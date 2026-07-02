@@ -211,7 +211,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env());
+            let app_data_dir = app.path().app_data_dir()?;
+            let resource_dir = app.path().resource_dir().ok();
+            let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
+                app_data_dir,
+                resource_dir,
+            ));
             app.manage(manager);
             app.manage(PendingPdfBytes::default());
             Ok(())

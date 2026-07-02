@@ -6,6 +6,9 @@ coverage/
 target/
 engine/upstream/
 engine/dist/
+installer/.payload-cache/
+apps/shell/src-tauri/payload/*
+!apps/shell/src-tauri/payload/.gitkeep
 src-tauri/gen/
 **/src-tauri/gen/
 

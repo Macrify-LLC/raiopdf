@@ -6,7 +6,8 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "@raiopdf/engine-api": ["packages/engine-api/src/index.ts"]
+      "@raiopdf/engine-api": ["packages/engine-api/src/index.ts"],
+      "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/src/index.ts"]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

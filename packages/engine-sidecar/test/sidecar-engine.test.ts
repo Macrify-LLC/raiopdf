@@ -1,4 +1,9 @@
 import { PdfEngineError } from "@raiopdf/engine-api";
+import {
+  PDFDict,
+  PDFDocument,
+  PDFName,
+} from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { SidecarPdfEngine } from "../src/index";
 
@@ -198,6 +203,131 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[1], "customMargin", "medium");
   });
 
+  it("redacts text through auto-redact with literal term mapping", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(70));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const redacted = await engine.redactText(document, {
+      terms: ["Alice Smith", "123-45-6789"],
+      wholeWord: true,
+      rasterize: true,
+    });
+
+    expect(await engine.saveToBytes(redacted)).toEqual(bytes(70));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/auto-redact");
+    expectFormField(calls[1], "listOfText", "Alice Smith\n123-45-6789");
+    expectFormField(calls[1], "useRegex", "false");
+    expectFormField(calls[1], "wholeWordSearch", "true");
+    expectFormField(calls[1], "redactColor", "#000000");
+    expectFormField(calls[1], "customPadding", "0");
+    expectFormField(calls[1], "convertPDFToImage", "true");
+  });
+
+  it("rejects auto-redact text removal unless callers explicitly allow rasterization", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(
+      engine.redactText(document, {
+        terms: ["Alice Smith"],
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("redacts PDF point areas through redact-execute imageBoxes", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(71));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const redacted = await engine.redactAreas(document, [
+      { pageIndex: 0, x: 10, y: 20, w: 30, h: 40 },
+      { pageIndex: 2, x: 50, y: 60, w: 70, h: 80 },
+    ]);
+
+    expect(await engine.saveToBytes(redacted)).toEqual(bytes(71));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/redact-execute");
+    expect(expectJsonFormField(calls[1], "imageBoxes")).toEqual([
+      { pageIndex: 0, x1: 10, y1: 60, x2: 40, y2: 20 },
+      { pageIndex: 2, x1: 50, y1: 140, x2: 120, y2: 60 },
+    ]);
+    expect(expectJsonFormField(calls[1], "style")).toEqual({
+      color: "#000000",
+      padding: 0,
+      convertToImage: true,
+      strategy: "IMAGE_FINALIZE",
+    });
+  });
+
+  it("scrubs metadata through update-metadata deleteAll and local byte post-processing", async () => {
+    const serverBytes = await createPdfWithMetadata();
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 1 }),
+      pdfBytesResponse(serverBytes),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const scrubbed = await engine.scrubMetadata(document);
+
+    await expectNoDocumentMetadata(await engine.saveToBytes(scrubbed));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/update-metadata");
+    expectFormField(calls[1], "deleteAll", "true");
+  });
+
+  it("stamps Bates numbers as sequential add-stamp calls", async () => {
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 3 }),
+      pdfResponse(80),
+      pdfResponse(81),
+      pdfResponse(82),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const stamped = await engine.batesStamp(document, {
+      prefix: "ABC",
+      start: 98,
+      digits: 3,
+      placement: { edge: "footer", align: "right" },
+    });
+
+    expect(await engine.saveToBytes(stamped)).toEqual(bytes(82));
+    expect(calls.slice(1).map((call) => pathFromUrl(call.url))).toEqual([
+      "/api/v1/misc/add-stamp",
+      "/api/v1/misc/add-stamp",
+      "/api/v1/misc/add-stamp",
+    ]);
+    expectFormField(calls[1], "pageNumbers", "1");
+    expectFormField(calls[1], "stampText", "ABC098");
+    expectFormField(calls[2], "pageNumbers", "2");
+    expectFormField(calls[2], "stampText", "ABC099");
+    expectFormField(calls[3], "pageNumbers", "3");
+    expectFormField(calls[3], "stampText", "ABC100");
+  });
+
+  it("rejects Bates numbers that overflow the configured digit width before stamping", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(
+      engine.batesStamp(document, {
+        prefix: "ABC",
+        start: 98,
+        digits: 2,
+        placement: { edge: "footer", align: "right" },
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
   it("reports sidecar binder creation as unsupported", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
@@ -332,12 +462,60 @@ function pdfResponse(...contents: number[]): Response {
   });
 }
 
+function pdfBytesResponse(contents: Uint8Array): Response {
+  return new Response(toArrayBuffer(contents), {
+    status: 200,
+    headers: {
+      "content-type": "application/pdf",
+    },
+  });
+}
+
+async function createPdfWithMetadata(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.setTitle("Confidential Title");
+  pdf.setAuthor("Confidential Author");
+  pdf.setSubject("Confidential Subject");
+  pdf.setKeywords(["confidential", "legal"]);
+  pdf.setCreator("RaioPDF Test");
+  pdf.setProducer("RaioPDF Producer");
+
+  const metadataStream = pdf.context.stream("<x:xmpmeta>Confidential XMP</x:xmpmeta>", {
+    Type: "Metadata",
+    Subtype: "XML",
+  });
+  pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(metadataStream));
+
+  return pdf.save();
+}
+
+async function expectNoDocumentMetadata(contents: Uint8Array): Promise<void> {
+  const pdf = await PDFDocument.load(contents, { updateMetadata: false });
+
+  expect(pdf.context.trailerInfo.Info).toBeUndefined();
+  expect(pdf.catalog.has(PDFName.of("Metadata"))).toBe(false);
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFDict) {
+      expect(object.has(PDFName.of("Metadata"))).toBe(false);
+    }
+  }
+}
+
 function bytes(...contents: number[]): Uint8Array {
   return new Uint8Array(contents);
 }
 
 function arrayBuffer(...contents: number[]): ArrayBuffer {
   const buffer = new ArrayBuffer(contents.length);
+  new Uint8Array(buffer).set(contents);
+
+  return buffer;
+}
+
+function toArrayBuffer(contents: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(contents.byteLength);
   new Uint8Array(buffer).set(contents);
 
   return buffer;
@@ -351,6 +529,13 @@ function getFormData(call: FetchCall | undefined): FormData {
 
 function expectFormField(call: FetchCall | undefined, name: string, value: string): void {
   expect(getFormData(call).get(name)).toBe(value);
+}
+
+function expectJsonFormField(call: FetchCall | undefined, name: string): unknown {
+  const value = getFormData(call).get(name);
+  expect(typeof value).toBe("string");
+
+  return JSON.parse(value as string) as unknown;
 }
 
 async function expectFormFile(call: FetchCall | undefined, expectedBytes: readonly number[]): Promise<void> {

@@ -1,4 +1,5 @@
 import type {
+  PdfBatesStampOptions,
   PdfBinderExhibit,
   PdfBinderOptions,
   PdfBytes,
@@ -6,14 +7,19 @@ import type {
   PdfEngine,
   PdfPageSizePoints,
   PdfPageSelection,
+  PdfRedactTextOptions,
+  PdfRedactionArea,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTextRegion,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
+import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
 import {
   degrees as pdfDegrees,
   PDFDocument,
   PDFName,
+  PDFRef,
   PDFString,
   rgb,
   StandardFonts,
@@ -220,6 +226,77 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     const output = await this.load(document);
     await stampTextInPlace(output, options);
+
+    return this.store(await output.save());
+  }
+
+  /**
+   * The local pdf-lib backend cannot guarantee true content removal for arbitrary
+   * rectangles. Drawing black boxes would leave text/images extractable, so area
+   * redaction is reserved for the desktop sidecar engine.
+   */
+  async redactAreas(
+    _document: PdfDocumentHandle,
+    _areas: readonly PdfRedactionArea[],
+  ): Promise<PdfDocumentHandle> {
+    throw unsupportedTrueRedaction();
+  }
+
+  /**
+   * The local pdf-lib backend has no safe content-stream text removal pipeline.
+   * Returning overlay-only output would be a security bug, so term redaction is
+   * reserved for the desktop sidecar engine.
+   */
+  async redactText(
+    _document: PdfDocumentHandle,
+    _options: PdfRedactTextOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw unsupportedTrueRedaction();
+  }
+
+  async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    scrubPdfMetadataInPlace(output);
+
+    return this.store(await output.save());
+  }
+
+  async extractTextRegions(
+    _document: PdfDocumentHandle,
+    _areas: readonly PdfRedactionArea[],
+  ): Promise<readonly PdfTextRegion[]> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Region text extraction is unavailable in the local engine; verify redaction output with pdf.js.",
+    );
+  }
+
+  async batesStamp(
+    document: PdfDocumentHandle,
+    options: PdfBatesStampOptions,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const normalizedOptions = normalizeBatesOptions(options);
+    const pageCount = output.getPageCount();
+    assertBatesFitsPageCount(normalizedOptions, pageCount);
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const stampOptions: PdfStampTextOptions = {
+        text: formatBatesNumber(normalizedOptions, pageIndex),
+        pageIndexes: [pageIndex],
+        placement: normalizedOptions.placement,
+      };
+
+      if (normalizedOptions.fontSizePt !== undefined) {
+        stampOptions.fontSizePt = normalizedOptions.fontSizePt;
+      }
+
+      if (normalizedOptions.marginIn !== undefined) {
+        stampOptions.marginIn = normalizedOptions.marginIn;
+      }
+
+      await stampTextInPlace(output, stampOptions);
+    }
 
     return this.store(await output.save());
   }
@@ -478,6 +555,40 @@ function normalizeStampOptions(options: PdfStampTextOptions): Required<PdfStampT
   };
 }
 
+function normalizeBatesOptions(options: PdfBatesStampOptions): PdfBatesStampOptions {
+  if (!Number.isInteger(options.start) || options.start < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Bates start must be a non-negative integer.");
+  }
+
+  if (!Number.isInteger(options.digits) || options.digits <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Bates digits must be a positive integer.");
+  }
+
+  if (options.fontSizePt !== undefined) {
+    assertPositiveNumber(options.fontSizePt, "fontSizePt");
+  }
+
+  if (options.marginIn !== undefined) {
+    assertPositiveNumber(options.marginIn, "marginIn");
+  }
+
+  return options;
+}
+
+function assertBatesFitsPageCount(options: PdfBatesStampOptions, pageCount: number): void {
+  const lastNumber = options.start + pageCount - 1;
+  if (lastNumber >= 10 ** options.digits) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Bates numbers exceed the configured digit width.",
+    );
+  }
+}
+
+function formatBatesNumber(options: PdfBatesStampOptions, offset: number): string {
+  return `${options.prefix}${String(options.start + offset).padStart(options.digits, "0")}`;
+}
+
 function addOutline(pdf: PDFDocument, entries: readonly OutlineEntry[]): void {
   if (entries.length === 0) {
     return;
@@ -586,6 +697,13 @@ function assertNonEmptyText(text: string): void {
   if (text.length === 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", "Stamp text must not be empty.");
   }
+}
+
+function unsupportedTrueRedaction(): PdfEngineError {
+  return new PdfEngineError(
+    "UNSUPPORTED",
+    "True redaction requires the desktop engine; the local engine cannot safely remove underlying PDF content.",
+  );
 }
 
 function assertPositiveNumber(value: number, fieldName: string): void {

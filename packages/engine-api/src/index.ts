@@ -21,6 +21,52 @@ export type PdfStampTextOptions = {
   marginIn?: number;
 };
 
+export type PdfRedactionArea = {
+  /** Zero-based page index containing the rectangle to redact. */
+  pageIndex: number;
+  /** Left edge of the redaction rectangle in PDF user-space points. */
+  x: number;
+  /** Bottom edge of the redaction rectangle in PDF user-space points. */
+  y: number;
+  /** Width of the redaction rectangle in PDF user-space points. */
+  w: number;
+  /** Height of the redaction rectangle in PDF user-space points. */
+  h: number;
+};
+
+export type PdfRedactTextOptions = {
+  /** Literal terms to remove from the PDF content. Terms are not treated as regular expressions. */
+  terms: readonly string[];
+  /** When true, engines only match terms on word boundaries. Defaults to false. */
+  wholeWord?: boolean;
+  /**
+   * When true, the engine may rasterize pages to guarantee removed text is not
+   * recoverable from PDF content streams. Rasterized output loses searchable and
+   * selectable text on affected pages. Engines must reject text redaction when
+   * this tradeoff is required for safety and the caller leaves it false or
+   * omitted.
+   */
+  rasterize?: boolean;
+};
+
+export type PdfTextRegion = PdfRedactionArea & {
+  /** Text extracted from this area, if the engine can perform region extraction. */
+  text: string;
+};
+
+export type PdfBatesStampOptions = {
+  /** Text prepended before the zero-padded sequential number, for example "ABC". */
+  prefix: string;
+  /** First Bates number to stamp on page zero. */
+  start: number;
+  /** Minimum number of digits in the sequential number. */
+  digits: number;
+  /** Page edge and horizontal alignment for the Bates number. */
+  placement: PdfStampPlacement;
+  fontSizePt?: number;
+  marginIn?: number;
+};
+
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
@@ -131,6 +177,67 @@ export interface PdfEngine {
   stampText(
     document: PdfDocumentHandle,
     options: PdfStampTextOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with true area redaction applied to PDF point rectangles.
+   *
+   * Areas use zero-based `pageIndex` and PDF user-space point coordinates. `x` and
+   * `y` are the rectangle's bottom-left corner; `w` and `h` are dimensions in
+   * points. Engines must remove or rasterize underlying content, not merely draw
+   * opaque boxes. Engines that cannot guarantee true content removal must reject
+   * with `PdfEngineError("UNSUPPORTED", ...)`.
+   */
+  redactAreas(
+    document: PdfDocumentHandle,
+    areas: readonly PdfRedactionArea[],
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with literal terms removed from PDF content.
+   *
+   * `terms` are plain text search strings. `wholeWord` requests word-boundary
+   * matching when the backing engine supports it. `rasterize` explicitly allows
+   * image-based output when that is the only guaranteed removal mode; callers
+   * should expect searchable/selectable text to be lost on rasterized pages.
+   * Engines that cannot guarantee true text removal must reject with
+   * `PdfEngineError("UNSUPPORTED", ...)`.
+   */
+  redactText(
+    document: PdfDocumentHandle,
+    options: PdfRedactTextOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with document metadata scrubbed.
+   *
+   * Implementations remove the PDF Info dictionary and XMP `/Metadata` streams
+   * where the backing PDF library exposes them.
+   */
+  scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle>;
+
+  /**
+   * Extracts text from rectangular regions for post-redaction verification.
+   *
+   * This is a best-effort helper. Engines without reliable region text
+   * extraction should reject with `PdfEngineError("UNSUPPORTED", ...)`; callers
+   * can then verify output with pdf.js in the application layer.
+   */
+  extractTextRegions(
+    document: PdfDocumentHandle,
+    areas: readonly PdfRedactionArea[],
+  ): Promise<readonly PdfTextRegion[]>;
+
+  /**
+   * Creates a new document stamped with sequential Bates numbers on every page.
+   *
+   * The number format is `${prefix}${number.toString().padStart(digits, "0")}`.
+   * Engines should implement this as page-by-page `stampText` operations so
+   * placement and font behavior stays aligned with normal stamping.
+   */
+  batesStamp(
+    document: PdfDocumentHandle,
+    options: PdfBatesStampOptions,
   ): Promise<PdfDocumentHandle>;
 
   /**

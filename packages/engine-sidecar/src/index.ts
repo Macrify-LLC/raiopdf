@@ -1,4 +1,5 @@
 import type {
+  PdfBatesStampOptions,
   PdfBinderExhibit,
   PdfBinderOptions,
   PdfBytes,
@@ -7,10 +8,14 @@ import type {
   PdfEngineErrorCode,
   PdfPageSizePoints,
   PdfPageSelection,
+  PdfRedactTextOptions,
+  PdfRedactionArea,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTextRegion,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
+import { scrubPdfMetadataBytes } from "@raiopdf/engine-pdf-lib";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -71,6 +76,20 @@ const DEFAULT_MARGIN_IN = 0.5;
  *   5 middle-center, 6 middle-right, 7 bottom-left, 8 bottom-center,
  *   9 bottom-right. `marginIn` is mapped onto Stirling's small/medium/large
  *   customMargin presets.
+ * - redactText -> POST /api/v1/security/auto-redact only when callers pass
+ *   rasterize=true. Stirling's auto-redact can fall back to overlay-only output
+ *   unless convertPDFToImage=true; rasterization is the guaranteed removal mode
+ *   but returns image-based pages without searchable/selectable text.
+ * - redactAreas -> POST /api/v1/security/redact-execute with imageBoxes JSON.
+ *   RaioPDF `{pageIndex,x,y,w,h}` maps to Stirling
+ *   `{pageIndex,x1:x,y1:y+h,x2:x+w,y2:y}` because Stirling names y1 as the
+ *   top coordinate and y2 as bottom. `style` is sent as
+ *   `{color:"#000000",padding:0,convertToImage:true,
+ *   strategy:"IMAGE_FINALIZE"}` to avoid overlay-only redaction.
+ * - scrubMetadata -> POST /api/v1/misc/update-metadata with deleteAll=true,
+ *   followed by engine-local's low-level Info dictionary and XMP metadata
+ *   removal on the returned bytes.
+ * - batesStamp -> sequential stampText calls, one page at a time.
  * - buildBinder is intentionally unsupported for this engine because Stirling
  *   exposes generated merge TOCs but not caller-defined exhibit outline titles
  *   and destinations. Use the local engine for contract-complete binders.
@@ -312,6 +331,108 @@ export class SidecarPdfEngine implements PdfEngine {
     return this.store(await readBytes(response), pageCount);
   }
 
+  async redactAreas(
+    document: PdfDocumentHandle,
+    areas: readonly PdfRedactionArea[],
+  ): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    assertRedactionAreas(areas, pageCount);
+
+    if (areas.length === 0) {
+      return this.store(storedDocument.bytes, pageCount);
+    }
+
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("imageBoxes", JSON.stringify(areas.map(toSidecarImageBox)));
+    formData.append(
+      "style",
+      JSON.stringify({
+        color: "#000000",
+        padding: 0,
+        convertToImage: true,
+        strategy: "IMAGE_FINALIZE",
+      }),
+    );
+
+    const response = await this.request("/api/v1/security/redact-execute", formData);
+
+    return this.store(await readBytes(response), pageCount);
+  }
+
+  async redactText(
+    document: PdfDocumentHandle,
+    options: PdfRedactTextOptions,
+  ): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    assertRedactTextOptions(options);
+    assertRasterizedTextRedaction(options);
+
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("listOfText", options.terms.join("\n"));
+    formData.append("useRegex", "false");
+    formData.append("wholeWordSearch", String(options.wholeWord ?? false));
+    formData.append("redactColor", "#000000");
+    formData.append("customPadding", "0");
+    formData.append("convertPDFToImage", "true");
+
+    const response = await this.request("/api/v1/security/auto-redact", formData);
+
+    return this.store(await readBytes(response), pageCount);
+  }
+
+  async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("deleteAll", "true");
+
+    const response = await this.request("/api/v1/misc/update-metadata", formData);
+
+    return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
+  }
+
+  async extractTextRegions(
+    _document: PdfDocumentHandle,
+    _areas: readonly PdfRedactionArea[],
+  ): Promise<readonly PdfTextRegion[]> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Region text extraction is unavailable in the sidecar engine; verify redaction output with pdf.js.",
+    );
+  }
+
+  async batesStamp(
+    document: PdfDocumentHandle,
+    options: PdfBatesStampOptions,
+  ): Promise<PdfDocumentHandle> {
+    const pageCount = await this.pageCount(document);
+    const normalizedOptions = normalizeBatesOptions(options);
+    assertBatesFitsPageCount(normalizedOptions, pageCount);
+    let stampedDocument = document;
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const stampOptions: PdfStampTextOptions = {
+        text: formatBatesNumber(normalizedOptions, pageIndex),
+        pageIndexes: [pageIndex],
+        placement: normalizedOptions.placement,
+      };
+
+      if (normalizedOptions.fontSizePt !== undefined) {
+        stampOptions.fontSizePt = normalizedOptions.fontSizePt;
+      }
+
+      if (normalizedOptions.marginIn !== undefined) {
+        stampOptions.marginIn = normalizedOptions.marginIn;
+      }
+
+      stampedDocument = await this.stampText(stampedDocument, stampOptions);
+    }
+
+    return stampedDocument;
+  }
+
   async buildBinder(
     _main: PdfDocumentHandle,
     _exhibits: readonly PdfBinderExhibit[],
@@ -496,6 +617,108 @@ function normalizeStampOptions(options: PdfStampTextOptions): Required<PdfStampT
     fontSizePt,
     marginIn,
   };
+}
+
+function normalizeBatesOptions(options: PdfBatesStampOptions): PdfBatesStampOptions {
+  if (!Number.isInteger(options.start) || options.start < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Bates start must be a non-negative integer.");
+  }
+
+  if (!Number.isInteger(options.digits) || options.digits <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Bates digits must be a positive integer.");
+  }
+
+  if (options.fontSizePt !== undefined && (!Number.isFinite(options.fontSizePt) || options.fontSizePt <= 0)) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "fontSizePt must be a positive number.");
+  }
+
+  if (options.marginIn !== undefined && (!Number.isFinite(options.marginIn) || options.marginIn <= 0)) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "marginIn must be a positive number.");
+  }
+
+  return options;
+}
+
+function assertBatesFitsPageCount(options: PdfBatesStampOptions, pageCount: number): void {
+  const lastNumber = options.start + pageCount - 1;
+  if (lastNumber >= 10 ** options.digits) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Bates numbers exceed the configured digit width.",
+    );
+  }
+}
+
+function formatBatesNumber(options: PdfBatesStampOptions, offset: number): string {
+  return `${options.prefix}${String(options.start + offset).padStart(options.digits, "0")}`;
+}
+
+function assertRedactTextOptions(options: PdfRedactTextOptions): void {
+  const hasTerm = options.terms.some((term) => term.trim().length > 0);
+
+  if (!hasTerm) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "At least one redaction term is required.");
+  }
+}
+
+function assertRasterizedTextRedaction(options: PdfRedactTextOptions): void {
+  if (options.rasterize !== true) {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar text redaction requires rasterize=true so Stirling removes recoverable text by converting pages to images.",
+    );
+  }
+}
+
+function assertRedactionAreas(areas: readonly PdfRedactionArea[], pageCount: number): void {
+  assertPageIndexes(areas.map((area) => area.pageIndex), pageCount);
+
+  for (const area of areas) {
+    assertNonNegativeFinite(area.x, "x");
+    assertNonNegativeFinite(area.y, "y");
+    assertPositiveFinite(area.w, "w");
+    assertPositiveFinite(area.h, "h");
+  }
+}
+
+function assertNonNegativeFinite(value: number, fieldName: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a non-negative number.`);
+  }
+}
+
+function assertPositiveFinite(value: number, fieldName: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a positive number.`);
+  }
+}
+
+function toSidecarImageBox(area: PdfRedactionArea): {
+  pageIndex: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+} {
+  return {
+    pageIndex: area.pageIndex,
+    x1: area.x,
+    y1: area.y + area.h,
+    x2: area.x + area.w,
+    y2: area.y,
+  };
+}
+
+async function scrubReturnedMetadata(bytes: Uint8Array): Promise<Uint8Array> {
+  try {
+    return await scrubPdfMetadataBytes(bytes);
+  } catch (error) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Metadata scrub returned PDF bytes that could not be post-processed.",
+      { cause: error },
+    );
+  }
 }
 
 function toSidecarStampPosition(placement: PdfStampPlacement): string {

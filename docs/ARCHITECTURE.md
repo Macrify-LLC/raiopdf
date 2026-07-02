@@ -4,6 +4,8 @@ RaioPDF is a fully local desktop PDF suite. The product is organized around thre
 
 The TypeScript workspace starts with a `PdfEngine` seam in `packages/engine-api`. The UI depends on that interface, not on any particular engine implementation. `packages/engine-local` provides the Phase-1 local JavaScript implementation using `pdf-lib`; a future localhost sidecar adapter will satisfy the same interface. That keeps UI workflows stable while implementation details move from pure TypeScript transforms to sidecar-backed operations.
 
+`packages/engine-sidecar` is the second implementation of the `PdfEngine` seam. It is an HTTP client for a localhost Stirling-PDF backend and keeps document bytes client-side behind the same opaque handle pattern as `engine-local`. The UI does not use this package yet; it remains dormant until the engine bundling phase wires the desktop shell to launch and select the sidecar-backed engine.
+
 The UI must never call the Stirling sidecar directly. All document operations go through `PdfEngine` so handles, byte serialization, errors, and future sidecar behavior stay behind one boundary. This also keeps the Tauri shell free to decide how local services are launched, discovered, supervised, and shut down without leaking those mechanics into React components.
 
 Stirling-PDF code may be consumed only from MIT-licensed directories. Do not copy, vendor, adapt, or link code from `frontend/editor/src/desktop`, `app/proprietary`, `app/saas`, `engine/`, or any other carved-out or non-MIT area. If a Stirling source path is not clearly covered by the MIT license grant, treat it as unavailable for RaioPDF.

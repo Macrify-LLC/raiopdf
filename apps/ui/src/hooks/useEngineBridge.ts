@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
-import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import type { PdfDocumentHandle, PdfRedactionArea } from "@raiopdf/engine-api";
 
 interface EngineStartResponse {
   disabled?: boolean;
@@ -16,6 +16,7 @@ export interface EngineBridge {
   starting: boolean;
   error: string | null;
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<Uint8Array>;
+  redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
 }
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -116,11 +117,30 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const redactAreas = useCallback(
+    async (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => {
+      const engine = await ensureEngine();
+      const sourceHandle = await engine.open(bytes);
+      let outputHandle: PdfDocumentHandle | null = null;
+
+      try {
+        outputHandle = await engine.redactAreas(sourceHandle, areas);
+
+        return await engine.saveToBytes(outputHandle);
+      } finally {
+        await closeHandle(engine, outputHandle);
+        await closeHandle(engine, sourceHandle);
+      }
+    },
+    [ensureEngine],
+  );
+
   return {
     available: runtimeAvailable && !disabled,
     starting,
     error,
     runOcr,
+    redactAreas,
   };
 }
 

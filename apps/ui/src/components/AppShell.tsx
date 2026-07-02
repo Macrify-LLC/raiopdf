@@ -8,6 +8,15 @@ import { StatusBar } from "./StatusBar";
 import { ThumbnailRail } from "./ThumbnailRail";
 import { TitleBar } from "./TitleBar";
 import { ToolPanel, type LegalToolId, type OrganizeToolId } from "./ToolPanel";
+import type {
+  BatesPanelState,
+  RedactionPanelState,
+  ScannerPanelState,
+  ScrubMetadataPanelState,
+} from "./ToolPanel";
+import type { PendingRedactionOverlay } from "./CanvasWell";
+import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api";
+import type { SensitiveHit } from "../lib/legalTools";
 import "./AppShell.css";
 
 export interface AppShellProps {
@@ -37,6 +46,20 @@ export interface AppShellProps {
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
+  redaction: RedactionPanelState;
+  bates: BatesPanelState;
+  scanner: ScannerPanelState;
+  scrubMetadata: ScrubMetadataPanelState;
+  pendingRedactions: readonly PendingRedactionOverlay[];
+  redactionModeBar: ReactNode;
+  onRedactionAreaCreated: (area: PdfRedactionArea) => void;
+  onRedactionAreaRemoved: (id: string) => void;
+  onConfirmRedactions: () => void;
+  onCancelRedactions: () => void;
+  onApplyBates: (options: PdfBatesStampOptions) => Promise<boolean>;
+  onRunScanner: () => void;
+  onMarkScannerHit: (hit: SensitiveHit) => void;
+  onScrubMetadata: () => void;
 }
 
 export function AppShell({
@@ -66,6 +89,20 @@ export function AppShell({
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
+  redaction,
+  bates,
+  scanner,
+  scrubMetadata,
+  pendingRedactions,
+  redactionModeBar,
+  onRedactionAreaCreated,
+  onRedactionAreaRemoved,
+  onConfirmRedactions,
+  onCancelRedactions,
+  onApplyBates,
+  onRunScanner,
+  onMarkScannerHit,
+  onScrubMetadata,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
@@ -140,6 +177,11 @@ export function AppShell({
           error={document.error}
           onFitZoomResolved={onFitZoomResolved}
           onPageSizeChange={onPageSizeChange}
+          redactionMode={activeLegalTool === "redact"}
+          redactionModeBar={redactionModeBar}
+          pendingRedactions={pendingRedactions}
+          onRedactionAreaCreated={onRedactionAreaCreated}
+          onRedactionAreaRemoved={onRedactionAreaRemoved}
         />
         <ToolPanel
           hasDocument={hasDocument}
@@ -151,6 +193,17 @@ export function AppShell({
           onLegalToolSelected={onLegalToolSelected}
           onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}
+          redaction={redaction}
+          bates={bates}
+          scanner={scanner}
+          scrubMetadata={scrubMetadata}
+          pageCount={document.pageCount}
+          onConfirmRedactions={onConfirmRedactions}
+          onCancelRedactions={onCancelRedactions}
+          onApplyBates={onApplyBates}
+          onRunScanner={onRunScanner}
+          onMarkScannerHit={onMarkScannerHit}
+          onScrubMetadata={onScrubMetadata}
         />
       </div>
       <StatusBar

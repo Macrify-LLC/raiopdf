@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
+import type { PdfBatesStampOptions, PdfStampPlacement } from "@raiopdf/engine-api";
 import type { OcrUiState } from "../App";
+import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import {
   BatesIcon,
   BoltIcon,
@@ -41,7 +43,35 @@ const ORGANIZE_TOOLS = [
   { id: "extract", label: "Extract Pages...", icon: <ExtractIcon size={16} /> },
   { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
   { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
+  { id: "passwords", label: "Passwords", icon: <ShieldCheckIcon size={16} /> },
 ] as const;
+
+export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
+
+export interface RedactionPanelState {
+  phase: RedactionPhase;
+  message: string | null;
+  pendingCount: number;
+  available: boolean;
+}
+
+export interface BatesPanelState {
+  applying: boolean;
+  message: string | null;
+}
+
+export interface ScannerPanelState {
+  scanning: boolean;
+  message: string | null;
+  hits: readonly SensitiveHit[];
+}
+
+export interface ScrubMetadataPanelState {
+  metadata: PdfMetadataSummary | null;
+  scrubbing: boolean;
+  message: string | null;
+  removedFields: readonly string[];
+}
 
 export interface ToolPanelProps {
   hasDocument: boolean;
@@ -53,6 +83,17 @@ export interface ToolPanelProps {
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
+  redaction: RedactionPanelState;
+  bates: BatesPanelState;
+  scanner: ScannerPanelState;
+  scrubMetadata: ScrubMetadataPanelState;
+  pageCount: number;
+  onConfirmRedactions: () => void;
+  onCancelRedactions: () => void;
+  onApplyBates: (options: PdfBatesStampOptions) => Promise<boolean>;
+  onRunScanner: () => void;
+  onMarkScannerHit: (hit: SensitiveHit) => void;
+  onScrubMetadata: () => void;
 }
 
 export function ToolPanel({
@@ -65,6 +106,17 @@ export function ToolPanel({
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
+  redaction,
+  bates,
+  scanner,
+  scrubMetadata,
+  pageCount,
+  onConfirmRedactions,
+  onCancelRedactions,
+  onApplyBates,
+  onRunScanner,
+  onMarkScannerHit,
+  onScrubMetadata,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
 
@@ -96,13 +148,17 @@ export function ToolPanel({
         onToggle={() => toggleGroup("edit")}
       >
         {ORGANIZE_TOOLS.map((tool) => (
-          <ToolRow
-            key={tool.id}
-            icon={tool.icon}
-            label={tool.label}
-            selected={activeOrganizeTool === tool.id}
-            onSelect={() => onOrganizeToolSelected(tool.id)}
-          />
+          <div key={tool.id}>
+            <ToolRow
+              icon={tool.icon}
+              label={tool.label}
+              selected={activeOrganizeTool === tool.id}
+              onSelect={() => onOrganizeToolSelected(tool.id)}
+            />
+            {tool.id === "passwords" && activeOrganizeTool === "passwords" ? (
+              <PasswordsPanel />
+            ) : null}
+          </div>
         ))}
       </AccordionGroup>
 
@@ -155,6 +211,37 @@ export function ToolPanel({
                   ocrStarting={ocrStarting}
                 />
               ) : null}
+              {tool.id === "redact" && selected ? (
+                <RedactionStatusPanel
+                  state={redaction}
+                  hasDocument={hasDocument}
+                  onConfirm={onConfirmRedactions}
+                  onCancel={onCancelRedactions}
+                />
+              ) : null}
+              {tool.id === "bates-numbering" && selected ? (
+                <BatesPanel
+                  state={bates}
+                  hasDocument={hasDocument}
+                  pageCount={pageCount}
+                  onApply={onApplyBates}
+                />
+              ) : null}
+              {tool.id === "scanner-2425" && selected ? (
+                <ScannerPanel
+                  state={scanner}
+                  hasDocument={hasDocument}
+                  onRunScanner={onRunScanner}
+                  onMarkHit={onMarkScannerHit}
+                />
+              ) : null}
+              {tool.id === "scrub-metadata" && selected ? (
+                <ScrubMetadataPanel
+                  state={scrubMetadata}
+                  hasDocument={hasDocument}
+                  onScrub={onScrubMetadata}
+                />
+              ) : null}
             </div>
           );
         })}
@@ -194,6 +281,322 @@ function OcrStatusPanel({
   );
 }
 
+function RedactionStatusPanel({
+  state,
+  hasDocument,
+  onConfirm,
+  onCancel,
+}: {
+  state: RedactionPanelState;
+  hasDocument: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!hasDocument) {
+    return <InlineMessage tone="neutral" message="Open a PDF before marking redactions." />;
+  }
+
+  if (!state.available) {
+    return <InlineMessage tone="neutral" message="True redaction runs in the desktop app." />;
+  }
+
+  if (state.phase === "confirming") {
+    return (
+      <div className="tool-panel__inline-card" data-tone="danger">
+        <p className="tool-panel__card-title">
+          {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
+        </p>
+        <p className="tool-panel__card-copy">
+          Content is deleted, not covered. This cannot be undone after saving.
+        </p>
+        <div className="tool-panel__button-row">
+          <button type="button" className="tool-panel__primary-button" onClick={onConfirm}>
+            Apply
+          </button>
+          <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.message) {
+    return (
+      <InlineMessage
+        tone={state.phase === "error" ? "danger" : state.phase === "verified" ? "ok" : "neutral"}
+        message={state.message}
+      />
+    );
+  }
+
+  return (
+    <InlineMessage
+      tone="neutral"
+      message="Drag boxes on the page, or use Search text in the canvas mode bar."
+    />
+  );
+}
+
+function BatesPanel({
+  state,
+  hasDocument,
+  pageCount,
+  onApply,
+}: {
+  state: BatesPanelState;
+  hasDocument: boolean;
+  pageCount: number;
+  onApply: (options: PdfBatesStampOptions) => Promise<boolean>;
+}) {
+  const [prefix, setPrefix] = useState("SMITH");
+  const [start, setStart] = useState(1);
+  const [digits, setDigits] = useState(6);
+  const [placement, setPlacement] = useState<PdfStampPlacement>({
+    edge: "footer",
+    align: "right",
+  });
+  const [localMessage, setLocalMessage] = useState<string | null>(null);
+  const preview = useMemo(
+    () => `${prefix}${String(Math.max(0, start)).padStart(Math.max(1, digits), "0")}`,
+    [digits, prefix, start],
+  );
+  const lastNumber = start + Math.max(0, pageCount - 1);
+  const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
+  const message = localMessage ?? state.message;
+
+  async function apply(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalMessage(null);
+
+    if (!hasDocument) {
+      setLocalMessage("Open a PDF before applying Bates numbers.");
+      return;
+    }
+
+    if (overflows) {
+      setLocalMessage("Increase digits or lower the start number so every page fits.");
+      return;
+    }
+
+    const applied = await onApply({
+      prefix,
+      start,
+      digits,
+      placement,
+      fontSizePt: 10,
+    });
+
+    if (!applied) {
+      setLocalMessage("Bates numbers could not be applied. Check the format and try again.");
+    }
+  }
+
+  return (
+    <form className="tool-panel__inline-card" onSubmit={apply}>
+      <div className="tool-panel__field">
+        <label htmlFor="bates-prefix">Prefix</label>
+        <input id="bates-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+      </div>
+      <div className="tool-panel__field-grid">
+        <div className="tool-panel__field">
+          <label htmlFor="bates-start">Start</label>
+          <input
+            id="bates-start"
+            type="number"
+            min="0"
+            value={start}
+            onChange={(event) => setStart(Number(event.target.value))}
+          />
+        </div>
+        <div className="tool-panel__field">
+          <label htmlFor="bates-digits">Digits</label>
+          <input
+            id="bates-digits"
+            type="number"
+            min="1"
+            max="12"
+            value={digits}
+            onChange={(event) => setDigits(Number(event.target.value))}
+          />
+        </div>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="bates-position">Position</label>
+        <select
+          id="bates-position"
+          value={`${placement.edge}-${placement.align}`}
+          onChange={(event) => setPlacement(parsePlacement(event.target.value))}
+        >
+          <option value="footer-left">Footer left</option>
+          <option value="footer-center">Footer center</option>
+          <option value="footer-right">Footer right</option>
+          <option value="header-left">Header left</option>
+          <option value="header-center">Header center</option>
+          <option value="header-right">Header right</option>
+        </select>
+      </div>
+      <span className="tool-panel__preview-chip" aria-label="Bates preview">{preview}</span>
+      {overflows ? (
+        <p className="tool-panel__field-error">
+          The last page would exceed the configured digit width.
+        </p>
+      ) : null}
+      {message ? <p className="tool-panel__status-line">{message}</p> : null}
+      <p className="tool-panel__note">Numbers are stamped into page content, not annotations.</p>
+      <button
+        type="submit"
+        className="tool-panel__primary-button"
+        disabled={!hasDocument || state.applying || overflows}
+      >
+        Apply Bates Numbers
+      </button>
+    </form>
+  );
+}
+
+function ScannerPanel({
+  state,
+  hasDocument,
+  onRunScanner,
+  onMarkHit,
+}: {
+  state: ScannerPanelState;
+  hasDocument: boolean;
+  onRunScanner: () => void;
+  onMarkHit: (hit: SensitiveHit) => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      <p className="tool-panel__note">
+        Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
+      </p>
+      <button
+        type="button"
+        className="tool-panel__primary-button"
+        disabled={!hasDocument || state.scanning}
+        onClick={onRunScanner}
+      >
+        Scan Document
+      </button>
+      {state.message ? <p className="tool-panel__status-line">{state.message}</p> : null}
+      {state.hits.length === 0 && !state.scanning && state.message ? (
+        <p className="tool-panel__empty-state">
+          No obvious sensitive patterns found. Review remains yours.
+        </p>
+      ) : null}
+      {state.hits.length ? (
+        <div className="tool-panel__hit-list" role="list">
+          {state.hits.map((hit) => (
+            <div key={hit.id} className="tool-panel__hit" role="listitem">
+              <div className="tool-panel__hit-head">
+                <span className="tool-panel__category-chip">{hit.category}</span>
+                <span>Page {hit.pageIndex + 1}</span>
+              </div>
+              <p>{hit.excerpt}</p>
+              <button
+                type="button"
+                className="tool-panel__secondary-button"
+                onClick={() => onMarkHit(hit)}
+              >
+                Mark for redaction
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ScrubMetadataPanel({
+  state,
+  hasDocument,
+  onScrub,
+}: {
+  state: ScrubMetadataPanelState;
+  hasDocument: boolean;
+  onScrub: () => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      {state.metadata ? (
+        <table className="tool-panel__metadata-table">
+          <tbody>
+            {state.metadata.rows.map((row) => (
+              <tr key={row.label}>
+                <th scope="row">{row.label}</th>
+                <td>{row.value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="tool-panel__status-line">Open a PDF to inspect metadata.</p>
+      )}
+      {state.removedFields.length ? (
+        <p className="tool-panel__status-line" data-tone="ok">
+          Removed {state.removedFields.join(", ")}.
+        </p>
+      ) : null}
+      {state.message ? <p className="tool-panel__status-line">{state.message}</p> : null}
+      <p className="tool-panel__note">Does not affect page content or annotations.</p>
+      <button
+        type="button"
+        className="tool-panel__primary-button"
+        disabled={!hasDocument || state.scrubbing}
+        onClick={onScrub}
+      >
+        Scrub Metadata
+      </button>
+    </div>
+  );
+}
+
+function PasswordsPanel() {
+  return (
+    <div className="tool-panel__inline-card">
+      <div className="tool-panel__field">
+        <label htmlFor="open-password">Open password</label>
+        <input id="open-password" type="password" disabled />
+      </div>
+      <label className="tool-panel__check-row">
+        <input type="checkbox" disabled />
+        Allow printing
+      </label>
+      <label className="tool-panel__check-row">
+        <input type="checkbox" disabled />
+        Allow copying
+      </label>
+      <p className="tool-panel__note">
+        Never stored. Password changes are unavailable in this build: pdf-lib does not encrypt PDFs, and the verified sidecar notes list no password endpoints.
+      </p>
+      <div className="tool-panel__button-row">
+        <button type="button" className="tool-panel__primary-button" disabled>
+          Set Password
+        </button>
+        <button type="button" className="tool-panel__secondary-button" disabled>
+          Remove Password
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InlineMessage({
+  tone,
+  message,
+}: {
+  tone: "neutral" | "ok" | "danger";
+  message: string;
+}) {
+  return (
+    <div className="tool-panel__inline-card" data-tone={tone} role="status">
+      <p className="tool-panel__card-copy">{message}</p>
+    </div>
+  );
+}
+
 function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): string {
   if (!hasDocument) {
     return "Open a PDF before running OCR.";
@@ -204,6 +607,15 @@ function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): stri
   }
 
   return "Ready to make this PDF searchable.";
+}
+
+function parsePlacement(value: string): PdfStampPlacement {
+  const [edge, align] = value.split("-");
+
+  return {
+    edge: edge === "header" ? "header" : "footer",
+    align: align === "left" || align === "center" ? align : "right",
+  };
 }
 
 function isOcrActive(phase: OcrUiState["phase"], ocrStarting: boolean): boolean {

@@ -178,6 +178,55 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   ]);
 });
 
+test("2.425 scanner finds and masks a planted SSN", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "scanner-fixture.pdf",
+    await createTextPdf("Client SSN 123-45-6789 Account 987654321"),
+  );
+
+  await page.getByRole("button", { name: "2.425 Scanner" }).click();
+  await page.getByRole("button", { name: "Scan Document" }).click();
+
+  await expect(page.getByText("•••-••-6789")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark for redaction" }).first()).toBeVisible();
+});
+
+test("redacts searched text through the mocked desktop engine and verifies output", async ({ page }) => {
+  const sourcePdf = await createTextPdf("Confidential SSN 123-45-6789");
+  const redactedPdf = await createPdf([200]);
+  await installRedactionBridgeMock(page, redactedPdf);
+  await page.goto("/");
+  await openPdf(page, "redact.pdf", sourcePdf);
+
+  await page.getByRole("button", { name: "Redact" }).click();
+  await page.getByRole("button", { name: "Search text..." }).click();
+  await page.getByLabel("Search text to redact").fill("123-45-6789");
+  await page.getByLabel("Search text to redact").press("Enter");
+
+  await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();
+  await page.getByRole("button", { name: "Apply Redactions" }).click();
+  await expect(page.getByText("1 area will be permanently removed")).toBeVisible();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+  await expect(page.getByText("Redacted and verified — the removed text no longer exists in the file.")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  await expect.poll(() => getRedactionCallCount(page)).toBe(1);
+});
+
+test("Bates numbering card shows the live default format preview", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "bates.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
+  await page.getByLabel("Prefix").fill("CASE");
+  await page.getByLabel("Start").fill("42");
+  await page.getByLabel("Digits").fill("4");
+  await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
+});
+
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
@@ -282,11 +331,66 @@ async function installOcrBridgeMock(
   });
 }
 
+async function installRedactionBridgeMock(
+  page: Page,
+  redactedBytes: Uint8Array,
+): Promise<void> {
+  await page.addInitScript(({ redactedContents }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_REDACTION_CALL_COUNT__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_REDACTION_CALL_COUNT__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      return { port: 39393 } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (url.endsWith("/api/v1/analysis/basic-info")) {
+        return new Response(JSON.stringify({ pageCount: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/security/redact-execute")) {
+        testWindow.__RAIOPDF_TEST_REDACTION_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_REDACTION_CALL_COUNT__ ?? 0) + 1;
+
+        return new Response(new Uint8Array(redactedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    redactedContents: [...redactedBytes],
+  });
+}
+
 async function getOcrCallCount(page: Page): Promise<number> {
   return page.evaluate(() => {
     return (window as typeof window & {
       __RAIOPDF_TEST_OCR_CALL_COUNT__?: number;
     }).__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0;
+  });
+}
+
+async function getRedactionCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_REDACTION_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_REDACTION_CALL_COUNT__ ?? 0;
   });
 }
 

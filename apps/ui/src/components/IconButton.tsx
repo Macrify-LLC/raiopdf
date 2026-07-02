@@ -8,7 +8,11 @@ export interface IconButtonProps {
   label: string;
   onClick?: (() => void) | undefined;
   disabled?: boolean;
-  /** Reflects an active tool/mode -- e.g. the current cursor mode. */
+  /**
+   * Reflects an active tool/mode -- e.g. the current cursor mode.
+   * Leave undefined for plain action buttons so they are not exposed
+   * to assistive tech as toggle buttons.
+   */
   active?: boolean;
 }
 
@@ -17,7 +21,7 @@ export function IconButton({
   label,
   onClick,
   disabled = false,
-  active = false,
+  active,
 }: IconButtonProps) {
   return (
     <button

@@ -1,0 +1,13 @@
+{
+  "name": "@raiopdf/shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "typecheck": "echo \"No TypeScript sources in @raiopdf/shell\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

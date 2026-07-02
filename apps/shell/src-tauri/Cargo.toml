@@ -1,0 +1,23 @@
+[package]
+name = "raiopdf-shell"
+version = "0.0.0"
+description = "RaioPDF desktop shell"
+authors = ["Macrify LLC"]
+edition = "2021"
+build = "build.rs"
+
+[lib]
+name = "raiopdf_shell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "raiopdf-shell"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }

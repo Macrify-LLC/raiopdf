@@ -144,7 +144,9 @@ jobs:
 
           OCRMYPDF_WIN=$(cygpath -w "$PAYLOAD_DIR/ocr/ocrmypdf.cmd")
           TESSDATA_WIN=$(cygpath -w "$PAYLOAD_DIR/ocr/tesseract/tessdata")
-          python3 - "$BASE_PATH/configs/settings.yml" "$OCRMYPDF_WIN" "$TESSDATA_WIN" <<'PY'
+          # Stirling replaces short settings.yml files during boot; custom_settings.yml
+          # is loaded after the generated template and preserves our smoke-only overrides.
+          python3 - "$BASE_PATH/configs/custom_settings.yml" "$OCRMYPDF_WIN" "$TESSDATA_WIN" <<'PY'
           from pathlib import Path
           import sys
 
@@ -248,7 +250,8 @@ jobs:
           BASE_WIN=$(cygpath -w "$BASE_PATH")
 
           export PATH="$PAYLOAD_DIR/ocr:$PAYLOAD_DIR/ocr/python:$PAYLOAD_DIR/ocr/tesseract:$PAYLOAD_DIR/ocr/gs/bin:$PATH"
-          STIRLING_BASE_PATH="$BASE_WIN" "$JAVA_BIN" -Xmx1g -jar "$JAR_PATH" \
+          # Stirling reads tessdataDir for language validation; OCRmyPDF's child tesseract reads TESSDATA_PREFIX.
+          TESSDATA_PREFIX="$TESSDATA_WIN" STIRLING_BASE_PATH="$BASE_WIN" "$JAVA_BIN" -Xmx1g -jar "$JAR_PATH" \
             --server.address=127.0.0.1 \
             "--server.port=$PORT" \
             --springdoc.api-docs.enabled=false \

@@ -46,7 +46,17 @@ const INITIAL_DOCUMENT: DocumentState = {
 interface CommitOptions {
   dirty: boolean;
   currentPage?: number | ((current: DocumentState, pageCount: number) => number);
+  hasTextLayer?: boolean | null;
 }
+
+interface ReplaceBytesOptions {
+  dirty: boolean;
+  hasTextLayer?: boolean | null;
+  expectedOpenToken?: number;
+  expectedSourceBytes?: Uint8Array | null;
+}
+
+export type ReplaceBytesResult = "replaced" | "stale" | "failed";
 
 interface OperationContext {
   handle: PdfDocumentHandle;
@@ -69,6 +79,7 @@ export function useDocument() {
   const engine = useMemo<PdfEngine>(() => new LocalPdfEngine(), []);
   const [document, setDocument] = useState<DocumentState>(INITIAL_DOCUMENT);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
+  const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -96,6 +107,7 @@ export function useDocument() {
       openTokenRef.current += 1;
       const engineHandle = activeHandleRef.current;
       activeHandleRef.current = null;
+      activeBytesRef.current = null;
       void closeHandle(engineHandle);
     };
   }, [closeHandle]);
@@ -121,6 +133,7 @@ export function useDocument() {
 
       const previousHandle = activeHandleRef.current;
       activeHandleRef.current = engineHandle;
+      activeBytesRef.current = bytes;
       setDocument((current) => ({
         ...current,
         bytes,
@@ -129,7 +142,7 @@ export function useDocument() {
         currentPage: clampPage(resolveCurrentPage(options, current, pageCount), pageCount),
         dirty: options.dirty,
         fileSizeBytes: bytes.byteLength,
-        hasTextLayer: null,
+        hasTextLayer: options.hasTextLayer ?? null,
         pageSizeInches: null,
         error: null,
       }));
@@ -162,17 +175,23 @@ export function useDocument() {
       operation: (context: OperationContext) => Promise<{
         engineHandle: PdfDocumentHandle;
         options: CommitOptions;
-      }>,
+      } | null>,
+      requestedToken = openTokenRef.current,
     ) => {
       const queued = mutationQueueRef.current.then(async () => {
         const context = currentOperation();
 
-        if (!context) {
+        if (!context || context.token !== requestedToken) {
           return false;
         }
 
         try {
           const result = await operation(context);
+
+          if (!result) {
+            return false;
+          }
+
           try {
             return await commitHandle(result.engineHandle, result.options, context);
           } catch (error) {
@@ -208,6 +227,7 @@ export function useDocument() {
       const previousHandle = activeHandleRef.current;
       let openedHandle: PdfDocumentHandle | null = null;
       activeHandleRef.current = null;
+      activeBytesRef.current = null;
       setDocument(INITIAL_DOCUMENT);
       await closeHandle(previousHandle);
 
@@ -222,6 +242,7 @@ export function useDocument() {
         }
 
         activeHandleRef.current = engineHandle;
+        activeBytesRef.current = file.bytes;
         setDocument({
           bytes: file.bytes,
           engineHandle,
@@ -243,6 +264,7 @@ export function useDocument() {
 
         if (openTokenRef.current === token) {
           activeHandleRef.current = null;
+          activeBytesRef.current = null;
           setDocument({
             ...INITIAL_DOCUMENT,
             error: getEngineErrorMessage(error),
@@ -254,6 +276,59 @@ export function useDocument() {
     },
     [closeHandle, engine],
   );
+
+  const replaceBytes = useCallback(
+    async (bytes: Uint8Array, options: ReplaceBytesOptions): Promise<ReplaceBytesResult> => {
+      const requestedToken = options.expectedOpenToken ?? openTokenRef.current;
+      let stale = false;
+
+      const replaced = await enqueueMutation("replace", async () => {
+        if (
+          options.expectedOpenToken !== undefined &&
+          openTokenRef.current !== options.expectedOpenToken
+        ) {
+          stale = true;
+          return null;
+        }
+
+        if (
+          options.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== options.expectedSourceBytes
+        ) {
+          stale = true;
+          return null;
+        }
+
+        let openedHandle: PdfDocumentHandle | null = null;
+        const nextBytes = new Uint8Array(bytes);
+
+        try {
+          const engineHandle = await engine.open(nextBytes);
+          openedHandle = engineHandle;
+
+          return {
+            engineHandle,
+            options: {
+              dirty: options.dirty,
+              hasTextLayer: options.hasTextLayer ?? null,
+            },
+          };
+        } catch (error) {
+          await closeHandle(openedHandle);
+          throw error;
+        }
+      }, requestedToken);
+
+      if (replaced) {
+        return "replaced";
+      }
+
+      return stale ? "stale" : "failed";
+    },
+    [closeHandle, engine, enqueueMutation],
+  );
+
+  const getOpenToken = useCallback(() => openTokenRef.current, []);
 
   const setCurrentPage = useCallback((page: number) => {
     setDocument((current) => ({
@@ -395,6 +470,8 @@ export function useDocument() {
   return {
     document,
     openFile,
+    replaceBytes,
+    getOpenToken,
     setCurrentPage,
     setZoom,
     setFitZoom,

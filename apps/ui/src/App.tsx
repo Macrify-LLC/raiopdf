@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { AppShell } from "./components/AppShell";
+import {
+  isEngineBridgeUnavailableError,
+  useEngineBridge,
+} from "./hooks/useEngineBridge";
 import { useDocument } from "./hooks/useDocument";
 import {
   getPdfLoadErrorMessage,
@@ -7,13 +11,32 @@ import {
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
+import {
+  hasExtractableTextLayer,
+  pdfDocumentHasTextLayer,
+} from "./lib/textLayer";
 
 const ZOOM_STEP = 0.25;
+
+export type OcrPhase =
+  | "idle"
+  | "starting-engine"
+  | "processing"
+  | "verifying"
+  | "done"
+  | "error";
+
+export interface OcrUiState {
+  phase: OcrPhase;
+  message: string | null;
+}
 
 export function App() {
   const {
     document,
     openFile: openDocumentFile,
+    replaceBytes,
+    getOpenToken,
     setCurrentPage,
     setZoom,
     setFitZoom,
@@ -26,10 +49,17 @@ export function App() {
     save: saveDocument,
     markSaved,
   } = useDocument();
+  const engineBridge = useEngineBridge();
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
+  const [ocrState, setOcrState] = useState<OcrUiState>({
+    phase: "idle",
+    message: null,
+  });
+  const ocrRunRef = useRef(0);
+  const ocrActiveRef = useRef(false);
 
   useEffect(() => {
     let disposed = false;
@@ -72,17 +102,12 @@ export function App() {
 
     let disposed = false;
 
-    void pdfDocument
-      .getPage(1)
-      .then((page) => page.getTextContent())
-      .then((textContent) => {
+    void pdfDocumentHasTextLayer(pdfDocument)
+      .then((hasTextLayer) => {
         if (disposed) {
           return;
         }
 
-        const hasTextLayer = textContent.items.some((item) => {
-          return "str" in item && item.str.trim().length > 0;
-        });
         setHasTextLayer(hasTextLayer);
       })
       .catch(() => {
@@ -96,8 +121,150 @@ export function App() {
     };
   }, [pdfDocument, setHasTextLayer]);
 
+  const makeSearchable = useCallback(() => {
+    if (ocrActiveRef.current) {
+      return;
+    }
+
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+
+    if (!sourceBytes) {
+      setOcrState({
+        phase: "error",
+        message: "Open a PDF before running OCR.",
+      });
+      return;
+    }
+
+    if (!engineBridge.available) {
+      setOcrState({
+        phase: "error",
+        message: "OCR runs in the desktop app.",
+      });
+      return;
+    }
+
+    const runId = ocrRunRef.current + 1;
+    ocrRunRef.current = runId;
+    ocrActiveRef.current = true;
+    const isCurrentRun = () => (
+      ocrRunRef.current === runId && getOpenToken() === sourceOpenToken
+    );
+    const finishCurrentRun = () => {
+      if (ocrRunRef.current === runId) {
+        ocrActiveRef.current = false;
+      }
+    };
+
+    setOcrState({
+      phase: "starting-engine",
+      message: "Starting the PDF engine...",
+    });
+
+    void engineBridge
+      .runOcr(sourceBytes, {
+        onEngineReady: () => {
+          if (isCurrentRun()) {
+            setOcrState({
+              phase: "processing",
+              message: "Making searchable — page-by-page work happens in the engine.",
+            });
+          }
+        },
+      })
+      .then(async (ocrBytes) => {
+        if (!isCurrentRun()) {
+          return;
+        }
+
+        setOcrState({
+          phase: "verifying",
+          message: "Verifying the text layer...",
+        });
+
+        const hasTextLayer = await hasExtractableTextLayer(ocrBytes);
+
+        if (!isCurrentRun()) {
+          return;
+        }
+
+        if (!hasTextLayer) {
+          finishCurrentRun();
+          setOcrState({
+            phase: "error",
+            message: "OCR produced no text layer. The document was left unchanged.",
+          });
+          return;
+        }
+
+        const replaced = await replaceBytes(ocrBytes, {
+          dirty: true,
+          hasTextLayer: true,
+          expectedOpenToken: sourceOpenToken,
+          expectedSourceBytes: sourceBytes,
+        });
+
+        if (!isCurrentRun()) {
+          return;
+        }
+
+        if (replaced === "stale") {
+          finishCurrentRun();
+          setOcrState({
+            phase: "error",
+            message: "The document changed before OCR finished. The result was not applied.",
+          });
+          return;
+        }
+
+        if (replaced === "failed") {
+          finishCurrentRun();
+          setOcrState({
+            phase: "error",
+            message: "The searchable PDF could not be opened. The document was left unchanged.",
+          });
+          return;
+        }
+
+        setSelectedPageIndexes(new Set([0]));
+        finishCurrentRun();
+        setOcrState({
+          phase: "done",
+          message: "Searchable — verified",
+        });
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentRun()) {
+          return;
+        }
+
+        if (isEngineBridgeUnavailableError(error)) {
+          finishCurrentRun();
+          setOcrState({
+            phase: "error",
+            message: error.message,
+          });
+          return;
+        }
+
+        const message = error instanceof Error
+          ? error.message
+          : "OCR could not finish. The document was left unchanged.";
+
+        finishCurrentRun();
+        setOcrState({
+          phase: "error",
+          message,
+        });
+      });
+  }, [document.bytes, engineBridge, getOpenToken, replaceBytes]);
+
   const openOpenedFile = useCallback(
     (file: OpenedFile) => {
+      ocrRunRef.current += 1;
+      ocrActiveRef.current = false;
+      setOcrState({ phase: "idle", message: null });
       setSelectedPageIndexes(new Set());
       void openDocumentFile(file).then((opened) => {
         if (opened) {
@@ -314,6 +481,10 @@ export function App() {
       onDeleteSelected={deleteSelected}
       onMoveSelectedUp={() => moveSelected(-1)}
       onMoveSelectedDown={() => moveSelected(1)}
+      ocrState={ocrState}
+      ocrAvailable={engineBridge.available}
+      ocrStarting={engineBridge.starting}
+      onMakeSearchable={makeSearchable}
     />
   );
 }

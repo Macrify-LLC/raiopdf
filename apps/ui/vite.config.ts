@@ -6,8 +6,14 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@raiopdf/engine-api": fileURLToPath(
+        new URL("../../packages/engine-api/src/index.ts", import.meta.url),
+      ),
       "@raiopdf/engine-local": fileURLToPath(
         new URL("../../packages/engine-local/src/index.ts", import.meta.url),
+      ),
+      "@raiopdf/engine-sidecar": fileURLToPath(
+        new URL("../../packages/engine-sidecar/src/index.ts", import.meta.url),
       ),
     },
   },

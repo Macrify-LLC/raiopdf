@@ -25,6 +25,14 @@ export type SidecarPdfEngineInfo = {
   version?: string;
 };
 
+export type SidecarOcrType = "skip-text" | "force-ocr" | "Normal";
+
+export interface SidecarOcrOptions {
+  languages?: readonly string[];
+  ocrType?: SidecarOcrType;
+  deskew?: boolean;
+}
+
 type StirlingErrorBody = {
   error?: unknown;
   message?: unknown;
@@ -48,6 +56,8 @@ type StirlingErrorBody = {
  *   result with /api/v1/general/rearrange-pages when insertion is not an append.
  * - merge -> POST /api/v1/general/merge-pdfs with repeated fileInput parts,
  *   sortType=orderProvided, removeCertSign=true, and generateToc=false.
+ * - ocr -> POST /api/v1/misc/ocr-pdf with repeated languages, ocrType,
+ *   ocrRenderType=sandwich, sidecar=false, and deskew.
  */
 export class SidecarPdfEngine implements PdfEngine {
   private readonly baseUrl: string;
@@ -235,6 +245,29 @@ export class SidecarPdfEngine implements PdfEngine {
       await this.postMerge(storedDocuments.map((document) => document.bytes)),
       sum(pageCounts),
     );
+  }
+
+  async ocr(
+    document: PdfDocumentHandle,
+    options: SidecarOcrOptions = {},
+  ): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const formData = createFormData(storedDocument.bytes);
+    const languages = options.languages?.length ? options.languages : ["eng"];
+
+    for (const language of languages) {
+      formData.append("languages", language);
+    }
+
+    formData.append("ocrType", options.ocrType ?? "skip-text");
+    formData.append("ocrRenderType", "sandwich");
+    formData.append("sidecar", "false");
+    formData.append("deskew", String(options.deskew ?? false));
+
+    const response = await this.request("/api/v1/misc/ocr-pdf", formData);
+
+    return this.store(await readBytes(response), pageCount);
   }
 
   async saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array> {

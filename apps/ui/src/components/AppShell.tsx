@@ -1,4 +1,5 @@
 import { useRef, type ChangeEvent, type MouseEvent } from "react";
+import type { OcrUiState } from "../App";
 import type { DocumentState } from "../hooks/useDocument";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
@@ -27,6 +28,10 @@ export interface AppShellProps {
   onDeleteSelected: () => void;
   onMoveSelectedUp: () => void;
   onMoveSelectedDown: () => void;
+  ocrState: OcrUiState;
+  ocrAvailable: boolean;
+  ocrStarting: boolean;
+  onMakeSearchable: () => void;
 }
 
 export function AppShell({
@@ -47,6 +52,10 @@ export function AppShell({
   onDeleteSelected,
   onMoveSelectedUp,
   onMoveSelectedDown,
+  ocrState,
+  ocrAvailable,
+  ocrStarting,
+  onMakeSearchable,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && pdfDocument);
@@ -121,7 +130,13 @@ export function AppShell({
           onFitZoomResolved={onFitZoomResolved}
           onPageSizeChange={onPageSizeChange}
         />
-        <ToolPanel />
+        <ToolPanel
+          hasDocument={hasDocument}
+          ocrState={ocrState}
+          ocrAvailable={ocrAvailable}
+          ocrStarting={ocrStarting}
+          onMakeSearchable={onMakeSearchable}
+        />
       </div>
       <StatusBar
         currentPage={hasDocument ? document.currentPage : 0}

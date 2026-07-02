@@ -157,6 +157,25 @@ describe("SidecarPdfEngine", () => {
     expect(getFormData(calls[2]).getAll("fileInput")).toHaveLength(2);
   });
 
+  it("runs OCR through ocr-pdf with searchable sandwich defaults", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(42));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const searchable = await engine.ocr(document, {
+      languages: ["eng", "spa"],
+      deskew: true,
+    });
+
+    expect(await engine.saveToBytes(searchable)).toEqual(bytes(42));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/ocr-pdf");
+    expect(getFormData(calls[1]).getAll("languages")).toEqual(["eng", "spa"]);
+    expectFormField(calls[1], "ocrType", "skip-text");
+    expectFormField(calls[1], "ocrRenderType", "sandwich");
+    expectFormField(calls[1], "sidecar", "false");
+    expectFormField(calls[1], "deskew", "true");
+  });
+
   it("closes document handles and ignores unknown handles", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

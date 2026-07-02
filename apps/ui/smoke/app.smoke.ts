@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
@@ -48,6 +48,71 @@ test("queues rapid rotate and delete clicks without losing the delete", async ({
   });
 });
 
+test("makes an image-only PDF searchable through the mocked desktop OCR bridge", async ({ page }) => {
+  const sourcePdf = await createPdf([200]);
+  const searchablePdf = await createTextPdf("Verified OCR text");
+  await installOcrBridgeMock(page, searchablePdf);
+  await page.goto("/");
+  await openPdf(page, "scan.pdf", sourcePdf);
+
+  const makeSearchable = page.getByRole("button", { name: "Make Searchable (OCR)" });
+  await makeSearchable.evaluate((element) => {
+    const button = element as HTMLButtonElement;
+    button.click();
+    button.click();
+  });
+
+  await expect(page.getByText("Starting the PDF engine...")).toBeVisible();
+  await expect(makeSearchable).toBeDisabled();
+  await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
+  await expect(page.getByText("Verifying the text layer...")).toBeVisible();
+  await expect(page.getByLabel("Legal").getByText("Searchable — verified")).toBeVisible();
+  await expect(page.getByRole("contentinfo").getByText("Searchable — verified")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  await expect.poll(() => getOcrCallCount(page)).toBe(1);
+});
+
+test("leaves the document unchanged when OCR returns no text layer", async ({ page }) => {
+  const sourcePdf = await createPdf([200]);
+  const imageOnlyOcrPdf = await createPdf([240]);
+  await installOcrBridgeMock(page, imageOnlyOcrPdf);
+  await page.goto("/");
+  await openPdf(page, "scan.pdf", sourcePdf);
+
+  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+
+  await expect(page.getByText("OCR produced no text layer. The document was left unchanged.")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeHidden();
+
+  const saved = await savePdf(page);
+  expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
+});
+
+test("keeps a rotate queued during mocked OCR and rejects the stale OCR result", async ({ page }) => {
+  const sourcePdf = await createPdf([200]);
+  const searchablePdf = await createTextPdf("Verified OCR text");
+  await installOcrBridgeMock(page, searchablePdf, {
+    engineStartDelayMs: 20,
+    ocrDelayMs: 350,
+  });
+  await page.goto("/");
+  await openPdf(page, "scan.pdf", sourcePdf);
+
+  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+  await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Rotate selected pages" }).click();
+
+  await expect(page.getByText("The document changed before OCR finished. The result was not applied.")).toBeVisible();
+  await expect.poll(() => getOcrCallCount(page)).toBe(1);
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [200],
+    rotations: [90],
+  });
+});
+
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
@@ -79,6 +144,85 @@ async function createPdf(pageWidths: readonly number[]): Promise<Uint8Array> {
   }
 
   return pdf.save();
+}
+
+async function createTextPdf(text: string): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([200, 300]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText(text, {
+    x: 24,
+    y: 240,
+    size: 12,
+    font,
+  });
+
+  return pdf.save();
+}
+
+async function installOcrBridgeMock(
+  page: Page,
+  ocrBytes: Uint8Array,
+  options: { engineStartDelayMs?: number; ocrDelayMs?: number } = {},
+): Promise<void> {
+  await page.addInitScript(({ ocrContents, engineStartDelayMs, ocrDelayMs }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_OCR_CALL_COUNT__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, engineStartDelayMs);
+      });
+
+      return { port: 39393 } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (url.endsWith("/api/v1/analysis/basic-info")) {
+        return new Response(JSON.stringify({ pageCount: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/misc/ocr-pdf")) {
+        testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0) + 1;
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, ocrDelayMs);
+        });
+
+        return new Response(new Uint8Array(ocrContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    ocrContents: [...ocrBytes],
+    engineStartDelayMs: options.engineStartDelayMs ?? 120,
+    ocrDelayMs: options.ocrDelayMs ?? 120,
+  });
+}
+
+async function getOcrCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_OCR_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0;
+  });
 }
 
 async function expectPdf(

@@ -17,6 +17,7 @@ export interface DocumentState {
   dirty: boolean;
   fitWidth: boolean;
   fileName: string | null;
+  filePath: string | null;
   fileSizeBytes: number | null;
   hasTextLayer: boolean | null;
   pageSizeInches: PageSizeInches | null;
@@ -35,6 +36,7 @@ const INITIAL_DOCUMENT: DocumentState = {
   dirty: false,
   fitWidth: true,
   fileName: null,
+  filePath: null,
   fileSizeBytes: null,
   hasTextLayer: null,
   pageSizeInches: null,
@@ -49,6 +51,18 @@ interface CommitOptions {
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
+}
+
+export interface DocumentFileInput {
+  bytes: Uint8Array;
+  name: string;
+  path?: string | null;
+}
+
+export interface SaveDocumentResult {
+  bytes: Uint8Array;
+  fileName: string;
+  filePath: string | null;
 }
 
 export function useDocument() {
@@ -188,7 +202,7 @@ export function useDocument() {
   );
 
   const openFile = useCallback(
-    async (file: File) => {
+    async (file: DocumentFileInput) => {
       const token = openTokenRef.current + 1;
       openTokenRef.current = token;
       const previousHandle = activeHandleRef.current;
@@ -198,8 +212,7 @@ export function useDocument() {
       await closeHandle(previousHandle);
 
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const engineHandle = await engine.open(bytes);
+        const engineHandle = await engine.open(file.bytes);
         openedHandle = engineHandle;
         const pageCount = await engine.pageCount(engineHandle);
 
@@ -210,7 +223,7 @@ export function useDocument() {
 
         activeHandleRef.current = engineHandle;
         setDocument({
-          bytes,
+          bytes: file.bytes,
           engineHandle,
           pageCount,
           currentPage: 1,
@@ -218,7 +231,8 @@ export function useDocument() {
           fitWidth: true,
           dirty: false,
           fileName: file.name,
-          fileSizeBytes: bytes.byteLength,
+          filePath: file.path ?? null,
+          fileSizeBytes: file.bytes.byteLength,
           hasTextLayer: null,
           pageSizeInches: null,
           error: null,
@@ -323,7 +337,7 @@ export function useDocument() {
     [engine, enqueueMutation],
   );
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (): Promise<SaveDocumentResult | null> => {
     await mutationQueueRef.current;
 
     const engineHandle = activeHandleRef.current;
@@ -341,13 +355,14 @@ export function useDocument() {
       }
 
       let fileName = "Untitled.pdf";
+      let filePath: string | null = null;
       setDocument((current) => {
         fileName = current.fileName ?? fileName;
+        filePath = current.filePath;
 
         return {
           ...current,
           bytes,
-          dirty: false,
           fileSizeBytes: bytes.byteLength,
           error: null,
         };
@@ -356,6 +371,7 @@ export function useDocument() {
       return {
         bytes,
         fileName,
+        filePath,
       };
     } catch (error) {
       if (activeHandleRef.current === engineHandle && openTokenRef.current === token) {
@@ -365,6 +381,16 @@ export function useDocument() {
       return null;
     }
   }, [engine, setError]);
+
+  const markSaved = useCallback((saved: { fileName: string; filePath: string | null }) => {
+    setDocument((current) => ({
+      ...current,
+      dirty: false,
+      fileName: saved.fileName,
+      filePath: saved.filePath,
+      error: null,
+    }));
+  }, []);
 
   return {
     document,
@@ -379,6 +405,7 @@ export function useDocument() {
     deletePages,
     reorderPages,
     save,
+    markSaved,
   };
 }
 

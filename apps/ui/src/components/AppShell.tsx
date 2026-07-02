@@ -13,7 +13,8 @@ export interface AppShellProps {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
   selectedPageIndexes: ReadonlySet<number>;
-  onOpenFile: (file: File) => void;
+  onOpenRequested: () => void;
+  onFileDropped: (file: File) => void;
   onSave: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
@@ -32,7 +33,8 @@ export function AppShell({
   document,
   pdfDocument,
   selectedPageIndexes,
-  onOpenFile,
+  onOpenRequested,
+  onFileDropped,
   onSave,
   onPreviousPage,
   onNextPage,
@@ -60,7 +62,7 @@ export function AppShell({
     : [];
 
   function requestOpen() {
-    fileInputRef.current?.click();
+    onOpenRequested();
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
@@ -68,7 +70,7 @@ export function AppShell({
     event.currentTarget.value = "";
 
     if (file) {
-      onOpenFile(file);
+      onFileDropped(file);
     }
   }
 
@@ -110,7 +112,7 @@ export function AppShell({
         />
         <CanvasWell
           onOpenRequested={requestOpen}
-          onFileDropped={onOpenFile}
+          onFileDropped={onFileDropped}
           pdfDocument={pdfDocument}
           currentPage={document.currentPage}
           zoom={document.zoom}

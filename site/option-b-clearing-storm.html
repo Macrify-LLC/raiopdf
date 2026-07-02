@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RaioPDF — Free, local, full-featured PDF suite for law firms</title>
+<meta name="description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Acrobat never bothered building.">
+
+<link rel="stylesheet" href="./shared/reset.css">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Newsreader:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%23F5B942' d='M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z'/%3E%3C/svg%3E">
+
+<style>
+  :root{
+    --navy-deep:#0B1A2E;
+    --navy:#132D52;
+    --primary:#1D4E8F;
+    --secondary:#2979C9;
+    --accent:#4AADE0;
+    --light-blue:#7EC8F0;
+    --muted-blend:#5A6F8A;
+    --surface:#F7FAFE;
+    --bg-alt:#EDF4FB;
+    --border:#D4DFEE;
+    --text-primary:#0B1A2E;
+    --text-body:#2D3E56;
+    --text-muted:#5A6F8A;
+    --gold:#F5B942;
+    --gold-deep:#E0932E;
+    --gold-pale:#FFE7B3;
+    --font-display:"Newsreader",Georgia,serif;
+    --font-editorial:"DM Serif Display",Georgia,serif;
+    --font-body:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,sans-serif;
+  }
+
+  html{scroll-behavior:smooth;}
+  body{font-family:var(--font-body);color:var(--text-body);background:var(--surface);line-height:1.6;overflow-x:hidden;}
+
+  .visually-hidden{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+  }
+  .skip-link{
+    position:absolute; top:-48px; left:12px; z-index:100;
+    background:var(--gold); color:var(--navy-deep); font-weight:700;
+    padding:.6rem 1rem; border-radius:8px; transition:top .15s ease;
+  }
+  .skip-link:focus{ top:12px; }
+
+  .container{ max-width:1120px; margin:0 auto; padding:0 24px; }
+
+  .eyebrow{
+    font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--gold-deep); display:inline-flex; align-items:center; gap:8px;
+  }
+  .eyebrow--on-dark{ color:var(--gold); }
+
+  /* ---------- status bar ---------- */
+  .status-bar{
+    background:var(--navy-deep); color:#EAF2FB; font-size:13px; font-weight:500;
+    text-align:center; padding:10px 16px; border-bottom:1px solid rgba(245,185,66,.25);
+  }
+  .status-bar strong{ color:var(--gold); font-weight:700; }
+  .status-bar a{ color:var(--light-blue); text-decoration:underline; text-underline-offset:2px; }
+  .status-bar a:hover{ color:var(--gold); }
+
+  /* ---------- nav ---------- */
+  .nav{
+    position:relative; z-index:20;
+    background:linear-gradient(180deg, rgba(11,26,46,.96), rgba(19,45,82,.9));
+    border-bottom:1px solid rgba(255,255,255,.08);
+  }
+  .nav__inner{
+    max-width:1120px; margin:0 auto; padding:16px 24px;
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+  }
+  .nav__brand{ display:flex; align-items:center; gap:10px; }
+  .bolt-icon{ width:22px; height:22px; flex:none; color:var(--gold); filter:drop-shadow(0 0 6px rgba(245,185,66,.55)); }
+  .nav__wordmark{ font-family:var(--font-display); font-size:20px; color:#fff; letter-spacing:.01em; }
+  .nav__wordmark .wt-bold{ font-weight:700; color:var(--gold); }
+  .nav__links{ display:flex; align-items:center; gap:22px; }
+  .nav__links a{
+    font-size:14px; font-weight:600; color:rgba(255,255,255,.82);
+    padding:6px 2px; border-bottom:2px solid transparent; transition:color .15s ease, border-color .15s ease;
+  }
+  .nav__links a:hover{ color:#fff; border-color:var(--accent); }
+  .nav__links .nav__cta{
+    background:var(--gold); color:var(--navy-deep); border-radius:999px;
+    padding:9px 18px; border:0; font-weight:700;
+  }
+  .nav__links .nav__cta:hover{ background:var(--gold-pale); border-color:transparent; }
+  .nav__toggle{ display:none; }
+
+  /* ---------- hero / storm ---------- */
+  .hero{
+    position:relative; overflow:hidden; isolation:isolate;
+    background:linear-gradient(165deg, var(--navy-deep) 0%, var(--navy) 38%, #3E5170 72%, var(--muted-blend) 100%);
+    color:#fff;
+    padding:clamp(72px, 12vw, 128px) 24px clamp(64px, 9vw, 104px);
+  }
+
+  .hero__atmosphere{ position:absolute; inset:0; z-index:0; pointer-events:none; }
+
+  .cloud{
+    position:absolute; border-radius:50%; filter:blur(58px);
+    background:radial-gradient(circle at 32% 30%, rgba(30,52,86,.9), rgba(11,26,46,.55) 60%, transparent 82%);
+    will-change:transform;
+  }
+  .cloud--1{ top:-140px; left:-120px; width:560px; height:360px; opacity:.85; }
+  .cloud--2{ top:20px; right:-160px; width:480px; height:320px; opacity:.7; background:radial-gradient(circle at 60% 35%, rgba(41,60,92,.85), rgba(11,26,46,.5) 62%, transparent 84%); }
+  .cloud--3{ bottom:-180px; left:8%; width:640px; height:380px; opacity:.62; }
+  .cloud--4{ top:46%; left:34%; width:400px; height:230px; opacity:.5; filter:blur(70px); }
+
+  .spotlight-wrap{ position:absolute; inset:0; overflow:hidden; z-index:1; pointer-events:none; }
+  .spotlight-group{ position:absolute; top:0; opacity:0; animation:spotlight-reveal 1.9s ease forwards; }
+  .spotlight-group--strong{ left:0; animation-delay:.15s; }
+  .spotlight-group--weak{ right:0; animation-delay:.45s; opacity:0; }
+
+  /* Desktop-pointer parallax: JS sets --pointer-x/--pointer-y (in px, clamped
+     and smoothed) on .hero as the mouse moves. `translate` is a distinct CSS
+     property from `transform`, so it composes for free with the existing
+     scale/rotate keyframe animations above instead of fighting them. No-op
+     (0px, 0px) on touch devices and under reduced motion — see the script at
+     the bottom of the page, which only attaches the listener when
+     `(hover: hover) and (pointer: fine)` and motion isn't reduced. */
+  .spotlight-group--strong{
+    translate: calc(var(--pointer-x, 0px) * 1) calc(var(--pointer-y, 0px) * 1);
+    transition: translate .5s cubic-bezier(.2,.8,.2,1);
+  }
+  .spotlight-group--weak{
+    /* The fading storm side drifts the opposite way, slightly — reads as the
+       whole sky reacting to where the light is breaking through, not a
+       cursor sticking to one beam. */
+    translate: calc(var(--pointer-x, 0px) * -0.45) calc(var(--pointer-y, 0px) * -0.45);
+    transition: translate .5s cubic-bezier(.2,.8,.2,1);
+  }
+
+  .spotlight-beam{ position:absolute; top:0; left:0; border-radius:9999px; }
+
+  /* strong beam group — the hard sunbreak, upper-left */
+  .spotlight-group--strong .spotlight-beam--primary{
+    width:640px; height:1480px;
+    transform:translateY(-380px) rotate(-45deg);
+    background:radial-gradient(68.54% 68.72% at 55.02% 31.46%, hsla(38,96%,68%,.42) 0%, hsla(36,90%,55%,.18) 45%, hsla(34,85%,45%,0) 78%);
+    filter:blur(1px);
+    animation:spotlight-drift-strong 7s ease-in-out infinite 2s;
+  }
+  .spotlight-group--strong .spotlight-beam--core-a{
+    left:200px; width:240px; height:1480px;
+    transform:translateY(-380px) rotate(-45deg);
+    background:radial-gradient(50% 50% at 50% 28%, hsla(45,100%,90%,.62) 0%, hsla(42,96%,72%,.22) 55%, transparent 100%);
+    animation:spotlight-pulse 6s ease-in-out infinite .3s;
+  }
+  .spotlight-group--strong .spotlight-beam--core-b{
+    left:200px; width:240px; height:920px;
+    transform:translateY(-200px) rotate(-45deg);
+    background:radial-gradient(50% 50% at 50% 30%, hsla(48,100%,96%,.8) 0%, hsla(44,98%,80%,.28) 55%, transparent 100%);
+    animation:spotlight-pulse 6s ease-in-out infinite .9s;
+  }
+
+  /* weak beam group — the fading storm side, upper-right */
+  .spotlight-group--weak .spotlight-beam--primary{
+    right:0; left:auto; width:400px; height:1000px;
+    transform:translateY(-260px) rotate(45deg);
+    background:radial-gradient(68.54% 68.72% at 45% 31.46%, hsla(212,38%,55%,.16) 0%, hsla(212,34%,40%,.07) 50%, transparent 80%);
+    animation:spotlight-drift-weak 7s ease-in-out infinite 2.4s;
+  }
+  .spotlight-group--weak .spotlight-beam--core-a{
+    right:100px; left:auto; width:140px; height:1000px;
+    transform:translateY(-260px) rotate(45deg);
+    background:radial-gradient(50% 50% at 50% 28%, hsla(210,55%,80%,.22) 0%, hsla(210,45%,60%,.08) 55%, transparent 100%);
+    animation:spotlight-pulse 6s ease-in-out infinite .5s;
+  }
+  .spotlight-group--weak .spotlight-beam--core-b{
+    right:100px; left:auto; width:140px; height:640px;
+    transform:translateY(-140px) rotate(45deg);
+    background:radial-gradient(50% 50% at 50% 30%, hsla(212,60%,88%,.28) 0%, hsla(212,45%,65%,.1) 55%, transparent 100%);
+    animation:spotlight-pulse 6s ease-in-out infinite 1.1s;
+  }
+
+  @keyframes spotlight-reveal{ from{ opacity:0; transform:scale(.82); } to{ opacity:1; transform:scale(1); } }
+  @keyframes spotlight-drift-strong{
+    0%,100%{ transform:translateY(-380px) rotate(-45deg); }
+    50%{ transform:translateY(-402px) rotate(-43deg); }
+  }
+  @keyframes spotlight-drift-weak{
+    0%,100%{ transform:translateY(-260px) rotate(45deg); }
+    50%{ transform:translateY(-244px) rotate(47deg); }
+  }
+  @keyframes spotlight-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.78; } }
+
+  .hero__content{ position:relative; z-index:2; max-width:1120px; margin:0 auto; }
+  .hero__badge{
+    display:inline-flex; align-items:center; gap:8px; margin-bottom:22px;
+    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.16);
+    padding:7px 14px; border-radius:999px; backdrop-filter:blur(6px);
+  }
+  .hero__badge svg{ width:14px; height:14px; color:var(--gold); }
+  .hero__badge span{ font-size:12px; font-weight:600; letter-spacing:.05em; color:rgba(255,255,255,.85); }
+
+  .hero h1{
+    font-family:var(--font-display); font-weight:700; font-style:normal;
+    font-size:clamp(2.2rem, 5.2vw, 3.9rem); line-height:1.08; letter-spacing:-.01em;
+    max-width:20ch; color:#fff;
+    text-shadow:0 6px 40px rgba(0,0,0,.35);
+  }
+  .hero h1 .accent-word{ color:var(--gold); }
+
+  .hero__subhead{
+    font-family:var(--font-body); font-weight:600; font-size:clamp(1.05rem,2vw,1.3rem);
+    color:var(--light-blue); margin-top:18px; max-width:38ch;
+  }
+
+  .hero__positioning{
+    margin-top:28px; max-width:56ch; font-size:16px; line-height:1.7; color:rgba(234,242,251,.86);
+  }
+
+  /* ---------- download panel ---------- */
+  .download-panel{
+    margin-top:40px; max-width:560px;
+    background:rgba(11,26,46,.55); border:1px solid rgba(245,185,66,.25);
+    border-radius:16px; padding:28px; backdrop-filter:blur(10px);
+    box-shadow:0 30px 70px rgba(0,0,0,.35);
+  }
+  .is-hidden{ display:none !important; }
+
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:10px;
+    font-family:var(--font-body); font-weight:700; font-size:15px;
+    border-radius:12px; padding:15px 26px; transition:transform .15s ease, box-shadow .2s ease, background .15s ease;
+  }
+  .btn:active{ transform:scale(.97); }
+  .btn--primary{
+    background:linear-gradient(135deg, var(--gold) 0%, var(--gold-deep) 100%);
+    color:var(--navy-deep);
+    box-shadow:0 0 0 rgba(245,185,66,0), 0 18px 40px -12px rgba(245,185,66,.55);
+  }
+  .btn--primary:hover{ box-shadow:0 22px 50px -10px rgba(245,185,66,.75); transform:translateY(-2px); }
+  .btn--primary svg{ width:18px; height:18px; }
+  .btn--outline{
+    background:transparent; color:#fff; border:1.5px solid rgba(255,255,255,.4);
+  }
+  .btn--outline:hover{ border-color:var(--gold); color:var(--gold); }
+
+  .download-loading{ font-size:14px; color:rgba(255,255,255,.65); }
+  .download-loading::before{
+    content:""; display:inline-block; width:9px; height:9px; margin-right:8px;
+    border-radius:50%; background:var(--gold); animation:pulse-dot 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse-dot{ 0%,100%{ opacity:.35; } 50%{ opacity:1; } }
+
+  .download-meta{ margin-top:14px; font-size:13px; color:rgba(255,255,255,.65); letter-spacing:.01em; }
+  .download-verify{ display:inline-block; margin-top:8px; font-size:13px; color:var(--light-blue); text-decoration:underline; text-underline-offset:3px; }
+  .download-verify:hover{ color:var(--gold); }
+
+  .download-pending p{ font-size:15px; color:rgba(234,242,251,.9); margin-bottom:18px; max-width:44ch; }
+
+  .download-counter{
+    margin-top:20px; padding-top:18px; border-top:1px solid rgba(255,255,255,.14);
+    font-size:13px; color:rgba(255,255,255,.7);
+  }
+  .download-counter strong{
+    font-family:var(--font-editorial); font-size:22px; font-weight:400; color:var(--gold); margin-right:6px;
+  }
+
+  .hero__meta-note{ margin-top:18px; font-size:12.5px; color:rgba(255,255,255,.5); max-width:46ch; }
+
+  /* ---------- generic section scaffolding ---------- */
+  section{ padding:clamp(56px, 8vw, 96px) 24px; }
+  .section-head{ max-width:640px; margin:0 0 40px; }
+  .section-head h2{
+    font-family:var(--font-display); font-weight:700; font-size:clamp(1.7rem,3.4vw,2.4rem);
+    color:var(--text-primary); margin-top:10px; line-height:1.15;
+  }
+  .section-head p{ margin-top:12px; font-size:16px; color:var(--text-muted); max-width:52ch; }
+
+  /* ---------- inputs section ---------- */
+  .inputs{ background:var(--surface); }
+  .inputs-grid{
+    display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:20px;
+  }
+  .input-card{
+    background:#fff; border:1px solid var(--border); border-radius:14px; padding:26px;
+    display:flex; gap:18px; box-shadow:0 2px 14px rgba(11,26,46,.04);
+    transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+  }
+  .input-card:hover{ box-shadow:0 10px 32px rgba(11,26,46,.08); transform:translateY(-2px); border-color:var(--accent); }
+  .input-card__num{
+    font-family:var(--font-display); font-weight:700; font-size:26px; color:var(--gold-deep);
+    flex:none; width:2.2ch;
+  }
+  .input-card h3{ font-size:16px; font-weight:700; color:var(--text-primary); margin-bottom:6px; }
+  .input-card p{ font-size:14.5px; color:var(--text-muted); line-height:1.6; }
+
+  /* ---------- outcomes section ---------- */
+  .outcomes{ background:var(--bg-alt); }
+  .outcomes-grid{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px; }
+  .outcomes-grid .outcome-card--wide{ grid-column:span 3; }
+  .outcome-card{
+    background:#fff; border:1px solid var(--border); border-radius:14px; padding:22px;
+    display:flex; gap:14px; align-items:flex-start;
+  }
+  .outcome-card svg{ width:20px; height:20px; flex:none; color:var(--gold-deep); margin-top:2px; }
+  .outcome-card p{ font-size:14.5px; color:var(--text-body); line-height:1.6; }
+  .outcome-card p strong{ color:var(--text-primary); font-weight:700; }
+
+  /* ---------- pull quote ---------- */
+  .pullquote{
+    position:relative; overflow:hidden;
+    background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 55%, #38507a 100%);
+    color:#fff; text-align:left;
+  }
+  .pullquote::before{
+    content:""; position:absolute; top:-30%; right:-10%; width:60%; height:160%;
+    background:radial-gradient(closest-side, hsla(38,96%,68%,.16), transparent 72%);
+    pointer-events:none;
+  }
+  .pullquote__inner{ position:relative; max-width:800px; margin:0 auto; border-left:3px solid var(--gold); padding-left:28px; }
+  .pullquote blockquote{
+    font-family:var(--font-editorial); font-weight:400; font-size:clamp(1.4rem,3vw,2rem);
+    line-height:1.45; color:#fff;
+  }
+  .pullquote cite{ display:block; margin-top:20px; font-family:var(--font-body); font-style:normal; font-size:13px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--gold); }
+
+  /* ---------- honesty section ---------- */
+  .honest{ background:var(--surface); }
+  .honest-list{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; }
+  .honest-item{
+    display:flex; gap:12px; align-items:flex-start; padding:18px 20px;
+    background:var(--bg-alt); border:1px solid var(--border); border-radius:12px;
+  }
+  .honest-item svg{ width:18px; height:18px; flex:none; color:var(--muted-blend); margin-top:2px; }
+  .honest-item p{ font-size:14px; color:var(--text-body); line-height:1.55; }
+
+  /* ---------- footer ---------- */
+  .footer{
+    background:var(--navy-deep); color:rgba(234,242,251,.78);
+    padding:56px 24px 40px; border-top:3px solid transparent;
+    border-image:linear-gradient(90deg, var(--navy), var(--gold-deep), var(--navy)) 1;
+  }
+  .footer__inner{
+    max-width:1120px; margin:0 auto; display:grid; grid-template-columns:1.2fr 1fr; gap:40px;
+  }
+  .footer__brand img{ height:34px; width:auto; }
+  .footer__license{ font-size:13px; line-height:1.7; margin-top:16px; max-width:44ch; color:rgba(234,242,251,.62); }
+  .footer__license a{ color:var(--light-blue); text-decoration:underline; text-underline-offset:2px; }
+  .footer__license a:hover{ color:var(--gold); }
+
+  .footer__col h4{
+    font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; color:var(--gold);
+    margin-bottom:12px;
+  }
+  .footer__telemetry{ font-size:13px; line-height:1.65; color:rgba(234,242,251,.62); max-width:48ch; }
+  .footer__support{ margin-top:20px; display:flex; flex-direction:column; gap:8px; font-size:13.5px; }
+  .footer__support a{ color:rgba(234,242,251,.85); text-decoration:underline; text-underline-offset:2px; }
+  .footer__support a:hover{ color:var(--gold); }
+
+  .footer__bottom{
+    max-width:1120px; margin:40px auto 0; padding-top:24px; border-top:1px solid rgba(255,255,255,.08);
+    font-size:12px; color:rgba(234,242,251,.45); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width:860px){
+    .nav__links{ gap:14px; }
+    .nav__links a:not(.nav__cta){ display:none; }
+    .inputs-grid{ grid-template-columns:1fr; }
+    .outcomes-grid{ grid-template-columns:1fr 1fr; }
+    .outcomes-grid .outcome-card--wide{ grid-column:span 2; }
+    .honest-list{ grid-template-columns:1fr; }
+    .footer__inner{ grid-template-columns:1fr; gap:32px; }
+    .spotlight-group--strong .spotlight-beam--primary,
+    .spotlight-group--strong .spotlight-beam--core-a{ width:60vw; }
+  }
+
+  @media (max-width:560px){
+    .outcomes-grid{ grid-template-columns:1fr; }
+    .outcomes-grid .outcome-card--wide{ grid-column:span 1; }
+    .download-panel{ padding:22px; }
+    .footer__bottom{ flex-direction:column; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="status-bar">
+  <p><strong>Pre-alpha</strong> — under active development. Nothing to download yet.
+    <a href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener">Watch the repo</a> for the first release.</p>
+</div>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="#top">
+      <svg class="bolt-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
+      <span class="nav__wordmark"><span class="wt-light">Raio</span><span class="wt-bold">PDF</span></span>
+    </a>
+    <nav class="nav__links" aria-label="Primary">
+      <a href="#inputs">How it works</a>
+      <a href="#outcomes">Features</a>
+      <a href="#honest">What it isn't</a>
+      <a class="nav__cta" href="#top">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="hero__atmosphere" aria-hidden="true">
+      <div class="cloud cloud--1"></div>
+      <div class="cloud cloud--2"></div>
+      <div class="cloud cloud--3"></div>
+      <div class="cloud cloud--4"></div>
+      <div class="spotlight-wrap">
+        <div class="spotlight-group spotlight-group--strong">
+          <div class="spotlight-beam spotlight-beam--primary"></div>
+          <div class="spotlight-beam spotlight-beam--core-a"></div>
+          <div class="spotlight-beam spotlight-beam--core-b"></div>
+        </div>
+        <div class="spotlight-group spotlight-group--weak">
+          <div class="spotlight-beam spotlight-beam--primary"></div>
+          <div class="spotlight-beam spotlight-beam--core-a"></div>
+          <div class="spotlight-beam spotlight-beam--core-b"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero__content">
+      <span class="hero__badge">
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
+        <span>Free &amp; open source · GPL-3.0 · Windows first</span>
+      </span>
+
+      <h1>Everything you use Acrobat for, day to day — <span class="accent-word">free</span>, full-featured, and it never leaves your computer.</h1>
+      <p class="hero__subhead">Plus the legal workflows Acrobat never bothered building.</p>
+
+      <p class="hero__positioning">
+        Adobe has spent years pushing Acrobat toward pricier tiers and more features nobody asked
+        for, while locking a fundamentally local task — editing a file that already lives on your
+        machine — behind a mandatory account and a cloud round-trip. RaioPDF is the opposite bet:
+        free, full-featured for daily use, entirely on-device, and honest that it collects nothing.
+      </p>
+
+      <div class="download-panel" id="downloadPanel">
+        <p class="download-loading" id="downloadLoading">Checking GitHub for the latest release…</p>
+
+        <div class="download-available is-hidden" id="downloadAvailable">
+          <a class="btn btn--primary" id="downloadBtn" href="https://github.com/Macrify-LLC/raiopdf/releases" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            Download for Windows
+          </a>
+          <p class="download-meta" id="downloadMeta"></p>
+          <a class="download-verify is-hidden" id="downloadVerify" href="#" target="_blank" rel="noopener">Verify the download (SHA-256) →</a>
+        </div>
+
+        <div class="download-pending is-hidden" id="downloadPending">
+          <p>RaioPDF is in active development. The first signed Windows installer ships here first.</p>
+          <a class="btn btn--outline" href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener">Watch the repo on GitHub →</a>
+        </div>
+
+        <div class="download-counter is-hidden" id="downloadCounter">
+          <strong id="downloadCounterValue">0</strong><span>downloads across all published releases</span>
+        </div>
+      </div>
+
+      <p class="hero__meta-note">Windows only today. macOS later — no date promised.</p>
+    </div>
+  </section>
+
+  <section class="inputs" id="inputs">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">How you'd actually use it</span>
+        <h2>Four ways it fits into a real day at the firm</h2>
+      </div>
+      <div class="inputs-grid">
+        <div class="input-card">
+          <span class="input-card__num">01</span>
+          <div>
+            <h3>Download the installer, open it, use it.</h3>
+            <p>No account screen, no sign-in, no "create a free account to continue."</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">02</span>
+          <div>
+            <h3>Drop in a scanned PDF, hit Make Searchable.</h3>
+            <p>OCR runs entirely offline — no upload, no wait on a server.</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">03</span>
+          <div>
+            <h3>One click, "Prepare for Filing."</h3>
+            <p>Normalizes every page to letter-size portrait and splits an oversized file into properly labeled, sequential, portal-compliant parts.</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">04</span>
+          <div>
+            <h3>"Combine with Exhibits."</h3>
+            <p>Assemble a motion or brief with exhibit files in order, auto-stamped ("Exhibit A," configurable) and auto-bookmarked.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="outcomes" id="outcomes">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">What it replaces, and what it adds</span>
+        <h2>A full day-to-day Acrobat replacement, plus the legal workflow Acrobat skipped</h2>
+      </div>
+      <div class="outcomes-grid">
+        <div class="outcome-card outcome-card--wide">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
+          <p>View, organize (merge, split, reorder, extract, insert, rotate, crop), annotate, fill forms, sign — <strong>at $0, permanently</strong>, no watermarks or nag screens.</p>
+        </div>
+        <div class="outcome-card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <p><strong>True redaction</strong> — content is actually removed and verified by re-extraction, not a black box drawn over text that's still there underneath.</p>
+        </div>
+        <div class="outcome-card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <p><strong>Bates numbering</strong> across an entire document set in one pass.</p>
+        </div>
+        <div class="outcome-card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <p><strong>Sensitive-info scanner</strong> — assistive detection of SSNs and account numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out.</p>
+        </div>
+        <div class="outcome-card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <p><strong>Metadata scrubbing</strong> before production or filing.</p>
+        </div>
+        <div class="outcome-card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <p><strong>e-filing preflight report</strong> with the actual rule citations (Fla. R. Jud. Admin. 2.520/2.525) attached.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pullquote">
+    <div class="container">
+      <div class="pullquote__inner">
+        <blockquote>
+          Adobe has spent years pushing Acrobat toward pricier tiers and features nobody asked for,
+          while a task that's fundamentally local — editing your own file — now requires an account
+          and a cloud round-trip. RaioPDF is the opposite bet: free, full-featured, on-device,
+          nothing collected.
+        </blockquote>
+        <cite>Why now</cite>
+      </div>
+    </div>
+  </section>
+
+  <section class="honest" id="honest">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Said plainly</span>
+        <h2>What RaioPDF is not</h2>
+      </div>
+      <div class="honest-list">
+        <div class="honest-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+          <p>Not "AI-powered." No AI runs anywhere in RaioPDF — that's a selling point, not a gap.</p>
+        </div>
+        <div class="honest-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+          <p>Not released yet. Pre-alpha, no promised date.</p>
+        </div>
+        <div class="honest-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+          <p>Windows first. macOS later — no date promised.</p>
+        </div>
+        <div class="honest-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+          <p>Not a feature-by-feature Acrobat killer. A different bet on the same job.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <a href="https://macrify.me" target="_blank" rel="noopener" aria-label="Macrify">
+        <img src="./assets/macrify-wordmark-light.png" alt="Macrify">
+      </a>
+      <p class="footer__license">
+        Published as a public service to the legal community by
+        <a href="https://macrify.me" target="_blank" rel="noopener">Macrify LLC</a>.
+        Licensed under GPL-3.0. Bundles the MIT-licensed Stirling-PDF engine and other
+        third-party components under their own licenses.
+      </p>
+    </div>
+    <div class="footer__col">
+      <h4>No telemetry, ever</h4>
+      <p class="footer__telemetry">
+        This page runs no analytics, sets no tracking cookies, and profiles no one. The only
+        thing it fetches on its own is a single anonymous, unauthenticated call to GitHub's
+        public API for the current release — the same thing your browser would show if you
+        visited the repo directly.
+      </p>
+      <div class="footer__support">
+        <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>
+        <a href="mailto:support@macrify.me">support@macrify.me (best-effort, community-supported)</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer__bottom">
+    <span>© 2026 Macrify LLC. RaioPDF is free and open source under GPL-3.0.</span>
+    <a href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener">github.com/Macrify-LLC/raiopdf</a>
+  </div>
+</footer>
+
+<script src="./shared/release-data.js"></script>
+<script>
+  (function () {
+    "use strict";
+
+    var loadingEl = document.getElementById("downloadLoading");
+    var availableEl = document.getElementById("downloadAvailable");
+    var pendingEl = document.getElementById("downloadPending");
+    var counterEl = document.getElementById("downloadCounter");
+    var counterValueEl = document.getElementById("downloadCounterValue");
+    var btn = document.getElementById("downloadBtn");
+    var meta = document.getElementById("downloadMeta");
+    var verify = document.getElementById("downloadVerify");
+
+    function showPending() {
+      loadingEl.classList.add("is-hidden");
+      availableEl.classList.add("is-hidden");
+      pendingEl.classList.remove("is-hidden");
+      counterEl.classList.add("is-hidden");
+    }
+
+    if (window.RaioRelease && typeof window.RaioRelease.loadReleaseInfo === "function") {
+      window.RaioRelease.loadReleaseInfo()
+        .then(function (info) {
+          loadingEl.classList.add("is-hidden");
+
+          if (info && info.available) {
+            btn.href = info.downloadUrl;
+
+            var parts = [];
+            if (info.version) parts.push("v" + info.version);
+            if (info.sizeBytes) parts.push(window.RaioRelease.formatBytes(info.sizeBytes));
+            if (info.publishedAt) parts.push(window.RaioRelease.formatDate(info.publishedAt));
+            meta.textContent = parts.join(" · ");
+
+            if (info.checksumsUrl) {
+              verify.href = info.checksumsUrl;
+              verify.classList.remove("is-hidden");
+            } else {
+              verify.classList.add("is-hidden");
+            }
+
+            availableEl.classList.remove("is-hidden");
+            pendingEl.classList.add("is-hidden");
+
+            if (info.totalDownloads > 0) {
+              counterEl.classList.remove("is-hidden");
+              window.RaioRelease.animateCount(counterValueEl, info.totalDownloads);
+            } else {
+              counterEl.classList.add("is-hidden");
+            }
+          } else {
+            showPending();
+          }
+        })
+        .catch(showPending);
+    } else {
+      showPending();
+    }
+  })();
+
+  // Scroll-linked parallax on the storm-cloud layers — cheap rAF-throttled
+  // listener, gated behind prefers-reduced-motion (JS motion isn't covered
+  // by reset.css's CSS-only reduced-motion override, so we check it here).
+  (function () {
+    "use strict";
+
+    var prefersReduced =
+      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReduced) return;
+
+    var clouds = document.querySelectorAll(".cloud");
+    var hero = document.querySelector(".hero");
+    if (!clouds.length || !hero) return;
+
+    // Capture each cloud's own base opacity (set in CSS) once, so the scroll
+    // fade scales relative to it instead of clobbering the per-layer values.
+    var baseOpacities = Array.prototype.map.call(clouds, function (cloud) {
+      return parseFloat(window.getComputedStyle(cloud).opacity) || 1;
+    });
+
+    var ticking = false;
+
+    function update() {
+      var y = window.scrollY || window.pageYOffset || 0;
+      var heroHeight = hero.offsetHeight || 800;
+      var progress = Math.min(1, y / heroHeight);
+
+      clouds.forEach(function (cloud, i) {
+        var speed = 0.12 + i * 0.06;
+        var drift = -y * speed;
+        var fade = baseOpacities[i] * (1 - progress * 0.35);
+        cloud.style.transform = "translateY(" + drift + "px)";
+        cloud.style.opacity = fade;
+      });
+
+      ticking = false;
+    }
+
+    window.addEventListener(
+      "scroll",
+      function () {
+        if (!ticking) {
+          window.requestAnimationFrame(update);
+          ticking = true;
+        }
+      },
+      { passive: true }
+    );
+  })();
+
+  // Pointer-follow spotlight — desktop only. On a real mouse, the beams lean
+  // gently toward the cursor, like the light is tracking where you're
+  // looking; on touch, the ambient CSS drift keeps running on its own.
+  // Skipped entirely under reduced motion. `--pointer-x`/`--pointer-y` are
+  // consumed by the `translate` rules on .spotlight-group above.
+  (function () {
+    "use strict";
+
+    var prefersReduced =
+      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var hasFinePointer =
+      window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    if (prefersReduced || !hasFinePointer) return;
+
+    var hero = document.querySelector(".hero");
+    if (!hero) return;
+
+    var MAX_OFFSET = 34; // px — a lean, not a chase
+    var targetX = 0,
+      targetY = 0,
+      currentX = 0,
+      currentY = 0,
+      raf = null;
+
+    // getBoundingClientRect() forces a layout read — cache it instead of
+    // calling it on every raw pointermove (which can fire 60-120+ times/sec).
+    // Refreshed on resize; a mid-gesture reflow drifting the hero box by a
+    // few px isn't worth reading layout on every mouse tick to guard against.
+    var heroRect = hero.getBoundingClientRect();
+    window.addEventListener(
+      "resize",
+      function () {
+        heroRect = hero.getBoundingClientRect();
+      },
+      { passive: true }
+    );
+
+    function onPointerMove(e) {
+      var nx = (e.clientX - heroRect.left) / heroRect.width - 0.5; // -0.5..0.5
+      var ny = (e.clientY - heroRect.top) / heroRect.height - 0.5;
+      targetX = Math.max(-1, Math.min(1, nx * 2)) * MAX_OFFSET;
+      targetY = Math.max(-1, Math.min(1, ny * 2)) * MAX_OFFSET * 0.6;
+      if (!raf) raf = window.requestAnimationFrame(tick);
+    }
+
+    function onPointerLeave() {
+      targetX = 0;
+      targetY = 0;
+      if (!raf) raf = window.requestAnimationFrame(tick);
+    }
+
+    function tick() {
+      // Exponential smoothing so the beams glide behind the cursor rather
+      // than snapping to it — the CSS `translate` transition adds a second,
+      // slower layer of easing on top of this for the languid final feel.
+      currentX += (targetX - currentX) * 0.12;
+      currentY += (targetY - currentY) * 0.12;
+      hero.style.setProperty("--pointer-x", currentX.toFixed(1) + "px");
+      hero.style.setProperty("--pointer-y", currentY.toFixed(1) + "px");
+
+      if (Math.abs(targetX - currentX) > 0.1 || Math.abs(targetY - currentY) > 0.1) {
+        raf = window.requestAnimationFrame(tick);
+      } else {
+        raf = null;
+      }
+    }
+
+    hero.addEventListener("pointermove", onPointerMove, { passive: true });
+    hero.addEventListener("pointerleave", onPointerLeave, { passive: true });
+  })();
+</script>
+</body>
+</html>

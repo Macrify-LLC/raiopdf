@@ -21,5 +21,5 @@ export function getPdfLoadErrorMessage(error: unknown): string {
     return "This PDF is encrypted. Encrypted documents are not supported yet.";
   }
 
-  return "This PDF could not be opened. The file may be corrupt or unsupported.";
+  return "This PDF opened, but the preview could not be rendered.";
 }

@@ -52,6 +52,30 @@ test("renders page 1 in the main canvas after opening a PDF", async ({ page }) =
   });
 });
 
+test("renders page 1 in the main canvas after opening a 4-page PDF", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "render-main-canvas-4-page.pdf",
+    await createMultiPageTextPdf([
+      "Line 1: the parties stipulate to the facts set forth herein.",
+      "Line 2: the movant requests relief under the attached order.",
+      "Line 3: counsel certifies conferral before filing.",
+      "Line 4: the court retains jurisdiction for enforcement.",
+    ]),
+  );
+
+  await expect(page.getByRole("button", { name: "Page 4" })).toBeVisible();
+  await expect(page.locator(".canvas-well__empty")).toHaveCount(0);
+  await expect(page.getByText("This PDF could not be opened. The file may be corrupt or unsupported.")).toHaveCount(0);
+  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect.poll(() => mainCanvasStats(page)).toMatchObject({
+    widthReady: true,
+    heightReady: true,
+    hasTextPixels: true,
+  });
+});
+
 test("queues rapid rotate and delete clicks without losing the delete", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "rapid-fire.pdf", await createPdf([200, 210, 220]));
@@ -321,6 +345,29 @@ async function createTextPdf(text: string): Promise<Uint8Array> {
     y: 240,
     size: 12,
     font,
+  });
+
+  return pdf.save();
+}
+
+async function createMultiPageTextPdf(pageTexts: readonly string[]): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  pageTexts.forEach((text, pageIndex) => {
+    const page = pdf.addPage([612, 792]);
+    page.drawText(text, {
+      x: 72,
+      y: 720,
+      size: 14,
+      font,
+    });
+    page.drawText(`Page ${pageIndex + 1} of ${pageTexts.length}`, {
+      x: 72,
+      y: 48,
+      size: 10,
+      font,
+    });
   });
 
   return pdf.save();

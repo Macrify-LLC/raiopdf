@@ -1,3 +1,4 @@
+import { PdfEngineError } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createLocalPdfEngine } from "../src/index";
@@ -31,6 +32,18 @@ describe("LocalPdfEngine", () => {
     const bytes = await engine.saveToBytes(deleted);
 
     await expectPageWidths(bytes, [200, 220]);
+  });
+
+  it("rejects deleting every page", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 300]]));
+
+    const result = engine.deletePages(document, [0, 1]);
+
+    await expect(result).rejects.toBeInstanceOf(PdfEngineError);
+    await expect(result).rejects.toMatchObject({
+      code: "EMPTY_RESULT",
+    });
   });
 
   it("merges documents in order", async () => {

@@ -83,6 +83,13 @@ export class LocalPdfEngine implements PdfEngine {
       .getPageIndices()
       .filter((pageIndex) => !deletedPages.has(pageIndex));
 
+    if (keptPageIndexes.length === 0) {
+      throw new PdfEngineError(
+        "EMPTY_RESULT",
+        "Delete operations must leave at least one page.",
+      );
+    }
+
     const output = await PDFDocument.create();
     const copiedPages = await output.copyPages(source, keptPageIndexes);
     for (const page of copiedPages) {

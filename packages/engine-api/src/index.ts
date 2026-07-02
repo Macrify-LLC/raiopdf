@@ -8,6 +8,8 @@ export type PdfDocumentHandle = string & {
 
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
+  /** Operation would create a PDF with no pages. */
+  | "EMPTY_RESULT"
   | "EMPTY_INPUT"
   | "INVALID_DOCUMENT"
   | "INVALID_PAGE_INDEX"

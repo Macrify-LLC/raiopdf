@@ -3,13 +3,16 @@ import type {
   PdfBinderExhibit,
   PdfBinderOptions,
   PdfBytes,
+  PdfAConversionOptions,
   PdfDocumentHandle,
   PdfEngine,
   PdfEngineErrorCode,
+  PdfNormalizePagesOptions,
   PdfPageSizePoints,
   PdfPageSelection,
   PdfRedactTextOptions,
   PdfRedactionArea,
+  PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextRegion,
@@ -263,6 +266,43 @@ export class SidecarPdfEngine implements PdfEngine {
       "UNSUPPORTED",
       "Sidecar resize operations are unsupported until the Stirling PDF scale-pages endpoint contract is verified.",
     );
+  }
+
+  async normalizePages(
+    _document: PdfDocumentHandle,
+    _options: PdfNormalizePagesOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar page normalization is unsupported until the Stirling PDF scale-pages endpoint contract is verified.",
+    );
+  }
+
+  async splitByMaxBytes(
+    _document: PdfDocumentHandle,
+    _maxBytes: number,
+  ): Promise<PdfSplitByMaxBytesResult> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar byte-capped splitting is unsupported; use the local engine for deterministic page-boundary packing.",
+    );
+  }
+
+  async convertToPdfA(
+    document: PdfDocumentHandle,
+    options: PdfAConversionOptions,
+  ): Promise<PdfDocumentHandle> {
+    assertSupportedPdfAFlavor(options.flavor);
+
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("outputFormat", options.flavor);
+    formData.append("strict", String(options.strict ?? false));
+
+    const response = await this.request("/api/v1/convert/pdf/pdfa", formData);
+
+    return this.store(await readBytes(response), pageCount);
   }
 
   async insertPages(
@@ -917,6 +957,12 @@ function assertSupportedRotation(degrees: number): void {
       "UNSUPPORTED_ROTATION",
       "Page rotations must use whole 90-degree increments.",
     );
+  }
+}
+
+function assertSupportedPdfAFlavor(flavor: PdfAConversionOptions["flavor"]): void {
+  if (flavor !== "pdfa-1" && flavor !== "pdfa-2b" && flavor !== "pdfa-3b") {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Unsupported PDF/A flavor.");
   }
 }
 

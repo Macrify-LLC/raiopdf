@@ -338,6 +338,40 @@ describe("SidecarPdfEngine", () => {
     });
   });
 
+  it("reports sidecar page normalization and byte splitting as unsupported", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(
+      engine.normalizePages(document, {
+        targetSize: { w: 8.5, h: 11, in: true },
+        orientation: "portrait",
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    await expect(engine.splitByMaxBytes(document, 1024)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
+  it("converts to PDF/A through the verified Stirling endpoint", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(91));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const converted = await engine.convertToPdfA(document, {
+      flavor: "pdfa-2b",
+      strict: true,
+    });
+
+    expect(await engine.saveToBytes(converted)).toEqual(bytes(91));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/convert/pdf/pdfa");
+    expectFormField(calls[1], "outputFormat", "pdfa-2b");
+    expectFormField(calls[1], "strict", "true");
+  });
+
   it("runs OCR through ocr-pdf with searchable sandwich defaults", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(42));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

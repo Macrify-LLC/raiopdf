@@ -3,12 +3,15 @@ import type {
   PdfBinderExhibit,
   PdfBinderOptions,
   PdfBytes,
+  PdfAConversionOptions,
   PdfDocumentHandle,
   PdfEngine,
+  PdfNormalizePagesOptions,
   PdfPageSizePoints,
   PdfPageSelection,
   PdfRedactTextOptions,
   PdfRedactionArea,
+  PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextRegion,
@@ -185,6 +188,136 @@ export class LocalPdfEngine implements PdfEngine {
     });
 
     return this.store(await output.save());
+  }
+
+  async normalizePages(
+    document: PdfDocumentHandle,
+    options: PdfNormalizePagesOptions,
+  ): Promise<PdfDocumentHandle> {
+    assertPositiveNumber(options.targetSize.w, "targetSize.w");
+    assertPositiveNumber(options.targetSize.h, "targetSize.h");
+
+    if (options.orientation !== "portrait") {
+      throw new PdfEngineError("INVALID_DOCUMENT", "Only portrait normalization is supported.");
+    }
+
+    const source = await this.load(document);
+    const output = await PDFDocument.create();
+    const targetWidth = Math.min(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;
+    const targetHeight = Math.max(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;
+
+    for (const sourcePage of source.getPages()) {
+      const targetPage = output.addPage([targetWidth, targetHeight]);
+
+      if (!sourcePage.node.Contents()) {
+        continue;
+      }
+
+      const embeddedPage = await output.embedPage(sourcePage);
+      const drawOptions = computeNormalizeDrawOptions({
+        sourceWidth: sourcePage.getWidth(),
+        sourceHeight: sourcePage.getHeight(),
+        sourceRotation: normalizePageRotation(sourcePage.getRotation().angle),
+        targetWidth,
+        targetHeight,
+      });
+
+      targetPage.drawPage(embeddedPage, {
+        x: drawOptions.x,
+        y: drawOptions.y,
+        width: drawOptions.width,
+        height: drawOptions.height,
+        rotate: pdfDegrees(drawOptions.rotate),
+      });
+    }
+
+    return this.store(await output.save());
+  }
+
+  async splitByMaxBytes(
+    document: PdfDocumentHandle,
+    maxBytes: number,
+  ): Promise<PdfSplitByMaxBytesResult> {
+    if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+      throw new PdfEngineError("INVALID_DOCUMENT", "maxBytes must be a positive integer.");
+    }
+
+    const source = await this.load(document);
+    const parts: Array<{
+      bytes: Uint8Array;
+      pageIndexes: number[];
+      oversized: boolean;
+    }> = [];
+    let currentPageIndexes: number[] = [];
+    let currentBytes: Uint8Array | null = null;
+
+    for (const pageIndex of source.getPageIndices()) {
+      const candidatePageIndexes = [...currentPageIndexes, pageIndex];
+      const candidateBytes = await createDocumentBytesForPages(source, candidatePageIndexes);
+
+      if (candidateBytes.byteLength <= maxBytes) {
+        currentPageIndexes = candidatePageIndexes;
+        currentBytes = candidateBytes;
+        continue;
+      }
+
+      if (currentPageIndexes.length > 0 && currentBytes) {
+        parts.push({
+          bytes: currentBytes,
+          pageIndexes: currentPageIndexes,
+          oversized: false,
+        });
+        currentPageIndexes = [];
+        currentBytes = null;
+      }
+
+      const singlePageBytes = await createDocumentBytesForPages(source, [pageIndex]);
+
+      if (singlePageBytes.byteLength > maxBytes) {
+        parts.push({
+          bytes: singlePageBytes,
+          pageIndexes: [pageIndex],
+          oversized: true,
+        });
+        continue;
+      }
+
+      currentPageIndexes = [pageIndex];
+      currentBytes = singlePageBytes;
+    }
+
+    if (currentPageIndexes.length > 0 && currentBytes) {
+      parts.push({
+        bytes: currentBytes,
+        pageIndexes: currentPageIndexes,
+        oversized: false,
+      });
+    }
+
+    return {
+      parts: parts.map((part) => {
+        const partDocument = this.store(part.bytes);
+
+        return {
+          document: partDocument,
+          pageIndexes: part.pageIndexes,
+          byteLength: part.bytes.byteLength,
+          oversized: part.oversized,
+        };
+      }),
+    };
+  }
+
+  async convertToPdfA(
+    _document: PdfDocumentHandle,
+    options: PdfAConversionOptions,
+  ): Promise<PdfDocumentHandle> {
+    assertSupportedPdfAFlavor(options.flavor);
+
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF/A conversion requires the desktop sidecar engine; the local pdf-lib engine cannot produce PDF/A output.",
+    );
   }
 
   async insertPages(
@@ -399,6 +532,93 @@ async function copyPagesInto(
   const copiedPages = await output.copyPages(source, [...pageIndexes]);
   for (const page of copiedPages) {
     output.addPage(page);
+  }
+}
+
+async function createDocumentBytesForPages(
+  source: PDFDocument,
+  pageIndexes: readonly number[],
+): Promise<Uint8Array> {
+  if (pageIndexes.length === 0) {
+    throw new PdfEngineError("EMPTY_RESULT", "Split parts must contain at least one page.");
+  }
+
+  const output = await PDFDocument.create();
+  await copyPagesInto(output, source, pageIndexes);
+
+  return output.save();
+}
+
+function computeNormalizeDrawOptions(options: {
+  sourceWidth: number;
+  sourceHeight: number;
+  sourceRotation: PageRotation;
+  targetWidth: number;
+  targetHeight: number;
+}): { x: number; y: number; width: number; height: number; rotate: PageRotation } {
+  const visualWidth = isSidewaysRotation(options.sourceRotation)
+    ? options.sourceHeight
+    : options.sourceWidth;
+  const visualHeight = isSidewaysRotation(options.sourceRotation)
+    ? options.sourceWidth
+    : options.sourceHeight;
+  const layoutRotation = visualWidth > visualHeight ? 90 : 0;
+  const rotate = normalizePageRotation(360 - options.sourceRotation + layoutRotation);
+  const normalizedVisualWidth = layoutRotation === 90 ? visualHeight : visualWidth;
+  const normalizedVisualHeight = layoutRotation === 90 ? visualWidth : visualHeight;
+  const scale = Math.min(
+    options.targetWidth / normalizedVisualWidth,
+    options.targetHeight / normalizedVisualHeight,
+  );
+  const width = options.sourceWidth * scale;
+  const height = options.sourceHeight * scale;
+  const bounds = rotatedRectBounds(width, height, rotate);
+  const left = (options.targetWidth - bounds.width) / 2;
+  const bottom = (options.targetHeight - bounds.height) / 2;
+
+  return {
+    x: left - bounds.minX,
+    y: bottom - bounds.minY,
+    width,
+    height,
+    rotate,
+  };
+}
+
+function rotatedRectBounds(
+  width: number,
+  height: number,
+  rotation: PageRotation,
+): { minX: number; minY: number; width: number; height: number } {
+  const corners = [
+    rotatePoint(0, 0, rotation),
+    rotatePoint(width, 0, rotation),
+    rotatePoint(0, height, rotation),
+    rotatePoint(width, height, rotation),
+  ];
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+
+  return {
+    minX,
+    minY,
+    width: Math.max(...xs) - minX,
+    height: Math.max(...ys) - minY,
+  };
+}
+
+function rotatePoint(x: number, y: number, rotation: PageRotation): { x: number; y: number } {
+  switch (rotation) {
+    case 0:
+      return { x, y };
+    case 90:
+      return { x: -y, y: x };
+    case 180:
+      return { x: -x, y: -y };
+    case 270:
+      return { x: y, y: -x };
   }
 }
 
@@ -737,6 +957,12 @@ function assertSupportedRotation(degrees: number): void {
       "UNSUPPORTED_ROTATION",
       "Page rotations must use whole 90-degree increments.",
     );
+  }
+}
+
+function assertSupportedPdfAFlavor(flavor: PdfAConversionOptions["flavor"]): void {
+  if (flavor !== "pdfa-1" && flavor !== "pdfa-2b" && flavor !== "pdfa-3b") {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Unsupported PDF/A flavor.");
   }
 }
 

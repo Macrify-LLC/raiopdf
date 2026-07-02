@@ -1,0 +1,71 @@
+name: Release (Windows)
+
+# Builds the Windows installers (NSIS .exe + MSI) and uploads them as workflow
+# artifacts. These artifacts are UNSIGNED by design: signing is done locally with
+# the Certum cloud certificate via SimplySign Desktop (see docs/SIGNING.md), so no
+# signing credentials ever live in CI. Once a code-signing cert is available and a
+# signing host is chosen, this workflow can be extended to sign in CI instead.
+#
+# NOTE: the Stirling engine + OCR toolchain are not yet wired into the Tauri bundle
+# (no `externalBin`/`resources` in tauri.conf.json), so the installer produced here
+# is the shell only. Bundling the sidecar is a separate, later step.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# No repository write access needed; artifact upload does not require it.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # corepack must run before setup-node: the pnpm cache resolver needs pnpm on PATH
+      - name: Enable pnpm from packageManager
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: apps/shell/src-tauri -> target
+
+      # Builds the UI (via beforeBuildCommand) and bundles the Windows installers.
+      # Unsigned — see the note at the top of this file.
+      - name: Build Tauri app (unsigned)
+        run: pnpm --filter @raiopdf/shell tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: raiopdf-windows-unsigned
+          if-no-files-found: error
+          path: |
+            apps/shell/src-tauri/target/release/bundle/nsis/*.exe
+            apps/shell/src-tauri/target/release/bundle/msi/*.msi

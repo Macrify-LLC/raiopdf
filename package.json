@@ -12,6 +12,7 @@
     "dev:shell": "pnpm --filter @raiopdf/shell tauri dev",
     "build": "pnpm -r build",
     "build:shell": "pnpm --filter @raiopdf/shell tauri build",
+    "build:shell:signed": "pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows.signing.conf.json",
     "engine:vendor": "bash engine/vendor.sh",
     "engine:build": "bash engine/build.sh",
     "engine:verify": "bash engine/verify-live.sh",

@@ -1,0 +1,33 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-areas:
+    "command command command"
+    "thumbnails canvas tools";
+  grid-template-columns: 12rem minmax(0, 1fr) 18rem;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.app-shell__command-bar {
+  grid-area: command;
+  display: flex;
+}
+
+.app-shell__thumbnail-rail {
+  grid-area: thumbnails;
+}
+
+.app-shell__canvas {
+  grid-area: canvas;
+}
+
+.app-shell__tool-panel {
+  grid-area: tools;
+}

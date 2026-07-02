@@ -1,0 +1,80 @@
+/*
+ * RaioPDF design tokens.
+ *
+ * Every raw color/shadow value in the app lives here, as a CSS custom
+ * property, per the design spec's acceptance checklist ("only token
+ * values -- zero raw hex outside tokens.css"). Components and other
+ * stylesheets must reference these tokens, never a literal hex value.
+ */
+
+:root {
+  /* ---- Color -- Macrify app palette (softer than the corporate palette) ---- */
+  --chrome: #f3f6fa; /* command bar, thumbnail rail, status bar ground */
+  --panel: #ffffff; /* title bar, tool panel, popovers */
+  --border: #d4dfee; /* structural borders */
+  --border-soft: #e4ebf4; /* intra-panel hairlines */
+  --well: #dee6f0; /* document canvas well */
+
+  --ink: #0b1a2e; /* primary text */
+  --body: #2d3e56; /* default UI text */
+  --muted: #5a6f8a; /* captions, secondary */
+
+  --primary: #2565a0; /* selection, primary buttons, active tool */
+  --primary-deep: #1b3a5c; /* logo mark ground, emphasized headers */
+  --accent: #4fb8e0; /* focus rings, live indicators */
+  --accent-pale: #eaf5fc; /* selected-row / Legal-header wash */
+
+  --on-primary: #ffffff; /* text/icon color on top of --primary / --primary-deep fills */
+
+  --ok: #166534;
+  --ok-bg: #dcfce7;
+  --warn: #92400e;
+  --warn-bg: #fef3c7;
+  --danger: #991b1b;
+  --danger-bg: #fee2e2;
+
+  /* Interaction ground -- not itself a semantic color, just the shared
+     hover-state wash for chrome buttons and panel rows. */
+  --hover-ground: #e7eef7;
+
+  /* The RaioPDF product mark (bolt) fill, and the gradient accent bar
+     that always sits at the very top of the app window. */
+  --bolt: #7ec8f0;
+  --accent-bar-start: #132d52;
+  --accent-bar-mid: #1d4e8f;
+  --accent-bar-end: #4aade0;
+
+  /* ---- Type ---- */
+  --font-ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-document: "Times New Roman", Times, serif;
+
+  --text-2xs: 11px; /* uppercase micro-labels */
+  --text-xs: 12px;
+  --text-sm: 12.5px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 18px; /* empty-state heading -- the one exception above 14px */
+
+  --tracking-micro: 0.08em;
+
+  /* ---- Space (4px base grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* ---- Shape ---- */
+  --radius-control: 6px; /* buttons, inputs */
+  --radius-chip: 7px; /* chips, tabs */
+  --radius-popover: 9px; /* popovers */
+  --radius-window: 10px; /* the app window itself */
+
+  /* ---- Elevation -- one shadow per elevated surface, max two on screen ---- */
+  --shadow-page: 0 3px 14px rgba(11, 26, 46, 0.22);
+  --shadow-popover: 0 14px 34px rgba(11, 26, 46, 0.28);
+
+  /* ---- Motion ---- */
+  --duration-fast: 120ms;
+}

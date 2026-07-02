@@ -1,0 +1,23 @@
+.app-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 3px 42px 42px minmax(0, 1fr) 30px;
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+}
+
+.app-shell__accent-bar {
+  background: linear-gradient(
+    90deg,
+    var(--accent-bar-start),
+    var(--accent-bar-mid) 45%,
+    var(--accent-bar-end)
+  );
+}
+
+.app-shell__body {
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr) 288px;
+  min-height: 0;
+}

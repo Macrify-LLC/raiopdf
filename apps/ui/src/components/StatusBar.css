@@ -1,0 +1,29 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 30px;
+  padding: 7px var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--chrome);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-bar__ok-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.status-bar__local {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--primary-deep);
+  font-weight: 600;
+}

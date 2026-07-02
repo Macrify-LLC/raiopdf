@@ -1,24 +1,32 @@
-type RegionProps = {
-  label: string;
-};
+import { CanvasWell } from "./CanvasWell";
+import { CommandBar } from "./CommandBar";
+import { StatusBar } from "./StatusBar";
+import { ThumbnailRail } from "./ThumbnailRail";
+import { TitleBar } from "./TitleBar";
+import { ToolPanel } from "./ToolPanel";
+import "./AppShell.css";
 
-function Region({ label }: RegionProps) {
-  return <section>{label}</section>;
+export interface AppShellProps {
+  /**
+   * Fired from every "Open a PDF" entry point (command bar + canvas empty
+   * state). No-op by default -- this PR ships static chrome only; the
+   * engine-wiring PR supplies real file-opening logic.
+   */
+  onOpenRequested?: (() => void) | undefined;
 }
 
-export function AppShell() {
+export function AppShell({ onOpenRequested }: AppShellProps) {
   return (
-    <main className="app-shell">
-      <header className="app-shell__command-bar">Top command bar</header>
-      <aside className="app-shell__thumbnail-rail">
-        <Region label="Left thumbnail rail" />
-      </aside>
-      <section className="app-shell__canvas">
-        <Region label="Center canvas" />
-      </section>
-      <aside className="app-shell__tool-panel">
-        <Region label="Right tool panel" />
-      </aside>
-    </main>
+    <div className="app-shell">
+      <div className="app-shell__accent-bar" aria-hidden="true" />
+      <TitleBar />
+      <CommandBar onOpen={onOpenRequested} />
+      <div className="app-shell__body">
+        <ThumbnailRail />
+        <CanvasWell onOpenRequested={onOpenRequested} />
+        <ToolPanel />
+      </div>
+      <StatusBar />
+    </div>
   );
 }

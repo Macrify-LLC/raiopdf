@@ -18,10 +18,8 @@ export interface FilePort {
   ) => Promise<SavedFile | null>;
 }
 
-const PDF_FILTER = {
-  name: "PDF",
-  extensions: ["pdf"],
-};
+const HEADER_PATH = "x-raio-path";
+const HEADER_SUGGESTED_NAME = "x-raio-suggested-name";
 
 export const filePort: FilePort = isTauriRuntime()
   ? createTauriFilePort()
@@ -59,51 +57,64 @@ function createBrowserFilePort(): FilePort {
 function createTauriFilePort(): FilePort {
   return {
     async openFile() {
-      const [{ open }, { readFile }] = await Promise.all([
-        import("@tauri-apps/plugin-dialog"),
-        import("@tauri-apps/plugin-fs"),
-      ]);
-      const selected = await open({
-        multiple: false,
-        directory: false,
-        filters: [PDF_FILTER],
-      });
-      const path = Array.isArray(selected) ? selected[0] : selected;
+      const { invoke } = await import("@tauri-apps/api/core");
+      const selected = await invoke<TauriOpenedPdf | null>("open_pdf_dialog");
 
-      if (typeof path !== "string") {
+      if (!selected) {
         return null;
       }
 
+      const bytes = await invoke<BinaryInvokeResponse>(
+        "read_opened_pdf_bytes",
+        {
+          token: selected.bytesToken,
+        },
+      );
+
       return {
-        bytes: await readFile(path),
-        name: basename(path),
-        path,
+        bytes: toUint8Array(bytes),
+        name: selected.name,
+        path: selected.path,
       };
     },
     async saveFile(bytes, suggestedName, currentPath) {
-      const [{ save }, { writeFile }] = await Promise.all([
-        import("@tauri-apps/plugin-dialog"),
-        import("@tauri-apps/plugin-fs"),
-      ]);
-      const path =
-        currentPath ??
-        (await save({
-          defaultPath: ensurePdfExtension(suggestedName),
-          filters: [PDF_FILTER],
-        }));
+      const { invoke } = await import("@tauri-apps/api/core");
 
-      if (typeof path !== "string") {
-        return null;
+      if (currentPath) {
+        return invoke<SavedFile>("save_pdf_to_path", bytes, {
+          headers: {
+            [HEADER_PATH]: encodeURIComponent(currentPath),
+          },
+        });
       }
 
-      await writeFile(path, bytes);
-
-      return {
-        name: basename(path),
-        path,
-      };
+      return invoke<SavedFile | null>("save_pdf_dialog", bytes, {
+        headers: {
+          [HEADER_SUGGESTED_NAME]: encodeURIComponent(suggestedName),
+        },
+      });
     },
   };
+}
+
+interface TauriOpenedPdf {
+  bytesToken: string;
+  name: string;
+  path: string;
+}
+
+type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
+
+function toUint8Array(bytes: BinaryInvokeResponse): Uint8Array {
+  if (bytes instanceof Uint8Array) {
+    return bytes;
+  }
+
+  if (bytes instanceof ArrayBuffer) {
+    return new Uint8Array(bytes);
+  }
+
+  return new Uint8Array(bytes);
 }
 
 function isTauriRuntime(): boolean {
@@ -137,16 +148,4 @@ function downloadBytes(bytes: Uint8Array, fileName: string) {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "Untitled.pdf";
-}
-
-function ensurePdfExtension(fileName: string): string {
-  if (/\.pdf$/i.test(fileName)) {
-    return fileName;
-  }
-
-  return `${fileName}.pdf`;
 }

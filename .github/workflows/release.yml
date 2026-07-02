@@ -1,14 +1,4 @@
-name: Release (Windows)
-
-# Builds the Windows installers (NSIS .exe + MSI) and uploads them as workflow
-# artifacts. These artifacts are UNSIGNED by design: signing is done locally with
-# the Certum cloud certificate via SimplySign Desktop (see docs/SIGNING.md), so no
-# signing credentials ever live in CI. Once a code-signing cert is available and a
-# signing host is chosen, this workflow can be extended to sign in CI instead.
-#
-# NOTE: the Stirling engine + OCR toolchain are not yet wired into the Tauri bundle
-# (no `externalBin`/`resources` in tauri.conf.json), so the installer produced here
-# is the shell only. Bundling the sidecar is a separate, later step.
+name: Release
 
 on:
   push:
@@ -16,19 +6,23 @@ on:
       - "v*"
   workflow_dispatch:
 
-# No repository write access needed; artifact upload does not require it.
+# Release builds attach assets to GitHub Releases, so contents: write is required.
+# This workflow only runs from our own tag/dispatch refs, never from fork PRs.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  windows:
-    name: Windows installer
+  build-windows:
+    name: Build Windows Installer
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
+
+    env:
+      PAYLOAD_PLATFORM: windows-x64
 
     steps:
       - name: Checkout
@@ -45,9 +39,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
@@ -56,16 +47,320 @@ jobs:
         with:
           workspaces: apps/shell/src-tauri -> target
 
-      # Builds the UI (via beforeBuildCommand) and bundles the Windows installers.
-      # Unsigned — see the note at the top of this file.
-      - name: Build Tauri app (unsigned)
-        run: pnpm --filter @raiopdf/shell tauri build
+      - name: Set up JDK
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: 21
+          # no gradle cache: gradle files only exist inside engine/upstream after vendoring
 
-      - name: Upload installers
+      - name: Cache payload downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: installer/.payload-cache
+          key: payload-${{ runner.os }}-${{ hashFiles('installer/PINS.env', 'installer/ocrmypdf-windows-requirements.txt', 'engine/PINNED_TAG') }}
+          restore-keys: |
+            payload-${{ runner.os }}-
+
+      - name: Assemble Windows payload
+        shell: bash
+        run: bash installer/assemble-payload.sh
+
+      - name: Verify Windows payload
+        shell: bash
+        run: bash installer/assemble-payload.sh --verify
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspaces
+        run: pnpm -r build
+
+      - name: Build Tauri shell
+        run: pnpm build:shell
+
+      - name: Enforce bundled payload resources
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          target = Path("apps/shell/src-tauri/target/release")
+          candidates = []
+          for java in target.rglob("payload/jre/bin/java.exe"):
+              payload = java.parents[2]
+              jar = payload / "engine" / "stirling.jar"
+              if jar.is_file():
+                  candidates.append(payload)
+
+          if not candidates:
+              print("No built bundle resource payload contained both jre/bin/java.exe and engine/stirling.jar.", file=sys.stderr)
+              print(f"Searched under {target}", file=sys.stderr)
+              for path in sorted(target.rglob("payload/*"))[:80]:
+                  print(path, file=sys.stderr)
+              sys.exit(1)
+
+          print("Verified bundled payload resources:")
+          for payload in candidates:
+              print(f"  {payload}")
+          PY
+
+      - name: Smoke offline OCR engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          PAYLOAD_DIR="$PWD/apps/shell/src-tauri/payload"
+          JAVA_BIN="$PAYLOAD_DIR/jre/bin/java.exe"
+          JAR_PATH="$PAYLOAD_DIR/engine/stirling.jar"
+
+          for path in \
+            "$JAVA_BIN" \
+            "$JAR_PATH" \
+            "$PAYLOAD_DIR/ocr/ocrmypdf.cmd" \
+            "$PAYLOAD_DIR/ocr/tesseract/tesseract.exe" \
+            "$PAYLOAD_DIR/ocr/tesseract/tessdata/eng.traineddata" \
+            "$PAYLOAD_DIR/ocr/gs/bin/gswin64c.exe"; do
+            if [[ ! -f "$path" ]]; then
+              echo "Missing smoke-test payload file: $path" >&2
+              exit 1
+            fi
+          done
+
+          TMP_DIR=$(mktemp -d)
+          SERVER_PID=""
+          cleanup() {
+            if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+              kill "$SERVER_PID" 2>/dev/null || true
+              wait "$SERVER_PID" 2>/dev/null || true
+            fi
+            rm -rf -- "$TMP_DIR"
+          }
+          trap cleanup EXIT
+
+          BASE_PATH="$TMP_DIR/stirling-base"
+          mkdir -p -- "$BASE_PATH/configs"
+
+          OCRMYPDF_WIN=$(cygpath -w "$PAYLOAD_DIR/ocr/ocrmypdf.cmd")
+          TESSDATA_WIN=$(cygpath -w "$PAYLOAD_DIR/ocr/tesseract/tessdata")
+          python3 - "$BASE_PATH/configs/settings.yml" "$OCRMYPDF_WIN" "$TESSDATA_WIN" <<'PY'
+          from pathlib import Path
+          import sys
+
+          def quote(value):
+              return "'" + value.replace("'", "''") + "'"
+
+          settings = f"""system:
+            customPaths:
+              operations:
+                ocrmypdf: {quote(sys.argv[2])}
+            tessdataDir: {quote(sys.argv[3])}
+          processExecutor:
+            sessionLimit:
+              ocrMyPdfSessionLimit: 1
+            timeoutMinutes:
+              ocrMyPdfTimeoutMinutes: 5
+          endpoints:
+            toRemove: []
+            groupsToRemove: []
+          springdoc:
+            api-docs:
+              enabled: false
+          """
+          Path(sys.argv[1]).write_text(settings, encoding="utf-8")
+          PY
+
+          INPUT_PDF="$TMP_DIR/image-only.pdf"
+          OUTPUT_PDF="$TMP_DIR/ocr-output.pdf"
+          python3 - "$INPUT_PDF" <<'PY'
+          import sys
+
+          out = sys.argv[1]
+          scale = 28
+          glyphs = {
+              "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+              "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+              "I": ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+              "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+              "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+              "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+              "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+              " ": ["000", "000", "000", "000", "000", "000", "000"],
+          }
+          text = "RAIO PDF"
+          width = sum(len(glyphs[ch][0]) + 1 for ch in text) * scale + scale
+          height = 9 * scale
+          pixels = bytearray([255]) * (width * height)
+          x = scale // 2
+          y = scale
+          for ch in text:
+              glyph = glyphs[ch]
+              for row, bits in enumerate(glyph):
+                  for col, bit in enumerate(bits):
+                      if bit == "1":
+                          for yy in range(y + row * scale, y + (row + 1) * scale):
+                              start = yy * width + x + col * scale
+                              pixels[start : start + scale] = b"\x00" * scale
+              x += (len(glyph[0]) + 1) * scale
+
+          content = b"q\n500 0 0 160 56 520 cm\n/Im1 Do\nQ\n"
+          objects = [
+              b"<< /Type /Catalog /Pages 2 0 R >>",
+              b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+              b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>",
+              f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {len(pixels)} >>\nstream\n".encode() + bytes(pixels) + b"\nendstream",
+              f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"endstream",
+          ]
+
+          pdf = bytearray(b"%PDF-1.4\n")
+          offsets = [0]
+          for index, body in enumerate(objects, start=1):
+              offsets.append(len(pdf))
+              pdf.extend(f"{index} 0 obj\n".encode("ascii"))
+              pdf.extend(body)
+              pdf.extend(b"\nendobj\n")
+          xref = len(pdf)
+          pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+          pdf.extend(b"0000000000 65535 f \n")
+          for offset in offsets[1:]:
+              pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+          pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
+          with open(out, "wb") as handle:
+              handle.write(pdf)
+          PY
+
+          if grep -aE '/Font|/ToUnicode' "$INPUT_PDF" >/dev/null; then
+            echo "OCR fixture must be image-only, but it already contains a text layer marker." >&2
+            exit 1
+          fi
+
+          PORT=$(python3 - <<'PY'
+          import socket
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.bind(("127.0.0.1", 0))
+              print(sock.getsockname()[1])
+          PY
+          )
+          LOG_FILE="$TMP_DIR/stirling.log"
+          BASE_WIN=$(cygpath -w "$BASE_PATH")
+
+          export PATH="$PAYLOAD_DIR/ocr:$PAYLOAD_DIR/ocr/python:$PAYLOAD_DIR/ocr/tesseract:$PAYLOAD_DIR/ocr/gs/bin:$PATH"
+          STIRLING_BASE_PATH="$BASE_WIN" "$JAVA_BIN" -Xmx1g -jar "$JAR_PATH" \
+            --server.address=127.0.0.1 \
+            "--server.port=$PORT" \
+            --springdoc.api-docs.enabled=false \
+            >"$LOG_FILE" 2>&1 &
+          SERVER_PID=$!
+
+          BASE_URL="http://127.0.0.1:$PORT"
+          ready=false
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "Stirling JVM exited before health became ready." >&2
+              sed -n '1,240p' "$LOG_FILE" >&2 || true
+              exit 1
+            fi
+            if curl -fsS --connect-timeout 1 --max-time 2 "$BASE_URL/api/v1/info/status" >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$ready" != "true" ]]; then
+            echo "Timed out waiting for Stirling health." >&2
+            sed -n '1,240p' "$LOG_FILE" >&2 || true
+            exit 1
+          fi
+
+          status=$(curl -sS -o "$OUTPUT_PDF" -w '%{http_code}' \
+            --connect-timeout 2 \
+            --max-time 180 \
+            -X POST \
+            "$BASE_URL/api/v1/misc/ocr-pdf" \
+            -F "fileInput=@$INPUT_PDF;type=application/pdf" \
+            -F "languages=eng" \
+            -F "ocrType=force-ocr" \
+            -F "ocrRenderType=sandwich")
+
+          if [[ "$status" != "200" ]]; then
+            echo "OCR smoke failed with HTTP $status" >&2
+            sed -n '1,240p' "$LOG_FILE" >&2 || true
+            if [[ -s "$OUTPUT_PDF" ]]; then
+              sed -n '1,120p' "$OUTPUT_PDF" >&2 || true
+            fi
+            exit 1
+          fi
+
+          input_size=$(wc -c <"$INPUT_PDF" | tr -d ' ')
+          output_size=$(wc -c <"$OUTPUT_PDF" | tr -d ' ')
+          if ! grep -aE '/Font|/ToUnicode' "$OUTPUT_PDF" >/dev/null && (( output_size <= input_size + 500 )); then
+            echo "OCR response lacks a visible text-layer marker and did not materially grow." >&2
+            echo "Input bytes: $input_size; output bytes: $output_size" >&2
+            sed -n '1,240p' "$LOG_FILE" >&2 || true
+            exit 1
+          fi
+
+          echo "Offline OCR smoke passed: HTTP 200, $input_size bytes -> $output_size bytes"
+
+      - name: Collect installer artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA:0:7}"
+          fi
+
+          ASSET_DIR="$PWD/release-assets"
+          mkdir -p -- "$ASSET_DIR"
+
+          mapfile -t MSI_FILES < <(find apps/shell/src-tauri/target/release/bundle/msi -type f -name '*.msi' | sort)
+          mapfile -t EXE_FILES < <(find apps/shell/src-tauri/target/release/bundle/nsis -type f -name '*.exe' | sort)
+
+          if [[ "${#MSI_FILES[@]}" -lt 1 ]]; then
+            echo "No MSI installer was produced." >&2
+            exit 1
+          fi
+          if [[ "${#EXE_FILES[@]}" -lt 1 ]]; then
+            echo "No NSIS installer was produced." >&2
+            exit 1
+          fi
+
+          cp -- "${MSI_FILES[0]}" "$ASSET_DIR/RaioPDF-$VERSION-windows-x64-unsigned.msi"
+          cp -- "${EXE_FILES[0]}" "$ASSET_DIR/RaioPDF-$VERSION-windows-x64-unsigned.exe"
+
+          (
+            cd "$ASSET_DIR"
+            sha256sum "RaioPDF-$VERSION-windows-x64-unsigned.msi" "RaioPDF-$VERSION-windows-x64-unsigned.exe" > SHA256SUMS.txt
+          )
+
+          echo "Collected release assets:"
+          ls -lh "$ASSET_DIR"
+
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: raiopdf-windows-unsigned
+          name: raiopdf-windows-x64-unsigned
+          path: release-assets/*
           if-no-files-found: error
-          path: |
-            apps/shell/src-tauri/target/release/bundle/nsis/*.exe
-            apps/shell/src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Create draft GitHub Release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --draft=true --title "$TAG"
+          else
+            gh release create "$TAG" --draft --title "$TAG" --notes "Draft release for $TAG."
+          fi
+
+          gh release upload "$TAG" release-assets/* --clobber

@@ -2,9 +2,10 @@ use serde::Serialize;
 use std::{
     env,
     ffi::OsString,
+    fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus},
     sync::{Arc, Condvar, Mutex},
     thread,
@@ -16,10 +17,21 @@ const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 5;
+const PAYLOAD_DIR_NAME: &str = "payload";
+const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
+const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
+const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidecarConfig {
     jar_path: Option<PathBuf>,
+    java_path: PathBuf,
+    stirling_base_path: Option<PathBuf>,
+    ocrmypdf_path: Option<PathBuf>,
+    tessdata_dir: Option<PathBuf>,
+    path_entries: Vec<PathBuf>,
+    path_env_key: OsString,
+    inherited_path: Option<OsString>,
     health_path: String,
     startup_timeout: Duration,
     initial_backoff: Duration,
@@ -28,22 +40,51 @@ pub struct SidecarConfig {
 }
 
 impl SidecarConfig {
-    pub fn from_env() -> Self {
-        Self::from_env_vars(env::vars_os())
+    pub fn from_env(app_data_dir: PathBuf, resource_dir: Option<PathBuf>) -> Self {
+        Self::from_env_vars_with_roots(
+            env::vars_os(),
+            app_data_dir,
+            current_exe_dir(),
+            resource_dir,
+            dev_payload_dir(),
+        )
     }
 
+    #[cfg(test)]
     fn from_env_vars<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<OsString>,
         V: Into<OsString>,
     {
+        Self::from_env_vars_with_roots(vars, PathBuf::from("app-data"), None, None, None)
+    }
+
+    fn from_env_vars_with_roots<I, K, V>(
+        vars: I,
+        default_app_data_dir: PathBuf,
+        exe_dir: Option<PathBuf>,
+        resource_dir: Option<PathBuf>,
+        dev_payload_dir: Option<PathBuf>,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<OsString>,
+        V: Into<OsString>,
+    {
         let mut jar_path = None;
+        let mut java_path = None;
+        let mut payload_dir = None;
+        let mut stirling_base_path = None;
+        let mut ocrmypdf_path = None;
+        let mut tessdata_dir = None;
         let mut health_path = DEFAULT_HEALTH_PATH.to_string();
         let mut startup_timeout = DEFAULT_STARTUP_TIMEOUT;
         let mut initial_backoff = DEFAULT_INITIAL_BACKOFF;
         let mut max_backoff = DEFAULT_MAX_BACKOFF;
         let mut idle_shutdown = idle_shutdown_from_minutes(DEFAULT_IDLE_SHUTDOWN_MINUTES);
+        let mut path_env_key = OsString::from("PATH");
+        let mut inherited_path = None;
 
         for (key, value) in vars {
             let key = key.into();
@@ -53,6 +94,36 @@ impl SidecarConfig {
                     let value = value.to_string_lossy().trim().to_string();
                     if !value.is_empty() {
                         jar_path = Some(PathBuf::from(value));
+                    }
+                }
+                "RAIOPDF_ENGINE_JAVA" => {
+                    let value = value.to_string_lossy().trim().to_string();
+                    if !value.is_empty() {
+                        java_path = Some(PathBuf::from(value));
+                    }
+                }
+                "RAIOPDF_ENGINE_PAYLOAD_DIR" => {
+                    let value = value.to_string_lossy().trim().to_string();
+                    if !value.is_empty() {
+                        payload_dir = Some(PathBuf::from(value));
+                    }
+                }
+                "RAIOPDF_ENGINE_BASE_PATH" | "STIRLING_BASE_PATH" => {
+                    let value = value.to_string_lossy().trim().to_string();
+                    if !value.is_empty() {
+                        stirling_base_path = Some(PathBuf::from(value));
+                    }
+                }
+                "RAIOPDF_ENGINE_OCRMYPDF" => {
+                    let value = value.to_string_lossy().trim().to_string();
+                    if !value.is_empty() {
+                        ocrmypdf_path = Some(PathBuf::from(value));
+                    }
+                }
+                "RAIOPDF_ENGINE_TESSDATA_DIR" => {
+                    let value = value.to_string_lossy().trim().to_string();
+                    if !value.is_empty() {
+                        tessdata_dir = Some(PathBuf::from(value));
                     }
                 }
                 "RAIOPDF_ENGINE_HEALTH_PATH" => {
@@ -75,9 +146,39 @@ impl SidecarConfig {
                         idle_shutdown = idle_shutdown_from_minutes(minutes);
                     }
                 }
+                _ if key.to_string_lossy().eq_ignore_ascii_case("PATH") => {
+                    path_env_key = key;
+                    inherited_path = Some(value);
+                }
                 _ => {}
             }
         }
+
+        let payload_dir = payload_dir.or_else(|| {
+            find_payload_dir(
+                exe_dir.as_deref(),
+                resource_dir.as_deref(),
+                dev_payload_dir.as_deref(),
+            )
+        });
+
+        if let Some(payload_dir) = payload_dir.as_deref() {
+            jar_path = jar_path.or_else(|| existing_join(payload_dir, ENGINE_JAR_RELATIVE));
+            java_path = java_path.or_else(|| payload_java_path(payload_dir));
+            ocrmypdf_path = ocrmypdf_path.or_else(|| existing_join(payload_dir, OCRMYPDF_RELATIVE));
+            tessdata_dir = tessdata_dir.or_else(|| existing_join(payload_dir, TESSDATA_RELATIVE));
+        }
+
+        let path_entries = payload_dir
+            .as_deref()
+            .map(payload_path_entries)
+            .unwrap_or_default();
+        let java_path = java_path.unwrap_or_else(|| PathBuf::from("java"));
+        let stirling_base_path = if jar_path.is_some() {
+            Some(stirling_base_path.unwrap_or(default_app_data_dir))
+        } else {
+            None
+        };
 
         if max_backoff < initial_backoff {
             max_backoff = initial_backoff;
@@ -85,6 +186,13 @@ impl SidecarConfig {
 
         Self {
             jar_path,
+            java_path,
+            stirling_base_path,
+            ocrmypdf_path,
+            tessdata_dir,
+            path_entries,
+            path_env_key,
+            inherited_path,
             health_path,
             startup_timeout,
             initial_backoff,
@@ -95,6 +203,25 @@ impl SidecarConfig {
 
     fn disabled(&self) -> bool {
         self.jar_path.is_none()
+    }
+
+    fn write_settings(&self) -> std::io::Result<()> {
+        let Some(stirling_base_path) = self.stirling_base_path.as_ref() else {
+            return Ok(());
+        };
+        let Some(ocrmypdf_path) = self.ocrmypdf_path.as_ref() else {
+            return Ok(());
+        };
+        let Some(tessdata_dir) = self.tessdata_dir.as_ref() else {
+            return Ok(());
+        };
+
+        let configs_dir = stirling_base_path.join("configs");
+        fs::create_dir_all(&configs_dir)?;
+        fs::write(
+            configs_dir.join("settings.yml"),
+            stirling_settings_yaml(ocrmypdf_path, tessdata_dir),
+        )
     }
 }
 
@@ -304,14 +431,8 @@ impl SidecarManager {
             return Ok(EngineStartResponse::ready(port));
         }
 
-        let jar_path = self
-            .config
-            .jar_path
-            .clone()
-            .expect("jar path is present when sidecar is enabled");
-
         for attempt_index in 0..2 {
-            match self.start_once(&jar_path) {
+            match self.start_once() {
                 Ok(port) => return Ok(EngineStartResponse::ready(port)),
                 Err(StartAttemptError::TimedOut(_port)) if attempt_index == 0 => {
                     kill_child(&self.child);
@@ -365,7 +486,7 @@ impl SidecarManager {
         self.stop_child();
     }
 
-    fn start_once(&self, jar_path: &PathBuf) -> Result<u16, StartAttemptError> {
+    fn start_once(&self) -> Result<u16, StartAttemptError> {
         let reservation =
             pick_free_port().map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
         let port = reservation
@@ -378,7 +499,7 @@ impl SidecarManager {
         // support that reports the bound port back to the shell.
         drop(reservation);
 
-        match spawn_engine(jar_path, port) {
+        match spawn_engine(&self.config, port) {
             Ok(spawned_child) => {
                 *self.child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
             }
@@ -501,19 +622,58 @@ pub fn pick_free_port() -> std::io::Result<PortReservation> {
     Ok(PortReservation { listener })
 }
 
-fn spawn_engine(jar_path: &PathBuf, port: u16) -> std::io::Result<Child> {
-    let mut command = Command::new("java");
-    command
-        .arg("-jar")
-        .arg(jar_path)
-        .arg("--server.address=127.0.0.1")
-        .arg(format!("--server.port={port}"));
+#[derive(Debug, Eq, PartialEq)]
+struct EngineSpawnSpec {
+    program: PathBuf,
+    args: Vec<OsString>,
+    current_dir: Option<PathBuf>,
+    envs: Vec<(OsString, OsString)>,
+}
 
-    if let Some(parent) = jar_path.parent() {
-        command.current_dir(parent);
+fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child> {
+    let spec = engine_spawn_spec(config, port)?;
+    let mut command = Command::new(&spec.program);
+    command.args(&spec.args);
+    if let Some(current_dir) = spec.current_dir {
+        command.current_dir(current_dir);
+    }
+    for (key, value) in spec.envs {
+        command.env(key, value);
+    }
+    command.spawn()
+}
+
+fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<EngineSpawnSpec> {
+    config.write_settings()?;
+
+    let jar_path = config
+        .jar_path
+        .clone()
+        .expect("jar path is present when sidecar is enabled");
+    let mut envs = Vec::new();
+
+    if let Some(stirling_base_path) = config.stirling_base_path.as_ref() {
+        envs.push((
+            OsString::from("STIRLING_BASE_PATH"),
+            stirling_base_path.as_os_str().to_os_string(),
+        ));
     }
 
-    command.spawn()
+    if let Some(path) = child_path(config) {
+        envs.push((config.path_env_key.clone(), path));
+    }
+
+    Ok(EngineSpawnSpec {
+        program: config.java_path.clone(),
+        args: vec![
+            OsString::from("-jar"),
+            jar_path.as_os_str().to_os_string(),
+            OsString::from("--server.address=127.0.0.1"),
+            OsString::from(format!("--server.port={port}")),
+        ],
+        current_dir: jar_path.parent().map(Path::to_path_buf),
+        envs,
+    })
 }
 
 fn wait_until_ready(
@@ -740,6 +900,107 @@ fn idle_shutdown_from_minutes(minutes: u64) -> Option<Duration> {
     Some(Duration::from_secs(minutes.saturating_mul(60)))
 }
 
+fn current_exe_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+fn dev_payload_dir() -> Option<PathBuf> {
+    option_env!("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .map(|manifest_dir| manifest_dir.join(PAYLOAD_DIR_NAME))
+}
+
+fn find_payload_dir(
+    exe_dir: Option<&Path>,
+    resource_dir: Option<&Path>,
+    dev_payload_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    [
+        exe_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
+        resource_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
+        dev_payload_dir.map(Path::to_path_buf),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|path| path.is_dir())
+}
+
+fn existing_join(root: &Path, parts: &[&str]) -> Option<PathBuf> {
+    let path = join_parts(root, parts);
+    path.exists().then_some(path)
+}
+
+fn join_parts(root: &Path, parts: &[&str]) -> PathBuf {
+    parts
+        .iter()
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+fn payload_java_path(payload_dir: &Path) -> Option<PathBuf> {
+    [
+        payload_dir.join("jre").join("bin").join("java.exe"),
+        payload_dir.join("jre").join("bin").join("java"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
+fn payload_path_entries(payload_dir: &Path) -> Vec<PathBuf> {
+    [
+        payload_dir.join("ocr"),
+        payload_dir.join("ocr").join("python"),
+        payload_dir.join("ocr").join("tesseract"),
+        payload_dir.join("ocr").join("gs").join("bin"),
+    ]
+    .into_iter()
+    .filter(|path| path.is_dir())
+    .collect()
+}
+
+fn child_path(config: &SidecarConfig) -> Option<OsString> {
+    if config.path_entries.is_empty() {
+        return None;
+    }
+
+    let mut paths = config.path_entries.clone();
+    if let Some(inherited_path) = config.inherited_path.as_ref() {
+        paths.extend(env::split_paths(inherited_path));
+    }
+
+    env::join_paths(paths).ok()
+}
+
+fn stirling_settings_yaml(ocrmypdf_path: &Path, tessdata_dir: &Path) -> String {
+    format!(
+        "\
+system:
+  customPaths:
+    operations:
+      ocrmypdf: {}
+  tessdataDir: {}
+processExecutor:
+  sessionLimit:
+    ocrMyPdfSessionLimit: 2
+  timeoutMinutes:
+    ocrMyPdfTimeoutMinutes: 30
+endpoints:
+  toRemove: []
+  groupsToRemove: []
+springdoc:
+  api-docs:
+    enabled: false
+",
+        yaml_single_quote(ocrmypdf_path),
+        yaml_single_quote(tessdata_dir)
+    )
+}
+
+fn yaml_single_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
 fn normalize_health_path(path: &str) -> String {
     let path = path.trim();
     if path.is_empty() {
@@ -800,6 +1061,7 @@ mod tests {
     fn config_parses_engine_environment() {
         let config = SidecarConfig::from_env_vars(vec![
             ("RAIOPDF_ENGINE_JAR", "/opt/raiopdf/stirling.jar"),
+            ("RAIOPDF_ENGINE_JAVA", "/opt/raiopdf/jre/bin/java"),
             ("RAIOPDF_ENGINE_HEALTH_PATH", "healthz"),
             ("RAIOPDF_ENGINE_STARTUP_TIMEOUT_MS", "30000"),
             ("RAIOPDF_ENGINE_INITIAL_BACKOFF_MS", "25"),
@@ -812,6 +1074,7 @@ mod tests {
             config.jar_path,
             Some(PathBuf::from("/opt/raiopdf/stirling.jar"))
         );
+        assert_eq!(config.java_path, PathBuf::from("/opt/raiopdf/jre/bin/java"));
         assert_eq!(config.health_path, "/healthz");
         assert_eq!(config.startup_timeout, Duration::from_secs(30));
         assert_eq!(config.initial_backoff, Duration::from_millis(25));
@@ -883,5 +1146,156 @@ mod tests {
 
         assert_eq!(timer.remaining(now + Duration::from_secs(3600)), None);
         assert!(!timer.expired(now + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn payload_resolution_builds_launch_spec_and_settings_without_spawning() {
+        let root = test_temp_dir("payload-launch");
+        let exe_dir = root.join("bin");
+        let payload = exe_dir.join(PAYLOAD_DIR_NAME);
+        let app_data = root.join("app-data");
+        create_payload_tree(&payload);
+
+        let config = SidecarConfig::from_env_vars_with_roots(
+            vec![("PATH", "/usr/bin")],
+            app_data.clone(),
+            Some(exe_dir),
+            None,
+            None,
+        );
+
+        assert!(!config.disabled());
+        assert_eq!(
+            config.java_path,
+            payload.join("jre").join("bin").join("java.exe")
+        );
+        assert_eq!(
+            config.jar_path,
+            Some(payload.join("engine").join("stirling.jar"))
+        );
+        assert_eq!(
+            config.ocrmypdf_path,
+            Some(payload.join("ocr").join("ocrmypdf.cmd"))
+        );
+        assert_eq!(
+            config.tessdata_dir,
+            Some(payload.join("ocr").join("tesseract").join("tessdata"))
+        );
+
+        let spec = engine_spawn_spec(&config, 49152).expect("spawn spec should build");
+        assert_eq!(
+            spec.program,
+            payload.join("jre").join("bin").join("java.exe")
+        );
+        assert_eq!(
+            spec.args,
+            vec![
+                OsString::from("-jar"),
+                payload
+                    .join("engine")
+                    .join("stirling.jar")
+                    .as_os_str()
+                    .to_os_string(),
+                OsString::from("--server.address=127.0.0.1"),
+                OsString::from("--server.port=49152"),
+            ]
+        );
+        assert_eq!(spec.current_dir, Some(payload.join("engine")));
+        assert!(spec.envs.iter().any(|(key, value)| {
+            key.to_string_lossy() == "STIRLING_BASE_PATH" && value == app_data.as_os_str()
+        }));
+        assert!(spec.envs.iter().any(|key_value| {
+            key_value.0.to_string_lossy() == "PATH"
+                && key_value
+                    .1
+                    .to_string_lossy()
+                    .starts_with(&payload.join("ocr").to_string_lossy().to_string())
+        }));
+
+        let settings = fs::read_to_string(app_data.join("configs").join("settings.yml"))
+            .expect("settings should be written");
+        assert!(settings.contains("ocrmypdf: '"));
+        assert!(settings.contains("ocrmypdf.cmd"));
+        assert!(settings.contains("tessdataDir: '"));
+        assert!(settings.contains("ocrMyPdfSessionLimit: 2"));
+        assert!(settings.contains("enabled: false"));
+    }
+
+    #[test]
+    fn environment_overrides_payload_defaults() {
+        let root = test_temp_dir("payload-overrides");
+        let payload = root.join("dev-payload");
+        create_payload_tree(&payload);
+
+        let config = SidecarConfig::from_env_vars_with_roots(
+            vec![
+                ("RAIOPDF_ENGINE_PAYLOAD_DIR", payload.to_str().unwrap()),
+                ("RAIOPDF_ENGINE_JAR", "/override/stirling.jar"),
+                ("RAIOPDF_ENGINE_JAVA", "/override/java"),
+                ("RAIOPDF_ENGINE_BASE_PATH", "/override/base"),
+                ("RAIOPDF_ENGINE_OCRMYPDF", "/override/ocrmypdf.cmd"),
+                ("RAIOPDF_ENGINE_TESSDATA_DIR", "/override/tessdata"),
+            ],
+            root.join("app-data"),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            config.jar_path,
+            Some(PathBuf::from("/override/stirling.jar"))
+        );
+        assert_eq!(config.java_path, PathBuf::from("/override/java"));
+        assert_eq!(
+            config.stirling_base_path,
+            Some(PathBuf::from("/override/base"))
+        );
+        assert_eq!(
+            config.ocrmypdf_path,
+            Some(PathBuf::from("/override/ocrmypdf.cmd"))
+        );
+        assert_eq!(
+            config.tessdata_dir,
+            Some(PathBuf::from("/override/tessdata"))
+        );
+    }
+
+    fn test_temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let unique = format!("raiopdf-{name}-{}-{}", std::process::id(), nanos);
+        let path = env::temp_dir().join(unique);
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
+    }
+
+    fn create_payload_tree(payload: &Path) {
+        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload.join("engine").join("stirling.jar"));
+        touch(&payload.join("ocr").join("ocrmypdf.cmd"));
+        touch(
+            &payload
+                .join("ocr")
+                .join("tesseract")
+                .join("tessdata")
+                .join("eng.traineddata"),
+        );
+        touch(&payload.join("ocr").join("tesseract").join("tesseract.exe"));
+        touch(
+            &payload
+                .join("ocr")
+                .join("gs")
+                .join("bin")
+                .join("gswin64c.exe"),
+        );
+    }
+
+    fn touch(path: &Path) {
+        fs::create_dir_all(path.parent().expect("test file should have parent"))
+            .expect("parent should be created");
+        fs::write(path, []).expect("test file should be written");
     }
 }

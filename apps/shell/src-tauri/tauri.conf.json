@@ -30,6 +30,9 @@
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "payload/"
     ]
   }
 }

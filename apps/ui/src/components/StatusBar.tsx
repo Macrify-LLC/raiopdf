@@ -24,7 +24,7 @@ export function StatusBar({
       {hasTextLayer ? (
         <span className="status-bar__ok-chip">
           <CheckIcon size={12} />
-          Searchable
+          Searchable — verified
         </span>
       ) : null}
       <span className="status-bar__local">

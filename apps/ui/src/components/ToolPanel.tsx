@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { OcrUiState } from "../App";
 import {
   BatesIcon,
   BoltIcon,
@@ -28,7 +29,21 @@ const LEGAL_TOOLS = [
   { id: "scrub-metadata", label: "Scrub Metadata", icon: <ScrubMetadataIcon size={16} /> },
 ] as const;
 
-export function ToolPanel() {
+export interface ToolPanelProps {
+  hasDocument: boolean;
+  ocrState: OcrUiState;
+  ocrAvailable: boolean;
+  ocrStarting: boolean;
+  onMakeSearchable: () => void;
+}
+
+export function ToolPanel({
+  hasDocument,
+  ocrState,
+  ocrAvailable,
+  ocrStarting,
+  onMakeSearchable,
+}: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const [selectedLegalTool, setSelectedLegalTool] = useState<string>(
     "prepare-for-filing",
@@ -36,6 +51,14 @@ export function ToolPanel() {
 
   function toggleGroup(group: GroupId) {
     setOpenGroup((current) => (current === group ? null : group));
+  }
+
+  function selectLegalTool(toolId: string) {
+    setSelectedLegalTool(toolId);
+
+    if (toolId === "make-searchable") {
+      onMakeSearchable();
+    }
   }
 
   return (
@@ -80,16 +103,96 @@ export function ToolPanel() {
         isOpen={openGroup === "legal"}
         onToggle={() => toggleGroup("legal")}
       >
-        {LEGAL_TOOLS.map((tool) => (
-          <ToolRow
-            key={tool.id}
-            icon={tool.icon}
-            label={tool.label}
-            selected={selectedLegalTool === tool.id}
-            onSelect={() => setSelectedLegalTool(tool.id)}
-          />
-        ))}
+        {LEGAL_TOOLS.map((tool) => {
+          const selected = selectedLegalTool === tool.id;
+
+          return (
+            <div key={tool.id}>
+              <ToolRow
+                icon={tool.icon}
+                label={tool.label}
+                selected={selected}
+                onSelect={() => selectLegalTool(tool.id)}
+              />
+              {tool.id === "make-searchable" && selected ? (
+                <OcrStatusPanel
+                  hasDocument={hasDocument}
+                  ocrState={ocrState}
+                  ocrAvailable={ocrAvailable}
+                  ocrStarting={ocrStarting}
+                />
+              ) : null}
+            </div>
+          );
+        })}
       </AccordionGroup>
     </aside>
   );
+}
+
+interface OcrStatusPanelProps {
+  hasDocument: boolean;
+  ocrState: OcrUiState;
+  ocrAvailable: boolean;
+  ocrStarting: boolean;
+}
+
+function OcrStatusPanel({
+  hasDocument,
+  ocrState,
+  ocrAvailable,
+  ocrStarting,
+}: OcrStatusPanelProps) {
+  const message = ocrState.message ?? getDefaultOcrMessage(hasDocument, ocrAvailable);
+  const phase = ocrStarting && ocrState.phase === "starting-engine"
+    ? "starting-engine"
+    : ocrState.phase;
+
+  return (
+    <div
+      className="tool-panel__ocr-status"
+      data-phase={phase}
+      role="status"
+      aria-live="polite"
+    >
+      <p className="tool-panel__ocr-status-label">{getOcrStatusLabel(phase)}</p>
+      <p className="tool-panel__ocr-status-message">{message}</p>
+    </div>
+  );
+}
+
+function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): string {
+  if (!hasDocument) {
+    return "Open a PDF before running OCR.";
+  }
+
+  if (!ocrAvailable) {
+    return "OCR runs in the desktop app.";
+  }
+
+  return "Ready to make this PDF searchable.";
+}
+
+function getOcrStatusLabel(phase: OcrUiState["phase"]): string {
+  if (phase === "done") {
+    return "Verified";
+  }
+
+  if (phase === "error") {
+    return "Needs attention";
+  }
+
+  if (phase === "starting-engine") {
+    return "Starting";
+  }
+
+  if (phase === "processing") {
+    return "Processing";
+  }
+
+  if (phase === "verifying") {
+    return "Verifying";
+  }
+
+  return "OCR";
 }

@@ -48,6 +48,11 @@ interface CommitOptions {
   currentPage?: number | ((current: DocumentState, pageCount: number) => number);
 }
 
+interface ReplaceBytesOptions {
+  dirty: boolean;
+  hasTextLayer?: boolean | null;
+}
+
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
@@ -255,6 +260,57 @@ export function useDocument() {
     [closeHandle, engine],
   );
 
+  const replaceBytes = useCallback(
+    async (bytes: Uint8Array, options: ReplaceBytesOptions) => {
+      const token = openTokenRef.current + 1;
+      openTokenRef.current = token;
+      const previousHandle = activeHandleRef.current;
+      let openedHandle: PdfDocumentHandle | null = null;
+
+      try {
+        const nextBytes = new Uint8Array(bytes);
+        const engineHandle = await engine.open(nextBytes);
+        openedHandle = engineHandle;
+        const pageCount = await engine.pageCount(engineHandle);
+
+        if (openTokenRef.current !== token) {
+          await closeHandle(engineHandle);
+          return false;
+        }
+
+        activeHandleRef.current = engineHandle;
+        setDocument((current) => ({
+          ...current,
+          bytes: nextBytes,
+          engineHandle,
+          pageCount,
+          currentPage: clampPage(current.currentPage, pageCount),
+          dirty: options.dirty,
+          fileSizeBytes: nextBytes.byteLength,
+          hasTextLayer: options.hasTextLayer ?? null,
+          pageSizeInches: null,
+          error: null,
+        }));
+
+        if (previousHandle !== engineHandle) {
+          await closeHandle(previousHandle);
+        }
+
+        return true;
+      } catch (error) {
+        await closeHandle(openedHandle);
+
+        if (openTokenRef.current === token) {
+          activeHandleRef.current = previousHandle;
+          setError(getEngineErrorMessage(error));
+        }
+
+        return false;
+      }
+    },
+    [closeHandle, engine, setError],
+  );
+
   const setCurrentPage = useCallback((page: number) => {
     setDocument((current) => ({
       ...current,
@@ -395,6 +451,7 @@ export function useDocument() {
   return {
     document,
     openFile,
+    replaceBytes,
     setCurrentPage,
     setZoom,
     setFitZoom,

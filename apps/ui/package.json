@@ -14,6 +14,7 @@
   "dependencies": {
     "@raiopdf/engine-api": "workspace:*",
     "@raiopdf/engine-local": "workspace:*",
+    "@raiopdf/engine-sidecar": "workspace:*",
     "@tauri-apps/api": "^2.11.1",
     "pdfjs-dist": "^6.1.200",
     "react": "^19.0.0",

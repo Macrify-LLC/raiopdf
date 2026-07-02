@@ -56,6 +56,9 @@ importers:
       '@raiopdf/engine-local':
         specifier: workspace:*
         version: link:../../packages/engine-local
+      '@raiopdf/engine-sidecar':
+        specifier: workspace:*
+        version: link:../../packages/engine-sidecar
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.11.1

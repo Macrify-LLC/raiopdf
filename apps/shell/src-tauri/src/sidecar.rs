@@ -219,7 +219,7 @@ impl SidecarConfig {
         let configs_dir = stirling_base_path.join("configs");
         fs::create_dir_all(&configs_dir)?;
         fs::write(
-            configs_dir.join("settings.yml"),
+            configs_dir.join("custom_settings.yml"),
             stirling_settings_yaml(ocrmypdf_path, tessdata_dir),
         )
     }
@@ -661,6 +661,14 @@ fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<Engin
 
     if let Some(path) = child_path(config) {
         envs.push((config.path_env_key.clone(), path));
+    }
+
+    if let Some(tessdata_dir) = config.tessdata_dir.as_ref() {
+        // OCRmyPDF invokes tesseract as a child process; this keeps that lookup on the bundled data.
+        envs.push((
+            OsString::from("TESSDATA_PREFIX"),
+            tessdata_dir.as_os_str().to_os_string(),
+        ));
     }
 
     Ok(EngineSpawnSpec {
@@ -1212,13 +1220,23 @@ mod tests {
                     .starts_with(&payload.join("ocr").to_string_lossy().to_string())
         }));
 
-        let settings = fs::read_to_string(app_data.join("configs").join("settings.yml"))
+        assert!(!app_data.join("configs").join("settings.yml").exists());
+        let settings = fs::read_to_string(app_data.join("configs").join("custom_settings.yml"))
             .expect("settings should be written");
         assert!(settings.contains("ocrmypdf: '"));
         assert!(settings.contains("ocrmypdf.cmd"));
         assert!(settings.contains("tessdataDir: '"));
         assert!(settings.contains("ocrMyPdfSessionLimit: 2"));
         assert!(settings.contains("enabled: false"));
+        assert!(spec.envs.iter().any(|(key, value)| {
+            key.to_string_lossy() == "TESSDATA_PREFIX"
+                && value
+                    == payload
+                        .join("ocr")
+                        .join("tesseract")
+                        .join("tessdata")
+                        .as_os_str()
+        }));
     }
 
     #[test]

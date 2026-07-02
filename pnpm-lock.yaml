@@ -71,6 +71,12 @@ importers:
         specifier: ^1.17.1
         version: 1.17.1
 
+  packages/engine-sidecar:
+    dependencies:
+      '@raiopdf/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+
 packages:
 
   '@babel/code-frame@7.29.7':

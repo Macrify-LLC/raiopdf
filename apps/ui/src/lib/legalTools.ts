@@ -8,6 +8,7 @@ export type LegalScanCategory =
   | "Credit Card"
   | "Driver License"
   | "Birth Date";
+export type LegalScanConfidence = "high" | "lower";
 
 export interface ExtractedTextBox {
   pageIndex: number;
@@ -18,6 +19,7 @@ export interface ExtractedTextBox {
 export interface SensitiveHit {
   id: string;
   category: LegalScanCategory;
+  confidence: LegalScanConfidence;
   pageIndex: number;
   excerpt: string;
   area: PdfRedactionArea;
@@ -39,9 +41,11 @@ const REDACTION_PADDING_PT = 2;
 
 const SCAN_PATTERNS: ReadonlyArray<{
   category: LegalScanCategory;
+  confidence?: LegalScanConfidence;
   regex: RegExp;
 }> = [
-  { category: "SSN", regex: /\b\d{3}-\d{2}-\d{4}\b/g },
+  { category: "SSN", regex: /\b\d{3}[ -]\d{2}[ -]\d{4}\b/g },
+  { category: "SSN", confidence: "lower", regex: /\b\d{9}\b/g },
   {
     category: "Bank / Account",
     regex: /\b(?:account|acct|routing|aba)\b[^\n]{0,32}?\b\d{4,17}\b/gi,
@@ -64,24 +68,15 @@ export async function extractTextBoxes(
   pdfDocument: PDFDocumentProxy,
 ): Promise<ExtractedTextBox[]> {
   const boxes: ExtractedTextBox[] = [];
+  const pages = await extractPageText(pdfDocument);
 
-  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-    const page = await pdfDocument.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-
-    for (const rawItem of textContent.items) {
-      const item = rawItem as TextItemLike;
-      const text = typeof item.str === "string" ? item.str : "";
-
-      if (!text.trim()) {
-        continue;
-      }
-
-      const area = textItemToRedactionArea(item, pageNumber - 1);
-
-      if (area) {
-        boxes.push({ pageIndex: pageNumber - 1, text, area });
-      }
+  for (const page of pages) {
+    for (const span of page.spans) {
+      boxes.push({
+        pageIndex: page.pageIndex,
+        text: page.text.slice(span.start, span.end),
+        area: span.area,
+      });
     }
   }
 
@@ -98,26 +93,45 @@ export async function findTextRedactionAreas(
     return [];
   }
 
-  const boxes = await extractTextBoxes(pdfDocument);
+  const pages = await extractPageText(pdfDocument);
+  const areas: PdfRedactionArea[] = [];
 
-  return boxes
-    .filter((box) => box.text.toLowerCase().includes(normalizedQuery))
-    .map((box) => box.area);
+  for (const page of pages) {
+    const normalizedPageText = page.text.toLowerCase();
+    let start = normalizedPageText.indexOf(normalizedQuery);
+
+    while (start !== -1) {
+      const area = areaForTextRange(page, start, start + normalizedQuery.length);
+
+      if (area) {
+        areas.push(area);
+      }
+
+      start = normalizedPageText.indexOf(normalizedQuery, start + normalizedQuery.length);
+    }
+  }
+
+  return areas;
 }
 
 export async function scanSensitivePatterns(
   pdfDocument: PDFDocumentProxy,
 ): Promise<SensitiveHit[]> {
-  const boxes = await extractTextBoxes(pdfDocument);
+  const pages = await extractPageText(pdfDocument);
   const hits: SensitiveHit[] = [];
 
-  boxes.forEach((box, boxIndex) => {
+  pages.forEach((page) => {
     for (const pattern of SCAN_PATTERNS) {
       pattern.regex.lastIndex = 0;
       let match: RegExpExecArray | null;
 
-      while ((match = pattern.regex.exec(box.text)) !== null) {
+      while ((match = pattern.regex.exec(page.text)) !== null) {
         const matchedText = match[0] ?? "";
+        const area = areaForTextRange(page, match.index, match.index + matchedText.length);
+
+        if (!area) {
+          continue;
+        }
 
         if (
           pattern.category === "Credit Card" &&
@@ -127,17 +141,98 @@ export async function scanSensitivePatterns(
         }
 
         hits.push({
-          id: `${box.pageIndex}-${boxIndex}-${pattern.category}-${match.index}`,
+          id: `${page.pageIndex}-${pattern.category}-${match.index}`,
           category: pattern.category,
-          pageIndex: box.pageIndex,
-          excerpt: maskExcerpt(box.text, match.index, matchedText.length),
-          area: box.area,
+          confidence: pattern.confidence ?? "high",
+          pageIndex: page.pageIndex,
+          excerpt: maskExcerpt(page.text, match.index, matchedText.length),
+          area,
         });
       }
     }
   });
 
   return hits;
+}
+
+interface TextSpan {
+  start: number;
+  end: number;
+  area: PdfRedactionArea;
+}
+
+interface ExtractedPageText {
+  pageIndex: number;
+  text: string;
+  spans: TextSpan[];
+}
+
+async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<ExtractedPageText[]> {
+  const pages: ExtractedPageText[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    const page = await pdfDocument.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const spans: TextSpan[] = [];
+    let text = "";
+
+    for (const rawItem of textContent.items) {
+      const item = rawItem as TextItemLike;
+      const itemText = typeof item.str === "string" ? item.str : "";
+      const start = text.length;
+      text += itemText;
+      const end = text.length;
+
+      if (!itemText.trim()) {
+        continue;
+      }
+
+      const area = textItemToRedactionArea(item, pageNumber - 1);
+
+      if (area) {
+        spans.push({ start, end, area });
+      }
+    }
+
+    pages.push({
+      pageIndex: pageNumber - 1,
+      text,
+      spans,
+    });
+  }
+
+  return pages;
+}
+
+function areaForTextRange(
+  page: ExtractedPageText,
+  start: number,
+  end: number,
+): PdfRedactionArea | null {
+  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
+
+  if (matchingSpans.length === 0) {
+    return null;
+  }
+
+  return matchingSpans
+    .map((span) => span.area)
+    .reduce(unionAreas);
+}
+
+function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedactionArea {
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  const maxX = Math.max(left.x + left.w, right.x + right.w);
+  const maxY = Math.max(left.y + left.h, right.y + right.h);
+
+  return {
+    pageIndex: left.pageIndex,
+    x,
+    y,
+    w: Math.max(1, maxX - x),
+    h: Math.max(1, maxY - y),
+  };
 }
 
 export async function verifyRedactionAreasClear(

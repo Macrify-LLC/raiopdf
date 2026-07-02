@@ -32,6 +32,7 @@ export interface AppShellProps {
   onZoomIn: () => void;
   onFitZoomResolved: (zoom: number) => void;
   onPageSizeChange: (size: { width: number; height: number }) => void;
+  onRenderError: (message: string) => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
   onDeleteSelected: () => void;
@@ -75,6 +76,7 @@ export function AppShell({
   onZoomIn,
   onFitZoomResolved,
   onPageSizeChange,
+  onRenderError,
   onThumbnailClick,
   onRotateSelected,
   onDeleteSelected,
@@ -177,6 +179,7 @@ export function AppShell({
           error={document.error}
           onFitZoomResolved={onFitZoomResolved}
           onPageSizeChange={onPageSizeChange}
+          onRenderError={onRenderError}
           redactionMode={activeLegalTool === "redact"}
           redactionModeBar={redactionModeBar}
           pendingRedactions={pendingRedactions}

@@ -27,6 +27,7 @@ export interface CanvasWellProps {
   error?: string | null;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
+  onRenderError?: ((message: string) => void) | undefined;
   workspace?: ReactNode;
   redactionMode?: boolean;
   redactionModeBar?: ReactNode;
@@ -45,6 +46,7 @@ export function CanvasWell({
   error = null,
   onFitZoomResolved,
   onPageSizeChange,
+  onRenderError,
   workspace = null,
   redactionMode = false,
   redactionModeBar = null,
@@ -68,16 +70,25 @@ export function CanvasWell({
       return;
     }
 
-    void pdfDocument.getPage(currentPage).then((loadedPage) => {
-      if (!cancelled) {
-        setPage(loadedPage);
-        const viewport = loadedPage.getViewport({ scale: 1 });
-        onPageSizeChange?.({
-          width: viewport.width / 72,
-          height: viewport.height / 72,
-        });
-      }
-    });
+    setPage(null);
+
+    void pdfDocument
+      .getPage(currentPage)
+      .then((loadedPage) => {
+        if (!cancelled) {
+          setPage(loadedPage);
+          const viewport = loadedPage.getViewport({ scale: 1 });
+          onPageSizeChange?.({
+            width: viewport.width / 72,
+            height: viewport.height / 72,
+          });
+        }
+      })
+      .catch((pageError: unknown) => {
+        if (!cancelled && !isCancelledRenderError(pageError)) {
+          onRenderError?.("This page could not be displayed.");
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -124,18 +135,16 @@ export function CanvasWell({
 
     const renderTask = page.render({ canvas, viewport });
     void renderTask.promise.catch((renderError: unknown) => {
-      if (
-        renderError instanceof Error &&
-        renderError.name !== "RenderingCancelledException"
-      ) {
+      if (!isCancelledRenderError(renderError)) {
         console.error(renderError);
+        onRenderError?.("This page could not be displayed.");
       }
     });
 
     return () => {
       renderTask.cancel();
     };
-  }, [page, viewport]);
+  }, [onRenderError, page, viewport]);
 
   useEffect(() => {
     setDraftRect(null);
@@ -406,4 +415,8 @@ function toOverlayStyle(rect: ViewportRect) {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function isCancelledRenderError(error: unknown): boolean {
+  return error instanceof Error && error.name === "RenderingCancelledException";
 }

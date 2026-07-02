@@ -38,6 +38,20 @@ test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ p
   });
 });
 
+test("renders page 1 in the main canvas after opening a PDF", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "render-main-canvas.pdf", await createTextPdf("Main canvas render check"));
+
+  await expect(page.locator(".canvas-well__empty")).toHaveCount(0);
+  await expect(page.getByText("This PDF could not be opened. The file may be corrupt or unsupported.")).toHaveCount(0);
+  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect.poll(() => mainCanvasStats(page)).toMatchObject({
+    widthReady: true,
+    heightReady: true,
+    hasTextPixels: true,
+  });
+});
+
 test("queues rapid rotate and delete clicks without losing the delete", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "rapid-fire.pdf", await createPdf([200, 210, 220]));
@@ -208,7 +222,7 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();
   await page.getByRole("button", { name: "Apply Redactions" }).click();
   await expect(page.getByText("1 area will be permanently removed")).toBeVisible();
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await page.locator(".tool-panel__danger-button", { hasText: "Apply Redactions" }).click();
 
   await expect(page.getByText("Redacted and verified — the removed text no longer exists in the file.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
@@ -235,6 +249,44 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
   });
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+}
+
+async function mainCanvasStats(page: Page): Promise<{
+  widthReady: boolean;
+  heightReady: boolean;
+  hasTextPixels: boolean;
+}> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid="pdf-page-canvas"]');
+
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      return { widthReady: false, heightReady: false, hasTextPixels: false };
+    }
+
+    const context = canvas.getContext("2d");
+    const image = context?.getImageData(0, 0, canvas.width, canvas.height).data;
+    let nonWhitePixels = 0;
+
+    if (image) {
+      for (let index = 0; index < image.length; index += 4) {
+        const alpha = image[index + 3] ?? 0;
+        const red = image[index] ?? 255;
+        const green = image[index + 1] ?? 255;
+        const blue = image[index + 2] ?? 255;
+
+        if (alpha !== 0 && (red < 245 || green < 245 || blue < 245)) {
+          nonWhitePixels += 1;
+        }
+      }
+    }
+
+    return {
+      widthReady: canvas.width > 0,
+      heightReady: canvas.height > 0,
+      hasTextPixels: nonWhitePixels > 0,
+    };
+  });
 }
 
 async function savePdf(page: Page): Promise<Uint8Array> {

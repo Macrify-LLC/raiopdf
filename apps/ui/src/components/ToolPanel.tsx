@@ -302,7 +302,7 @@ function RedactionStatusPanel({
 
   if (state.phase === "confirming") {
     return (
-      <div className="tool-panel__inline-card" data-tone="danger">
+      <div className="tool-panel__inline-card">
         <p className="tool-panel__card-title">
           {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
         </p>
@@ -310,8 +310,8 @@ function RedactionStatusPanel({
           Content is deleted, not covered. This cannot be undone after saving.
         </p>
         <div className="tool-panel__button-row">
-          <button type="button" className="tool-panel__primary-button" onClick={onConfirm}>
-            Apply
+          <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>
+            Apply Redactions
           </button>
           <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
             Cancel
@@ -491,6 +491,9 @@ function ScannerPanel({
             <div key={hit.id} className="tool-panel__hit" role="listitem">
               <div className="tool-panel__hit-head">
                 <span className="tool-panel__category-chip">{hit.category}</span>
+                {hit.confidence === "lower" ? (
+                  <span className="tool-panel__confidence-chip">Lower confidence</span>
+                ) : null}
                 <span>Page {hit.pageIndex + 1}</span>
               </div>
               <p>{hit.excerpt}</p>

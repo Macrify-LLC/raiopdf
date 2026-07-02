@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -135,6 +136,12 @@ export function App() {
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const redactionIdRef = useRef(0);
+  const documentBytesRef = useRef<Uint8Array | null>(null);
+  const scannerRunRef = useRef(0);
+
+  useLayoutEffect(() => {
+    documentBytesRef.current = document.bytes;
+  }, [document.bytes]);
 
   const resetLegalState = useCallback(() => {
     setPendingRedactions([]);
@@ -146,6 +153,19 @@ export function App() {
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
   }, []);
+
+  const clearDocumentBoundLegalState = useCallback(() => {
+    scannerRunRef.current += 1;
+    setPendingRedactions([]);
+    setScannerState({ scanning: false, message: null, hits: [] });
+  }, []);
+
+  const isCurrentDocument = useCallback(
+    (sourceOpenToken: number, sourceBytes: Uint8Array) => (
+      getOpenToken() === sourceOpenToken && documentBytesRef.current === sourceBytes
+    ),
+    [getOpenToken],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -208,10 +228,8 @@ export function App() {
   }, [pdfDocument, setHasTextLayer]);
 
   useEffect(() => {
-    if (!document.bytes) {
-      resetLegalState();
-    }
-  }, [document.bytes, resetLegalState]);
+    clearDocumentBoundLegalState();
+  }, [clearDocumentBoundLegalState, document.bytes]);
 
   useEffect(() => {
     let disposed = false;
@@ -672,7 +690,19 @@ export function App() {
         return;
       }
 
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setRedactionMessage("Open a PDF before searching for redaction text.");
+        return;
+      }
+
       const areas = await findTextRedactionAreas(pdfDocument, redactionSearchText);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
 
       if (areas.length === 0) {
         setRedactionPhase("idle");
@@ -693,7 +723,7 @@ export function App() {
       setRedactionPhase("idle");
       setRedactionMessage(`${areas.length} ${areas.length === 1 ? "area" : "areas"} marked from search.`);
     },
-    [pdfDocument, redactionSearchText],
+    [document.bytes, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText],
   );
 
   const requestApplyRedactions = useCallback(() => {
@@ -738,7 +768,16 @@ export function App() {
 
     try {
       const redactedBytes = await engineBridge.redactAreas(sourceBytes, areas);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
       const verified = await verifyRedactionAreasClear(redactedBytes, areas);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
 
       if (!verified) {
         setRedactionPhase("error");
@@ -769,10 +808,14 @@ export function App() {
           ? error.message
           : "Redaction could not finish. The document was left unchanged.";
 
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
       setRedactionPhase("error");
       setRedactionMessage(message);
     }
-  }, [document.bytes, engineBridge, getOpenToken, pendingRedactions, replaceBytes]);
+  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pendingRedactions, replaceBytes]);
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
@@ -791,7 +834,10 @@ export function App() {
   );
 
   const runScanner = useCallback(() => {
-    if (!pdfDocument && !document.bytes) {
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+
+    if (!sourceBytes) {
       setScannerState({
         scanning: false,
         message: "Open a PDF before running the 2.425 scanner.",
@@ -800,14 +846,21 @@ export function App() {
       return;
     }
 
+    const runId = scannerRunRef.current + 1;
+    scannerRunRef.current = runId;
+    const isCurrentScannerRun = () => (
+      scannerRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
+    );
+
     setScannerState((current) => ({
       ...current,
       scanning: true,
       message: "Scanning extracted text...",
+      hits: [],
     }));
 
     void (async () => {
-      const loadedForScan = pdfDocument ? null : await loadPdfDocument(document.bytes!);
+      const loadedForScan = pdfDocument ? null : await loadPdfDocument(sourceBytes);
       const scanDocument = pdfDocument ?? loadedForScan;
 
       if (!scanDocument) {
@@ -821,6 +874,10 @@ export function App() {
       }
     })()
       .then((hits) => {
+        if (!isCurrentScannerRun()) {
+          return;
+        }
+
         setScannerState({
           scanning: false,
           message: hits.length
@@ -830,13 +887,17 @@ export function App() {
         });
       })
       .catch(() => {
+        if (!isCurrentScannerRun()) {
+          return;
+        }
+
         setScannerState({
           scanning: false,
           message: "The scanner could not read text from this PDF.",
           hits: [],
         });
       });
-  }, [document.bytes, pdfDocument]);
+  }, [document.bytes, getOpenToken, isCurrentDocument, pdfDocument]);
 
   const markScannerHit = useCallback(
     (hit: SensitiveHit) => {
@@ -936,6 +997,7 @@ export function App() {
       onZoomIn={() => setZoom(document.zoom + ZOOM_STEP)}
       onFitZoomResolved={setFitZoom}
       onPageSizeChange={setPageSizeInches}
+      onRenderError={setError}
       onThumbnailClick={handleThumbnailClick}
       onRotateSelected={rotateSelected}
       onDeleteSelected={deleteSelected}

@@ -16,7 +16,8 @@ mkdir -p -- "$DIST_DIR"
 
 (
   cd "$UPSTREAM_DIR"
-  STIRLING_FLAVOR=core ./gradlew :stirling-pdf:bootJar \
+  env -u DISABLE_ADDITIONAL_FEATURES -u DOCKER_ENABLE_SECURITY \
+    STIRLING_FLAVOR=core ./gradlew :stirling-pdf:bootJar \
     "-PjpdfiumPlatforms=$PLATFORM" \
     -x test -x spotlessCheck
 )
@@ -27,7 +28,11 @@ if [[ ! -f "$JAR_PATH" ]]; then
   exit 1
 fi
 
-if unzip -l "$JAR_PATH" | grep -Ei 'proprietary|saas'; then
+if ! JAR_ENTRIES=$(unzip -Z1 "$JAR_PATH"); then
+  echo "Could not list JAR entries for verification: $JAR_PATH" >&2
+  exit 1
+fi
+if grep -Ei 'proprietary|saas' <<<"$JAR_ENTRIES"; then
   echo "Refusing to publish JAR; proprietary or SaaS entries were found." >&2
   exit 1
 fi

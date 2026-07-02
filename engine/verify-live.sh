@@ -27,10 +27,8 @@ latest_dist_jar() {
   host_platform=$(detect_host_platform || true)
 
   if [[ -n "$host_platform" ]]; then
-    host_match=$(find "$DIST_DIR" -maxdepth 1 -type f -name "stirling-pdf-*-$host_platform.jar" -printf '%T@ %p\n' \
-      | sort -n \
-      | tail -n 1 \
-      | cut -d' ' -f2-)
+    # shellcheck disable=SC2012 # portable newest-file pick (find -printf is GNU-only)
+    host_match=$(ls -t "$DIST_DIR"/stirling-pdf-*-"$host_platform".jar 2>/dev/null | head -n 1)
     if [[ -n "$host_match" ]]; then
       printf '%s\n' "$host_match"
       return 0

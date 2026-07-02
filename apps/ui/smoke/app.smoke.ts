@@ -1,6 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import {
+  decodePDFRawStream,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFHexString,
+  PDFName,
+  PDFNumber,
+  PDFRawStream,
+  PDFRef,
+  PDFString,
+  PDFStream,
+  StandardFonts,
+} from "pdf-lib";
 
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
@@ -111,6 +124,52 @@ test("keeps a rotate queued during mocked OCR and rejects the stale OCR result",
     widths: [200],
     rotations: [90],
   });
+});
+
+test("builds an exhibit binder round trip from a keyboard-only assembly path", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "motion.pdf", await createPdf([200, 210]));
+
+  const combine = page.getByRole("button", { name: "Combine with Exhibits" });
+  await combine.focus();
+  await page.keyboard.press("Enter");
+
+  await page.getByLabel("Add exhibits").setInputFiles([
+    {
+      name: "exhibit-a.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from(await createPdf([300, 310])),
+    },
+    {
+      name: "exhibit-b.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from(await createPdf([350])),
+    },
+  ]);
+
+  const moveFirstDown = page.getByRole("button", { name: "Move exhibit-a.pdf down" });
+  await moveFirstDown.focus();
+  await page.keyboard.press("Enter");
+
+  const buildBinder = page.getByRole("button", { name: "Build Binder" });
+  await buildBinder.focus();
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page 5" })).toBeVisible();
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [200, 210, 350, 300, 310],
+    rotations: [0, 0, 0, 0, 0],
+  });
+  await expectPageContentToContainLabel(saved, 2, "Exhibit A");
+  await expectPageContentToContainLabel(saved, 3, "Exhibit B");
+  await expectOutlineEntries(saved, [
+    { title: "Main document", pageIndex: 0 },
+    { title: "Exhibit A", pageIndex: 2 },
+    { title: "Exhibit B", pageIndex: 3 },
+  ]);
 });
 
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
@@ -234,4 +293,88 @@ async function expectPdf(
 
   expect(pages.map((pdfPage) => pdfPage.getWidth())).toEqual(expected.widths);
   expect(pages.map((pdfPage) => pdfPage.getRotation().angle)).toEqual(expected.rotations);
+}
+
+async function expectPageContentToContainLabel(
+  bytes: Uint8Array,
+  pageIndex: number,
+  label: string,
+): Promise<void> {
+  expect(await readDecodedPageContent(bytes, pageIndex)).toContain(encodeTextAsHex(label));
+}
+
+async function readDecodedPageContent(bytes: Uint8Array, pageIndex: number): Promise<string> {
+  const pdf = await PDFDocument.load(bytes);
+  const contents = pdf.getPage(pageIndex).node.Contents();
+  const contentObjects = contents instanceof PDFArray ? contents.asArray() : contents ? [contents] : [];
+
+  return contentObjects
+    .map((object) => (object instanceof PDFStream ? object : pdf.context.lookup(object)))
+    .filter((object): object is PDFStream => object instanceof PDFStream)
+    .map((stream) => decodePdfStream(stream))
+    .join("\n");
+}
+
+function decodePdfStream(stream: PDFStream): string {
+  if (stream instanceof PDFRawStream) {
+    return new TextDecoder().decode(decodePDFRawStream(stream).decode());
+  }
+
+  return new TextDecoder().decode(stream.getContents());
+}
+
+function encodeTextAsHex(text: string): string {
+  return `<${[...new TextEncoder().encode(text)]
+    .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+    .join("")}>`;
+}
+
+async function expectOutlineEntries(
+  bytes: Uint8Array,
+  expectedEntries: ReadonlyArray<{ title: string; pageIndex: number }>,
+): Promise<void> {
+  const pdf = await PDFDocument.load(bytes);
+  const outlinesObject = pdf.catalog.get(PDFName.of("Outlines"));
+  const outlines = outlinesObject instanceof PDFRef
+    ? pdf.context.lookup(outlinesObject, PDFDict)
+    : outlinesObject;
+
+  if (!(outlines instanceof PDFDict)) {
+    throw new Error("Expected PDF outlines dictionary.");
+  }
+
+  expect(outlines.lookup(PDFName.of("Count"), PDFNumber).asNumber()).toBe(expectedEntries.length);
+  expect(readOutlineEntries(pdf, outlines)).toEqual(expectedEntries);
+}
+
+function readOutlineEntries(
+  pdf: PDFDocument,
+  outlines: PDFDict,
+): Array<{ title: string; pageIndex: number }> {
+  const entries: Array<{ title: string; pageIndex: number }> = [];
+  let itemRef = outlines.get(PDFName.of("First"));
+
+  while (itemRef) {
+    if (!(itemRef instanceof PDFRef)) {
+      throw new Error("Expected PDF outline item reference.");
+    }
+
+    const item = pdf.context.lookup(itemRef, PDFDict);
+    const title = item.lookup(PDFName.of("Title"), PDFString, PDFHexString).decodeText();
+    const dest = item.lookup(PDFName.of("Dest"), PDFArray);
+    const destPageRef = dest.get(0);
+
+    if (!(destPageRef instanceof PDFRef)) {
+      throw new Error("Expected PDF outline destination page reference.");
+    }
+
+    const pageIndex = pdf.getPages().findIndex((pdfPage) => {
+      return pdfPage.ref.toString() === destPageRef.toString();
+    });
+
+    entries.push({ title, pageIndex });
+    itemRef = item.get(PDFName.of("Next"));
+  }
+
+  return entries;
 }

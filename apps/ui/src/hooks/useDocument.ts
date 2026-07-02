@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PdfDocumentHandle, PdfEngine } from "@raiopdf/engine-api";
+import type {
+  PdfBinderOptions,
+  PdfDocumentHandle,
+  PdfEngine,
+} from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 
@@ -47,6 +51,8 @@ interface CommitOptions {
   dirty: boolean;
   currentPage?: number | ((current: DocumentState, pageCount: number) => number);
   hasTextLayer?: boolean | null;
+  fileName?: string;
+  filePath?: string | null;
 }
 
 interface ReplaceBytesOptions {
@@ -54,6 +60,8 @@ interface ReplaceBytesOptions {
   hasTextLayer?: boolean | null;
   expectedOpenToken?: number;
   expectedSourceBytes?: Uint8Array | null;
+  fileName?: string;
+  filePath?: string | null;
 }
 
 export type ReplaceBytesResult = "replaced" | "stale" | "failed";
@@ -73,6 +81,11 @@ export interface SaveDocumentResult {
   bytes: Uint8Array;
   fileName: string;
   filePath: string | null;
+}
+
+export interface BinderExhibitInput {
+  bytes: Uint8Array;
+  label: string;
 }
 
 export function useDocument() {
@@ -141,6 +154,8 @@ export function useDocument() {
         pageCount,
         currentPage: clampPage(resolveCurrentPage(options, current, pageCount), pageCount),
         dirty: options.dirty,
+        fileName: options.fileName ?? current.fileName,
+        filePath: options.filePath ?? current.filePath,
         fileSizeBytes: bytes.byteLength,
         hasTextLayer: options.hasTextLayer ?? null,
         pageSizeInches: null,
@@ -305,13 +320,22 @@ export function useDocument() {
         try {
           const engineHandle = await engine.open(nextBytes);
           openedHandle = engineHandle;
+          const commitOptions: CommitOptions = {
+            dirty: options.dirty,
+            hasTextLayer: options.hasTextLayer ?? null,
+          };
+
+          if (options.fileName !== undefined) {
+            commitOptions.fileName = options.fileName;
+          }
+
+          if (options.filePath !== undefined) {
+            commitOptions.filePath = options.filePath;
+          }
 
           return {
             engineHandle,
-            options: {
-              dirty: options.dirty,
-              hasTextLayer: options.hasTextLayer ?? null,
-            },
+            options: commitOptions,
           };
         } catch (error) {
           await closeHandle(openedHandle);
@@ -412,6 +436,187 @@ export function useDocument() {
     [engine, enqueueMutation],
   );
 
+  const mergeWithFiles = useCallback(
+    async (files: readonly DocumentFileInput[]) => {
+      if (files.length === 0) {
+        return false;
+      }
+
+      return enqueueMutation("merge", async ({ handle }) => {
+        const openedHandles: PdfDocumentHandle[] = [];
+
+        try {
+          for (const file of files) {
+            openedHandles.push(await engine.open(file.bytes));
+          }
+
+          return {
+            engineHandle: await engine.merge([handle, ...openedHandles]),
+            options: {
+              dirty: true,
+              currentPage: 1,
+              fileName: "Merged.pdf",
+              filePath: null,
+            },
+          };
+        } finally {
+          await closeHandles(openedHandles);
+        }
+      });
+    },
+    [engine, enqueueMutation],
+  );
+
+  const extractPages = useCallback(
+    async (pageIndexes: readonly number[]) => {
+      if (pageIndexes.length === 0) {
+        return false;
+      }
+
+      return enqueueMutation("extract", async ({ handle }) => {
+        const pageCount = await engine.pageCount(handle);
+        const extracted = uniqueSortedPageIndexes(pageIndexes, pageCount);
+        const deletedPages = complementPageIndexes(extracted, pageCount);
+
+        return {
+          engineHandle: await extractHandle(engine, handle, deletedPages),
+          options: {
+            dirty: true,
+            currentPage: 1,
+            fileName: "Extracted Pages.pdf",
+            filePath: null,
+          },
+        };
+      });
+    },
+    [engine, enqueueMutation],
+  );
+
+  const splitPages = useCallback(
+    async (
+      pageGroups: readonly (readonly number[])[],
+      suggestedBaseName: string,
+    ): Promise<SaveDocumentResult[] | null> => {
+      await mutationQueueRef.current;
+
+      const handle = activeHandleRef.current;
+      const token = openTokenRef.current;
+
+      if (!handle || pageGroups.length === 0) {
+        return null;
+      }
+
+      const outputHandles: PdfDocumentHandle[] = [];
+
+      try {
+        const pageCount = await engine.pageCount(handle);
+        const results: SaveDocumentResult[] = [];
+
+        for (const [index, pageGroup] of pageGroups.entries()) {
+          const keptPages = uniqueSortedPageIndexes(pageGroup, pageCount);
+          const outputHandle = await extractHandle(
+            engine,
+            handle,
+            complementPageIndexes(keptPages, pageCount),
+          );
+          outputHandles.push(outputHandle);
+
+          const bytes = await engine.saveToBytes(outputHandle);
+
+          if (activeHandleRef.current !== handle || openTokenRef.current !== token) {
+            return null;
+          }
+
+          results.push({
+            bytes,
+            fileName: `${suggestedBaseName} - Part ${index + 1}.pdf`,
+            filePath: null,
+          });
+        }
+
+        setError(null);
+        return results;
+      } catch (error) {
+        if (activeHandleRef.current === handle && openTokenRef.current === token) {
+          setError(getActionErrorMessage("split", error));
+        }
+
+        return null;
+      } finally {
+        await closeHandles(outputHandles);
+      }
+    },
+    [engine, setError],
+  );
+
+  const insertFile = useCallback(
+    async (file: DocumentFileInput, insertAtPageIndex: number) => {
+      return enqueueMutation("insert", async ({ handle }) => {
+        let insertedHandle: PdfDocumentHandle | null = null;
+
+        try {
+          insertedHandle = await engine.open(file.bytes);
+
+          return {
+            engineHandle: await engine.insertPages(handle, insertAtPageIndex, insertedHandle),
+            options: {
+              dirty: true,
+              currentPage: insertAtPageIndex + 1,
+              fileName: "Inserted Pages.pdf",
+              filePath: null,
+            },
+          };
+        } finally {
+          await closeHandle(insertedHandle);
+        }
+      });
+    },
+    [closeHandle, engine, enqueueMutation],
+  );
+
+  const buildBinder = useCallback(
+    async (
+      exhibits: readonly BinderExhibitInput[],
+      options: PdfBinderOptions,
+      fileName: string,
+    ) => {
+      if (exhibits.length === 0) {
+        setError("Add at least one exhibit before building the binder.");
+        return false;
+      }
+
+      return enqueueMutation("build binder", async ({ handle }) => {
+        const openedHandles: PdfDocumentHandle[] = [];
+
+        try {
+          for (const exhibit of exhibits) {
+            openedHandles.push(await engine.open(exhibit.bytes));
+          }
+
+          return {
+            engineHandle: await engine.buildBinder(
+              handle,
+              exhibits.map((exhibit, index) => ({
+                doc: openedHandles[index]!,
+                label: exhibit.label,
+              })),
+              options,
+            ),
+            options: {
+              dirty: true,
+              currentPage: 1,
+              fileName,
+              filePath: null,
+            },
+          };
+        } finally {
+          await closeHandles(openedHandles);
+        }
+      });
+    },
+    [engine, enqueueMutation, setError],
+  );
+
   const save = useCallback(async (): Promise<SaveDocumentResult | null> => {
     await mutationQueueRef.current;
 
@@ -481,9 +686,60 @@ export function useDocument() {
     rotatePages,
     deletePages,
     reorderPages,
+    mergeWithFiles,
+    extractPages,
+    splitPages,
+    insertFile,
+    buildBinder,
     save,
     markSaved,
   };
+
+  async function closeHandles(handles: readonly PdfDocumentHandle[]) {
+    await Promise.all(handles.map((handle) => closeHandle(handle)));
+  }
+}
+
+async function extractHandle(
+  engine: PdfEngine,
+  handle: PdfDocumentHandle,
+  deletedPages: readonly number[],
+): Promise<PdfDocumentHandle> {
+  if (deletedPages.length === 0) {
+    return engine.open(await engine.saveToBytes(handle));
+  }
+
+  return engine.deletePages(handle, deletedPages);
+}
+
+function uniqueSortedPageIndexes(
+  pageIndexes: readonly number[],
+  pageCount: number,
+): number[] {
+  const unique = [...new Set(pageIndexes)].sort((left, right) => left - right);
+
+  if (
+    unique.length === 0 ||
+    unique.some((pageIndex) => pageIndex < 0 || pageIndex >= pageCount)
+  ) {
+    throw new PdfEngineError(
+      "INVALID_PAGE_INDEX",
+      "The page range is outside this document.",
+    );
+  }
+
+  return unique;
+}
+
+function complementPageIndexes(
+  keptPages: readonly number[],
+  pageCount: number,
+): number[] {
+  const kept = new Set(keptPages);
+
+  return Array.from({ length: pageCount }, (_, index) => index).filter(
+    (pageIndex) => !kept.has(pageIndex),
+  );
 }
 
 function clampPage(page: number, pageCount: number): number {
@@ -541,6 +797,26 @@ function getActionErrorMessage(action: string, error: unknown): string {
 
   if (action === "reorder") {
     return "The selected pages could not be moved. Check the selection and try again.";
+  }
+
+  if (action === "merge") {
+    return "The PDFs could not be merged. Check the files and try again.";
+  }
+
+  if (action === "extract") {
+    return "Those pages could not be extracted. Check the range and try again.";
+  }
+
+  if (action === "split") {
+    return "The document could not be split. Check the page ranges and try again.";
+  }
+
+  if (action === "insert") {
+    return "The selected file could not be inserted. Check the file and try again.";
+  }
+
+  if (action === "build binder") {
+    return "The binder could not be built. Check the exhibit files and try again.";
   }
 
   if (action === "save") {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { BoltIcon, OpenIcon } from "../icons";
 import type { PDFDocumentProxy, PDFPageProxy } from "../lib/pdfjs";
 import "./CanvasWell.css";
@@ -13,6 +13,7 @@ export interface CanvasWellProps {
   error?: string | null;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
+  workspace?: ReactNode;
 }
 
 export function CanvasWell({
@@ -25,6 +26,7 @@ export function CanvasWell({
   error = null,
   onFitZoomResolved,
   onPageSizeChange,
+  workspace = null,
 }: CanvasWellProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -125,7 +127,9 @@ export function CanvasWell({
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
-      {hasDocument ? (
+      {workspace ? (
+        workspace
+      ) : hasDocument ? (
         <div ref={stageRef} className="canvas-well__stage">
           <canvas
             ref={canvasRef}

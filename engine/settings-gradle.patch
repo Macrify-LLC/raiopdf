@@ -1,0 +1,17 @@
+diff --git a/settings.gradle b/settings.gradle
+index 71abb01..36fbe1a 100644
+--- a/settings.gradle
++++ b/settings.gradle
+@@ -88,7 +88,8 @@ gradle.ext.enableSaas = enableSaas
+-include 'stirling-pdf', 'common', 'proprietary'
+-
++include 'stirling-pdf', 'common'
+ project(':stirling-pdf').projectDir = file('app/core')
+ project(':common'      ).projectDir = file('app/common')
+-project(':proprietary' ).projectDir = file('app/proprietary')
+-
++if (!disableAdditional) {
++    include 'proprietary'
++    project(':proprietary').projectDir = file('app/proprietary')
++}
+ if (enableSaas) {

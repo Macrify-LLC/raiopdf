@@ -57,6 +57,10 @@ export function ToolPanel({
     setSelectedLegalTool(toolId);
 
     if (toolId === "make-searchable") {
+      if (isOcrActive(ocrState.phase, ocrStarting)) {
+        return;
+      }
+
       onMakeSearchable();
     }
   }
@@ -105,6 +109,7 @@ export function ToolPanel({
       >
         {LEGAL_TOOLS.map((tool) => {
           const selected = selectedLegalTool === tool.id;
+          const disabled = tool.id === "make-searchable" && isOcrActive(ocrState.phase, ocrStarting);
 
           return (
             <div key={tool.id}>
@@ -112,6 +117,7 @@ export function ToolPanel({
                 icon={tool.icon}
                 label={tool.label}
                 selected={selected}
+                disabled={disabled}
                 onSelect={() => selectLegalTool(tool.id)}
               />
               {tool.id === "make-searchable" && selected ? (
@@ -171,6 +177,15 @@ function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): stri
   }
 
   return "Ready to make this PDF searchable.";
+}
+
+function isOcrActive(phase: OcrUiState["phase"], ocrStarting: boolean): boolean {
+  return (
+    ocrStarting ||
+    phase === "starting-engine" ||
+    phase === "processing" ||
+    phase === "verifying"
+  );
 }
 
 function getOcrStatusLabel(phase: OcrUiState["phase"]): string {

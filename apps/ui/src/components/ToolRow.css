@@ -19,6 +19,15 @@
   background: var(--chrome);
 }
 
+.tool-row:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.tool-row:disabled:hover {
+  background: transparent;
+}
+
 .tool-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

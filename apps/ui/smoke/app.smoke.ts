@@ -48,21 +48,28 @@ test("queues rapid rotate and delete clicks without losing the delete", async ({
   });
 });
 
-test("makes an image-only PDF searchable through the desktop OCR bridge", async ({ page }) => {
+test("makes an image-only PDF searchable through the mocked desktop OCR bridge", async ({ page }) => {
   const sourcePdf = await createPdf([200]);
   const searchablePdf = await createTextPdf("Verified OCR text");
   await installOcrBridgeMock(page, searchablePdf);
   await page.goto("/");
   await openPdf(page, "scan.pdf", sourcePdf);
 
-  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+  const makeSearchable = page.getByRole("button", { name: "Make Searchable (OCR)" });
+  await makeSearchable.evaluate((element) => {
+    const button = element as HTMLButtonElement;
+    button.click();
+    button.click();
+  });
 
   await expect(page.getByText("Starting the PDF engine...")).toBeVisible();
+  await expect(makeSearchable).toBeDisabled();
   await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
   await expect(page.getByText("Verifying the text layer...")).toBeVisible();
   await expect(page.getByLabel("Legal").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByRole("contentinfo").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  await expect.poll(() => getOcrCallCount(page)).toBe(1);
 });
 
 test("leaves the document unchanged when OCR returns no text layer", async ({ page }) => {
@@ -79,6 +86,31 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
 
   const saved = await savePdf(page);
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
+});
+
+test("keeps a rotate queued during mocked OCR and rejects the stale OCR result", async ({ page }) => {
+  const sourcePdf = await createPdf([200]);
+  const searchablePdf = await createTextPdf("Verified OCR text");
+  await installOcrBridgeMock(page, searchablePdf, {
+    engineStartDelayMs: 20,
+    ocrDelayMs: 350,
+  });
+  await page.goto("/");
+  await openPdf(page, "scan.pdf", sourcePdf);
+
+  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+  await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Rotate selected pages" }).click();
+
+  await expect(page.getByText("The document changed before OCR finished. The result was not applied.")).toBeVisible();
+  await expect.poll(() => getOcrCallCount(page)).toBe(1);
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [200],
+    rotations: [90],
+  });
 });
 
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
@@ -131,12 +163,15 @@ async function createTextPdf(text: string): Promise<Uint8Array> {
 async function installOcrBridgeMock(
   page: Page,
   ocrBytes: Uint8Array,
+  options: { engineStartDelayMs?: number; ocrDelayMs?: number } = {},
 ): Promise<void> {
-  await page.addInitScript((ocrContents: number[]) => {
+  await page.addInitScript(({ ocrContents, engineStartDelayMs, ocrDelayMs }) => {
     const testWindow = window as typeof window & {
       __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
       __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_OCR_CALL_COUNT__?: number;
     };
+    testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ = 0;
 
     testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
       if (command !== "engine_start") {
@@ -144,7 +179,7 @@ async function installOcrBridgeMock(
       }
 
       await new Promise((resolve) => {
-        window.setTimeout(resolve, 120);
+        window.setTimeout(resolve, engineStartDelayMs);
       });
 
       return { port: 39393 } as T;
@@ -161,8 +196,10 @@ async function installOcrBridgeMock(
       }
 
       if (url.endsWith("/api/v1/misc/ocr-pdf")) {
+        testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0) + 1;
         await new Promise((resolve) => {
-          window.setTimeout(resolve, 120);
+          window.setTimeout(resolve, ocrDelayMs);
         });
 
         return new Response(new Uint8Array(ocrContents), {
@@ -173,7 +210,19 @@ async function installOcrBridgeMock(
 
       return new Response("Not found", { status: 404 });
     };
-  }, [...ocrBytes]);
+  }, {
+    ocrContents: [...ocrBytes],
+    engineStartDelayMs: options.engineStartDelayMs ?? 120,
+    ocrDelayMs: options.ocrDelayMs ?? 120,
+  });
+}
+
+async function getOcrCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_OCR_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0;
+  });
 }
 
 async function expectPdf(

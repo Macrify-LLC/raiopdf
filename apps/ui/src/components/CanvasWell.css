@@ -68,3 +68,29 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+.canvas-well__stage {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.canvas-well__page {
+  display: block;
+  background: var(--panel);
+  box-shadow: var(--shadow-page);
+}
+
+.canvas-well__message {
+  margin: 0;
+  max-width: 420px;
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  padding: var(--space-2) var(--space-3);
+}

@@ -5,6 +5,7 @@ export interface DocumentTabInfo {
   id: string;
   fileName: string;
   active?: boolean;
+  dirty?: boolean;
 }
 
 export interface TitleBarProps {
@@ -34,7 +35,13 @@ export function TitleBar({ tabs = DEMO_TABS }: TitleBarProps) {
             className="title-bar__tab"
             aria-current={tab.active ? "page" : undefined}
           >
-            <span className="title-bar__tab-dot" aria-hidden="true" />
+            {tab.dirty ? (
+              <span
+                className="title-bar__tab-dot"
+                aria-label="Unsaved changes"
+                title="Unsaved changes"
+              />
+            ) : null}
             {tab.fileName}
           </div>
         ))}

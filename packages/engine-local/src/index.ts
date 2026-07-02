@@ -27,6 +27,8 @@ type OutlineEntry = {
   title: string;
 };
 
+type PageRotation = 0 | 90 | 180 | 270;
+
 const DEFAULT_FONT_SIZE_PT = 11;
 const DEFAULT_MARGIN_IN = 0.5;
 const POINTS_PER_INCH = 72;
@@ -293,11 +295,16 @@ function drawStampText(
 ): void {
   const marginPt = options.marginIn * POINTS_PER_INCH;
   const textWidth = font.widthOfTextAtSize(options.text, options.fontSizePt);
-  const x = computeStampX(page.getWidth(), textWidth, marginPt, options.placement.align);
-  const y =
-    options.placement.edge === "header"
-      ? page.getHeight() - marginPt - options.fontSizePt
-      : marginPt;
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const { x, y } = computeStampPosition({
+    pageWidth: page.getWidth(),
+    pageHeight: page.getHeight(),
+    textWidth,
+    fontSize: options.fontSizePt,
+    marginPt,
+    placement: options.placement,
+    pageRotation,
+  });
 
   page.drawText(options.text, {
     x,
@@ -305,7 +312,66 @@ function drawStampText(
     size: options.fontSizePt,
     font,
     color: STAMP_COLOR,
+    rotate: pdfDegrees(pageRotation),
   });
+}
+
+function computeStampPosition(options: {
+  pageWidth: number;
+  pageHeight: number;
+  textWidth: number;
+  fontSize: number;
+  marginPt: number;
+  placement: PdfStampPlacement;
+  pageRotation: PageRotation;
+}): { x: number; y: number } {
+  const visualWidth = isSidewaysRotation(options.pageRotation)
+    ? options.pageHeight
+    : options.pageWidth;
+  const visualHeight = isSidewaysRotation(options.pageRotation)
+    ? options.pageWidth
+    : options.pageHeight;
+  const visualX = computeStampX(
+    visualWidth,
+    options.textWidth,
+    options.marginPt,
+    options.placement.align,
+  );
+  const visualY =
+    options.placement.edge === "header"
+      ? visualHeight - options.marginPt - options.fontSize
+      : options.marginPt;
+
+  return mapVisualPointToPagePoint({
+    visualX,
+    visualY,
+    pageWidth: options.pageWidth,
+    pageHeight: options.pageHeight,
+    pageRotation: options.pageRotation,
+  });
+}
+
+function isSidewaysRotation(pageRotation: PageRotation): boolean {
+  return pageRotation === 90 || pageRotation === 270;
+}
+
+function mapVisualPointToPagePoint(options: {
+  visualX: number;
+  visualY: number;
+  pageWidth: number;
+  pageHeight: number;
+  pageRotation: PageRotation;
+}): { x: number; y: number } {
+  switch (options.pageRotation) {
+    case 0:
+      return { x: options.visualX, y: options.visualY };
+    case 90:
+      return { x: options.pageWidth - options.visualY, y: options.visualX };
+    case 180:
+      return { x: options.pageWidth - options.visualX, y: options.pageHeight - options.visualY };
+    case 270:
+      return { x: options.visualY, y: options.pageHeight - options.visualX };
+  }
 }
 
 function computeStampX(
@@ -502,6 +568,19 @@ function assertSupportedRotation(degrees: number): void {
 
 function normalizeRotation(degrees: number): number {
   return ((degrees % 360) + 360) % 360;
+}
+
+function normalizePageRotation(degrees: number): PageRotation {
+  const rotation = normalizeRotation(degrees);
+
+  if (rotation === 0 || rotation === 90 || rotation === 180 || rotation === 270) {
+    return rotation;
+  }
+
+  throw new PdfEngineError(
+    "UNSUPPORTED_ROTATION",
+    "Page rotations must use whole 90-degree increments.",
+  );
 }
 
 function range(startInclusive: number, endExclusive: number): number[] {

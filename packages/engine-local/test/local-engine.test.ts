@@ -11,6 +11,7 @@ import {
   PDFRef,
   PDFString,
   PDFStream,
+  StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createLocalPdfEngine } from "../src/index";
@@ -101,6 +102,37 @@ describe("LocalPdfEngine", () => {
 
     await expectPageContentToContainLabel(bytes, 0, "Filed 2026");
     await expectPageContentNotToContainLabel(bytes, 1, "Filed 2026");
+  });
+
+  it("stamps rotated pages against the visual page edge", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+    const rotated = await engine.rotatePages(document, [0], 90);
+
+    const stamped = await engine.stampText(rotated, {
+      text: "Rotated Header",
+      pageIndexes: "first",
+      placement: { edge: "header", align: "center" },
+      fontSizePt: 11,
+      marginIn: 0.5,
+    });
+    const bytes = await engine.saveToBytes(stamped);
+    const [matrix] = await readPageTextMatrices(bytes, 0);
+
+    if (!matrix) {
+      throw new Error("Expected stamped page to contain a text matrix.");
+    }
+
+    const textWidth = await measureHelveticaText("Rotated Header", 11);
+
+    expect(matrix).toMatchObject({
+      a: expect.closeTo(0, 10),
+      b: expect.closeTo(1, 10),
+      c: expect.closeTo(-1, 10),
+      d: expect.closeTo(0, 10),
+      e: expect.closeTo(47, 5),
+      f: expect.closeTo((300 - textWidth) / 2, 5),
+    });
   });
 
   it("builds a slip-sheet exhibit binder with stamped labels and outline entries", async () => {
@@ -227,6 +259,41 @@ async function readDecodedPageContent(bytes: Uint8Array, pageIndex: number): Pro
     .filter((object): object is PDFStream => object instanceof PDFStream)
     .map((stream) => decodePdfStream(stream))
     .join("\n");
+}
+
+async function readPageTextMatrices(
+  bytes: Uint8Array,
+  pageIndex: number,
+): Promise<Array<{ a: number; b: number; c: number; d: number; e: number; f: number }>> {
+  const content = await readDecodedPageContent(bytes, pageIndex);
+  const numberPattern = String.raw`-?(?:\d+\.?\d*|\.\d+)`;
+  const matrixPattern = new RegExp(
+    `${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} Tm`,
+    "g",
+  );
+
+  return [...content.matchAll(matrixPattern)].map((match) => {
+    const values = match[0]
+      .slice(0, -" Tm".length)
+      .split(" ")
+      .map((value) => Number(value));
+
+    return {
+      a: values[0]!,
+      b: values[1]!,
+      c: values[2]!,
+      d: values[3]!,
+      e: values[4]!,
+      f: values[5]!,
+    };
+  });
+}
+
+async function measureHelveticaText(text: string, size: number): Promise<number> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  return font.widthOfTextAtSize(text, size);
 }
 
 function decodePdfStream(stream: PDFStream): string {

@@ -6,6 +6,34 @@ export type PdfDocumentHandle = string & {
   readonly [pdfDocumentHandleBrand]: "PdfDocumentHandle";
 };
 
+export type PdfPageSelection = readonly number[] | "all" | "first";
+
+export type PdfStampPlacement = {
+  edge: "header" | "footer";
+  align: "left" | "center" | "right";
+};
+
+export type PdfStampTextOptions = {
+  text: string;
+  pageIndexes: PdfPageSelection;
+  placement: PdfStampPlacement;
+  fontSizePt?: number;
+  marginIn?: number;
+};
+
+export type PdfBinderExhibit = {
+  doc: PdfDocumentHandle;
+  label: string;
+};
+
+export type PdfBinderOptions = {
+  slipSheets: boolean;
+  placement?: PdfStampPlacement;
+  stampPages?: PdfPageSelection;
+  fontSizePt?: number;
+  marginIn?: number;
+};
+
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "ENCRYPTED_DOCUMENT"
@@ -14,6 +42,7 @@ export type PdfEngineErrorCode =
   | "EMPTY_INPUT"
   | "INVALID_DOCUMENT"
   | "INVALID_PAGE_INDEX"
+  | "UNSUPPORTED"
   | "UNSUPPORTED_ROTATION";
 
 export class PdfEngineError extends Error {
@@ -72,6 +101,37 @@ export interface PdfEngine {
 
   /** Creates a new document by concatenating all pages from the provided documents in order. */
   merge(documents: readonly PdfDocumentHandle[]): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with text stamped on selected pages.
+   *
+   * `pageIndexes` accepts zero-based page indexes, `"all"`, or `"first"`.
+   * `placement` maps the stamp to a page edge and horizontal alignment.
+   * Defaults are `fontSizePt=11` and `marginIn=0.5`.
+   */
+  stampText(
+    document: PdfDocumentHandle,
+    options: PdfStampTextOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Builds an exhibit binder from a main document and labeled exhibits.
+   *
+   * Output page order is the main document, then each exhibit section. An
+   * exhibit section contains an optional centered slip sheet, then the exhibit
+   * pages stamped with the exhibit label according to `placement` and
+   * `stampPages`. Defaults are footer-right labels on all exhibit pages,
+   * `fontSizePt=11`, and `marginIn=0.5`. The binder outline contains
+   * "Main document" and one entry per exhibit pointing at each section's first
+   * page. Engines without caller-defined outline support may reject this with
+   * `PdfEngineError("UNSUPPORTED", ...)`; the local engine is the default
+   * binder implementation.
+   */
+  buildBinder(
+    main: PdfDocumentHandle,
+    exhibits: readonly PdfBinderExhibit[],
+    options: PdfBinderOptions,
+  ): Promise<PdfDocumentHandle>;
 
   /** Serializes an opened document handle to PDF bytes. */
   saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array>;

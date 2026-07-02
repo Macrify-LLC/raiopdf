@@ -1,0 +1,38 @@
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8.5px 16px 8.5px 20px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--body);
+  text-align: left;
+  cursor: default;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.tool-row:hover {
+  background: var(--chrome);
+}
+
+.tool-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tool-row[data-selected="true"] {
+  background: var(--accent-pale);
+  border-left-color: var(--primary);
+  color: var(--primary-deep);
+  font-weight: 600;
+}
+
+.tool-row__icon {
+  display: flex;
+  flex-shrink: 0;
+  color: inherit;
+}

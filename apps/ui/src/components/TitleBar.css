@@ -1,0 +1,85 @@
+.title-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 42px;
+  padding: 0 var(--space-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.title-bar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.title-bar__mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--primary-deep);
+}
+
+.title-bar__mark-icon {
+  color: var(--bolt);
+}
+
+.title-bar__wordmark {
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.title-bar__wordmark-accent {
+  color: var(--primary);
+}
+
+.title-bar__tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  height: 100%;
+  overflow: hidden;
+}
+
+.title-bar__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-end;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-bottom-color: transparent;
+  border-radius: var(--radius-chip) var(--radius-chip) 0 0;
+  padding: 6px 14px 7px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.title-bar__tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.title-bar__meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.title-bar__byline {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+}

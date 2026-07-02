@@ -1,0 +1,18 @@
+.tool-panel {
+  width: 288px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.tool-panel__heading {
+  margin: 0;
+  padding: 13px var(--space-4) 9px;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--muted);
+}

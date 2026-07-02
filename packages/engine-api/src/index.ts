@@ -39,6 +39,14 @@ export type PdfRedactTextOptions = {
   terms: readonly string[];
   /** When true, engines only match terms on word boundaries. Defaults to false. */
   wholeWord?: boolean;
+  /**
+   * When true, the engine may rasterize pages to guarantee removed text is not
+   * recoverable from PDF content streams. Rasterized output loses searchable and
+   * selectable text on affected pages. Engines must reject text redaction when
+   * this tradeoff is required for safety and the caller leaves it false or
+   * omitted.
+   */
+  rasterize?: boolean;
 };
 
 export type PdfTextRegion = PdfRedactionArea & {
@@ -189,8 +197,11 @@ export interface PdfEngine {
    * Creates a new document with literal terms removed from PDF content.
    *
    * `terms` are plain text search strings. `wholeWord` requests word-boundary
-   * matching when the backing engine supports it. Engines that cannot guarantee
-   * true text removal must reject with `PdfEngineError("UNSUPPORTED", ...)`.
+   * matching when the backing engine supports it. `rasterize` explicitly allows
+   * image-based output when that is the only guaranteed removal mode; callers
+   * should expect searchable/selectable text to be lost on rasterized pages.
+   * Engines that cannot guarantee true text removal must reject with
+   * `PdfEngineError("UNSUPPORTED", ...)`.
    */
   redactText(
     document: PdfDocumentHandle,

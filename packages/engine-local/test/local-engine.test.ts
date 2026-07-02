@@ -188,6 +188,22 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 2, "RAIO-0009");
   });
 
+  it("rejects Bates numbers that overflow the configured digit width", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
+
+    await expect(
+      engine.batesStamp(document, {
+        prefix: "RAIO-",
+        start: 98,
+        digits: 2,
+        placement: { edge: "footer", align: "right" },
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+  });
+
   it("rejects true redaction operations as unsupported", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300]]));

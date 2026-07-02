@@ -1,5 +1,5 @@
 {
-  "name": "@raiopdf/engine-sidecar",
+  "name": "@raiopdf/engine-pdf-lib",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,14 +15,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
   },
   "dependencies": {
-    "@raiopdf/engine-api": "workspace:*",
-    "@raiopdf/engine-pdf-lib": "workspace:*"
-  },
-  "devDependencies": {
     "pdf-lib": "^1.17.1"
-  }
+  },
+  "devDependencies": {}
 }

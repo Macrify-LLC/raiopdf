@@ -14,9 +14,9 @@ import type {
   PdfTextRegion,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
+import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
 import {
   degrees as pdfDegrees,
-  PDFDict,
   PDFDocument,
   PDFName,
   PDFRef,
@@ -256,7 +256,7 @@ export class LocalPdfEngine implements PdfEngine {
 
   async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
     const output = await this.load(document);
-    scrubMetadataInPlace(output);
+    scrubPdfMetadataInPlace(output);
 
     return this.store(await output.save());
   }
@@ -278,6 +278,7 @@ export class LocalPdfEngine implements PdfEngine {
     const output = await this.load(document);
     const normalizedOptions = normalizeBatesOptions(options);
     const pageCount = output.getPageCount();
+    assertBatesFitsPageCount(normalizedOptions, pageCount);
 
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       const stampOptions: PdfStampTextOptions = {
@@ -574,33 +575,18 @@ function normalizeBatesOptions(options: PdfBatesStampOptions): PdfBatesStampOpti
   return options;
 }
 
-function formatBatesNumber(options: PdfBatesStampOptions, offset: number): string {
-  return `${options.prefix}${String(options.start + offset).padStart(options.digits, "0")}`;
+function assertBatesFitsPageCount(options: PdfBatesStampOptions, pageCount: number): void {
+  const lastNumber = options.start + pageCount - 1;
+  if (lastNumber >= 10 ** options.digits) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Bates numbers exceed the configured digit width.",
+    );
+  }
 }
 
-function scrubMetadataInPlace(pdf: PDFDocument): void {
-  const infoRef = pdf.context.trailerInfo.Info;
-  if (infoRef instanceof PDFRef) {
-    pdf.context.delete(infoRef);
-  }
-  delete pdf.context.trailerInfo.Info;
-
-  const metadataName = PDFName.of("Metadata");
-  for (const [ref, object] of pdf.context.enumerateIndirectObjects()) {
-    if (!(object instanceof PDFDict)) {
-      continue;
-    }
-
-    const metadataRef = object.get(metadataName);
-    if (metadataRef instanceof PDFRef) {
-      pdf.context.delete(metadataRef);
-    }
-
-    if (object.has(metadataName)) {
-      object.delete(metadataName);
-      pdf.context.assign(ref, object);
-    }
-  }
+function formatBatesNumber(options: PdfBatesStampOptions, offset: number): string {
+  return `${options.prefix}${String(options.start + offset).padStart(options.digits, "0")}`;
 }
 
 function addOutline(pdf: PDFDocument, entries: readonly OutlineEntry[]): void {

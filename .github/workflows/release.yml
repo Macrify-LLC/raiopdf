@@ -52,7 +52,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-          cache: gradle
+          # no gradle cache: gradle files only exist inside engine/upstream after vendoring
 
       - name: Cache payload downloads
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

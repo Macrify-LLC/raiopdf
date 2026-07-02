@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Child, Command, ExitStatus},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -15,6 +15,7 @@ const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
+const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidecarConfig {
@@ -23,6 +24,7 @@ pub struct SidecarConfig {
     startup_timeout: Duration,
     initial_backoff: Duration,
     max_backoff: Duration,
+    idle_shutdown: Option<Duration>,
 }
 
 impl SidecarConfig {
@@ -41,6 +43,7 @@ impl SidecarConfig {
         let mut startup_timeout = DEFAULT_STARTUP_TIMEOUT;
         let mut initial_backoff = DEFAULT_INITIAL_BACKOFF;
         let mut max_backoff = DEFAULT_MAX_BACKOFF;
+        let mut idle_shutdown = idle_shutdown_from_minutes(DEFAULT_IDLE_SHUTDOWN_MINUTES);
 
         for (key, value) in vars {
             let key = key.into();
@@ -67,6 +70,11 @@ impl SidecarConfig {
                 "RAIOPDF_ENGINE_MAX_BACKOFF_MS" => {
                     max_backoff = parse_duration_ms(&value).unwrap_or(DEFAULT_MAX_BACKOFF);
                 }
+                "RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES" => {
+                    if let Some(minutes) = parse_u64(&value) {
+                        idle_shutdown = idle_shutdown_from_minutes(minutes);
+                    }
+                }
                 _ => {}
             }
         }
@@ -81,6 +89,7 @@ impl SidecarConfig {
             startup_timeout,
             initial_backoff,
             max_backoff,
+            idle_shutdown,
         }
     }
 
@@ -93,16 +102,47 @@ impl SidecarConfig {
 #[serde(rename_all = "snake_case")]
 enum EngineStatus {
     Disabled,
+    Stopped,
     Starting,
     Ready,
     Error,
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct EnginePortResponse {
+pub struct EngineStartResponse {
+    #[serde(skip_serializing_if = "is_false")]
+    disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+}
+
+impl EngineStartResponse {
+    fn disabled() -> Self {
+        Self {
+            disabled: true,
+            port: None,
+        }
+    }
+
+    fn ready(port: u16) -> Self {
+        Self {
+            disabled: false,
+            port: Some(port),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineStatusResponse {
     engine: EngineStatus,
+    disabled: bool,
     port: Option<u16>,
     error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineStopResponse {
+    stopped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +156,14 @@ impl EngineState {
     fn disabled() -> Self {
         Self {
             status: EngineStatus::Disabled,
+            port: None,
+            error: None,
+        }
+    }
+
+    fn stopped() -> Self {
+        Self {
+            status: EngineStatus::Stopped,
             port: None,
             error: None,
         }
@@ -146,9 +194,47 @@ impl EngineState {
     }
 }
 
+#[derive(Debug)]
+struct IdleShutdownTimer {
+    last_touch: Instant,
+    shutdown_after: Option<Duration>,
+}
+
+impl IdleShutdownTimer {
+    fn new(now: Instant, shutdown_after: Option<Duration>) -> Self {
+        Self {
+            last_touch: now,
+            shutdown_after,
+        }
+    }
+
+    fn touch(&mut self, now: Instant) {
+        self.last_touch = now;
+    }
+
+    fn remaining(&self, now: Instant) -> Option<Duration> {
+        let shutdown_after = self.shutdown_after?;
+        let elapsed = now.saturating_duration_since(self.last_touch);
+        Some(shutdown_after.saturating_sub(elapsed))
+    }
+
+    fn expired(&self, now: Instant) -> bool {
+        matches!(self.remaining(now), Some(remaining) if remaining.is_zero())
+    }
+}
+
+#[derive(Debug)]
+struct IdleShutdownState {
+    timer: IdleShutdownTimer,
+    stopped: bool,
+}
+
 pub struct SidecarManager {
+    config: SidecarConfig,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
+    lifecycle_lock: Arc<Mutex<()>>,
+    idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
 }
 
 pub struct PortReservation {
@@ -168,70 +254,215 @@ impl PortReservation {
 }
 
 impl SidecarManager {
-    pub fn start(config: SidecarConfig) -> Self {
-        let state = Arc::new(Mutex::new(EngineState::disabled()));
+    pub fn new(config: SidecarConfig) -> Self {
+        let state = Arc::new(Mutex::new(if config.disabled() {
+            EngineState::disabled()
+        } else {
+            EngineState::stopped()
+        }));
         let child = Arc::new(Mutex::new(None));
-        let manager = Self {
-            state: Arc::clone(&state),
-            child: Arc::clone(&child),
-        };
+        let lifecycle_lock = Arc::new(Mutex::new(()));
+        let idle = Arc::new((
+            Mutex::new(IdleShutdownState {
+                timer: IdleShutdownTimer::new(Instant::now(), config.idle_shutdown),
+                stopped: false,
+            }),
+            Condvar::new(),
+        ));
 
-        if config.disabled() {
-            return manager;
+        start_idle_supervisor(
+            Arc::clone(&idle),
+            Arc::clone(&state),
+            Arc::clone(&child),
+            Arc::clone(&lifecycle_lock),
+            config.disabled(),
+        );
+
+        Self {
+            config,
+            state,
+            child,
+            lifecycle_lock,
+            idle,
+        }
+    }
+
+    fn engine_start(&self) -> Result<EngineStartResponse, String> {
+        self.touch_idle();
+
+        if self.config.disabled() {
+            set_state(&self.state, EngineState::disabled());
+            return Ok(EngineStartResponse::disabled());
         }
 
-        let reservation = match pick_free_port() {
-            Ok(reservation) => reservation,
-            Err(error) => {
-                set_state(&state, EngineState::error(None, error.to_string()));
-                return manager;
-            }
-        };
-        let port = match reservation.port() {
-            Ok(port) => port,
-            Err(error) => {
-                set_state(&state, EngineState::error(None, error.to_string()));
-                return manager;
-            }
-        };
+        let _guard = self
+            .lifecycle_lock
+            .lock()
+            .expect("sidecar lifecycle lock poisoned");
 
-        set_state(&state, EngineState::starting(port));
+        if let Some(port) = self.reap_and_get_ready_port()? {
+            return Ok(EngineStartResponse::ready(port));
+        }
 
-        let jar_path = config
+        let jar_path = self
+            .config
             .jar_path
             .clone()
             .expect("jar path is present when sidecar is enabled");
+
+        for attempt_index in 0..2 {
+            match self.start_once(&jar_path) {
+                Ok(port) => return Ok(EngineStartResponse::ready(port)),
+                Err(StartAttemptError::TimedOut(_port)) if attempt_index == 0 => {
+                    kill_child(&self.child);
+                    set_state(&self.state, EngineState::stopped());
+                    continue;
+                }
+                Err(StartAttemptError::TimedOut(port)) => {
+                    kill_child(&self.child);
+                    let message = "engine health check timed out".to_string();
+                    set_state(&self.state, EngineState::error(Some(port), &message));
+                    return Err(message);
+                }
+                Err(StartAttemptError::Stopped(message)) => return Err(message),
+            }
+        }
+
+        let message = "engine failed to start".to_string();
+        set_state(&self.state, EngineState::error(None, &message));
+        Err(message)
+    }
+
+    fn engine_status(&self) -> Result<EngineStatusResponse, String> {
+        self.touch_idle();
+        let _guard = self
+            .lifecycle_lock
+            .lock()
+            .expect("sidecar lifecycle lock poisoned");
+        self.reap_child_if_exited()?;
+
+        let state = self.state.lock().expect("sidecar state lock poisoned");
+        Ok(EngineStatusResponse {
+            engine: state.status.clone(),
+            disabled: self.config.disabled(),
+            port: state.port,
+            error: state.error.clone(),
+        })
+    }
+
+    fn engine_stop(&self) -> EngineStopResponse {
+        self.touch_idle();
+        let _guard = self
+            .lifecycle_lock
+            .lock()
+            .expect("sidecar lifecycle lock poisoned");
+        let stopped = self.stop_child();
+        EngineStopResponse { stopped }
+    }
+
+    pub fn shutdown(&self) {
+        self.stop_idle_supervisor();
+        self.stop_child();
+    }
+
+    fn start_once(&self, jar_path: &PathBuf) -> Result<u16, StartAttemptError> {
+        let reservation =
+            pick_free_port().map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
+        let port = reservation
+            .port()
+            .map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
+
+        set_state(&self.state, EngineState::starting(port));
         // Holding the listener until immediately before spawning narrows the
         // TOCTOU window, but cannot eliminate it without server-side port-0
         // support that reports the bound port back to the shell.
         drop(reservation);
-        match spawn_engine(&jar_path, port) {
+
+        match spawn_engine(jar_path, port) {
             Ok(spawned_child) => {
-                *child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
-                poll_until_ready(config, jar_path, port, state, child, true);
+                *self.child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
             }
             Err(error) => {
-                set_state(
-                    &manager.state,
-                    EngineState::error(Some(port), format!("failed to spawn engine: {error}")),
-                );
+                let message = format!("failed to spawn engine: {error}");
+                set_state(&self.state, EngineState::error(Some(port), &message));
+                return Err(StartAttemptError::Stopped(message));
             }
         }
 
-        manager
-    }
-
-    fn get_engine_port(&self) -> EnginePortResponse {
-        let state = self.state.lock().expect("sidecar state lock poisoned");
-        EnginePortResponse {
-            engine: state.status.clone(),
-            port: state.port,
-            error: state.error.clone(),
+        match wait_until_ready(&self.config, port, &self.state, &self.child) {
+            StartupOutcome::Ready => {
+                spawn_child_supervisor(port, Arc::clone(&self.state), Arc::clone(&self.child));
+                Ok(port)
+            }
+            StartupOutcome::TimedOut => Err(StartAttemptError::TimedOut(port)),
+            StartupOutcome::Stopped => {
+                let message = current_error(&self.state)
+                    .unwrap_or_else(|| "engine stopped before becoming ready".to_string());
+                Err(StartAttemptError::Stopped(message))
+            }
         }
     }
 
-    pub fn shutdown(&self) {
-        kill_child(&self.child);
+    fn reap_and_get_ready_port(&self) -> Result<Option<u16>, String> {
+        self.reap_child_if_exited()?;
+        let state = self.state.lock().expect("sidecar state lock poisoned");
+        let child_running = self
+            .child
+            .lock()
+            .expect("sidecar child lock poisoned")
+            .is_some();
+
+        if child_running && matches!(state.status, EngineStatus::Ready) {
+            return Ok(state.port);
+        }
+
+        Ok(None)
+    }
+
+    fn reap_child_if_exited(&self) -> Result<(), String> {
+        match take_child_exit_status(&self.child) {
+            Ok(Some(exit_status)) => {
+                let port = self.state.lock().expect("sidecar state lock poisoned").port;
+                set_state(
+                    &self.state,
+                    EngineState::error(
+                        port,
+                        format!("engine exited after becoming ready: {exit_status}"),
+                    ),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => return Err(format!("failed to check engine process: {error}")),
+        }
+
+        Ok(())
+    }
+
+    fn stop_child(&self) -> bool {
+        let stopped = kill_child(&self.child);
+        set_state(
+            &self.state,
+            if self.config.disabled() {
+                EngineState::disabled()
+            } else {
+                EngineState::stopped()
+            },
+        );
+        stopped
+    }
+
+    fn touch_idle(&self) {
+        let (idle, wake_idle) = &*self.idle;
+        let mut idle = idle.lock().expect("sidecar idle lock poisoned");
+        idle.timer.touch(Instant::now());
+        wake_idle.notify_one();
+    }
+
+    fn stop_idle_supervisor(&self) {
+        let (idle, wake_idle) = &*self.idle;
+        let mut idle = idle.lock().expect("sidecar idle lock poisoned");
+        idle.stopped = true;
+        wake_idle.notify_one();
     }
 }
 
@@ -241,9 +472,28 @@ impl Drop for SidecarManager {
     }
 }
 
+enum StartAttemptError {
+    TimedOut(u16),
+    Stopped(String),
+}
+
 #[tauri::command]
-pub fn get_engine_port(manager: tauri::State<'_, SidecarManager>) -> EnginePortResponse {
-    manager.get_engine_port()
+pub fn engine_start(
+    manager: tauri::State<'_, SidecarManager>,
+) -> Result<EngineStartResponse, String> {
+    manager.engine_start()
+}
+
+#[tauri::command]
+pub fn engine_status(
+    manager: tauri::State<'_, SidecarManager>,
+) -> Result<EngineStatusResponse, String> {
+    manager.engine_status()
+}
+
+#[tauri::command]
+pub fn engine_stop(manager: tauri::State<'_, SidecarManager>) -> EngineStopResponse {
+    manager.engine_stop()
 }
 
 pub fn pick_free_port() -> std::io::Result<PortReservation> {
@@ -264,37 +514,6 @@ fn spawn_engine(jar_path: &PathBuf, port: u16) -> std::io::Result<Child> {
     }
 
     command.spawn()
-}
-
-fn poll_until_ready(
-    config: SidecarConfig,
-    jar_path: PathBuf,
-    port: u16,
-    state: Arc<Mutex<EngineState>>,
-    child: Arc<Mutex<Option<Child>>>,
-    retry_on_timeout: bool,
-) {
-    thread::spawn(
-        move || match wait_until_ready(&config, port, &state, &child) {
-            StartupOutcome::Ready => {
-                supervise_child(port, state, child);
-            }
-            StartupOutcome::TimedOut => {
-                kill_child(&child);
-
-                if retry_on_timeout {
-                    retry_startup(config, jar_path, state, child);
-                    return;
-                }
-
-                set_state(
-                    &state,
-                    EngineState::error(Some(port), "engine health check timed out"),
-                );
-            }
-            StartupOutcome::Stopped => {}
-        },
-    );
 }
 
 fn wait_until_ready(
@@ -348,56 +567,12 @@ fn wait_until_ready(
     }
 }
 
-fn retry_startup(
-    config: SidecarConfig,
-    jar_path: PathBuf,
+fn spawn_child_supervisor(
+    port: u16,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
 ) {
-    let reservation = match pick_free_port() {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            set_state(&state, EngineState::error(None, error.to_string()));
-            return;
-        }
-    };
-    let port = match reservation.port() {
-        Ok(port) => port,
-        Err(error) => {
-            set_state(&state, EngineState::error(None, error.to_string()));
-            return;
-        }
-    };
-
-    set_state(&state, EngineState::starting(port));
-    // See the matching comment in SidecarManager::start: this keeps the race
-    // window as small as the current engine contract permits.
-    drop(reservation);
-
-    match spawn_engine(&jar_path, port) {
-        Ok(spawned_child) => {
-            *child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
-            match wait_until_ready(&config, port, &state, &child) {
-                StartupOutcome::Ready => {
-                    supervise_child(port, state, child);
-                }
-                StartupOutcome::TimedOut => {
-                    kill_child(&child);
-                    set_state(
-                        &state,
-                        EngineState::error(Some(port), "engine health check timed out"),
-                    );
-                }
-                StartupOutcome::Stopped => {}
-            }
-        }
-        Err(error) => {
-            set_state(
-                &state,
-                EngineState::error(Some(port), format!("failed to spawn engine: {error}")),
-            );
-        }
-    }
+    thread::spawn(move || supervise_child(port, state, child));
 }
 
 fn supervise_child(port: u16, state: Arc<Mutex<EngineState>>, child: Arc<Mutex<Option<Child>>>) {
@@ -434,6 +609,72 @@ fn supervise_child(port: u16, state: Arc<Mutex<EngineState>>, child: Arc<Mutex<O
     }
 }
 
+fn start_idle_supervisor(
+    idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
+    state: Arc<Mutex<EngineState>>,
+    child: Arc<Mutex<Option<Child>>>,
+    lifecycle_lock: Arc<Mutex<()>>,
+    disabled: bool,
+) {
+    thread::spawn(move || loop {
+        let (idle_lock, wake_idle) = &*idle;
+        let mut idle_state = idle_lock.lock().expect("sidecar idle lock poisoned");
+
+        loop {
+            if idle_state.stopped {
+                return;
+            }
+
+            let Some(remaining) = idle_state.timer.remaining(Instant::now()) else {
+                idle_state = wake_idle
+                    .wait(idle_state)
+                    .expect("sidecar idle lock poisoned");
+                continue;
+            };
+
+            if remaining.is_zero() {
+                break;
+            }
+
+            let (next_idle_state, _) = wake_idle
+                .wait_timeout(idle_state, remaining)
+                .expect("sidecar idle lock poisoned");
+            idle_state = next_idle_state;
+        }
+
+        drop(idle_state);
+
+        let _guard = lifecycle_lock
+            .lock()
+            .expect("sidecar lifecycle lock poisoned");
+        let mut idle_state = idle_lock.lock().expect("sidecar idle lock poisoned");
+
+        if idle_state.stopped {
+            return;
+        }
+
+        if !idle_state.timer.expired(Instant::now()) {
+            continue;
+        }
+
+        drop(idle_state);
+
+        if kill_child(&child) {
+            set_state(
+                &state,
+                if disabled {
+                    EngineState::disabled()
+                } else {
+                    EngineState::stopped()
+                },
+            );
+        }
+
+        idle_state = idle_lock.lock().expect("sidecar idle lock poisoned");
+        idle_state.timer.touch(Instant::now());
+    });
+}
+
 fn take_child_exit_status(
     child: &Arc<Mutex<Option<Child>>>,
 ) -> std::io::Result<Option<ExitStatus>> {
@@ -451,13 +692,14 @@ fn take_child_exit_status(
     }
 }
 
-fn kill_child(child: &Arc<Mutex<Option<Child>>>) {
+fn kill_child(child: &Arc<Mutex<Option<Child>>>) -> bool {
     let Some(mut child) = child.lock().expect("sidecar child lock poisoned").take() else {
-        return;
+        return false;
     };
 
     let _ = child.kill();
     let _ = child.wait();
+    true
 }
 
 fn health_check(port: u16, path: &str) -> std::io::Result<bool> {
@@ -483,12 +725,19 @@ fn health_check(port: u16, path: &str) -> std::io::Result<bool> {
 }
 
 fn parse_duration_ms(value: &OsString) -> Option<Duration> {
-    value
-        .to_string_lossy()
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_millis)
+    parse_u64(value).map(Duration::from_millis)
+}
+
+fn parse_u64(value: &OsString) -> Option<u64> {
+    value.to_string_lossy().trim().parse::<u64>().ok()
+}
+
+fn idle_shutdown_from_minutes(minutes: u64) -> Option<Duration> {
+    if minutes == 0 {
+        return None;
+    }
+
+    Some(Duration::from_secs(minutes.saturating_mul(60)))
 }
 
 fn normalize_health_path(path: &str) -> String {
@@ -506,6 +755,18 @@ fn normalize_health_path(path: &str) -> String {
 
 fn set_state(state: &Arc<Mutex<EngineState>>, next: EngineState) {
     *state.lock().expect("sidecar state lock poisoned") = next;
+}
+
+fn current_error(state: &Arc<Mutex<EngineState>>) -> Option<String> {
+    state
+        .lock()
+        .expect("sidecar state lock poisoned")
+        .error
+        .clone()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -529,6 +790,10 @@ mod tests {
         assert_eq!(config.jar_path, None);
         assert_eq!(config.health_path, DEFAULT_HEALTH_PATH);
         assert_eq!(config.startup_timeout, DEFAULT_STARTUP_TIMEOUT);
+        assert_eq!(
+            config.idle_shutdown,
+            idle_shutdown_from_minutes(DEFAULT_IDLE_SHUTDOWN_MINUTES)
+        );
     }
 
     #[test]
@@ -539,6 +804,7 @@ mod tests {
             ("RAIOPDF_ENGINE_STARTUP_TIMEOUT_MS", "30000"),
             ("RAIOPDF_ENGINE_INITIAL_BACKOFF_MS", "25"),
             ("RAIOPDF_ENGINE_MAX_BACKOFF_MS", "250"),
+            ("RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES", "2"),
         ]);
 
         assert!(!config.disabled());
@@ -550,6 +816,7 @@ mod tests {
         assert_eq!(config.startup_timeout, Duration::from_secs(30));
         assert_eq!(config.initial_backoff, Duration::from_millis(25));
         assert_eq!(config.max_backoff, Duration::from_millis(250));
+        assert_eq!(config.idle_shutdown, Some(Duration::from_secs(120)));
     }
 
     #[test]
@@ -557,10 +824,15 @@ mod tests {
         let config = SidecarConfig::from_env_vars(vec![
             ("RAIOPDF_ENGINE_JAR", "   "),
             ("RAIOPDF_ENGINE_STARTUP_TIMEOUT_MS", "nope"),
+            ("RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES", "nope"),
         ]);
 
         assert!(config.disabled());
         assert_eq!(config.startup_timeout, DEFAULT_STARTUP_TIMEOUT);
+        assert_eq!(
+            config.idle_shutdown,
+            idle_shutdown_from_minutes(DEFAULT_IDLE_SHUTDOWN_MINUTES)
+        );
     }
 
     #[test]
@@ -572,5 +844,44 @@ mod tests {
 
         assert_eq!(config.initial_backoff, Duration::from_millis(500));
         assert_eq!(config.max_backoff, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn idle_shutdown_can_be_disabled_with_zero_minutes() {
+        let config =
+            SidecarConfig::from_env_vars(vec![("RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES", "0")]);
+
+        assert_eq!(config.idle_shutdown, None);
+    }
+
+    #[test]
+    fn idle_timer_expires_only_after_configured_idle_window() {
+        let now = Instant::now();
+        let timer = IdleShutdownTimer::new(now, Some(Duration::from_secs(60)));
+
+        assert_eq!(timer.remaining(now), Some(Duration::from_secs(60)));
+        assert!(!timer.expired(now + Duration::from_secs(59)));
+        assert!(timer.expired(now + Duration::from_secs(60)));
+        assert!(timer.expired(now + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn idle_timer_touch_resets_deadline() {
+        let now = Instant::now();
+        let mut timer = IdleShutdownTimer::new(now, Some(Duration::from_secs(60)));
+
+        timer.touch(now + Duration::from_secs(50));
+
+        assert!(!timer.expired(now + Duration::from_secs(109)));
+        assert!(timer.expired(now + Duration::from_secs(110)));
+    }
+
+    #[test]
+    fn disabled_idle_timer_never_expires() {
+        let now = Instant::now();
+        let timer = IdleShutdownTimer::new(now, None);
+
+        assert_eq!(timer.remaining(now + Duration::from_secs(3600)), None);
+        assert!(!timer.expired(now + Duration::from_secs(3600)));
     }
 }

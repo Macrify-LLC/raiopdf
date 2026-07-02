@@ -6,6 +6,7 @@ import {
   loadPdfDocument,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
+import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
 
 const ZOOM_STEP = 0.25;
 
@@ -23,6 +24,7 @@ export function App() {
     deletePages,
     reorderPages,
     save: saveDocument,
+    markSaved,
   } = useDocument();
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
@@ -94,8 +96,8 @@ export function App() {
     };
   }, [pdfDocument, setHasTextLayer]);
 
-  const openFile = useCallback(
-    (file: File) => {
+  const openOpenedFile = useCallback(
+    (file: OpenedFile) => {
       setSelectedPageIndexes(new Set());
       void openDocumentFile(file).then((opened) => {
         if (opened) {
@@ -104,6 +106,30 @@ export function App() {
       });
     },
     [openDocumentFile],
+  );
+
+  const openFile = useCallback(() => {
+    void filePort
+      .openFile()
+      .then((file) => {
+        if (file) {
+          openOpenedFile(file);
+        }
+      })
+      .catch(() => {
+        setError("This PDF could not be opened. The file may be corrupt or unsupported.");
+      });
+  }, [openOpenedFile, setError]);
+
+  const openDroppedFile = useCallback(
+    (file: File) => {
+      void readBrowserFile(file)
+        .then(openOpenedFile)
+        .catch(() => {
+          setError("This PDF could not be opened. The file may be corrupt or unsupported.");
+        });
+    },
+    [openOpenedFile, setError],
   );
 
   const handleThumbnailClick = useCallback(
@@ -245,29 +271,37 @@ export function App() {
   );
 
   const save = useCallback(() => {
-    void saveDocument().then((saved) => {
-      if (!saved) {
-        return;
-      }
+    void saveDocument()
+      .then(async (saved) => {
+        if (!saved) {
+          return;
+        }
 
-      const blob = new Blob([saved.bytes.slice().buffer], {
-        type: "application/pdf",
+        const written = await filePort.saveFile(
+          saved.bytes,
+          saved.fileName,
+          saved.filePath,
+        );
+
+        if (written) {
+          markSaved({
+            fileName: written.name,
+            filePath: written.path,
+          });
+        }
+      })
+      .catch(() => {
+        setError("This PDF could not be saved. Try reopening the document and saving again.");
       });
-      const url = URL.createObjectURL(blob);
-      const anchor = window.document.createElement("a");
-      anchor.href = url;
-      anchor.download = saved.fileName;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    });
-  }, [saveDocument]);
+  }, [markSaved, saveDocument, setError]);
 
   return (
     <AppShell
       document={document}
       pdfDocument={pdfDocument}
       selectedPageIndexes={selectedPageIndexes}
-      onOpenFile={openFile}
+      onOpenRequested={openFile}
+      onFileDropped={openDroppedFile}
       onSave={save}
       onPreviousPage={() => setCurrentPage(document.currentPage - 1)}
       onNextPage={() => setCurrentPage(document.currentPage + 1)}

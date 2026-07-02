@@ -1,6 +1,7 @@
 import { PdfEngineError } from "@raiopdf/engine-api";
 import {
   decodePDFRawStream,
+  degrees as pdfDegrees,
   PDFArray,
   PDFDict,
   PDFDocument,
@@ -11,6 +12,7 @@ import {
   PDFRef,
   PDFString,
   PDFStream,
+  rgb,
   StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
@@ -105,6 +107,33 @@ describe("LocalPdfEngine", () => {
 
     await expectPageSizes(bytes, [[612, 792], [612, 792]]);
     await expectPageRotations(bytes, [0, 0]);
+  });
+
+  it("normalizes a landscape page with Rotate 90 inside the letter portrait page box", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithRotatedLandscapePage());
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const [matrix] = await readPageDrawMatrices(bytes, 0);
+
+    if (!matrix) {
+      throw new Error("Expected normalized page to draw an embedded source page.");
+    }
+
+    const bounds = boundsForTransformedRect(matrix, 792, 612);
+
+    await expectPageSizes(bytes, [[612, 792]]);
+    await expectPageRotations(bytes, [0]);
+    expect(bounds.minX).toBeGreaterThanOrEqual(-0.001);
+    expect(bounds.minY).toBeGreaterThanOrEqual(-0.001);
+    expect(bounds.maxX).toBeLessThanOrEqual(612.001);
+    expect(bounds.maxY).toBeLessThanOrEqual(792.001);
+    expect(bounds.maxX - bounds.minX).toBeCloseTo(612, 5);
+    expect(bounds.maxY - bounds.minY).toBeCloseTo(792, 5);
   });
 
   it("splits documents by max bytes with greedy page-boundary packing", async () => {
@@ -359,6 +388,23 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   return pdf.save();
 }
 
+async function createPdfWithRotatedLandscapePage(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([792, 612]);
+
+  page.setRotation(pdfDegrees(90));
+  page.drawRectangle({
+    x: 24,
+    y: 24,
+    width: 744,
+    height: 564,
+    borderColor: rgb(0, 0, 0),
+    borderWidth: 2,
+  });
+
+  return pdf.save();
+}
+
 async function createPdfWithMetadata(): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   pdf.addPage([200, 300]);
@@ -504,6 +550,79 @@ async function readPageTextMatrices(
       f: values[5]!,
     };
   });
+}
+
+async function readPageDrawMatrices(bytes: Uint8Array, pageIndex: number): Promise<TransformMatrix[]> {
+  const content = await readDecodedPageContent(bytes, pageIndex);
+  const numberPattern = String.raw`-?(?:\d+\.?\d*|\.\d+)`;
+  const matrixPattern = new RegExp(
+    `${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} ${numberPattern} cm`,
+    "g",
+  );
+  const matrices = [...content.matchAll(matrixPattern)].map((match) => {
+    const values = match[0]
+      .slice(0, -" cm".length)
+      .split(" ")
+      .map((value) => Number(value));
+
+    return {
+      a: values[0]!,
+      b: values[1]!,
+      c: values[2]!,
+      d: values[3]!,
+      e: values[4]!,
+      f: values[5]!,
+    };
+  });
+
+  if (matrices.length === 0) {
+    return [];
+  }
+
+  return [matrices.reduce(multiplyMatrices)];
+}
+
+type TransformMatrix = { a: number; b: number; c: number; d: number; e: number; f: number };
+
+function multiplyMatrices(left: TransformMatrix, right: TransformMatrix): TransformMatrix {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d,
+    e: left.a * right.e + left.c * right.f + left.e,
+    f: left.b * right.e + left.d * right.f + left.f,
+  };
+}
+
+function boundsForTransformedRect(matrix: TransformMatrix, width: number, height: number): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
+  const points = [
+    transformPoint(matrix, 0, 0),
+    transformPoint(matrix, width, 0),
+    transformPoint(matrix, 0, height),
+    transformPoint(matrix, width, height),
+  ];
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+
+  return {
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys),
+  };
+}
+
+function transformPoint(matrix: TransformMatrix, x: number, y: number): { x: number; y: number } {
+  return {
+    x: matrix.a * x + matrix.c * y + matrix.e,
+    y: matrix.b * x + matrix.d * y + matrix.f,
+  };
 }
 
 async function measureHelveticaText(text: string, size: number): Promise<number> {

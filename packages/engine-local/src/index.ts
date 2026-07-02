@@ -555,45 +555,71 @@ function computeNormalizeDrawOptions(options: {
   sourceRotation: PageRotation;
   targetWidth: number;
   targetHeight: number;
-}): { x: number; y: number; width: number; height: number; rotate: 0 | 90 } {
+}): { x: number; y: number; width: number; height: number; rotate: PageRotation } {
   const visualWidth = isSidewaysRotation(options.sourceRotation)
     ? options.sourceHeight
     : options.sourceWidth;
   const visualHeight = isSidewaysRotation(options.sourceRotation)
     ? options.sourceWidth
     : options.sourceHeight;
-  const rotate = visualWidth > visualHeight ? 90 : 0;
-  const normalizedVisualWidth = rotate === 90 ? visualHeight : visualWidth;
-  const normalizedVisualHeight = rotate === 90 ? visualWidth : visualHeight;
+  const layoutRotation = visualWidth > visualHeight ? 90 : 0;
+  const rotate = normalizePageRotation(360 - options.sourceRotation + layoutRotation);
+  const normalizedVisualWidth = layoutRotation === 90 ? visualHeight : visualWidth;
+  const normalizedVisualHeight = layoutRotation === 90 ? visualWidth : visualHeight;
   const scale = Math.min(
     options.targetWidth / normalizedVisualWidth,
     options.targetHeight / normalizedVisualHeight,
   );
   const width = options.sourceWidth * scale;
   const height = options.sourceHeight * scale;
-
-  if (rotate === 90) {
-    const drawnBoundingWidth = height;
-    const drawnBoundingHeight = width;
-    const left = (options.targetWidth - drawnBoundingWidth) / 2;
-    const bottom = (options.targetHeight - drawnBoundingHeight) / 2;
-
-    return {
-      x: left + drawnBoundingWidth,
-      y: bottom,
-      width,
-      height,
-      rotate,
-    };
-  }
+  const bounds = rotatedRectBounds(width, height, rotate);
+  const left = (options.targetWidth - bounds.width) / 2;
+  const bottom = (options.targetHeight - bounds.height) / 2;
 
   return {
-    x: (options.targetWidth - width) / 2,
-    y: (options.targetHeight - height) / 2,
+    x: left - bounds.minX,
+    y: bottom - bounds.minY,
     width,
     height,
     rotate,
   };
+}
+
+function rotatedRectBounds(
+  width: number,
+  height: number,
+  rotation: PageRotation,
+): { minX: number; minY: number; width: number; height: number } {
+  const corners = [
+    rotatePoint(0, 0, rotation),
+    rotatePoint(width, 0, rotation),
+    rotatePoint(0, height, rotation),
+    rotatePoint(width, height, rotation),
+  ];
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+
+  return {
+    minX,
+    minY,
+    width: Math.max(...xs) - minX,
+    height: Math.max(...ys) - minY,
+  };
+}
+
+function rotatePoint(x: number, y: number, rotation: PageRotation): { x: number; y: number } {
+  switch (rotation) {
+    case 0:
+      return { x, y };
+    case 90:
+      return { x: -y, y: x };
+    case 180:
+      return { x: -x, y: -y };
+    case 270:
+      return { x: y, y: -x };
+  }
 }
 
 async function stampTextInPlace(

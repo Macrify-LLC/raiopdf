@@ -2,12 +2,18 @@ export type JurisdictionPackId = "florida" | (string & {});
 
 export type ConstraintKind = "rule" | "portal";
 
+export type ConstraintApplicability = {
+  scope: "statewide" | "varies";
+  note?: string;
+};
+
 export type ConstraintEntry = {
   id: string;
   label: string;
   kind: ConstraintKind;
   authority: string;
   lastVerified: string;
+  applicability: ConstraintApplicability;
 };
 
 export type PageSizeInches = {
@@ -34,6 +40,8 @@ export type PdfARequirement = {
 export type JurisdictionPack = {
   id: JurisdictionPackId;
   name: string;
+  packVersion: string;
+  guidanceNote: string;
   constraints: readonly ConstraintEntry[];
   pageSize: PageSizeInches;
   orientation: PageOrientation;
@@ -57,22 +65,34 @@ export type PageFacts = {
 
 export type DocumentFacts = {
   pages: readonly PageFacts[];
-  fileBytes: number;
-  searchableText: boolean;
+  fileBytes?: number;
+  searchableText?: boolean;
   pdfaCompliant?: boolean;
   clerkStampSpaceBlank?: boolean;
 };
 
-export type PreflightStatus = "pass" | "fail" | "warn";
+export type RulePreflightStatus = "pass" | "warn" | "unknown";
+export type PortalPreflightStatus = "pass" | "fix" | "unknown";
+export type PreflightStatus = RulePreflightStatus | PortalPreflightStatus;
 
-export type PreflightCheck = {
+export type PreflightCheckBase = {
   checkId: string;
   label: string;
-  kind: ConstraintKind;
   authority: string;
-  status: PreflightStatus;
   detail: string;
 };
+
+export type RulePreflightCheck = PreflightCheckBase & {
+  kind: "rule";
+  status: RulePreflightStatus;
+};
+
+export type PortalPreflightCheck = PreflightCheckBase & {
+  kind: "portal";
+  status: PortalPreflightStatus;
+};
+
+export type PreflightCheck = RulePreflightCheck | PortalPreflightCheck;
 
 export type PreflightReport = {
   checks: readonly PreflightCheck[];

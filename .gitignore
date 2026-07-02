@@ -3,6 +3,9 @@ dist/
 coverage/
 .turbo/
 .vite/
+target/
+src-tauri/gen/
+**/src-tauri/gen/
 
 *.log
 pnpm-debug.log*

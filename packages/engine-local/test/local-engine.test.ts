@@ -93,6 +93,61 @@ describe("LocalPdfEngine", () => {
     await expectPageSizes(bytes, [[612, 792], [210, 310]]);
   });
 
+  it("normalizes pages to letter portrait without retaining page rotations", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[792, 612], [306, 396]]));
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+
+    await expectPageSizes(bytes, [[612, 792], [612, 792]]);
+    await expectPageRotations(bytes, [0, 0]);
+  });
+
+  it("splits documents by max bytes with greedy page-boundary packing", async () => {
+    const engine = createLocalPdfEngine();
+    const sourceBytes = await createPdf([[200, 300], [210, 310], [220, 320]]);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const twoPageBytes = await createPdfFromSourcePages(sourcePdf, [0, 1]);
+    const threePageBytes = await createPdfFromSourcePages(sourcePdf, [0, 1, 2]);
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.splitByMaxBytes(document, threePageBytes.byteLength - 1);
+
+    expect(result.parts).toHaveLength(2);
+    expect(result.parts[0]).toMatchObject({
+      pageIndexes: [0, 1],
+      byteLength: twoPageBytes.byteLength,
+      oversized: false,
+    });
+    expect(result.parts[1]).toMatchObject({
+      pageIndexes: [2],
+      oversized: false,
+    });
+    await expectPageWidths(await engine.saveToBytes(result.parts[0]!.document), [200, 210]);
+    await expectPageWidths(await engine.saveToBytes(result.parts[1]!.document), [220]);
+  });
+
+  it("flags a single page that exceeds the split byte cap", async () => {
+    const engine = createLocalPdfEngine();
+    const sourceBytes = await createPdf([[200, 300]]);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const singlePageBytes = await createPdfFromSourcePages(sourcePdf, [0]);
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.splitByMaxBytes(document, singlePageBytes.byteLength - 1);
+
+    expect(result.parts).toHaveLength(1);
+    expect(result.parts[0]).toMatchObject({
+      pageIndexes: [0],
+      byteLength: singlePageBytes.byteLength,
+      oversized: true,
+    });
+  });
+
   it("merges documents in order", async () => {
     const engine = createLocalPdfEngine();
     const first = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -220,6 +275,15 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("rejects PDF/A conversion as unsupported in the local engine", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(engine.convertToPdfA(document, { flavor: "pdfa-2b" })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("builds a slip-sheet exhibit binder with stamped labels and outline entries", async () => {
     const engine = createLocalPdfEngine();
     const main = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -314,6 +378,20 @@ async function createPdfWithMetadata(): Promise<Uint8Array> {
   pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(metadataStream));
 
   return pdf.save();
+}
+
+async function createPdfFromSourcePages(
+  source: PDFDocument,
+  pageIndexes: readonly number[],
+): Promise<Uint8Array> {
+  const output = await PDFDocument.create();
+  const copiedPages = await output.copyPages(source, [...pageIndexes]);
+
+  for (const page of copiedPages) {
+    output.addPage(page);
+  }
+
+  return output.save();
 }
 
 function encryptedPdfBytes(): Uint8Array {

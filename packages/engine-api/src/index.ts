@@ -85,6 +85,39 @@ export type PdfPageSizePoints = {
   heightPt: number;
 };
 
+export type PdfPageSizeInches = {
+  w: number;
+  h: number;
+  in: true;
+};
+
+export type PdfPageOrientation = "portrait" | "landscape";
+
+export type PdfNormalizePagesOptions = {
+  targetSize: PdfPageSizeInches;
+  orientation: "portrait";
+};
+
+export type PdfSplitPart = {
+  document: PdfDocumentHandle;
+  /** Zero-based source page indexes included in this part. */
+  pageIndexes: readonly number[];
+  byteLength: number;
+  /** True when a single source page cannot fit within the requested byte cap. */
+  oversized: boolean;
+};
+
+export type PdfSplitByMaxBytesResult = {
+  parts: readonly PdfSplitPart[];
+};
+
+export type PdfAFlavor = "pdfa-1" | "pdfa-2b" | "pdfa-3b";
+
+export type PdfAConversionOptions = {
+  flavor: PdfAFlavor;
+  strict?: boolean;
+};
+
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "ENCRYPTED_DOCUMENT"
@@ -155,6 +188,35 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
     pageSize: PdfPageSizePoints,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with every page rendered into the requested page
+   * size and orientation. Content must preserve aspect ratio and may be
+   * letterboxed, but never distorted.
+   */
+  normalizePages(
+    document: PdfDocumentHandle,
+    options: PdfNormalizePagesOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Splits a document at page boundaries using greedy packing against a byte
+   * cap. A source page that cannot fit alone is emitted as its own part with
+   * `oversized=true`.
+   */
+  splitByMaxBytes(
+    document: PdfDocumentHandle,
+    maxBytes: number,
+  ): Promise<PdfSplitByMaxBytesResult>;
+
+  /**
+   * Converts a document to the requested PDF/A flavor when the backing engine
+   * has a verified conversion pipeline.
+   */
+  convertToPdfA(
+    document: PdfDocumentHandle,
+    options: PdfAConversionOptions,
   ): Promise<PdfDocumentHandle>;
 
   /** Creates a new document by inserting all pages from another document at a zero-based page position. */

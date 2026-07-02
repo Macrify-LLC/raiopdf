@@ -198,6 +198,93 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[1], "customMargin", "medium");
   });
 
+  it("redacts text through auto-redact with literal term mapping", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(70));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const redacted = await engine.redactText(document, {
+      terms: ["Alice Smith", "123-45-6789"],
+      wholeWord: true,
+    });
+
+    expect(await engine.saveToBytes(redacted)).toEqual(bytes(70));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/auto-redact");
+    expectFormField(calls[1], "listOfText", "Alice Smith\n123-45-6789");
+    expectFormField(calls[1], "useRegex", "false");
+    expectFormField(calls[1], "wholeWordSearch", "true");
+    expectFormField(calls[1], "redactColor", "#000000");
+    expectFormField(calls[1], "customPadding", "0");
+    expectFormField(calls[1], "convertPDFToImage", "false");
+  });
+
+  it("redacts PDF point areas through redact-execute imageBoxes", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(71));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const redacted = await engine.redactAreas(document, [
+      { pageIndex: 0, x: 10, y: 20, w: 30, h: 40 },
+      { pageIndex: 2, x: 50, y: 60, w: 70, h: 80 },
+    ]);
+
+    expect(await engine.saveToBytes(redacted)).toEqual(bytes(71));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/redact-execute");
+    expect(expectJsonFormField(calls[1], "imageBoxes")).toEqual([
+      { pageIndex: 0, x1: 10, y1: 20, x2: 40, y2: 60 },
+      { pageIndex: 2, x1: 50, y1: 60, x2: 120, y2: 140 },
+    ]);
+    expect(expectJsonFormField(calls[1], "style")).toEqual({
+      color: "#000000",
+      padding: 0,
+      convertToImage: true,
+      strategy: "IMAGE_FINALIZE",
+    });
+  });
+
+  it("scrubs metadata through update-metadata deleteAll", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(72));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const scrubbed = await engine.scrubMetadata(document);
+
+    expect(await engine.saveToBytes(scrubbed)).toEqual(bytes(72));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/update-metadata");
+    expectFormField(calls[1], "deleteAll", "true");
+  });
+
+  it("stamps Bates numbers as sequential add-stamp calls", async () => {
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 3 }),
+      pdfResponse(80),
+      pdfResponse(81),
+      pdfResponse(82),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const stamped = await engine.batesStamp(document, {
+      prefix: "ABC",
+      start: 98,
+      digits: 3,
+      placement: { edge: "footer", align: "right" },
+    });
+
+    expect(await engine.saveToBytes(stamped)).toEqual(bytes(82));
+    expect(calls.slice(1).map((call) => pathFromUrl(call.url))).toEqual([
+      "/api/v1/misc/add-stamp",
+      "/api/v1/misc/add-stamp",
+      "/api/v1/misc/add-stamp",
+    ]);
+    expectFormField(calls[1], "pageNumbers", "1");
+    expectFormField(calls[1], "stampText", "ABC098");
+    expectFormField(calls[2], "pageNumbers", "2");
+    expectFormField(calls[2], "stampText", "ABC099");
+    expectFormField(calls[3], "pageNumbers", "3");
+    expectFormField(calls[3], "stampText", "ABC100");
+  });
+
   it("reports sidecar binder creation as unsupported", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
@@ -351,6 +438,13 @@ function getFormData(call: FetchCall | undefined): FormData {
 
 function expectFormField(call: FetchCall | undefined, name: string, value: string): void {
   expect(getFormData(call).get(name)).toBe(value);
+}
+
+function expectJsonFormField(call: FetchCall | undefined, name: string): unknown {
+  const value = getFormData(call).get(name);
+  expect(typeof value).toBe("string");
+
+  return JSON.parse(value as string) as unknown;
 }
 
 async function expectFormFile(call: FetchCall | undefined, expectedBytes: readonly number[]): Promise<void> {

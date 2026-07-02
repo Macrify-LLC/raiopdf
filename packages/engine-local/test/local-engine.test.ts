@@ -161,6 +161,49 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("scrubs info dictionary fields and XMP metadata streams", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithMetadata());
+
+    const scrubbed = await engine.scrubMetadata(document);
+    const bytes = await engine.saveToBytes(scrubbed);
+
+    await expectNoDocumentMetadata(bytes);
+  });
+
+  it("stamps sequential Bates numbers on every page", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
+
+    const stamped = await engine.batesStamp(document, {
+      prefix: "RAIO-",
+      start: 7,
+      digits: 4,
+      placement: { edge: "footer", align: "right" },
+    });
+    const bytes = await engine.saveToBytes(stamped);
+
+    await expectPageContentToContainLabel(bytes, 0, "RAIO-0007");
+    await expectPageContentToContainLabel(bytes, 1, "RAIO-0008");
+    await expectPageContentToContainLabel(bytes, 2, "RAIO-0009");
+  });
+
+  it("rejects true redaction operations as unsupported", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(
+      engine.redactAreas(document, [{ pageIndex: 0, x: 10, y: 10, w: 20, h: 20 }]),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    await expect(
+      engine.redactText(document, { terms: ["secret"], wholeWord: true }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("builds a slip-sheet exhibit binder with stamped labels and outline entries", async () => {
     const engine = createLocalPdfEngine();
     const main = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -236,6 +279,27 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   return pdf.save();
 }
 
+async function createPdfWithMetadata(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.setTitle("Confidential Title");
+  pdf.setAuthor("Confidential Author");
+  pdf.setSubject("Confidential Subject");
+  pdf.setKeywords(["confidential", "legal"]);
+  pdf.setCreator("RaioPDF Test");
+  pdf.setProducer("RaioPDF Producer");
+  pdf.setCreationDate(new Date("2026-01-02T03:04:05Z"));
+  pdf.setModificationDate(new Date("2026-01-03T03:04:05Z"));
+
+  const metadataStream = pdf.context.stream("<x:xmpmeta>Confidential XMP</x:xmpmeta>", {
+    Type: "Metadata",
+    Subtype: "XML",
+  });
+  pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(metadataStream));
+
+  return pdf.save();
+}
+
 function encryptedPdfBytes(): Uint8Array {
   return new TextEncoder().encode(`%PDF-1.4
 1 0 obj
@@ -293,6 +357,19 @@ async function expectPageContentNotToContainLabel(
   label: string,
 ): Promise<void> {
   expect(await readDecodedPageContent(bytes, pageIndex)).not.toContain(encodeTextAsHex(label));
+}
+
+async function expectNoDocumentMetadata(bytes: Uint8Array): Promise<void> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+
+  expect(pdf.context.trailerInfo.Info).toBeUndefined();
+  expect(pdf.catalog.has(PDFName.of("Metadata"))).toBe(false);
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFDict) {
+      expect(object.has(PDFName.of("Metadata"))).toBe(false);
+    }
+  }
 }
 
 async function readDecodedPageContent(bytes: Uint8Array, pageIndex: number): Promise<string> {

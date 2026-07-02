@@ -5,7 +5,7 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -151,6 +151,22 @@ pub struct SidecarManager {
     child: Arc<Mutex<Option<Child>>>,
 }
 
+pub struct PortReservation {
+    listener: TcpListener,
+}
+
+enum StartupOutcome {
+    Ready,
+    TimedOut,
+    Stopped,
+}
+
+impl PortReservation {
+    fn port(&self) -> std::io::Result<u16> {
+        Ok(self.listener.local_addr()?.port())
+    }
+}
+
 impl SidecarManager {
     pub fn start(config: SidecarConfig) -> Self {
         let state = Arc::new(Mutex::new(EngineState::disabled()));
@@ -164,7 +180,14 @@ impl SidecarManager {
             return manager;
         }
 
-        let port = match pick_free_port() {
+        let reservation = match pick_free_port() {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                set_state(&state, EngineState::error(None, error.to_string()));
+                return manager;
+            }
+        };
+        let port = match reservation.port() {
             Ok(port) => port,
             Err(error) => {
                 set_state(&state, EngineState::error(None, error.to_string()));
@@ -178,10 +201,14 @@ impl SidecarManager {
             .jar_path
             .clone()
             .expect("jar path is present when sidecar is enabled");
+        // Holding the listener until immediately before spawning narrows the
+        // TOCTOU window, but cannot eliminate it without server-side port-0
+        // support that reports the bound port back to the shell.
+        drop(reservation);
         match spawn_engine(&jar_path, port) {
             Ok(spawned_child) => {
                 *child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
-                poll_until_ready(config, port, state, child);
+                poll_until_ready(config, jar_path, port, state, child, true);
             }
             Err(error) => {
                 set_state(
@@ -219,9 +246,9 @@ pub fn get_engine_port(manager: tauri::State<'_, SidecarManager>) -> EnginePortR
     manager.get_engine_port()
 }
 
-pub fn pick_free_port() -> std::io::Result<u16> {
+pub fn pick_free_port() -> std::io::Result<PortReservation> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(listener.local_addr()?.port())
+    Ok(PortReservation { listener })
 }
 
 fn spawn_engine(jar_path: &PathBuf, port: u16) -> std::io::Result<Child> {
@@ -229,6 +256,7 @@ fn spawn_engine(jar_path: &PathBuf, port: u16) -> std::io::Result<Child> {
     command
         .arg("-jar")
         .arg(jar_path)
+        .arg("--server.address=127.0.0.1")
         .arg(format!("--server.port={port}"));
 
     if let Some(parent) = jar_path.parent() {
@@ -240,51 +268,187 @@ fn spawn_engine(jar_path: &PathBuf, port: u16) -> std::io::Result<Child> {
 
 fn poll_until_ready(
     config: SidecarConfig,
+    jar_path: PathBuf,
     port: u16,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
+    retry_on_timeout: bool,
 ) {
-    thread::spawn(move || {
-        let deadline = Instant::now() + config.startup_timeout;
-        let mut backoff = config.initial_backoff;
+    thread::spawn(
+        move || match wait_until_ready(&config, port, &state, &child) {
+            StartupOutcome::Ready => {
+                supervise_child(port, state, child);
+            }
+            StartupOutcome::TimedOut => {
+                kill_child(&child);
 
-        loop {
-            if let Some(exit_status) = child_exit_status(&child) {
+                if retry_on_timeout {
+                    retry_startup(config, jar_path, state, child);
+                    return;
+                }
+
                 set_state(
                     &state,
+                    EngineState::error(Some(port), "engine health check timed out"),
+                );
+            }
+            StartupOutcome::Stopped => {}
+        },
+    );
+}
+
+fn wait_until_ready(
+    config: &SidecarConfig,
+    port: u16,
+    state: &Arc<Mutex<EngineState>>,
+    child: &Arc<Mutex<Option<Child>>>,
+) -> StartupOutcome {
+    let deadline = Instant::now() + config.startup_timeout;
+    let mut backoff = config.initial_backoff;
+
+    loop {
+        match take_child_exit_status(child) {
+            Ok(Some(exit_status)) => {
+                set_state(
+                    state,
                     EngineState::error(
                         Some(port),
                         format!("engine exited before becoming ready: {exit_status}"),
                     ),
                 );
-                return;
+                return StartupOutcome::Stopped;
             }
-
-            if health_check(port, &config.health_path).unwrap_or(false) {
-                set_state(&state, EngineState::ready(port));
-                return;
+            Ok(None) => {}
+            Err(error) => {
+                set_state(
+                    state,
+                    EngineState::error(
+                        Some(port),
+                        format!("failed to check engine process: {error}"),
+                    ),
+                );
+                return StartupOutcome::Stopped;
             }
+        }
+        if child.lock().expect("sidecar child lock poisoned").is_none() {
+            return StartupOutcome::Stopped;
+        }
 
-            if Instant::now() >= deadline {
+        if health_check(port, &config.health_path).unwrap_or(false) {
+            set_state(state, EngineState::ready(port));
+            return StartupOutcome::Ready;
+        }
+
+        if Instant::now() >= deadline {
+            return StartupOutcome::TimedOut;
+        }
+
+        thread::sleep(backoff);
+        backoff = (backoff * 2).min(config.max_backoff);
+    }
+}
+
+fn retry_startup(
+    config: SidecarConfig,
+    jar_path: PathBuf,
+    state: Arc<Mutex<EngineState>>,
+    child: Arc<Mutex<Option<Child>>>,
+) {
+    let reservation = match pick_free_port() {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            set_state(&state, EngineState::error(None, error.to_string()));
+            return;
+        }
+    };
+    let port = match reservation.port() {
+        Ok(port) => port,
+        Err(error) => {
+            set_state(&state, EngineState::error(None, error.to_string()));
+            return;
+        }
+    };
+
+    set_state(&state, EngineState::starting(port));
+    // See the matching comment in SidecarManager::start: this keeps the race
+    // window as small as the current engine contract permits.
+    drop(reservation);
+
+    match spawn_engine(&jar_path, port) {
+        Ok(spawned_child) => {
+            *child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
+            match wait_until_ready(&config, port, &state, &child) {
+                StartupOutcome::Ready => {
+                    supervise_child(port, state, child);
+                }
+                StartupOutcome::TimedOut => {
+                    kill_child(&child);
+                    set_state(
+                        &state,
+                        EngineState::error(Some(port), "engine health check timed out"),
+                    );
+                }
+                StartupOutcome::Stopped => {}
+            }
+        }
+        Err(error) => {
+            set_state(
+                &state,
+                EngineState::error(Some(port), format!("failed to spawn engine: {error}")),
+            );
+        }
+    }
+}
+
+fn supervise_child(port: u16, state: Arc<Mutex<EngineState>>, child: Arc<Mutex<Option<Child>>>) {
+    loop {
+        match take_child_exit_status(&child) {
+            Ok(Some(exit_status)) => {
                 set_state(
                     &state,
-                    EngineState::error(Some(port), "engine health check timed out"),
+                    EngineState::error(
+                        Some(port),
+                        format!("engine exited after becoming ready: {exit_status}"),
+                    ),
                 );
                 return;
             }
-
-            thread::sleep(backoff);
-            backoff = (backoff * 2).min(config.max_backoff);
+            Ok(None) => {}
+            Err(error) => {
+                set_state(
+                    &state,
+                    EngineState::error(
+                        Some(port),
+                        format!("failed to check engine process: {error}"),
+                    ),
+                );
+                return;
+            }
         }
-    });
+
+        if child.lock().expect("sidecar child lock poisoned").is_none() {
+            return;
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
-fn child_exit_status(child: &Arc<Mutex<Option<Child>>>) -> Option<std::process::ExitStatus> {
+fn take_child_exit_status(
+    child: &Arc<Mutex<Option<Child>>>,
+) -> std::io::Result<Option<ExitStatus>> {
     let mut child = child.lock().expect("sidecar child lock poisoned");
-    child
-        .as_mut()
-        .and_then(|child| child.try_wait().ok())
-        .flatten()
+    let Some(spawned_child) = child.as_mut() else {
+        return Ok(None);
+    };
+
+    match spawned_child.try_wait()? {
+        Some(exit_status) => {
+            child.take();
+            Ok(Some(exit_status))
+        }
+        None => Ok(None),
+    }
 }
 
 fn kill_child(child: &Arc<Mutex<Option<Child>>>) {
@@ -307,7 +471,15 @@ fn health_check(port: u16, path: &str) -> std::io::Result<bool> {
 
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
-    Ok(response.starts_with("HTTP/1.1 2") || response.starts_with("HTTP/1.0 2"))
+    let Some(status_line) = response.lines().next() else {
+        return Ok(false);
+    };
+
+    let mut parts = status_line.split_whitespace();
+    Ok(matches!(
+        (parts.next(), parts.next()),
+        (Some("HTTP/1.0") | Some("HTTP/1.1"), Some("200"))
+    ))
 }
 
 fn parse_duration_ms(value: &OsString) -> Option<Duration> {
@@ -342,8 +514,10 @@ mod tests {
 
     #[test]
     fn pick_free_port_returns_bindable_loopback_port() {
-        let port = pick_free_port().expect("port should be available");
+        let reservation = pick_free_port().expect("port should be available");
+        let port = reservation.port().expect("port should be readable");
         assert!(port > 0);
+        drop(reservation);
         TcpListener::bind(("127.0.0.1", port)).expect("picked port should be bindable");
     }
 

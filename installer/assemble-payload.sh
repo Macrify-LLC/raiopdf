@@ -19,6 +19,25 @@ DOWNLOAD_DIR="$CACHE_DIR/downloads"
 WORK_DIR="$CACHE_DIR/work"
 REQ_FILE="$REPO_ROOT/$OCRMYPDF_REQUIREMENTS"
 
+MODE=assemble
+case "${1:-}" in
+  "")
+    ;;
+  --verify)
+    MODE=verify
+    shift
+    ;;
+  *)
+    echo "Usage: $0 [--verify]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$#" -ne 0 ]]; then
+  echo "Usage: $0 [--verify]" >&2
+  exit 2
+fi
+
 mkdir -p -- "$DOWNLOAD_DIR" "$WORK_DIR"
 
 need() {
@@ -143,6 +162,88 @@ copy_engine_jar() {
   cp -- "$dist_jar" "$dest"
 }
 
+generate_python_third_party_notice() {
+  local site_packages=$1
+  local notice_file=$2
+
+  python3 - "$site_packages" "$notice_file" <<'PY'
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path
+import re
+import sys
+
+site_packages = Path(sys.argv[1])
+notice_file = Path(sys.argv[2])
+metadata_files = sorted(site_packages.glob("*.dist-info/METADATA"))
+
+if not metadata_files:
+    raise SystemExit(f"No Python wheel METADATA files found in {site_packages}")
+
+def clean(value):
+    value = value or "Not declared in METADATA"
+    value = re.sub(r"\s+", " ", value).strip()
+    return value.replace("\\", "\\\\").replace("|", "\\|")
+
+def project_urls(metadata):
+    urls = {}
+    for item in metadata.get_all("Project-URL", []):
+        label, sep, url = item.partition(",")
+        if sep:
+            urls[label.strip().lower()] = url.strip()
+    return urls
+
+def homepage(metadata):
+    direct = metadata.get("Home-page")
+    if direct:
+        return direct
+
+    urls = project_urls(metadata)
+    for label in (
+        "homepage",
+        "home",
+        "source",
+        "source code",
+        "repository",
+        "code",
+        "documentation",
+    ):
+        if label in urls:
+            return urls[label]
+    return None
+
+rows = []
+for metadata_file in metadata_files:
+    with metadata_file.open("rb") as handle:
+        metadata = BytesParser(policy=policy.default).parse(handle)
+
+    fallback_name = metadata_file.parent.name
+    if fallback_name.endswith(".dist-info"):
+        fallback_name = fallback_name[: -len(".dist-info")]
+    name = metadata.get("Name") or fallback_name
+    version = metadata.get("Version")
+    license_value = metadata.get("License-Expression") or metadata.get("License")
+    rows.append((name, version, license_value, homepage(metadata)))
+
+rows.sort(key=lambda row: row[0].lower())
+
+lines = [
+    "# Python OCR Third-Party Notices",
+    "",
+    "Generated from installed wheel `*.dist-info/METADATA` files in the bundled OCRmyPDF Python environment.",
+    "",
+    "| Component | Version | License | Homepage |",
+    "| --- | --- | --- | --- |",
+]
+for name, version, license_value, home in rows:
+    lines.append(
+        f"| {clean(name)} | {clean(version)} | {clean(license_value)} | {clean(home)} |"
+    )
+
+notice_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 install_python_ocrmypdf() {
   local python_zip=$1
   local extract_dir="$WORK_DIR/python"
@@ -200,6 +301,8 @@ set "PYTHONHOME=%~dp0python"
 set "PYTHONPATH=%~dp0python\Lib\site-packages"
 "%~dp0python\python.exe" -m ocrmypdf %*
 EOF
+
+  generate_python_third_party_notice "$python_dir/Lib/site-packages" "$PAYLOAD_DIR/ocr/THIRD-PARTY-PYTHON.md"
 }
 
 install_tesseract() {
@@ -240,6 +343,7 @@ verify_payload() {
   for path in \
     "$PAYLOAD_DIR/jre/bin/java.exe" \
     "$PAYLOAD_DIR/engine/stirling.jar" \
+    "$PAYLOAD_DIR/ocr/THIRD-PARTY-PYTHON.md" \
     "$PAYLOAD_DIR/ocr/ocrmypdf.cmd" \
     "$PAYLOAD_DIR/ocr/python/python.exe" \
     "$PAYLOAD_DIR/ocr/tesseract/tesseract.exe" \
@@ -258,6 +362,11 @@ verify_payload() {
   printf 'Payload assembled at %s\n' "$PAYLOAD_DIR"
   printf 'Payload size: %s\n' "$(du -sh "$PAYLOAD_DIR" | awk '{print $1}')"
 }
+
+if [[ "$MODE" == "verify" ]]; then
+  verify_payload
+  exit 0
+fi
 
 need curl
 need python3

@@ -52,3 +52,4 @@ It is not a substitute for the full upstream license texts shipped by each compo
 - License: MPL-2.0 for OCRmyPDF; transitive dependencies carry their own upstream licenses
 - Source: https://github.com/ocrmypdf/OCRmyPDF
 - Use: Searchable PDF OCR pipeline invoked by Stirling-PDF.
+- Python dependency notices: generated at `payload/ocr/THIRD-PARTY-PYTHON.md` by `installer/assemble-payload.sh` from each installed wheel's `*.dist-info/METADATA`.

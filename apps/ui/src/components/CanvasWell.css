@@ -1,10 +1,26 @@
 .canvas-well {
+  position: relative;
   background: var(--well);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-6);
   overflow: auto;
+}
+
+.canvas-well__mode-bar-slot {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  right: var(--space-4);
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.canvas-well__mode-bar-slot > * {
+  pointer-events: auto;
 }
 
 .canvas-well__empty {
@@ -81,7 +97,48 @@
 .canvas-well__page {
   display: block;
   background: var(--panel);
+}
+
+.canvas-well__page-frame {
+  position: relative;
   box-shadow: var(--shadow-page);
+}
+
+.canvas-well__page-frame[data-redaction-mode="true"] {
+  cursor: crosshair;
+}
+
+.canvas-well__redaction-overlay,
+.canvas-well__redaction-draft {
+  position: absolute;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.canvas-well__redaction-draft {
+  border-style: dashed;
+}
+
+.canvas-well__redaction-remove {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: default;
 }
 
 .canvas-well__message {

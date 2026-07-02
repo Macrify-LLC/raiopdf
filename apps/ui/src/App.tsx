@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
+import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
 import {
@@ -20,7 +29,23 @@ import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
+import {
+  findTextRedactionAreas,
+  readMetadataSummary,
+  scanSensitivePatterns,
+  verifyRedactionAreasClear,
+  type PdfMetadataSummary,
+  type SensitiveHit,
+} from "./lib/legalTools";
 import type { LegalToolId, OrganizeToolId } from "./components/ToolPanel";
+import type {
+  BatesPanelState,
+  RedactionPanelState,
+  ScannerPanelState,
+  ScrubMetadataPanelState,
+} from "./components/ToolPanel";
+import { SearchIcon } from "./icons";
+import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
 
@@ -35,6 +60,11 @@ export type OcrPhase =
 export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
+}
+
+interface PendingRedaction {
+  id: string;
+  area: PdfRedactionArea;
 }
 
 export function App() {
@@ -58,6 +88,8 @@ export function App() {
     insertFile,
     cropResizePages,
     buildBinder,
+    batesStamp,
+    scrubMetadata,
     save: saveDocument,
     markSaved,
   } = useDocument();
@@ -76,8 +108,64 @@ export function App() {
   const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
     null,
   );
+  const [pendingRedactions, setPendingRedactions] = useState<PendingRedaction[]>([]);
+  const [redactionPhase, setRedactionPhase] =
+    useState<RedactionPanelState["phase"]>("idle");
+  const [redactionMessage, setRedactionMessage] = useState<string | null>(null);
+  const [redactionSearchOpen, setRedactionSearchOpen] = useState(false);
+  const [redactionSearchText, setRedactionSearchText] = useState("");
+  const [batesState, setBatesState] = useState<BatesPanelState>({
+    applying: false,
+    message: null,
+  });
+  const [scannerState, setScannerState] = useState<ScannerPanelState>({
+    scanning: false,
+    message: null,
+    hits: [],
+  });
+  const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
+  const [scrubState, setScrubState] = useState<{
+    scrubbing: boolean;
+    message: string | null;
+    removedFields: readonly string[];
+  }>({
+    scrubbing: false,
+    message: null,
+    removedFields: [],
+  });
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
+  const redactionIdRef = useRef(0);
+  const documentBytesRef = useRef<Uint8Array | null>(null);
+  const scannerRunRef = useRef(0);
+
+  useLayoutEffect(() => {
+    documentBytesRef.current = document.bytes;
+  }, [document.bytes]);
+
+  const resetLegalState = useCallback(() => {
+    setPendingRedactions([]);
+    setRedactionPhase("idle");
+    setRedactionMessage(null);
+    setRedactionSearchOpen(false);
+    setRedactionSearchText("");
+    setScannerState({ scanning: false, message: null, hits: [] });
+    setBatesState({ applying: false, message: null });
+    setScrubState({ scrubbing: false, message: null, removedFields: [] });
+  }, []);
+
+  const clearDocumentBoundLegalState = useCallback(() => {
+    scannerRunRef.current += 1;
+    setPendingRedactions([]);
+    setScannerState({ scanning: false, message: null, hits: [] });
+  }, []);
+
+  const isCurrentDocument = useCallback(
+    (sourceOpenToken: number, sourceBytes: Uint8Array) => (
+      getOpenToken() === sourceOpenToken && documentBytesRef.current === sourceBytes
+    ),
+    [getOpenToken],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -138,6 +226,35 @@ export function App() {
       disposed = true;
     };
   }, [pdfDocument, setHasTextLayer]);
+
+  useEffect(() => {
+    clearDocumentBoundLegalState();
+  }, [clearDocumentBoundLegalState, document.bytes]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    if (!document.bytes) {
+      setMetadataSummary(null);
+      return;
+    }
+
+    void readMetadataSummary(document.bytes)
+      .then((summary) => {
+        if (!disposed) {
+          setMetadataSummary(summary);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setMetadataSummary(null);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [document.bytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -283,6 +400,7 @@ export function App() {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
+      resetLegalState();
       setSelectedPageIndexes(new Set());
       void openDocumentFile(file).then((opened) => {
         if (opened) {
@@ -290,7 +408,7 @@ export function App() {
         }
       });
     },
-    [openDocumentFile],
+    [openDocumentFile, resetLegalState],
   );
 
   const openFile = useCallback(() => {
@@ -546,6 +664,305 @@ export function App() {
     [cropResizePages, document.bytes, setError],
   );
 
+  const addPendingRedaction = useCallback((area: PdfRedactionArea) => {
+    redactionIdRef.current += 1;
+    setPendingRedactions((current) => [
+      ...current,
+      {
+        id: `redaction-${redactionIdRef.current}`,
+        area,
+      },
+    ]);
+    setRedactionPhase("idle");
+    setRedactionMessage(null);
+  }, []);
+
+  const removePendingRedaction = useCallback((id: string) => {
+    setPendingRedactions((current) => current.filter((area) => area.id !== id));
+  }, []);
+
+  const searchTextForRedaction = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+
+      if (!pdfDocument) {
+        setRedactionMessage("Open a PDF before searching for redaction text.");
+        return;
+      }
+
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setRedactionMessage("Open a PDF before searching for redaction text.");
+        return;
+      }
+
+      const areas = await findTextRedactionAreas(pdfDocument, redactionSearchText);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
+      if (areas.length === 0) {
+        setRedactionPhase("idle");
+        setRedactionMessage("No matching text was found.");
+        return;
+      }
+
+      setPendingRedactions((current) => [
+        ...current,
+        ...areas.map((area) => {
+          redactionIdRef.current += 1;
+          return {
+            id: `redaction-${redactionIdRef.current}`,
+            area,
+          };
+        }),
+      ]);
+      setRedactionPhase("idle");
+      setRedactionMessage(`${areas.length} ${areas.length === 1 ? "area" : "areas"} marked from search.`);
+    },
+    [document.bytes, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText],
+  );
+
+  const requestApplyRedactions = useCallback(() => {
+    if (!document.bytes) {
+      setRedactionPhase("error");
+      setRedactionMessage("Open a PDF before applying redactions.");
+      return;
+    }
+
+    if (!engineBridge.available) {
+      setRedactionPhase("error");
+      setRedactionMessage("True redaction runs in the desktop app.");
+      return;
+    }
+
+    if (pendingRedactions.length === 0) {
+      setRedactionPhase("error");
+      setRedactionMessage("Mark at least one area before applying redactions.");
+      return;
+    }
+
+    setRedactionPhase("confirming");
+    setRedactionMessage(null);
+  }, [document.bytes, engineBridge.available, pendingRedactions.length]);
+
+  const cancelRedactions = useCallback(() => {
+    setRedactionPhase("idle");
+    setRedactionMessage(null);
+  }, []);
+
+  const confirmRedactions = useCallback(async () => {
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+    const areas = pendingRedactions.map((pending) => pending.area);
+
+    if (!sourceBytes || areas.length === 0) {
+      return;
+    }
+
+    setRedactionPhase("applying");
+    setRedactionMessage("Applying redactions and verifying removed text...");
+
+    try {
+      const redactedBytes = await engineBridge.redactAreas(sourceBytes, areas);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
+      const verified = await verifyRedactionAreasClear(redactedBytes, areas);
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
+      if (!verified) {
+        setRedactionPhase("error");
+        setRedactionMessage("Verification failed — text may remain. The document was NOT modified.");
+        return;
+      }
+
+      const replaced = await replaceBytes(redactedBytes, {
+        dirty: true,
+        hasTextLayer: null,
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
+
+      if (replaced !== "replaced") {
+        setRedactionPhase("error");
+        setRedactionMessage("The document changed before redaction finished. The result was not applied.");
+        return;
+      }
+
+      setPendingRedactions([]);
+      setRedactionPhase("verified");
+      setRedactionMessage("Redacted and verified — the removed text no longer exists in the file.");
+    } catch (error) {
+      const message = isEngineBridgeUnavailableError(error)
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Redaction could not finish. The document was left unchanged.";
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
+      setRedactionPhase("error");
+      setRedactionMessage(message);
+    }
+  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pendingRedactions, replaceBytes]);
+
+  const applyBates = useCallback(
+    async (options: PdfBatesStampOptions) => {
+      setBatesState({ applying: true, message: "Applying Bates numbers..." });
+      const applied = await batesStamp(options);
+      setBatesState({
+        applying: false,
+        message: applied
+          ? "Bates numbers applied."
+          : "Bates numbers could not be applied. Check the format and try again.",
+      });
+
+      return applied;
+    },
+    [batesStamp],
+  );
+
+  const runScanner = useCallback(() => {
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+
+    if (!sourceBytes) {
+      setScannerState({
+        scanning: false,
+        message: "Open a PDF before running the 2.425 scanner.",
+        hits: [],
+      });
+      return;
+    }
+
+    const runId = scannerRunRef.current + 1;
+    scannerRunRef.current = runId;
+    const isCurrentScannerRun = () => (
+      scannerRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
+    );
+
+    setScannerState((current) => ({
+      ...current,
+      scanning: true,
+      message: "Scanning extracted text...",
+      hits: [],
+    }));
+
+    void (async () => {
+      const loadedForScan = pdfDocument ? null : await loadPdfDocument(sourceBytes);
+      const scanDocument = pdfDocument ?? loadedForScan;
+
+      if (!scanDocument) {
+        return [];
+      }
+
+      try {
+        return await scanSensitivePatterns(scanDocument);
+      } finally {
+        await loadedForScan?.loadingTask.destroy();
+      }
+    })()
+      .then((hits) => {
+        if (!isCurrentScannerRun()) {
+          return;
+        }
+
+        setScannerState({
+          scanning: false,
+          message: hits.length
+            ? `${hits.length} possible ${hits.length === 1 ? "item" : "items"} found.`
+            : "No obvious sensitive patterns found. Review remains yours.",
+          hits,
+        });
+      })
+      .catch(() => {
+        if (!isCurrentScannerRun()) {
+          return;
+        }
+
+        setScannerState({
+          scanning: false,
+          message: "The scanner could not read text from this PDF.",
+          hits: [],
+        });
+      });
+  }, [document.bytes, getOpenToken, isCurrentDocument, pdfDocument]);
+
+  const markScannerHit = useCallback(
+    (hit: SensitiveHit) => {
+      setActiveLegalTool("redact");
+      addPendingRedaction(hit.area);
+      setRedactionMessage(`${hit.category} on page ${hit.pageIndex + 1} marked for redaction.`);
+    },
+    [addPendingRedaction],
+  );
+
+  const scrubDocumentMetadata = useCallback(async () => {
+    if (!document.bytes) {
+      setScrubState({
+        scrubbing: false,
+        message: "Open a PDF before scrubbing metadata.",
+        removedFields: [],
+      });
+      return;
+    }
+
+    const removedFields = metadataSummary?.removedFields.length
+      ? metadataSummary.removedFields
+      : ["document metadata"];
+
+    setScrubState({
+      scrubbing: true,
+      message: "Scrubbing metadata...",
+      removedFields: [],
+    });
+
+    const scrubbed = await scrubMetadata();
+
+    setScrubState({
+      scrubbing: false,
+      message: scrubbed ? null : "Metadata could not be scrubbed. Try reopening the document.",
+      removedFields: scrubbed ? removedFields : [],
+    });
+  }, [document.bytes, metadataSummary, scrubMetadata]);
+
+  const redactionPanel: RedactionPanelState = {
+    phase: redactionPhase,
+    message: redactionMessage,
+    pendingCount: pendingRedactions.length,
+    available: engineBridge.available,
+  };
+  const scrubMetadataPanel: ScrubMetadataPanelState = {
+    metadata: metadataSummary,
+    scrubbing: scrubState.scrubbing,
+    message: scrubState.message,
+    removedFields: scrubState.removedFields,
+  };
+  const redactionModeBar = activeLegalTool === "redact" ? (
+    <RedactionModeBar
+      pendingCount={pendingRedactions.length}
+      searchOpen={redactionSearchOpen}
+      searchText={redactionSearchText}
+      applying={redactionPhase === "applying"}
+      onSearchOpen={() => setRedactionSearchOpen(true)}
+      onSearchTextChange={setRedactionSearchText}
+      onSearchSubmit={searchTextForRedaction}
+      onApply={requestApplyRedactions}
+      onExit={() => setActiveLegalTool("prepare-for-filing")}
+    />
+  ) : null;
+
   const workspace = activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
@@ -553,7 +970,7 @@ export function App() {
       onOpenRequested={openFile}
       onCancel={closeWorkspace}
     />
-  ) : activeOrganizeTool ? (
+  ) : activeOrganizeTool && activeOrganizeTool !== "passwords" ? (
     <OrganizeWorkspace
       flow={activeOrganizeTool as OrganizeFlowId}
       document={document}
@@ -580,6 +997,7 @@ export function App() {
       onZoomIn={() => setZoom(document.zoom + ZOOM_STEP)}
       onFitZoomResolved={setFitZoom}
       onPageSizeChange={setPageSizeInches}
+      onRenderError={setError}
       onThumbnailClick={handleThumbnailClick}
       onRotateSelected={rotateSelected}
       onDeleteSelected={deleteSelected}
@@ -594,7 +1012,78 @@ export function App() {
       onLegalToolSelected={selectLegalTool}
       onOrganizeToolSelected={selectOrganizeTool}
       onMakeSearchable={makeSearchable}
+      redaction={redactionPanel}
+      bates={batesState}
+      scanner={scannerState}
+      scrubMetadata={scrubMetadataPanel}
+      pendingRedactions={pendingRedactions}
+      redactionModeBar={redactionModeBar}
+      onRedactionAreaCreated={addPendingRedaction}
+      onRedactionAreaRemoved={removePendingRedaction}
+      onConfirmRedactions={confirmRedactions}
+      onCancelRedactions={cancelRedactions}
+      onApplyBates={applyBates}
+      onRunScanner={runScanner}
+      onMarkScannerHit={markScannerHit}
+      onScrubMetadata={scrubDocumentMetadata}
     />
+  );
+}
+
+function RedactionModeBar({
+  pendingCount,
+  searchOpen,
+  searchText,
+  applying,
+  onSearchOpen,
+  onSearchTextChange,
+  onSearchSubmit,
+  onApply,
+  onExit,
+}: {
+  pendingCount: number;
+  searchOpen: boolean;
+  searchText: string;
+  applying: boolean;
+  onSearchOpen: () => void;
+  onSearchTextChange: (text: string) => void;
+  onSearchSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onApply: () => void;
+  onExit: () => void;
+}) {
+  return (
+    <div className="legal-mode-bar" role="toolbar" aria-label="Redaction mode">
+      <span className="legal-mode-bar__status">
+        Redaction mode — {pendingCount} {pendingCount === 1 ? "area" : "areas"} marked
+      </span>
+      {searchOpen ? (
+        <form className="legal-mode-bar__search" onSubmit={onSearchSubmit}>
+          <SearchIcon size={13} />
+          <input
+            type="search"
+            placeholder="Search text..."
+            aria-label="Search text to redact"
+            value={searchText}
+            onChange={(event) => onSearchTextChange(event.target.value)}
+          />
+        </form>
+      ) : (
+        <button type="button" className="legal-mode-bar__button" onClick={onSearchOpen}>
+          Search text...
+        </button>
+      )}
+      <button
+        type="button"
+        className="legal-mode-bar__danger-button"
+        disabled={pendingCount === 0 || applying}
+        onClick={onApply}
+      >
+        Apply Redactions
+      </button>
+      <button type="button" className="legal-mode-bar__button" onClick={onExit}>
+        Exit
+      </button>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  PdfBatesStampOptions,
   PdfBinderOptions,
   PdfDocumentHandle,
   PdfEngine,
@@ -670,6 +671,23 @@ export function useDocument() {
     [engine, enqueueMutation, setError],
   );
 
+  const batesStamp = useCallback(
+    async (options: PdfBatesStampOptions) => {
+      return enqueueMutation("Bates numbering", async ({ handle }) => ({
+        engineHandle: await engine.batesStamp(handle, options),
+        options: { dirty: true },
+      }));
+    },
+    [engine, enqueueMutation],
+  );
+
+  const scrubMetadata = useCallback(async () => {
+    return enqueueMutation("scrub metadata", async ({ handle }) => ({
+      engineHandle: await engine.scrubMetadata(handle),
+      options: { dirty: true },
+    }));
+  }, [engine, enqueueMutation]);
+
   const save = useCallback(async (): Promise<SaveDocumentResult | null> => {
     await mutationQueueRef.current;
 
@@ -745,6 +763,8 @@ export function useDocument() {
     insertFile,
     cropResizePages,
     buildBinder,
+    batesStamp,
+    scrubMetadata,
     save,
     markSaved,
   };

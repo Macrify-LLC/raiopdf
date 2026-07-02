@@ -479,10 +479,8 @@ function mapHttpStatusToErrorCode(status: number, message: string): PdfEngineErr
     return "INVALID_PAGE_INDEX";
   }
 
-  if (status === 404) {
-    return "DOCUMENT_NOT_FOUND";
-  }
-
+  // HTTP 404 from the sidecar means a bad endpoint/base URL, not a missing
+  // document — DOCUMENT_NOT_FOUND is reserved for local handle lookups.
   return "INVALID_DOCUMENT";
 }
 

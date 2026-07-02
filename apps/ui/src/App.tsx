@@ -2,18 +2,39 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type MouseEvent,
 } from "react";
 import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api";
+import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import { LocalPdfEngine } from "@raiopdf/engine-local";
+import { PDFDocument, StandardFonts } from "pdf-lib";
+import floridaPackJson from "../../../packages/rules/data/florida.json";
+import { preflight } from "../../../packages/rules/src/preflight";
+import type {
+  DocumentFacts,
+  JurisdictionPack,
+  PageFacts,
+  PreflightCheck,
+  PreflightReport,
+  RectInches,
+} from "../../../packages/rules/src/types";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
 import {
   OrganizeWorkspace,
   type OrganizeFlowId,
 } from "./components/OrganizeWorkspace";
+import {
+  PrepareForFilingWorkspace,
+  type CertificateOfServiceDraft,
+  type FilingOutputPart,
+  type FilingProgressState,
+  type FilingResultState,
+} from "./components/PrepareForFilingWorkspace";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -30,6 +51,7 @@ import {
   pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
 import {
+  extractTextBoxes,
   findTextRedactionAreas,
   readMetadataSummary,
   scanSensitivePatterns,
@@ -48,6 +70,14 @@ import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
+const FLORIDA_PACK = floridaPackJson as JurisdictionPack;
+const POINTS_PER_INCH = 72;
+
+declare global {
+  interface Window {
+    __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+  }
+}
 
 export type OcrPhase =
   | "idle"
@@ -103,7 +133,7 @@ export function App() {
     message: null,
   });
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
-    "prepare-for-filing",
+    null,
   );
   const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
     null,
@@ -124,6 +154,13 @@ export function App() {
     hits: [],
   });
   const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
+  const [filingReport, setFilingReport] = useState<PreflightReport | null>(null);
+  const [filingReportLoading, setFilingReportLoading] = useState(false);
+  const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
+    phase: "idle",
+    message: null,
+  });
+  const [filingResult, setFilingResult] = useState<FilingResultState | null>(null);
   const [scrubState, setScrubState] = useState<{
     scrubbing: boolean;
     message: string | null;
@@ -138,6 +175,8 @@ export function App() {
   const redactionIdRef = useRef(0);
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
+  const filingRunRef = useRef(0);
+  const filingEngine = useMemo(() => new LocalPdfEngine(), []);
 
   useLayoutEffect(() => {
     documentBytesRef.current = document.bytes;
@@ -152,12 +191,17 @@ export function App() {
     setScannerState({ scanning: false, message: null, hits: [] });
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
+    setFilingProgress({ phase: "idle", message: null });
+    setFilingResult(null);
   }, []);
 
   const clearDocumentBoundLegalState = useCallback(() => {
     scannerRunRef.current += 1;
+    filingRunRef.current += 1;
     setPendingRedactions([]);
     setScannerState({ scanning: false, message: null, hits: [] });
+    setFilingResult(null);
+    setFilingProgress({ phase: "idle", message: null });
   }, []);
 
   const isCurrentDocument = useCallback(
@@ -255,6 +299,57 @@ export function App() {
       disposed = true;
     };
   }, [document.bytes]);
+
+  useEffect(() => {
+    let disposed = false;
+    const sourceBytes = document.bytes;
+
+    if (!sourceBytes) {
+      setFilingReport(null);
+      setFilingReportLoading(false);
+      return;
+    }
+
+    setFilingReportLoading(true);
+
+    const factsOptions: {
+      fileBytes: number;
+      searchableText?: boolean;
+      pdfaCompliant?: boolean;
+      pdfDocument?: PDFDocumentProxy | null;
+    } = {
+      fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
+      pdfaCompliant: false,
+      pdfDocument,
+    };
+
+    if (document.hasTextLayer !== null) {
+      factsOptions.searchableText = document.hasTextLayer;
+    }
+
+    void readFilingFacts(sourceBytes, factsOptions)
+      .then((facts) => {
+        if (disposed || documentBytesRef.current !== sourceBytes) {
+          return;
+        }
+
+        setFilingReport(runFilingPreflight(facts, FLORIDA_PACK));
+      })
+      .catch(() => {
+        if (!disposed && documentBytesRef.current === sourceBytes) {
+          setFilingReport(null);
+        }
+      })
+      .finally(() => {
+        if (!disposed && documentBytesRef.current === sourceBytes) {
+          setFilingReportLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -615,7 +710,7 @@ export function App() {
     setActiveOrganizeTool(null);
 
     if (activeLegalTool === "combine-exhibits") {
-      setActiveLegalTool("prepare-for-filing");
+      setActiveLegalTool(null);
     }
   }, [activeLegalTool]);
 
@@ -937,6 +1032,199 @@ export function App() {
     });
   }, [document.bytes, metadataSummary, scrubMetadata]);
 
+  const prepareFilingCopy = useCallback((certificate: CertificateOfServiceDraft | null) => {
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+
+    if (!sourceBytes) {
+      setFilingProgress({
+        phase: "error",
+        message: "Open a PDF before preparing a filing copy.",
+      });
+      return;
+    }
+
+    if (!engineBridge.available) {
+      setFilingProgress({
+        phase: "error",
+        message: "PDF/A export runs in the desktop app.",
+      });
+      return;
+    }
+
+    const runId = filingRunRef.current + 1;
+    filingRunRef.current = runId;
+    const isCurrentFilingRun = () => (
+      filingRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
+    );
+
+    setFilingResult(null);
+    setFilingProgress({
+      phase: "normalizing",
+      message: "Normalizing pages to the filing pack size and orientation...",
+    });
+
+    void (async () => {
+      let workingHandle: PdfDocumentHandle | null = null;
+      const closeHandles: PdfDocumentHandle[] = [];
+
+      try {
+        workingHandle = await filingEngine.open(sourceBytes);
+        closeHandles.push(workingHandle);
+
+        if (certificate && hasCertificateContent(certificate)) {
+          const certificateBytes = await createCertificateOfServicePdf(certificate);
+          const certificateHandle = await filingEngine.open(certificateBytes);
+          closeHandles.push(certificateHandle);
+          const pageCount = await filingEngine.pageCount(workingHandle);
+          const appendedHandle = await filingEngine.insertPages(
+            workingHandle,
+            pageCount,
+            certificateHandle,
+          );
+          closeHandles.push(appendedHandle);
+          workingHandle = appendedHandle;
+        }
+
+        const normalizedHandle = await filingEngine.normalizePages(workingHandle, {
+          targetSize: FLORIDA_PACK.pageSize,
+          orientation: "portrait",
+        });
+        closeHandles.push(normalizedHandle);
+        workingHandle = normalizedHandle;
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingProgress({
+          phase: "splitting",
+          message: "Splitting at page boundaries against the portal byte cap...",
+        });
+
+        const splitResult = await filingEngine.splitByMaxBytes(
+          workingHandle,
+          FLORIDA_PACK.recommendedMaxFileBytes,
+        );
+        closeHandles.push(...splitResult.parts.map((part) => part.document));
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingProgress({
+          phase: "converting",
+          message: "Converting each output part to PDF/A in the desktop engine...",
+        });
+
+        const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+        const convertedParts = [];
+
+        for (const [index, part] of splitResult.parts.entries()) {
+          const partBytes = await filingEngine.saveToBytes(part.document);
+          const convertedBytes = await engineBridge.convertToPdfA(
+            partBytes,
+            FLORIDA_PACK.pdfa.flavor,
+          );
+          convertedParts.push({
+            bytes: convertedBytes,
+            fileName: formatFilingOutputName(baseName, FLORIDA_PACK, index + 1, splitResult.parts.length),
+            pageIndexes: part.pageIndexes,
+            oversized: part.oversized,
+          });
+        }
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingProgress({
+          phase: "verifying",
+          message: "Re-running preflight on the output files...",
+        });
+
+        const outputReports: PreflightReport[] = [];
+        const outputParts: FilingOutputPart[] = [];
+
+        for (const part of convertedParts) {
+          const facts = await readFilingFacts(part.bytes, {
+            fileBytes: part.bytes.byteLength,
+            pdfaCompliant: true,
+          });
+          const report = runFilingPreflight(facts, FLORIDA_PACK);
+          outputReports.push(report);
+          outputParts.push({
+            fileName: part.fileName,
+            byteLength: part.bytes.byteLength,
+            pageIndexes: part.pageIndexes,
+            oversized: part.oversized,
+          });
+        }
+
+        const finalReport = aggregateOutputReports(outputReports);
+
+        if (hasPortalFix(finalReport)) {
+          setFilingProgress({
+            phase: "error",
+            message: "Output preflight still found portal work. The files were not saved.",
+          });
+          setFilingResult({
+            parts: outputParts,
+            report: finalReport,
+            verifiedAt: new Date().toISOString(),
+          });
+          return;
+        }
+
+        for (const part of convertedParts) {
+          if (!isCurrentFilingRun()) {
+            return;
+          }
+
+          await filePort.saveFile(part.bytes, part.fileName, null);
+        }
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingResult({
+          parts: outputParts,
+          report: finalReport,
+          verifiedAt: new Date().toISOString(),
+        });
+        setFilingProgress({
+          phase: "done",
+          message: "Filing output saved after output preflight verification.",
+        });
+      } finally {
+        await Promise.all(closeHandles.map((handle) => filingEngine.close(handle).catch(() => undefined)));
+      }
+    })().catch((error: unknown) => {
+      if (!isCurrentFilingRun()) {
+        return;
+      }
+
+      const message = isEngineBridgeUnavailableError(error)
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "The filing copy could not be prepared.";
+
+      setFilingProgress({
+        phase: "error",
+        message,
+      });
+    });
+  }, [
+    document.bytes,
+    document.fileName,
+    engineBridge,
+    filingEngine,
+    getOpenToken,
+    isCurrentDocument,
+  ]);
+
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,
     message: redactionMessage,
@@ -959,11 +1247,22 @@ export function App() {
       onSearchTextChange={setRedactionSearchText}
       onSearchSubmit={searchTextForRedaction}
       onApply={requestApplyRedactions}
-      onExit={() => setActiveLegalTool("prepare-for-filing")}
+      onExit={() => setActiveLegalTool(null)}
     />
   ) : null;
 
-  const workspace = activeLegalTool === "combine-exhibits" ? (
+  const workspace = activeLegalTool === "prepare-for-filing" ? (
+    <PrepareForFilingWorkspace
+      document={document}
+      pack={FLORIDA_PACK}
+      report={filingReport}
+      loadingReport={filingReportLoading}
+      progress={filingProgress}
+      result={filingResult}
+      pdfAAvailable={engineBridge.available}
+      onPrepare={prepareFilingCopy}
+    />
+  ) : activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
       onBuildBinder={buildBinder}
@@ -1085,6 +1384,251 @@ function RedactionModeBar({
       </button>
     </div>
   );
+}
+
+async function readFilingFacts(
+  bytes: Uint8Array,
+  options: {
+    fileBytes: number;
+    searchableText?: boolean;
+    pdfaCompliant?: boolean;
+    pdfDocument?: PDFDocumentProxy | null;
+  },
+): Promise<DocumentFacts> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const pageOccupiedRegions = await readOccupiedRegions(bytes, options.pdfDocument ?? null);
+  const pages: PageFacts[] = pdf.getPages().map((page, pageIndex) => {
+    const widthIn = page.getWidth() / POINTS_PER_INCH;
+    const heightIn = page.getHeight() / POINTS_PER_INCH;
+    const occupiedRegions = pageOccupiedRegions.get(pageIndex);
+    const pageFacts: PageFacts = {
+      pageIndex,
+      size: {
+        w: roundInches(widthIn),
+        h: roundInches(heightIn),
+        in: true,
+      },
+      orientation: heightIn >= widthIn ? "portrait" : "landscape",
+    };
+
+    if (occupiedRegions) {
+      pageFacts.occupiedRegions = occupiedRegions;
+    }
+
+    return pageFacts;
+  });
+  const hasExtractedText = [...pageOccupiedRegions.values()].some((regions) => regions.length > 0);
+  const facts: DocumentFacts = {
+    pages,
+    fileBytes: options.fileBytes,
+  };
+
+  facts.searchableText = options.searchableText ?? hasExtractedText;
+
+  if (options.pdfaCompliant !== undefined) {
+    facts.pdfaCompliant = options.pdfaCompliant;
+  }
+
+  if (pageOccupiedRegions.has(0)) {
+    facts.clerkStampSpaceBlank = !pageOccupiedRegions
+      .get(0)!
+      .some((region) => intersects(region, FLORIDA_PACK.clerkStampSpace.firstPage));
+  }
+
+  return facts;
+}
+
+async function readOccupiedRegions(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null,
+): Promise<Map<number, RectInches[]>> {
+  let loadedDocument: PDFDocumentProxy | null = null;
+  const pdfDocument = currentPdfDocument ?? await loadPdfDocument(bytes);
+
+  if (!currentPdfDocument) {
+    loadedDocument = pdfDocument;
+  }
+
+  try {
+    const boxes = await extractTextBoxes(pdfDocument);
+
+    if (boxes.length === 0) {
+      return new Map();
+    }
+
+    const regions = new Map<number, RectInches[]>();
+
+    for (let pageIndex = 0; pageIndex < pdfDocument.numPages; pageIndex += 1) {
+      regions.set(pageIndex, []);
+    }
+
+    for (const box of boxes) {
+      const pageRegions = regions.get(box.pageIndex);
+
+      if (!pageRegions) {
+        continue;
+      }
+
+      pageRegions.push({
+        x: box.area.x / POINTS_PER_INCH,
+        y: box.area.y / POINTS_PER_INCH,
+        w: box.area.w / POINTS_PER_INCH,
+        h: box.area.h / POINTS_PER_INCH,
+      });
+    }
+
+    return regions;
+  } catch {
+    return new Map();
+  } finally {
+    await loadedDocument?.loadingTask.destroy();
+  }
+}
+
+function runFilingPreflight(facts: DocumentFacts, pack: JurisdictionPack): PreflightReport {
+  window.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ =
+    (window.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ ?? 0) + 1;
+
+  return preflight(facts, pack);
+}
+
+function aggregateOutputReports(reports: readonly PreflightReport[]): PreflightReport {
+  const [firstReport] = reports;
+
+  if (!firstReport) {
+    return { checks: [] };
+  }
+
+  return {
+    checks: firstReport.checks.map((firstCheck) => {
+      const matchingChecks = reports
+        .map((report) => report.checks.find((check) => check.checkId === firstCheck.checkId))
+        .filter((check): check is PreflightCheck => Boolean(check));
+      const failedChecks = matchingChecks.filter((check) => check.status !== "pass");
+
+      return {
+        ...firstCheck,
+        status: aggregateStatus(firstCheck, matchingChecks),
+        detail: failedChecks.length === 0
+          ? `All ${reports.length} output ${reports.length === 1 ? "file passes" : "files pass"}.`
+          : failedChecks.map((check, index) => `Part ${index + 1}: ${check.detail}`).join(" "),
+      } as PreflightCheck;
+    }),
+  };
+}
+
+function aggregateStatus(
+  firstCheck: PreflightCheck,
+  checks: readonly PreflightCheck[],
+): PreflightCheck["status"] {
+  if (firstCheck.kind === "portal") {
+    if (checks.some((check) => check.status === "fix")) {
+      return "fix";
+    }
+
+    if (checks.some((check) => check.status === "unknown")) {
+      return "unknown";
+    }
+
+    return "pass";
+  }
+
+  if (checks.some((check) => check.status === "warn")) {
+    return "warn";
+  }
+
+  if (checks.some((check) => check.status === "unknown")) {
+    return "unknown";
+  }
+
+  return "pass";
+}
+
+function hasPortalFix(report: PreflightReport): boolean {
+  return report.checks.some((check) => check.kind === "portal" && check.status === "fix");
+}
+
+function formatFilingOutputName(
+  baseName: string,
+  pack: JurisdictionPack,
+  partNumber: number,
+  totalParts: number,
+): string {
+  if (totalParts === 1) {
+    return `${baseName} — filing.pdf`;
+  }
+
+  return `${pack.splitNaming
+    .replace("{name}", baseName)
+    .replace("{n}", String(partNumber))
+    .replace("{total}", String(totalParts))}.pdf`;
+}
+
+async function createCertificateOfServicePdf(
+  certificate: CertificateOfServiceDraft,
+): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([8.5 * POINTS_PER_INCH, 11 * POINTS_PER_INCH]);
+  const font = await pdf.embedFont(StandardFonts.TimesRoman);
+  const boldFont = await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const left = 72;
+  let y = 720;
+  const lines = [
+    certificate.caseCaption.trim() || "Case Caption",
+    "",
+    "CERTIFICATE OF SERVICE",
+    "",
+    "I HEREBY CERTIFY that a true and correct copy of the foregoing was furnished",
+    `on ${certificate.date || new Date().toISOString().slice(0, 10)} to:`,
+    "",
+    ...certificate.serviceList.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+  ];
+
+  for (const line of lines) {
+    page.drawText(line, {
+      x: left,
+      y,
+      size: 12,
+      font: line === "CERTIFICATE OF SERVICE" ? boldFont : font,
+    });
+    y -= line === "" ? 12 : 18;
+  }
+
+  page.drawText("Respectfully submitted,", {
+    x: left,
+    y: 140,
+    size: 12,
+    font,
+  });
+  page.drawText("________________________________", {
+    x: left,
+    y: 96,
+    size: 12,
+    font,
+  });
+
+  return pdf.save();
+}
+
+function hasCertificateContent(certificate: CertificateOfServiceDraft): boolean {
+  return Boolean(
+    certificate.caseCaption.trim() ||
+    certificate.serviceList.trim() ||
+    certificate.date.trim(),
+  );
+}
+
+function intersects(a: RectInches, b: RectInches): boolean {
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.w > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.h > b.y
+  );
+}
+
+function roundInches(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function stripPdfExtension(fileName: string): string {

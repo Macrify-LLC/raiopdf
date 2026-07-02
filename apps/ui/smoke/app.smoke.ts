@@ -265,6 +265,46 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
 });
 
+test("prepares an oversize landscape filing copy and re-runs preflight on output", async ({ page }) => {
+  const sourcePdf = await createPaddedPdf(
+    await createLandscapeTextPdf([
+      "Motion for summary judgment",
+      "Exhibit index and certificate text",
+    ]),
+    26 * 1024 * 1024,
+  );
+  const convertedPdf = await createMultiPageTextPdf([
+    "Converted filing output page 1",
+    "Converted filing output page 2",
+  ]);
+  await installFilingBridgeMock(page, convertedPdf);
+  await page.goto("/");
+  await openPdf(page, "landscape-oversize.pdf", sourcePdf);
+  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+
+  await expect(page.getByRole("heading", { name: "Prepare for Filing" })).toBeVisible();
+  await expect(page.getByText("Florida — Rule 2.520/2.525 + ePortal")).toBeVisible();
+  await expect(page.getByText("These checks are guidance only")).toBeVisible();
+  await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();
+
+  const lawRows = page.locator('.filing-row[data-kind="rule"]');
+  await expect(lawRows.filter({ hasText: "Letter portrait pages" })).toHaveAttribute("data-status", "warn");
+  await expect(lawRows.locator(".filing-row__chip", { hasText: "WILL FIX" })).toHaveCount(0);
+  await expect(page.locator('.filing-row[data-kind="portal"] .filing-row__chip', { hasText: "WILL FIX" })).toHaveCount(2);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Make Filing-Ready" }).click();
+  await downloadPromise;
+
+  await expect(page.getByText("Filing output saved after output preflight verification.")).toBeVisible();
+  await expect(page.getByText("Output preflight re-run complete")).toBeVisible();
+  await expect(page.getByText("Verified after re-running preflight on the output.")).toBeVisible();
+  await expect(page.getByText("landscape-oversize — filing.pdf")).toBeVisible();
+  await expect(page.locator('.filing-row[data-kind="rule"] .filing-row__chip', { hasText: "WILL FIX" })).toHaveCount(0);
+  await expect.poll(() => getFilingPreflightRuns(page)).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => getPdfACallCount(page)).toBe(1);
+});
+
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
@@ -373,6 +413,40 @@ async function createMultiPageTextPdf(pageTexts: readonly string[]): Promise<Uin
   return pdf.save();
 }
 
+async function createLandscapeTextPdf(pageTexts: readonly string[]): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  pageTexts.forEach((text, pageIndex) => {
+    const page = pdf.addPage([792, 612]);
+    page.drawText(text, {
+      x: 72,
+      y: 520,
+      size: 14,
+      font,
+    });
+    page.drawText(`Page ${pageIndex + 1} of ${pageTexts.length}`, {
+      x: 72,
+      y: 48,
+      size: 10,
+      font,
+    });
+  });
+
+  return pdf.save();
+}
+
+async function createPaddedPdf(bytes: Uint8Array, targetBytes: number): Promise<Uint8Array> {
+  if (bytes.byteLength >= targetBytes) {
+    return bytes;
+  }
+
+  return Buffer.concat([
+    Buffer.from(bytes),
+    Buffer.alloc(targetBytes - bytes.byteLength, 0x20),
+  ]);
+}
+
 async function installOcrBridgeMock(
   page: Page,
   ocrBytes: Uint8Array,
@@ -477,6 +551,55 @@ async function installRedactionBridgeMock(
   });
 }
 
+async function installFilingBridgeMock(
+  page: Page,
+  convertedBytes: Uint8Array,
+): Promise<void> {
+  await page.addInitScript(({ convertedContents }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_PDFA_CALL_COUNT__?: number;
+      __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ = 0;
+    testWindow.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      return { port: 39393 } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (url.endsWith("/api/v1/analysis/basic-info")) {
+        return new Response(JSON.stringify({ pageCount: 2 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/convert/pdf/pdfa")) {
+        testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
+
+        return new Response(new Uint8Array(convertedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    convertedContents: [...convertedBytes],
+  });
+}
+
 async function getOcrCallCount(page: Page): Promise<number> {
   return page.evaluate(() => {
     return (window as typeof window & {
@@ -490,6 +613,22 @@ async function getRedactionCallCount(page: Page): Promise<number> {
     return (window as typeof window & {
       __RAIOPDF_TEST_REDACTION_CALL_COUNT__?: number;
     }).__RAIOPDF_TEST_REDACTION_CALL_COUNT__ ?? 0;
+  });
+}
+
+async function getPdfACallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_PDFA_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0;
+  });
+}
+
+async function getFilingPreflightRuns(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    }).__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ ?? 0;
   });
 }
 

@@ -134,6 +134,12 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   await combine.focus();
   await page.keyboard.press("Enter");
 
+  await expect(page.getByText("Page 1 / 2")).toBeVisible();
+  await expect(page.getByText("Page 1 of 2")).toBeVisible();
+  await expect(page.getByText(/Page 0/)).toHaveCount(0);
+  await expect(page.getByText("0 x 0 in")).toHaveCount(0);
+  await expect(page.getByText("0 KB")).toHaveCount(0);
+
   await page.getByLabel("Add exhibits").setInputFiles([
     {
       name: "exhibit-a.pdf",

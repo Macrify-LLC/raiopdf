@@ -20,7 +20,6 @@ import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
-import { cropResizePdf } from "./lib/cropResize";
 import type { LegalToolId, OrganizeToolId } from "./components/ToolPanel";
 
 const ZOOM_STEP = 0.25;
@@ -57,6 +56,7 @@ export function App() {
     extractPages,
     splitPages,
     insertFile,
+    cropResizePages,
     buildBinder,
     save: saveDocument,
     markSaved,
@@ -537,24 +537,13 @@ export function App() {
       }
 
       try {
-        const bytes = await cropResizePdf(document.bytes, {
-          pageIndexes,
-          cropMarginIn: options.cropMarginIn,
-          resizePreset: options.resizePreset,
-        });
-        const replaced = await replaceBytes(bytes, {
-          dirty: true,
-          fileName: "Cropped Pages.pdf",
-          filePath: null,
-        });
-
-        return replaced === "replaced";
+        return await cropResizePages(pageIndexes, options);
       } catch {
         setError("The pages could not be cropped. Check the range and try again.");
         return false;
       }
     },
-    [document.bytes, replaceBytes, setError],
+    [cropResizePages, document.bytes, setError],
   );
 
   const workspace = activeLegalTool === "combine-exhibits" ? (

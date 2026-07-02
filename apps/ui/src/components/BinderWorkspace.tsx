@@ -81,7 +81,7 @@ export function BinderWorkspace({
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
 
-    if (files.length === 0) {
+    if (files.length === 0 || building) {
       return;
     }
 
@@ -128,31 +128,35 @@ export function BinderWorkspace({
     setBuilding(true);
     setStatus("Building binder...");
 
-    const built = await onBuildBinder(
-      exhibits.map((exhibit, index) => ({
-        bytes: exhibit.bytes,
-        label: labels[index]!,
-      })),
-      {
-        slipSheets,
-        placement: {
-          edge: placementEdge,
-          align: placementAlign,
+    try {
+      const built = await onBuildBinder(
+        exhibits.map((exhibit, index) => ({
+          bytes: exhibit.bytes,
+          label: labels[index]!,
+        })),
+        {
+          slipSheets,
+          placement: {
+            edge: placementEdge,
+            align: placementAlign,
+          },
+          stampPages: stampPages === "first" ? "first" : "all",
+          fontSizePt: 11,
+          marginIn: 0.5,
         },
-        stampPages: stampPages === "first" ? "first" : "all",
-        fontSizePt: 11,
-        marginIn: 0.5,
-      },
-      `${stripPdfExtension(mainName)} Binder.pdf`,
-    );
+        `${stripPdfExtension(mainName)} Binder.pdf`,
+      );
 
-    setBuilding(false);
-
-    if (built) {
-      setStatus("Binder built. The bookmarks panel will show each exhibit.");
-      onCancel();
-    } else {
+      if (built) {
+        setStatus("Binder built. The bookmarks panel will show each exhibit.");
+        onCancel();
+      } else {
+        setStatus("The binder could not be built. Check the exhibit files and try again.");
+      }
+    } catch {
       setStatus("The binder could not be built. Check the exhibit files and try again.");
+    } finally {
+      setBuilding(false);
     }
   }
 
@@ -178,7 +182,12 @@ export function BinderWorkspace({
               <p className="binder-main__meta">{mainPages} {mainPages === 1 ? "page" : "pages"}</p>
             </div>
           </div>
-          <button type="button" className="binder-workspace__secondary" onClick={onOpenRequested}>
+          <button
+            type="button"
+            className="binder-workspace__secondary"
+            onClick={onOpenRequested}
+            disabled={building}
+          >
             <OpenIcon size={15} />
             Replace via Open
           </button>
@@ -211,7 +220,7 @@ export function BinderWorkspace({
                     type="button"
                     aria-label={`Move ${exhibit.name} up`}
                     onClick={() => moveExhibit(index, -1)}
-                    disabled={index === 0}
+                    disabled={building || index === 0}
                   >
                     <ArrowUpIcon size={14} />
                   </button>
@@ -219,7 +228,7 @@ export function BinderWorkspace({
                     type="button"
                     aria-label={`Move ${exhibit.name} down`}
                     onClick={() => moveExhibit(index, 1)}
-                    disabled={index === exhibits.length - 1}
+                    disabled={building || index === exhibits.length - 1}
                   >
                     <ArrowDownIcon size={14} />
                   </button>
@@ -227,6 +236,7 @@ export function BinderWorkspace({
                     type="button"
                     aria-label={`Remove ${exhibit.name}`}
                     onClick={() => removeExhibit(exhibit.id)}
+                    disabled={building}
                   >
                     <DeleteIcon size={14} />
                   </button>
@@ -243,51 +253,53 @@ export function BinderWorkspace({
             multiple
             aria-label="Add exhibits"
             onChange={handleAddFiles}
+            disabled={building}
           />
           <button
             type="button"
             className="binder-workspace__secondary binder-workspace__add"
             onClick={() => addInputRef.current?.click()}
+            disabled={building}
           >
             <PlusIcon size={15} />
             Add exhibits...
           </button>
         </section>
 
-        <section className="binder-card" aria-label="Binder settings">
+        <section className="binder-card binder-card--settings" aria-label="Binder settings">
           <p className="binder-card__label">Settings</p>
           <fieldset className="binder-fieldset">
             <legend>Identifier style</legend>
-            <label><input type="radio" name="identifier" checked={identifierStyle === "letters"} onChange={() => setIdentifierStyle("letters")} /> Letters</label>
-            <label><input type="radio" name="identifier" checked={identifierStyle === "numbers"} onChange={() => setIdentifierStyle("numbers")} /> Numbers</label>
+            <label><input type="radio" name="identifier" checked={identifierStyle === "letters"} onChange={() => setIdentifierStyle("letters")} disabled={building} /> Letters</label>
+            <label><input type="radio" name="identifier" checked={identifierStyle === "numbers"} onChange={() => setIdentifierStyle("numbers")} disabled={building} /> Numbers</label>
           </fieldset>
 
           <label className="binder-field">
             <span>Prefix</span>
-            <input value={prefix} placeholder="Plaintiff's Exhibit" onChange={(event) => setPrefix(event.currentTarget.value)} />
+            <input value={prefix} placeholder="Plaintiff's Exhibit" onChange={(event) => setPrefix(event.currentTarget.value)} disabled={building} />
           </label>
 
           <fieldset className="binder-fieldset">
             <legend>Placement</legend>
-            <label><input type="radio" name="placement-edge" checked={placementEdge === "header"} onChange={() => setPlacementEdge("header")} /> Header</label>
-            <label><input type="radio" name="placement-edge" checked={placementEdge === "footer"} onChange={() => setPlacementEdge("footer")} /> Footer</label>
+            <label><input type="radio" name="placement-edge" checked={placementEdge === "header"} onChange={() => setPlacementEdge("header")} disabled={building} /> Header</label>
+            <label><input type="radio" name="placement-edge" checked={placementEdge === "footer"} onChange={() => setPlacementEdge("footer")} disabled={building} /> Footer</label>
           </fieldset>
 
           <fieldset className="binder-fieldset">
             <legend>Position</legend>
-            <label><input type="radio" name="placement-align" checked={placementAlign === "left"} onChange={() => setPlacementAlign("left")} /> Left</label>
-            <label><input type="radio" name="placement-align" checked={placementAlign === "center"} onChange={() => setPlacementAlign("center")} /> Center</label>
-            <label><input type="radio" name="placement-align" checked={placementAlign === "right"} onChange={() => setPlacementAlign("right")} /> Right</label>
+            <label><input type="radio" name="placement-align" checked={placementAlign === "left"} onChange={() => setPlacementAlign("left")} disabled={building} /> Left</label>
+            <label><input type="radio" name="placement-align" checked={placementAlign === "center"} onChange={() => setPlacementAlign("center")} disabled={building} /> Center</label>
+            <label><input type="radio" name="placement-align" checked={placementAlign === "right"} onChange={() => setPlacementAlign("right")} disabled={building} /> Right</label>
           </fieldset>
 
           <fieldset className="binder-fieldset">
             <legend>Stamp pages</legend>
-            <label><input type="radio" name="stamp-pages" checked={stampPages === "first"} onChange={() => setStampPages("first")} /> First page only</label>
-            <label><input type="radio" name="stamp-pages" checked={stampPages === "all"} onChange={() => setStampPages("all")} /> Every page</label>
+            <label><input type="radio" name="stamp-pages" checked={stampPages === "first"} onChange={() => setStampPages("first")} disabled={building} /> First page only</label>
+            <label><input type="radio" name="stamp-pages" checked={stampPages === "all"} onChange={() => setStampPages("all")} disabled={building} /> Every page</label>
           </fieldset>
 
           <label className="binder-toggle">
-            <input type="checkbox" checked={slipSheets} onChange={(event) => setSlipSheets(event.currentTarget.checked)} />
+            <input type="checkbox" checked={slipSheets} onChange={(event) => setSlipSheets(event.currentTarget.checked)} disabled={building} />
             <span><SlipSheetIcon size={15} /> Slip sheets</span>
           </label>
           <p className="binder-card__hint">Insert a separator page before each exhibit</p>
@@ -296,10 +308,12 @@ export function BinderWorkspace({
       </div>
 
       <footer className="binder-workspace__footer">
-        <p>
-          {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPages} {totalPages === 1 ? "page" : "pages"}
-        </p>
-        {status ? <p className="binder-workspace__status" role="status">{status}</p> : null}
+        <div className="binder-workspace__footer-summary">
+          <p>
+            {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPages} {totalPages === 1 ? "page" : "pages"}
+          </p>
+          {status ? <p className="binder-workspace__status" role="status">{status}</p> : null}
+        </div>
         <button
           type="button"
           className="binder-workspace__primary"

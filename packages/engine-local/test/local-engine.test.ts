@@ -67,6 +67,32 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("crops selected pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 310]]));
+
+    const cropped = await engine.cropPages(document, [1], 0.25);
+    const bytes = await engine.saveToBytes(cropped);
+
+    await expectPageCropBoxes(bytes, [
+      { x: 0, y: 0, width: 200, height: 300 },
+      { x: 18, y: 18, width: 174, height: 274 },
+    ]);
+  });
+
+  it("resizes selected pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 310]]));
+
+    const resized = await engine.resizePages(document, [0], {
+      widthPt: 612,
+      heightPt: 792,
+    });
+    const bytes = await engine.saveToBytes(resized);
+
+    await expectPageSizes(bytes, [[612, 792], [210, 310]]);
+  });
+
   it("merges documents in order", async () => {
     const engine = createLocalPdfEngine();
     const first = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -231,6 +257,26 @@ async function expectPageWidths(bytes: Uint8Array, expectedWidths: readonly numb
   const widths = pdf.getPages().map((page) => page.getWidth());
 
   expect(widths).toEqual(expectedWidths);
+}
+
+async function expectPageSizes(
+  bytes: Uint8Array,
+  expectedSizes: ReadonlyArray<readonly [number, number]>,
+): Promise<void> {
+  const pdf = await PDFDocument.load(bytes);
+  const sizes = pdf.getPages().map((page) => [page.getWidth(), page.getHeight()]);
+
+  expect(sizes).toEqual(expectedSizes);
+}
+
+async function expectPageCropBoxes(
+  bytes: Uint8Array,
+  expectedCropBoxes: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
+): Promise<void> {
+  const pdf = await PDFDocument.load(bytes);
+  const cropBoxes = pdf.getPages().map((page) => page.getCropBox());
+
+  expect(cropBoxes).toEqual(expectedCropBoxes);
 }
 
 async function expectPageContentToContainLabel(

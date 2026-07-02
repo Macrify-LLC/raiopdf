@@ -4,6 +4,7 @@ import type {
   PdfBytes,
   PdfDocumentHandle,
   PdfEngine,
+  PdfPageSizePoints,
   PdfPageSelection,
   PdfStampPlacement,
   PdfStampTextOptions,
@@ -127,6 +128,55 @@ export class LocalPdfEngine implements PdfEngine {
     for (const page of copiedPages) {
       output.addPage(page);
     }
+
+    return this.store(await output.save());
+  }
+
+  async cropPages(
+    document: PdfDocumentHandle,
+    pageIndexes: readonly number[],
+    marginIn: number,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const pageCount = output.getPageCount();
+    assertPageIndexes(pageIndexes, pageCount);
+    assertNonNegativeNumber(marginIn, "marginIn");
+
+    const selectedPages = new Set(pageIndexes);
+    const cropMarginPt = marginIn * POINTS_PER_INCH;
+
+    output.getPages().forEach((page, pageIndex) => {
+      if (!selectedPages.has(pageIndex)) {
+        return;
+      }
+
+      const width = page.getWidth();
+      const height = page.getHeight();
+      const maxMargin = Math.min(width, height) / 2 - 1;
+      const margin = Math.min(cropMarginPt, Math.max(maxMargin, 0));
+      page.setCropBox(margin, margin, width - margin * 2, height - margin * 2);
+    });
+
+    return this.store(await output.save());
+  }
+
+  async resizePages(
+    document: PdfDocumentHandle,
+    pageIndexes: readonly number[],
+    pageSize: PdfPageSizePoints,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    assertPageIndexes(pageIndexes, output.getPageCount());
+    assertPositiveNumber(pageSize.widthPt, "widthPt");
+    assertPositiveNumber(pageSize.heightPt, "heightPt");
+
+    const selectedPages = new Set(pageIndexes);
+
+    output.getPages().forEach((page, pageIndex) => {
+      if (selectedPages.has(pageIndex)) {
+        page.setSize(pageSize.widthPt, pageSize.heightPt);
+      }
+    });
 
     return this.store(await output.save());
   }
@@ -541,6 +591,12 @@ function assertNonEmptyText(text: string): void {
 function assertPositiveNumber(value: number, fieldName: string): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a positive number.`);
+  }
+}
+
+function assertNonNegativeNumber(value: number, fieldName: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must not be negative.`);
   }
 }
 

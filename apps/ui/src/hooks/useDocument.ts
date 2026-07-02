@@ -6,6 +6,10 @@ import type {
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
+import {
+  RESIZE_PRESET_SIZES,
+  type ResizePreset,
+} from "../lib/cropResize";
 
 export interface PageSizeInches {
   width: number;
@@ -574,6 +578,55 @@ export function useDocument() {
     [closeHandle, engine, enqueueMutation],
   );
 
+  const cropResizePages = useCallback(
+    async (
+      pageIndexes: readonly number[],
+      options: { cropMarginIn: number; resizePreset: ResizePreset },
+    ) => {
+      if (pageIndexes.length === 0) {
+        return false;
+      }
+
+      return enqueueMutation("crop", async ({ handle }) => {
+        let croppedHandle: PdfDocumentHandle | null = null;
+
+        try {
+          croppedHandle = await engine.cropPages(handle, pageIndexes, options.cropMarginIn);
+
+          if (options.resizePreset === "original") {
+            const engineHandle = croppedHandle;
+            croppedHandle = null;
+
+            return {
+              engineHandle,
+              options: {
+                dirty: true,
+                fileName: "Cropped Pages.pdf",
+                filePath: null,
+              },
+            };
+          }
+
+          return {
+            engineHandle: await engine.resizePages(
+              croppedHandle,
+              pageIndexes,
+              RESIZE_PRESET_SIZES[options.resizePreset],
+            ),
+            options: {
+              dirty: true,
+              fileName: "Cropped Pages.pdf",
+              filePath: null,
+            },
+          };
+        } finally {
+          await closeHandle(croppedHandle);
+        }
+      });
+    },
+    [closeHandle, engine, enqueueMutation],
+  );
+
   const buildBinder = useCallback(
     async (
       exhibits: readonly BinderExhibitInput[],
@@ -690,6 +743,7 @@ export function useDocument() {
     extractPages,
     splitPages,
     insertFile,
+    cropResizePages,
     buildBinder,
     save,
     markSaved,

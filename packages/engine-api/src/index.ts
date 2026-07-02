@@ -34,6 +34,11 @@ export type PdfBinderOptions = {
   marginIn?: number;
 };
 
+export type PdfPageSizePoints = {
+  widthPt: number;
+  heightPt: number;
+};
+
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "ENCRYPTED_DOCUMENT"
@@ -90,6 +95,20 @@ export interface PdfEngine {
   deletePages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
+  ): Promise<PdfDocumentHandle>;
+
+  /** Creates a new document with crop boxes inset on the selected zero-based pages. */
+  cropPages(
+    document: PdfDocumentHandle,
+    pageIndexes: readonly number[],
+    marginIn: number,
+  ): Promise<PdfDocumentHandle>;
+
+  /** Creates a new document with selected zero-based pages resized to the provided point size. */
+  resizePages(
+    document: PdfDocumentHandle,
+    pageIndexes: readonly number[],
+    pageSize: PdfPageSizePoints,
   ): Promise<PdfDocumentHandle>;
 
   /** Creates a new document by inserting all pages from another document at a zero-based page position. */

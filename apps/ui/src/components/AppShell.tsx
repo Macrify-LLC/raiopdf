@@ -68,7 +68,7 @@ export function AppShell({
   onMakeSearchable,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasDocument = Boolean(document.engineHandle && pdfDocument);
+  const hasDocument = Boolean(document.engineHandle && document.bytes);
   const tabs = document.fileName
     ? [
         {
@@ -154,8 +154,8 @@ export function AppShell({
         />
       </div>
       <StatusBar
-        currentPage={hasDocument ? document.currentPage : 0}
-        pageCount={hasDocument ? document.pageCount : 0}
+        currentPage={hasDocument ? document.currentPage : null}
+        pageCount={hasDocument ? document.pageCount : null}
         pageSizeInches={hasDocument ? document.pageSizeInches : null}
         fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
         hasTextLayer={hasDocument ? document.hasTextLayer : null}

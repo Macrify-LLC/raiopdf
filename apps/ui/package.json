@@ -8,12 +8,18 @@
     "build": "tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:smoke": "playwright test",
     "lint": "eslint ."
   },
   "dependencies": {
     "@raiopdf/engine-api": "workspace:*",
+    "@raiopdf/engine-local": "workspace:*",
+    "pdfjs-dist": "^6.1.200",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "pdf-lib": "^1.17.1"
+  }
 }

@@ -21,6 +21,10 @@ export class LocalPdfEngine implements PdfEngine {
     return this.store(normalizedBytes);
   }
 
+  async close(document: PdfDocumentHandle): Promise<void> {
+    this.documents.delete(document);
+  }
+
   async pageCount(document: PdfDocumentHandle): Promise<number> {
     const pdf = await this.load(document);
 
@@ -178,10 +182,26 @@ async function loadPdf(bytes: Uint8Array): Promise<PDFDocument> {
   try {
     return await PDFDocument.load(bytes);
   } catch (error) {
+    if (isEncryptedPdfError(error)) {
+      throw new PdfEngineError("ENCRYPTED_DOCUMENT", "Encrypted PDFs are not supported.", {
+        cause: error,
+      });
+    }
+
     throw new PdfEngineError("INVALID_DOCUMENT", "PDF bytes could not be read.", {
       cause: error,
     });
   }
+}
+
+function isEncryptedPdfError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+
+  return message.includes("encrypted") || message.includes("password");
 }
 
 function normalizeBytes(bytes: PdfBytes): Uint8Array {

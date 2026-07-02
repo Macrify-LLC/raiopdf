@@ -1,3 +1,6 @@
+import { useRef, type ChangeEvent, type MouseEvent } from "react";
+import type { DocumentState } from "../hooks/useDocument";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
 import { CommandBar } from "./CommandBar";
 import { StatusBar } from "./StatusBar";
@@ -7,26 +10,124 @@ import { ToolPanel } from "./ToolPanel";
 import "./AppShell.css";
 
 export interface AppShellProps {
-  /**
-   * Fired from every "Open a PDF" entry point (command bar + canvas empty
-   * state). No-op by default -- this PR ships static chrome only; the
-   * engine-wiring PR supplies real file-opening logic.
-   */
-  onOpenRequested?: (() => void) | undefined;
+  document: DocumentState;
+  pdfDocument: PDFDocumentProxy | null;
+  selectedPageIndexes: ReadonlySet<number>;
+  onOpenFile: (file: File) => void;
+  onSave: () => void;
+  onPreviousPage: () => void;
+  onNextPage: () => void;
+  onZoomOut: () => void;
+  onZoomIn: () => void;
+  onFitZoomResolved: (zoom: number) => void;
+  onPageSizeChange: (size: { width: number; height: number }) => void;
+  onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
+  onRotateSelected: () => void;
+  onDeleteSelected: () => void;
+  onMoveSelectedUp: () => void;
+  onMoveSelectedDown: () => void;
 }
 
-export function AppShell({ onOpenRequested }: AppShellProps) {
+export function AppShell({
+  document,
+  pdfDocument,
+  selectedPageIndexes,
+  onOpenFile,
+  onSave,
+  onPreviousPage,
+  onNextPage,
+  onZoomOut,
+  onZoomIn,
+  onFitZoomResolved,
+  onPageSizeChange,
+  onThumbnailClick,
+  onRotateSelected,
+  onDeleteSelected,
+  onMoveSelectedUp,
+  onMoveSelectedDown,
+}: AppShellProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasDocument = Boolean(document.engineHandle && pdfDocument);
+  const tabs = document.fileName
+    ? [
+        {
+          id: "active-document",
+          fileName: document.fileName,
+          active: true,
+          dirty: document.dirty,
+        },
+      ]
+    : [];
+
+  function requestOpen() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+
+    if (file) {
+      onOpenFile(file);
+    }
+  }
+
   return (
     <div className="app-shell">
       <div className="app-shell__accent-bar" aria-hidden="true" />
-      <TitleBar />
-      <CommandBar onOpen={onOpenRequested} />
+      <input
+        ref={fileInputRef}
+        className="app-shell__file-input"
+        type="file"
+        accept="application/pdf"
+        aria-label="Open PDF file"
+        onChange={handleFileInputChange}
+      />
+      <TitleBar tabs={tabs} />
+      <CommandBar
+        onOpen={requestOpen}
+        onSave={onSave}
+        onPreviousPage={onPreviousPage}
+        onNextPage={onNextPage}
+        onZoomOut={onZoomOut}
+        onZoomIn={onZoomIn}
+        currentPage={document.currentPage}
+        pageCount={document.pageCount}
+        zoom={document.zoom}
+        hasDocument={hasDocument}
+      />
       <div className="app-shell__body">
-        <ThumbnailRail />
-        <CanvasWell onOpenRequested={onOpenRequested} />
+        <ThumbnailRail
+          pdfDocument={pdfDocument}
+          pageCount={document.pageCount}
+          currentPage={document.currentPage}
+          selectedPageIndexes={selectedPageIndexes}
+          onPageClick={onThumbnailClick}
+          onRotateSelected={onRotateSelected}
+          onDeleteSelected={onDeleteSelected}
+          onMoveSelectedUp={onMoveSelectedUp}
+          onMoveSelectedDown={onMoveSelectedDown}
+        />
+        <CanvasWell
+          onOpenRequested={requestOpen}
+          onFileDropped={onOpenFile}
+          pdfDocument={pdfDocument}
+          currentPage={document.currentPage}
+          zoom={document.zoom}
+          fitWidth={document.fitWidth}
+          error={document.error}
+          onFitZoomResolved={onFitZoomResolved}
+          onPageSizeChange={onPageSizeChange}
+        />
         <ToolPanel />
       </div>
-      <StatusBar />
+      <StatusBar
+        currentPage={hasDocument ? document.currentPage : 0}
+        pageCount={hasDocument ? document.pageCount : 0}
+        pageSizeInches={hasDocument ? document.pageSizeInches : null}
+        fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
+        hasTextLayer={hasDocument ? document.hasTextLayer : null}
+      />
     </div>
   );
 }

@@ -46,6 +46,14 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("maps encrypted documents to ENCRYPTED_DOCUMENT", async () => {
+    const engine = createLocalPdfEngine();
+
+    await expect(engine.open(encryptedPdfBytes())).rejects.toMatchObject({
+      code: "ENCRYPTED_DOCUMENT",
+    });
+  });
+
   it("merges documents in order", async () => {
     const engine = createLocalPdfEngine();
     const first = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -67,6 +75,17 @@ describe("LocalPdfEngine", () => {
 
     await expectPageWidths(bytes, [200, 210, 220]);
   });
+
+  it("closes document handles and ignores unknown handles", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(engine.close(document)).resolves.toBeUndefined();
+    await expect(engine.close("local-pdf:missing" as never)).resolves.toBeUndefined();
+    await expect(engine.saveToBytes(document)).rejects.toMatchObject({
+      code: "DOCUMENT_NOT_FOUND",
+    });
+  });
 });
 
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {
@@ -77,6 +96,22 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+function encryptedPdfBytes(): Uint8Array {
+  return new TextEncoder().encode(`%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 0 /Kids [] >>
+endobj
+3 0 obj
+<< /Filter /Standard /V 1 /R 2 /O <0000000000000000000000000000000000000000000000000000000000000000> /U <0000000000000000000000000000000000000000000000000000000000000000> /P -4 >>
+endobj
+trailer
+<< /Root 1 0 R /Encrypt 3 0 R >>
+%%EOF`);
 }
 
 async function expectPageWidths(bytes: Uint8Array, expectedWidths: readonly number[]): Promise<void> {

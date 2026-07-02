@@ -157,6 +157,18 @@ describe("SidecarPdfEngine", () => {
     expect(getFormData(calls[2]).getAll("fileInput")).toHaveLength(2);
   });
 
+  it("closes document handles and ignores unknown handles", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(engine.close(document)).resolves.toBeUndefined();
+    await expect(engine.close("sidecar-pdf:missing" as never)).resolves.toBeUndefined();
+    await expect(engine.saveToBytes(document)).rejects.toMatchObject({
+      code: "DOCUMENT_NOT_FOUND",
+    });
+  });
+
   it("maps local validation failures to PdfEngineError codes", async () => {
     const { fetchImpl } = createFetch();
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
@@ -186,6 +198,17 @@ describe("SidecarPdfEngine", () => {
 
     await expect(result).rejects.toBeInstanceOf(PdfEngineError);
     await expect(result).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  });
+
+  it("maps Stirling encrypted-document errors to ENCRYPTED_DOCUMENT", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({ message: "PDF is encrypted or password protected" }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.open(bytes(1))).rejects.toMatchObject({
+      code: "ENCRYPTED_DOCUMENT",
+    });
   });
 
   it("maps Stirling page errors to INVALID_PAGE_INDEX", async () => {

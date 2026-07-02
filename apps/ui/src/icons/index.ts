@@ -24,3 +24,7 @@ export * from "./SearchIcon";
 export * from "./MinusIcon";
 export * from "./PlusIcon";
 export * from "./CheckIcon";
+export * from "./RotateIcon";
+export * from "./DeleteIcon";
+export * from "./ArrowUpIcon";
+export * from "./ArrowDownIcon";

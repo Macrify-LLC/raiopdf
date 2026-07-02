@@ -21,3 +21,11 @@
   grid-template-columns: 158px minmax(0, 1fr) 288px;
   min-height: 0;
 }
+
+.app-shell__file-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}

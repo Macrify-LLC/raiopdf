@@ -157,6 +157,57 @@ describe("SidecarPdfEngine", () => {
     expect(getFormData(calls[2]).getAll("fileInput")).toHaveLength(2);
   });
 
+  it("stamps text through add-stamp with required customMargin", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(77));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const stamped = await engine.stampText(document, {
+      text: "Exhibit A",
+      pageIndexes: [0, 2],
+      placement: { edge: "footer", align: "right" },
+      fontSizePt: 12,
+      marginIn: 0.75,
+    });
+
+    expect(await engine.saveToBytes(stamped)).toEqual(bytes(77));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/add-stamp");
+    expectFormField(calls[1], "pageNumbers", "1,3");
+    expectFormField(calls[1], "stampType", "text");
+    expectFormField(calls[1], "stampText", "Exhibit A");
+    expectFormField(calls[1], "fontSize", "12");
+    expectFormField(calls[1], "position", "9");
+    expectFormField(calls[1], "customMargin", "large");
+  });
+
+  it("maps header-center first-page stamps onto the Stirling position grid", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(78));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await engine.stampText(document, {
+      text: "Filed",
+      pageIndexes: "first",
+      placement: { edge: "header", align: "center" },
+    });
+
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/add-stamp");
+    expectFormField(calls[1], "pageNumbers", "1");
+    expectFormField(calls[1], "fontSize", "11");
+    expectFormField(calls[1], "position", "2");
+    expectFormField(calls[1], "customMargin", "medium");
+  });
+
+  it("reports sidecar binder creation as unsupported", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(engine.buildBinder(document, [], { slipSheets: false })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("runs OCR through ocr-pdf with searchable sandwich defaults", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(42));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

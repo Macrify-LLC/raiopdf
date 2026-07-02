@@ -1,8 +1,13 @@
 import type {
+  PdfBinderExhibit,
+  PdfBinderOptions,
   PdfBytes,
   PdfDocumentHandle,
   PdfEngine,
   PdfEngineErrorCode,
+  PdfPageSelection,
+  PdfStampPlacement,
+  PdfStampTextOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 
@@ -39,6 +44,9 @@ type StirlingErrorBody = {
   status?: unknown;
 };
 
+const DEFAULT_FONT_SIZE_PT = 11;
+const DEFAULT_MARGIN_IN = 0.5;
+
 /**
  * PdfEngine implementation backed by Stirling PDF's current v2 API surface.
  *
@@ -56,6 +64,15 @@ type StirlingErrorBody = {
  *   result with /api/v1/general/rearrange-pages when insertion is not an append.
  * - merge -> POST /api/v1/general/merge-pdfs with repeated fileInput parts,
  *   sortType=orderProvided, removeCertSign=true, and generateToc=false.
+ * - stampText -> POST /api/v1/misc/add-stamp with stampType=text,
+ *   customMargin always present, and position mapped onto Stirling's 1-9
+ *   grid: 1 top-left, 2 top-center, 3 top-right, 4 middle-left,
+ *   5 middle-center, 6 middle-right, 7 bottom-left, 8 bottom-center,
+ *   9 bottom-right. `marginIn` is mapped onto Stirling's small/medium/large
+ *   customMargin presets.
+ * - buildBinder is intentionally unsupported for this engine because Stirling
+ *   exposes generated merge TOCs but not caller-defined exhibit outline titles
+ *   and destinations. Use the local engine for contract-complete binders.
  * - ocr -> POST /api/v1/misc/ocr-pdf with repeated languages, ocrType,
  *   ocrRenderType=sandwich, sidecar=false, and deskew.
  */
@@ -247,6 +264,42 @@ export class SidecarPdfEngine implements PdfEngine {
     );
   }
 
+  async stampText(
+    document: PdfDocumentHandle,
+    options: PdfStampTextOptions,
+  ): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const normalizedOptions = normalizeStampOptions(options);
+    assertPageSelection(normalizedOptions.pageIndexes, pageCount);
+
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("pageNumbers", toSidecarPageNumbers(normalizedOptions.pageIndexes));
+    formData.append("stampType", "text");
+    formData.append("stampText", normalizedOptions.text);
+    formData.append("fontSize", String(normalizedOptions.fontSizePt));
+    formData.append("rotation", "0");
+    formData.append("opacity", "1");
+    formData.append("position", toSidecarStampPosition(normalizedOptions.placement));
+    formData.append("customMargin", toSidecarCustomMargin(normalizedOptions.marginIn));
+    formData.append("customColor", "#141414");
+
+    const response = await this.request("/api/v1/misc/add-stamp", formData);
+
+    return this.store(await readBytes(response), pageCount);
+  }
+
+  async buildBinder(
+    _main: PdfDocumentHandle,
+    _exhibits: readonly PdfBinderExhibit[],
+    _options: PdfBinderOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar binder creation is unsupported because Stirling PDF cannot create caller-defined exhibit outline entries.",
+    );
+  }
+
   async ocr(
     document: PdfDocumentHandle,
     options: SidecarOcrOptions = {},
@@ -395,6 +448,50 @@ function normalizeBytes(bytes: PdfBytes): Uint8Array {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
+}
+
+function normalizeStampOptions(options: PdfStampTextOptions): Required<PdfStampTextOptions> {
+  if (options.text.length === 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Stamp text must not be empty.");
+  }
+
+  const fontSizePt = options.fontSizePt ?? DEFAULT_FONT_SIZE_PT;
+  const marginIn = options.marginIn ?? DEFAULT_MARGIN_IN;
+
+  if (!Number.isFinite(fontSizePt) || fontSizePt <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "fontSizePt must be a positive number.");
+  }
+
+  if (!Number.isFinite(marginIn) || marginIn <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "marginIn must be a positive number.");
+  }
+
+  return {
+    text: options.text,
+    pageIndexes: options.pageIndexes,
+    placement: options.placement,
+    fontSizePt,
+    marginIn,
+  };
+}
+
+function toSidecarStampPosition(placement: PdfStampPlacement): string {
+  const rowOffset = placement.edge === "header" ? 0 : 6;
+  const columnOffset = placement.align === "left" ? 1 : placement.align === "center" ? 2 : 3;
+
+  return String(rowOffset + columnOffset);
+}
+
+function toSidecarCustomMargin(marginIn: number): string {
+  if (marginIn <= 0.25) {
+    return "small";
+  }
+
+  if (marginIn <= DEFAULT_MARGIN_IN) {
+    return "medium";
+  }
+
+  return "large";
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -547,6 +644,14 @@ function assertPageIndexes(pageIndexes: readonly number[], pageCount: number): v
   }
 }
 
+function assertPageSelection(selection: PdfPageSelection, pageCount: number): void {
+  if (selection === "all" || selection === "first") {
+    return;
+  }
+
+  assertPageIndexes(selection, pageCount);
+}
+
 function assertInsertIndex(insertAtPageIndex: number, pageCount: number): void {
   if (
     !Number.isInteger(insertAtPageIndex) ||
@@ -575,6 +680,18 @@ function normalizeRotation(degrees: number): number {
 
 function toOneBasedPageNumbers(pageIndexes: readonly number[]): string {
   return pageIndexes.map((pageIndex) => String(pageIndex + 1)).join(",");
+}
+
+function toSidecarPageNumbers(selection: PdfPageSelection): string {
+  if (selection === "all") {
+    return "all";
+  }
+
+  if (selection === "first") {
+    return "1";
+  }
+
+  return toOneBasedPageNumbers([...new Set(selection)]);
 }
 
 function range(startInclusive: number, endExclusive: number): number[] {

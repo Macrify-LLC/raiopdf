@@ -45,7 +45,7 @@ export function App() {
         loadedDocument = loaded;
 
         if (disposed) {
-          void loaded.cleanup();
+          void loaded.loadingTask.destroy();
           return;
         }
 
@@ -59,7 +59,7 @@ export function App() {
 
     return () => {
       disposed = true;
-      void loadedDocument?.cleanup();
+      void loadedDocument?.loadingTask.destroy();
     };
   }, [document.bytes, setError]);
 
@@ -176,8 +176,10 @@ export function App() {
       Math.min(indexes[0] ?? 0, document.pageCount - indexes.length - 1),
     );
 
-    void deletePages(indexes).then(() => {
-      setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+    void deletePages(indexes).then((deleted) => {
+      if (deleted) {
+        setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+      }
     });
   }, [deletePages, document.pageCount, selectedIndexes, setError]);
 
@@ -233,8 +235,10 @@ export function App() {
         }
       });
 
-      void reorderPages(order, nextCurrentPage).then(() => {
-        setSelectedPageIndexes(nextSelectedPageIndexes);
+      void reorderPages(order, nextCurrentPage).then((reordered) => {
+        if (reordered) {
+          setSelectedPageIndexes(nextSelectedPageIndexes);
+        }
       });
     },
     [document.currentPage, document.pageCount, reorderPages, selectedIndexes],

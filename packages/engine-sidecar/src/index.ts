@@ -97,6 +97,10 @@ export class SidecarPdfEngine implements PdfEngine {
     return this.store(normalizedBytes, pageCount);
   }
 
+  async close(document: PdfDocumentHandle): Promise<void> {
+    this.documents.delete(document);
+  }
+
   async pageCount(document: PdfDocumentHandle): Promise<number> {
     const storedDocument = this.get(document);
 
@@ -474,6 +478,10 @@ function readErrorMessage(errorBody: StirlingErrorBody | null): string | null {
 
 function mapHttpStatusToErrorCode(status: number, message: string): PdfEngineErrorCode {
   const normalizedMessage = message.toLowerCase();
+
+  if (normalizedMessage.includes("encrypted") || normalizedMessage.includes("password")) {
+    return "ENCRYPTED_DOCUMENT";
+  }
 
   if (normalizedMessage.includes("page")) {
     return "INVALID_PAGE_INDEX";

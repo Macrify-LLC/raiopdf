@@ -8,6 +8,7 @@ export type PdfDocumentHandle = string & {
 
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
+  | "ENCRYPTED_DOCUMENT"
   /** Operation would create a PDF with no pages. */
   | "EMPTY_RESULT"
   | "EMPTY_INPUT"
@@ -32,6 +33,13 @@ export class PdfEngineError extends Error {
 export interface PdfEngine {
   /** Opens a PDF byte buffer and returns an opaque handle for later engine calls. */
   open(bytes: PdfBytes): Promise<PdfDocumentHandle>;
+
+  /**
+   * Releases engine-owned resources for an opened document handle.
+   *
+   * Closing an unknown or already-closed handle is a no-op.
+   */
+  close(document: PdfDocumentHandle): Promise<void>;
 
   /** Returns the number of pages in an opened document. */
   pageCount(document: PdfDocumentHandle): Promise<number>;

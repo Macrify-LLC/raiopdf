@@ -49,7 +49,11 @@ function formatInches(value: number): string {
 
 function formatFileSize(fileSizeBytes: number | null): string {
   if (!fileSizeBytes) {
-    return "0 MB";
+    return "0 KB";
+  }
+
+  if (fileSizeBytes < 1_000_000) {
+    return `${Math.max(1, Math.round(fileSizeBytes / 1_000))} KB`;
   }
 
   return `${(fileSizeBytes / 1_000_000).toFixed(1)} MB`;

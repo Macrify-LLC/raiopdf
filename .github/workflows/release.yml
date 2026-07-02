@@ -171,8 +171,10 @@ jobs:
           Path(sys.argv[1]).write_text(settings, encoding="utf-8")
           PY
 
-          INPUT_PDF="$TMP_DIR/image-only.pdf"
-          OUTPUT_PDF="$TMP_DIR/ocr-output.pdf"
+          # native Windows python/curl cannot resolve msys /tmp paths — use mixed form (D:/...)
+          TMP_MIXED=$(cygpath -m "$TMP_DIR")
+          INPUT_PDF="$TMP_MIXED/image-only.pdf"
+          OUTPUT_PDF="$TMP_MIXED/ocr-output.pdf"
           python3 - "$INPUT_PDF" <<'PY'
           import sys
 

@@ -17,8 +17,10 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
     acceptDownloads: true,
     baseURL: "http://127.0.0.1:4173",
-    launchOptions: {
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ?? "/snap/bin/chromium",
-    },
+    // Override only when explicitly pointed at a system browser; otherwise use
+    // Playwright's own managed chromium (installed in CI via `playwright install`).
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
+      : {},
   },
 });

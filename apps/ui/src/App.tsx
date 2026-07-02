@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { AppShell } from "./components/AppShell";
+import { BinderWorkspace } from "./components/BinderWorkspace";
+import {
+  OrganizeWorkspace,
+  type OrganizeFlowId,
+} from "./components/OrganizeWorkspace";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -15,6 +20,7 @@ import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
+import type { LegalToolId, OrganizeToolId } from "./components/ToolPanel";
 
 const ZOOM_STEP = 0.25;
 
@@ -46,6 +52,12 @@ export function App() {
     rotatePages,
     deletePages,
     reorderPages,
+    mergeWithFiles,
+    extractPages,
+    splitPages,
+    insertFile,
+    cropResizePages,
+    buildBinder,
     save: saveDocument,
     markSaved,
   } = useDocument();
@@ -58,6 +70,12 @@ export function App() {
     phase: "idle",
     message: null,
   });
+  const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
+    "prepare-for-filing",
+  );
+  const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
+    null,
+  );
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
 
@@ -462,6 +480,92 @@ export function App() {
       });
   }, [markSaved, saveDocument, setError]);
 
+  const selectLegalTool = useCallback((toolId: LegalToolId) => {
+    setActiveLegalTool(toolId);
+
+    if (toolId === "combine-exhibits") {
+      setActiveOrganizeTool(null);
+    }
+  }, []);
+
+  const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
+    setActiveOrganizeTool(toolId);
+    setActiveLegalTool(null);
+  }, []);
+
+  const closeWorkspace = useCallback(() => {
+    setActiveOrganizeTool(null);
+
+    if (activeLegalTool === "combine-exhibits") {
+      setActiveLegalTool("prepare-for-filing");
+    }
+  }, [activeLegalTool]);
+
+  const splitAndSavePages = useCallback(
+    async (pageGroups: readonly (readonly number[])[]) => {
+      const parts = await splitPages(
+        pageGroups,
+        stripPdfExtension(document.fileName ?? "Untitled"),
+      );
+
+      if (!parts) {
+        return null;
+      }
+
+      const saved = [];
+      for (const part of parts) {
+        const written = await filePort.saveFile(part.bytes, part.fileName, null);
+
+        if (written) {
+          saved.push(written);
+        }
+      }
+
+      return saved;
+    },
+    [document.fileName, splitPages],
+  );
+
+  const cropResize = useCallback(
+    async (
+      pageIndexes: readonly number[],
+      options: { cropMarginIn: number; resizePreset: "original" | "letter" | "legal" },
+    ) => {
+      if (!document.bytes) {
+        setError("Open a PDF before cropping pages.");
+        return false;
+      }
+
+      try {
+        return await cropResizePages(pageIndexes, options);
+      } catch {
+        setError("The pages could not be cropped. Check the range and try again.");
+        return false;
+      }
+    },
+    [cropResizePages, document.bytes, setError],
+  );
+
+  const workspace = activeLegalTool === "combine-exhibits" ? (
+    <BinderWorkspace
+      document={document}
+      onBuildBinder={buildBinder}
+      onOpenRequested={openFile}
+      onCancel={closeWorkspace}
+    />
+  ) : activeOrganizeTool ? (
+    <OrganizeWorkspace
+      flow={activeOrganizeTool as OrganizeFlowId}
+      document={document}
+      onCancel={closeWorkspace}
+      onMerge={mergeWithFiles}
+      onExtract={extractPages}
+      onSplit={splitAndSavePages}
+      onInsert={insertFile}
+      onCropResize={cropResize}
+    />
+  ) : null;
+
   return (
     <AppShell
       document={document}
@@ -484,7 +588,16 @@ export function App() {
       ocrState={ocrState}
       ocrAvailable={engineBridge.available}
       ocrStarting={engineBridge.starting}
+      workspace={workspace}
+      activeLegalTool={activeLegalTool}
+      activeOrganizeTool={activeOrganizeTool}
+      onLegalToolSelected={selectLegalTool}
+      onOrganizeToolSelected={selectOrganizeTool}
       onMakeSearchable={makeSearchable}
     />
   );
+}
+
+function stripPdfExtension(fileName: string): string {
+  return fileName.replace(/\.pdf$/i, "");
 }

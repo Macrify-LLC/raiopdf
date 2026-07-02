@@ -1,4 +1,4 @@
-import { useRef, type ChangeEvent, type MouseEvent } from "react";
+import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 import type { OcrUiState } from "../App";
 import type { DocumentState } from "../hooks/useDocument";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
@@ -7,7 +7,7 @@ import { CommandBar } from "./CommandBar";
 import { StatusBar } from "./StatusBar";
 import { ThumbnailRail } from "./ThumbnailRail";
 import { TitleBar } from "./TitleBar";
-import { ToolPanel } from "./ToolPanel";
+import { ToolPanel, type LegalToolId, type OrganizeToolId } from "./ToolPanel";
 import "./AppShell.css";
 
 export interface AppShellProps {
@@ -31,6 +31,11 @@ export interface AppShellProps {
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
+  workspace: ReactNode;
+  activeLegalTool: string | null;
+  activeOrganizeTool: string | null;
+  onLegalToolSelected: (toolId: LegalToolId) => void;
+  onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
 }
 
@@ -55,10 +60,15 @@ export function AppShell({
   ocrState,
   ocrAvailable,
   ocrStarting,
+  workspace,
+  activeLegalTool,
+  activeOrganizeTool,
+  onLegalToolSelected,
+  onOrganizeToolSelected,
   onMakeSearchable,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasDocument = Boolean(document.engineHandle && pdfDocument);
+  const hasDocument = Boolean(document.engineHandle && document.bytes);
   const tabs = document.fileName
     ? [
         {
@@ -120,6 +130,7 @@ export function AppShell({
           onMoveSelectedDown={onMoveSelectedDown}
         />
         <CanvasWell
+          workspace={workspace}
           onOpenRequested={requestOpen}
           onFileDropped={onFileDropped}
           pdfDocument={pdfDocument}
@@ -135,12 +146,16 @@ export function AppShell({
           ocrState={ocrState}
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
+          activeLegalTool={activeLegalTool}
+          activeOrganizeTool={activeOrganizeTool}
+          onLegalToolSelected={onLegalToolSelected}
+          onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}
         />
       </div>
       <StatusBar
-        currentPage={hasDocument ? document.currentPage : 0}
-        pageCount={hasDocument ? document.pageCount : 0}
+        currentPage={hasDocument ? document.currentPage : null}
+        pageCount={hasDocument ? document.pageCount : null}
         pageSizeInches={hasDocument ? document.pageSizeInches : null}
         fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
         hasTextLayer={hasDocument ? document.hasTextLayer : null}

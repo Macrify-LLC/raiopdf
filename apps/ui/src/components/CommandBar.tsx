@@ -85,9 +85,13 @@ export function CommandBar({
             onClick={onPreviousPage}
             disabled={!hasDocument || currentPage <= 1}
           />
-          <span className="command-bar__page-label">
-            Page <b>{hasDocument ? currentPage : 0}</b> / {pageCount}
-          </span>
+          {hasDocument ? (
+            <span className="command-bar__page-label">
+              Page <b>{currentPage}</b> / {pageCount}
+            </span>
+          ) : (
+            <span className="command-bar__page-label">No document</span>
+          )}
           <IconButton
             icon={<ChevronRightIcon size={15} />}
             label="Next page"

@@ -5,6 +5,7 @@ import type {
   PdfDocumentHandle,
   PdfEngine,
   PdfEngineErrorCode,
+  PdfPageSizePoints,
   PdfPageSelection,
   PdfStampPlacement,
   PdfStampTextOptions,
@@ -221,6 +222,28 @@ export class SidecarPdfEngine implements PdfEngine {
     const response = await this.request("/api/v1/general/remove-pages", formData);
 
     return this.store(await readBytes(response), outputPageCount);
+  }
+
+  async cropPages(
+    _document: PdfDocumentHandle,
+    _pageIndexes: readonly number[],
+    _marginIn: number,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar crop operations are unsupported until the Stirling PDF crop endpoint contract is verified.",
+    );
+  }
+
+  async resizePages(
+    _document: PdfDocumentHandle,
+    _pageIndexes: readonly number[],
+    _pageSize: PdfPageSizePoints,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Sidecar resize operations are unsupported until the Stirling PDF scale-pages endpoint contract is verified.",
+    );
   }
 
   async insertPages(

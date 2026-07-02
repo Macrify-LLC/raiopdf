@@ -5,19 +5,25 @@ import {
   BoltIcon,
   CombineExhibitsIcon,
   CommentIcon,
+  CropIcon,
   EditIcon,
+  ExtractIcon,
+  InsertIcon,
   OcrSearchIcon,
   OrganizeIcon,
   RedactIcon,
   ScaleIcon,
   ScrubMetadataIcon,
   ShieldCheckIcon,
+  SplitIcon,
 } from "../icons";
 import { AccordionGroup } from "./AccordionGroup";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
 type GroupId = "edit" | "organize" | "comment" | "legal";
+export type LegalToolId = typeof LEGAL_TOOLS[number]["id"];
+export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
 
 const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
@@ -29,11 +35,23 @@ const LEGAL_TOOLS = [
   { id: "scrub-metadata", label: "Scrub Metadata", icon: <ScrubMetadataIcon size={16} /> },
 ] as const;
 
+const ORGANIZE_TOOLS = [
+  { id: "merge", label: "Merge PDFs...", icon: <CombineExhibitsIcon size={16} /> },
+  { id: "split", label: "Split by Pages...", icon: <SplitIcon size={16} /> },
+  { id: "extract", label: "Extract Pages...", icon: <ExtractIcon size={16} /> },
+  { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
+  { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
+] as const;
+
 export interface ToolPanelProps {
   hasDocument: boolean;
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
+  activeLegalTool: string | null;
+  activeOrganizeTool: string | null;
+  onLegalToolSelected: (toolId: LegalToolId) => void;
+  onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
 }
 
@@ -42,19 +60,20 @@ export function ToolPanel({
   ocrState,
   ocrAvailable,
   ocrStarting,
+  activeLegalTool,
+  activeOrganizeTool,
+  onLegalToolSelected,
+  onOrganizeToolSelected,
   onMakeSearchable,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
-  const [selectedLegalTool, setSelectedLegalTool] = useState<string>(
-    "prepare-for-filing",
-  );
 
   function toggleGroup(group: GroupId) {
     setOpenGroup((current) => (current === group ? null : group));
   }
 
   function selectLegalTool(toolId: string) {
-    setSelectedLegalTool(toolId);
+    onLegalToolSelected(toolId as LegalToolId);
 
     if (toolId === "make-searchable") {
       if (isOcrActive(ocrState.phase, ocrStarting)) {
@@ -76,7 +95,15 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        <p className="accordion-group__empty">More tools coming soon.</p>
+        {ORGANIZE_TOOLS.map((tool) => (
+          <ToolRow
+            key={tool.id}
+            icon={tool.icon}
+            label={tool.label}
+            selected={activeOrganizeTool === tool.id}
+            onSelect={() => onOrganizeToolSelected(tool.id)}
+          />
+        ))}
       </AccordionGroup>
 
       <AccordionGroup
@@ -108,7 +135,7 @@ export function ToolPanel({
         onToggle={() => toggleGroup("legal")}
       >
         {LEGAL_TOOLS.map((tool) => {
-          const selected = selectedLegalTool === tool.id;
+          const selected = activeLegalTool === tool.id;
           const disabled = tool.id === "make-searchable" && isOcrActive(ocrState.phase, ocrStarting);
 
           return (

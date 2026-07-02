@@ -4,6 +4,8 @@ coverage/
 .turbo/
 .vite/
 target/
+engine/upstream/
+engine/dist/
 src-tauri/gen/
 **/src-tauri/gen/
 

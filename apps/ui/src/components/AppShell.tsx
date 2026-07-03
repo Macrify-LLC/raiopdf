@@ -7,7 +7,12 @@ import { CommandBar } from "./CommandBar";
 import { StatusBar } from "./StatusBar";
 import { ThumbnailRail } from "./ThumbnailRail";
 import { TitleBar } from "./TitleBar";
-import { ToolPanel, type LegalToolId, type OrganizeToolId } from "./ToolPanel";
+import {
+  ToolPanel,
+  type EditDialogToolId,
+  type LegalToolId,
+  type OrganizeToolId,
+} from "./ToolPanel";
 import type {
   RedactionPanelState,
   ScannerPanelState,
@@ -44,7 +49,9 @@ export interface AppShellProps {
   workspace: ReactNode;
   overlay: ReactNode;
   activeLegalTool: string | null;
+  activeEditDialogTool: EditDialogToolId | null;
   activeOrganizeTool: string | null;
+  onEditDialogToolSelected: (toolId: EditDialogToolId) => void;
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
@@ -87,7 +94,9 @@ export function AppShell({
   workspace,
   overlay,
   activeLegalTool,
+  activeEditDialogTool,
   activeOrganizeTool,
+  onEditDialogToolSelected,
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
@@ -194,9 +203,11 @@ export function AppShell({
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
           activeEditTool={editing.tool}
+          activeEditDialogTool={activeEditDialogTool}
           activeLegalTool={activeLegalTool}
           activeOrganizeTool={activeOrganizeTool}
           onEditToolSelected={editing.setTool}
+          onEditDialogToolSelected={onEditDialogToolSelected}
           onLegalToolSelected={onLegalToolSelected}
           onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}

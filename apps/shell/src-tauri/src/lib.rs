@@ -320,6 +320,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:export-pdfa", "Export PDF/A...")
         .text("file:print", "Print...")
         .text("file:protect", "Protect (passwords)...")
+        .text("file:properties", "Document Properties")
         .separator()
         .text("file:preferences", "Preferences...")
         .separator()

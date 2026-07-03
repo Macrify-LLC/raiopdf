@@ -19,6 +19,7 @@ import {
   CropIcon,
   DeleteIcon,
   ExtractIcon,
+  ImageIcon,
   InsertIcon,
   PlusIcon,
   RotateIcon,
@@ -44,6 +45,7 @@ export interface OrganizeWorkspaceProps {
   onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+  onExportPageAsImage?: (pageIndex: number) => Promise<boolean>;
   onCropResize: (
     pageIndexes: readonly number[],
     options: { cropMarginIn: number; resizePreset: ResizePreset },
@@ -66,6 +68,7 @@ export function OrganizeWorkspace({
   onExtract,
   onSplit,
   onInsert,
+  onExportPageAsImage,
   onCropResize,
 }: OrganizeWorkspaceProps) {
   const title = getFlowTitle(flow);
@@ -97,6 +100,7 @@ export function OrganizeWorkspace({
         onExtract={onExtract}
         onSplit={onSplit}
         onInsert={onInsert}
+        onExportPageAsImage={onExportPageAsImage}
       />
     );
   }
@@ -142,6 +146,7 @@ function OrganizePagesGrid({
   onExtract,
   onSplit,
   onInsert,
+  onExportPageAsImage,
 }: {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
@@ -156,6 +161,7 @@ function OrganizePagesGrid({
   onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+  onExportPageAsImage?: ((pageIndex: number) => Promise<boolean>) | undefined;
 }) {
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
@@ -198,6 +204,19 @@ function OrganizePagesGrid({
     } catch {
       setStatus("This PDF could not be opened. Check the file and try again.");
     }
+  }
+
+  async function exportSelectionAsImage() {
+    const pageIndex = selectedIndexes[0];
+
+    if (pageIndex === undefined || !onExportPageAsImage) {
+      setStatus("Select one page before exporting an image.");
+      return;
+    }
+
+    setStatus("Exporting page image...");
+    const exported = await onExportPageAsImage(pageIndex);
+    setStatus(exported ? "Page image saved." : "The page image could not be exported.");
   }
 
   async function dropOn(targetPageIndex: number) {
@@ -278,6 +297,10 @@ function OrganizePagesGrid({
         <button type="button" className="organize-secondary" onClick={() => setSplitOpen(true)}>
           <SplitIcon size={15} />
           Split Document...
+        </button>
+        <button type="button" className="organize-secondary" disabled={selectedCount !== 1} onClick={exportSelectionAsImage}>
+          <ImageIcon size={15} />
+          Export page as image...
         </button>
         <span className="organize-pages__toolbar-spacer" aria-hidden="true" />
         <button type="button" className="organize-secondary" disabled={selectedCount === 0 || !canMoveUp} onClick={onMoveSelectedUp}>

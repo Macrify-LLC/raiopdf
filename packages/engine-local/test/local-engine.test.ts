@@ -272,6 +272,34 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 2, "RAIO-0009");
   });
 
+  it("stamps simple page numbers on selected pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 300]]));
+
+    const numbered = await engine.pageNumbers(document, {
+      startAt: 3,
+      pageIndexes: "all",
+      format: "page-of-total",
+      placement: { edge: "footer", align: "center" },
+    });
+    const bytes = await engine.saveToBytes(numbered);
+
+    await expectPageContentToContainLabel(bytes, 0, "Page 3 of 2");
+    await expectPageContentToContainLabel(bytes, 1, "Page 4 of 2");
+  });
+
+  it("inserts PNG images as full pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [220, 300]]));
+
+    const inserted = await engine.insertImagePages(document, 1, [
+      { bytes: onePixelPng(), format: "png" },
+    ]);
+    const bytes = await engine.saveToBytes(inserted);
+
+    await expectPageWidths(bytes, [200, 1, 220]);
+  });
+
   it("rejects Bates numbers that overflow the configured digit width", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
@@ -386,6 +414,13 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+function onePixelPng(): Uint8Array {
+  return new Uint8Array(Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "base64",
+  ));
 }
 
 async function createPdfWithRotatedLandscapePage(): Promise<Uint8Array> {

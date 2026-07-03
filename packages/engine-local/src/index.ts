@@ -5,6 +5,7 @@ import type {
   PdfBytes,
   PdfAConversionOptions,
   PdfCommentEdit,
+  PdfCompressOptions,
   PdfDocumentHandle,
   PdfEdit,
   PdfEditColor,
@@ -13,19 +14,24 @@ import type {
   PdfFormFieldValue,
   PdfFormValuesEdit,
   PdfHighlightEdit,
+  PdfImagePageInput,
   PdfImageEdit,
   PdfInkEdit,
   PdfNormalizePagesOptions,
   PdfPageSizePoints,
+  PdfPageNumbersOptions,
   PdfPageSelection,
   PdfRedactTextOptions,
   PdfRedactionArea,
+  PdfSanitizeOptions,
+  PdfSanitizeResult,
   PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextBoxEdit,
   PdfTextRegion,
+  PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
@@ -70,6 +76,8 @@ const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
 const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
 const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
 const DEFAULT_TEXT_BOX_FONT_SIZE_PT = 12;
+const DEFAULT_WATERMARK_FONT_SIZE_PT = 48;
+const DEFAULT_WATERMARK_OPACITY = 0.18;
 const TEXT_BOX_LINE_HEIGHT_FACTOR = 1.2;
 const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 const COMMENT_ICON_SIZE_PT = 20;
@@ -348,6 +356,33 @@ export class LocalPdfEngine implements PdfEngine {
     );
   }
 
+  async compress(
+    _document: PdfDocumentHandle,
+    _options: PdfCompressOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF compression requires the desktop sidecar engine; the local pdf-lib engine cannot downsample arbitrary PDF content.",
+    );
+  }
+
+  async sanitize(
+    _document: PdfDocumentHandle,
+    _options: PdfSanitizeOptions = {},
+  ): Promise<PdfSanitizeResult> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF sanitizing requires the desktop sidecar engine; the local pdf-lib engine cannot remove active document content safely.",
+    );
+  }
+
+  async repair(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF repair requires the desktop sidecar engine; the local pdf-lib engine only opens already-readable PDFs.",
+    );
+  }
+
   async insertPages(
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
@@ -458,6 +493,79 @@ export class LocalPdfEngine implements PdfEngine {
 
       await stampTextInPlace(output, stampOptions);
     }
+
+    return this.store(await output.save());
+  }
+
+  async pageNumbers(
+    document: PdfDocumentHandle,
+    options: PdfPageNumbersOptions,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const normalizedOptions = normalizePageNumbersOptions(options);
+    const pageCount = output.getPageCount();
+    const pageIndexes = resolvePageSelection(normalizedOptions.pageIndexes, pageCount);
+
+    for (const [offset, pageIndex] of pageIndexes.entries()) {
+      const pageNumber = normalizedOptions.startAt + offset;
+      await stampTextInPlace(output, {
+        text: normalizedOptions.format === "page-of-total"
+          ? `Page ${pageNumber} of ${pageCount}`
+          : String(pageNumber),
+        pageIndexes: [pageIndex],
+        placement: normalizedOptions.placement,
+        fontSizePt: normalizedOptions.fontSizePt,
+        marginIn: normalizedOptions.marginIn,
+      });
+    }
+
+    return this.store(await output.save());
+  }
+
+  async watermark(
+    document: PdfDocumentHandle,
+    options: PdfWatermarkOptions,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const normalizedOptions = normalizeWatermarkOptions(options);
+    const pageIndexes = resolvePageSelection(normalizedOptions.pageIndexes, output.getPageCount());
+    const font = await output.embedFont(StandardFonts.HelveticaBold);
+
+    for (const pageIndex of pageIndexes) {
+      drawWatermarkText(output.getPage(pageIndex), font, normalizedOptions);
+    }
+
+    return this.store(await output.save());
+  }
+
+  async insertImagePages(
+    document: PdfDocumentHandle,
+    insertAtPageIndex: number,
+    images: readonly PdfImagePageInput[],
+  ): Promise<PdfDocumentHandle> {
+    if (images.length === 0) {
+      throw new PdfEngineError("EMPTY_INPUT", "At least one image is required.");
+    }
+
+    const source = await this.load(document);
+    const sourcePageCount = source.getPageCount();
+    assertInsertIndex(insertAtPageIndex, sourcePageCount);
+
+    const output = await PDFDocument.create();
+    await copyPagesInto(output, source, source.getPageIndices().slice(0, insertAtPageIndex));
+
+    for (const imageInput of images) {
+      const image = await embedImagePage(output, imageInput);
+      const page = output.addPage([image.width, image.height]);
+      page.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: image.width,
+        height: image.height,
+      });
+    }
+
+    await copyPagesInto(output, source, source.getPageIndices().slice(insertAtPageIndex));
 
     return this.store(await output.save());
   }
@@ -751,6 +859,35 @@ function drawStampText(
   });
 }
 
+function drawWatermarkText(
+  page: ReturnType<PDFDocument["getPage"]>,
+  font: Awaited<ReturnType<PDFDocument["embedFont"]>>,
+  options: Required<PdfWatermarkOptions>,
+): void {
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const visualWidth = isSidewaysRotation(pageRotation) ? page.getHeight() : page.getWidth();
+  const visualHeight = isSidewaysRotation(pageRotation) ? page.getWidth() : page.getHeight();
+  const textWidth = font.widthOfTextAtSize(options.text, options.fontSizePt);
+  const anchor = mapVisualPointToPagePoint({
+    visualX: (visualWidth - textWidth) / 2,
+    visualY: visualHeight / 2,
+    pageWidth: page.getWidth(),
+    pageHeight: page.getHeight(),
+    pageRotation,
+  });
+  const rotation = normalizeRotation(pageRotation + (options.orientation === "diagonal" ? 45 : 0));
+
+  page.drawText(options.text, {
+    x: anchor.x,
+    y: anchor.y,
+    size: options.fontSizePt,
+    font,
+    color: rgb(0.35, 0.35, 0.35),
+    opacity: options.opacity,
+    rotate: pdfDegrees(rotation),
+  });
+}
+
 function computeStampPosition(options: {
   pageWidth: number;
   pageHeight: number;
@@ -993,6 +1130,23 @@ async function embedEditImage(
     throw new PdfEngineError(
       "INVALID_DOCUMENT",
       `Edit image bytes could not be decoded as ${edit.format}.`,
+      { cause: error },
+    );
+  }
+}
+
+async function embedImagePage(
+  pdf: PDFDocument,
+  image: PdfImagePageInput,
+): Promise<Awaited<ReturnType<PDFDocument["embedPng"]>>> {
+  try {
+    return image.format === "png"
+      ? await pdf.embedPng(image.bytes)
+      : await pdf.embedJpg(image.bytes);
+  } catch (error) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Image page bytes could not be decoded as ${image.format}.`,
       { cause: error },
     );
   }
@@ -1300,6 +1454,48 @@ function normalizeBatesOptions(options: PdfBatesStampOptions): PdfBatesStampOpti
   }
 
   return options;
+}
+
+function normalizePageNumbersOptions(
+  options: PdfPageNumbersOptions,
+): Required<PdfPageNumbersOptions> {
+  if (!Number.isInteger(options.startAt) || options.startAt < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Page numbering start must be a non-negative integer.");
+  }
+
+  const fontSizePt = options.fontSizePt ?? DEFAULT_FONT_SIZE_PT;
+  const marginIn = options.marginIn ?? DEFAULT_MARGIN_IN;
+  assertPositiveNumber(fontSizePt, "fontSizePt");
+  assertPositiveNumber(marginIn, "marginIn");
+
+  return {
+    startAt: options.startAt,
+    pageIndexes: options.pageIndexes,
+    format: options.format,
+    placement: options.placement,
+    fontSizePt,
+    marginIn,
+  };
+}
+
+function normalizeWatermarkOptions(options: PdfWatermarkOptions): Required<PdfWatermarkOptions> {
+  assertNonEmptyText(options.text);
+
+  const fontSizePt = options.fontSizePt ?? DEFAULT_WATERMARK_FONT_SIZE_PT;
+  const opacity = options.opacity ?? DEFAULT_WATERMARK_OPACITY;
+  assertPositiveNumber(fontSizePt, "fontSizePt");
+
+  if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Watermark opacity must be between 0 and 1.");
+  }
+
+  return {
+    text: options.text,
+    pageIndexes: options.pageIndexes,
+    orientation: options.orientation,
+    opacity,
+    fontSizePt,
+  };
 }
 
 function assertBatesFitsPageCount(options: PdfBatesStampOptions, pageCount: number): void {

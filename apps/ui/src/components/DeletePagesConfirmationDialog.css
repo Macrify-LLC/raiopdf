@@ -1,0 +1,62 @@
+.delete-pages-confirmation {
+  display: grid;
+  gap: var(--space-3);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.delete-pages-confirmation p {
+  margin: 0;
+}
+
+.delete-pages-confirmation__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.delete-pages-confirmation__secondary-button,
+.delete-pages-confirmation__danger-button {
+  min-height: 30px;
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0 var(--space-3);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+  transition:
+    background-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.delete-pages-confirmation__secondary-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--body);
+}
+
+.delete-pages-confirmation__secondary-button:hover {
+  background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.delete-pages-confirmation__danger-button {
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: var(--on-primary);
+}
+
+.delete-pages-confirmation__danger-button:hover {
+  background: color-mix(in srgb, var(--danger) 88%, black);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.delete-pages-confirmation__secondary-button:active,
+.delete-pages-confirmation__danger-button:active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
+}

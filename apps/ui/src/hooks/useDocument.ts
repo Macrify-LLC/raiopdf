@@ -426,13 +426,13 @@ export function useDocument() {
   }, []);
 
   const rotatePages = useCallback(
-    async (pageIndexes: readonly number[]) => {
+    async (pageIndexes: readonly number[], degrees = 90) => {
       if (pageIndexes.length === 0) {
         return false;
       }
 
       return enqueueMutation("rotate", async ({ handle }) => ({
-        engineHandle: await engine.rotatePages(handle, pageIndexes, 90),
+        engineHandle: await engine.rotatePages(handle, pageIndexes, degrees),
         options: { dirty: true },
       }));
     },

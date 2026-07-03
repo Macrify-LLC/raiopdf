@@ -74,6 +74,7 @@ import {
   CrashReportDialog,
   type CrashReportPayload,
 } from "./components/CrashReportDialog";
+import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
@@ -88,6 +89,7 @@ import { useDocument, type DocumentState } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
+import { isTextEntryTarget } from "./lib/domGuards";
 import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
 import {
   getPdfLoadErrorMessage,
@@ -270,6 +272,9 @@ export function App() {
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
+  const [pageDeleteConfirmation, setPageDeleteConfirmation] = useState<
+    readonly number[] | null
+  >(null);
   const [ocrState, setOcrState] = useState<OcrUiState>({
     phase: "idle",
     message: null,
@@ -1350,6 +1355,34 @@ export function App() {
     void rotatePages(selectedIndexes());
   }, [rotatePages, selectedIndexes]);
 
+  /** Context-menu rotate: acts on exactly the right-clicked page, independent
+   * of whatever the current multi-selection happens to be. */
+  const rotatePage = useCallback(
+    (pageIndex: number, degrees: number) => {
+      void rotatePages([pageIndex], degrees);
+    },
+    [rotatePages],
+  );
+
+  const runDeletePages = useCallback(
+    (indexes: readonly number[]) => {
+      const nextSelectedPageIndex = Math.max(
+        0,
+        Math.min(indexes[0] ?? 0, document.pageCount - indexes.length - 1),
+      );
+
+      void deletePages(indexes).then((deleted) => {
+        if (deleted) {
+          setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+        }
+      });
+    },
+    [deletePages, document.pageCount],
+  );
+
+  // Page deletion is destructive, so both entry points below only *request*
+  // it -- the actual delete happens from confirmDeletePagesRequest, once the
+  // DeletePagesConfirmationDialog is accepted.
   const deleteSelected = useCallback(() => {
     const indexes = selectedIndexes();
 
@@ -1362,25 +1395,34 @@ export function App() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Delete ${indexes.length} selected ${indexes.length === 1 ? "page" : "pages"}?`,
-    );
+    setPageDeleteConfirmation(indexes);
+  }, [document.pageCount, selectedIndexes, setError]);
 
-    if (!confirmed) {
-      return;
-    }
-
-    const nextSelectedPageIndex = Math.max(
-      0,
-      Math.min(indexes[0] ?? 0, document.pageCount - indexes.length - 1),
-    );
-
-    void deletePages(indexes).then((deleted) => {
-      if (deleted) {
-        setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+  /** Context-menu delete: targets exactly the right-clicked page. */
+  const requestDeletePage = useCallback(
+    (pageIndex: number) => {
+      if (document.pageCount <= 1) {
+        setError("A document must keep at least one page.");
+        return;
       }
-    });
-  }, [deletePages, document.pageCount, selectedIndexes, setError]);
+
+      setPageDeleteConfirmation([pageIndex]);
+    },
+    [document.pageCount, setError],
+  );
+
+  const cancelDeletePagesRequest = useCallback(() => {
+    setPageDeleteConfirmation(null);
+  }, []);
+
+  const confirmDeletePagesRequest = useCallback(() => {
+    const indexes = pageDeleteConfirmation;
+    setPageDeleteConfirmation(null);
+
+    if (indexes && indexes.length > 0) {
+      runDeletePages(indexes);
+    }
+  }, [pageDeleteConfirmation, runDeletePages]);
 
   const moveSelected = useCallback(
     (direction: -1 | 1) => {
@@ -1557,7 +1599,13 @@ export function App() {
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
     if (toolId === "rotate") {
       rotateSelected();
-      setActiveOrganizeTool(null);
+      // The sidebar's "Rotate Pages" row is a standalone action from the
+      // plain canvas, but when the Organize Pages workspace is already open
+      // it must stay open -- rotating shouldn't kick the reader back to the
+      // canvas. Read the current value functionally so this stays a no-op
+      // dependency (the callback below doesn't need to be recreated when
+      // activeOrganizeTool changes).
+      setActiveOrganizeTool((current) => (current === "pages" ? current : null));
       setActiveLegalTool(null);
       return;
     }
@@ -2972,6 +3020,8 @@ export function App() {
       onPageSelected={handleThumbnailClick}
       onRotateSelected={rotateSelected}
       onDeleteSelected={deleteSelected}
+      onRotatePage={rotatePage}
+      onDeletePageRequested={requestDeletePage}
       onMoveSelectedUp={() => moveSelected(-1)}
       onMoveSelectedDown={() => moveSelected(1)}
       onReorderPages={reorderPagesFromGrid}
@@ -3297,6 +3347,13 @@ export function App() {
           pageCount={document.pageCount}
           onConfirm={confirmOcrDialog}
           onCancel={cancelOcrDialog}
+        />
+      ) : null}
+      {pageDeleteConfirmation ? (
+        <DeletePagesConfirmationDialog
+          pageCount={pageDeleteConfirmation.length}
+          onConfirm={confirmDeletePagesRequest}
+          onCancel={cancelDeletePagesRequest}
         />
       ) : null}
       {helpOpen ? (
@@ -4265,14 +4322,6 @@ function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   }
 
   return "external links";
-}
-
-function isTextEntryTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
 function formatBytes(bytes: number): string {

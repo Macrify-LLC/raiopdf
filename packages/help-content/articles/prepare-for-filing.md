@@ -37,8 +37,9 @@ you get it split into properly labeled, sequential parts instead.
 
 - **Sets the page size and format.** Every page is normalized to letter-size,
   portrait — the shape portals expect.
-- **Splits oversized filings.** If the file is over the portal's limit, it's
-  divided into sequential, clearly named parts.
+- **Splits oversized filings to your court's limit.** Pick your court and RaioPDF
+  uses that court's file-size cap — if the file is over it, it's divided into
+  sequential, clearly named parts. You can also save a custom size limit for a court.
 - **Checks against the e-filing rules.** The preflight looks at the formatting
   and electronic-filing requirements and flags what needs fixing.
 - **Can draft a certificate of service** to include with the filing.

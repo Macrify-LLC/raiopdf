@@ -105,6 +105,16 @@ export function FloatingDialog({
       return;
     }
 
+    // Capturing the pointer on the header retargets the synthesized click to the
+    // header itself, so buttons inside it (close/help) would never receive their
+    // click. Leave interactive children alone and only drag from inert areas.
+    if (
+      event.target instanceof Element
+      && event.target.closest("button, a, input, select, textarea, [role='button']")
+    ) {
+      return;
+    }
+
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,

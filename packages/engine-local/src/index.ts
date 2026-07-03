@@ -75,6 +75,7 @@ export type ExhibitIndexEntry = ExhibitBinderIndexExhibit & {
   binderPageStart: number;
   binderPageEnd: number;
   pageRange: string;
+  descriptionGeneratedFromSourceFileName?: boolean | undefined;
 };
 
 export type ExhibitIndexLayoutInput = {
@@ -813,13 +814,17 @@ export function planExhibitIndexEntries(options: {
     const binderPageEnd = binderPageStart + sectionPageCount - 1;
     nextBinderPage = binderPageEnd + 1;
 
-    const description = exhibit.description?.trim() ||
+    const explicitDescription = exhibit.description?.trim();
+    const descriptionGeneratedFromSourceFileName =
+      (!explicitDescription || explicitDescription.length === 0) && Boolean(exhibit.sourceFileName);
+    const description = explicitDescription ||
       defaultExhibitDescription(exhibit.sourceFileName, exhibit.label);
 
     return {
       label: exhibit.label,
       pageCount: exhibit.pageCount,
       description,
+      descriptionGeneratedFromSourceFileName,
       sourceFileName: exhibit.sourceFileName,
       binderPageStart,
       binderPageEnd,
@@ -1787,7 +1792,9 @@ function drawIndexRow(
   fontSize: number,
   includeSourceFileName: boolean,
 ): void {
-  page.drawText(fitTextToWidth(font, entry.label, fontSize, columns.labelWidth), {
+  const label = sanitizeIndexTextForFont(font, entry.label);
+
+  page.drawText(fitTextToWidth(font, label, fontSize, columns.labelWidth), {
     x: columns.labelX,
     y,
     size: fontSize,
@@ -1797,7 +1804,7 @@ function drawIndexRow(
   page.drawText(
     fitTextToWidth(
       font,
-      entry.description ?? defaultExhibitDescription(entry.sourceFileName, entry.label),
+      displayIndexDescription(font, entry),
       fontSize,
       columns.descriptionWidth,
     ),
@@ -1815,8 +1822,10 @@ function drawIndexRow(
     columns.sourceFileNameX !== undefined &&
     columns.sourceFileNameWidth !== undefined
   ) {
+    const sourceFileName = sanitizeIndexTextForFont(font, entry.sourceFileName ?? "");
+
     page.drawText(
-      fitTextToWidth(font, entry.sourceFileName ?? "", fontSize, columns.sourceFileNameWidth),
+      fitTextToWidth(font, sourceFileName, fontSize, columns.sourceFileNameWidth),
       {
         x: columns.sourceFileNameX,
         y,
@@ -1845,6 +1854,47 @@ function drawIndexRow(
     y,
     fontSize,
   );
+}
+
+function displayIndexDescription(font: PDFFont, entry: ExhibitIndexEntry): string {
+  const rawDescription = entry.description ?? defaultExhibitDescription(entry.sourceFileName, entry.label);
+  const description = sanitizeIndexTextForFont(font, rawDescription);
+
+  if (description.length > 0 || entry.descriptionGeneratedFromSourceFileName !== true) {
+    return description;
+  }
+
+  return sanitizeIndexTextForFont(font, entry.label);
+}
+
+function sanitizeIndexTextForFont(font: PDFFont, text: string): string {
+  let sanitized = "";
+
+  for (const character of text) {
+    if (isWhitespace(character) || isControlCharacter(character)) {
+      sanitized += " ";
+      continue;
+    }
+
+    try {
+      font.widthOfTextAtSize(character, 1);
+      sanitized += character;
+    } catch {
+      sanitized += " ";
+    }
+  }
+
+  return sanitized.replace(/\s+/gu, " ").trim();
+}
+
+function isWhitespace(character: string): boolean {
+  return /\s/u.test(character);
+}
+
+function isControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+
+  return codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f);
 }
 
 function drawRightAlignedText(

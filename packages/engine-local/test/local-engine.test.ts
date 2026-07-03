@@ -477,6 +477,68 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 1, "contract.pdf");
   });
 
+  it("falls back to the exhibit label when a CJK filename description cannot be drawn", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit A", sourceFileName: "契約書.pdf" }],
+      { slipSheets: false, index: { includeSourceFileName: true } },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    await expectPageContentToContainLabel(bytes, 1, "Source file");
+    await expectPageContentToContainLabel(bytes, 1, ".pdf");
+    await expectPageContentLabelCount(bytes, 1, "Exhibit A", 2);
+  });
+
+  it("falls back to the exhibit label when an emoji-only filename description cannot be drawn", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit B", sourceFileName: "😀.pdf" }],
+      { slipSheets: false },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    await expectPageContentLabelCount(bytes, 1, "Exhibit B", 2);
+  });
+
+  it("keeps drawable text from a mixed Unicode filename description", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Label C", sourceFileName: "Exhibit — 契約書.pdf" }],
+      { slipSheets: false },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    await expectPageContentLabelCount(bytes, 1, "Exhibit", 2);
+  });
+
+  it("sanitizes user-supplied Unicode descriptions before drawing the exhibit index", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit D", description: "Signed 契約" }],
+      { slipSheets: false },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    await expectPageContentToContainLabel(bytes, 1, "Signed");
+  });
+
   it("keeps exhibit index pagination stable for a multi-page index", async () => {
     const layout = await createStableExhibitIndex({
       pageSize: [612, 792],
@@ -635,6 +697,18 @@ async function expectPageContentNotToContainLabel(
   expect(await readDecodedPageContent(bytes, pageIndex)).not.toContain(encodeTextAsHex(label));
 }
 
+async function expectPageContentLabelCount(
+  bytes: Uint8Array,
+  pageIndex: number,
+  label: string,
+  minimumCount: number,
+): Promise<void> {
+  const content = await readDecodedPageContent(bytes, pageIndex);
+  const matches = content.match(new RegExp(escapeRegExp(encodeTextAsHexFragment(label)), "g"));
+
+  expect(matches?.length ?? 0).toBeGreaterThanOrEqual(minimumCount);
+}
+
 async function expectNoDocumentMetadata(bytes: Uint8Array): Promise<void> {
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
 
@@ -785,9 +859,17 @@ function decodePdfStream(stream: PDFStream): string {
 }
 
 function encodeTextAsHex(text: string): string {
-  return `<${[...new TextEncoder().encode(text)]
+  return `<${encodeTextAsHexFragment(text)}>`;
+}
+
+function encodeTextAsHexFragment(text: string): string {
+  return [...new TextEncoder().encode(text)]
     .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
-    .join("")}>`;
+    .join("");
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function expectOutlineEntries(

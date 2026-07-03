@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
+    "dev": "pnpm sync:pdfjs-assets && vite",
+    "build": "pnpm sync:pdfjs-assets && tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:smoke": "playwright test",
+    "sync:pdfjs-assets": "node scripts/sync-pdfjs-assets.mjs",
     "lint": "eslint ."
   },
   "dependencies": {

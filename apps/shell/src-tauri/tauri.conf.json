@@ -27,13 +27,41 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "publisher": "Macrify LLC",
+    "homepage": "https://raio.macrify.me",
+    "copyright": "Copyright (c) 2026 Macrify LLC",
+    "license": "GPL-3.0-only",
+    "licenseFile": "../../../installer/RAIOPDF-LICENSE-NOTICES.txt",
+    "category": "Productivity",
+    "shortDescription": "Free, local desktop PDF suite for law firms.",
+    "longDescription": "RaioPDF is a free, fully local PDF suite for law firms. It runs on your computer and ships as open-source software under GPL-3.0 with bundled third-party components under their own licenses.",
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
     ],
     "resources": [
       "payload/**/*"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "headerImage": "../../../installer/artwork/nsis-header.bmp",
+        "sidebarImage": "../../../installer/artwork/nsis-sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ],
+        "compression": "lzma"
+      },
+      "wix": {
+        "bannerPath": "../../../installer/artwork/wix-banner.bmp",
+        "dialogImagePath": "../../../installer/artwork/wix-dialog.bmp"
+      }
+    }
   }
 }

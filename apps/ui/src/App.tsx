@@ -1952,6 +1952,48 @@ export function App() {
     setFitZoom(document.zoom);
   }, [document.bytes, document.zoom, setFitZoom]);
 
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!event.ctrlKey || event.defaultPrevented || isTextEntryTarget(event.target)) {
+        return;
+      }
+
+      if (!document.bytes) {
+        return;
+      }
+
+      switch (event.key) {
+        case "=":
+        case "+":
+        case "Add":
+          event.preventDefault();
+          setZoom(document.zoom + ZOOM_STEP);
+          break;
+        case "-":
+        case "Subtract":
+          event.preventDefault();
+          setZoom(document.zoom - ZOOM_STEP);
+          break;
+        case "0":
+          event.preventDefault();
+          setZoom(1);
+          break;
+        case "1":
+          // Acrobat uses Ctrl+1 for actual size and Ctrl+2 for fit width; Raio
+          // maps Ctrl+0 to 100% and Ctrl+1 to our existing fit-width command.
+          event.preventDefault();
+          fitToPageWidth();
+          break;
+        default:
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [document.bytes, document.zoom, fitToPageWidth, setZoom]);
+
   const handleNativeMenuCommand = useCallback(
     (command: string) => {
       switch (command) {
@@ -3029,6 +3071,14 @@ function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   }
 
   return "external links";
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
 function formatBytes(bytes: number): string {

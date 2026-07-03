@@ -1,10 +1,12 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { shouldConvertToPdfA } from "@raiopdf/rules";
 import type {
   ConstraintEntry,
   JurisdictionPack,
   PreflightCheck,
   PreflightReport,
 } from "@raiopdf/rules";
+import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { BoltIcon, CheckIcon, ChevronDownIcon } from "../icons";
 import { LoadingSun } from "./LoadingSun";
@@ -43,6 +45,22 @@ export interface CertificateOfServiceDraft {
   date: string;
 }
 
+export interface PrepareOptions {
+  /** The user saw the conversion-impact warning and chose to continue anyway. */
+  acknowledgeImpact?: boolean;
+}
+
+/**
+ * What running Prepare for Filing would silently lose, surfaced for an explicit
+ * go-ahead before anything is destroyed.
+ */
+export interface FilingImpactState {
+  /** Features PDF/A conversion would strip; null when this pack skips conversion. */
+  conversionImpact: PdfAConversionImpact | null;
+  /** In-app redaction marks that have not been applied and will NOT redact the output. */
+  unappliedRedactionMarks: number;
+}
+
 export interface PrepareForFilingWorkspaceProps {
   document: DocumentState;
   pack: JurisdictionPack;
@@ -50,9 +68,11 @@ export interface PrepareForFilingWorkspaceProps {
   loadingReport: boolean;
   progress: FilingProgressState;
   result: FilingResultState | null;
+  impact: FilingImpactState | null;
   pdfAAvailable: boolean;
   compressAvailable: boolean;
-  onPrepare: (certificate: CertificateOfServiceDraft | null) => void;
+  onPrepare: (certificate: CertificateOfServiceDraft | null, options?: PrepareOptions) => void;
+  onDismissImpact: () => void;
   onCompressFirst: () => void;
 }
 
@@ -63,9 +83,11 @@ export function PrepareForFilingWorkspace({
   loadingReport,
   progress,
   result,
+  impact,
   pdfAAvailable,
   compressAvailable,
   onPrepare,
+  onDismissImpact,
   onCompressFirst,
 }: PrepareForFilingWorkspaceProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -79,13 +101,15 @@ export function PrepareForFilingWorkspace({
   });
   const latestVerified = useMemo(() => latestDate(pack.constraints), [pack.constraints]);
   const activeReport = result?.report ?? report;
+  const convertsToPdfA = shouldConvertToPdfA(pack);
   const hasFixes = Boolean(report?.checks.some((check) => check.kind === "portal" && check.status === "fix"));
-  const needsPdfA = Boolean(report?.checks.some((check) => check.checkId === "pdfa" && check.status !== "pass"));
+  const needsPdfA = convertsToPdfA &&
+    Boolean(report?.checks.some((check) => check.checkId === "pdfa" && check.status !== "pass"));
   const needsMechanicalWork = Boolean(report?.checks.some((check) => check.status !== "pass"));
   const overPortalSize = Boolean(
     document.fileSizeBytes && document.fileSizeBytes > pack.recommendedMaxFileBytes,
   );
-  const primaryLabel = hasFixes || needsMechanicalWork
+  const primaryLabel = hasFixes || needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
   const canPrepare = Boolean(document.bytes && report) &&
@@ -93,6 +117,7 @@ export function PrepareForFilingWorkspace({
     progress.phase !== "splitting" &&
     progress.phase !== "converting" &&
     progress.phase !== "verifying" &&
+    !impact &&
     !(needsPdfA && !pdfAAvailable);
 
   function submitCertificate(event: FormEvent<HTMLFormElement>) {
@@ -175,6 +200,14 @@ export function PrepareForFilingWorkspace({
 
         {!document.bytes ? (
           <p className="filing-card__empty">Open a PDF before preparing a filing copy.</p>
+        ) : null}
+
+        {impact ? (
+          <ImpactWarning
+            impact={impact}
+            onContinue={() => onPrepare(certificateOpen ? certificate : null, { acknowledgeImpact: true })}
+            onCancel={onDismissImpact}
+          />
         ) : null}
 
         {certificateOpen ? (
@@ -299,6 +332,83 @@ export function PrepareForFilingWorkspace({
       </div>
     </section>
   );
+}
+
+function ImpactWarning({
+  impact,
+  onContinue,
+  onCancel,
+}: {
+  impact: FilingImpactState;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  const lines = describeImpact(impact);
+
+  return (
+    <div className="filing-impact" role="alertdialog" aria-label="Prepare for Filing will remove document features">
+      <p className="filing-impact__title">Stopped before anything was changed</p>
+      <ul>
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <p className="filing-impact__hint">
+        {impact.unappliedRedactionMarks > 0
+          ? "Apply your redactions first, then run Prepare for Filing again."
+          : "If these features are load-bearing — an unsigned form, a signature you need intact — cancel and handle them first."}
+      </p>
+      <div className="filing-card__button-row">
+        <button type="button" className="filing-card__secondary-button" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" className="filing-card__ghost-button" onClick={onContinue}>
+          Continue anyway
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function describeImpact(impact: FilingImpactState): string[] {
+  const lines: string[] = [];
+  const conversion = impact.conversionImpact;
+
+  if (impact.unappliedRedactionMarks > 0) {
+    lines.push(
+      `${formatCount(impact.unappliedRedactionMarks, "redaction mark")} you made in RaioPDF ${impact.unappliedRedactionMarks === 1 ? "has" : "have"} not been applied — the filing copy would keep that content readable.`,
+    );
+  }
+
+  if (conversion?.pendingRedactionAnnotations) {
+    lines.push(
+      `${formatCount(conversion.pendingRedactionAnnotations, "pending redaction mark")} from another PDF tool ${conversion.pendingRedactionAnnotations === 1 ? "was" : "were"} never applied — PDF/A conversion discards the marks and files the content un-redacted.`,
+    );
+  }
+
+  if (conversion?.overlayAnnotations) {
+    lines.push(
+      `${formatCount(conversion.overlayAnnotations, "annotation")} (highlights, boxes, notes) would be removed by PDF/A conversion. A box drawn over text does not redact it — the text underneath becomes visible.`,
+    );
+  }
+
+  if (conversion?.formFields) {
+    lines.push(
+      `${formatCount(conversion.formFields, "interactive form field")} would be flattened or removed by PDF/A conversion.`,
+    );
+  }
+
+  if (conversion?.signedSignatureFields) {
+    lines.push(
+      `${formatCount(conversion.signedSignatureFields, "digital signature")} would be invalidated by PDF/A conversion.`,
+    );
+  }
+
+  return lines;
+}
+
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function PreflightRow({ check }: { check: PreflightCheck }) {

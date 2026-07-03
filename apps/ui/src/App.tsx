@@ -21,7 +21,7 @@ import type {
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { getPack, getPackIntegrityBanner, preflight } from "@raiopdf/rules";
+import { getPack, getPackIntegrityBanner, preflight, shouldConvertToPdfA } from "@raiopdf/rules";
 import type {
   DocumentFacts,
   JurisdictionPack,
@@ -39,9 +39,11 @@ import {
 import {
   PrepareForFilingWorkspace,
   type CertificateOfServiceDraft,
+  type FilingImpactState,
   type FilingOutputPart,
   type FilingProgressState,
   type FilingResultState,
+  type PrepareOptions,
 } from "./components/PrepareForFilingWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
@@ -77,6 +79,13 @@ import {
   type RedactionVerificationResult,
   type SensitiveHit,
 } from "./lib/legalTools";
+import {
+  assessPdfAConversionImpact,
+  assessPdfAConversionImpactFromBytes,
+  hasPdfAConversionImpact,
+  readPdfAIdentification,
+  type PdfAConversionImpact,
+} from "@raiopdf/engine-pdf-lib";
 import {
   BatesPanel,
   PasswordsPanel,
@@ -222,6 +231,11 @@ export function App() {
     message: null,
   });
   const [filingResult, setFilingResult] = useState<FilingResultState | null>(null);
+  const [filingImpact, setFilingImpact] = useState<FilingImpactState | null>(null);
+  // The single pack binding read by BOTH the filing pipeline and the workspace UI.
+  // A future jurisdiction selector replaces this one line — keeping the button's
+  // promise and the pipeline's behavior from ever reading different packs.
+  const filingPack = FLORIDA_PACK;
   const [scrubState, setScrubState] = useState<{
     scrubbing: boolean;
     message: string | null;
@@ -331,6 +345,7 @@ export function App() {
     setFilingReportLoading(false);
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
+    setFilingImpact(null);
     setSidecarStatus({
       running: false,
       message: null,
@@ -352,6 +367,7 @@ export function App() {
     setFilingReport(null);
     setFilingReportLoading(false);
     setFilingResult(null);
+    setFilingImpact(null);
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
     }
@@ -510,7 +526,6 @@ export function App() {
 
     const factsOptions: FilingFactsOptions = {
       fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
-      pdfaCompliant: false,
       pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
     };
 
@@ -527,7 +542,7 @@ export function App() {
           return;
         }
 
-        setFilingReport(runFilingPreflight(facts, FLORIDA_PACK));
+        setFilingReport(runFilingPreflight(facts, filingPack));
       })
       .catch(() => {
         if (!disposed && documentBytesRef.current === sourceBytes) {
@@ -1783,9 +1798,13 @@ export function App() {
     });
   }, [document.bytes, metadataSummary, scrubMetadata]);
 
-  const prepareFilingCopy = useCallback((certificate: CertificateOfServiceDraft | null) => {
+  const prepareFilingCopy = useCallback((
+    certificate: CertificateOfServiceDraft | null,
+    options?: PrepareOptions,
+  ) => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const convertOutputToPdfA = shouldConvertToPdfA(filingPack);
 
     if (!sourceBytes) {
       setFilingProgress({
@@ -1795,7 +1814,7 @@ export function App() {
       return;
     }
 
-    if (!engineBridge.available) {
+    if (convertOutputToPdfA && !engineBridge.available) {
       setFilingProgress({
         phase: "error",
         message: "PDF/A export is available in the desktop app.",
@@ -1808,14 +1827,38 @@ export function App() {
     const isCurrentFilingRun = () => (
       filingRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
     );
+    const unappliedRedactionMarks = pendingRedactions.length;
 
     setFilingResult(null);
+    setFilingImpact(null);
     setFilingProgress({
       phase: "normalizing",
       message: "Normalizing pages to the filing pack size and orientation...",
     });
 
     void (async () => {
+      // PDF/A conversion strips annotations, form fields, and signatures to reach
+      // conformance — silently. Surface what this run would destroy and stop for an
+      // explicit go-ahead before any of it happens.
+      if (!options?.acknowledgeImpact) {
+        const conversionImpact = convertOutputToPdfA
+          ? await getCachedConversionImpact(sourceBytes)
+          : null;
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        if (unappliedRedactionMarks > 0 || (conversionImpact && hasPdfAConversionImpact(conversionImpact))) {
+          setFilingImpact({
+            conversionImpact,
+            unappliedRedactionMarks,
+          });
+          setFilingProgress({ phase: "idle", message: null });
+          return;
+        }
+      }
+
       let workingHandle: PdfDocumentHandle;
       const closeHandles: PdfDocumentHandle[] = [];
 
@@ -1838,7 +1881,7 @@ export function App() {
         }
 
         const normalizedHandle = await filingEngine.normalizePages(workingHandle, {
-          targetSize: FLORIDA_PACK.pageSize,
+          targetSize: filingPack.pageSize,
           orientation: "portrait",
         });
         closeHandles.push(normalizedHandle);
@@ -1855,7 +1898,7 @@ export function App() {
 
         const splitResult = await filingEngine.splitByMaxBytes(
           workingHandle,
-          FLORIDA_PACK.recommendedMaxFileBytes,
+          filingPack.recommendedMaxFileBytes,
         );
         closeHandles.push(...splitResult.parts.map((part) => part.document));
 
@@ -1863,23 +1906,24 @@ export function App() {
           return;
         }
 
-        setFilingProgress({
-          phase: "converting",
-          message: "Converting each output part to PDF/A in the desktop engine...",
-        });
+        if (convertOutputToPdfA) {
+          setFilingProgress({
+            phase: "converting",
+            message: "Converting each output part to PDF/A in the desktop engine...",
+          });
+        }
 
         const baseName = stripPdfExtension(document.fileName ?? "Untitled");
         const convertedParts = [];
 
         for (const [index, part] of splitResult.parts.entries()) {
           const partBytes = await filingEngine.saveToBytes(part.document);
-          const convertedBytes = await engineBridge.convertToPdfA(
-            partBytes,
-            FLORIDA_PACK.pdfa.flavor,
-          );
+          const convertedBytes = convertOutputToPdfA
+            ? await engineBridge.convertToPdfA(partBytes, filingPack.pdfa.flavor)
+            : partBytes;
           convertedParts.push({
             bytes: convertedBytes,
-            fileName: formatFilingOutputName(baseName, FLORIDA_PACK, index + 1, splitResult.parts.length),
+            fileName: formatFilingOutputName(baseName, filingPack, index + 1, splitResult.parts.length),
             pageIndexes: part.pageIndexes,
             oversized: part.oversized,
           });
@@ -1900,9 +1944,9 @@ export function App() {
         for (const part of convertedParts) {
           const facts = await getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
             fileBytes: part.bytes.byteLength,
-            pdfaCompliant: true,
+            ...(convertOutputToPdfA ? { pdfaCompliant: true } : {}),
           });
-          const report = runFilingPreflight(facts, FLORIDA_PACK);
+          const report = runFilingPreflight(facts, filingPack);
           outputReports.push(report);
           outputParts.push({
             fileName: part.fileName,
@@ -1974,6 +2018,7 @@ export function App() {
     filingEngine,
     getOpenToken,
     isCurrentDocument,
+    pendingRedactions.length,
   ]);
 
   const compressBeforeFiling = useCallback(() => {
@@ -2239,14 +2284,16 @@ export function App() {
         >
           <PrepareForFilingWorkspace
             document={document}
-            pack={FLORIDA_PACK}
+            pack={filingPack}
             report={filingReport}
             loadingReport={filingReportLoading}
             progress={filingProgress}
             result={filingResult}
+            impact={filingImpact}
             pdfAAvailable={engineBridge.available}
             compressAvailable={engineBridge.available}
             onPrepare={prepareFilingCopy}
+            onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
           />
         </FloatingDialog>
@@ -2876,6 +2923,28 @@ function SidecarStatusLine({
   );
 }
 
+// Keyed on bytes identity; populated as a side effect of readFilingFacts (the filing
+// dialog's report pass) so the Prepare click usually finds it warm.
+const conversionImpactCache = new WeakMap<Uint8Array, PdfAConversionImpact>();
+
+async function getCachedConversionImpact(
+  bytes: Uint8Array,
+): Promise<PdfAConversionImpact | null> {
+  const cached = conversionImpactCache.get(bytes);
+
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const impact = await assessPdfAConversionImpactFromBytes(bytes);
+    conversionImpactCache.set(bytes, impact);
+    return impact;
+  } catch {
+    return null;
+  }
+}
+
 function getCachedFilingFacts(
   cacheRef: { current: FilingFactsCache },
   bytes: Uint8Array,
@@ -2914,6 +2983,11 @@ async function readFilingFacts(
   options: FilingFactsOptions,
 ): Promise<DocumentFacts> {
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+
+  // Piggyback on this parse: cache what a PDF/A conversion of these bytes would
+  // destroy, so the Prepare click's impact gate doesn't need a parse of its own.
+  conversionImpactCache.set(bytes, assessPdfAConversionImpact(pdf));
+
   const pdfPages = pdf.getPages();
   const occupiedRegionPageIndexes = options.occupiedRegionPages === "first" && pdfPages.length > 0
     ? [0]
@@ -2950,10 +3024,9 @@ async function readFilingFacts(
   };
 
   facts.searchableText = options.searchableText ?? hasExtractedText;
-
-  if (options.pdfaCompliant !== undefined) {
-    facts.pdfaCompliant = options.pdfaCompliant;
-  }
+  // A PDF/A conformance claim requires an XMP pdfaid identification, so its absence
+  // is a definitive "not PDF/A"; the claim itself is only what the document reports.
+  facts.pdfaCompliant = options.pdfaCompliant ?? (readPdfAIdentification(pdf) !== null);
 
   if (pageOccupiedRegions.has(0)) {
     facts.clerkStampSpaceBlank = !pageOccupiedRegions

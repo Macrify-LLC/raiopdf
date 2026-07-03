@@ -5,10 +5,12 @@ import {
   getPack,
   packJsonSha256,
   preflight,
+  shouldConvertToPdfA,
   unknownPack,
   verifyAppDataPackIntegrity,
   verifyBundledPackIntegrity,
   type PackManifest,
+  type PdfAStance,
 } from "../src/index";
 import { loadJurisdictionPackFromJson } from "../src/packLoader";
 
@@ -21,7 +23,7 @@ describe("Florida jurisdiction pack", () => {
     expect(floridaPack).toMatchObject({
       id: "florida",
       name: "Florida",
-      packVersion: "1.0.0",
+      packVersion: "1.1.0",
       guidanceNote: "These checks are guidance only — not legal advice…tell us at support@macrify.me",
       pageSize: { w: 8.5, h: 11, in: true },
       orientation: "portrait",
@@ -32,8 +34,7 @@ describe("Florida jurisdiction pack", () => {
       maxFileBytes: 25 * 1024 * 1024,
       recommendedMaxFileBytes: 24 * 1024 * 1024,
       pdfa: {
-        required: false,
-        preferred: true,
+        stance: "preferred",
         flavor: "pdfa-2b",
       },
       searchableTextRequired: true,
@@ -182,6 +183,63 @@ describe("Florida jurisdiction pack", () => {
       kind: "rule",
       status: "warn",
     });
+  });
+
+  it("allow-lists PDF/A conversion to required and preferred stances only", () => {
+    const stances: Record<PdfAStance, boolean> = {
+      required: true,
+      preferred: true,
+      accepted: false,
+      prohibited: false,
+      unknown: false,
+    };
+
+    for (const [stance, expected] of Object.entries(stances)) {
+      const pack = {
+        ...floridaPack,
+        pdfa: { ...floridaPack.pdfa, stance: stance as PdfAStance },
+      };
+
+      expect(shouldConvertToPdfA(pack), `stance ${stance}`).toBe(expected);
+    }
+  });
+
+  it("preflights PDF/A per stance without ever converting outside the allow-list", () => {
+    const packWithStance = (stance: PdfAStance) => ({
+      ...floridaPack,
+      pdfa: { ...floridaPack.pdfa, stance },
+    });
+    const facts = (pdfaCompliant: boolean | undefined) => ({
+      pages: [
+        {
+          pageIndex: 0,
+          size: { w: 8.5, h: 11, in: true as const },
+          orientation: "portrait" as const,
+        },
+      ],
+      ...(pdfaCompliant === undefined ? {} : { pdfaCompliant }),
+    });
+    const pdfaStatus = (stance: PdfAStance, pdfaCompliant: boolean | undefined) =>
+      preflight(facts(pdfaCompliant), packWithStance(stance))
+        .checks.find((check) => check.checkId === "pdfa")?.status;
+
+    expect(pdfaStatus("required", false)).toBe("fix");
+    expect(pdfaStatus("preferred", false)).toBe("fix");
+    expect(pdfaStatus("preferred", true)).toBe("pass");
+    expect(pdfaStatus("accepted", false)).toBe("pass");
+    expect(pdfaStatus("unknown", false)).toBe("unknown");
+    // A prohibited portal treats an already-PDF/A document as outstanding portal work.
+    expect(pdfaStatus("prohibited", true)).toBe("fix");
+    expect(pdfaStatus("prohibited", false)).toBe("pass");
+  });
+
+  it("rejects packs whose pdfa stance is missing or invalid", () => {
+    const rawPack = JSON.parse(JSON.stringify(floridaPack)) as Record<string, unknown>;
+    (rawPack.pdfa as Record<string, unknown>).stance = "mandatory";
+
+    expect(() => loadJurisdictionPackFromJson(JSON.stringify(rawPack), "bad stance")).toThrow(
+      /bad stance\.pdfa\.stance must be/,
+    );
   });
 
   it("matches the committed pack manifest hash", () => {

@@ -127,11 +127,27 @@ function readPdfA(pack: Record<string, unknown>, sourceName: string): PdfARequir
     throw new Error(`${sourceName}.pdfa.flavor must be "pdfa-1", "pdfa-2b", or "pdfa-3b"`);
   }
 
-  return {
-    required: readBoolean(pdfa, "required", `${sourceName}.pdfa`),
-    preferred: readBoolean(pdfa, "preferred", `${sourceName}.pdfa`),
-    flavor,
-  };
+  const stance = pdfa.stance;
+
+  if (
+    stance !== "required" &&
+    stance !== "preferred" &&
+    stance !== "accepted" &&
+    stance !== "prohibited" &&
+    stance !== "unknown"
+  ) {
+    throw new Error(
+      `${sourceName}.pdfa.stance must be "required", "preferred", "accepted", "prohibited", or "unknown"`,
+    );
+  }
+
+  const note = pdfa.note;
+
+  if (note !== undefined && typeof note !== "string") {
+    throw new Error(`${sourceName}.pdfa.note must be a string when present`);
+  }
+
+  return note === undefined ? { stance, flavor } : { stance, flavor, note };
 }
 
 function readPageSize(

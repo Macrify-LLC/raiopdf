@@ -604,7 +604,7 @@ test("prepare for filing closes an open organize workspace", async ({ page }) =>
   await expect(page.getByRole("list", { name: "Page grid" })).toBeVisible();
 
   await page.getByRole("button", { name: "Legal" }).click();
-  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
 
   await expect(page.getByRole("list", { name: "Page grid" })).toHaveCount(0);
   await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();

@@ -69,6 +69,10 @@ import {
   type ProductionSetRunInput,
 } from "./components/ProductionSetWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
+import {
+  CrashReportDialog,
+  type CrashReportPayload,
+} from "./components/CrashReportDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog } from "./components/FloatingDialog";
 import { LoadingSun } from "./components/LoadingSun";
@@ -351,6 +355,8 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
+  const [crashReportPayload, setCrashReportPayload] =
+    useState<CrashReportPayload | null>(null);
   useEffect(() => {
     if (!settingsOpen) {
       return;
@@ -447,6 +453,59 @@ export function App() {
         setDiagnosticsStatus(result ? `Saved to ${result.path}` : "Export canceled.");
       } catch {
         setDiagnosticsStatus("Diagnostics could not be exported.");
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const payload = await invoke<CrashReportPayload | null>(
+          "crash_report_take_pending",
+        );
+        if (!disposed && payload) {
+          setCrashReportPayload(payload);
+        }
+      } catch {
+        // Non-Tauri/dev context or command unavailable -- default is no prompt.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  const handleOpenCrashReportIssue = useCallback(() => {
+    const payload = crashReportPayload;
+
+    if (!payload) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const { openUrl } = await import("@tauri-apps/plugin-opener");
+        await openUrl(buildCrashReportIssueUrl(payload));
+        setCrashReportPayload(null);
+      } catch {
+        // Opening the browser failed; leave the prompt visible so the user can choose again.
+      }
+    })();
+  }, [crashReportPayload]);
+  const handleNeverAskCrashReport = useCallback(() => {
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("crash_report_never_ask");
+        setCrashReportPayload(null);
+      } catch {
+        // If the preference cannot be saved, keep the prompt visible.
       }
     })();
   }, []);
@@ -3033,6 +3092,12 @@ export function App() {
           onExportDiagnostics={handleExportDiagnostics}
         />
       ) : null}
+      <CrashReportDialog
+        payload={crashReportPayload}
+        onOpenGitHubIssue={handleOpenCrashReportIssue}
+        onNotNow={() => setCrashReportPayload(null)}
+        onNeverAsk={handleNeverAskCrashReport}
+      />
     </>
   );
 }
@@ -4014,6 +4079,16 @@ function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMess
   }
 
   return absolutePaths;
+}
+
+function buildCrashReportIssueUrl(payload: CrashReportPayload): string {
+  const params = new URLSearchParams({
+    title: payload.title,
+    body: payload.body,
+    labels: "crash",
+  });
+
+  return `https://github.com/Macrify-LLC/raiopdf/issues/new?${params.toString()}`;
 }
 
 function isTauriRuntime(): boolean {

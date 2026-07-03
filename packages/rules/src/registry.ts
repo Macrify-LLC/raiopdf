@@ -9,15 +9,24 @@ export const UNKNOWN_PACK_ID = "unknown";
 
 export const unknownPack: JurisdictionPack = {
   id: UNKNOWN_PACK_ID,
+  schemaVersion: 2,
   name: "Rules unavailable",
   packVersion: "0.0.0",
+  jurisdiction: "Unknown",
+  courtSystem: "Unknown",
+  portal: "Unknown",
+  scopeNote: "Jurisdiction pack integrity could not be verified.",
   guidanceNote: "Jurisdiction pack integrity could not be verified. Confirm filing requirements outside RaioPDF.",
   constraints: [
     unknownConstraint("page-size-orientation", "Letter portrait pages", "rule"),
     unknownConstraint("searchable-text", "Searchable text", "rule"),
     unknownConstraint("file-size", "Portal file size cap", "portal"),
+    unknownConstraint("filename", "Portal filename limits", "portal"),
     unknownConstraint("clerk-stamp-space", "First-page clerk stamp space", "rule"),
     unknownConstraint("pdfa", "PDF/A preference", "portal"),
+    unknownConstraint("envelope-size", "Envelope size cap", "portal"),
+    unknownConstraint("selection-filenames", "Selected filename limits", "portal"),
+    unknownConstraint("filename-collisions", "Filename collisions", "portal"),
   ],
   pageSize: { w: 8.5, h: 11, in: true },
   orientation: "portrait",
@@ -29,9 +38,15 @@ export const unknownPack: JurisdictionPack = {
   recommendedMaxFileBytes: Number.MAX_SAFE_INTEGER,
   pdfa: {
     stance: "unknown",
+    prepDefault: "off",
     flavor: "pdfa-2b",
   },
-  searchableTextRequired: false,
+  activeContent: unknownPolicyConstraint({ prepDefault: "on" }),
+  encryption: unknownPolicyConstraint({ prepDefault: "on" }),
+  embeddedFiles: unknownPolicyConstraint({ prepDefault: "on" }),
+  metadataScrub: unknownPolicyConstraint({ prepDefault: "on" }),
+  ocr: unknownPolicyConstraint(),
+  flattenForms: unknownPolicyConstraint(),
   splitNaming: "{name} — Part {n} of {total}",
 };
 
@@ -93,5 +108,17 @@ function unknownConstraint(
     authority: "Pack integrity unavailable",
     lastVerified: "1970-01-01",
     applicability: { scope: "varies", note: "Pack refused by integrity verification." },
+  };
+}
+
+function unknownPolicyConstraint(
+  overrides: Partial<JurisdictionPack["metadataScrub"]> = {},
+): JurisdictionPack["metadataScrub"] {
+  return {
+    stance: "unknown",
+    prepDefault: "off",
+    authority: "Pack integrity unavailable",
+    lastVerified: "1970-01-01",
+    ...overrides,
   };
 }

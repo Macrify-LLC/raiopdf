@@ -1,7 +1,12 @@
 {
   "id": "florida",
+  "schemaVersion": 2,
   "name": "Florida",
-  "packVersion": "1.1.0",
+  "packVersion": "2.0.0",
+  "jurisdiction": "Florida",
+  "courtSystem": "State trial and appellate courts",
+  "portal": "Florida Courts E-Filing Portal",
+  "scopeNote": "Statewide ePortal constraints for Florida trial courts, District Courts of Appeal, and the Florida Supreme Court. Local document-type practices may vary by clerk.",
   "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
   "constraints": [
     {
@@ -27,8 +32,8 @@
     {
       "id": "searchable-text",
       "label": "Searchable text",
-      "kind": "rule",
-      "authority": "Fla. R. Gen. Prac. & Jud. Admin. 2.525",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
       "lastVerified": "2026-07-02",
       "applicability": {
         "scope": "statewide"
@@ -38,7 +43,49 @@
       "id": "file-size",
       "label": "Portal file size cap",
       "kind": "portal",
-      "authority": "https://www.myflcourtaccess.com/",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority FAQ for Filers, Nov. 2021",
+      "lastVerified": "2026-07-02",
+      "note": "research 2026-07-02: trial-court envelope 50 MB, appellate 200 MB — deliberately kept at conservative 25 MB default; per-run override covers larger chunks",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "envelope-size",
+      "label": "Portal envelope size cap",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority FAQ for Filers, Nov. 2021",
+      "lastVerified": "2026-07-02",
+      "note": "research 2026-07-02: trial-court envelope 50 MB, appellate 200 MB — deliberately kept at conservative 25 MB default; per-run override covers larger chunks",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "filename",
+      "label": "Filename length and characters",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "selection-filenames",
+      "label": "Selected filenames",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "filename-collisions",
+      "label": "Filename collisions",
+      "kind": "portal",
+      "authority": "RaioPDF local package safety check",
       "lastVerified": "2026-07-02",
       "applicability": {
         "scope": "statewide"
@@ -48,7 +95,7 @@
       "id": "pdfa",
       "label": "PDF/A preference",
       "kind": "portal",
-      "authority": "https://www.myflcourtaccess.com/",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
       "lastVerified": "2026-07-02",
       "applicability": {
         "scope": "statewide"
@@ -72,11 +119,63 @@
   },
   "maxFileBytes": 26214400,
   "recommendedMaxFileBytes": 25165824,
+  "maxEnvelopeBytes": 26214400,
+  "filenameMaxChars": 150,
+  "filenameCharset": "^[^\"#%&*:<>?/{}|~.,']+(?:\\.pdf)?$",
+  "userConfigurable": {
+    "maxFileBytes": true,
+    "maxEnvelopeBytes": true
+  },
   "pdfa": {
     "stance": "preferred",
-    "flavor": "pdfa-2b",
-    "note": "The ePortal's PDF/A check is informational only; non-conformant files still file. PDF/A-2a preferred for born-digital, 2b for scanned."
+    "prepDefault": "on",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+    "lastVerified": "2026-07-02",
+    "note": "The ePortal's PDF/A check is informational only; non-conformant files still file. PDF/A-2a is preferred for born-digital documents, while PDF/A-2b is acceptable for scanned documents. Full metadata scrubbing can remove the pdfcreator tag needed by PDF/A conformance checks.",
+    "flavor": "pdfa-2b"
   },
-  "searchableTextRequired": true,
+  "activeContent": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "condition": "when submitted as PDF/A",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+    "lastVerified": "2026-07-02",
+    "note": "JavaScript and form actions are prohibited PDF/A document-intelligence elements."
+  },
+  "encryption": {
+    "stance": "prohibited",
+    "prepDefault": "off",
+    "condition": "when submitted as PDF/A; encryption-key digital signatures are not passed through by the Portal",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+    "lastVerified": "2026-07-02"
+  },
+  "embeddedFiles": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "condition": "when submitted as PDF/A",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+    "lastVerified": "2026-07-02"
+  },
+  "metadataScrub": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+    "lastVerified": "2026-07-02",
+    "note": "Formal standards do not impose a general metadata-scrub requirement, but the Portal PDF/A FAQ describes a conflict: scrubbing the pdfcreator tag can make PDF/A conformance verification fail."
+  },
+  "ocr": {
+    "stance": "required",
+    "prepDefault": "on",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+    "lastVerified": "2026-07-02",
+    "note": "PDF documents filed with the Portal must be searchable; scanned documents should be OCR'd."
+  },
+  "flattenForms": {
+    "stance": "prohibited",
+    "prepDefault": "off",
+    "condition": "form fields and actions are prohibited when submitted as PDF/A",
+    "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+    "lastVerified": "2026-07-02"
+  },
   "splitNaming": "{name} — Part {n} of {total}"
 }

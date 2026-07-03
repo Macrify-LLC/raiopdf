@@ -102,12 +102,11 @@ export function PrepareForFilingWorkspace({
   const latestVerified = useMemo(() => latestDate(pack.constraints), [pack.constraints]);
   const activeReport = result?.report ?? report;
   const convertsToPdfA = shouldConvertToPdfA(pack);
-  const hasFixes = Boolean(report?.checks.some((check) => check.kind === "portal" && check.status === "fix"));
   const needsMechanicalWork = Boolean(report?.checks.some((check) => check.status !== "pass"));
   const overPortalSize = Boolean(
     document.fileSizeBytes && document.fileSizeBytes > pack.recommendedMaxFileBytes,
   );
-  const primaryLabel = hasFixes || needsMechanicalWork || !convertsToPdfA
+  const primaryLabel = needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
   // Gate on "this pack will convert", not on the report's pdfa status — an input
@@ -170,8 +169,9 @@ export function PrepareForFilingWorkspace({
           </div>
         </header>
 
-        <div className="filing-card__jurisdiction" title={`Last verified ${latestVerified}`}>
-          <span>{pack.name} — Rule 2.520/2.525 + ePortal</span>
+        <div className="filing-card__jurisdiction" title={`${pack.scopeNote} Last verified ${latestVerified}`}>
+          <span>{pack.jurisdiction} — {pack.portal}</span>
+          <span>{pack.courtSystem}</span>
           <button
             type="button"
             className="filing-card__change-button"
@@ -183,7 +183,7 @@ export function PrepareForFilingWorkspace({
           <label className="filing-card__pack-select">
             <span>Jurisdiction</span>
             <select value={pack.id} disabled aria-label="Jurisdiction pack">
-              <option value={pack.id}>{pack.name}</option>
+              <option value={pack.id}>{pack.jurisdiction} — {pack.portal}</option>
             </select>
           </label>
         </div>
@@ -269,6 +269,9 @@ export function PrepareForFilingWorkspace({
             </p>
           ) : null}
           {activeReport?.checks.map((check) => (
+            <PreflightRow key={check.checkId} check={check} />
+          ))}
+          {activeReport?.selectionChecks?.map((check) => (
             <PreflightRow key={check.checkId} check={check} />
           ))}
         </div>
@@ -505,8 +508,8 @@ function formatStatus(check: PreflightCheck): string {
     return "not checked";
   }
 
-  if (check.kind === "portal" && check.status === "fix") {
-    return "WILL FIX";
+  if (check.kind === "portal" && check.status === "warn") {
+    return "warning";
   }
 
   if (check.kind === "rule" && check.status === "warn") {

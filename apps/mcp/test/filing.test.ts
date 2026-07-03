@@ -76,7 +76,7 @@ describe("prepare_for_filing", () => {
       status: "warn",
       detail: "Pages 1 are not 8.5 x 11 in portrait.",
     });
-    expect(content.noBlockingIssues).toBe(false);
+    expect(content.noWarnings).toBe(false);
   });
 
   it("never reports confirmed-ready while clerk-stamp / PDF-A remain unverified", async () => {

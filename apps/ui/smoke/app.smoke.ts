@@ -539,15 +539,22 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await openPdf(page, "landscape-oversize.pdf", sourcePdf);
   await page.getByRole("button", { name: "Prepare for Filing" }).click();
 
-  await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
-  await expect(page.getByText("Florida — Rule 2.520/2.525 + ePortal")).toBeVisible();
+  const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
+  await expect(filingDialog).toBeVisible();
+  const jurisdictionHeader = filingDialog.locator(".filing-card__jurisdiction");
+  await expect(
+    jurisdictionHeader.locator(":scope > span").filter({
+      hasText: /^Florida — Florida Courts E-Filing Portal$/,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("State trial and appellate courts")).toBeVisible();
   await expect(page.getByText("These checks are guidance only")).toBeVisible();
   await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();
 
   const lawRows = page.locator('.filing-row[data-kind="rule"]');
   await expect(lawRows.filter({ hasText: "Letter portrait pages" })).toHaveAttribute("data-status", "warn");
-  await expect(lawRows.locator(".filing-row__chip", { hasText: "WILL FIX" })).toHaveCount(0);
-  await expect(page.locator('.filing-row[data-kind="portal"] .filing-row__chip', { hasText: "WILL FIX" })).toHaveCount(2);
+  await expect(lawRows.locator(".filing-row__chip", { hasText: "warning" })).toHaveCount(0);
+  await expect(page.locator('.filing-row[data-kind="portal"] .filing-row__chip', { hasText: "warning" })).toHaveCount(2);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Make Filing-Ready" }).click();
@@ -557,7 +564,7 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect(page.getByText("Output preflight re-run complete")).toBeVisible();
   await expect(page.getByText("Verified after re-running preflight on the output.")).toBeVisible();
   await expect(page.getByText("landscape-oversize — filing.pdf")).toBeVisible();
-  await expect(page.locator('.filing-row[data-kind="rule"] .filing-row__chip', { hasText: "WILL FIX" })).toHaveCount(0);
+  await expect(page.locator('.filing-row[data-kind="rule"] .filing-row__chip', { hasText: "warning" })).toHaveCount(0);
   await expect.poll(() => getFilingPreflightRuns(page)).toBeGreaterThanOrEqual(2);
   await expect.poll(() => getPdfACallCount(page)).toBe(1);
 });

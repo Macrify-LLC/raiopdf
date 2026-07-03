@@ -23,7 +23,11 @@ describe("Florida jurisdiction pack", () => {
     expect(floridaPack).toMatchObject({
       id: "florida",
       name: "Florida",
-      packVersion: "1.1.0",
+      schemaVersion: 2,
+      packVersion: "2.0.0",
+      jurisdiction: "Florida",
+      courtSystem: "State trial and appellate courts",
+      portal: "Florida Courts E-Filing Portal",
       guidanceNote: "These checks are guidance only — not legal advice…tell us at support@macrify.me",
       pageSize: { w: 8.5, h: 11, in: true },
       orientation: "portrait",
@@ -33,13 +37,106 @@ describe("Florida jurisdiction pack", () => {
       },
       maxFileBytes: 25 * 1024 * 1024,
       recommendedMaxFileBytes: 24 * 1024 * 1024,
+      maxEnvelopeBytes: 25 * 1024 * 1024,
+      filenameMaxChars: 150,
       pdfa: {
         stance: "preferred",
+        prepDefault: "on",
         flavor: "pdfa-2b",
       },
-      searchableTextRequired: true,
+      ocr: {
+        stance: "required",
+        prepDefault: "on",
+      },
+      metadataScrub: {
+        stance: "unknown",
+        prepDefault: "on",
+      },
       splitNaming: "{name} — Part {n} of {total}",
     });
+  });
+
+  it("snapshots the Florida schema v2 migration fields", () => {
+    expect({
+      schemaVersion: floridaPack.schemaVersion,
+      jurisdiction: floridaPack.jurisdiction,
+      courtSystem: floridaPack.courtSystem,
+      portal: floridaPack.portal,
+      maxEnvelopeBytes: floridaPack.maxEnvelopeBytes,
+      filenameMaxChars: floridaPack.filenameMaxChars,
+      userConfigurable: floridaPack.userConfigurable,
+      pdfa: floridaPack.pdfa,
+      activeContent: floridaPack.activeContent,
+      encryption: floridaPack.encryption,
+      embeddedFiles: floridaPack.embeddedFiles,
+      metadataScrub: floridaPack.metadataScrub,
+      ocr: floridaPack.ocr,
+      flattenForms: floridaPack.flattenForms,
+    }).toMatchInlineSnapshot(`
+      {
+        "activeContent": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+          "condition": "when submitted as PDF/A",
+          "lastVerified": "2026-07-02",
+          "note": "JavaScript and form actions are prohibited PDF/A document-intelligence elements.",
+          "prepDefault": "on",
+          "stance": "prohibited",
+        },
+        "courtSystem": "State trial and appellate courts",
+        "embeddedFiles": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+          "condition": "when submitted as PDF/A",
+          "lastVerified": "2026-07-02",
+          "prepDefault": "on",
+          "stance": "prohibited",
+        },
+        "encryption": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+          "condition": "when submitted as PDF/A; encryption-key digital signatures are not passed through by the Portal",
+          "lastVerified": "2026-07-02",
+          "prepDefault": "off",
+          "stance": "prohibited",
+        },
+        "filenameMaxChars": 150,
+        "flattenForms": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+          "condition": "form fields and actions are prohibited when submitted as PDF/A",
+          "lastVerified": "2026-07-02",
+          "prepDefault": "off",
+          "stance": "prohibited",
+        },
+        "jurisdiction": "Florida",
+        "maxEnvelopeBytes": 26214400,
+        "metadataScrub": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+          "lastVerified": "2026-07-02",
+          "note": "Formal standards do not impose a general metadata-scrub requirement, but the Portal PDF/A FAQ describes a conflict: scrubbing the pdfcreator tag can make PDF/A conformance verification fail.",
+          "prepDefault": "on",
+          "stance": "unknown",
+        },
+        "ocr": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+          "lastVerified": "2026-07-02",
+          "note": "PDF documents filed with the Portal must be searchable; scanned documents should be OCR'd.",
+          "prepDefault": "on",
+          "stance": "required",
+        },
+        "pdfa": {
+          "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+          "flavor": "pdfa-2b",
+          "lastVerified": "2026-07-02",
+          "note": "The ePortal's PDF/A check is informational only; non-conformant files still file. PDF/A-2a is preferred for born-digital documents, while PDF/A-2b is acceptable for scanned documents. Full metadata scrubbing can remove the pdfcreator tag needed by PDF/A conformance checks.",
+          "prepDefault": "on",
+          "stance": "preferred",
+        },
+        "portal": "Florida Courts E-Filing Portal",
+        "schemaVersion": 2,
+        "userConfigurable": {
+          "maxEnvelopeBytes": true,
+          "maxFileBytes": true,
+        },
+      }
+    `);
   });
 
   it("tags every constraint with kind, authority, verification date, and applicability", () => {
@@ -62,6 +159,7 @@ describe("Florida jurisdiction pack", () => {
       loadJurisdictionPackFromJson(
         JSON.stringify({
           id: "broken",
+          schemaVersion: 2,
           name: "Broken",
           packVersion: "not-semver",
         }),
@@ -70,9 +168,26 @@ describe("Florida jurisdiction pack", () => {
     }).toThrow(/broken pack\.packVersion must be a semver string/);
   });
 
+  it("accepts schema v2 packs and rejects newer schema versions with an update message", () => {
+    expect(loadJurisdictionPackFromJson(JSON.stringify(floridaPack), "schema v2 pack")).toMatchObject({
+      id: "florida",
+      schemaVersion: 2,
+    });
+
+    const futurePack = {
+      ...JSON.parse(JSON.stringify(floridaPack)),
+      schemaVersion: 3,
+    };
+
+    expect(() => loadJurisdictionPackFromJson(JSON.stringify(futurePack), "future pack")).toThrow(
+      /Update RaioPDF to load this jurisdiction pack/,
+    );
+  });
+
   it("preflights passing Florida facts", () => {
     const report = preflight(
       {
+        filename: "motion.pdf",
         fileBytes: 2 * 1024 * 1024,
         searchableText: true,
         pdfaCompliant: true,
@@ -94,12 +209,14 @@ describe("Florida jurisdiction pack", () => {
       "pass",
       "pass",
       "pass",
+      "pass",
     ]);
   });
 
-  it("preflights warning and fixing Florida facts", () => {
+  it("preflights warning-only Florida facts", () => {
     const report = preflight(
       {
+        filename: "motion.pdf",
         fileBytes: 24.5 * 1024 * 1024,
         searchableText: false,
         pdfaCompliant: false,
@@ -118,9 +235,10 @@ describe("Florida jurisdiction pack", () => {
     expect(Object.fromEntries(report.checks.map((check) => [check.checkId, check.status]))).toEqual({
       "page-size-orientation": "warn",
       "searchable-text": "warn",
-      "file-size": "fix",
+      "file-size": "warn",
+      filename: "pass",
       "clerk-stamp-space": "warn",
-      pdfa: "fix",
+      pdfa: "warn",
     });
   });
 
@@ -142,12 +260,13 @@ describe("Florida jurisdiction pack", () => {
       "page-size-orientation": "pass",
       "searchable-text": "unknown",
       "file-size": "unknown",
+      filename: "unknown",
       "clerk-stamp-space": "unknown",
       pdfa: "unknown",
     });
   });
 
-  it("never emits fix for rule-kind constraints", () => {
+  it("uses one warning status vocabulary for rule and portal constraints", () => {
     const ruleOnlyFileSizePack = {
       ...floridaPack,
       constraints: floridaPack.constraints.map((constraint) => {
@@ -164,6 +283,7 @@ describe("Florida jurisdiction pack", () => {
 
     const report = preflight(
       {
+        filename: "motion.pdf",
         fileBytes: 30 * 1024 * 1024,
         searchableText: true,
         pdfaCompliant: true,
@@ -202,6 +322,11 @@ describe("Florida jurisdiction pack", () => {
 
       expect(shouldConvertToPdfA(pack), `stance ${stance}`).toBe(expected);
     }
+
+    expect(shouldConvertToPdfA({
+      ...floridaPack,
+      pdfa: { ...floridaPack.pdfa, stance: "preferred", prepDefault: "off" },
+    })).toBe(false);
   });
 
   it("preflights PDF/A per stance without ever converting outside the allow-list", () => {
@@ -223,14 +348,14 @@ describe("Florida jurisdiction pack", () => {
       preflight(facts(pdfaCompliant), packWithStance(stance))
         .checks.find((check) => check.checkId === "pdfa")?.status;
 
-    expect(pdfaStatus("required", false)).toBe("fix");
-    expect(pdfaStatus("preferred", false)).toBe("fix");
+    expect(pdfaStatus("required", false)).toBe("warn");
+    expect(pdfaStatus("preferred", false)).toBe("warn");
     expect(pdfaStatus("preferred", true)).toBe("pass");
     expect(pdfaStatus("accepted", false)).toBe("pass");
     expect(pdfaStatus("unknown", false)).toBe("unknown");
     // A prohibited portal treats an already-PDF/A document as outstanding portal work,
     // and refuses to call unverified facts safe.
-    expect(pdfaStatus("prohibited", true)).toBe("fix");
+    expect(pdfaStatus("prohibited", true)).toBe("warn");
     expect(pdfaStatus("prohibited", false)).toBe("pass");
     expect(pdfaStatus("prohibited", undefined)).toBe("unknown");
   });
@@ -242,6 +367,55 @@ describe("Florida jurisdiction pack", () => {
     expect(() => loadJurisdictionPackFromJson(JSON.stringify(rawPack), "bad stance")).toThrow(
       /bad stance\.pdfa\.stance must be/,
     );
+  });
+
+  it("checks selection-level envelope size, filename limits, and collisions", () => {
+    const under = preflight(
+      {
+        filename: "motion.pdf",
+        fileBytes: 1,
+        searchableText: true,
+        pdfaCompliant: true,
+        pages: [],
+      },
+      floridaPack,
+      {
+        files: [
+          { filename: "motion.pdf", fileBytes: 10 * 1024 * 1024 },
+          { filename: "exhibit.pdf", fileBytes: 10 * 1024 * 1024 },
+        ],
+      },
+    );
+
+    expect(Object.fromEntries(under.selectionChecks!.map((check) => [check.checkId, check.status]))).toEqual({
+      "envelope-size": "pass",
+      "selection-filenames": "pass",
+      "filename-collisions": "pass",
+    });
+
+    const over = preflight(
+      {
+        filename: "motion.pdf",
+        fileBytes: 1,
+        searchableText: true,
+        pdfaCompliant: true,
+        pages: [],
+      },
+      floridaPack,
+      {
+        files: [
+          { filename: "motion.pdf", fileBytes: 20 * 1024 * 1024 },
+          { filename: "motion.pdf", fileBytes: 10 * 1024 * 1024 },
+          { filename: "bad.name.pdf", fileBytes: 1 },
+        ],
+      },
+    );
+
+    expect(Object.fromEntries(over.selectionChecks!.map((check) => [check.checkId, check.status]))).toEqual({
+      "envelope-size": "warn",
+      "selection-filenames": "warn",
+      "filename-collisions": "warn",
+    });
   });
 
   it("matches the committed pack manifest hash", () => {
@@ -284,13 +458,7 @@ describe("Florida jurisdiction pack", () => {
       unknownPack,
     );
 
-    expect(report.checks.map((check) => check.status)).toEqual([
-      "unknown",
-      "unknown",
-      "unknown",
-      "unknown",
-      "unknown",
-    ]);
+    expect(report.checks.every((check) => check.status === "unknown")).toBe(true);
   });
 
   it("requires a signature-equivalent manifest match or hash acknowledgment for app-data packs", () => {

@@ -295,7 +295,7 @@
   color: var(--ok);
 }
 
-.filing-row[data-kind="portal"][data-status="fix"] .filing-row__chip {
+.filing-row[data-kind="portal"][data-status="warn"] .filing-row__chip {
   border-color: var(--warn-bg);
   background: var(--warn-bg);
   color: var(--warn);

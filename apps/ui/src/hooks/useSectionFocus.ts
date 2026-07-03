@@ -19,6 +19,11 @@ export function useSectionFocus(
 
   useEffect(() => {
     if (!focused) {
+      // Focus moved elsewhere (e.g. another section's deep link fired)
+      // before this section's own ring-clear timeout got a chance to run --
+      // the cleanup below cancels that timeout, so clear the ring here
+      // instead of leaving it stuck on.
+      setShowFocusRing(false);
       return;
     }
 

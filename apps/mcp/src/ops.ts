@@ -32,31 +32,38 @@ export async function runOutputOp(
 ): Promise<StructuredToolResult> {
   const resolvedInputs = await Promise.all(inputPaths.map((path) => resolveInput(path)));
   const output = await prepareOutput(outputPath);
-  const engine = await engineHandle.getEngine();
   const opened: PdfDocumentHandle[] = [];
+  let engine: SidecarPdfEngine | undefined;
+  let produced: PdfDocumentHandle | undefined;
 
   try {
+    // Inside the try so a sidecar-start failure still aborts the reserved output.
+    engine = await engineHandle.getEngine();
     for (const input of resolvedInputs) {
       const bytes = await fs.readFile(input.realPath);
       opened.push(await engine.open(bytes));
     }
 
     const { result, summary, extra } = await produce(engine, opened);
+    produced = result;
     const outputBytes = await engine.saveToBytes(result);
     await output.write(outputBytes);
     await output.commit();
-
-    if (!opened.includes(result)) {
-      await engine.close(result).catch(() => undefined);
-    }
 
     return successResult(summary, { output: output.outputPath, ...(extra ?? {}) });
   } catch (error) {
     await output.abort();
     throw error;
   } finally {
-    for (const document of opened) {
-      await engine.close(document).catch(() => undefined);
+    if (engine !== undefined) {
+      const toClose = [...opened];
+      if (produced !== undefined && !opened.includes(produced)) {
+        // Close the freshly produced handle too, even if save/write/commit failed.
+        toClose.push(produced);
+      }
+      for (const document of toClose) {
+        await engine.close(document).catch(() => undefined);
+      }
     }
   }
 }

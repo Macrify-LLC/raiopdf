@@ -128,7 +128,7 @@ export const sanitizeInputSchema = {
   output: absoluteOutput,
   removeJavaScript: z.boolean().optional().describe("Default true."),
   removeEmbeddedFiles: z.boolean().optional().describe("Default true."),
-  removeLinks: z.boolean().optional().describe("Default false."),
+  removeLinks: z.boolean().optional().describe("Default true."),
 };
 export const sanitizeOutputSchema = {
   ...outputResultSchema,
@@ -149,7 +149,7 @@ export function handleSanitize(
     const { document: result, removed } = await e.sanitize(document, {
       removeJavaScript: input.removeJavaScript ?? true,
       removeEmbeddedFiles: input.removeEmbeddedFiles ?? true,
-      removeLinks: input.removeLinks ?? false,
+      removeLinks: input.removeLinks ?? true,
     });
     const removedLabel = removed.length > 0 ? removed.join(", ") : "nothing";
     return {

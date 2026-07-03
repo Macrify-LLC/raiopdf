@@ -4,6 +4,7 @@ import "./ToolRow.css";
 export interface ToolRowProps {
   icon: ReactNode;
   label: string;
+  description?: string;
   selected?: boolean;
   disabled?: boolean;
   onSelect?: (() => void) | undefined;
@@ -12,6 +13,7 @@ export interface ToolRowProps {
 export function ToolRow({
   icon,
   label,
+  description,
   selected = false,
   disabled = false,
   onSelect,
@@ -22,6 +24,7 @@ export function ToolRow({
       className="tool-row"
       data-selected={selected ? "true" : undefined}
       aria-current={selected ? "true" : undefined}
+      title={description ?? label}
       disabled={disabled}
       onClick={onSelect}
     >

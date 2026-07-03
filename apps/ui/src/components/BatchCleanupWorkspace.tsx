@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { JurisdictionPack } from "@raiopdf/rules";
 import type { OpenedFile } from "../lib/filePort";
+import { formatBatchFailureReason } from "../lib/userMessages";
 import { PlusIcon } from "../icons";
 import "./BatchCleanupWorkspace.css";
 
@@ -57,6 +58,29 @@ export interface BatchCleanupWorkspaceProps {
   onAddFile: () => Promise<OpenedFile | null>;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
 }
+
+const OCR_MODE_HELP: Record<BatchCleanupOcrMode, string> = {
+  "auto-image-only": "Run OCR only on PDFs that appear to have no searchable text.",
+  "skip-text": "Skip OCR when a PDF already has searchable text.",
+  "force-ocr": "Run OCR even when searchable text may already exist.",
+  off: "Do not run OCR during batch cleanup.",
+};
+
+const STATUS_LABELS: Record<BatchCleanupStatus, string> = {
+  pending: "Queued",
+  running: "Running",
+  done: "Done",
+  failed: "Needs attention",
+  skipped: "Skipped",
+};
+
+const STATUS_HELP: Record<BatchCleanupStatus, string> = {
+  pending: "Waiting for batch cleanup to start this file.",
+  running: "Batch cleanup is working on this file.",
+  done: "This file finished and outputs were written.",
+  failed: "This file could not be cleaned up. Review the reason and try again.",
+  skipped: "This file was skipped by the selected cleanup rules.",
+};
 
 export function BatchCleanupWorkspace({
   currentFile,
@@ -156,18 +180,21 @@ export function BatchCleanupWorkspace({
               <p className="batch-workspace__file-name">{file.name}</p>
               <p className="batch-workspace__file-meta">
                 {file.path ? "Local file" : "Path unavailable"}
-                {file.reason ? ` · ${file.reason}` : ""}
+                {file.reason ? ` · ${formatBatchFailureReason(file.reason)}` : ""}
               </p>
             </div>
-            <span className={`batch-workspace__status-chip batch-workspace__status-chip--${file.status}`}>
-              {file.status}
+            <span
+              className={`batch-workspace__status-chip batch-workspace__status-chip--${file.status}`}
+              title={STATUS_HELP[file.status]}
+            >
+              {STATUS_LABELS[file.status]}
             </span>
           </div>
         ))}
       </div>
 
       <div className="batch-workspace__grid">
-        <label>
+        <label title="Use a filing rules pack when cleanup needs filing-size split decisions.">
           <span>Jurisdiction pack</span>
           <select value={packId} onChange={(event) => setPackId(event.target.value)}>
             <option value="">None</option>
@@ -178,7 +205,7 @@ export function BatchCleanupWorkspace({
             ))}
           </select>
         </label>
-        <label>
+        <label title="Choose an empty folder where RaioPDF can write the cleaned PDFs and reports.">
           <span>Package root folder</span>
           <input
             value={outputDir}
@@ -189,7 +216,7 @@ export function BatchCleanupWorkspace({
       </div>
 
       <div className="batch-workspace__section">
-        <label>
+        <label title={OCR_MODE_HELP[ocrMode]}>
           <span>OCR mode</span>
           <select value={ocrMode} onChange={(event) => setOcrMode(event.target.value as BatchCleanupOcrMode)}>
             <option value="auto-image-only">Image-only files</option>
@@ -199,15 +226,15 @@ export function BatchCleanupWorkspace({
           </select>
         </label>
         <div className="batch-workspace__checks">
-          <Checkbox label="Compress" checked={compress} onChange={setCompress} />
-          <Checkbox label="Sanitize active content" checked={sanitize} onChange={setSanitize} />
-          <Checkbox label="Scrub metadata" checked={scrubMetadata} onChange={setScrubMetadata} />
-          <Checkbox label="Repair" checked={repair} onChange={setRepair} />
-          <Checkbox label="Split by size" checked={splitBySize} onChange={setSplitBySize} />
-          <Checkbox label="Normalize pages" checked={normalizePages} onChange={setNormalizePages} />
+          <Checkbox label="Compress" title="Reduce file size after cleanup." checked={compress} onChange={setCompress} />
+          <Checkbox label="Sanitize active content" title="Remove active content such as JavaScript, launch actions, links, and attachments." checked={sanitize} onChange={setSanitize} />
+          <Checkbox label="Scrub metadata" title="Remove document metadata fields without changing page content." checked={scrubMetadata} onChange={setScrubMetadata} />
+          <Checkbox label="Repair" title="Try to rebuild PDFs that fail to open cleanly before other steps run." checked={repair} onChange={setRepair} />
+          <Checkbox label="Split by size" title="Split outputs into filing-size parts when they exceed the selected cap." checked={splitBySize} onChange={setSplitBySize} />
+          <Checkbox label="Normalize pages" title="Normalize page boxes and orientation before writing outputs." checked={normalizePages} onChange={setNormalizePages} />
         </div>
         {splitBySize ? (
-          <label className="batch-workspace__number">
+          <label className="batch-workspace__number" title="Maximum size for each split output part.">
             <span>Split cap MB</span>
             <input
               type="number"
@@ -246,15 +273,17 @@ export function BatchCleanupWorkspace({
 
 function Checkbox({
   label,
+  title,
   checked,
   onChange,
 }: {
   label: string;
+  title: string;
   checked: boolean;
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="batch-workspace__checkbox-row">
+    <label className="batch-workspace__checkbox-row" title={title}>
       <input
         type="checkbox"
         checked={checked}

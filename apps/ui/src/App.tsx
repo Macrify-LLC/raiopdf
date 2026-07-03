@@ -86,6 +86,7 @@ import {
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
 import { writeProductionLastUsed } from "./lib/productionHints";
+import { formatWorkflowError } from "./lib/userMessages";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -269,6 +270,7 @@ export function App() {
   const [filingReport, setFilingReport] = useState<PreflightReport | null>(null);
   const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
   const [filingReportLoading, setFilingReportLoading] = useState(false);
+  const [filingReportError, setFilingReportError] = useState<string | null>(null);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
     phase: "idle",
     message: null,
@@ -334,6 +336,7 @@ export function App() {
   >(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [mcpPath, setMcpPath] = useState<string | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
   useEffect(() => {
     if (!settingsOpen) {
@@ -349,6 +352,7 @@ export function App() {
         if (!cancelled) {
           setMcpEnabled(status.enabled);
           setMcpPath(status.path);
+          setMcpStatus(null);
         }
       } catch {
         // Non-Tauri/dev context or command unavailable -- keep the safe default (off).
@@ -359,6 +363,7 @@ export function App() {
     };
   }, [settingsOpen]);
   const mcpToggleChainRef = useRef<Promise<void>>(Promise.resolve());
+  const mcpToggleRequestRef = useRef(0);
   const updateFilingPreferences = useCallback((next: FilingPreferences) => {
     setFilingPreferences(next);
     writeFilingPreferences(next);
@@ -381,13 +386,20 @@ export function App() {
     }));
   }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
+    const requestId = mcpToggleRequestRef.current + 1;
+    mcpToggleRequestRef.current = requestId;
     setMcpEnabled(next);
+    setMcpStatus(null);
     // Serialize gate writes so rapid toggles persist in click order (the last
     // click wins) instead of racing a create against a remove.
     mcpToggleChainRef.current = mcpToggleChainRef.current.then(async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("mcp_set_enabled", { enabled: next });
+        if (mcpToggleRequestRef.current === requestId) {
+          setMcpEnabled(next);
+          setMcpStatus(null);
+        }
       } catch {
         // Best-effort resync to the persisted truth on failure.
         try {
@@ -395,9 +407,15 @@ export function App() {
           const status = await invoke<{ enabled: boolean; path: string | null }>(
             "mcp_status",
           );
-          setMcpEnabled(status.enabled);
+          if (mcpToggleRequestRef.current === requestId) {
+            setMcpEnabled(status.enabled);
+            setMcpStatus("Connector setting could not be saved. The switch was restored to the saved setting.");
+          }
         } catch {
-          setMcpEnabled(!next);
+          if (mcpToggleRequestRef.current === requestId) {
+            setMcpEnabled(!next);
+            setMcpStatus("Connector setting could not be saved. Try again from the desktop app.");
+          }
         }
       }
     });
@@ -456,9 +474,7 @@ export function App() {
         result,
       });
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : "Production package could not be built.";
+      const message = formatWorkflowError(error, "Production package could not be built.");
       setProductionProgress({
         running: false,
         message,
@@ -504,9 +520,7 @@ export function App() {
         result,
       });
     } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : "Batch cleanup could not be completed.";
+      const message = formatWorkflowError(error, "Batch cleanup could not be completed.");
       setBatchCleanupProgress({
         running: false,
         message,
@@ -546,6 +560,7 @@ export function App() {
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
     setFilingReport(null);
     setFilingReportLoading(false);
+    setFilingReportError(null);
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
     setFilingImpact(null);
@@ -571,6 +586,7 @@ export function App() {
     setScannerState({ scanning: false, message: null, hits: [] });
     setFilingReport(null);
     setFilingReportLoading(false);
+    setFilingReportError(null);
     setFilingResult(null);
     setFilingImpact(null);
     setProductionProgress({ running: false, message: null, result: null });
@@ -722,6 +738,7 @@ export function App() {
 
     if (activeLegalTool !== "prepare-for-filing") {
       setFilingReportLoading(false);
+      setFilingReportError(null);
       return;
     }
 
@@ -729,6 +746,7 @@ export function App() {
       setFilingReport(null);
       setFilingFacts(null);
       setFilingReportLoading(false);
+      setFilingReportError(null);
       return;
     }
 
@@ -744,6 +762,7 @@ export function App() {
     }
 
     setFilingReportLoading(true);
+    setFilingReportError(null);
 
     void getCachedFilingFacts(filingFactsCacheRef, sourceBytes, factsOptions)
       .then((facts) => {
@@ -753,11 +772,13 @@ export function App() {
 
         setFilingFacts(facts);
         setFilingReport(runFilingPreflight(facts, filingPack));
+        setFilingReportError(null);
       })
       .catch(() => {
         if (!disposed && documentBytesRef.current === sourceBytes) {
           setFilingFacts(null);
           setFilingReport(null);
+          setFilingReportError("RaioPDF could not read the facts needed for filing checks. The document was left unchanged; try reopening or repairing the PDF.");
         }
       })
       .finally(() => {
@@ -900,9 +921,7 @@ export function App() {
           return;
         }
 
-        const message = error instanceof Error
-          ? error.message
-          : "OCR could not finish. The document was left unchanged.";
+        const message = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
 
         finishCurrentRun();
         setOcrState({
@@ -1452,9 +1471,7 @@ export function App() {
     } catch (error) {
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
-        : error instanceof Error
-          ? error.message
-          : "Redaction could not finish. The document was left unchanged.";
+        : formatWorkflowError(error, "Redaction could not finish. The document was left unchanged.");
 
       if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
         return;
@@ -2300,9 +2317,7 @@ export function App() {
 
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
-        : error instanceof Error
-          ? error.message
-          : "The filing copy could not be prepared.";
+        : formatWorkflowError(error, "The filing copy could not be prepared.");
 
       setFilingProgress({
         phase: "error",
@@ -2612,6 +2627,7 @@ export function App() {
             selectedCourtProfile={selectedCourtProfile}
             report={filingReport}
             loadingReport={filingReportLoading}
+            reportError={filingReportError}
             progress={filingProgress}
             result={filingResult}
             impact={filingImpact}
@@ -2884,6 +2900,7 @@ export function App() {
           mcpPath={mcpPath}
           focusSection={settingsFocusSection}
           onFocusSectionHandled={() => setSettingsFocusSection(null)}
+          mcpStatus={mcpStatus}
           diagnosticsStatus={diagnosticsStatus}
           onExportDiagnostics={handleExportDiagnostics}
         />

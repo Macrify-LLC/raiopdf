@@ -89,6 +89,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const layerRef = useRef<HTMLDivElement>(null);
   const [textBoxes, setTextBoxes] = useState<readonly PageTextBox[]>([]);
   const [highlightDraft, setHighlightDraft] = useState<ViewportRect | null>(null);
+  const [textLayerError, setTextLayerError] = useState<string | null>(null);
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
@@ -114,6 +115,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     let disposed = false;
 
     setTextBoxes([]);
+    setTextLayerError(null);
 
     void page
       .getTextContent()
@@ -125,6 +127,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       .catch(() => {
         if (!disposed) {
           setTextBoxes([]);
+          setTextLayerError("Text could not be read on this page, so highlight drag is unavailable here.");
         }
       });
 
@@ -720,6 +723,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
       {highlightDraft ? (
         <span className="edit-layer__highlight-draft" style={toOverlayStyle(highlightDraft)} />
+      ) : null}
+
+      {tool === "highlight" && textLayerError ? (
+        <p className="edit-layer__message" role="status">
+          {textLayerError}
+        </p>
       ) : null}
 
       {textDraft ? (

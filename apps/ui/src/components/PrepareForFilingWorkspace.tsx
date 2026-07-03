@@ -77,6 +77,7 @@ export interface PrepareForFilingWorkspaceProps {
   selectedCourtProfile: CourtProfile | null;
   report: PreflightReport | null;
   loadingReport: boolean;
+  reportError?: string | null;
   progress: FilingProgressState;
   result: FilingResultState | null;
   impact: FilingImpactState | null;
@@ -99,6 +100,7 @@ export function PrepareForFilingWorkspace({
   selectedCourtProfile,
   report,
   loadingReport,
+  reportError = null,
   progress,
   result,
   impact,
@@ -249,6 +251,7 @@ export function PrepareForFilingWorkspace({
             type="button"
             className="filing-card__primary-button"
             disabled={!canPrepare}
+            title={reportError ?? (canPrepare ? "Build a filing copy using the checks shown below." : "Run is available after RaioPDF reads the filing checks.")}
             onClick={() => onPrepare(certificateOpen ? certificate : null, prepareOptions())}
           >
             {primaryLabel}
@@ -332,6 +335,11 @@ export function PrepareForFilingWorkspace({
               <p className="filing-card__status" role="status">
                 <LoadingSun size={14} label="Reading document facts" />
                 Reading document facts...
+              </p>
+            ) : null}
+            {reportError ? (
+              <p className="filing-card__status" role="status">
+                {reportError}
               </p>
             ) : null}
             {activeReport?.checks.map((check) => (

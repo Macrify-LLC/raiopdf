@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { PDFDocument } from "pdf-lib";
 import type { OpenedFile } from "../lib/filePort";
 import {
   productionHintMessage,
@@ -63,6 +64,8 @@ export function ProductionSetWorkspace({
   onAddFile,
   onRun,
 }: ProductionSetWorkspaceProps) {
+  const mountedRef = useRef(true);
+  const addFilePendingRef = useRef(false);
   const [files, setFiles] = useState<ProductionSetFile[]>(() =>
     currentFile ? [fromOpenedFile(currentFile, currentPageCount)] : [],
   );
@@ -75,12 +78,25 @@ export function ProductionSetWorkspace({
   const [combinedPdf, setCombinedPdf] = useState(false);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
+  const [addingFile, setAddingFile] = useState(false);
+  const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
   const totalPages = files.reduce((sum, file) => sum + file.pages, 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
-  const canRun = files.length > 0 && outputDir.trim().length > 0 && !overflows && !progress.running;
+  const addFileBusy = addingFile || pendingPageCountReads > 0;
+  const canRun = files.length > 0 &&
+    outputDir.trim().length > 0 &&
+    !overflows &&
+    !addFileBusy &&
+    !progress.running;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const lastUsed = readProductionLastUsed(prefix);
@@ -90,11 +106,45 @@ export function ProductionSetWorkspace({
   }, [prefix]);
 
   async function addFile() {
-    const opened = await onAddFile();
-    if (!opened) {
+    if (addFilePendingRef.current) {
       return;
     }
-    setFiles((current) => [...current, fromOpenedFile(opened, 0)]);
+
+    addFilePendingRef.current = true;
+    setAddingFile(true);
+
+    try {
+      const opened = await onAddFile();
+      if (!opened || !mountedRef.current) {
+        return;
+      }
+
+      setPendingPageCountReads((current) => current + 1);
+      setLocalMessage("Reading page count...");
+
+      try {
+        const pages = await readProductionSetPageCount(opened.bytes);
+        if (!mountedRef.current) {
+          return;
+        }
+        setFiles((current) => [...current, fromOpenedFile(opened, pages)]);
+        setLocalMessage(null);
+      } catch {
+        if (!mountedRef.current) {
+          return;
+        }
+        setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
+      } finally {
+        if (mountedRef.current) {
+          setPendingPageCountReads((current) => Math.max(0, current - 1));
+        }
+      }
+    } finally {
+      if (mountedRef.current) {
+        setAddingFile(false);
+      }
+      addFilePendingRef.current = false;
+    }
   }
 
   function moveFile(index: number, delta: -1 | 1) {
@@ -144,6 +194,8 @@ export function ProductionSetWorkspace({
           type="button"
           className="production-workspace__secondary-button"
           onClick={addFile}
+          disabled={addFileBusy || progress.running}
+          title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
         >
           <PlusIcon size={14} /> Add PDF
         </button>
@@ -156,11 +208,11 @@ export function ProductionSetWorkspace({
             <div className="production-workspace__file-row" key={file.id}>
               <div>
                 <p className="production-workspace__file-name">{file.name}</p>
-                <p className="production-workspace__file-meta">
-                  {file.pages > 0 ? `${file.pages} page${file.pages === 1 ? "" : "s"}` : "Page count pending"}
+                <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
+                  {file.pages} page{file.pages === 1 ? "" : "s"}
                 </p>
               </div>
-              <label>
+              <label title="Optional confidentiality text to include for this source in the production package.">
                 <span>Designation</span>
                 <select
                   value={designationSelectValue(file.designation)}
@@ -202,11 +254,11 @@ export function ProductionSetWorkspace({
       </div>
 
       <div className="production-workspace__grid">
-        <label>
+        <label title="Letters before the Bates number, for example SMITH000001.">
           <span>Prefix</span>
           <input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
         </label>
-        <label>
+        <label title="First Bates number to use for the first selected page.">
           <span>Start</span>
           <input
             type="number"
@@ -215,7 +267,7 @@ export function ProductionSetWorkspace({
             onChange={(event) => setStart(Number(event.target.value))}
           />
         </label>
-        <label>
+        <label title="Minimum number of digits to pad after the prefix.">
           <span>Digits</span>
           <input
             type="number"
@@ -225,7 +277,7 @@ export function ProductionSetWorkspace({
             onChange={(event) => setDigits(Number(event.target.value))}
           />
         </label>
-        <label>
+        <label title="Choose an empty folder where RaioPDF can write the production package.">
           <span>Package root folder</span>
           <input
             value={outputDir}
@@ -241,7 +293,7 @@ export function ProductionSetWorkspace({
       ) : null}
 
       <div className="production-workspace__section">
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Write PDF and CSV indexes listing produced files and Bates ranges.">
           <input
             type="checkbox"
             checked={includeIndex}
@@ -249,7 +301,7 @@ export function ProductionSetWorkspace({
           />
           <span>Production index PDF and CSV</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Include each source filename as a column in the production index.">
           <input
             type="checkbox"
             checked={includeFilenameInIndex}
@@ -257,7 +309,7 @@ export function ProductionSetWorkspace({
           />
           <span>Filename column in index</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Also write one combined produced PDF alongside individual outputs.">
           <input
             type="checkbox"
             checked={combinedPdf}
@@ -265,7 +317,7 @@ export function ProductionSetWorkspace({
           />
           <span>Combined production PDF</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Group production outputs into volume folders by size.">
           <input
             type="checkbox"
             checked={useVolumeCap}
@@ -274,7 +326,7 @@ export function ProductionSetWorkspace({
           <span>Volume folders</span>
         </label>
         {useVolumeCap ? (
-          <label>
+          <label title="Maximum size for each volume folder before starting the next volume.">
             <span>Volume cap MB</span>
             <input
               type="number"
@@ -323,6 +375,11 @@ function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
     pages,
     designation: "",
   };
+}
+
+export async function readProductionSetPageCount(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes);
+  return pdf.getPageCount();
 }
 
 function designationSelectValue(value: string): string {

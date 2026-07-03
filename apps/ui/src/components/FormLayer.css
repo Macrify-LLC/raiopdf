@@ -47,3 +47,20 @@
 .form-layer__checkbox:disabled {
   opacity: 0.45;
 }
+
+.form-layer__message {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  max-width: min(320px, calc(100% - var(--space-6)));
+  margin: 0;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+  box-shadow: var(--shadow-control);
+}

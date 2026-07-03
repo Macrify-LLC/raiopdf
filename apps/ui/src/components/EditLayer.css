@@ -45,6 +45,24 @@
   pointer-events: none;
 }
 
+.edit-layer__message {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  max-width: min(340px, calc(100% - var(--space-6)));
+  margin: 0;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+  box-shadow: var(--shadow-control);
+  pointer-events: none;
+}
+
 /* ---- Placed items (text boxes, images, signatures) ---- */
 
 .edit-layer__item {

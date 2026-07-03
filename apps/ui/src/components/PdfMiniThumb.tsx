@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { loadPdfDocument } from "../lib/pdfjs";
 
 export interface PdfMiniThumbProps {
@@ -8,17 +8,21 @@ export interface PdfMiniThumbProps {
 
 export function PdfMiniThumb({ bytes, label }: PdfMiniThumbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [renderError, setRenderError] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
 
     if (!bytes || !canvas) {
+      setRenderError(false);
       return;
     }
 
     let disposed = false;
     let renderTask: ReturnType<Awaited<ReturnType<Awaited<ReturnType<typeof loadPdfDocument>>["getPage"]>>["render"]> | null = null;
     let loadedDocument: Awaited<ReturnType<typeof loadPdfDocument>> | null = null;
+
+    setRenderError(false);
 
     void loadPdfDocument(bytes)
       .then(async (pdf) => {
@@ -41,8 +45,8 @@ export function PdfMiniThumb({ bytes, label }: PdfMiniThumbProps) {
         return renderTask.promise;
       })
       .catch((error: unknown) => {
-        if (error instanceof Error && error.name !== "RenderingCancelledException") {
-          console.error(error);
+        if (!disposed && !isCancelledRenderError(error)) {
+          setRenderError(true);
         }
       });
 
@@ -56,8 +60,24 @@ export function PdfMiniThumb({ bytes, label }: PdfMiniThumbProps) {
   return (
     <span className="pdf-mini-thumb" aria-label={label}>
       {bytes ? (
-        <canvas ref={canvasRef} className="pdf-mini-thumb__canvas" aria-hidden="true" />
+        <>
+          {renderError ? (
+            <span className="pdf-mini-thumb__error" role="status">
+              Preview unavailable
+            </span>
+          ) : null}
+          <canvas
+            ref={canvasRef}
+            className="pdf-mini-thumb__canvas"
+            aria-hidden="true"
+            data-hidden={renderError ? "true" : undefined}
+          />
+        </>
       ) : null}
     </span>
   );
+}
+
+function isCancelledRenderError(error: unknown): boolean {
+  return error instanceof Error && error.name === "RenderingCancelledException";
 }

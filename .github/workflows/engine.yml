@@ -27,7 +27,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Set up Java
+      - name: Set up Java 25 runtime
+        uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Java 21 build launcher
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
         with:
           distribution: temurin
@@ -41,4 +47,6 @@ jobs:
         run: PLATFORM=linux-x64 engine/build.sh
 
       - name: Verify engine live
-        run: PLATFORM=linux-x64 engine/verify-live.sh
+        run: |
+          : "${JAVA_HOME_25_X64:?Java 25 runtime was not configured}"
+          JAVA_BIN="$JAVA_HOME_25_X64/bin/java" PLATFORM=linux-x64 engine/verify-live.sh

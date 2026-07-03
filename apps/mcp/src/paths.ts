@@ -26,6 +26,10 @@ export type PreparedOutput = {
   abort(): Promise<void>;
 };
 
+export type PreparedPackageOutputDir = {
+  outputPath: string;
+};
+
 export async function resolveInput(inputPath: string): Promise<ResolvedInput> {
   assertAbsolutePath(inputPath, "input");
   await assertNoSymlinkComponents(inputPath);
@@ -129,6 +133,13 @@ export async function prepareOutput(outputPath: string): Promise<PreparedOutput>
       await cleanup();
     },
   };
+}
+
+export async function preparePackageOutputDir(outputDir: string): Promise<PreparedPackageOutputDir> {
+  assertAbsolutePath(outputDir, "output");
+  await assertNoSymlinkComponents(outputDir);
+
+  return { outputPath: path.resolve(outputDir) };
 }
 
 async function reserveOutput(outputPath: string): Promise<fs.FileHandle> {

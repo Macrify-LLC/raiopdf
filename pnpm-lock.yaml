@@ -47,6 +47,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@raiopdf/batch-cleanup':
+        specifier: workspace:*
+        version: link:../../packages/batch-cleanup
       '@raiopdf/engine-api':
         specifier: workspace:*
         version: link:../../packages/engine-api
@@ -112,6 +115,24 @@ importers:
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+
+  packages/batch-cleanup:
+    dependencies:
+      '@raiopdf/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@raiopdf/engine-local':
+        specifier: workspace:*
+        version: link:../engine-local
+      '@raiopdf/package-writer':
+        specifier: workspace:*
+        version: link:../package-writer
+      '@raiopdf/rules':
+        specifier: workspace:*
+        version: link:../rules
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1

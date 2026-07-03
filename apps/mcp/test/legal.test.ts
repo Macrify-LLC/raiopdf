@@ -169,6 +169,27 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(path.join(outputDir, "raio-manifest", "checksums.txt"))).resolves.toBeUndefined();
   });
 
+  it("build_production_set accepts an existing empty package directory", async () => {
+    const source = await makePdf("prod-a.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+    await fs.mkdir(outputDir);
+
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: source }],
+        outputDir,
+        prefix: "PROD",
+      },
+      engine,
+    );
+
+    expect(structured(result)).toMatchObject({
+      ok: true,
+      packageRoot: outputDir,
+    });
+    await expect(fs.access(path.join(outputDir, "raio-manifest", "manifest.json"))).resolves.toBeUndefined();
+  });
+
   it("build_production_set rejects relative source paths before writing output", async () => {
     const outputDir = path.join(dir, "production-package");
 

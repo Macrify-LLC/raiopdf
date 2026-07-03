@@ -74,6 +74,58 @@ pub struct ProductionSetShellOutput {
     file_count: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchCleanupOneShotInput {
+    inputs: Vec<String>,
+    output_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pack_id: Option<String>,
+    operations: BatchCleanupOperations,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCleanupOperations {
+    ocr_mode: String,
+    compress: bool,
+    sanitize: bool,
+    scrub_metadata: bool,
+    repair: bool,
+    split_by_size: bool,
+    split_size_mb: f64,
+    normalize_pages: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchCleanupOneShotOutput {
+    ok: bool,
+    error: Option<ToolError>,
+    package_root: Option<String>,
+    report_pdf: Option<String>,
+    report_json: Option<String>,
+    files: Option<Vec<BatchCleanupFileOutput>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCleanupFileOutput {
+    source_filename: String,
+    status: String,
+    reason: Option<String>,
+    outputs: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCleanupShellOutput {
+    package_root: String,
+    report_pdf: String,
+    report_json: String,
+    files: Vec<BatchCleanupFileOutput>,
+}
+
 fn config_root() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(dir);
@@ -176,7 +228,7 @@ pub fn build_production_set(
         .map_err(|error| format!("failed to parse build_production_set result: {error}"))?;
 
     if !output.ok {
-        return Err(format_tool_error(output.error));
+        return Err(format_tool_error("build_production_set", output.error));
     }
 
     let package_root = output
@@ -192,6 +244,41 @@ pub fn build_production_set(
         index_location: output.index_pdf,
         next_number,
         file_count,
+    })
+}
+
+#[tauri::command]
+pub fn batch_cleanup(
+    inputs: Vec<String>,
+    output_dir: String,
+    pack_id: Option<String>,
+    operations: BatchCleanupOperations,
+) -> Result<BatchCleanupShellOutput, String> {
+    let input = BatchCleanupOneShotInput {
+        inputs,
+        output_dir,
+        pack_id,
+        operations,
+    };
+    let stdout = run_mcp_one_shot("batch_cleanup", &input)?;
+    let output: BatchCleanupOneShotOutput = serde_json::from_slice(&stdout)
+        .map_err(|error| format!("failed to parse batch_cleanup result: {error}"))?;
+
+    if !output.ok {
+        return Err(format_tool_error("batch_cleanup", output.error));
+    }
+
+    Ok(BatchCleanupShellOutput {
+        package_root: output
+            .package_root
+            .ok_or_else(|| "batch_cleanup result did not include packageRoot".to_string())?,
+        report_pdf: output
+            .report_pdf
+            .ok_or_else(|| "batch_cleanup result did not include reportPdf".to_string())?,
+        report_json: output
+            .report_json
+            .ok_or_else(|| "batch_cleanup result did not include reportJson".to_string())?,
+        files: output.files.unwrap_or_default(),
     })
 }
 
@@ -215,7 +302,7 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
         })?;
 
     let payload = serde_json::to_vec(input)
-        .map_err(|error| format!("failed to encode build_production_set request: {error}"))?;
+        .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
     {
         let mut stdin = child
             .stdin
@@ -223,17 +310,17 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
             .ok_or_else(|| "failed to open RaioPDF MCP stdin".to_string())?;
         stdin
             .write_all(&payload)
-            .map_err(|error| format!("failed to send build_production_set request: {error}"))?;
+            .map_err(|error| format!("failed to send {tool_name} request: {error}"))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|error| format!("failed to read build_production_set response: {error}"))?;
+        .map_err(|error| format!("failed to read {tool_name} response: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            format!("build_production_set failed with status {}", output.status)
+            format!("{tool_name} failed with status {}", output.status)
         } else {
             stderr
         });
@@ -242,12 +329,12 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
     Ok(output.stdout)
 }
 
-fn format_tool_error(error: Option<ToolError>) -> String {
+fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
     match error {
         Some(error) => match error.action {
             Some(action) => format!("{} {}", error.message, action),
             None => error.message,
         },
-        None => "build_production_set failed".to_string(),
+        None => format!("{tool_name} failed"),
     }
 }

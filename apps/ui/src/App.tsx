@@ -53,6 +53,11 @@ import {
   type PrepareOptions,
 } from "./components/PrepareForFilingWorkspace";
 import {
+  BatchCleanupWorkspace,
+  type BatchCleanupProgress,
+  type BatchCleanupRunInput,
+} from "./components/BatchCleanupWorkspace";
+import {
   ProductionSetWorkspace,
   type ProductionSetProgress,
   type ProductionSetRunInput,
@@ -257,6 +262,11 @@ export function App() {
     message: null,
     result: null,
   });
+  const [batchCleanupProgress, setBatchCleanupProgress] = useState<BatchCleanupProgress>({
+    running: false,
+    message: null,
+    result: null,
+  });
   // The single pack binding read by BOTH the filing pipeline and the workspace UI.
   // A future jurisdiction selector replaces this one line — keeping the button's
   // promise and the pipeline's behavior from ever reading different packs.
@@ -401,6 +411,54 @@ export function App() {
       });
     }
   }, []);
+
+  const buildBatchCleanupFromUi = useCallback(async (input: BatchCleanupRunInput) => {
+    setBatchCleanupProgress({
+      running: true,
+      message: "Running batch cleanup...",
+      result: null,
+    });
+
+    try {
+      const sourcePaths = input.files.map((file) => file.path);
+      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
+        throw new Error("Batch cleanup needs PDFs opened from local desktop paths.");
+      }
+
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{
+        packageRoot: string;
+        reportPdf: string;
+        reportJson: string;
+        files: {
+          sourceFilename: string;
+          status: "pending" | "running" | "done" | "failed" | "skipped";
+          reason: string | null;
+          outputs: string[];
+        }[];
+      }>("batch_cleanup", {
+        inputs: input.files.map((file) => file.path),
+        outputDir: input.outputDir,
+        packId: input.packId ?? undefined,
+        operations: input.operations,
+      });
+
+      setBatchCleanupProgress({
+        running: false,
+        message: `Batch cleanup finished for ${result.files.length} file(s).`,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Batch cleanup could not be completed.";
+      setBatchCleanupProgress({
+        running: false,
+        message,
+        result: null,
+      });
+    }
+  }, []);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
@@ -437,6 +495,7 @@ export function App() {
     setFilingResult(null);
     setFilingImpact(null);
     setProductionProgress({ running: false, message: null, result: null });
+    setBatchCleanupProgress({ running: false, message: null, result: null });
     setSidecarStatus({
       running: false,
       message: null,
@@ -460,6 +519,7 @@ export function App() {
     setFilingResult(null);
     setFilingImpact(null);
     setProductionProgress({ running: false, message: null, result: null });
+    setBatchCleanupProgress({ running: false, message: null, result: null });
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
     }
@@ -836,6 +896,19 @@ export function App() {
       setProductionProgress({
         running: false,
         message: "This PDF could not be added to the production set.",
+        result: null,
+      });
+      return null;
+    }
+  }, []);
+
+  const openBatchCleanupFile = useCallback(async (): Promise<OpenedFile | null> => {
+    try {
+      return await filePort.openFile();
+    } catch {
+      setBatchCleanupProgress({
+        running: false,
+        message: "This PDF could not be added to the batch.",
         result: null,
       });
       return null;
@@ -2403,6 +2476,29 @@ export function App() {
             onPrepare={prepareFilingCopy}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeLegalTool === "batch-cleanup") {
+      return (
+        <FloatingDialog
+          title="Batch Cleanup"
+          eyebrow="Legal"
+          width="lg"
+          onClose={closeWorkspace}
+        >
+          <BatchCleanupWorkspace
+            currentFile={document.bytes ? {
+              bytes: document.bytes,
+              name: document.fileName ?? "Untitled.pdf",
+              path: document.filePath,
+            } : null}
+            packs={AVAILABLE_FILING_PACKS}
+            progress={batchCleanupProgress}
+            onAddFile={openBatchCleanupFile}
+            onRun={buildBatchCleanupFromUi}
           />
         </FloatingDialog>
       );

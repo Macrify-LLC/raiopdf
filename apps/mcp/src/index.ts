@@ -9,6 +9,12 @@ import { ENABLE_ACTION, enableFlagPath, isEnabled } from "./gate.js";
 import { errorResult, type StructuredToolResult } from "./format.js";
 import { PathPolicyError } from "./paths.js";
 import {
+  batchCleanupInputSchema,
+  batchCleanupOutputSchema,
+  handleBatchCleanup,
+  type BatchCleanupInput,
+} from "./tools/batchCleanup.js";
+import {
   handleHealth,
   healthInputSchema,
   healthOutputSchema,
@@ -308,6 +314,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
   );
 
   server.registerTool(
+    "batch_cleanup",
+    {
+      title: "Batch cleanup PDFs",
+      description:
+        "Runs a serial batch OCR/cleanup worklist and writes a package with cleaned PDFs in upload/, batch-report.pdf, manifest JSON, and checksums.",
+      inputSchema: batchCleanupInputSchema,
+      outputSchema: batchCleanupOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: BatchCleanupInput) =>
+        await handleBatchCleanup(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
     "page_numbers",
     {
       title: "Add page numbers",
@@ -438,12 +461,14 @@ async function runOneShot(): Promise<void> {
   const toolName = process.argv[3];
   const input = JSON.parse(await readStdin()) as unknown;
 
-  if (toolName !== "build_production_set") {
+  if (toolName !== "build_production_set" && toolName !== "batch_cleanup") {
     throw new Error(`Unsupported one-shot tool: ${toolName ?? "(missing)"}`);
   }
 
   try {
-    const result = await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
+    const result = toolName === "batch_cleanup"
+      ? await handleBatchCleanup(input as BatchCleanupInput, defaultEngineHandle)
+      : await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
     console.log(JSON.stringify(result.structuredContent));
   } catch (error) {
     const result = toolError(error);

@@ -80,8 +80,8 @@ export type JurisdictionPack = {
     firstPage: RectInches;
     laterPages: RectInches | null;
   };
-  maxFileBytes: number;
-  recommendedMaxFileBytes: number;
+  maxFileBytes?: number;
+  recommendedMaxFileBytes?: number;
   maxEnvelopeBytes?: number;
   filenameMaxChars?: number;
   filenameCharset?: string;

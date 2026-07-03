@@ -109,6 +109,9 @@ function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): P
 }
 
 function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  const maxFileBytes = pack.maxFileBytes;
+  const recommendedMaxFileBytes = pack.recommendedMaxFileBytes;
+
   if (document.fileBytes === undefined) {
     return buildCheck(pack, "file-size", {
       status: "unknown",
@@ -116,23 +119,57 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
     });
   }
 
-  if (document.fileBytes > pack.maxFileBytes) {
+  if (pack.maxFileBytes === undefined && pack.userConfigurable?.maxFileBytes === true) {
     return buildCheck(pack, "file-size", {
-      status: "warn",
-      detail: `The document is ${formatBytes(document.fileBytes)}, exceeding the ${formatBytes(pack.maxFileBytes)} portal cap.`,
+      status: "unknown",
+      detail: `The document is ${formatBytes(document.fileBytes)}. Set this court's file-size cap before RaioPDF can evaluate this check.`,
     });
   }
 
-  if (document.fileBytes > pack.recommendedMaxFileBytes) {
+  if (maxFileBytes !== undefined && document.fileBytes > maxFileBytes) {
     return buildCheck(pack, "file-size", {
       status: "warn",
-      detail: `The document is ${formatBytes(document.fileBytes)}, under the portal cap but above the ${formatBytes(pack.recommendedMaxFileBytes)} mechanical safety margin.`,
+      detail: `The document is ${formatBytes(document.fileBytes)}, exceeding the ${formatBytes(maxFileBytes)} portal cap.`,
+    });
+  }
+
+  if (recommendedMaxFileBytes !== undefined && document.fileBytes > recommendedMaxFileBytes) {
+    const authority = findConstraint(pack, "file-size").authority;
+
+    return buildCheck(pack, "file-size", {
+      status: "warn",
+      detail: maxFileBytes === undefined
+        ? `The document is ${formatBytes(document.fileBytes)}, above the ${authority} recommended limit of ${formatBytes(recommendedMaxFileBytes)}.`
+        : `The document is ${formatBytes(document.fileBytes)}, under the portal cap but above the ${formatBytes(recommendedMaxFileBytes)} recommended limit.`,
+    });
+  }
+
+  if (recommendedMaxFileBytes === undefined && maxFileBytes === undefined) {
+    return buildCheck(pack, "file-size", {
+      status: "unknown",
+      detail: "This jurisdiction pack has no configured file-size limit.",
+    });
+  }
+
+  if (recommendedMaxFileBytes === undefined) {
+    const hardMaxFileBytes = maxFileBytes;
+
+    if (hardMaxFileBytes === undefined) {
+      return buildCheck(pack, "file-size", {
+        status: "unknown",
+        detail: "This jurisdiction pack has no configured file-size limit.",
+      });
+    }
+
+    return buildCheck(pack, "file-size", {
+      status: "pass",
+      detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(hardMaxFileBytes)} portal cap.`,
     });
   }
 
   return buildCheck(pack, "file-size", {
     status: "pass",
-    detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(pack.recommendedMaxFileBytes)} safety margin.`,
+    detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(recommendedMaxFileBytes)} recommended limit.`,
   });
 }
 

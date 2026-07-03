@@ -106,7 +106,9 @@ export function PrepareForFilingWorkspace({
   const convertsToPdfA = shouldConvertToPdfA(pack);
   const needsMechanicalWork = Boolean(report?.checks.some((check) => check.status !== "pass"));
   const overPortalSize = Boolean(
-    document.fileSizeBytes && document.fileSizeBytes > pack.recommendedMaxFileBytes,
+    document.fileSizeBytes &&
+      pack.recommendedMaxFileBytes !== undefined &&
+      document.fileSizeBytes > pack.recommendedMaxFileBytes,
   );
   const primaryLabel = needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"

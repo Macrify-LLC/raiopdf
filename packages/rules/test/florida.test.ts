@@ -305,6 +305,31 @@ describe("Florida jurisdiction pack", () => {
     });
   });
 
+  it("keeps hard file-size caps on the cap-exceeded branch", () => {
+    const report = preflight(
+      {
+        filename: "motion.pdf",
+        fileBytes: 26 * 1024 * 1024,
+        searchableText: true,
+        pdfaCompliant: true,
+        pages: [
+          {
+            pageIndex: 0,
+            size: { w: 8.5, h: 11, in: true },
+            orientation: "portrait",
+            occupiedRegions: [],
+          },
+        ],
+      },
+      floridaPack,
+    );
+
+    expect(report.checks.find((check) => check.checkId === "file-size")).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("portal cap"),
+    });
+  });
+
   it("allow-lists PDF/A conversion to required and preferred stances only", () => {
     const stances: Record<PdfAStance, boolean> = {
       required: true,

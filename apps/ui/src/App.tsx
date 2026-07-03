@@ -1913,12 +1913,14 @@ export function App() {
 
         setFilingProgress({
           phase: "splitting",
-          message: "Splitting at page boundaries against the portal byte cap...",
+          message: "Splitting at page boundaries against the configured byte target...",
         });
 
+        const splitTargetBytes =
+          filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? Number.MAX_SAFE_INTEGER;
         const splitResult = await filingEngine.splitByMaxBytes(
           workingHandle,
-          filingPack.recommendedMaxFileBytes,
+          splitTargetBytes,
         );
         closeHandles.push(...splitResult.parts.map((part) => part.document));
 

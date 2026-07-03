@@ -95,7 +95,6 @@
     },
     "laterPages": null
   },
-  "maxFileBytes": 5242880,
   "recommendedMaxFileBytes": 5242880,
   "maxEnvelopeBytes": 26214400,
   "pdfa": {

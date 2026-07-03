@@ -3,7 +3,7 @@
   "packs": {
     "federal-cmecf": {
       "file": "federal-cmecf.json",
-      "sha256": "9100ad827a9f35943767f34a3445343cb1e24f697c4a2f835bee618de19ce670"
+      "sha256": "ff7b63ad8e9d5d346e3fddb1c3cb961c27743d502d92636a5362ccd0c2d2e85d"
     },
     "florida": {
       "file": "florida.json",
@@ -11,7 +11,7 @@
     },
     "georgia-efilega": {
       "file": "georgia-efilega.json",
-      "sha256": "a857d6122c4e90744b1f37bdc233d8ed0d3927335ca300f05f7e3d7d2e40b7a2"
+      "sha256": "4748dfbc70fb33fb718e5624a3e230a701ddb249e5246f9c1b3814c5763e902c"
     },
     "georgia-peachcourt": {
       "file": "georgia-peachcourt.json",

@@ -114,8 +114,6 @@
     },
     "laterPages": null
   },
-  "maxFileBytes": 9007199254740991,
-  "recommendedMaxFileBytes": 9007199254740991,
   "userConfigurable": {
     "maxFileBytes": true
   },

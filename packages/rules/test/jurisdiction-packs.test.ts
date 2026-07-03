@@ -79,6 +79,8 @@ describe("bundled jurisdiction packs", () => {
       flattenForms: { stance: "preferred", prepDefault: "on" },
       ocr: { stance: "accepted", prepDefault: "off" },
     });
+    expect(pack.maxFileBytes).toBeUndefined();
+    expect(pack.recommendedMaxFileBytes).toBeUndefined();
     expect(pack.scopeNote).toContain("Each district/bankruptcy/appellate court configures its own file-size cap");
     expect(shouldConvertToPdfA(pack)).toBe(false);
 
@@ -95,22 +97,25 @@ describe("bundled jurisdiction packs", () => {
 
     expect(Object.fromEntries(report.checks.map((check) => [check.checkId, check.status]))).toEqual({
       "searchable-text": "pass",
-      "file-size": "pass",
+      "file-size": "unknown",
       pdfa: "pass",
     });
+    expect(report.checks.find((check) => check.checkId === "file-size")?.detail).toContain(
+      "Set this court's file-size cap",
+    );
   });
 
   it("models Georgia eFileGA recommendations and skips risky PDF/A/OCR automation", () => {
     const pack = getPack("georgia-efilega");
 
     expect(pack).toMatchObject({
-      maxFileBytes: 5 * MiB,
       recommendedMaxFileBytes: 5 * MiB,
       maxEnvelopeBytes: 25 * MiB,
       pdfa: { stance: "accepted", prepDefault: "off" },
       ocr: { prepDefault: "off" },
       encryption: { stance: "prohibited" },
     });
+    expect(pack.maxFileBytes).toBeUndefined();
     expect(pack.pdfa.note).toMatch(/JBIG|JBig/);
     expect(pack.ocr.note).toMatch(/Format Error/);
     expect(shouldConvertToPdfA(pack)).toBe(false);
@@ -118,7 +123,7 @@ describe("bundled jurisdiction packs", () => {
     const report = preflight(
       {
         filename: "brief.pdf",
-        fileBytes: 6 * MiB,
+        fileBytes: 8 * MiB,
         searchableText: false,
         pdfaCompliant: false,
         pages: [],
@@ -137,6 +142,9 @@ describe("bundled jurisdiction packs", () => {
       "searchable-text": "pass",
       pdfa: "pass",
     });
+    const fileSizeCheck = report.checks.find((check) => check.checkId === "file-size");
+    expect(fileSizeCheck?.detail).toContain("Tyler Odyssey File & Serve eFileGA FAQ recommended limit");
+    expect(fileSizeCheck?.detail).not.toContain("portal cap");
     expect(report.selectionChecks?.find((check) => check.checkId === "envelope-size")).toMatchObject({
       status: "warn",
     });

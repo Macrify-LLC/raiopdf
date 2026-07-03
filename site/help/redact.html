@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redact — remove text for good — RaioPDF Help</title>
+<meta name="description" content="Permanently take confidential text out of a PDF, so it's gone — not just hidden behind a black box.">
+<link rel="canonical" href="https://raio.macrify.me/help/redact.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RaioPDF">
+<meta property="og:url" content="https://raio.macrify.me/help/redact.html">
+<meta property="og:title" content="Redact — remove text for good — RaioPDF Help">
+<meta property="og:description" content="Permanently take confidential text out of a PDF, so it's gone — not just hidden behind a black box.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Redact — remove text for good — RaioPDF Help">
+<meta name="twitter:description" content="Permanently take confidential text out of a PDF, so it's gone — not just hidden behind a black box.">
+
+<link rel="stylesheet" href="/shared/reset.css">
+<link rel="stylesheet" href="/shared/help.css">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Newsreader:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="icon" type="image/svg+xml" href="/assets/raiopdf/raiopdf-favicon.svg">
+<link rel="icon" type="image/png" sizes="545x545" href="/assets/raiopdf/raiopdf-favicon.png">
+<link rel="apple-touch-icon" href="/assets/raiopdf/raiopdf-favicon.png">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="status-bar">
+  <p><strong>Pre-alpha</strong> — under active development. Nothing to download yet.
+    <a href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener">Watch the repo</a> for the first release.</p>
+</div>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__brand" href="/">
+      <img class="nav__logo" src="/assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
+    </a>
+    <nav class="nav__links" aria-label="Primary">
+      <a href="/#philosophy">Why</a>
+      <a href="/#inputs">How it works</a>
+      <a href="/#outcomes">Features</a>
+      <a href="/#honest">What it isn't</a>
+      <a href="/help/" aria-current="page">Help</a>
+      <a class="nav__cta" href="/#top">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="help-article-section">
+    <div class="container">
+      <nav class="help-breadcrumb" aria-label="Breadcrumb">
+        <a href="/">RaioPDF</a>
+        <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
+        <a href="/help/">Help</a>
+        <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
+        <a href="/help/#group-legal">Legal</a>
+        <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
+        <span class="help-breadcrumb__current" aria-current="page">Redact — remove text for good</span>
+      </nav>
+
+      <div class="help-article-layout">
+        <article class="help-article">
+          <div class="help-article__body"><h1>Redact — remove text for good</h1><p>Redaction removes confidential text from a document for good: Social Security
+numbers, a client's name, a privileged paragraph, a bank account. When you're
+done, the words aren't hidden — they're <strong>gone</strong>.</p><h2 id="why-this-matters">Why this matters</h2><p>A common and costly mistake is drawing a black box over text and assuming it's
+gone. It isn't — the box is just a graphic sitting on top, and the words are
+still underneath, where anyone can copy them out or find them in a search.
+That's how confidential information ends up in a public filing. Real redaction
+removes the text itself.</p><p>RaioPDF's <strong>Redact</strong> tool removes it, then double-checks its own work.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Open the PDF.</li><li>In the <strong>Legal</strong> tools, choose <strong>Redact</strong>.</li><li>Drag a box over each thing you want removed. Add as many boxes as you need.</li><li>Click <strong>Apply Redactions</strong>. RaioPDF tells you how many areas will be
+permanently removed — confirm, and it removes them and checks its work.</li><li><strong>Save.</strong> RaioPDF leaves your original file untouched and asks for a new file
+name, suggesting <em>_redacted.pdf</em> — so you keep both the original and the
+redacted copy.</li></ol><p>Applying redactions changes the document open in RaioPDF; the file on your disk
+isn't touched until you save, and even then RaioPDF steers you to a new file
+rather than over the original.</p><h2 id="what-verified-means">What "verified" means</h2><p>After it removes the text, RaioPDF re-reads the whole document to make sure the
+words can't be pulled back out. It also checks the redacted pages' images, any
+hidden notes attached to those pages, and the file's hidden info (the details a
+PDF quietly carries about how it was made). If anything you redacted still shows
+up, RaioPDF tells you instead of pretending it worked.</p><p>When you see <strong>Verified</strong>, the content is actually gone.</p><h2 id="what-to-know">What to know</h2><ul><li><strong>Your original is protected for you.</strong> Applying redactions changes only the
+document open in RaioPDF — the file on your disk is left untouched. When you
+save, RaioPDF asks for a new file name (suggesting <em>_redacted.pdf</em>), so
+you end up with both the original and the redacted copy without having to
+remember to.</li><li><strong>The removed text is gone for good.</strong> Once you save the redacted version,
+the words are deleted from that file, not hidden. There's no recovering them
+from it later — which is exactly what you want in a document you're producing.</li><li><strong>If it can't be verified, nothing changes.</strong> If RaioPDF can't confirm the
+text is truly gone, it leaves your document exactly as it was and tells you
+what failed — it won't hand you a file it isn't sure about.</li><li><strong>Catch what you missed first.</strong> Run the <strong>2.425 Scanner</strong> before you file to
+flag Social Security and account numbers you might have overlooked.</li></ul></div>
+        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/scanner-2425.html">2.425 Scanner</a> — find sensitive numbers before you file</li><li><a href="/help/scrub-metadata.html">Scrub Metadata</a> — remove the hidden info a file carries</li><li><a href="/help/prepare-for-filing.html">Prepare for Filing</a> — get the file ready for the portal</li></ul></div>
+        <nav class="help-pager" aria-label="More in this category">
+          <a class="help-pager__link help-pager__link--prev" href="/help/scanner-2425.html">
+            <span class="help-pager__eyebrow">← Previous</span>
+            <span class="help-pager__title">2.425 Scanner</span>
+          </a>
+          <a class="help-pager__link help-pager__link--next" href="/help/bates-numbering.html">
+            <span class="help-pager__eyebrow">Next →</span>
+            <span class="help-pager__title">Bates Numbering</span>
+          </a>
+        </nav>
+        </article>
+        <aside class="help-toc" aria-label="On this page">
+          <p class="help-toc__label">On this page</p>
+          <ul>
+          <li><a href="#why-this-matters">Why this matters</a></li>
+          <li><a href="#how-to-do-it">How to do it</a></li>
+          <li><a href="#what-verified-means">What "verified" means</a></li>
+          <li><a href="#what-to-know">What to know</a></li>
+          <li><a href="#related">Related</a></li>
+          </ul>
+        </aside>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <a href="https://macrify.me" target="_blank" rel="noopener" aria-label="Macrify">
+        <img src="/assets/macrify-wordmark-light.png" alt="Macrify">
+      </a>
+      <p class="footer__license">
+        Published as a public good and also to swag on em by
+        <a href="https://macrify.me" target="_blank" rel="noopener">Macrify LLC</a>.
+        Licensed under GPL-3.0. Bundles the MIT-licensed Stirling-PDF engine and other
+        third-party components under their own licenses.
+      </p>
+    </div>
+    <div class="footer__col">
+      <h4>No telemetry, ever</h4>
+      <p class="footer__telemetry">
+        This page runs no analytics, sets no tracking cookies, and profiles no one. The only
+        thing it fetches on its own is a single anonymous, unauthenticated call to GitHub's
+        public API for the current release — the same thing your browser would show if you
+        visited the repo directly.
+      </p>
+      <div class="footer__support">
+        <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>
+        <a href="mailto:support@macrify.me">support@macrify.me (best-effort, community-supported)</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer__bottom">
+    <span>© 2026 Macrify LLC. RaioPDF is free and open source under GPL-3.0.</span>
+    <a href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener">github.com/Macrify-LLC/raiopdf</a>
+  </div>
+</footer>
+</body>
+</html>

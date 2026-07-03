@@ -2293,7 +2293,7 @@ export function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "F1" || event.defaultPrevented || hasOpenDialogStackEntry()) {
+      if (event.key !== "F1" || event.defaultPrevented || settingsOpen || hasOpenDialogStackEntry()) {
         return;
       }
 
@@ -2304,7 +2304,7 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [settingsOpen]);
 
   const handleNativeMenuCommand = useCallback(
     (command: string) => {

@@ -18,8 +18,6 @@ const KNOWN_HELP_ONLY_ARTICLE_IDS = new Set([
 
 // Phase 2 removes this allowance when the remaining tool articles ship.
 const STUB_PENDING = new Set([
-  "batch-cleanup",
-  "production-set",
   "pages",
   "compress",
   "repair",

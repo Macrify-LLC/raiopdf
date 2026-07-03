@@ -415,7 +415,6 @@ export function BinderWorkspace({
               Apply preset
             </button>
           </div>
-          <p className="binder-card__hint">Insert a separator page before each exhibit</p>
           <p className="binder-card__hint">Each exhibit is bookmarked automatically.</p>
         </section>
       </div>

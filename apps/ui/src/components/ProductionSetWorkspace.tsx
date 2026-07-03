@@ -5,7 +5,7 @@ import {
   productionHintMessage,
   readProductionLastUsed,
 } from "../lib/productionHints";
-import { ArrowDownIcon, ArrowUpIcon, PlusIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, PlusIcon } from "../icons";
 import "./ProductionSetWorkspace.css";
 
 export interface ProductionSetFile {
@@ -185,34 +185,50 @@ export function ProductionSetWorkspace({
 
   return (
     <section className="production-workspace" aria-label="Production Set Builder">
-      <header className="production-workspace__header">
-        <div>
-          <p className="production-workspace__eyebrow">Legal</p>
-          <h2>Production Set Builder</h2>
+      {/* The dialog chrome already shows "Legal / Production Set" -- repeating
+          that title here stacked a second heading on the first. This section
+          carries the thing the dialog title doesn't: the ordered file list,
+          styled the same way as Prepare for Filing's packet order so the two
+          "reorder documents, then run" flows read as the same control. */}
+      <section className="production-workspace__section" aria-label="Production order">
+        <div className="production-workspace__header">
+          <div>
+            <p className="production-workspace__title">Production order</p>
+            <p className="production-workspace__subtitle">
+              {files.length} document{files.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="production-workspace__secondary-button"
+            onClick={addFile}
+            disabled={addFileBusy || progress.running}
+            title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
+          >
+            <PlusIcon size={14} /> Add PDF
+          </button>
         </div>
-        <button
-          type="button"
-          className="production-workspace__secondary-button"
-          onClick={addFile}
-          disabled={addFileBusy || progress.running}
-          title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
-        >
-          <PlusIcon size={14} /> Add PDF
-        </button>
-      </header>
-
-      <div className="production-workspace__section">
-        <h3>Production Order</h3>
-        <div className="production-workspace__file-list">
+        <div className="production-workspace__file-list" role="list">
+          {files.length === 0 ? (
+            <p className="production-workspace__empty">Add PDFs to build the production order.</p>
+          ) : null}
           {files.map((file, index) => (
-            <div className="production-workspace__file-row" key={file.id}>
-              <div>
-                <p className="production-workspace__file-name">{file.name}</p>
-                <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
-                  {file.pages} page{file.pages === 1 ? "" : "s"}
-                </p>
+            <div className="production-workspace__file-row" role="listitem" key={file.id}>
+              <div className="production-workspace__file-body">
+                <span className="production-workspace__file-index" aria-hidden="true">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <div>
+                  <p className="production-workspace__file-name">{file.name}</p>
+                  <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
+                    {file.pages} page{file.pages === 1 ? "" : "s"}
+                  </p>
+                </div>
               </div>
-              <label title="Optional confidentiality text to include for this source in the production package.">
+              <label
+                className="production-workspace__designation"
+                title="Optional confidentiality text to include for this source in the production package."
+              >
                 <span>Designation</span>
                 <select
                   value={designationSelectValue(file.designation)}
@@ -251,82 +267,87 @@ export function ProductionSetWorkspace({
             </div>
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="production-workspace__grid">
-        <label title="Letters before the Bates number, for example SMITH000001.">
-          <span>Prefix</span>
-          <input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
-        </label>
-        <label title="First Bates number to use for the first selected page.">
-          <span>Start</span>
-          <input
-            type="number"
-            min="0"
-            value={start}
-            onChange={(event) => setStart(Number(event.target.value))}
-          />
-        </label>
-        <label title="Minimum number of digits to pad after the prefix.">
-          <span>Digits</span>
-          <input
-            type="number"
-            min="1"
-            max="12"
-            value={digits}
-            onChange={(event) => setDigits(Number(event.target.value))}
-          />
-        </label>
-        <label title="Choose an empty folder where RaioPDF can write the production package.">
-          <span>Package root folder</span>
-          <input
-            value={outputDir}
-            onChange={(event) => setOutputDir(event.target.value)}
-            placeholder="/absolute/path/to/empty-folder"
-          />
-        </label>
-      </div>
+      <section className="production-workspace__section" aria-label="Bates numbering">
+        <p className="production-workspace__title">Bates numbering</p>
+        <div className="production-workspace__grid">
+          <label title="Letters before the Bates number, for example SMITH000001.">
+            <span>Prefix</span>
+            <input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+          </label>
+          <label title="First Bates number to use for the first selected page.">
+            <span>Start</span>
+            <input
+              type="number"
+              min="0"
+              value={start}
+              onChange={(event) => setStart(Number(event.target.value))}
+            />
+          </label>
+          <label title="Minimum number of digits to pad after the prefix.">
+            <span>Digits</span>
+            <input
+              type="number"
+              min="1"
+              max="12"
+              value={digits}
+              onChange={(event) => setDigits(Number(event.target.value))}
+            />
+          </label>
+          <label title="Choose an empty folder where RaioPDF can write the production package.">
+            <span>Package root folder</span>
+            <input
+              value={outputDir}
+              onChange={(event) => setOutputDir(event.target.value)}
+              placeholder="/absolute/path/to/empty-folder"
+            />
+          </label>
+        </div>
+        {hint ? <p className="production-workspace__status">{hint}</p> : null}
+        {overflows ? (
+          <p className="production-workspace__status">The last Bates number would exceed the configured digit width.</p>
+        ) : null}
+      </section>
 
-      {hint ? <p className="production-workspace__status">{hint}</p> : null}
-      {overflows ? (
-        <p className="production-workspace__status">The last Bates number would exceed the configured digit width.</p>
-      ) : null}
-
-      <div className="production-workspace__section">
-        <label className="production-workspace__checkbox-row" title="Write PDF and CSV indexes listing produced files and Bates ranges.">
-          <input
-            type="checkbox"
-            checked={includeIndex}
-            onChange={(event) => setIncludeIndex(event.target.checked)}
-          />
-          <span>Production index PDF and CSV</span>
-        </label>
-        <label className="production-workspace__checkbox-row" title="Include each source filename as a column in the production index.">
-          <input
-            type="checkbox"
-            checked={includeFilenameInIndex}
-            onChange={(event) => setIncludeFilenameInIndex(event.target.checked)}
-          />
-          <span>Filename column in index</span>
-        </label>
-        <label className="production-workspace__checkbox-row" title="Also write one combined produced PDF alongside individual outputs.">
-          <input
-            type="checkbox"
-            checked={combinedPdf}
-            onChange={(event) => setCombinedPdf(event.target.checked)}
-          />
-          <span>Combined production PDF</span>
-        </label>
-        <label className="production-workspace__checkbox-row" title="Group production outputs into volume folders by size.">
-          <input
-            type="checkbox"
-            checked={useVolumeCap}
-            onChange={(event) => setUseVolumeCap(event.target.checked)}
-          />
-          <span>Volume folders</span>
-        </label>
+      <section className="production-workspace__section" aria-label="Output options">
+        <p className="production-workspace__title">Output options</p>
+        <div className="production-workspace__checks">
+          <label className="production-workspace__checkbox-row" title="Write PDF and CSV indexes listing produced files and Bates ranges.">
+            <input
+              type="checkbox"
+              checked={includeIndex}
+              onChange={(event) => setIncludeIndex(event.target.checked)}
+            />
+            <span>Production index PDF and CSV</span>
+          </label>
+          <label className="production-workspace__checkbox-row" title="Include each source filename as a column in the production index.">
+            <input
+              type="checkbox"
+              checked={includeFilenameInIndex}
+              onChange={(event) => setIncludeFilenameInIndex(event.target.checked)}
+            />
+            <span>Filename column in index</span>
+          </label>
+          <label className="production-workspace__checkbox-row" title="Also write one combined produced PDF alongside individual outputs.">
+            <input
+              type="checkbox"
+              checked={combinedPdf}
+              onChange={(event) => setCombinedPdf(event.target.checked)}
+            />
+            <span>Combined production PDF</span>
+          </label>
+          <label className="production-workspace__checkbox-row" title="Group production outputs into volume folders by size.">
+            <input
+              type="checkbox"
+              checked={useVolumeCap}
+              onChange={(event) => setUseVolumeCap(event.target.checked)}
+            />
+            <span>Volume folders</span>
+          </label>
+        </div>
         {useVolumeCap ? (
-          <label title="Maximum size for each volume folder before starting the next volume.">
+          <label className="production-workspace__number" title="Maximum size for each volume folder before starting the next volume.">
             <span>Volume cap MB</span>
             <input
               type="number"
@@ -336,7 +357,7 @@ export function ProductionSetWorkspace({
             />
           </label>
         ) : null}
-      </div>
+      </section>
 
       <div className="production-workspace__button-row">
         <button
@@ -347,20 +368,39 @@ export function ProductionSetWorkspace({
         >
           Build Production
         </button>
-        <p className="production-workspace__status">
+        <p className="production-workspace__status" role="status">
           {localMessage ?? progress.message ?? `${totalPages} page${totalPages === 1 ? "" : "s"} selected`}
         </p>
       </div>
 
       {progress.result ? (
-        <div className="production-workspace__result">
-          <p className="production-workspace__status">
-            Package: {progress.result.packageRoot}
-          </p>
-          <p className="production-workspace__status">
-            Index: {progress.result.indexLocation ?? "not written"} · Next number {progress.result.nextNumber}
-          </p>
-        </div>
+        <section className="production-workspace__result" aria-label="Production build result">
+          <div className="production-workspace__result-header">
+            <CheckIcon size={15} />
+            <div>
+              <p className="production-workspace__result-title">Production package built</p>
+              <p className="production-workspace__result-subtitle">
+                {progress.result.fileCount} file{progress.result.fileCount === 1 ? "" : "s"} Bates-stamped and written.
+              </p>
+            </div>
+          </div>
+          <div className="production-workspace__result-parts">
+            <div className="production-workspace__result-part">
+              <span className="production-workspace__result-part-label">Package</span>
+              <span className="production-workspace__result-part-value">{progress.result.packageRoot}</span>
+            </div>
+            <div className="production-workspace__result-part">
+              <span className="production-workspace__result-part-label">Index</span>
+              <span className="production-workspace__result-part-value">
+                {progress.result.indexLocation ?? "not written"}
+              </span>
+            </div>
+            <div className="production-workspace__result-part">
+              <span className="production-workspace__result-part-label">Next Bates number</span>
+              <span className="production-workspace__result-part-value">{progress.result.nextNumber}</span>
+            </div>
+          </div>
+        </section>
       ) : null}
     </section>
   );

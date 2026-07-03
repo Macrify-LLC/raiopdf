@@ -1,49 +1,56 @@
 .production-workspace {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
   color: var(--body);
+}
+
+/* Chrome-background section, white-panel rows inside -- same nesting as
+   Prepare for Filing's .filing-prep / .filing-checks sections. */
+.production-workspace__section {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-popover);
+  background: var(--chrome);
+  padding: var(--space-3);
 }
 
 .production-workspace__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
-.production-workspace__eyebrow {
-  margin: 0 0 var(--space-1);
+.production-workspace__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.production-workspace__subtitle {
+  margin: 0;
   color: var(--muted);
   font-size: var(--text-2xs);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.production-workspace h2,
-.production-workspace h3 {
-  margin: 0;
-  font-size: var(--text-lg);
-  line-height: 1.2;
-}
-
-.production-workspace h3 {
-  font-size: var(--text-sm);
-}
-
-.production-workspace__section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
 .production-workspace__file-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--space-2);
   max-height: 250px;
   overflow: auto;
+}
+
+.production-workspace__empty {
+  margin: 0;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  padding: var(--space-3);
+  text-align: center;
 }
 
 .production-workspace__file-row {
@@ -53,23 +60,50 @@
   gap: var(--space-2);
   min-height: 48px;
   padding: var(--space-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--panel);
+}
+
+.production-workspace__file-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Neutral ordinal chip -- position in the production order, not a status.
+   Shares its shape with Prepare for Filing's packet-order chip so the two
+   ordering controls read as the same product family. */
+.production-workspace__file-index {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .production-workspace__file-name {
   min-width: 0;
   margin: 0;
+  color: var(--ink);
   font-size: var(--text-sm);
-  font-weight: 650;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .production-workspace__file-meta {
-  margin: var(--space-1) 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: var(--text-2xs);
 }
@@ -87,13 +121,12 @@
 }
 
 .production-workspace label {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--space-1);
   min-width: 0;
   color: var(--muted);
   font-size: var(--text-2xs);
-  font-weight: 650;
+  font-weight: 700;
 }
 
 .production-workspace input,
@@ -105,12 +138,27 @@
   background: var(--panel);
   color: var(--body);
   font: inherit;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   padding: 0 var(--space-2);
 }
 
-.production-workspace__checkbox-row {
+.production-workspace__designation {
+  min-width: 0;
+}
+
+.production-workspace__checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+}
+
+/* An element selector on the label itself keeps this at the same
+   specificity as the generic `.production-workspace label` rule above, so
+   cascade order (this rule comes later) decides the row layout instead of
+   an accidental specificity tie going the other way. */
+label.production-workspace__checkbox-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: var(--space-2);
   color: var(--body);
@@ -121,6 +169,11 @@
 .production-workspace__checkbox-row input {
   width: 16px;
   min-height: 16px;
+  flex: 0 0 auto;
+}
+
+.production-workspace__number {
+  max-width: 180px;
 }
 
 .production-workspace__button-row {
@@ -134,26 +187,58 @@
 .production-workspace__secondary-button,
 .production-workspace__icon-button {
   min-height: 32px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  background: var(--panel);
-  color: var(--body);
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 700;
   padding: 0 var(--space-3);
   box-shadow: var(--shadow-control);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
-.production-workspace__primary-button {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-primary);
+.production-workspace__secondary-button,
+.production-workspace__icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--body);
 }
 
 .production-workspace__icon-button {
   width: 32px;
   padding: 0;
+}
+
+.production-workspace__primary-button {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-primary);
+}
+
+.production-workspace__primary-button:hover:not(:disabled) {
+  background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.production-workspace__secondary-button:hover:not(:disabled),
+.production-workspace__icon-button:hover:not(:disabled) {
+  background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.production-workspace__primary-button:active:not(:disabled),
+.production-workspace__secondary-button:active:not(:disabled),
+.production-workspace__icon-button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .production-workspace__primary-button:disabled,
@@ -170,16 +255,101 @@
   line-height: 1.35;
 }
 
+/* Result -- receipt style: check-marked header, dashed-hairline part rows,
+   tabular figures. Mirrors Prepare for Filing's ResultCard so every legal
+   workflow's "it's done" state reads the same way. */
 .production-workspace__result {
-  padding: var(--space-3);
-  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--ok-bg);
   border-radius: var(--radius-control);
-  background: var(--subtle);
+  background: var(--ok-bg);
+  padding: var(--space-3);
+  animation: production-panel-in var(--duration-fast) ease;
+}
+
+.production-workspace__result-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ok);
+}
+
+.production-workspace__result-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.production-workspace__result-subtitle {
+  margin: 0;
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.production-workspace__result-parts {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.production-workspace__result-part {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px dashed var(--border-soft);
+  font-size: var(--text-xs);
+}
+
+.production-workspace__result-part:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.production-workspace__result-part-label {
+  color: var(--muted);
+}
+
+.production-workspace__result-part-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes production-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .production-workspace__result {
+    animation: none;
+  }
+}
+
+/* Safety net for the control the app-wide baseline focus rule misses --
+   it covers button/input/[tabindex] but not select. */
+.production-workspace select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 @media (max-width: 720px) {
   .production-workspace__file-row,
-  .production-workspace__grid {
+  .production-workspace__grid,
+  .production-workspace__checks {
     grid-template-columns: 1fr;
   }
 }

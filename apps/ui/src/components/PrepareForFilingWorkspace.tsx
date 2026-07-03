@@ -642,13 +642,21 @@ function PacketBuilderPanel({
         </button>
       </div>
       <div className="filing-packet__files" role="list">
+        {files.length === 0 ? (
+          <p className="filing-card__empty">Add PDFs to build the filing packet order.</p>
+        ) : null}
         {files.map((file, index) => (
           <article className="filing-packet__file" key={file.id} role="listitem">
-            <div>
-              <p className="filing-packet__file-name">{String(index + 1).padStart(2, "0")} - {file.name}</p>
-              <p className="filing-packet__file-meta">
-                {file.path ? "Local file" : "Path unavailable"} · {formatPageCount(file.pages)}
-              </p>
+            <div className="filing-packet__file-body">
+              <span className="filing-packet__file-index" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <div>
+                <p className="filing-packet__file-name">{file.name}</p>
+                <p className="filing-packet__file-meta">
+                  {file.path ? "Local file" : "Path unavailable"} · {formatPageCount(file.pages)}
+                </p>
+              </div>
             </div>
             <div className="filing-packet__file-actions">
               <button
@@ -718,19 +726,47 @@ function PacketBuilderPanel({
           {progress.running ? "Building Packet..." : "Build Filing Packet"}
         </button>
       </div>
-      {localMessage || progress.message ? (
-        <p className="filing-card__status">{localMessage ?? progress.message}</p>
+      {progress.running ? (
+        <div className="filing-progress" data-phase="active" role="status" aria-live="polite">
+          <p className="filing-progress__label">
+            <LoadingSun size={14} label="Building filing packet" />
+            Building packet
+          </p>
+          <p>{localMessage ?? progress.message ?? "Writing packet files..."}</p>
+        </div>
+      ) : localMessage || progress.message ? (
+        <p className="filing-card__status" role="status">{localMessage ?? progress.message}</p>
       ) : null}
       {progress.result ? (
-        <div className="filing-packet__result">
-          <p className="filing-card__status">Package: {progress.result.packageRoot}</p>
-          <p className="filing-card__status">
-            Manifest: {progress.result.manifestPdf} · JSON: {progress.result.packetJson}
-          </p>
-          {progress.result.combinedPdf ? (
-            <p className="filing-card__status">Combined upload: {progress.result.combinedPdf}</p>
+        <section className="filing-result" aria-label="Filing packet result">
+          <div className="filing-result__header">
+            <CheckIcon size={15} />
+            <div>
+              <p className="filing-result__title">Filing packet built</p>
+              <p className="filing-result__subtitle">
+                {formatCount(progress.result.outputs.length, "upload file")} written to the package root.
+              </p>
+            </div>
+          </div>
+          {progress.result.outputs.length > 0 ? (
+            <div className="filing-result__parts" role="list">
+              {progress.result.outputs.map((output) => (
+                <div key={output} className="filing-result__part" role="listitem">
+                  <span className="filing-result__part-name">{output}</span>
+                </div>
+              ))}
+            </div>
           ) : null}
-        </div>
+          <div className="filing-result__footer">
+            <p className="filing-result__fine">Package: {progress.result.packageRoot}</p>
+            <p className="filing-result__fine">
+              Manifest: {progress.result.manifestPdf} · Packet data: {progress.result.packetJson}
+            </p>
+            {progress.result.combinedPdf ? (
+              <p className="filing-result__fine">Combined upload: {progress.result.combinedPdf}</p>
+            ) : null}
+          </div>
+        </section>
       ) : null}
     </section>
   );

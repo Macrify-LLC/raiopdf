@@ -200,9 +200,17 @@
 - **8 (bundled here)**: flatten Prepare for Filing to ONE chrome: outer FloatingDialog
   header keeps title/?/✕ and gains the ⋯ menu; inner `filing-card` header is reduced
   to a plain document-info line (no second ? button).
-- **10 File menu / preferences**: add a real menu affordance in the custom title bar
-  (File / Preferences / Help). Note: window `decorations:false` — menu must be part
-  of `TitleBar.tsx`.
+- **10 File menu / preferences**: FINDING (2026-07-03) — a complete native menu
+  already exists and is wired end-to-end: `build_native_menu` (`apps/shell/
+  src-tauri/src/lib.rs:347-385`) registers File/Edit/View/Help incl. "Preferences…"
+  (`file:preferences` → `SettingsDialog`, handled at `App.tsx:2779`) and "Open Raio
+  to AI…"; `app.set_menu` installs it (`lib.rs:274`). But the window is frameless
+  (`decorations:false` in tauri.conf.json) so on Windows the native menu bar never
+  renders — the whole menu is unreachable. Fix = render File/Edit/View/Help
+  dropdowns in `TitleBar.tsx` that emit the SAME menu-event IDs the UI already
+  handles (keep the native menu registered for future macOS, where frameless apps
+  still get the global menu bar). Much smaller than building preferences from
+  scratch — the Preferences dialog itself already exists and works.
 - **11 Connect to AI Agent**: top-level tool in the sidebar ("Connect to AI Agent"),
   not buried in the Built-by-Macrify menu; opens the existing MCP enable/config
   surface. Copy must respect the two-halves framing: no AI *in* Raio; native

@@ -14,13 +14,21 @@ import {
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
   COMMENT_ICON_SIZE_PT,
-  INK_STROKE_WIDTH_PT,
   type PageTextBox,
   type PendingComment,
   type PendingEdit,
   type PendingStamp,
   type PendingTextBox,
 } from "../lib/edits";
+import type { PdfEditColor } from "@raiopdf/engine-api";
+import {
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_INK_COLOR,
+  DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_TEXT_COLOR,
+  pdfEditColorToHex,
+} from "../lib/editStyles";
 import { newEditId, type EditingState } from "../hooks/useEditing";
 import type { PDFPageProxy } from "../lib/pdfjs";
 import {
@@ -51,6 +59,7 @@ interface TextDraft {
   rect: ViewportRect;
   text: string;
   fontSizePt: number;
+  color?: PdfEditColor;
 }
 
 interface CommentDraft {
@@ -208,7 +217,13 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       if (draft.editId) {
         updateEdit(draft.editId, (edit) =>
           edit.kind === "textBox"
-            ? { ...edit, rect, text, fontSizePt: draft.fontSizePt }
+            ? {
+                ...edit,
+                rect,
+                text,
+                fontSizePt: draft.fontSizePt,
+                ...(draft.color ? { color: draft.color } : {}),
+              }
             : edit,
         );
       } else {
@@ -219,6 +234,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           rect,
           text,
           fontSizePt: draft.fontSizePt,
+          ...(draft.color ? { color: draft.color } : {}),
         });
       }
 
@@ -324,6 +340,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         },
         text: "",
         fontSizePt: DEFAULT_TEXT_BOX_FONT_SIZE,
+        ...(editing.textBoxStyle.color ? { color: editing.textBoxStyle.color } : {}),
       });
       return;
     }
@@ -441,7 +458,13 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       }
 
       editing.setMessage(null);
-      addEdit({ kind: "highlight", id: newEditId(), pageIndex, rects });
+      addEdit({
+        kind: "highlight",
+        id: newEditId(),
+        pageIndex,
+        rects,
+        ...editing.highlightStyle,
+      });
       return;
     }
 
@@ -459,6 +482,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         id: newEditId(),
         pageIndex,
         strokes: [points.map((strokePoint) => viewportPointToPdfPoint(strokePoint, viewport))],
+        strokeWidthPt: editing.inkStyle.strokeWidthPt,
+        ...(editing.inkStyle.color ? { color: editing.inkStyle.color } : {}),
       });
     }
   }
@@ -583,6 +608,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       rect: pdfRectToViewportRect(edit.rect, viewport),
       text: edit.text,
       fontSizePt: edit.fontSizePt,
+      ...(edit.color ? { color: edit.color } : {}),
     });
     suppressPlacement();
   }
@@ -700,8 +726,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                       })
                       .join(" ")}
                     fill="none"
-                    stroke="var(--edit-ink)"
-                    strokeWidth={INK_STROKE_WIDTH_PT * scale}
+                    stroke={pdfEditColorToHex(edit.color ?? DEFAULT_INK_COLOR)}
+                    strokeWidth={(edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT) * scale}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
@@ -712,8 +738,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
             <polyline
               points={drawDraft.map((strokePoint) => `${strokePoint.x},${strokePoint.y}`).join(" ")}
               fill="none"
-              stroke="var(--edit-ink)"
-              strokeWidth={INK_STROKE_WIDTH_PT * scale}
+              stroke={pdfEditColorToHex(editing.inkStyle.color ?? DEFAULT_INK_COLOR)}
+              strokeWidth={editing.inkStyle.strokeWidthPt * scale}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -722,7 +748,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       ) : null}
 
       {highlightDraft ? (
-        <span className="edit-layer__highlight-draft" style={toOverlayStyle(highlightDraft)} />
+        <span
+          className="edit-layer__highlight-draft"
+          style={highlightStyle(
+            highlightDraft,
+            editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR,
+            editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY,
+          )}
+        />
       ) : null}
 
       {tool === "highlight" && textLayerError ? (
@@ -790,7 +823,11 @@ function HighlightOverlay({
           key={`${edit.id}-${rectIndex}`}
           className="edit-layer__highlight"
           data-removable={removable ? "true" : undefined}
-          style={toOverlayStyle(pdfRectToViewportRect(rect, viewport))}
+          style={highlightStyle(
+            pdfRectToViewportRect(rect, viewport),
+            edit.color ?? DEFAULT_HIGHLIGHT_COLOR,
+            edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY,
+          )}
           title={removable ? "Click to remove this highlight" : undefined}
         />
       ))}
@@ -842,7 +879,7 @@ function TextBoxOverlay({
     >
       <span
         className="edit-layer__text-content"
-        style={textContentStyle(edit.fontSizePt, scale)}
+        style={textContentStyle(edit.fontSizePt, scale, edit.color ?? DEFAULT_TEXT_COLOR)}
       >
         {edit.text}
       </span>
@@ -1051,7 +1088,7 @@ function TextBoxDraftEditor({
       </span>
       <textarea
         className="edit-layer__text-input"
-        style={textContentStyle(draft.fontSizePt, scale)}
+        style={textContentStyle(draft.fontSizePt, scale, draft.color ?? DEFAULT_TEXT_COLOR)}
         aria-label="Text box content"
         value={draft.text}
         autoFocus
@@ -1140,10 +1177,27 @@ function CommentPopover({
   );
 }
 
-function textContentStyle(fontSizePt: number, scale: number): CSSProperties {
+function highlightStyle(
+  rect: ViewportRect,
+  color: PdfEditColor,
+  opacity: number,
+): CSSProperties {
+  return {
+    ...toOverlayStyle(rect),
+    backgroundColor: pdfEditColorToHex(color),
+    opacity,
+  };
+}
+
+function textContentStyle(
+  fontSizePt: number,
+  scale: number,
+  color: PdfEditColor,
+): CSSProperties {
   return {
     fontSize: `${fontSizePt * scale}px`,
     lineHeight: TEXT_BOX_LINE_HEIGHT,
+    color: pdfEditColorToHex(color),
   };
 }
 

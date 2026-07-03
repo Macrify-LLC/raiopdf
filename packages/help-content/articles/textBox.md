@@ -14,8 +14,9 @@ fill-in on a form that doesn't have real fields.
 ## How to do it
 
 1. Choose **Text box**, from the toolbar or the **Edit** tools.
-2. Click where you want the text.
-3. Type it, then press **Enter** to place it (**Esc** to cancel).
+2. Pick a text color if you want something other than black.
+3. Click where you want the text.
+4. Type it, then press **Enter** to place it (**Esc** to cancel).
 
 ## What to know
 

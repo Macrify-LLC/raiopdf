@@ -1,5 +1,6 @@
 import type {
   PdfEdit,
+  PdfEditColor,
   PdfEditImageFormat,
   PdfEditPoint,
   PdfEditRect,
@@ -28,6 +29,8 @@ export interface PendingHighlight {
   id: string;
   pageIndex: number;
   rects: readonly PdfEditRect[];
+  color?: PdfEditColor;
+  opacity?: number;
 }
 
 export interface PendingTextBox {
@@ -37,6 +40,7 @@ export interface PendingTextBox {
   rect: PdfEditRect;
   text: string;
   fontSizePt: number;
+  color?: PdfEditColor;
 }
 
 export interface PendingStamp {
@@ -65,6 +69,8 @@ export interface PendingInk {
   id: string;
   pageIndex: number;
   strokes: ReadonlyArray<readonly PdfEditPoint[]>;
+  strokeWidthPt?: number;
+  color?: PdfEditColor;
 }
 
 export type PendingEdit =
@@ -92,7 +98,13 @@ export function toPdfEdits(
   const edits: PdfEdit[] = pending.map((edit) => {
     switch (edit.kind) {
       case "highlight":
-        return { type: "highlight", pageIndex: edit.pageIndex, rects: edit.rects };
+        return {
+          type: "highlight",
+          pageIndex: edit.pageIndex,
+          rects: edit.rects,
+          ...(edit.color ? { color: edit.color } : {}),
+          ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
+        };
       case "textBox":
         return {
           type: "textBox",
@@ -100,6 +112,7 @@ export function toPdfEdits(
           rect: edit.rect,
           text: edit.text,
           fontSizePt: edit.fontSizePt,
+          ...(edit.color ? { color: edit.color } : {}),
         };
       case "image":
       case "signature":
@@ -122,7 +135,8 @@ export function toPdfEdits(
           type: "ink",
           pageIndex: edit.pageIndex,
           strokes: edit.strokes,
-          strokeWidthPt: INK_STROKE_WIDTH_PT,
+          strokeWidthPt: edit.strokeWidthPt ?? INK_STROKE_WIDTH_PT,
+          ...(edit.color ? { color: edit.color } : {}),
         };
     }
   });

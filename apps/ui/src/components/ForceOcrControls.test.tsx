@@ -78,6 +78,7 @@ describe("force OCR controls", () => {
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
+        onConnectToAi={() => undefined}
       />,
     );
 
@@ -195,6 +196,7 @@ function ToolPanelHarness({
       onRunScanner={() => undefined}
       onMarkScannerHit={() => undefined}
       onHelpRequested={() => undefined}
+      onConnectToAi={() => undefined}
     />
   );
 }

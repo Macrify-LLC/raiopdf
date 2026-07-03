@@ -25,6 +25,11 @@
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
     }
   },
+  "plugins": {
+    "shell": {
+      "open": "https://.+"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [

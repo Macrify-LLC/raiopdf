@@ -24,6 +24,13 @@ const pageSelectionSchema = z.union([
   z.literal("first"),
   z.array(z.number().int().nonnegative()),
 ]);
+const binderIndexSchema = z.object({
+  enabled: z.boolean().optional().describe("Generate an Exhibit Index. Defaults to true."),
+  includeSourceFileName: z
+    .boolean()
+    .optional()
+    .describe("Include source filenames in the Exhibit Index. Defaults to false."),
+});
 
 const outputResultSchema = { ...baseOutputSchema, output: z.string().optional() };
 const multiOutputResultSchema = { ...baseOutputSchema, outputs: z.array(z.string()).optional() };
@@ -48,9 +55,14 @@ type PageSelection = PdfPageSelection;
 export const binderInputSchema = {
   main: absoluteInput,
   exhibits: z
-    .array(z.object({ path: z.string(), label: z.string() }))
+    .array(z.object({ path: z.string(), label: z.string(), description: z.string().optional() }))
     .min(1)
     .describe("Ordered exhibit files with their labels (e.g. { path, label: \"Exhibit A\" })."),
+  descriptions: z
+    .array(z.string())
+    .optional()
+    .describe("Optional descriptions aligned to the exhibits array. Defaults from source filenames."),
+  index: binderIndexSchema.optional().describe("Exhibit Index options. Index generation defaults on."),
   output: absoluteOutput,
   slipSheets: z.boolean().optional().describe("Insert a labeled slip sheet before each exhibit."),
   placement: placementSchema.optional(),
@@ -61,7 +73,9 @@ export const binderInputSchema = {
 export const binderOutputSchema = outputResultSchema;
 export interface BinderInput {
   main: string;
-  exhibits: { path: string; label: string }[];
+  exhibits: { path: string; label: string; description?: string | undefined }[];
+  descriptions?: string[] | undefined;
+  index?: { enabled?: boolean | undefined; includeSourceFileName?: boolean | undefined } | undefined;
   output: string;
   slipSheets?: boolean | undefined;
   placement?: Placement | undefined;
@@ -73,6 +87,10 @@ export function handleBinder(
   input: BinderInput,
   _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
+  if (input.descriptions !== undefined && input.descriptions.length !== input.exhibits.length) {
+    throw new Error("descriptions must have one entry per exhibit when provided.");
+  }
+
   const inputPaths = [input.main, ...input.exhibits.map((exhibit) => exhibit.path)];
   return runLocalOutputOp(inputPaths, input.output, async (engine, documents) => {
     const mainDocument = documents[0];
@@ -84,10 +102,16 @@ export function handleBinder(
       if (doc === undefined) {
         throw new Error(`Missing exhibit document for "${exhibit.label}".`);
       }
-      return { doc, label: exhibit.label };
+      return {
+        doc,
+        label: exhibit.label,
+        description: exhibit.description ?? input.descriptions?.[index],
+        sourceFileName: path.basename(exhibit.path),
+      };
     });
     const result = await engine.buildBinder(mainDocument, exhibits, {
       slipSheets: input.slipSheets ?? false,
+      ...(input.index === undefined ? {} : { index: input.index }),
       ...(input.placement === undefined ? {} : { placement: input.placement }),
       ...(input.stampPages === undefined ? {} : { stampPages: input.stampPages }),
       ...(input.fontSizePt === undefined ? {} : { fontSizePt: input.fontSizePt }),

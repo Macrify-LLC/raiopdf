@@ -84,10 +84,17 @@ describe("legal tools (local pdf-lib engine)", () => {
     const exhibit = await makePdf("ex1.pdf", 2);
     const output = path.join(dir, "binder.pdf");
     await handleBinder(
-      { main, exhibits: [{ path: exhibit, label: "Exhibit A" }], output, slipSheets: false },
+      {
+        main,
+        exhibits: [{ path: exhibit, label: "Exhibit A" }],
+        descriptions: ["Custom exhibit description"],
+        index: { includeSourceFileName: true },
+        output,
+        slipSheets: false,
+      },
       engine,
     );
-    expect(await pageCount(output)).toBeGreaterThanOrEqual(3);
+    expect(await pageCount(output)).toBe(4);
   });
 
   it("split_pdf writes multiple parts that cover every page", async () => {

@@ -100,6 +100,8 @@ export interface SaveDocumentResult {
 export interface BinderExhibitInput {
   bytes: Uint8Array;
   label: string;
+  description?: string | undefined;
+  sourceFileName?: string | undefined;
 }
 
 export function useDocument() {
@@ -662,6 +664,8 @@ export function useDocument() {
               exhibits.map((exhibit, index) => ({
                 doc: openedHandles[index]!,
                 label: exhibit.label,
+                description: exhibit.description,
+                sourceFileName: exhibit.sourceFileName,
               })),
               options,
             ),

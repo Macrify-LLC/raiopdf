@@ -125,14 +125,24 @@ export type PdfImagePageInput = {
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
+  description?: string | undefined;
+  sourceFileName?: string | undefined;
+};
+
+export type PdfBinderIndexOptions = {
+  /** Defaults to true. */
+  enabled?: boolean | undefined;
+  /** Defaults to false because filenames can reveal work-product organization. */
+  includeSourceFileName?: boolean | undefined;
 };
 
 export type PdfBinderOptions = {
   slipSheets: boolean;
-  placement?: PdfStampPlacement;
-  stampPages?: PdfPageSelection;
-  fontSizePt?: number;
-  marginIn?: number;
+  index?: PdfBinderIndexOptions | undefined;
+  placement?: PdfStampPlacement | undefined;
+  stampPages?: PdfPageSelection | undefined;
+  fontSizePt?: number | undefined;
+  marginIn?: number | undefined;
 };
 
 export type PdfPageSizePoints = {
@@ -609,13 +619,14 @@ export interface PdfEngine {
   /**
    * Builds an exhibit binder from a main document and labeled exhibits.
    *
-   * Output page order is the main document, then each exhibit section. An
-   * exhibit section contains an optional centered slip sheet, then the exhibit
-   * pages stamped with the exhibit label according to `placement` and
-   * `stampPages`. Defaults are footer-right labels on all exhibit pages,
-   * `fontSizePt=11`, and `marginIn=0.5`. The binder outline contains
-   * "Main document" and one entry per exhibit pointing at each section's first
-   * page. Engines without caller-defined outline support may reject this with
+   * Output page order is the main document, then a generated exhibit index by
+   * default, then each exhibit section. An exhibit section contains an optional
+   * centered slip sheet, then the exhibit pages stamped with the exhibit label
+   * according to `placement` and `stampPages`. Defaults are footer-right labels
+   * on all exhibit pages, `fontSizePt=11`, and `marginIn=0.5`. The binder
+   * outline contains "Main document", "Exhibit Index" when enabled, and one
+   * entry per exhibit pointing at each section's first page. Engines without
+   * caller-defined outline support may reject this with
    * `PdfEngineError("UNSUPPORTED", ...)`; the local engine is the default
    * binder implementation.
    */

@@ -16,7 +16,7 @@ import {
   StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
-import { createLocalPdfEngine } from "../src/index";
+import { createLocalPdfEngine, createStableExhibitIndex } from "../src/index";
 
 describe("LocalPdfEngine", () => {
   it("reorders pages", async () => {
@@ -407,27 +407,31 @@ describe("LocalPdfEngine", () => {
     const binder = await engine.buildBinder(
       main,
       [
-        { doc: exhibitA, label: "Exhibit A" },
-        { doc: exhibitB, label: "Exhibit B" },
+        { doc: exhibitA, label: "Exhibit A", sourceFileName: "source-a.pdf" },
+        { doc: exhibitB, label: "Exhibit B", description: "Signed ledger" },
       ],
       { slipSheets: true },
     );
     const bytes = await engine.saveToBytes(binder);
 
-    await expectPageWidths(bytes, [200, 210, 200, 300, 310, 200, 400]);
-    await expectPageContentToContainLabel(bytes, 2, "Exhibit A");
+    await expectPageWidths(bytes, [200, 210, 200, 200, 300, 310, 200, 400]);
+    await expectPageContentToContainLabel(bytes, 2, "Exhibit Index");
+    await expectPageContentToContainLabel(bytes, 2, "4-6");
+    await expectPageContentToContainLabel(bytes, 2, "7-8");
     await expectPageContentToContainLabel(bytes, 3, "Exhibit A");
     await expectPageContentToContainLabel(bytes, 4, "Exhibit A");
-    await expectPageContentToContainLabel(bytes, 5, "Exhibit B");
+    await expectPageContentToContainLabel(bytes, 5, "Exhibit A");
     await expectPageContentToContainLabel(bytes, 6, "Exhibit B");
+    await expectPageContentToContainLabel(bytes, 7, "Exhibit B");
     await expectOutlineEntries(bytes, [
       { title: "Main document", pageIndex: 0 },
-      { title: "Exhibit A", pageIndex: 2 },
-      { title: "Exhibit B", pageIndex: 5 },
+      { title: "Exhibit Index", pageIndex: 2 },
+      { title: "Exhibit A", pageIndex: 3 },
+      { title: "Exhibit B", pageIndex: 6 },
     ]);
   });
 
-  it("builds an exhibit binder without slip sheets", async () => {
+  it("builds an exhibit binder without slip sheets after the generated index", async () => {
     const engine = createLocalPdfEngine();
     const main = await engine.open(await createPdf([[200, 300], [210, 300]]));
     const exhibitA = await engine.open(await createPdf([[300, 400], [310, 400]]));
@@ -436,19 +440,59 @@ describe("LocalPdfEngine", () => {
     const binder = await engine.buildBinder(
       main,
       [
-        { doc: exhibitA, label: "Exhibit A" },
+        { doc: exhibitA, label: "Exhibit A", sourceFileName: "invoice-final.pdf" },
         { doc: exhibitB, label: "Exhibit B" },
       ],
       { slipSheets: false },
     );
     const bytes = await engine.saveToBytes(binder);
 
-    await expectPageWidths(bytes, [200, 210, 300, 310, 400]);
+    await expectPageWidths(bytes, [200, 210, 200, 300, 310, 400]);
+    await expectPageContentToContainLabel(bytes, 2, "Exhibit Index");
+    await expectPageContentToContainLabel(bytes, 2, "invoice-final");
+    await expectPageContentNotToContainLabel(bytes, 2, "invoice-final.pdf");
+    await expectPageContentToContainLabel(bytes, 2, "4-5");
+    await expectPageContentToContainLabel(bytes, 2, "6");
     await expectOutlineEntries(bytes, [
       { title: "Main document", pageIndex: 0 },
-      { title: "Exhibit A", pageIndex: 2 },
-      { title: "Exhibit B", pageIndex: 4 },
+      { title: "Exhibit Index", pageIndex: 2 },
+      { title: "Exhibit A", pageIndex: 3 },
+      { title: "Exhibit B", pageIndex: 5 },
     ]);
+  });
+
+  it("builds an exhibit binder with the source filename index column when requested", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit A", description: "Contract", sourceFileName: "contract.pdf" }],
+      { slipSheets: false, index: { includeSourceFileName: true } },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    await expectPageContentToContainLabel(bytes, 1, "Source file");
+    await expectPageContentToContainLabel(bytes, 1, "contract.pdf");
+  });
+
+  it("keeps exhibit index pagination stable for a multi-page index", async () => {
+    const layout = await createStableExhibitIndex({
+      pageSize: [612, 792],
+      mainPageCount: 3,
+      slipSheets: false,
+      exhibits: Array.from({ length: 45 }, (_, index) => ({
+        label: `Exhibit ${index + 1}`,
+        pageCount: 1,
+        sourceFileName: `source-${index + 1}.pdf`,
+      })),
+    });
+
+    expect(layout.pageCount).toBeGreaterThan(1);
+    expect(layout.iterations).toBeLessThanOrEqual(5);
+    expect(layout.entries[0]?.pageRange).toBe("6");
+    expect(layout.entries.at(-1)?.pageRange).toBe("50");
   });
 
   it("closes document handles and ignores unknown handles", async () => {

@@ -541,6 +541,22 @@ describe("Florida jurisdiction pack", () => {
     );
 
     expect(report.checks.every((check) => check.status === "unknown")).toBe(true);
+    expect(report.checks.map((check) => check.checkId)).toEqual([
+      "page-size-orientation",
+      "searchable-text",
+      "file-size",
+      "filename",
+      "clerk-stamp-space",
+      "pdfa",
+      "active-content",
+      "encryption",
+      "embedded-files",
+      "metadata-scrub",
+      "flatten-forms",
+      "envelope-size",
+      "selection-filenames",
+      "filename-collisions",
+    ]);
   });
 
   it("requires a signature-equivalent manifest match or hash acknowledgment for app-data packs", () => {

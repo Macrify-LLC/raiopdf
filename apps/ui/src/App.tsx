@@ -21,11 +21,18 @@ import type {
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { getPack, getPackIntegrityBanner, listPacks, preflight, shouldConvertToPdfA } from "@raiopdf/rules";
+import {
+  buildDocumentFacts,
+  getPack,
+  getPackIntegrityBanner,
+  listPacks,
+  preflight,
+  shouldConvertToPdfA,
+} from "@raiopdf/rules";
 import type {
+  DocumentFactsTextExtractor,
   DocumentFacts,
   JurisdictionPack,
-  PageFacts,
   PreflightReport,
   RectInches,
   SelectionFacts,
@@ -66,6 +73,7 @@ import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
+  OPS,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
@@ -3099,52 +3107,59 @@ async function readFilingFacts(
   bytes: Uint8Array,
   options: FilingFactsOptions,
 ): Promise<DocumentFacts> {
-  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
-
-  // Piggyback on this parse: cache what a PDF/A conversion of these bytes would
-  // destroy, so the Prepare click's impact gate doesn't need a parse of its own.
-  conversionImpactCache.set(bytes, assessPdfAConversionImpact(pdf));
-
-  const pdfPages = pdf.getPages();
-  const occupiedRegionPageIndexes = options.occupiedRegionPages === "first" && pdfPages.length > 0
-    ? [0]
-    : undefined;
-  const pageOccupiedRegions = await readOccupiedRegions(
-    bytes,
-    options.pdfDocument ?? null,
-    occupiedRegionPageIndexes,
-  );
-  const pages: PageFacts[] = pdfPages.map((page, pageIndex) => {
-    const widthIn = page.getWidth() / POINTS_PER_INCH;
-    const heightIn = page.getHeight() / POINTS_PER_INCH;
-    const occupiedRegions = pageOccupiedRegions.get(pageIndex);
-    const pageFacts: PageFacts = {
-      pageIndex,
-      size: {
-        w: roundInches(widthIn),
-        h: roundInches(heightIn),
-        in: true,
-      },
-      orientation: heightIn >= widthIn ? "portrait" : "landscape",
-    };
-
-    if (occupiedRegions) {
-      pageFacts.occupiedRegions = occupiedRegions;
-    }
-
-    return pageFacts;
+  const sharedFacts = await buildDocumentFacts(bytes, {
+    textExtractor: createUiDocumentFactsTextExtractor(options.pdfDocument ?? null),
   });
-  const hasExtractedText = [...pageOccupiedRegions.values()].some((regions) => regions.length > 0);
   const facts: DocumentFacts = {
-    pages,
+    ...sharedFacts,
     fileBytes: options.fileBytes,
     ...(options.filename ? { filename: options.filename } : {}),
   };
 
-  facts.searchableText = options.searchableText ?? hasExtractedText;
-  // A PDF/A conformance claim requires an XMP pdfaid identification, so its absence
-  // is a definitive "not PDF/A"; the claim itself is only what the document reports.
-  facts.pdfaCompliant = options.pdfaCompliant ?? (readPdfAIdentification(pdf) !== null);
+  try {
+    const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+    // Piggyback on this parse: cache what a PDF/A conversion of these bytes would
+    // destroy, so the Prepare click's impact gate doesn't need a parse of its own.
+    conversionImpactCache.set(bytes, assessPdfAConversionImpact(pdf));
+
+    // A PDF/A conformance claim requires an XMP pdfaid identification, so its absence
+    // is a definitive "not PDF/A"; the claim itself is only what the document reports.
+    facts.pdfaCompliant = options.pdfaCompliant ?? (readPdfAIdentification(pdf) !== null);
+  } catch {
+    if (options.pdfaCompliant !== undefined) {
+      facts.pdfaCompliant = options.pdfaCompliant;
+    }
+  }
+
+  const occupiedRegionPageIndexes = options.occupiedRegionPages === "first" && facts.pages.length > 0
+    ? [0]
+    : undefined;
+  let pageOccupiedRegions = new Map<number, RectInches[]>();
+  if (facts.pages.length > 0) {
+    try {
+      pageOccupiedRegions = await readOccupiedRegions(
+        bytes,
+        options.pdfDocument ?? null,
+        occupiedRegionPageIndexes,
+      );
+    } catch {
+      pageOccupiedRegions = new Map();
+    }
+  }
+  const hasExtractedText = [...pageOccupiedRegions.values()].some((regions) => regions.length > 0);
+
+  if (pageOccupiedRegions.size > 0) {
+    facts.pages = facts.pages.map((page) => {
+      const occupiedRegions = pageOccupiedRegions.get(page.pageIndex);
+      return occupiedRegions ? { ...page, occupiedRegions } : page;
+    });
+  }
+
+  if (options.searchableText !== undefined) {
+    facts.searchableText = options.searchableText;
+  } else if (facts.searchableText === undefined) {
+    facts.searchableText = hasExtractedText;
+  }
 
   if (pageOccupiedRegions.has(0)) {
     facts.clerkStampSpaceBlank = !pageOccupiedRegions
@@ -3153,6 +3168,101 @@ async function readFilingFacts(
   }
 
   return facts;
+}
+
+function createUiDocumentFactsTextExtractor(
+  currentPdfDocument: PDFDocumentProxy | null,
+): DocumentFactsTextExtractor {
+  return {
+    extractTextLayerCoverage: (bytes) => extractUiTextLayerCoverage(bytes, currentPdfDocument),
+    extractPageTextByPage: (bytes) => extractUiPageTextByPage(bytes, currentPdfDocument),
+  };
+}
+
+async function withPdfDocument<T>(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null,
+  read: (pdfDocument: PDFDocumentProxy) => Promise<T>,
+): Promise<T> {
+  if (currentPdfDocument) {
+    return read(currentPdfDocument);
+  }
+
+  const pdfDocument = await loadPdfDocument(bytes);
+  try {
+    return await read(pdfDocument);
+  } finally {
+    await pdfDocument.loadingTask.destroy();
+  }
+}
+
+async function extractUiTextLayerCoverage(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null,
+): Promise<NonNullable<DocumentFacts["textLayerCoverage"]>> {
+  return withPdfDocument(bytes, currentPdfDocument, async (pdfDocument) => {
+    const imageOnlyPages: number[] = [];
+    const mixedPages: number[] = [];
+    const textPages: number[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+      const page = await pdfDocument.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const hasText = content.items.some((item) => textItemString(item).trim().length > 0);
+      const operatorList = await page.getOperatorList();
+      const hasImage = operatorList.fnArray.some(isImageOperator);
+      const pageIndex = pageNumber - 1;
+
+      if (!hasText) {
+        imageOnlyPages.push(pageIndex);
+      } else if (hasImage) {
+        mixedPages.push(pageIndex);
+      } else {
+        textPages.push(pageIndex);
+      }
+    }
+
+    return { imageOnlyPages, mixedPages, textPages };
+  });
+}
+
+async function extractUiPageTextByPage(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null,
+): Promise<readonly { pageIndex: number; text: string }[]> {
+  return withPdfDocument(bytes, currentPdfDocument, async (pdfDocument) => {
+    const pages: { pageIndex: number; text: string }[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+      const page = await pdfDocument.getPage(pageNumber);
+      const content = await page.getTextContent();
+      pages.push({
+        pageIndex: pageNumber - 1,
+        text: content.items.map(textItemString).join(" "),
+      });
+    }
+
+    return pages;
+  });
+}
+
+function textItemString(item: unknown): string {
+  if (typeof item !== "object" || item === null || !("str" in item)) {
+    return "";
+  }
+
+  const { str } = item as { str?: unknown };
+  return typeof str === "string" ? str : "";
+}
+
+function isImageOperator(fn: number): boolean {
+  return fn === OPS.paintImageXObject ||
+    fn === OPS.paintInlineImageXObject ||
+    fn === OPS.paintInlineImageXObjectGroup ||
+    fn === OPS.paintImageMaskXObject ||
+    fn === OPS.paintImageMaskXObjectGroup ||
+    fn === OPS.paintImageXObjectRepeat ||
+    fn === OPS.paintImageMaskXObjectRepeat;
 }
 
 async function readOccupiedRegions(
@@ -3318,10 +3428,6 @@ function intersects(a: RectInches, b: RectInches): boolean {
     a.y < b.y + b.h &&
     a.y + a.h > b.y
   );
-}
-
-function roundInches(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function getOrganizeDialogTitle(flow: Exclude<OrganizeFlowId, "pages">): string {

@@ -130,6 +130,17 @@ export type TextLayerCoverage = {
   textPages: readonly number[];
 };
 
+export type PageTextByPage = readonly { pageIndex: number; text: string }[];
+
+export type DocumentFactsTextExtractor = {
+  extractTextLayerCoverage: (bytes: Uint8Array) => Promise<TextLayerCoverage>;
+  extractPageTextByPage?: (bytes: Uint8Array) => Promise<PageTextByPage>;
+};
+
+export type BuildDocumentFactsOptions = {
+  textExtractor?: DocumentFactsTextExtractor;
+};
+
 export type DocumentFactName =
   | "pages"
   | "activeContentSignals"

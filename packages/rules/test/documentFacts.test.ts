@@ -9,6 +9,10 @@ import {
   buildDocumentFacts,
   detectEncryptionState,
 } from "../src/index";
+import {
+  extractPageTextByPage,
+  extractTextLayerCoverage,
+} from "../src/node";
 
 const ONE_BY_ONE_PNG = Uint8Array.from(Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -58,7 +62,15 @@ describe("document fact extractors", () => {
     acroForm.addField(signatureFieldRef);
     page.node.set(PDFName.of("Annots"), pdf.context.obj([redactAnnotation, blackSquare, fileAttachment]));
 
-    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }));
+    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }), {
+      textExtractor: {
+        extractTextLayerCoverage: async () => ({
+          imageOnlyPages: [],
+          mixedPages: [],
+          textPages: [0],
+        }),
+      },
+    });
 
     expect(facts.encryptionState).toBe("none");
     expect(facts.activeContentSignals).toMatchObject({ possiblyPresent: true });
@@ -72,6 +84,12 @@ describe("document fact extractors", () => {
       blackRectangleAnnotationCount: 1,
       possiblyPresent: true,
     });
+    expect(facts.textLayerCoverage).toEqual({
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0],
+    });
+    expect(facts.searchableText).toBe(true);
     expect(facts.errors).toBeUndefined();
   });
 
@@ -90,7 +108,12 @@ describe("document fact extractors", () => {
     mixedPage.drawText("text and image", { x: 72, y: 720, font, size: 12 });
     mixedPage.drawImage(image, { x: 72, y: 620, width: 72, height: 72 });
 
-    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }));
+    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }), {
+      textExtractor: {
+        extractTextLayerCoverage,
+        extractPageTextByPage,
+      },
+    });
 
     expect(facts.searchableText).toBe(true);
     expect(facts.textLayerCoverage).toEqual({

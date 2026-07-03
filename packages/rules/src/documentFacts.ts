@@ -11,9 +11,9 @@ import {
   PDFString,
   type PDFObject,
 } from "pdf-lib";
-import { extractPageTextByPage, extractTextLayerCoverage } from "./pdfjsNode.js";
 import type {
   ActiveContentSignals,
+  BuildDocumentFactsOptions,
   DocumentFactError,
   DocumentFactName,
   DocumentFacts,
@@ -32,7 +32,10 @@ const TEXT_DECODER = new TextDecoder("latin1");
  * preflight can report unknown instead of treating an unreadable detector as a
  * pass or throwing away the whole report.
  */
-export async function buildDocumentFacts(bytes: Uint8Array): Promise<DocumentFacts> {
+export async function buildDocumentFacts(
+  bytes: Uint8Array,
+  options: BuildDocumentFactsOptions = {},
+): Promise<DocumentFacts> {
   const errors: DocumentFactError[] = [];
   const encryptionState = detectEncryptionState(bytes);
   const base: DocumentFacts = {
@@ -112,17 +115,21 @@ export async function buildDocumentFacts(bytes: Uint8Array): Promise<DocumentFac
     errors.push(detectorError("possibleUnappliedRedactions", errorMessage(error)));
   }
 
-  try {
-    facts.textLayerCoverage = await extractTextLayerCoverage(bytes);
-    facts.searchableText = facts.textLayerCoverage.textPages.length > 0 ||
-      facts.textLayerCoverage.mixedPages.length > 0;
-  } catch (error) {
-    errors.push(detectorError("textLayerCoverage", errorMessage(error)));
+  if (options.textExtractor) {
     try {
-      const pageText = await extractPageTextByPage(bytes);
-      facts.searchableText = pageText.some((page) => page.text.trim().length > 0);
-    } catch {
-      // searchableText is derived from the same pdf.js detector family; leave it unknown.
+      facts.textLayerCoverage = await options.textExtractor.extractTextLayerCoverage(bytes);
+      facts.searchableText = facts.textLayerCoverage.textPages.length > 0 ||
+        facts.textLayerCoverage.mixedPages.length > 0;
+    } catch (error) {
+      errors.push(detectorError("textLayerCoverage", errorMessage(error)));
+      try {
+        const pageText = await options.textExtractor.extractPageTextByPage?.(bytes);
+        if (pageText) {
+          facts.searchableText = pageText.some((page) => page.text.trim().length > 0);
+        }
+      } catch {
+        // searchableText is derived from the same pdf.js detector family; leave it unknown.
+      }
     }
   }
 

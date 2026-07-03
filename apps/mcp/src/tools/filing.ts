@@ -1,6 +1,13 @@
 import { promises as fs } from "node:fs";
 import { z } from "zod";
-import { buildDocumentFacts, DEFAULT_PACK_ID, getPack, listPacks, preflight } from "@raiopdf/rules";
+import {
+  buildDocumentFacts,
+  DEFAULT_PACK_ID,
+  getPack,
+  listPacks,
+  preflight,
+} from "@raiopdf/rules";
+import { extractPageTextByPage, extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { JurisdictionPack, JurisdictionPackId } from "@raiopdf/rules";
 import type { EngineHandle } from "../engine.js";
 import { baseOutputSchema, errorResult, successResult, type StructuredToolResult } from "../format.js";
@@ -71,7 +78,12 @@ export async function handlePrepareForFiling(
 
   const source = await resolveInput(input.input);
   const bytes = await fs.readFile(source.realPath);
-  const facts = await buildDocumentFacts(bytes);
+  const facts = await buildDocumentFacts(bytes, {
+    textExtractor: {
+      extractTextLayerCoverage,
+      extractPageTextByPage,
+    },
+  });
   const report = preflight(facts, pack);
 
   const checks = report.checks.map((check) => ({

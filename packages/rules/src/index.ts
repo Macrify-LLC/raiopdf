@@ -18,14 +18,9 @@ export {
   buildDocumentFacts,
   detectEncryptionState,
 } from "./documentFacts.js";
-export {
-  extractAllText,
-  extractPageText,
-  extractPageTextByPage,
-  extractTextLayerCoverage,
-} from "./pdfjsNode.js";
 export type {
   ActiveContentSignals,
+  BuildDocumentFactsOptions,
   ConstraintApplicability,
   ConstraintEntry,
   ConstraintKind,
@@ -33,11 +28,13 @@ export type {
   DocumentFactError,
   DocumentFactName,
   DocumentFacts,
+  DocumentFactsTextExtractor,
   EncryptionState,
   FormFieldFacts,
   JurisdictionPack,
   JurisdictionPackId,
   PageFacts,
+  PageTextByPage,
   PageOrientation,
   PageSizeInches,
   PdfARequirement,

@@ -1,4 +1,4 @@
-import { extractAllText } from "@raiopdf/rules";
+import { extractAllText } from "@raiopdf/rules/node";
 
 export type RedactionVerification = {
   /** True when none of the redacted terms remain extractable. */

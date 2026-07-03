@@ -25,6 +25,9 @@ export default defineConfig({
       "@raiopdf/production-set": fileURLToPath(
         new URL("../../packages/production-set/src/index.ts", import.meta.url),
       ),
+      "@raiopdf/rules/node": fileURLToPath(
+        new URL("../../packages/rules/src/node.ts", import.meta.url),
+      ),
       "@raiopdf/rules": fileURLToPath(
         new URL("../../packages/rules/src/index.ts", import.meta.url),
       ),

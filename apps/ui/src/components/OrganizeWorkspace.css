@@ -298,6 +298,24 @@
   background: var(--accent-pale);
 }
 
+.organize-page {
+  transition: opacity var(--duration-fast) ease;
+}
+
+.organize-page[data-dragging="true"] {
+  opacity: 0.4;
+}
+
+.organize-page[data-drop-target="true"] {
+  border-color: var(--accent);
+  background: var(--accent-pale);
+}
+
+.organize-page[data-drop-target="true"] .organize-page__thumb {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
 .organize-page__thumb {
   width: 140px;
   height: 180px;

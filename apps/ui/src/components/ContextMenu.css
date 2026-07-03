@@ -1,0 +1,79 @@
+.context-menu {
+  position: fixed;
+  z-index: 8;
+  /* Explicit, not inherited -- callers may render this inside a layer that
+     sets `pointer-events: none` by default (e.g. EditLayer outside an
+     active placement tool), and the menu must stay clickable regardless. */
+  pointer-events: auto;
+  min-width: 168px;
+  display: grid;
+  gap: 1px;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+  outline: none;
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: top left;
+  animation: context-menu-in var(--duration-fast) ease forwards;
+}
+
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-menu {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-align: left;
+  padding: 0 var(--space-2);
+  cursor: default;
+}
+
+.context-menu__item[data-active="true"] {
+  background: var(--hover-ground);
+  color: var(--ink);
+}
+
+.context-menu__item[data-danger="true"] {
+  color: var(--danger);
+}
+
+.context-menu__item[data-danger="true"][data-active="true"] {
+  background: var(--danger-bg);
+}
+
+.context-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.context-menu__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

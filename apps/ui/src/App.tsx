@@ -3013,6 +3013,13 @@ export function App() {
     setSettingsFocusSection("about-macrify");
     setSettingsOpen(true);
   }, []);
+  // Shared by the File menu's "Open Raio to AI..." item and the tool
+  // sidebar's top-level "Connect to AI Agent" entry -- both open the exact
+  // same settings surface, not two copies of the same wiring.
+  const openConnectToAi = useCallback(() => {
+    setSettingsFocusSection("open-raio-to-ai");
+    setSettingsOpen(true);
+  }, []);
   const openHelp = useCallback((articleId?: string) => {
     setHelpArticleId(articleId);
     setHelpOpen(true);
@@ -3067,8 +3074,7 @@ export function App() {
           setSettingsOpen(true);
           break;
         case "file:open-raio-to-ai":
-          setSettingsFocusSection("open-raio-to-ai");
-          setSettingsOpen(true);
+          openConnectToAi();
           break;
         case "help:open":
           openHelp();
@@ -3099,6 +3105,7 @@ export function App() {
       handleExportDiagnostics,
       openHelp,
       openAboutMacrify,
+      openConnectToAi,
       openFile,
       printDocument,
       save,
@@ -3504,6 +3511,8 @@ export function App() {
         onMarkScannerHit={markScannerHit}
         onOpenAbout={openAboutMacrify}
         onHelpRequested={openHelp}
+        onConnectToAi={openConnectToAi}
+        onMenuCommand={handleNativeMenuCommand}
       />
       {forceOcrConfirmation ? (
         <ForceOcrConfirmationDialog

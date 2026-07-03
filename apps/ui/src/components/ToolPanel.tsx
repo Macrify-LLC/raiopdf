@@ -27,6 +27,7 @@ import {
   InsertIcon,
   OcrSearchIcon,
   OrganizeIcon,
+  PlugIcon,
   RedactIcon,
   RotateIcon,
   ScaleIcon,
@@ -126,6 +127,13 @@ export interface ToolPanelProps {
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onHelpRequested: (articleId: string) => void;
+  /**
+   * Top-level entry point for "Connect to AI Agent" -- opens the same
+   * settings surface as the File menu's "Open Raio to AI..." item. Not
+   * routed through the ToolRow help-icon plumbing: this is a doorway to a
+   * whole settings section, not a tool with its own help article.
+   */
+  onConnectToAi: () => void;
 }
 
 export function ToolPanel({
@@ -152,6 +160,7 @@ export function ToolPanel({
   onRunScanner,
   onMarkScannerHit,
   onHelpRequested,
+  onConnectToAi,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -182,7 +191,6 @@ export function ToolPanel({
             description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {EDIT_DIALOG_TOOLS.map((tool) => (
@@ -193,7 +201,6 @@ export function ToolPanel({
             description={tool.description}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {pendingContentEdits.length > 0 ? (
@@ -216,7 +223,6 @@ export function ToolPanel({
             description={tool.description}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
       </AccordionGroup>
@@ -244,7 +250,6 @@ export function ToolPanel({
           description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
-          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
@@ -252,12 +257,13 @@ export function ToolPanel({
           description="Rebuild the invisible searchable text by re-rendering the whole file."
           disabled={!hasDocument || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onForceOcr}
-          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         {ocrState.phase === "done" || ocrState.phase === "error" ? (
           <OcrResultNotice ocrState={ocrState} ocrAvailable={ocrAvailable} />
         ) : null}
       </div>
+
+      <ConnectToAiRow onSelect={onConnectToAi} />
 
       <AccordionGroup
         id="legal"
@@ -278,7 +284,6 @@ export function ToolPanel({
                 description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
-                onHelp={() => onHelpRequested(tool.helpArticleId)}
               />
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel
@@ -312,6 +317,29 @@ export function ToolPanel({
         })}
       </AccordionGroup>
     </aside>
+  );
+}
+
+// Top-level entry point (item 11) -- previously the only way to reach this
+// surface was the Built-by-Macrify byline or the invisible native File menu.
+// Copy follows the two-halves framing: no AI runs inside RaioPDF; this wires
+// Raio up to the user's OWN AI tools. Deliberately calm, not a promo card --
+// no badge, no accent wash, just a labeled row like everything else here.
+function ConnectToAiRow({ onSelect }: { onSelect: () => void }) {
+  return (
+    <div className="tool-panel__ai-connect">
+      <button type="button" className="tool-panel__ai-connect-button" onClick={onSelect}>
+        <span className="tool-panel__ai-connect-icon">
+          <PlugIcon size={16} />
+        </span>
+        <span className="tool-panel__ai-connect-copy">
+          <span className="tool-panel__ai-connect-label">Connect to AI Agent</span>
+          <span className="tool-panel__ai-connect-description">
+            Let your own AI assistant drive Raio — nothing runs in the app itself.
+          </span>
+        </span>
+      </button>
+    </div>
   );
 }
 

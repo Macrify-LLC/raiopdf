@@ -72,6 +72,8 @@ export interface AppShellProps {
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onOpenAbout: () => void;
   onHelpRequested: (articleId?: string) => void;
+  onConnectToAi: () => void;
+  onMenuCommand: (command: string) => void;
 }
 
 export function AppShell({
@@ -121,9 +123,12 @@ export function AppShell({
   onMarkScannerHit,
   onOpenAbout,
   onHelpRequested,
+  onConnectToAi,
+  onMenuCommand,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
+  const canUndo = editing.pendingEdits.length > 0;
   const tabs = document.fileName
     ? [
         {
@@ -159,7 +164,13 @@ export function AppShell({
         aria-label="Open PDF file"
         onChange={handleFileInputChange}
       />
-      <TitleBar tabs={tabs} onOpenAbout={onOpenAbout} />
+      <TitleBar
+        tabs={tabs}
+        onOpenAbout={onOpenAbout}
+        hasDocument={hasDocument}
+        canUndo={canUndo}
+        onMenuCommand={onMenuCommand}
+      />
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}
@@ -245,6 +256,7 @@ export function AppShell({
           onRunScanner={onRunScanner}
           onMarkScannerHit={onMarkScannerHit}
           onHelpRequested={onHelpRequested}
+          onConnectToAi={onConnectToAi}
         />
       </div>
       <StatusBar

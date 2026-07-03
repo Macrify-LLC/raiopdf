@@ -2,7 +2,7 @@ import { ICON_VIEWBOX, ICON_STROKE_WIDTH, type IconProps } from "./types";
 
 /**
  * Lines of text with one solid redaction bar. The bar is a deliberate,
- * spec-noted exception to "no fills except the bolt mark and state ticks"
+ * spec-noted exception to "no fills except special glyphs and state ticks"
  * -- an outlined block does not read as a redaction, and the reference
  * mockup renders it filled.
  */

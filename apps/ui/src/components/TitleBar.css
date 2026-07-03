@@ -20,12 +20,6 @@
   place-items: center;
   width: 22px;
   height: 22px;
-  border-radius: 5px;
-  background: var(--primary-deep);
-}
-
-.title-bar__mark-icon {
-  color: var(--bolt);
 }
 
 .title-bar__wordmark {

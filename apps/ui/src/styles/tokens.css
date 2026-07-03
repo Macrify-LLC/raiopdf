@@ -20,7 +20,7 @@
   --muted: #5a6f8a; /* captions, secondary */
 
   --primary: #2565a0; /* selection, primary buttons, active tool */
-  --primary-deep: #1b3a5c; /* logo mark ground, emphasized headers */
+  --primary-deep: #1b3a5c; /* app icon ground, emphasized headers */
   --accent: #4fb8e0; /* focus rings, live indicators */
   --accent-pale: #eaf5fc; /* selected-row / Legal-header wash */
 
@@ -43,7 +43,7 @@
   --highlight: #ffe64d;
   --edit-ink: #111111;
 
-  /* The RaioPDF product mark (bolt) fill, and the gradient accent bar
+  /* The Prepare for Filing bolt glyph fill, and the gradient accent bar
      that always sits at the very top of the app window. */
   --bolt: #7ec8f0;
   --accent-bar-start: #132d52;

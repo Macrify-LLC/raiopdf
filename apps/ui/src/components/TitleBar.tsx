@@ -1,4 +1,4 @@
-import { BoltIcon } from "../icons";
+import { SunMarkIcon } from "../icons";
 import "./TitleBar.css";
 
 export interface DocumentTabInfo {
@@ -21,7 +21,7 @@ export function TitleBar({ tabs = DEMO_TABS }: TitleBarProps) {
     <header className="title-bar">
       <div className="title-bar__brand">
         <span className="title-bar__mark">
-          <BoltIcon size={13} className="title-bar__mark-icon" />
+          <SunMarkIcon size={22} className="title-bar__mark-icon" />
         </span>
         <span className="title-bar__wordmark">
           Raio<span className="title-bar__wordmark-accent">PDF</span>

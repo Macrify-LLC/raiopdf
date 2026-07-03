@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
-import { BoltIcon, OpenIcon } from "../icons";
+import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy, PDFPageProxy } from "../lib/pdfjs";
 import {
@@ -345,7 +345,7 @@ export function CanvasWell({
       ) : (
         <div className="canvas-well__empty">
           <span className="canvas-well__mark">
-            <BoltIcon size={24} className="canvas-well__mark-icon" />
+            <SunMarkIcon size={40} className="canvas-well__mark-icon" />
           </span>
           <h2 className="canvas-well__heading">Open a PDF to get started</h2>
           <p className="canvas-well__hint">

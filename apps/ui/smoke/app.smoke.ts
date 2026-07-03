@@ -539,8 +539,14 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await openPdf(page, "landscape-oversize.pdf", sourcePdf);
   await page.getByRole("button", { name: "Prepare for Filing" }).click();
 
-  await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
-  await expect(page.getByText("Florida — Florida Courts E-Filing Portal")).toBeVisible();
+  const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
+  await expect(filingDialog).toBeVisible();
+  const jurisdictionHeader = filingDialog.locator(".filing-card__jurisdiction");
+  await expect(
+    jurisdictionHeader.locator(":scope > span").filter({
+      hasText: /^Florida — Florida Courts E-Filing Portal$/,
+    }),
+  ).toBeVisible();
   await expect(page.getByText("State trial and appellate courts")).toBeVisible();
   await expect(page.getByText("These checks are guidance only")).toBeVisible();
   await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();

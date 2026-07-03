@@ -152,9 +152,10 @@ export async function runBatchCleanup(
   input: BatchCleanupInput,
   engines: BatchCleanupEngines = {},
 ): Promise<BatchCleanupResult> {
-  const options = normalizeInput(input);
+  const hasSidecar = engines.sidecar !== undefined;
+  const options = normalizeInput(input, { hasSidecar });
   const localEngine = engines.local ?? createLocalPdfEngine();
-  const sidecarEngine = engines.sidecar ?? (localEngine as BatchCleanupSidecarEngine);
+  const sidecarEngine = engines.sidecar;
   const session = createPackage(options.outputDir, {
     appVersion: options.appVersion,
     createdAt: options.createdAt,
@@ -225,7 +226,10 @@ export async function runBatchCleanup(
   };
 }
 
-function normalizeInput(input: BatchCleanupInput): NormalizedOptions {
+function normalizeInput(
+  input: BatchCleanupInput,
+  runtime: { hasSidecar: boolean },
+): NormalizedOptions {
   if (input.sources.length === 0) {
     throw new Error("Batch cleanup requires at least one source PDF.");
   }
@@ -247,9 +251,9 @@ function normalizeInput(input: BatchCleanupInput): NormalizedOptions {
   const pack = input.packId ? getPack(input.packId) : null;
   const operations = input.operations ?? {};
   const normalizedOperations: NormalizedOperations = {
-    ocrMode: operations.ocrMode ?? DEFAULT_OCR_MODE,
+    ocrMode: operations.ocrMode ?? (runtime.hasSidecar ? DEFAULT_OCR_MODE : "off"),
     compress: operations.compress ?? false,
-    sanitize: operations.sanitize ?? defaultSanitize(pack),
+    sanitize: operations.sanitize ?? (runtime.hasSidecar ? defaultSanitize(pack) : false),
     scrubMetadata: operations.scrubMetadata ?? defaultScrubMetadata(pack),
     repair: operations.repair ?? false,
     splitBySize: operations.splitBySize ?? false,
@@ -274,7 +278,7 @@ async function processFile(
   source: BatchCleanupSourceInput,
   options: NormalizedOptions,
   localEngine: PdfEngine,
-  sidecarEngine: BatchCleanupSidecarEngine,
+  sidecarEngine: BatchCleanupSidecarEngine | undefined,
   session: ReturnType<typeof createPackage>,
   outputNames: Set<string>,
 ): Promise<BatchCleanupFileResult> {
@@ -318,6 +322,7 @@ async function processFile(
   }
 
   try {
+    validateSidecarAvailability(plan.operations, sidecarEngine);
     const produced = await runOperationPipeline(
       sourceBytes,
       facts,
@@ -457,7 +462,7 @@ async function runOperationPipeline(
   operations: readonly string[],
   options: NormalizedOptions,
   localEngine: PdfEngine,
-  sidecarEngine: PdfEngine,
+  sidecarEngine: PdfEngine | undefined,
 ): Promise<ProducedPdf[]> {
   let bytes = sourceBytes;
 
@@ -494,7 +499,7 @@ async function runOperationPipeline(
       operation,
       facts,
       options,
-      SIDE_CAR_OPERATIONS.has(operation) ? sidecarEngine : localEngine,
+      selectEngineForOperation(operation, localEngine, sidecarEngine),
     );
   }
 
@@ -648,6 +653,51 @@ function requireOcrEngine(engine: PdfEngine | BatchCleanupSidecarEngine): BatchC
   }
 
   throw new Error("OCR requires the desktop sidecar engine.");
+}
+
+function selectEngineForOperation(
+  operation: string,
+  localEngine: PdfEngine,
+  sidecarEngine: PdfEngine | undefined,
+): PdfEngine {
+  if (!SIDE_CAR_OPERATIONS.has(operation)) {
+    return localEngine;
+  }
+
+  if (!sidecarEngine) {
+    throw new Error(`${operationLabel(operation)} requires the desktop sidecar engine.`);
+  }
+
+  return sidecarEngine;
+}
+
+function validateSidecarAvailability(
+  operations: readonly string[],
+  sidecarEngine: BatchCleanupSidecarEngine | undefined,
+): void {
+  if (sidecarEngine) {
+    return;
+  }
+
+  const sidecarOperation = operations.find((operation) => SIDE_CAR_OPERATIONS.has(operation));
+  if (sidecarOperation) {
+    throw new Error(`${operationLabel(sidecarOperation)} requires the desktop sidecar engine.`);
+  }
+}
+
+function operationLabel(operation: string): string {
+  switch (operation) {
+    case "pdfa":
+      return "PDF/A conversion";
+    case "ocr":
+      return "OCR";
+    case "scrub-metadata":
+      return "Metadata scrubbing";
+    case "split-by-size":
+      return "Split by size";
+    default:
+      return operation;
+  }
 }
 
 async function createBatchReportPdf(

@@ -72,6 +72,12 @@ interface VolumeState {
   oversizedFiles: string[];
 }
 
+interface VolumeUploadArtifact {
+  outputName: string;
+  bytes: number;
+  volume: string | null;
+}
+
 interface OpenedHandle {
   handle: PdfDocumentHandle;
 }
@@ -110,6 +116,7 @@ export async function buildProductionSet(
   const opened: OpenedHandle[] = [];
   const stampedForCombined: PdfDocumentHandle[] = [];
   const files: ProductionSetFileResult[] = [];
+  const volumeArtifacts: VolumeUploadArtifact[] = [];
   let running = options.start;
   const volume: VolumeState | null = options.volumeBytes === null ? null : createVolume(1);
 
@@ -159,6 +166,11 @@ export async function buildProductionSet(
         batesStart,
         batesEnd,
         designation,
+      });
+      volumeArtifacts.push({
+        outputName,
+        bytes: entry.bytes,
+        volume: volumeName,
       });
 
       files.push({
@@ -217,10 +229,15 @@ export async function buildProductionSet(
         designation: "",
         combinedProduction: true,
       });
+      volumeArtifacts.push({
+        outputName: combinedName,
+        bytes: entry.bytes,
+        volume: volumeName,
+      });
       combinedPdf = entry.relativePath;
     }
 
-    const volumeResults = volume === null ? [] : collectVolumes(files, options.volumeBytes);
+    const volumeResults = volume === null ? [] : collectVolumes(volumeArtifacts, options.volumeBytes);
 
     session.recordDetail("productionSources", files.map((file) => ({
       sourcePath: file.sourcePath,
@@ -404,7 +421,7 @@ function assignVolume(
 }
 
 function collectVolumes(
-  files: readonly ProductionSetFileResult[],
+  files: readonly VolumeUploadArtifact[],
   cap: number | null,
 ): ProductionVolumeResult[] {
   if (cap === null) {

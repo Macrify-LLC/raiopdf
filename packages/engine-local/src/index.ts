@@ -4,26 +4,46 @@ import type {
   PdfBinderOptions,
   PdfBytes,
   PdfAConversionOptions,
+  PdfCommentEdit,
   PdfDocumentHandle,
+  PdfEdit,
+  PdfEditColor,
+  PdfEditRect,
   PdfEngine,
+  PdfFormFieldValue,
+  PdfFormValuesEdit,
+  PdfHighlightEdit,
+  PdfImageEdit,
+  PdfInkEdit,
   PdfNormalizePagesOptions,
   PdfPageSizePoints,
   PdfPageSelection,
   PdfRedactTextOptions,
   PdfRedactionArea,
+  PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTextBoxEdit,
   PdfTextRegion,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
 import {
   degrees as pdfDegrees,
+  LineCapStyle,
+  PDFArray,
+  PDFCheckBox,
   PDFDocument,
+  PDFDropdown,
+  PDFField,
+  PDFFont,
   PDFName,
+  PDFOptionList,
+  PDFRadioGroup,
   PDFRef,
   PDFString,
+  PDFTextField,
   rgb,
   StandardFonts,
 } from "pdf-lib";
@@ -47,6 +67,15 @@ const DEFAULT_BINDER_PLACEMENT: PdfStampPlacement = {
   align: "right",
 };
 const STAMP_COLOR = rgb(0.08, 0.08, 0.08);
+const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
+const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
+const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
+const DEFAULT_TEXT_BOX_FONT_SIZE_PT = 12;
+const TEXT_BOX_LINE_HEIGHT_FACTOR = 1.2;
+const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
+const COMMENT_ICON_SIZE_PT = 20;
+/** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
+const ANNOTATION_FLAG_PRINT = 4;
 
 export class LocalPdfEngine implements PdfEngine {
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
@@ -493,6 +522,66 @@ export class LocalPdfEngine implements PdfEngine {
     return this.store(await output.save());
   }
 
+  /**
+   * Applies add-content edits with pdf-lib.
+   *
+   * Comments become real `/Annots` `/Text` annotations so they stay live in
+   * other viewers. Highlights are drawn as translucent rectangles rather than
+   * `/Highlight` annotations: pdf-lib has no highlight-annotation API, and a
+   * hand-built one needs QuadPoints plus a multiply-blend appearance stream to
+   * render consistently across viewers — drawn rects are the clean, reliable
+   * option here and match the product's bake-on-save model. Text boxes, ink,
+   * images, and signatures are drawn content. Text, image, and signature
+   * placement is rotation-aware: content renders upright to the viewer on
+   * pages rotated 90/180/270 degrees, reusing the stamp rotation mapping.
+   */
+  async applyEdits(
+    document: PdfDocumentHandle,
+    edits: readonly PdfEdit[],
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const pageCount = output.getPageCount();
+
+    for (const edit of edits) {
+      assertValidEdit(edit, pageCount);
+    }
+
+    let helvetica: PDFFont | null = null;
+    const getHelvetica = async (): Promise<PDFFont> => {
+      helvetica ??= await output.embedFont(StandardFonts.Helvetica);
+
+      return helvetica;
+    };
+
+    for (const edit of edits) {
+      await applyEditInPlace(output, edit, getHelvetica);
+    }
+
+    return this.store(await output.save());
+  }
+
+  /**
+   * Flattens AcroForm fields with pdf-lib's `form.flatten()`: current field
+   * appearances are painted into page content and the interactive fields are
+   * removed. A document without form fields round-trips unchanged.
+   */
+  async flattenForm(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+    const form = output.getForm();
+
+    if (form.getFields().length > 0) {
+      try {
+        form.flatten();
+      } catch (error) {
+        throw new PdfEngineError("INVALID_DOCUMENT", "Form fields could not be flattened.", {
+          cause: error,
+        });
+      }
+    }
+
+    return this.store(await output.save());
+  }
+
   async saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array> {
     return new Uint8Array(this.get(document).bytes);
   }
@@ -719,6 +808,425 @@ function mapVisualPointToPagePoint(options: {
     case 270:
       return { x: options.visualY, y: options.pageHeight - options.visualX };
   }
+}
+
+/**
+ * Inverse of `mapVisualPointToPagePoint`: maps a PDF user-space point into
+ * the upright "visual" space a viewer sees after applying the page rotation.
+ */
+function mapPagePointToVisualPoint(options: {
+  pageX: number;
+  pageY: number;
+  pageWidth: number;
+  pageHeight: number;
+  pageRotation: PageRotation;
+}): { x: number; y: number } {
+  switch (options.pageRotation) {
+    case 0:
+      return { x: options.pageX, y: options.pageY };
+    case 90:
+      return { x: options.pageY, y: options.pageWidth - options.pageX };
+    case 180:
+      return { x: options.pageWidth - options.pageX, y: options.pageHeight - options.pageY };
+    case 270:
+      return { x: options.pageHeight - options.pageY, y: options.pageX };
+  }
+}
+
+/**
+ * Maps a user-space edit rectangle to its axis-aligned bounding box in visual
+ * space. On sideways pages the width/height swap; on 0-degree pages this is
+ * the identity.
+ */
+function mapPageRectToVisualRect(
+  rect: PdfEditRect,
+  pageWidth: number,
+  pageHeight: number,
+  pageRotation: PageRotation,
+): PdfEditRect {
+  const corners = [
+    { pageX: rect.x, pageY: rect.y },
+    { pageX: rect.x + rect.w, pageY: rect.y },
+    { pageX: rect.x, pageY: rect.y + rect.h },
+    { pageX: rect.x + rect.w, pageY: rect.y + rect.h },
+  ].map((corner) =>
+    mapPagePointToVisualPoint({ ...corner, pageWidth, pageHeight, pageRotation }),
+  );
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(...xs) - minX,
+    h: Math.max(...ys) - minY,
+  };
+}
+
+async function applyEditInPlace(
+  pdf: PDFDocument,
+  edit: PdfEdit,
+  getHelvetica: () => Promise<PDFFont>,
+): Promise<void> {
+  switch (edit.type) {
+    case "highlight":
+      applyHighlightEdit(pdf, edit);
+      return;
+    case "textBox":
+      applyTextBoxEdit(pdf, edit, await getHelvetica());
+      return;
+    case "image":
+    case "signature":
+      await applyImageEdit(pdf, edit);
+      return;
+    case "ink":
+      applyInkEdit(pdf, edit);
+      return;
+    case "comment":
+      applyCommentEdit(pdf, edit);
+      return;
+    case "formValues":
+      applyFormValuesEdit(pdf, edit);
+      return;
+  }
+}
+
+/**
+ * Draws translucent rectangles for each highlighted line. Rectangles are
+ * orientation-agnostic, so user-space coordinates are drawn verbatim with no
+ * rotation compensation.
+ */
+function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const color = toEditColor(edit.color, HIGHLIGHT_COLOR);
+  const opacity = edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
+
+  for (const rect of edit.rects) {
+    page.drawRectangle({
+      x: rect.x,
+      y: rect.y,
+      width: rect.w,
+      height: rect.h,
+      color,
+      opacity,
+    });
+  }
+}
+
+/**
+ * Draws the text block starting at the visual top-left of the edit rectangle,
+ * rotated with the page so it reads upright to the viewer. The first baseline
+ * sits one font-size below the rectangle's visual top edge.
+ */
+function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const visualRect = mapPageRectToVisualRect(
+    edit.rect,
+    page.getWidth(),
+    page.getHeight(),
+    pageRotation,
+  );
+  const anchor = mapVisualPointToPagePoint({
+    visualX: visualRect.x,
+    visualY: visualRect.y + visualRect.h - fontSize,
+    pageWidth: page.getWidth(),
+    pageHeight: page.getHeight(),
+    pageRotation,
+  });
+
+  page.drawText(edit.text, {
+    x: anchor.x,
+    y: anchor.y,
+    size: fontSize,
+    font,
+    color: toEditColor(edit.color, EDIT_INK_COLOR),
+    lineHeight: fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR,
+    rotate: pdfDegrees(pageRotation),
+  });
+}
+
+/**
+ * Draws an image or signature scaled into the edit rectangle. The image is
+ * anchored at the visual bottom-left of the rectangle and rotated with the
+ * page so it appears upright to the viewer.
+ */
+async function applyImageEdit(
+  pdf: PDFDocument,
+  edit: PdfImageEdit | PdfSignatureEdit,
+): Promise<void> {
+  const page = pdf.getPage(edit.pageIndex);
+  const image = await embedEditImage(pdf, edit);
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const visualRect = mapPageRectToVisualRect(
+    edit.rect,
+    page.getWidth(),
+    page.getHeight(),
+    pageRotation,
+  );
+  const anchor = mapVisualPointToPagePoint({
+    visualX: visualRect.x,
+    visualY: visualRect.y,
+    pageWidth: page.getWidth(),
+    pageHeight: page.getHeight(),
+    pageRotation,
+  });
+
+  page.drawImage(image, {
+    x: anchor.x,
+    y: anchor.y,
+    width: visualRect.w,
+    height: visualRect.h,
+    rotate: pdfDegrees(pageRotation),
+  });
+}
+
+async function embedEditImage(
+  pdf: PDFDocument,
+  edit: PdfImageEdit | PdfSignatureEdit,
+): Promise<Awaited<ReturnType<PDFDocument["embedPng"]>>> {
+  try {
+    return edit.format === "png" ? await pdf.embedPng(edit.bytes) : await pdf.embedJpg(edit.bytes);
+  } catch (error) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Edit image bytes could not be decoded as ${edit.format}.`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * Draws each freehand stroke as round-capped line segments. Stroke points are
+ * already in user space (the caller maps canvas points, including rotation),
+ * so no rotation compensation is applied.
+ */
+function applyInkEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT;
+  const color = toEditColor(edit.color, EDIT_INK_COLOR);
+
+  for (const stroke of edit.strokes) {
+    for (let pointIndex = 0; pointIndex + 1 < stroke.length; pointIndex += 1) {
+      const start = stroke[pointIndex]!;
+      const end = stroke[pointIndex + 1]!;
+
+      page.drawLine({
+        start: { x: start.x, y: start.y },
+        end: { x: end.x, y: end.y },
+        thickness,
+        color,
+        lineCap: LineCapStyle.Round,
+      });
+    }
+  }
+}
+
+/**
+ * Adds a `/Text` (sticky note) annotation to the page's `/Annots` array.
+ * Viewers render their own upright note icon, so the anchor is written in
+ * user space with no rotation compensation.
+ */
+function applyCommentEdit(pdf: PDFDocument, edit: PdfCommentEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const annotation = pdf.context.obj({
+    Type: "Annot",
+    Subtype: "Text",
+    Rect: [
+      edit.at.x,
+      edit.at.y,
+      edit.at.x + COMMENT_ICON_SIZE_PT,
+      edit.at.y + COMMENT_ICON_SIZE_PT,
+    ],
+    Contents: PDFString.of(edit.text),
+    Name: "Comment",
+    F: ANNOTATION_FLAG_PRINT,
+    Open: false,
+    ...(edit.author !== undefined ? { T: PDFString.of(edit.author) } : {}),
+  });
+  const annotationRef = pdf.context.register(annotation);
+  const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+  if (annotations) {
+    annotations.push(annotationRef);
+    return;
+  }
+
+  page.node.set(PDFName.of("Annots"), pdf.context.obj([annotationRef]));
+}
+
+function applyFormValuesEdit(pdf: PDFDocument, edit: PdfFormValuesEdit): void {
+  const form = pdf.getForm();
+
+  for (const [fieldName, value] of Object.entries(edit.values)) {
+    const field = form.getFieldMaybe(fieldName);
+
+    if (!field) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `Form field "${fieldName}" was not found in the document.`,
+      );
+    }
+
+    try {
+      setFormFieldValue(field, fieldName, value);
+    } catch (error) {
+      if (error instanceof PdfEngineError) {
+        throw error;
+      }
+
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `Form field "${fieldName}" rejected the provided value.`,
+        { cause: error },
+      );
+    }
+  }
+}
+
+function setFormFieldValue(field: PDFField, fieldName: string, value: PdfFormFieldValue): void {
+  if (field instanceof PDFTextField) {
+    if (typeof value !== "string") {
+      throw formValueTypeMismatch(fieldName, "a string");
+    }
+
+    field.setText(value);
+    return;
+  }
+
+  if (field instanceof PDFCheckBox) {
+    if (typeof value !== "boolean") {
+      throw formValueTypeMismatch(fieldName, "a boolean");
+    }
+
+    if (value) {
+      field.check();
+    } else {
+      field.uncheck();
+    }
+    return;
+  }
+
+  if (field instanceof PDFRadioGroup) {
+    if (typeof value !== "string") {
+      throw formValueTypeMismatch(fieldName, "a string option name");
+    }
+
+    field.select(value);
+    return;
+  }
+
+  if (field instanceof PDFDropdown || field instanceof PDFOptionList) {
+    if (typeof value === "boolean") {
+      throw formValueTypeMismatch(fieldName, "a string or string array of option names");
+    }
+
+    field.select(typeof value === "string" ? value : [...value]);
+    return;
+  }
+
+  throw new PdfEngineError(
+    "INVALID_DOCUMENT",
+    `Form field "${fieldName}" has a field type that does not accept value writes.`,
+  );
+}
+
+function formValueTypeMismatch(fieldName: string, expected: string): PdfEngineError {
+  return new PdfEngineError(
+    "INVALID_DOCUMENT",
+    `Form field "${fieldName}" requires ${expected}.`,
+  );
+}
+
+function assertValidEdit(edit: PdfEdit, pageCount: number): void {
+  if (edit.type === "formValues") {
+    return;
+  }
+
+  assertPageIndexes([edit.pageIndex], pageCount);
+
+  switch (edit.type) {
+    case "highlight":
+      if (edit.rects.length === 0) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Highlight edits require at least one rectangle.",
+        );
+      }
+
+      for (const rect of edit.rects) {
+        assertEditRect(rect);
+      }
+
+      if (
+        edit.opacity !== undefined &&
+        (!Number.isFinite(edit.opacity) || edit.opacity < 0 || edit.opacity > 1)
+      ) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Highlight opacity must be between 0 and 1.",
+        );
+      }
+      return;
+    case "textBox":
+      assertEditRect(edit.rect);
+      assertNonEmptyEditText(edit.text, "Text box");
+
+      if (edit.fontSizePt !== undefined) {
+        assertPositiveNumber(edit.fontSizePt, "fontSizePt");
+      }
+      return;
+    case "image":
+    case "signature":
+      assertEditRect(edit.rect);
+      return;
+    case "ink":
+      if (edit.strokes.length === 0) {
+        throw new PdfEngineError("INVALID_DOCUMENT", "Ink edits require at least one stroke.");
+      }
+
+      for (const stroke of edit.strokes) {
+        if (stroke.length < 2) {
+          throw new PdfEngineError(
+            "INVALID_DOCUMENT",
+            "Ink strokes require at least two points.",
+          );
+        }
+      }
+
+      if (edit.strokeWidthPt !== undefined) {
+        assertPositiveNumber(edit.strokeWidthPt, "strokeWidthPt");
+      }
+      return;
+    case "comment":
+      assertNonEmptyEditText(edit.text, "Comment");
+      return;
+  }
+}
+
+function assertEditRect(rect: PdfEditRect): void {
+  if (!Number.isFinite(rect.x) || !Number.isFinite(rect.y)) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Edit rectangles require finite coordinates.");
+  }
+
+  assertPositiveNumber(rect.w, "w");
+  assertPositiveNumber(rect.h, "h");
+}
+
+function assertNonEmptyEditText(text: string, editLabel: string): void {
+  if (text.length === 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${editLabel} text must not be empty.`);
+  }
+}
+
+function toEditColor(
+  color: PdfEditColor | undefined,
+  fallback: ReturnType<typeof rgb>,
+): ReturnType<typeof rgb> {
+  return color ? rgb(color.r, color.g, color.b) : fallback;
 }
 
 function computeStampX(

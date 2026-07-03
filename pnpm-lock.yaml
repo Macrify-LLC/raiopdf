@@ -59,6 +59,9 @@ importers:
       '@raiopdf/engine-sidecar':
         specifier: workspace:*
         version: link:../../packages/engine-sidecar
+      '@raiopdf/rules':
+        specifier: workspace:*
+        version: link:../../packages/rules
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.11.1
@@ -111,6 +114,8 @@ importers:
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
+
+  packages/rules: {}
 
 packages:
 

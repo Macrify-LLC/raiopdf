@@ -466,6 +466,15 @@ export function App() {
       }
     })();
   }, []);
+  const handleSaveCrashReport = useCallback(async (): Promise<string | null> => {
+    if (!isTauriRuntime()) {
+      return null;
+    }
+
+    const { invoke } = await import("@tauri-apps/api/core");
+    const result = await invoke<{ path: string } | null>("diagnostics_export_dialog");
+    return result?.path ?? null;
+  }, []);
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;
@@ -3191,6 +3200,7 @@ export function App() {
       ) : null}
       <CrashReportDialog
         payload={crashReportPayload}
+        onSaveReport={handleSaveCrashReport}
         onOpenGitHubIssue={handleOpenCrashReportIssue}
         isOpening={isOpeningCrashReportIssue}
         openStatus={crashReportOpenStatus}

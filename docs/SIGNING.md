@@ -17,6 +17,12 @@ cloud HSM (as CA/Browser Forum rules now require) and out of GitHub.
   `apps/shell/src-tauri/scripts/sign-windows.ps1` for each artifact. Building locally
   (rather than signing a downloaded CI artifact) ensures the inner app `.exe` **and** the
   installers are all signed, because Tauri signs during bundling.
+- The signed build is a **complete** build, not just a signing pass. `build:shell:signed`
+  first runs `pnpm prepare:shell-bundle`, which assembles the bundled **payload** (JRE +
+  Stirling OCR engine + OCR toolchain, shipped via `bundle.resources`) and compiles the
+  Tauri **`externalBin` sidecars** — `raiopdf-engine-host` and `raiopdf-mcp`. Tauri then
+  signs the app `.exe`, both sidecars, and the installers in one pass, so the signed
+  installer is the full app (OCR **and** the MCP connector), not a shell-only stub.
 
 Nothing secret is committed: the certificate is selected at build time by thumbprint,
 read from an environment variable.
@@ -32,7 +38,20 @@ read from an environment variable.
 3. **Windows SDK.** Install the Windows 10/11 SDK so `signtool.exe` is available.
    `sign-windows.ps1` finds it on `PATH` or under `Windows Kits\10\bin`.
 4. **PowerShell 7+** (`pwsh`) — the overlay invokes the signing script with `pwsh`.
-5. **Find your thumbprint.** With SimplySign logged in:
+5. **Local build toolchain.** Because the signed build now assembles the full payload and
+   compiles the sidecars locally (via `prepare:shell-bundle`), not just signing, the box
+   needs the same toolchain CI uses:
+   - **Node 24 + pnpm** and **Rust/cargo** (builds `raiopdf-engine-host` +
+     `raiopdf-mcp-launcher`).
+   - **JDK 21** plus the vendored Stirling engine dist — run `pnpm engine:vendor` (or
+     `pnpm engine:build`) once so `engine/dist/` holds the Stirling jar the payload
+     assembler expects.
+   - **Git Bash** (or WSL) — the payload assembler (`installer/assemble-payload.sh`) is a
+     `bash` script invoked by `installer/run-payload-assembler.mjs`.
+
+   See `installer/README.md` for payload details. Validate the payload independently with
+   `pnpm prepare:shell-bundle` before your first signed build.
+6. **Find your thumbprint.** With SimplySign logged in:
    ```powershell
    Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey } |
      Format-List Subject, Thumbprint, NotAfter
@@ -65,7 +84,9 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = op read "op://Macrify/Raio Tauri Priva
 # 4. Tag the release commit (the build stamps the version from this tag):
 git tag v0.1.0   # example
 
-# 5. Build the signed installers (stamps version, signs, emits updater .sig):
+# 5. Build the signed installers. Runs the full pipeline: stamp version ->
+#    prepare:shell-bundle (assemble OCR payload + build engine-host/MCP sidecars) ->
+#    sign app + sidecars + installers -> emit updater .sig. The first run is heavy.
 pnpm build:shell:signed
 ```
 

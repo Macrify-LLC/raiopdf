@@ -21,7 +21,7 @@ import type {
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { getPack, getPackIntegrityBanner, preflight, shouldConvertToPdfA } from "@raiopdf/rules";
+import { getPack, getPackIntegrityBanner, listPacks, preflight, shouldConvertToPdfA } from "@raiopdf/rules";
 import type {
   DocumentFacts,
   JurisdictionPack,
@@ -109,6 +109,7 @@ import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
 const FLORIDA_PACK: JurisdictionPack = getPack();
+const AVAILABLE_FILING_PACKS: readonly JurisdictionPack[] = listPacks();
 const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
 
@@ -2294,6 +2295,7 @@ export function App() {
           <PrepareForFilingWorkspace
             document={document}
             pack={filingPack}
+            availablePacks={AVAILABLE_FILING_PACKS}
             report={filingReport}
             loadingReport={filingReportLoading}
             progress={filingProgress}

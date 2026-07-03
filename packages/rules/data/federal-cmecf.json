@@ -1,0 +1,173 @@
+{
+  "id": "federal-cmecf",
+  "schemaVersion": 2,
+  "name": "Federal CM/ECF",
+  "packVersion": "1.0.0",
+  "jurisdiction": "Federal",
+  "courtSystem": "U.S. district, bankruptcy, and appellate courts",
+  "portal": "CM/ECF",
+  "scopeNote": "National CM/ECF baseline. Each district/bankruptcy/appellate court configures its own file-size cap and local rules may add requirements — set your court's cap once and Raio remembers it.",
+  "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
+  "constraints": [
+    {
+      "id": "file-format",
+      "label": "PDF-only filing format",
+      "kind": "portal",
+      "authority": "PACER CM/ECF FAQs; AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "National CM/ECF accepts PDFs; local courts may add requirements."
+      }
+    },
+    {
+      "id": "file-size",
+      "label": "Court-configured PDF file size cap",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality; PACER file-size FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "No national numeric cap exists; each CM/ECF court configures its own maximum PDF size.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Set the filing court's cap as a local court profile."
+      }
+    },
+    {
+      "id": "active-content",
+      "label": "JavaScript, scripts, audio, and video",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "National CM/ECF technical upload rules."
+      }
+    },
+    {
+      "id": "encryption",
+      "label": "Encrypted or password-protected PDFs",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "National CM/ECF technical upload rules."
+      }
+    },
+    {
+      "id": "embedded-files",
+      "label": "Internal embedded attachments",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "National CM/ECF technical upload rules."
+      }
+    },
+    {
+      "id": "flatten-forms",
+      "label": "Flatten fillable forms",
+      "kind": "portal",
+      "authority": "PACER CM/ECF troubleshooting FAQ",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "Appellate CM/ECF may reject editable forms outright."
+      }
+    },
+    {
+      "id": "pdfa",
+      "label": "PDF/A acceptance",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "National CM/ECF accepts PDF/A but does not require it."
+      }
+    },
+    {
+      "id": "searchable-text",
+      "label": "Searchable text",
+      "kind": "portal",
+      "authority": "AOC CM/ECF PDF-Related Functionality",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "OCR and plain scanned documents are both accepted nationally."
+      }
+    }
+  ],
+  "pageSize": {
+    "w": 8.5,
+    "h": 11,
+    "in": true
+  },
+  "orientation": "portrait",
+  "clerkStampSpace": {
+    "firstPage": {
+      "x": 0,
+      "y": 0,
+      "w": 0.01,
+      "h": 0.01
+    },
+    "laterPages": null
+  },
+  "maxFileBytes": 9007199254740991,
+  "recommendedMaxFileBytes": 9007199254740991,
+  "userConfigurable": {
+    "maxFileBytes": true
+  },
+  "pdfa": {
+    "stance": "accepted",
+    "prepDefault": "off",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "National CM/ECF lists PDF/A among accepted content types but does not prefer or require conversion.",
+    "flavor": "pdfa-2b"
+  },
+  "activeContent": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "CM/ECF rejects PDFs containing JavaScript, scripts that launch external applications, audio, or video."
+  },
+  "encryption": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "CM/ECF rejects encrypted or password-protected PDFs."
+  },
+  "embeddedFiles": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "CM/ECF rejects PDFs containing internal embedded attachments."
+  },
+  "metadataScrub": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "The national AOC document is silent on descriptive metadata; local court FAQ boilerplate may recommend scrubbing, but that is not a national baseline rule."
+  },
+  "ocr": {
+    "stance": "accepted",
+    "prepDefault": "off",
+    "authority": "AOC CM/ECF PDF-Related Functionality",
+    "lastVerified": "2026-07-02",
+    "note": "National CM/ECF accepts both OCR'd documents and plain scanned documents; local courts may set image standards."
+  },
+  "flattenForms": {
+    "stance": "preferred",
+    "prepDefault": "on",
+    "authority": "PACER CM/ECF troubleshooting FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "PACER names un-flattened fillable forms as a common upload-error cause; appellate CM/ECF may reject editable forms outright."
+  },
+  "splitNaming": "{name} — Part {n} of {total}"
+}

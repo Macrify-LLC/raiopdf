@@ -64,6 +64,7 @@ export interface FilingImpactState {
 export interface PrepareForFilingWorkspaceProps {
   document: DocumentState;
   pack: JurisdictionPack;
+  availablePacks?: readonly JurisdictionPack[];
   report: PreflightReport | null;
   loadingReport: boolean;
   progress: FilingProgressState;
@@ -79,6 +80,7 @@ export interface PrepareForFilingWorkspaceProps {
 export function PrepareForFilingWorkspace({
   document,
   pack,
+  availablePacks = [pack],
   report,
   loadingReport,
   progress,
@@ -183,9 +185,14 @@ export function PrepareForFilingWorkspace({
           <label className="filing-card__pack-select">
             <span>Jurisdiction</span>
             <select value={pack.id} disabled aria-label="Jurisdiction pack">
-              <option value={pack.id}>{pack.jurisdiction} — {pack.portal}</option>
+              {availablePacks.map((availablePack) => (
+                <option key={availablePack.id} value={availablePack.id}>
+                  {availablePack.jurisdiction} — {availablePack.portal}
+                </option>
+              ))}
             </select>
           </label>
+          <p className="filing-card__scope-note">{pack.scopeNote}</p>
         </div>
 
         <div className="filing-card__primary-row">

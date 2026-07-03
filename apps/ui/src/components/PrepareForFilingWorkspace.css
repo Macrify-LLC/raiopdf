@@ -161,6 +161,14 @@
   font-size: var(--text-sm);
 }
 
+.filing-card__scope-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .filing-card__primary-row {
   display: flex;
   justify-content: flex-end;

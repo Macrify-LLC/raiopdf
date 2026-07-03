@@ -33,16 +33,23 @@ export function preflight(
   }
 
   return {
-    checks: [
-      checkPageSizeAndOrientation(document, pack),
-      checkSearchableText(document, pack),
-      checkFileSize(document, pack),
-      checkFilename(document, pack),
-      checkClerkStampSpace(document, pack),
-      checkPdfA(document, pack),
-    ],
+    checks: buildDocumentChecks(document, pack),
     ...(selection ? { selectionChecks: checkSelection(selection, pack) } : {}),
   };
+}
+
+function buildDocumentChecks(
+  document: DocumentFacts,
+  pack: JurisdictionPack,
+): readonly PreflightCheck[] {
+  return [
+    hasConstraint(pack, "page-size-orientation") ? checkPageSizeAndOrientation(document, pack) : null,
+    hasConstraint(pack, "searchable-text") ? checkSearchableText(document, pack) : null,
+    hasConstraint(pack, "file-size") ? checkFileSize(document, pack) : null,
+    hasConstraint(pack, "filename") ? checkFilename(document, pack) : null,
+    hasConstraint(pack, "clerk-stamp-space") ? checkClerkStampSpace(document, pack) : null,
+    hasConstraint(pack, "pdfa") ? checkPdfA(document, pack) : null,
+  ].filter((check): check is PreflightCheck => check !== null);
 }
 
 function checkPageSizeAndOrientation(
@@ -360,10 +367,9 @@ function checkFilenameCollisions(selection: SelectionFacts, pack: JurisdictionPa
 
 function findFilenameIssues(filename: string, pack: JurisdictionPack): string[] {
   const issues: string[] = [];
-  const portalFilename = filename.replace(/\.pdf$/i, "");
 
-  if (pack.filenameMaxChars && [...portalFilename].length > pack.filenameMaxChars) {
-    issues.push(`The portal filename is ${[...portalFilename].length} characters, exceeding the ${pack.filenameMaxChars}-character portal limit.`);
+  if (pack.filenameMaxChars && [...filename].length > pack.filenameMaxChars) {
+    issues.push(`The portal filename is ${[...filename].length} characters, exceeding the ${pack.filenameMaxChars}-character portal limit.`);
   }
 
   if (pack.filenameCharset) {
@@ -377,7 +383,7 @@ function findFilenameIssues(filename: string, pack: JurisdictionPack): string[] 
       return issues;
     }
 
-    if (!charset.test(portalFilename)) {
+    if (!charset.test(filename)) {
       issues.push("The filename contains characters outside the configured portal character set.");
     }
   }
@@ -438,6 +444,10 @@ function findConstraint(
     lastVerified: "1970-01-01",
     applicability: { scope: "statewide" },
   };
+}
+
+function hasConstraint(pack: JurisdictionPack, checkId: string): boolean {
+  return pack.constraints.some((entry) => entry.id === checkId);
 }
 
 function formatPageNumbers(pages: readonly PageFacts[]): string {

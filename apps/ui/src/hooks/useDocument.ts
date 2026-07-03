@@ -171,7 +171,7 @@ export function useDocument() {
         currentPage: clampPage(resolveCurrentPage(options, current, pageCount), pageCount),
         dirty: options.dirty,
         fileName: options.fileName ?? current.fileName,
-        filePath: options.filePath ?? current.filePath,
+        filePath: options.filePath !== undefined ? options.filePath : current.filePath,
         fileSizeBytes: bytes.byteLength,
         hasTextLayer: options.hasTextLayer ?? null,
         pageSizeInches: null,

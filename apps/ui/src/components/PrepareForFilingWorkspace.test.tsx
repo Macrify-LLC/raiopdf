@@ -79,6 +79,9 @@ describe("PrepareForFilingWorkspace", () => {
       <PrepareForFilingWorkspace
         document={mockDocument}
         pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
         report={null}
         loadingReport={false}
         reportError="RaioPDF could not read the facts needed for filing checks."
@@ -87,6 +90,9 @@ describe("PrepareForFilingWorkspace", () => {
         impact={null}
         pdfAAvailable
         compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
         onPrepare={() => undefined}
         onDismissImpact={() => undefined}
         onCompressFirst={() => undefined}

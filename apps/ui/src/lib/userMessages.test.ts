@@ -56,6 +56,19 @@ describe("userMessages", () => {
     );
   });
 
+  it("preserves path-free workflow validation messages", () => {
+    expect(formatWorkflowError(
+      "Split size cap must be a positive number of MB.",
+      "Batch cleanup could not be completed.",
+    )).toBe("Split size cap must be a positive number of MB.");
+  });
+
+  it("preserves path-free skipped batch reasons", () => {
+    expect(formatBatchFailureReason("No selected operation applies to this file.")).toBe(
+      "No selected operation applies to this file.",
+    );
+  });
+
   it("detects common file path shapes", () => {
     expect(containsFilePath("/home/jacob/file.pdf")).toBe(true);
     expect(containsFilePath("C:\\Users\\Jacob\\file.pdf")).toBe(true);

@@ -70,7 +70,7 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
     return fallback;
   }
 
-  return fallback;
+  return raw;
 }
 
 export function formatBatchFailureReason(reason: string | null): string | null {

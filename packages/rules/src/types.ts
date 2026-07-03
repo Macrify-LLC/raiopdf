@@ -106,6 +106,56 @@ export type PageFacts = {
   occupiedRegions?: readonly RectInches[];
 };
 
+export type EncryptionState = "none" | "encrypted" | "usage_restricted" | "detector_failed";
+
+export type ActiveContentSignals = {
+  possiblyPresent: boolean;
+  signals: readonly string[];
+};
+
+export type FormFieldFacts = {
+  count: number;
+  anyFilled: boolean;
+};
+
+export type PossibleUnappliedRedactions = {
+  redactAnnotationCount: number;
+  blackRectangleAnnotationCount: number;
+  possiblyPresent: boolean;
+};
+
+export type TextLayerCoverage = {
+  imageOnlyPages: readonly number[];
+  mixedPages: readonly number[];
+  textPages: readonly number[];
+};
+
+export type PageTextByPage = readonly { pageIndex: number; text: string }[];
+
+export type DocumentFactsTextExtractor = {
+  extractTextLayerCoverage: (bytes: Uint8Array) => Promise<TextLayerCoverage>;
+  extractPageTextByPage?: (bytes: Uint8Array) => Promise<PageTextByPage>;
+};
+
+export type BuildDocumentFactsOptions = {
+  textExtractor?: DocumentFactsTextExtractor;
+};
+
+export type DocumentFactName =
+  | "pages"
+  | "activeContentSignals"
+  | "embeddedFileCount"
+  | "formFields"
+  | "annotationCount"
+  | "signatureFieldCount"
+  | "possibleUnappliedRedactions"
+  | "textLayerCoverage";
+
+export type DocumentFactError = {
+  fact: DocumentFactName;
+  reason: string;
+};
+
 export type DocumentFacts = {
   pages: readonly PageFacts[];
   filename?: string;
@@ -113,6 +163,15 @@ export type DocumentFacts = {
   searchableText?: boolean;
   pdfaCompliant?: boolean;
   clerkStampSpaceBlank?: boolean;
+  encryptionState?: EncryptionState;
+  activeContentSignals?: ActiveContentSignals;
+  embeddedFileCount?: number;
+  formFields?: FormFieldFacts;
+  annotationCount?: number;
+  signatureFieldCount?: number;
+  possibleUnappliedRedactions?: PossibleUnappliedRedactions;
+  textLayerCoverage?: TextLayerCoverage;
+  errors?: readonly DocumentFactError[];
 };
 
 export type SelectionFileFacts = {
@@ -122,6 +181,7 @@ export type SelectionFileFacts = {
 
 export type SelectionFacts = {
   files: readonly SelectionFileFacts[];
+  envelopeBytes?: number;
 };
 
 export type PreflightStatus = "pass" | "warn" | "unknown";

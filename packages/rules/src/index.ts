@@ -14,20 +14,33 @@ export {
   verifyBundledPackIntegrity,
 } from "./packIntegrity.js";
 export { preflight, shouldConvertToPdfA } from "./preflight.js";
+export {
+  buildDocumentFacts,
+  detectEncryptionState,
+} from "./documentFacts.js";
 export type {
+  ActiveContentSignals,
+  BuildDocumentFactsOptions,
   ConstraintApplicability,
   ConstraintEntry,
   ConstraintKind,
   ConstraintStance,
+  DocumentFactError,
+  DocumentFactName,
   DocumentFacts,
+  DocumentFactsTextExtractor,
+  EncryptionState,
+  FormFieldFacts,
   JurisdictionPack,
   JurisdictionPackId,
   PageFacts,
+  PageTextByPage,
   PageOrientation,
   PageSizeInches,
   PdfARequirement,
   PdfAStance,
   PolicyConstraint,
+  PossibleUnappliedRedactions,
   PrepDefault,
   PreflightCheck,
   PreflightReport,
@@ -35,6 +48,7 @@ export type {
   RectInches,
   SelectionFacts,
   SelectionFileFacts,
+  TextLayerCoverage,
 } from "./types.js";
 export type {
   AppDataPackIntegrityResult,

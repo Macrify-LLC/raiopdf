@@ -98,6 +98,10 @@ describe("bundled jurisdiction packs", () => {
     expect(Object.fromEntries(report.checks.map((check) => [check.checkId, check.status]))).toEqual({
       "searchable-text": "pass",
       "file-size": "unknown",
+      "active-content": "unknown",
+      encryption: "unknown",
+      "embedded-files": "unknown",
+      "flatten-forms": "unknown",
       pdfa: "pass",
     });
     expect(report.checks.find((check) => check.checkId === "file-size")?.detail).toContain(

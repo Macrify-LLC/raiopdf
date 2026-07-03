@@ -166,7 +166,14 @@ importers:
         specifier: ^1.17.1
         version: 1.17.1
 
-  packages/rules: {}
+  packages/rules:
+    dependencies:
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+      pdfjs-dist:
+        specifier: ^6.1.200
+        version: 6.1.200
 
 packages:
 

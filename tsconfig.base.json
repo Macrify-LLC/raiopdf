@@ -10,6 +10,7 @@
     "paths": {
       "@raiopdf/engine-api": ["packages/engine-api/src/index.ts"],
       "@raiopdf/rules": ["packages/rules/src/index.ts"],
+      "@raiopdf/rules/node": ["packages/rules/src/node.ts"],
       "@raiopdf/engine-sidecar": ["packages/engine-sidecar/src/index.ts"],
       "@raiopdf/engine-local": ["packages/engine-local/src/index.ts"],
       "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/src/index.ts"],

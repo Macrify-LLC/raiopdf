@@ -49,6 +49,11 @@ function buildDocumentChecks(
     hasConstraint(pack, "filename") ? checkFilename(document, pack) : null,
     hasConstraint(pack, "clerk-stamp-space") ? checkClerkStampSpace(document, pack) : null,
     hasConstraint(pack, "pdfa") ? checkPdfA(document, pack) : null,
+    hasConstraint(pack, "active-content") ? checkActiveContent(document, pack) : null,
+    hasConstraint(pack, "encryption") ? checkEncryption(document, pack) : null,
+    hasConstraint(pack, "embedded-files") ? checkEmbeddedFiles(document, pack) : null,
+    hasConstraint(pack, "metadata-scrub") ? checkMetadataScrub(document, pack) : null,
+    hasConstraint(pack, "flatten-forms") ? checkFlattenForms(document, pack) : null,
   ].filter((check): check is PreflightCheck => check !== null);
 }
 
@@ -307,6 +312,151 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   });
 }
 
+function checkActiveContent(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  if (pack.activeContent.stance === "unknown") {
+    return buildCheck(pack, "active-content", {
+      status: "unknown",
+      detail: "This jurisdiction's active-content stance is unverified.",
+      authority: pack.activeContent.authority,
+      label: "Active content",
+      kind: "portal",
+    });
+  }
+
+  if (hasFactError(document, "activeContentSignals") || !document.activeContentSignals) {
+    return buildCheck(pack, "active-content", {
+      status: "unknown",
+      detail: "Active-content facts could not be verified by the local detector.",
+      authority: pack.activeContent.authority,
+      label: "Active content",
+      kind: "portal",
+    });
+  }
+
+  const signals = document.activeContentSignals.signals.join(", ");
+  const prohibited = pack.activeContent.stance === "prohibited";
+  return buildCheck(pack, "active-content", {
+    status: prohibited && document.activeContentSignals.possiblyPresent ? "warn" : "pass",
+    detail: document.activeContentSignals.possiblyPresent
+      ? `The document has active-content presence signal(s): ${signals}.`
+      : "The local detector found no active-content presence signals.",
+    authority: pack.activeContent.authority,
+    label: "Active content",
+    kind: "portal",
+  });
+}
+
+function checkEncryption(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  if (pack.encryption.stance === "unknown") {
+    return buildCheck(pack, "encryption", {
+      status: "unknown",
+      detail: "This jurisdiction's encryption stance is unverified.",
+      authority: pack.encryption.authority,
+      label: "Encryption and restrictions",
+      kind: "portal",
+    });
+  }
+
+  if (document.encryptionState === undefined || document.encryptionState === "detector_failed") {
+    return buildCheck(pack, "encryption", {
+      status: "unknown",
+      detail: "Encryption facts could not be verified by the local detector.",
+      authority: pack.encryption.authority,
+      label: "Encryption and restrictions",
+      kind: "portal",
+    });
+  }
+
+  const hasRestriction = document.encryptionState === "encrypted" ||
+    document.encryptionState === "usage_restricted";
+  return buildCheck(pack, "encryption", {
+    status: pack.encryption.stance === "prohibited" && hasRestriction ? "warn" : "pass",
+    detail: hasRestriction
+      ? `The document encryption state is ${document.encryptionState}.`
+      : "The local detector found no PDF encryption trailer entry.",
+    authority: pack.encryption.authority,
+    label: "Encryption and restrictions",
+    kind: "portal",
+  });
+}
+
+function checkEmbeddedFiles(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  if (pack.embeddedFiles.stance === "unknown") {
+    return buildCheck(pack, "embedded-files", {
+      status: "unknown",
+      detail: "This jurisdiction's embedded-file stance is unverified.",
+      authority: pack.embeddedFiles.authority,
+      label: "Embedded files",
+      kind: "portal",
+    });
+  }
+
+  if (hasFactError(document, "embeddedFileCount") || document.embeddedFileCount === undefined) {
+    return buildCheck(pack, "embedded-files", {
+      status: "unknown",
+      detail: "Embedded-file facts could not be verified by the local detector.",
+      authority: pack.embeddedFiles.authority,
+      label: "Embedded files",
+      kind: "portal",
+    });
+  }
+
+  return buildCheck(pack, "embedded-files", {
+    status: pack.embeddedFiles.stance === "prohibited" && document.embeddedFileCount > 0 ? "warn" : "pass",
+    detail: document.embeddedFileCount > 0
+      ? `The document has ${document.embeddedFileCount} embedded file presence signal(s).`
+      : "The local detector found no EmbeddedFiles name-tree entries or FileAttachment annotations.",
+    authority: pack.embeddedFiles.authority,
+    label: "Embedded files",
+    kind: "portal",
+  });
+}
+
+function checkMetadataScrub(_document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  return buildCheck(pack, "metadata-scrub", {
+    status: "unknown",
+    detail: pack.metadataScrub.stance === "unknown"
+      ? "This jurisdiction's metadata-scrub stance is unverified."
+      : "Metadata scrubbing is not reliably verifiable from local document facts; confirm manually.",
+    authority: pack.metadataScrub.authority,
+    label: "Metadata scrub",
+    kind: "portal",
+  });
+}
+
+function checkFlattenForms(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  if (pack.flattenForms.stance === "unknown") {
+    return buildCheck(pack, "flatten-forms", {
+      status: "unknown",
+      detail: "This jurisdiction's form-flattening stance is unverified.",
+      authority: pack.flattenForms.authority,
+      label: "Flatten forms",
+      kind: "portal",
+    });
+  }
+
+  if (hasFactError(document, "formFields") || !document.formFields) {
+    return buildCheck(pack, "flatten-forms", {
+      status: "unknown",
+      detail: "Form-field facts could not be verified by the local detector.",
+      authority: pack.flattenForms.authority,
+      label: "Flatten forms",
+      kind: "portal",
+    });
+  }
+
+  const hasFields = document.formFields.count > 0;
+  return buildCheck(pack, "flatten-forms", {
+    status: pack.flattenForms.stance === "prohibited" && hasFields ? "warn" : "pass",
+    detail: hasFields
+      ? `The document has ${document.formFields.count} form field(s); filled fields present: ${document.formFields.anyFilled ? "yes" : "no"}.`
+      : "The local detector found no AcroForm fields.",
+    authority: pack.flattenForms.authority,
+    label: "Flatten forms",
+    kind: "portal",
+  });
+}
+
 function checkSelection(selection: SelectionFacts, pack: JurisdictionPack): readonly PreflightCheck[] {
   return [
     checkEnvelopeSize(selection, pack),
@@ -340,7 +490,9 @@ function checkEnvelopeSize(selection: SelectionFacts, pack: JurisdictionPack): P
     });
   }
 
-  const filesWithoutSizes = selection.files.filter((file) => file.fileBytes === undefined);
+  const filesWithoutSizes = selection.envelopeBytes === undefined
+    ? selection.files.filter((file) => file.fileBytes === undefined)
+    : [];
 
   if (filesWithoutSizes.length > 0) {
     return buildCheck(pack, "envelope-size", {
@@ -349,7 +501,8 @@ function checkEnvelopeSize(selection: SelectionFacts, pack: JurisdictionPack): P
     });
   }
 
-  const envelopeBytes = selection.files.reduce((sum, file) => sum + (file.fileBytes ?? 0), 0);
+  const envelopeBytes = selection.envelopeBytes ??
+    selection.files.reduce((sum, file) => sum + (file.fileBytes ?? 0), 0);
 
   return buildCheck(pack, "envelope-size", {
     status: envelopeBytes > pack.maxEnvelopeBytes ? "warn" : "pass",
@@ -448,14 +601,20 @@ function intersects(a: RectInches, b: RectInches): boolean {
 function buildCheck(
   pack: JurisdictionPack,
   checkId: string,
-  result: { status: PreflightStatus; detail: string; kind?: ConstraintKind },
+  result: {
+    status: PreflightStatus;
+    detail: string;
+    kind?: ConstraintKind;
+    authority?: string | undefined;
+    label?: string | undefined;
+  },
 ): PreflightCheck {
   const constraint = findConstraint(pack, checkId, result.kind);
 
   return {
     checkId,
-    label: constraint.label,
-    authority: constraint.authority,
+    label: result.label ?? constraint.label,
+    authority: result.authority ?? constraint.authority,
     detail: result.detail,
     kind: constraint.kind,
     status: result.status,
@@ -493,4 +652,8 @@ function formatPageNumbers(pages: readonly PageFacts[]): string {
 
 function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function hasFactError(document: DocumentFacts, fact: NonNullable<DocumentFacts["errors"]>[number]["fact"]): boolean {
+  return document.errors?.some((error) => error.fact === fact) ?? false;
 }

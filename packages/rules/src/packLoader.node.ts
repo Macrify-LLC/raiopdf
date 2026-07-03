@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 
-import manifestJson from "../data/packs.manifest.json";
-import type { PackManifest } from "./packIntegrity";
-import { verifyBundledPackIntegrity } from "./packIntegrity";
-import type { JurisdictionPack, JurisdictionPackId } from "./types";
+import manifestJson from "../data/packs.manifest.json" with { type: "json" };
+import type { PackManifest } from "./packIntegrity.js";
+import { verifyBundledPackIntegrity } from "./packIntegrity.js";
+import type { JurisdictionPack, JurisdictionPackId } from "./types.js";
 import {
   loadJurisdictionPackFromJson,
   type PackJsonSource,
-} from "./packLoader";
+} from "./packLoader.js";
 
 const bundledPackFiles = new Map<JurisdictionPackId, URL>([
   ["florida", new URL("../data/florida.json", import.meta.url)],

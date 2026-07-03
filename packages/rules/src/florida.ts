@@ -1,5 +1,5 @@
-import floridaJson from "../data/florida.json";
-import { validateJurisdictionPack } from "./packLoader";
+import floridaJson from "../data/florida.json" with { type: "json" };
+import { validateJurisdictionPack } from "./packLoader.js";
 
 export const floridaPack = validateJurisdictionPack(
   floridaJson,

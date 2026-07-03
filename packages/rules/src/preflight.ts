@@ -12,7 +12,7 @@ import type {
   RectInches,
   RulePreflightCheck,
   RulePreflightStatus,
-} from "./types";
+} from "./types.js";
 
 const SIZE_TOLERANCE_IN = 0.01;
 

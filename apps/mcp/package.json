@@ -7,7 +7,7 @@
     "raiopdf-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && pnpm --filter @raiopdf/engine-local build && tsc -p tsconfig.build.json",
+    "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && pnpm --filter @raiopdf/engine-local build && pnpm --filter @raiopdf/rules build && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint ."
@@ -17,6 +17,7 @@
     "@raiopdf/engine-api": "workspace:*",
     "@raiopdf/engine-local": "workspace:*",
     "@raiopdf/engine-sidecar": "workspace:*",
+    "@raiopdf/rules": "workspace:*",
     "pdfjs-dist": "^6.1.200",
     "zod": "^4.4.3"
   },

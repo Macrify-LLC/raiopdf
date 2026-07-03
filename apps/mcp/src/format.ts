@@ -16,7 +16,8 @@ export type ToolErrorCode =
   | "MCP_DISABLED"
   | "ENGINE_ERROR"
   | "PATH_POLICY"
-  | "REDACTION_UNVERIFIED";
+  | "REDACTION_UNVERIFIED"
+  | "INVALID_ARGUMENT";
 
 export type StructuredToolResult = CallToolResult & {
   structuredContent: Record<string, unknown>;

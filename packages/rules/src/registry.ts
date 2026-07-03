@@ -1,8 +1,8 @@
-import { floridaPack } from "./florida";
-import manifestJson from "../data/packs.manifest.json";
-import type { PackIntegrityIssue, PackManifest } from "./packIntegrity";
-import { verifyBundledPackIntegrity } from "./packIntegrity";
-import type { JurisdictionPack, JurisdictionPackId } from "./types";
+import { floridaPack } from "./florida.js";
+import manifestJson from "../data/packs.manifest.json" with { type: "json" };
+import type { PackIntegrityIssue, PackManifest } from "./packIntegrity.js";
+import { verifyBundledPackIntegrity } from "./packIntegrity.js";
+import type { JurisdictionPack, JurisdictionPackId } from "./types.js";
 
 export const DEFAULT_PACK_ID = "florida";
 export const UNKNOWN_PACK_ID = "unknown";

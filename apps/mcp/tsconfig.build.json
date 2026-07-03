@@ -5,6 +5,7 @@
     "paths": {
       "@raiopdf/engine-sidecar": ["packages/engine-sidecar/dist/index.d.ts"],
       "@raiopdf/engine-api": ["packages/engine-api/dist/index.d.ts"],
+      "@raiopdf/rules": ["packages/rules/dist/index.d.ts"],
       "@raiopdf/engine-local": ["packages/engine-local/dist/index.d.ts"],
       "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/dist/index.d.ts"]
     },

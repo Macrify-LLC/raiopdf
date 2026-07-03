@@ -274,16 +274,28 @@ export function App() {
       cancelled = true;
     };
   }, [settingsOpen]);
+  const mcpToggleChainRef = useRef<Promise<void>>(Promise.resolve());
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     setMcpEnabled(next);
-    void (async () => {
+    // Serialize gate writes so rapid toggles persist in click order (the last
+    // click wins) instead of racing a create against a remove.
+    mcpToggleChainRef.current = mcpToggleChainRef.current.then(async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("mcp_set_enabled", { enabled: next });
       } catch {
-        setMcpEnabled(!next);
+        // Best-effort resync to the persisted truth on failure.
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const status = await invoke<{ enabled: boolean; path: string | null }>(
+            "mcp_status",
+          );
+          setMcpEnabled(status.enabled);
+        } catch {
+          setMcpEnabled(!next);
+        }
       }
-    })();
+    });
   }, []);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);

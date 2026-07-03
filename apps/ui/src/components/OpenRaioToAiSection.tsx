@@ -246,5 +246,7 @@ function buildClaudeDesktopSnippet(command: string): string {
 }
 
 function buildClaudeCodeCommand(command: string): string {
-  return `claude mcp add raiopdf -- ${command}`;
+  // Quote the path so a binary path with spaces (or a custom RAIOPDF_MCP_BIN)
+  // reaches `claude mcp add` as a single command argument.
+  return `claude mcp add raiopdf -- "${command}"`;
 }

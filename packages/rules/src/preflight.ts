@@ -54,7 +54,46 @@ function buildDocumentChecks(
     hasConstraint(pack, "embedded-files") ? checkEmbeddedFiles(document, pack) : null,
     hasConstraint(pack, "metadata-scrub") ? checkMetadataScrub(document, pack) : null,
     hasConstraint(pack, "flatten-forms") ? checkFlattenForms(document, pack) : null,
+    ...pack.constraints
+      .filter((constraint) => constraint.check?.type === "required-phrase")
+      .map((constraint) => checkRequiredPhrase(document, pack, constraint)),
   ].filter((check): check is PreflightCheck => check !== null);
+}
+
+function checkRequiredPhrase(
+  document: DocumentFacts,
+  pack: JurisdictionPack,
+  constraint: ConstraintEntry,
+): PreflightCheck | null {
+  const check = constraint.check;
+  if (check?.type !== "required-phrase") {
+    return null;
+  }
+
+  if (!requiredPhraseApplies(document, check.appliesWhen)) {
+    return null;
+  }
+
+  if (!hasSearchableTextForPhraseCheck(document)) {
+    return buildCheck(pack, constraint.id, {
+      status: "unknown",
+      detail: check.noTextDetail,
+      kind: constraint.kind,
+      authority: constraint.authority,
+      label: constraint.label,
+    });
+  }
+
+  const haystack = normalizeSearchText(document.pageTextByPage?.map((page) => page.text).join("\n") ?? "");
+  const found = check.phrasesAny.some((phrase) => haystack.includes(normalizeSearchText(phrase)));
+
+  return buildCheck(pack, constraint.id, {
+    status: found ? "pass" : "warn",
+    detail: found ? check.passDetail ?? "Required phrase found." : check.missingDetail,
+    kind: constraint.kind,
+    authority: constraint.authority,
+    label: constraint.label,
+  });
 }
 
 function checkPageSizeAndOrientation(
@@ -644,6 +683,76 @@ function findConstraint(
 
 function hasConstraint(pack: JurisdictionPack, checkId: string): boolean {
   return pack.constraints.some((entry) => entry.id === checkId);
+}
+
+function requiredPhraseApplies(
+  document: DocumentFacts,
+  appliesWhen: NonNullable<ConstraintEntry["check"]>["appliesWhen"],
+): boolean {
+  const filename = normalizeSearchText(document.filename ?? "");
+  if (appliesWhen.filenameIncludesAny?.some((needle) => filename.includes(normalizeSearchText(needle)))) {
+    return true;
+  }
+
+  const firstPageText = document.pageTextByPage?.find((page) => page.pageIndex === 0)?.text ?? "";
+  const headingLines = firstPageText
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter(isHeadingLine)
+    .slice(0, 12);
+
+  return headingLines.some((line) => {
+    const normalized = normalizeSearchText(line);
+    return appliesWhen.firstPageHeadingIncludesAny?.some((needle) =>
+      normalized.includes(normalizeSearchText(needle))
+    ) ?? false;
+  });
+}
+
+function hasSearchableTextForPhraseCheck(document: DocumentFacts): boolean {
+  const hasExtractedText = document.pageTextByPage?.some((page) => page.text.trim().length > 0) ?? false;
+  if (!hasExtractedText) {
+    return false;
+  }
+
+  if (document.textLayerCoverage?.imageOnlyPages.length === document.pages.length && document.pages.length > 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function isHeadingLine(line: string): boolean {
+  if (line.length > 120) {
+    return false;
+  }
+
+  const letters = line.match(/\p{L}/gu) ?? [];
+  if (letters.length < 3) {
+    return false;
+  }
+
+  const upperLetters = letters.filter((letter) => letter === letter.toLocaleUpperCase()).length;
+  if (upperLetters / letters.length >= 0.7) {
+    return true;
+  }
+
+  const words = line.split(/\s+/u).filter((word) => /\p{L}/u.test(word));
+  if (words.length === 0) {
+    return false;
+  }
+
+  const titleCaseWords = words.filter((word) => {
+    const firstLetter = word.match(/\p{L}/u)?.[0];
+    return firstLetter !== undefined && firstLetter === firstLetter.toLocaleUpperCase();
+  });
+
+  return titleCaseWords.length / words.length >= 0.6;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLocaleLowerCase().replace(/\s+/gu, " ").trim();
 }
 
 function formatPageNumbers(pages: readonly PageFacts[]): string {

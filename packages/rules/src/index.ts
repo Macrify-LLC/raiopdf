@@ -50,6 +50,7 @@ export type {
   PreflightReport,
   PreflightStatus,
   RectInches,
+  RequiredPhraseConstraint,
   SelectionFacts,
   SelectionFileFacts,
   TextLayerCoverage,

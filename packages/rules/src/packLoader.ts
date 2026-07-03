@@ -10,6 +10,7 @@ import type {
   PdfARequirement,
   PolicyConstraint,
   PrepDefault,
+  RequiredPhraseConstraint,
   RectInches,
 } from "./types.js";
 
@@ -117,6 +118,7 @@ function readConstraints(pack: Record<string, unknown>, sourceName: string): rea
     const path = `${sourceName}.constraints[${index}]`;
     const constraint = requireObject(entry, path);
     const note = readOptionalString(constraint, "note", path);
+    const check = readOptionalConstraintCheck(constraint, path);
 
     return {
       id: readString(constraint, "id", path),
@@ -126,8 +128,56 @@ function readConstraints(pack: Record<string, unknown>, sourceName: string): rea
       lastVerified: readDateString(constraint, "lastVerified", path),
       ...(note === undefined ? {} : { note }),
       applicability: readApplicability(constraint, path),
+      ...(check === undefined ? {} : { check }),
     };
   });
+}
+
+function readOptionalConstraintCheck(
+  constraint: Record<string, unknown>,
+  sourceName: string,
+): RequiredPhraseConstraint | undefined {
+  if (constraint.check === undefined) {
+    return undefined;
+  }
+
+  const check = requireObject(constraint.check, `${sourceName}.check`);
+  const type = check.type;
+  if (type !== "required-phrase") {
+    throw new Error(`${sourceName}.check.type must be "required-phrase"`);
+  }
+
+  const appliesWhen = requireObject(check.appliesWhen, `${sourceName}.check.appliesWhen`);
+  const filenameIncludesAny = readOptionalStringArray(
+    appliesWhen,
+    "filenameIncludesAny",
+    `${sourceName}.check.appliesWhen`,
+  );
+  const firstPageHeadingIncludesAny = readOptionalStringArray(
+    appliesWhen,
+    "firstPageHeadingIncludesAny",
+    `${sourceName}.check.appliesWhen`,
+  );
+
+  if (filenameIncludesAny === undefined && firstPageHeadingIncludesAny === undefined) {
+    throw new Error(
+      `${sourceName}.check.appliesWhen must declare filenameIncludesAny or firstPageHeadingIncludesAny`,
+    );
+  }
+
+  const passDetail = readOptionalString(check, "passDetail", `${sourceName}.check`);
+
+  return {
+    type,
+    appliesWhen: {
+      ...(filenameIncludesAny === undefined ? {} : { filenameIncludesAny }),
+      ...(firstPageHeadingIncludesAny === undefined ? {} : { firstPageHeadingIncludesAny }),
+    },
+    phrasesAny: readStringArray(check, "phrasesAny", `${sourceName}.check`),
+    ...(passDetail === undefined ? {} : { passDetail }),
+    missingDetail: readString(check, "missingDetail", `${sourceName}.check`),
+    noTextDetail: readString(check, "noTextDetail", `${sourceName}.check`),
+  };
 }
 
 function readApplicability(
@@ -324,6 +374,40 @@ function readOptionalString(
   }
 
   return value;
+}
+
+function readStringArray(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): readonly string[] {
+  const value = object[key];
+
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${sourceName}.${key} must be a non-empty string array`);
+  }
+
+  const strings = value.map((item, index) => {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      throw new Error(`${sourceName}.${key}[${index}] must be a non-empty string`);
+    }
+
+    return item;
+  });
+
+  return strings;
+}
+
+function readOptionalStringArray(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): readonly string[] | undefined {
+  if (object[key] === undefined) {
+    return undefined;
+  }
+
+  return readStringArray(object, key, sourceName);
 }
 
 function readSemver(object: Record<string, unknown>, key: string, sourceName: string): string {

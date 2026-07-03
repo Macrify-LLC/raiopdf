@@ -50,6 +50,9 @@ import {
   PrepareForFilingWorkspace,
   type CertificateOfServiceDraft,
   type FilingImpactState,
+  type FilingPacketBuildInput,
+  type FilingPacketFile,
+  type FilingPacketProgress,
   type FilingOutputPart,
   type FilingProgressState,
   type FilingResultState,
@@ -96,6 +99,7 @@ import {
   readFilingPreferences,
   selectCourtProfile,
   selectDefaultPack,
+  setPacketPreferences,
   upsertCourtProfile,
   writeFilingPreferences,
   type CourtProfile,
@@ -277,6 +281,11 @@ export function App() {
   });
   const [filingResult, setFilingResult] = useState<FilingResultState | null>(null);
   const [filingImpact, setFilingImpact] = useState<FilingImpactState | null>(null);
+  const [filingPacketProgress, setFilingPacketProgress] = useState<FilingPacketProgress>({
+    running: false,
+    message: null,
+    result: null,
+  });
   const [productionProgress, setProductionProgress] = useState<ProductionSetProgress>({
     running: false,
     message: null,
@@ -385,6 +394,11 @@ export function App() {
       maxFileBytes,
     }));
   }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
+  const handlePacketPreferencesChange = useCallback((
+    preferences: { layoutMode: "separate-files" | "combined-pdf"; prefixFilenames: boolean },
+  ) => {
+    updateFilingPreferences(setPacketPreferences(filingPreferences, preferences));
+  }, [filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     const requestId = mcpToggleRequestRef.current + 1;
     mcpToggleRequestRef.current = requestId;
@@ -528,6 +542,57 @@ export function App() {
       });
     }
   }, []);
+  const buildFilingPacketFromUi = useCallback(async (input: FilingPacketBuildInput) => {
+    setFilingPacketProgress({
+      running: true,
+      message: "Building filing packet...",
+      result: null,
+    });
+
+    try {
+      const sourcePaths = input.files.map((file) => file.path);
+      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
+        throw new Error("Filing packet needs PDFs opened from local desktop paths.");
+      }
+
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{
+        packageRoot: string;
+        outputs: string[];
+        manifestPdf: string;
+        packetJson: string;
+        combinedPdf: string | null;
+      }>("build_filing_packet", {
+        sources: input.files.map((file) => ({
+          path: file.path,
+          displayName: file.name,
+        })),
+        outputDir: input.outputDir,
+        pack: filingPack.id,
+        layoutMode: input.layoutMode,
+        prefixFilenames: input.prefixFilenames,
+        maxFileBytes: filingPack.maxFileBytes,
+        maxEnvelopeBytes: filingPack.maxEnvelopeBytes,
+        selectedStepIds: input.selectedStepIds,
+        splitSizeMb: input.customSplitMegabytes ?? undefined,
+      });
+
+      setFilingPacketProgress({
+        running: false,
+        message: `Filing packet built with ${result.outputs.length} upload file(s).`,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Filing packet could not be built.";
+      setFilingPacketProgress({
+        running: false,
+        message,
+        result: null,
+      });
+    }
+  }, [filingPack.id, filingPack.maxEnvelopeBytes, filingPack.maxFileBytes]);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
@@ -564,6 +629,7 @@ export function App() {
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
     setFilingImpact(null);
+    setFilingPacketProgress({ running: false, message: null, result: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
     setSidecarStatus({
@@ -589,6 +655,7 @@ export function App() {
     setFilingReportError(null);
     setFilingResult(null);
     setFilingImpact(null);
+    setFilingPacketProgress({ running: false, message: null, result: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
     if (!preserveFilingProgress) {
@@ -986,6 +1053,29 @@ export function App() {
       setBatchCleanupProgress({
         running: false,
         message: "This PDF could not be added to the batch.",
+        result: null,
+      });
+      return null;
+    }
+  }, []);
+
+  const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile | null> => {
+    try {
+      const file = await filePort.openFile();
+      if (!file) {
+        return null;
+      }
+
+      return {
+        id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name,
+        path: file.path,
+        pages: await countPdfPages(file.bytes),
+      };
+    } catch {
+      setFilingPacketProgress({
+        running: false,
+        message: "This PDF could not be added to the filing packet.",
         result: null,
       });
       return null;
@@ -2637,6 +2727,12 @@ export function App() {
             onCourtProfileSelect={handleCourtProfileSelect}
             onCourtProfileSave={handleCourtProfileSave}
             onPrepare={prepareFilingCopy}
+            onAddPacketFile={openFilingPacketFile}
+            onBuildPacket={buildFilingPacketFromUi}
+            packetProgress={filingPacketProgress}
+            defaultPacketLayoutMode={filingPreferences.packetLayoutMode}
+            defaultPacketPrefixFilenames={filingPreferences.packetPrefixFilenames}
+            onPacketPreferencesChange={handlePacketPreferencesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
           />
@@ -3841,6 +3937,11 @@ function formatBytes(bytes: number): string {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function countPdfPages(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  return pdf.getPageCount();
 }
 
 async function readImagePageInput(file: File): Promise<PdfImagePageInput> {

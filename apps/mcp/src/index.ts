@@ -90,9 +90,13 @@ import {
   type RedactInput,
 } from "./tools/redact.js";
 import {
+  filingPacketInputSchema,
+  filingPacketOutputSchema,
   filingInputSchema,
   filingOutputSchema,
+  handleBuildFilingPacket,
   handlePrepareForFiling,
+  type FilingPacketInput,
   type FilingInput,
 } from "./tools/filing.js";
 
@@ -414,6 +418,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
         await handlePrepareForFiling(input, dependencies.engineHandle),
     ),
   );
+
+  server.registerTool(
+    "build_filing_packet",
+    {
+      title: "Build filing packet",
+      description:
+        "Builds a Prepare for Filing packet package from ordered PDFs with upload files, manifest PDF, machine JSON, checksums, selection preflight checks, and optional combined-PDF mode.",
+      inputSchema: filingPacketInputSchema,
+      outputSchema: filingPacketOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: FilingPacketInput) =>
+        await handleBuildFilingPacket(input, dependencies.engineHandle),
+    ),
+  );
 }
 
 export function withGate<Args>(
@@ -461,14 +482,20 @@ async function runOneShot(): Promise<void> {
   const toolName = process.argv[3];
   const input = JSON.parse(await readStdin()) as unknown;
 
-  if (toolName !== "build_production_set" && toolName !== "batch_cleanup") {
+  if (
+    toolName !== "build_production_set" &&
+    toolName !== "batch_cleanup" &&
+    toolName !== "build_filing_packet"
+  ) {
     throw new Error(`Unsupported one-shot tool: ${toolName ?? "(missing)"}`);
   }
 
   try {
     const result = toolName === "batch_cleanup"
       ? await handleBatchCleanup(input as BatchCleanupInput, defaultEngineHandle)
-      : await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
+      : toolName === "build_filing_packet"
+        ? await handleBuildFilingPacket(input as FilingPacketInput, defaultEngineHandle)
+        : await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
     console.log(JSON.stringify(result.structuredContent));
   } catch (error) {
     const result = toolError(error);

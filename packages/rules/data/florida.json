@@ -150,6 +150,30 @@
       "applicability": {
         "scope": "statewide"
       }
+    },
+    {
+      "id": "conferral-certificate",
+      "label": "Certificate of conferral",
+      "kind": "rule",
+      "authority": "Fla. R. Civ. P. 1.202",
+      "lastVerified": "2026-07-03",
+      "applicability": {
+        "scope": "statewide"
+      },
+      "check": {
+        "type": "required-phrase",
+        "appliesWhen": {
+          "filenameIncludesAny": ["motion"],
+          "firstPageHeadingIncludesAny": ["motion"]
+        },
+        "phrasesAny": [
+          "certify that prior to filing this motion",
+          "1.202"
+        ],
+        "passDetail": "Certificate of conferral language or a Rule 1.202 citation was found.",
+        "missingDetail": "Certificate of conferral possibly missing — Fla. R. Civ. P. 1.202 requires a certificate (that conferral occurred, or that it is not required) at the end of the motion, above the signature block.",
+        "noTextDetail": "Can't verify — no searchable text; run Make Searchable first."
+      }
     }
   ],
   "pageSize": {

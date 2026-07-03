@@ -15,6 +15,19 @@ export type ConstraintEntry = {
   lastVerified: string;
   note?: string;
   applicability: ConstraintApplicability;
+  check?: RequiredPhraseConstraint;
+};
+
+export type RequiredPhraseConstraint = {
+  type: "required-phrase";
+  appliesWhen: {
+    filenameIncludesAny?: readonly string[];
+    firstPageHeadingIncludesAny?: readonly string[];
+  };
+  phrasesAny: readonly string[];
+  missingDetail: string;
+  noTextDetail: string;
+  passDetail?: string;
 };
 
 export type PageSizeInches = {
@@ -171,6 +184,7 @@ export type DocumentFacts = {
   signatureFieldCount?: number;
   possibleUnappliedRedactions?: PossibleUnappliedRedactions;
   textLayerCoverage?: TextLayerCoverage;
+  pageTextByPage?: PageTextByPage;
   errors?: readonly DocumentFactError[];
 };
 

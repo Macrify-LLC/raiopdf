@@ -33,6 +33,34 @@ test("disables doc-dependent chrome and hover echoes for reduced motion", async 
   }).toBe("none");
 });
 
+test("opens legal workflow dialogs before a document is loaded", async ({ page }) => {
+  await page.goto("/");
+
+  for (const legalTool of [
+    {
+      name: "Prepare for Filing",
+      emptyState: "Open a PDF before preparing a filing copy.",
+    },
+    {
+      name: "Batch Cleanup",
+      emptyState: "Add PDFs to build the cleanup queue.",
+    },
+    {
+      name: "Production Set",
+      emptyState: "Add PDFs to build the production order.",
+    },
+  ]) {
+    await page.getByRole("button", { name: legalTool.name, exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: legalTool.name });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(legalTool.emptyState)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  }
+});
+
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "round-trip.pdf", await createPdf([200, 210, 220, 230]));

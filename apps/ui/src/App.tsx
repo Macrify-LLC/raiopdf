@@ -16,7 +16,6 @@ import type {
   PdfPageNumbersOptions,
   PdfRedactionArea,
   PdfSanitizeRemovedItem,
-  PdfSplitByMaxBytesResult,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
@@ -91,6 +90,7 @@ import {
   aggregateOutputReports,
   runFilingOutputPreflights,
 } from "./lib/filingOutputPreflight";
+import { prepareFilingOutputParts } from "./lib/filingOutputParts";
 import {
   readFilingPreferences,
   selectCourtProfile,
@@ -2192,21 +2192,6 @@ export function App() {
           workingHandle = flattenedHandle;
         }
 
-        if (convertOutputToPdfA) {
-          setFilingProgress({
-            phase: "converting",
-            message: "Converting the filing copy to PDF/A in the desktop engine...",
-          });
-          workingHandle = await reopenFilingHandle(
-            filingEngine,
-            closeHandles,
-            await engineBridge.convertToPdfA(
-              await filingEngine.saveToBytes(workingHandle),
-              filingPack.pdfa.flavor,
-            ),
-          );
-        }
-
         const baseName = stripPdfExtension(document.fileName ?? "Untitled");
 
         setFilingProgress({
@@ -2221,19 +2206,31 @@ export function App() {
           filingPack.recommendedMaxFileBytes ??
           filingPack.maxFileBytes ??
           Number.MAX_SAFE_INTEGER;
-        const splitResult = selectedSteps.has("split-by-size")
-          ? await filingEngine.splitByMaxBytes(workingHandle, splitTargetBytes)
-          : await singleFilingPart(filingEngine, workingHandle);
-        closeHandles.push(...splitResult.parts.map((part) => part.document));
-
-        const convertedParts = await Promise.all(
-          splitResult.parts.map(async (part, index) => ({
-            bytes: await filingEngine.saveToBytes(part.document),
-            fileName: formatFilingOutputName(baseName, filingPack, index + 1, splitResult.parts.length),
-            pageIndexes: part.pageIndexes,
-            oversized: part.oversized,
-          })),
-        );
+        if (convertOutputToPdfA) {
+          setFilingProgress({
+            phase: "converting",
+            message: selectedSteps.has("split-by-size")
+              ? "Converting each split filing part to PDF/A in the desktop engine..."
+              : "Converting the filing copy to PDF/A in the desktop engine...",
+          });
+        }
+        const preparedOutput = await prepareFilingOutputParts({
+          engine: filingEngine,
+          document: workingHandle,
+          splitBySize: selectedSteps.has("split-by-size"),
+          splitTargetBytes,
+          baseName,
+          pack: filingPack,
+          ...(convertOutputToPdfA
+            ? { pdfAConversion: {
+              flavor: filingPack.pdfa.flavor,
+              convert: engineBridge.convertToPdfA,
+            } }
+            : {}),
+          formatFileName: formatFilingOutputName,
+        });
+        closeHandles.push(...preparedOutput.handlesToClose);
+        const convertedParts = preparedOutput.parts;
 
         if (!isCurrentFilingRun()) {
           return;
@@ -2252,7 +2249,6 @@ export function App() {
             (part) => getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
               fileBytes: part.bytes.byteLength,
               filename: part.fileName,
-              ...(convertOutputToPdfA ? { pdfaCompliant: true } : {}),
             }),
             runFilingPreflight,
           );
@@ -3312,26 +3308,6 @@ async function reopenFilingHandle(
   const handle = await engine.open(bytes);
   closeHandles.push(handle);
   return handle;
-}
-
-async function singleFilingPart(
-  engine: LocalPdfEngine,
-  documentHandle: PdfDocumentHandle,
-): Promise<PdfSplitByMaxBytesResult> {
-  const bytes = await engine.saveToBytes(documentHandle);
-  const clone = await engine.open(bytes);
-  const pageCount = await engine.pageCount(clone);
-
-  return {
-    parts: [
-      {
-        document: clone,
-        pageIndexes: Array.from({ length: pageCount }, (_value, index) => index),
-        byteLength: bytes.byteLength,
-        oversized: false,
-      },
-    ],
-  };
 }
 
 function filingPreflightUnavailableReport(): PreflightReport {

@@ -298,7 +298,7 @@ impl AppDiagnostics {
         ));
         report.push_str("Release debug symbols: line-tables-only (profile.release.debug = 1)\n");
         report.push_str("Telemetry: none. This file was saved locally and not sent anywhere.\n");
-        report.push_str("Crash reporting: opt-in only, off by default. Reports are never sent automatically; you review and submit them yourself via GitHub.\n");
+        report.push_str("Crash reporting: reports are never sent automatically. After an unclean exit RaioPDF may ask once whether to report it; you review and submit each report yourself via GitHub, and can turn the prompt off.\n");
         report.push_str("Log policy: local logs are scrubbed and truncated in this export.\n\n");
 
         report.push_str("Engine status\n");

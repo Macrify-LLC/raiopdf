@@ -8,9 +8,10 @@
 
 ## Context
 
-Phase 3 of the diagnostics blueprint adds an **opt-in, post-crash report prompt**:
-after RaioPDF exits uncleanly, the next launch offers to help the user send a
-diagnostic report. The report itself is already designed and data-minimized
+Phase 3 of the diagnostics blueprint adds a **post-crash report prompt**:
+after RaioPDF exits uncleanly, the next launch offers (once, and the prompt can
+be turned off) to help the user send a diagnostic report. Nothing is ever sent
+automatically — the *sending* is what the user opts into, per report. The report itself is already designed and data-minimized
 (app version, OS/arch, crash signature + backtrace, a scrubbed log tail — never
 document data, file names, or page text; see the scrubber in `diagnostics.rs`).
 
@@ -44,9 +45,12 @@ Consequences for the surrounding promises:
 - **The "Telemetry: none" badge stays.** User-initiated reporting is not
   telemetry — nothing is collected in the background and nothing is ever sent
   automatically. The copy gains one honest clarifying line rather than a
-  retraction: *no automatic data collection; crash reports are opt-in, off by
-  default, and you review exactly what's sent.* Applies to `README.md`,
-  `SECURITY.md`, and `site/shared/COPY.md`.
+  retraction: *no automatic data collection; nothing is ever sent
+  automatically; after an unclean exit RaioPDF asks once (and you can turn the
+  prompt off), and you review and submit each report yourself.* Applies to
+  `README.md`, `SECURITY.md`, and `site/shared/COPY.md`. Note the copy must not
+  call the feature "off by default" — the prompt appears by default; only the
+  sending is opt-in.
 - **No backend infrastructure and no data-retention policy** are introduced.
   This keeps the product consistent with its "no cloud, no account" identity and
   its personal-protest framing — a firm shouldn't have to trust a vendor's

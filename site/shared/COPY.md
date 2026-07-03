@@ -170,16 +170,19 @@ paragraph.)
   spec-for-spec — it's about proving the free, local, and genuinely
   **competitive** alternative can exist at all.
 - Not phoning home. No telemetry, no background analytics — RaioPDF makes no
-  network requests of its own. If it ever crashes it can offer to open a
-  pre-filled GitHub issue you review and submit yourself: opt-in, off by
-  default, nothing is ever sent automatically.
+  network requests of its own, and nothing is ever sent automatically. If it
+  ever crashes it can ask once whether to open a pre-filled GitHub issue you
+  review and submit yourself; you choose each time, and you can switch the
+  prompt off.
 
 (Consistency note — the "telemetry: none" claim stays exactly as-is; it is
 still literally true because nothing is collected in the background and nothing
-auto-sends. When describing the *app* — not the website — pair it with the
-opt-in-crash nuance above so the two never read as a contradiction. The website
-"No-telemetry line" below is a separate, narrower claim about the marketing
-page's own analytics/cookies; don't merge the two.)
+auto-sends. When describing the crash-report feature, do NOT call it "off by
+default" or "opt-in" — the after-crash prompt appears by default (once, and can
+be turned off in Settings); what is genuinely opt-in is the *sending*, since you
+review and submit each report yourself. Lead with "nothing is sent
+automatically." The website "No-telemetry line" below is a separate, narrower
+claim about the marketing page's own analytics/cookies; don't merge the two.)
 
 ## Download panel copy
 

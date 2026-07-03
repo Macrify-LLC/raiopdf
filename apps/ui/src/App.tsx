@@ -27,12 +27,15 @@ import {
   getPackIntegrityBanner,
   listPacks,
   preflight,
-  shouldConvertToPdfA,
+  resolvePrepPlan,
 } from "@raiopdf/rules";
 import type {
   DocumentFactsTextExtractor,
   DocumentFacts,
   JurisdictionPack,
+  JurisdictionPackId,
+  PrepPlanStep,
+  PrepPlanStepId,
   PreflightReport,
   RectInches,
   SelectionFacts,
@@ -87,6 +90,16 @@ import {
   aggregateOutputReports,
   runFilingOutputPreflights,
 } from "./lib/filingOutputPreflight";
+import { prepareFilingOutputParts } from "./lib/filingOutputParts";
+import {
+  readFilingPreferences,
+  selectCourtProfile,
+  selectDefaultPack,
+  upsertCourtProfile,
+  writeFilingPreferences,
+  type CourtProfile,
+  type FilingPreferences,
+} from "./lib/filingPreferences";
 import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
@@ -249,7 +262,12 @@ export function App() {
     hits: [],
   });
   const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
+  const [filingPreferences, setFilingPreferences] = useState<FilingPreferences>(() => readFilingPreferences());
+  const [filingPackId, setFilingPackId] = useState<JurisdictionPackId>(() => (
+    filingPreferences.defaultPackId ?? FLORIDA_PACK.id
+  ));
   const [filingReport, setFilingReport] = useState<PreflightReport | null>(null);
+  const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
     phase: "idle",
@@ -267,10 +285,26 @@ export function App() {
     message: null,
     result: null,
   });
-  // The single pack binding read by BOTH the filing pipeline and the workspace UI.
-  // A future jurisdiction selector replaces this one line — keeping the button's
-  // promise and the pipeline's behavior from ever reading different packs.
-  const filingPack = FLORIDA_PACK;
+  const baseFilingPack = useMemo(() => {
+    try {
+      return getPack(filingPackId);
+    } catch {
+      return FLORIDA_PACK;
+    }
+  }, [filingPackId]);
+  const selectedCourtProfile = useMemo(() => {
+    const profileId = filingPreferences.lastCourtProfileByPack[baseFilingPack.id];
+
+    return filingPreferences.courtProfiles.find((profile) => profile.id === profileId) ?? null;
+  }, [baseFilingPack.id, filingPreferences]);
+  const filingPack = useMemo(
+    () => applyCourtProfile(baseFilingPack, selectedCourtProfile),
+    [baseFilingPack, selectedCourtProfile],
+  );
+  const filingPrepPlan = useMemo(
+    () => resolvePrepPlan(filingPack, filingFacts ?? emptyDocumentFacts(document)),
+    [document.fileName, document.fileSizeBytes, filingFacts, filingPack],
+  );
   const [scrubState, setScrubState] = useState<{
     scrubbing: boolean;
     message: string | null;
@@ -325,6 +359,27 @@ export function App() {
     };
   }, [settingsOpen]);
   const mcpToggleChainRef = useRef<Promise<void>>(Promise.resolve());
+  const updateFilingPreferences = useCallback((next: FilingPreferences) => {
+    setFilingPreferences(next);
+    writeFilingPreferences(next);
+  }, []);
+  const handleFilingPackChange = useCallback((packId: JurisdictionPackId) => {
+    setFilingPackId(packId);
+    updateFilingPreferences(selectDefaultPack(filingPreferences, packId));
+    setFilingResult(null);
+    setFilingImpact(null);
+  }, [filingPreferences, updateFilingPreferences]);
+  const handleCourtProfileSelect = useCallback((profileId: string) => {
+    updateFilingPreferences(selectCourtProfile(filingPreferences, baseFilingPack.id, profileId));
+  }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
+  const handleCourtProfileSave = useCallback((profile: { name: string; maxMegabytes: number }) => {
+    const maxFileBytes = Math.round(profile.maxMegabytes * 1024 * 1024);
+    updateFilingPreferences(upsertCourtProfile(filingPreferences, {
+      packId: baseFilingPack.id,
+      name: profile.name,
+      maxFileBytes,
+    }));
+  }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     setMcpEnabled(next);
     // Serialize gate writes so rapid toggles persist in click order (the last
@@ -672,6 +727,7 @@ export function App() {
 
     if (!sourceBytes) {
       setFilingReport(null);
+      setFilingFacts(null);
       setFilingReportLoading(false);
       return;
     }
@@ -695,10 +751,12 @@ export function App() {
           return;
         }
 
+        setFilingFacts(facts);
         setFilingReport(runFilingPreflight(facts, filingPack));
       })
       .catch(() => {
         if (!disposed && documentBytesRef.current === sourceBytes) {
+          setFilingFacts(null);
           setFilingReport(null);
         }
       })
@@ -711,7 +769,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.hasTextLayer, filingPack, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -1979,11 +2037,15 @@ export function App() {
 
   const prepareFilingCopy = useCallback((
     certificate: CertificateOfServiceDraft | null,
-    options?: PrepareOptions,
+    options: PrepareOptions,
   ) => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
-    const convertOutputToPdfA = shouldConvertToPdfA(filingPack);
+    const selectedSteps = new Set(options.selectedStepIds);
+    const convertOutputToPdfA = selectedSteps.has("convert-pdfa");
+    const customSplitBytes = options.customSplitMegabytes
+      ? Math.round(options.customSplitMegabytes * 1024 * 1024)
+      : null;
 
     if (!sourceBytes) {
       setFilingProgress({
@@ -2012,15 +2074,15 @@ export function App() {
     setFilingImpact(null);
     setFilingProgress({
       phase: "normalizing",
-      message: "Normalizing pages to the filing pack size and orientation...",
+      message: "Preparing the filing copy from the selected checklist...",
     });
 
     void (async () => {
-      // PDF/A conversion strips annotations, form fields, and signatures to reach
-      // conformance — silently. Surface what this run would destroy and stop for an
-      // explicit go-ahead before any of it happens.
-      if (!options?.acknowledgeImpact) {
-        const conversionImpact = convertOutputToPdfA
+      // Destructive steps strip annotations, form fields, and signatures silently.
+      // Surface what this run would destroy and stop for an explicit go-ahead.
+      if (!options.acknowledgeImpact) {
+        const needsImpactConfirmation = convertOutputToPdfA || selectedSteps.has("flatten-forms");
+        const conversionImpact = needsImpactConfirmation
           ? await getCachedConversionImpact(sourceBytes)
           : null;
 
@@ -2059,56 +2121,116 @@ export function App() {
           workingHandle = appendedHandle;
         }
 
-        const normalizedHandle = await filingEngine.normalizePages(workingHandle, {
-          targetSize: filingPack.pageSize,
-          orientation: "portrait",
-        });
-        closeHandles.push(normalizedHandle);
-        workingHandle = normalizedHandle;
-
-        if (!isCurrentFilingRun()) {
-          return;
-        }
-
-        setFilingProgress({
-          phase: "splitting",
-          message: "Splitting at page boundaries against the configured byte target...",
-        });
-
-        const splitTargetBytes =
-          filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? Number.MAX_SAFE_INTEGER;
-        const splitResult = await filingEngine.splitByMaxBytes(
-          workingHandle,
-          splitTargetBytes,
-        );
-        closeHandles.push(...splitResult.parts.map((part) => part.document));
-
-        if (!isCurrentFilingRun()) {
-          return;
-        }
-
-        if (convertOutputToPdfA) {
+        if (selectedSteps.has("normalize-pages")) {
           setFilingProgress({
-            phase: "converting",
-            message: "Converting each output part to PDF/A in the desktop engine...",
+            phase: "normalizing",
+            message: "Normalizing pages to the filing pack size and orientation...",
           });
+          const normalizedHandle = await filingEngine.normalizePages(workingHandle, {
+            targetSize: filingPack.pageSize,
+            orientation: "portrait",
+          });
+          closeHandles.push(normalizedHandle);
+          workingHandle = normalizedHandle;
+        }
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        if (selectedSteps.has("sanitize-content")) {
+          setFilingProgress({
+            phase: "normalizing",
+            message: "Sanitizing active and embedded content...",
+          });
+          workingHandle = await reopenFilingHandle(
+            filingEngine,
+            closeHandles,
+            await engineBridge.sanitize(await filingEngine.saveToBytes(workingHandle), {
+              removeJavaScript: true,
+              removeEmbeddedFiles: true,
+              removeLinks: true,
+            }).then((result) => result.bytes),
+          );
+        }
+
+        if (selectedSteps.has("scrub-metadata")) {
+          setFilingProgress({
+            phase: "normalizing",
+            message: selectedSteps.has("convert-pdfa")
+              ? "Scrubbing metadata before PDF/A conversion rewrites conformance metadata..."
+              : "Scrubbing metadata...",
+          });
+          const scrubbedHandle = await filingEngine.scrubMetadata(workingHandle);
+          closeHandles.push(scrubbedHandle);
+          workingHandle = scrubbedHandle;
+        }
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        if (selectedSteps.has("make-searchable")) {
+          setFilingProgress({
+            phase: "normalizing",
+            message: "Making the filing copy searchable...",
+          });
+          workingHandle = await reopenFilingHandle(
+            filingEngine,
+            closeHandles,
+            await engineBridge.runOcr(await filingEngine.saveToBytes(workingHandle)),
+          );
+        }
+
+        if (selectedSteps.has("flatten-forms")) {
+          setFilingProgress({
+            phase: "normalizing",
+            message: "Flattening form fields...",
+          });
+          const flattenedHandle = await filingEngine.flattenForm(workingHandle);
+          closeHandles.push(flattenedHandle);
+          workingHandle = flattenedHandle;
         }
 
         const baseName = stripPdfExtension(document.fileName ?? "Untitled");
-        const convertedParts = [];
 
-        for (const [index, part] of splitResult.parts.entries()) {
-          const partBytes = await filingEngine.saveToBytes(part.document);
-          const convertedBytes = convertOutputToPdfA
-            ? await engineBridge.convertToPdfA(partBytes, filingPack.pdfa.flavor)
-            : partBytes;
-          convertedParts.push({
-            bytes: convertedBytes,
-            fileName: formatFilingOutputName(baseName, filingPack, index + 1, splitResult.parts.length),
-            pageIndexes: part.pageIndexes,
-            oversized: part.oversized,
+        setFilingProgress({
+          phase: "splitting",
+          message: selectedSteps.has("split-by-size")
+            ? "Splitting at page boundaries against the configured byte target..."
+            : "Saving one filing output file...",
+        });
+
+        const splitTargetBytes =
+          customSplitBytes ??
+          filingPack.recommendedMaxFileBytes ??
+          filingPack.maxFileBytes ??
+          Number.MAX_SAFE_INTEGER;
+        if (convertOutputToPdfA) {
+          setFilingProgress({
+            phase: "converting",
+            message: selectedSteps.has("split-by-size")
+              ? "Converting each split filing part to PDF/A in the desktop engine..."
+              : "Converting the filing copy to PDF/A in the desktop engine...",
           });
         }
+        const preparedOutput = await prepareFilingOutputParts({
+          engine: filingEngine,
+          document: workingHandle,
+          splitBySize: selectedSteps.has("split-by-size"),
+          splitTargetBytes,
+          baseName,
+          pack: filingPack,
+          ...(convertOutputToPdfA
+            ? { pdfAConversion: {
+              flavor: filingPack.pdfa.flavor,
+              convert: engineBridge.convertToPdfA,
+            } }
+            : {}),
+          formatFileName: formatFilingOutputName,
+        });
+        closeHandles.push(...preparedOutput.handlesToClose);
+        const convertedParts = preparedOutput.parts;
 
         if (!isCurrentFilingRun()) {
           return;
@@ -2119,24 +2241,27 @@ export function App() {
           message: "Re-running preflight on the output files...",
         });
 
-        const outputReports = await runFilingOutputPreflights(
-          convertedParts,
-          filingPack,
-          (part) => getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
-            fileBytes: part.bytes.byteLength,
-            filename: part.fileName,
-            ...(convertOutputToPdfA ? { pdfaCompliant: true } : {}),
-          }),
-          runFilingPreflight,
-        );
+        let finalReport: PreflightReport;
+        try {
+          const outputReports = await runFilingOutputPreflights(
+            convertedParts,
+            filingPack,
+            (part) => getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
+              fileBytes: part.bytes.byteLength,
+              filename: part.fileName,
+            }),
+            runFilingPreflight,
+          );
+          finalReport = aggregateOutputReports(outputReports);
+        } catch {
+          finalReport = filingPreflightUnavailableReport();
+        }
         const outputParts: FilingOutputPart[] = convertedParts.map((part) => ({
           fileName: part.fileName,
           byteLength: part.bytes.byteLength,
           pageIndexes: part.pageIndexes,
           oversized: part.oversized,
         }));
-
-        const finalReport = aggregateOutputReports(outputReports);
 
         for (const part of convertedParts) {
           if (!isCurrentFilingRun()) {
@@ -2154,6 +2279,12 @@ export function App() {
           parts: outputParts,
           report: finalReport,
           verifiedAt: new Date().toISOString(),
+          skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
+          overrides: filingRunOverrides({
+            customSplitBytes,
+            packDefaultSplitBytes: filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null,
+            scrubbedBeforePdfA: selectedSteps.has("scrub-metadata") && selectedSteps.has("convert-pdfa"),
+          }),
         });
         setFilingProgress({
           phase: "done",
@@ -2183,6 +2314,8 @@ export function App() {
     document.fileName,
     engineBridge,
     filingEngine,
+    filingPack,
+    filingPrepPlan,
     getOpenToken,
     isCurrentDocument,
     pendingRedactions.length,
@@ -2223,8 +2356,16 @@ export function App() {
       return;
     }
 
-    prepareFilingCopy(null);
-  }, [document.bytes, prepareFilingCopy, setError]);
+    prepareFilingCopy(null, {
+      selectedStepIds: [
+        ...filingPrepPlan
+          .filter((step) => step.defaultChecked && !step.disabledReason)
+          .map((step) => step.id),
+        "convert-pdfa",
+      ],
+      customSplitMegabytes: null,
+    });
+  }, [document.bytes, filingPrepPlan, prepareFilingCopy, setError]);
 
   const showPasswordProtection = useCallback(() => {
     setActiveOrganizeTool(null);
@@ -2466,6 +2607,9 @@ export function App() {
             document={document}
             pack={filingPack}
             availablePacks={AVAILABLE_FILING_PACKS}
+            prepPlan={filingPrepPlan}
+            courtProfiles={filingPreferences.courtProfiles}
+            selectedCourtProfile={selectedCourtProfile}
             report={filingReport}
             loadingReport={filingReportLoading}
             progress={filingProgress}
@@ -2473,6 +2617,9 @@ export function App() {
             impact={filingImpact}
             pdfAAvailable={engineBridge.available}
             compressAvailable={engineBridge.available}
+            onPackChange={handleFilingPackChange}
+            onCourtProfileSelect={handleCourtProfileSelect}
+            onCourtProfileSave={handleCourtProfileSave}
             onPrepare={prepareFilingCopy}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
@@ -3151,6 +3298,93 @@ function SidecarStatusLine({
       {status.message}
     </p>
   );
+}
+
+async function reopenFilingHandle(
+  engine: LocalPdfEngine,
+  closeHandles: PdfDocumentHandle[],
+  bytes: Uint8Array,
+): Promise<PdfDocumentHandle> {
+  const handle = await engine.open(bytes);
+  closeHandles.push(handle);
+  return handle;
+}
+
+function filingPreflightUnavailableReport(): PreflightReport {
+  return {
+    checks: [
+      {
+        checkId: "final-preflight",
+        label: "Final output preflight",
+        authority: "RaioPDF local verification",
+        detail: "The filing output was saved, but Raio could not compute the final preflight report.",
+        kind: "rule",
+        status: "unknown",
+      },
+    ],
+  };
+}
+
+function skippedPrepSteps(
+  plan: readonly PrepPlanStep[],
+  selectedSteps: ReadonlySet<PrepPlanStepId>,
+): readonly string[] {
+  return plan
+    .filter((step) => step.defaultChecked && !selectedSteps.has(step.id))
+    .map((step) => `${step.label} skipped`);
+}
+
+function filingRunOverrides({
+  customSplitBytes,
+  packDefaultSplitBytes,
+  scrubbedBeforePdfA,
+}: {
+  customSplitBytes: number | null;
+  packDefaultSplitBytes: number | null;
+  scrubbedBeforePdfA: boolean;
+}): readonly string[] {
+  const overrides: string[] = [];
+
+  if (customSplitBytes !== null) {
+    const defaultText = packDefaultSplitBytes === null
+      ? "no pack default"
+      : `pack default ${formatMegabytes(packDefaultSplitBytes)}`;
+    overrides.push(`user set split cap ${formatMegabytes(customSplitBytes)} (${defaultText})`);
+  }
+
+  if (scrubbedBeforePdfA) {
+    overrides.push("metadata scrub ran before PDF/A conversion so the converter can write PDF/A conformance metadata");
+  }
+
+  return overrides;
+}
+
+function applyCourtProfile(
+  pack: JurisdictionPack,
+  profile: CourtProfile | null,
+): JurisdictionPack {
+  if (!profile || profile.packId !== pack.id) {
+    return pack;
+  }
+
+  return {
+    ...pack,
+    maxFileBytes: profile.maxFileBytes,
+    recommendedMaxFileBytes: profile.maxFileBytes,
+  };
+}
+
+function emptyDocumentFacts(document: DocumentState): DocumentFacts {
+  return {
+    pages: [],
+    ...(document.fileName ? { filename: document.fileName } : {}),
+    ...(document.fileSizeBytes !== null ? { fileBytes: document.fileSizeBytes } : {}),
+    ...(document.hasTextLayer !== null ? { searchableText: document.hasTextLayer } : {}),
+  };
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
 }
 
 // Keyed on bytes identity; populated as a side effect of readFilingFacts (the filing

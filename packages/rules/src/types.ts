@@ -201,3 +201,30 @@ export type PreflightReport = {
   checks: readonly PreflightCheck[];
   selectionChecks?: readonly PreflightCheck[];
 };
+
+export type PrepPlanStepId =
+  | "remove-encryption"
+  | "normalize-pages"
+  | "sanitize-content"
+  | "scrub-metadata"
+  | "make-searchable"
+  | "flatten-forms"
+  | "convert-pdfa"
+  | "split-by-size";
+
+export type PrepPlanStance = ConstraintStance | "standard";
+
+export type PrepPlanStep = {
+  id: PrepPlanStepId;
+  label: string;
+  stance: PrepPlanStance;
+  condition?: string;
+  authority: string;
+  lastVerified: string;
+  note?: string;
+  prepDefault: PrepDefault;
+  defaultChecked: boolean;
+  disabledReason?: string;
+  destructive: boolean;
+  impact: string;
+};

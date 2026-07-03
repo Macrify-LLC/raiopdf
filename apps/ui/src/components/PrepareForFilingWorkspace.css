@@ -20,8 +20,6 @@
 }
 
 .filing-card__header,
-.filing-card__title-row,
-.filing-card__jurisdiction,
 .filing-card__button-row,
 .filing-card__footer,
 .filing-result__header,
@@ -35,26 +33,45 @@
   gap: var(--space-3);
 }
 
-.filing-card__title-row {
-  gap: var(--space-3);
-  min-width: 0;
-}
+/* ---- Document identity line (replaces the old icon+eyebrow+h2 block --
+   the dialog chrome already renders "Legal / Prepare for Filing", so this
+   line only needs to say which document is loaded). ---- */
 
-.filing-card__icon {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
-  background: var(--chrome);
-  display: inline-flex;
+.filing-card__document-line {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--primary);
-  flex: 0 0 auto;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
-.filing-card__eyebrow,
-.filing-card__document-line,
+.filing-card__document-line svg {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+
+.filing-card__document-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filing-card__document-meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.filing-card__document-meta::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--border);
+}
+
 .filing-card__empty,
 .filing-card__status,
 .filing-card__guidance,
@@ -76,22 +93,7 @@
   gap: var(--space-1);
 }
 
-.filing-card__eyebrow {
-  color: var(--muted);
-  font-weight: 700;
-  letter-spacing: var(--tracking-micro);
-  text-transform: uppercase;
-}
-
-.filing-card h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--text-lg);
-  line-height: 1.2;
-  letter-spacing: 0;
-}
-
-.filing-card__document-line,
+.filing-card__document-meta,
 .filing-card__empty,
 .filing-card__guidance,
 .filing-card__footer,
@@ -103,6 +105,7 @@
 
 .filing-card__overflow {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .filing-card__icon-button {
@@ -153,48 +156,52 @@
   background: var(--hover-ground);
 }
 
+/* ---- Jurisdiction pack picker -- portal as the primary line, scope note
+   as secondary, staleness as a quiet tag. ---- */
+
 .filing-card__jurisdiction {
-  position: relative;
+  display: grid;
   gap: var(--space-2);
-  flex-wrap: wrap;
-  color: var(--body);
-  font-size: var(--text-sm);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
 }
 
-.filing-card__scope-note {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.4;
-}
-
-.filing-card__primary-row {
+.filing-pack__select-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
-.filing-card__change-button,
-.filing-card__rules-button,
-.filing-card__ghost-button {
-  border: 0;
-  background: transparent;
+.filing-pack__select {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.filing-pack__eyebrow {
   color: var(--muted);
-  font: inherit;
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
 }
 
-.filing-card__pack-select {
-  display: inline-flex;
+.filing-pack__select-control {
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--muted);
 }
 
-.filing-card__pack-select select,
-.filing-certificate input,
-.filing-certificate textarea {
+.filing-pack__select-control select {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 var(--space-2);
+  appearance: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--panel);
@@ -203,14 +210,374 @@
   font-size: var(--text-xs);
 }
 
-.filing-card__pack-select select {
+.filing-pack__select-control svg {
+  position: absolute;
+  right: var(--space-2);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.filing-pack__stale {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-chip);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: 3px var(--space-2);
+  white-space: nowrap;
+}
+
+.filing-pack__summary {
+  display: grid;
+  gap: 2px;
+}
+
+.filing-pack__portal {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-pack__court-system {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.filing-pack__scope-note {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+/* ---- Court file-size cap prompt ---- */
+
+.filing-court-profile {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
+}
+
+.filing-court-profile__intro p {
+  margin: 0;
+}
+
+.filing-court-profile__title {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-court-profile__hint {
+  margin-top: 2px !important;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.filing-court-profile__saved {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 320px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.filing-court-profile__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 130px) auto;
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.filing-court-profile__form label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.filing-court-profile__saved select,
+.filing-court-profile__form input {
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+/* ---- Prep checklist -- the hero of the workspace. ---- */
+
+.filing-prep {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
+}
+
+.filing-prep__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.filing-prep__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-prep__subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.filing-prep__rows {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filing-prep-row {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  padding: var(--space-3);
+}
+
+.filing-prep-row[data-disabled="true"] {
+  background: var(--chrome);
+}
+
+.filing-prep-row__main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.filing-prep-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.filing-prep-row__toggle input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.filing-prep-row__title {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-prep-row[data-disabled="true"] .filing-prep-row__title {
+  color: var(--muted);
+}
+
+/* Body block indents to align under the title, past the 16px checkbox
+   plus its var(--space-2) gap. */
+.filing-prep-row__body {
+  display: grid;
+  gap: 4px;
+  padding-left: 24px;
+}
+
+.filing-prep-row__condition,
+.filing-prep-row__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.filing-prep-row__impact {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.filing-prep-row__authority {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.filing-prep-row__blocked {
+  margin: 0;
+  width: max-content;
+  max-width: 100%;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.filing-prep-row__blocked[data-tone="policy"] {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.filing-prep-row__blocked[data-tone="product"] {
+  border: 1px solid var(--border-soft);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+/* Stance badge -- one tight, consistent vocabulary across every step. */
+
+.filing-prep-row__stance {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  padding: 2px var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.filing-prep-row__stance[data-stance="required"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
+}
+
+.filing-prep-row__stance[data-stance="preferred"] {
+  border-color: var(--primary);
+  background: var(--panel);
+  color: var(--primary);
+}
+
+.filing-prep-row__stance[data-stance="accepted"],
+.filing-prep-row__stance[data-stance="standard"] {
+  border-color: var(--border-soft);
+  background: var(--chrome);
+  color: var(--muted);
+}
+
+.filing-prep-row__stance[data-stance="unknown"] {
+  border-style: dashed;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.filing-prep-row__stance[data-stance="prohibited"] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* Destructive-impact callout -- lives inside the row, never a modal. Full
+   warmth once the step is checked (it will actually run); toned down while
+   unchecked so the plan doesn't read as one long alarm. */
+
+.filing-prep-row__warning {
+  display: grid;
+  gap: 1px;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+}
+
+.filing-prep-row__warning[data-tone="quiet"] {
+  border-left-color: var(--border);
+  background: var(--chrome);
+}
+
+.filing-prep-row__warning-label {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.filing-prep-row__warning[data-tone="quiet"] .filing-prep-row__warning-label {
+  color: var(--muted);
+}
+
+.filing-prep-row__warning-text {
+  margin: 0;
+  color: var(--body);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.filing-prep-row__override {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: 100%;
+}
+
+.filing-prep-row__override > span:first-child {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.filing-prep-row__override-input {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
   padding: 0 var(--space-2);
 }
 
-.filing-card__pack-select select:disabled {
+.filing-prep-row__override-input:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.filing-prep-row__override-input input {
+  width: 92px;
+  border: 0;
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0;
+}
+
+.filing-prep-row__override-input input:focus-visible {
+  outline: none;
+}
+
+.filing-prep-row__override-input span:last-child {
   color: var(--muted);
-  background: var(--chrome);
+  font-size: var(--text-2xs);
 }
 
 .filing-certificate {
@@ -220,6 +587,13 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-2);
+}
+
+.filing-certificate p,
+.filing-court-profile p,
+.filing-prep p,
+.filing-prep-row p {
+  margin: 0;
 }
 
 .filing-certificate__title {
@@ -242,13 +616,48 @@
   padding: 0 var(--space-2);
 }
 
+.filing-certificate input,
+.filing-certificate textarea {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
 .filing-certificate textarea {
   resize: vertical;
   min-height: 74px;
   padding: var(--space-2);
 }
 
+/* ---- Preflight / compliance report -- warn-only, guidance-toned. ---- */
+
 .filing-checks {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filing-checks__header {
+  display: grid;
+  gap: 1px;
+}
+
+.filing-checks__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-checks__subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.filing-checks__rows {
   display: grid;
   gap: var(--space-2);
 }
@@ -303,6 +712,11 @@
   color: var(--ok);
 }
 
+/* Portal warnings are mechanical and near-certain -- full amber fill.
+   Rule warnings are advisory ("review") -- same amber ink, but an outline
+   on white so the softer read the smoke suite's copy implies also shows up
+   visually, without collapsing to the same near-invisible grey as
+   "unknown." */
 .filing-row[data-kind="portal"][data-status="warn"] .filing-row__chip {
   border-color: var(--warn-bg);
   background: var(--warn-bg);
@@ -310,9 +724,9 @@
 }
 
 .filing-row[data-kind="rule"][data-status="warn"] .filing-row__chip {
-  border-color: var(--border-soft);
-  background: var(--chrome);
-  color: var(--muted);
+  border-color: var(--warn);
+  background: var(--panel);
+  color: var(--warn);
 }
 
 .filing-card__unavailable {
@@ -320,6 +734,14 @@
   border-radius: var(--radius-control);
   background: var(--chrome);
   padding: var(--space-2) var(--space-3);
+}
+
+.filing-card__empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
+  text-align: center;
 }
 
 .filing-card__guidance a {
@@ -335,11 +757,20 @@
   padding: var(--space-1) var(--space-2);
 }
 
+.filing-card__rules-button svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.filing-card__rules-button[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
 .filing-rules {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--chrome);
   padding: var(--space-3);
+  animation: filing-panel-in var(--duration-fast) ease;
 }
 
 .filing-rules p,
@@ -362,12 +793,15 @@
   color: var(--muted);
 }
 
+/* ---- Progress (running) / result (done) ---- */
+
 .filing-progress,
 .filing-result {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--chrome);
   padding: var(--space-3);
+  animation: filing-panel-in var(--duration-fast) ease;
 }
 
 .filing-progress[data-phase="done"],
@@ -381,6 +815,54 @@
   background: var(--warn-bg);
 }
 
+.filing-progress__steps {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.filing-progress__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.filing-progress__step-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--on-primary);
+}
+
+.filing-progress__step[data-state="active"] {
+  color: var(--primary);
+}
+
+.filing-progress__step[data-state="active"] .filing-progress__step-dot {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.filing-progress__step[data-state="done"] {
+  color: var(--ok);
+}
+
+.filing-progress__step[data-state="done"] .filing-progress__step-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
 .filing-impact {
   display: grid;
   gap: var(--space-2);
@@ -391,6 +873,7 @@
   padding: var(--space-3);
   font-size: var(--text-xs);
   line-height: 1.4;
+  animation: filing-panel-in var(--duration-fast) ease;
 }
 
 .filing-impact__title {
@@ -438,6 +921,13 @@
   color: var(--ok);
 }
 
+.filing-result__subtitle {
+  color: var(--body);
+  font-weight: 400;
+}
+
+/* Receipt-style parts list: a hairline rule between line items, tabular
+   figures on the byte counts so they line up like a total column. */
 .filing-result__parts {
   display: grid;
   gap: var(--space-1);
@@ -446,8 +936,35 @@
 .filing-result__part {
   justify-content: space-between;
   gap: var(--space-2);
-  color: var(--body);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px dashed var(--border-soft);
   font-size: var(--text-xs);
+}
+
+.filing-result__part:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.filing-result__part-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--body);
+}
+
+.filing-result__part-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.filing-result__footer {
+  display: grid;
+  gap: 2px;
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-2);
 }
 
 .filing-card__footer {
@@ -517,18 +1034,50 @@
   box-shadow: none;
 }
 
+/* A safety net for controls the app-wide baseline focus rule misses --
+   it covers button/input/[tabindex] but not select/textarea. */
+.filing-card select:focus-visible,
+.filing-card textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@keyframes filing-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .filing-rules,
+  .filing-progress,
+  .filing-result,
+  .filing-impact {
+    animation: none;
+  }
+}
+
 @media (max-width: 720px) {
   .filing-workspace {
     padding: var(--space-3);
   }
 
-  .filing-card__footer,
-  .filing-card__header {
+  .filing-card__footer {
     align-items: stretch;
     flex-direction: column;
   }
 
   .filing-card__primary-button {
     width: 100%;
+  }
+
+  .filing-court-profile__form {
+    grid-template-columns: 1fr;
   }
 }

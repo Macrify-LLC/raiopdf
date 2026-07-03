@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { getPack, preflight } from "@raiopdf/rules";
+import { getPack, preflight, resolvePrepPlan } from "@raiopdf/rules";
 import { PrepareForFilingWorkspace } from "./PrepareForFilingWorkspace";
 import type { DocumentState } from "../hooks/useDocument";
 
@@ -30,6 +30,9 @@ describe("PrepareForFilingWorkspace", () => {
       <PrepareForFilingWorkspace
         document={mockDocument}
         pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
         report={null}
         loadingReport={false}
         progress={{ phase: "done", message: null }}
@@ -50,10 +53,15 @@ describe("PrepareForFilingWorkspace", () => {
           ],
           report,
           verifiedAt: "2026-07-03T00:00:00.000Z",
+          skippedSteps: [],
+          overrides: [],
         }}
         impact={null}
         pdfAAvailable
         compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
         onPrepare={() => undefined}
         onDismissImpact={() => undefined}
         onCompressFirst={() => undefined}
@@ -80,4 +88,10 @@ const mockDocument: DocumentState = {
   hasTextLayer: true,
   pageSizeInches: null,
   error: null,
+};
+
+const mockFacts = {
+  pages: [],
+  fileBytes: 28 * MiB,
+  filename: "motion.pdf",
 };

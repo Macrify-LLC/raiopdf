@@ -252,17 +252,22 @@ function wrapHardLine(
   }
 
   const maxWidth = Math.max(0, options.boxWidthPt);
-  const words = [...text.matchAll(/\S+/g)].map((match) => match[0]);
 
-  if (words.length === 0) {
-    return [""];
+  if (fitsText(text, maxWidth, options)) {
+    return [text];
+  }
+
+  const tokens = text.match(/\s+|\S+/g) ?? [];
+
+  if (tokens.length === 0) {
+    return [text];
   }
 
   const lines: string[] = [];
   let current = "";
 
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
+  for (const token of tokens) {
+    const candidate = `${current}${token}`;
 
     if (fitsText(candidate, maxWidth, options)) {
       current = candidate;
@@ -273,12 +278,12 @@ function wrapHardLine(
       lines.push(current);
     }
 
-    if (fitsText(word, maxWidth, options)) {
-      current = word;
+    if (/^\s+$/.test(token) || fitsText(token, maxWidth, options)) {
+      current = token;
       continue;
     }
 
-    const pieces = breakLongWord(word, maxWidth, options);
+    const pieces = breakLongWord(token, maxWidth, options);
     lines.push(...pieces.slice(0, -1));
     current = pieces.at(-1) ?? "";
   }

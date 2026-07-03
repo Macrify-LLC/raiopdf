@@ -22,7 +22,6 @@ import {
   type PendingTextBox,
 } from "../lib/edits";
 import {
-  wrapTextBoxLines,
   type PdfEditColor,
   type PdfTextBoxAlign,
   type PdfTextBoxFontFamily,
@@ -52,6 +51,7 @@ import {
   type ViewportPoint,
   type ViewportRect,
 } from "../lib/viewportGeometry";
+import { computeTextBoxPreviewLines } from "../lib/textBoxPreview";
 import { CommentMarkerIcon } from "../icons";
 import "./EditLayer.css";
 
@@ -911,14 +911,12 @@ function TextBoxOverlay({
   );
   const lines = useMemo(
     () =>
-      font
-        ? wrapTextBoxLines({
-            text: edit.text,
-            boxWidthPt: rect.width / scale,
-            fontSizePt: edit.fontSizePt,
-            font,
-          })
-        : edit.text.replace(/\r\n/g, "\n").split("\n"),
+      computeTextBoxPreviewLines({
+        text: edit.text,
+        boxWidthPt: rect.width / scale,
+        fontSizePt: edit.fontSizePt,
+        font,
+      }),
     [edit.fontSizePt, edit.text, font, rect.width, scale],
   );
 
@@ -1186,7 +1184,7 @@ function ResizeHandles({
   );
 }
 
-function TextBoxDraftEditor({
+export function TextBoxDraftEditor({
   draft,
   scale,
   onTextChange,
@@ -1203,6 +1201,29 @@ function TextBoxDraftEditor({
   onCommit: () => void;
   onCancel: () => void;
 }) {
+  const color = draft.color ?? DEFAULT_TEXT_COLOR;
+  const font = useTextBoxPreviewFont(
+    draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(draft.bold),
+    Boolean(draft.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: draft.text,
+        boxWidthPt: draft.rect.width / scale,
+        fontSizePt: draft.fontSizePt,
+        font,
+      }),
+    [draft.fontSizePt, draft.rect.width, draft.text, font, scale],
+  );
+  const contentStyle = textContentStyle(draft, scale, color);
+  const inputStyle: CSSProperties = {
+    ...contentStyle,
+    color: "transparent",
+    caretColor: pdfEditColorToHex(color),
+  };
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1246,12 +1267,24 @@ function TextBoxDraftEditor({
         />
         <span className="edit-layer__chrome-hint">Enter commits · Esc cancels</span>
       </span>
+      <span
+        className="edit-layer__text-content edit-layer__text-draft-preview"
+        style={contentStyle}
+        aria-hidden="true"
+      >
+        {lines.map((line, lineIndex) => (
+          <span key={lineIndex} className="edit-layer__text-line">
+            {line}
+          </span>
+        ))}
+      </span>
       <textarea
         className="edit-layer__text-input"
-        style={textContentStyle(draft, scale, draft.color ?? DEFAULT_TEXT_COLOR)}
+        style={inputStyle}
         aria-label="Text box content"
         value={draft.text}
         autoFocus
+        spellCheck={false}
         onChange={(event) => onTextChange(event.target.value)}
         onKeyDown={handleKeyDown}
       />

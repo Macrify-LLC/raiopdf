@@ -87,6 +87,27 @@ describe("LocalPdfEngine.applyEdits", () => {
     expectWithin1Pt(matrix[5]!, 700 + 40 - 12);
   });
 
+  it("preserves authored whitespace for text box lines that do not need wrapping", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 200]]));
+    const text = "  Alpha   beta  gamma";
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 40, y: 120, w: 220, h: 40 },
+        text,
+        fontSizePt: 12,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(readTextDraws(content)).toEqual([text]);
+    expect(content).toContain(encodeTextAsHex(text));
+  });
+
   it("renders all standard text box font faces as page font resources", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -220,18 +241,17 @@ describe("LocalPdfEngine.applyEdits", () => {
     }
   });
 
-  it("bakes the same wrapped lines the editor preview helper computes", async () => {
+  it("bakes wrapped lines with the selected font metrics", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[240, 240]]));
-    const measurePdf = await PDFDocument.create();
-    const font = await measurePdf.embedFont(StandardFonts.TimesRomanBoldItalic);
     const text = "Preview wraps these words\nand splits supercalifragilistic";
-    const expectedLines = wrapTextBoxLines({
-      text,
-      boxWidthPt: 86,
-      fontSizePt: 12,
-      font,
-    });
+    const expectedLines = [
+      "Preview wraps ",
+      "these words",
+      "and splits ",
+      "supercalifragilist",
+      "ic",
+    ];
 
     const edited = await engine.applyEdits(document, [
       {

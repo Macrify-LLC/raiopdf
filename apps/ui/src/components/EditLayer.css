@@ -112,6 +112,7 @@
 
 .edit-layer__item-chrome {
   position: absolute;
+  z-index: 2;
   top: -30px;
   left: -1px;
   display: flex;
@@ -238,10 +239,14 @@
 .edit-layer__text-draft {
   border: 1px solid var(--primary);
   background: var(--panel);
+  overflow: hidden;
 }
 
 .edit-layer__text-input {
   display: block;
+  position: absolute;
+  z-index: 1;
+  inset: 0;
   width: 100%;
   height: 100%;
   border: none;
@@ -250,7 +255,12 @@
   padding: 0;
   margin: 0;
   background: transparent;
-  color: var(--edit-ink);
+}
+
+.edit-layer__text-draft-preview {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 /* ---- Comment pin + popover ---- */

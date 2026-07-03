@@ -52,4 +52,22 @@ describe("redaction term verifier (pdf.js in Node)", () => {
     expect(result.ok).toBe(false);
     expect(result.survivingTerms).toEqual(["---"]);
   });
+
+  it("honors whole-word mode (does not flag a substring inside a larger word)", async () => {
+    const bytes = await pdfWithText("The word concatenate appears here.");
+    const substring = await verifyTermsRemoved(bytes, ["cat"]);
+    expect(substring.ok).toBe(false); // default: substring found in "concatenate"
+    const wholeWord = await verifyTermsRemoved(bytes, ["cat"], { wholeWord: true });
+    expect(wholeWord.ok).toBe(true); // whole-word: "cat" is not a standalone word
+  });
+
+  it("does not treat a non-ASCII term as unverifiable-empty", async () => {
+    const bytes = await pdfWithText("only plain ascii text here");
+    // The Cyrillic term is absent; with Unicode-aware normalization it becomes a
+    // real (non-empty) needle and verifies as removed. Before the fix it would
+    // strip to an empty needle and be wrongly reported as surviving forever.
+    const result = await verifyTermsRemoved(bytes, ["секрет"]);
+    expect(result.ok).toBe(true);
+    expect(result.survivingTerms).toEqual([]);
+  });
 });

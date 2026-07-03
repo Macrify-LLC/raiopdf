@@ -67,7 +67,9 @@ export async function handleRedact(
     }
     const redactedBytes = await engine.saveToBytes(redacted);
 
-    const verification = await verifyTermsRemoved(redactedBytes, input.terms);
+    const verification = await verifyTermsRemoved(redactedBytes, input.terms, {
+      wholeWord: input.wholeWord ?? false,
+    });
     if (!verification.ok) {
       await output.abort();
       return errorResult(

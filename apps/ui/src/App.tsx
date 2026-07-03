@@ -76,6 +76,7 @@ import {
 } from "./components/CrashReportDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
+import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
 import { LoadingSun } from "./components/LoadingSun";
 import {
@@ -120,8 +121,9 @@ import {
   fitCrashReportPayloadToIssueUrl,
 } from "./lib/crashReportIssue";
 import {
-  hasExtractableTextLayer,
+  inspectTextLayer,
 } from "./lib/textLayer";
+import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import {
   collectRedactionAreaTexts,
@@ -184,6 +186,10 @@ export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
 }
+
+type OcrType = "skip-text" | "force-ocr";
+
+type ForceOcrConfirmationReason = "garbled" | "manual";
 
 interface PendingRedaction {
   id: string;
@@ -256,6 +262,8 @@ export function App() {
     phase: "idle",
     message: null,
   });
+  const [forceOcrConfirmation, setForceOcrConfirmation] =
+    useState<ForceOcrConfirmationReason | null>(null);
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
     null,
   );
@@ -972,7 +980,7 @@ export function App() {
     };
   }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pdfDocument, pdfDocumentBytes]);
 
-  const makeSearchable = useCallback(() => {
+  const runOcrWorkflow = useCallback((ocrType: OcrType) => {
     if (ocrActiveRef.current) {
       return;
     }
@@ -1017,11 +1025,14 @@ export function App() {
 
     void engineBridge
       .runOcr(sourceBytes, {
+        ocrType,
         onEngineReady: () => {
           if (isCurrentRun()) {
             setOcrState({
               phase: "processing",
-              message: "Making searchable — page-by-page work happens in the engine.",
+              message: ocrType === "force-ocr"
+                ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
+                : "Making searchable — page-by-page work happens in the engine.",
             });
           }
         },
@@ -1036,19 +1047,18 @@ export function App() {
           message: "Verifying the text layer...",
         });
 
-        // PHASE 3: A force-OCR "Fix garbled text" action must remain manually triggerable
-        // regardless of detector verdict, including documents scored clean.
-        const hasTextLayer = await hasExtractableTextLayer(ocrBytes);
+        const coverage = await inspectTextLayer(ocrBytes);
+        const verification = verifyOcrTextLayer(coverage);
 
         if (!isCurrentRun()) {
           return;
         }
 
-        if (!hasTextLayer) {
+        if (verification.status === "failed") {
           finishCurrentRun();
           setOcrState({
             phase: "error",
-            message: "OCR produced no text layer. The document was left unchanged.",
+            message: verification.message,
           });
           return;
         }
@@ -1086,7 +1096,7 @@ export function App() {
         finishCurrentRun();
         setOcrState({
           phase: "done",
-          message: "Searchable — verified",
+          message: verification.message,
         });
       })
       .catch((error: unknown) => {
@@ -1112,6 +1122,26 @@ export function App() {
         });
       });
   }, [document.bytes, engineBridge, getOpenToken, replaceBytes]);
+
+  const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
+    setForceOcrConfirmation(reason);
+  }, []);
+
+  const makeSearchable = useCallback(() => {
+    const status = deriveTextLayerStatus(document.textLayerCoverage);
+
+    if (status.state === "garbled") {
+      requestForceOcr("garbled");
+      return;
+    }
+
+    runOcrWorkflow("skip-text");
+  }, [document.textLayerCoverage, requestForceOcr, runOcrWorkflow]);
+
+  const confirmForceOcr = useCallback(() => {
+    setForceOcrConfirmation(null);
+    runOcrWorkflow("force-ocr");
+  }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
     (file: OpenedFile) => {
@@ -2448,7 +2478,9 @@ export function App() {
           workingHandle = await reopenFilingHandle(
             filingEngine,
             closeHandles,
-            await engineBridge.runOcr(await filingEngine.saveToBytes(workingHandle)),
+            await engineBridge.runOcr(await filingEngine.saveToBytes(workingHandle), {
+              ocrType: document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
+            }),
           );
         }
 
@@ -3170,6 +3202,7 @@ export function App() {
         onLegalToolSelected={selectLegalTool}
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
+        onForceOcr={() => requestForceOcr("manual")}
         redaction={redactionPanel}
         scanner={scannerState}
         pendingRedactions={pendingRedactions}
@@ -3184,6 +3217,13 @@ export function App() {
         onOpenAbout={openAboutMacrify}
         onHelpRequested={openHelp}
       />
+      {forceOcrConfirmation ? (
+        <ForceOcrConfirmationDialog
+          reason={forceOcrConfirmation}
+          onConfirm={confirmForceOcr}
+          onCancel={() => setForceOcrConfirmation(null)}
+        />
+      ) : null}
       {helpOpen ? (
         <HelpPanel
           initialArticleId={helpArticleId}

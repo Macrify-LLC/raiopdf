@@ -36,6 +36,7 @@ export interface FilingPacketChecklistOverrides {
   skippedStepIds?: readonly PrepPlanStepId[] | undefined;
   splitSizeMb?: number | undefined;
   convertToPdfA?: boolean | undefined;
+  ocrType?: "force-ocr" | "skip-text" | undefined;
 }
 
 export interface FilingPacketCourtProfileValues {
@@ -408,8 +409,9 @@ async function prepareDocument({
         }
         const sidecarDocument = await reopenInEngine(workingEngine, sidecarEngine, working);
         opened.push({ handle: sidecarDocument, engine: sidecarEngine });
-        replaceWorking(await sidecarEngine.ocr(sidecarDocument, { ocrType: "skip-text" }), sidecarEngine);
-        record(step, "run", "OCR ran with skip-text mode.");
+        const ocrType = filingPacketOcrType(facts, options.checklist.ocrType);
+        replaceWorking(await sidecarEngine.ocr(sidecarDocument, { ocrType }), sidecarEngine);
+        record(step, "run", `OCR ran with ${ocrType} mode.`);
       } else if (step.id === "flatten-forms") {
         replaceWorking(await workingEngine.flattenForm(working), workingEngine);
         record(step, "run", "Interactive form fields flattened.");
@@ -512,6 +514,19 @@ async function prepareDocument({
     stepStatus,
     handlesForCombined,
   };
+}
+
+function filingPacketOcrType(
+  facts: DocumentFacts,
+  requested: "force-ocr" | "skip-text" | undefined,
+): "force-ocr" | "skip-text" {
+  if (requested) {
+    return requested;
+  }
+
+  return (facts.textLayerCoverage?.garbledPages.length ?? 0) > 0
+    ? "force-ocr"
+    : "skip-text";
 }
 
 function normalizeInput(input: BuildFilingPacketInput): NormalizedInput {

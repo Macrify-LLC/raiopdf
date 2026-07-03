@@ -117,6 +117,7 @@ export interface ToolPanelProps {
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
+  onForceOcr: () => void;
   redaction: RedactionPanelState;
   scanner: ScannerPanelState;
   pendingEdits: readonly PendingEdit[];
@@ -142,6 +143,7 @@ export function ToolPanel({
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
+  onForceOcr,
   redaction,
   scanner,
   pendingEdits,
@@ -243,6 +245,14 @@ export function ToolPanel({
           description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
+          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
+        />
+        <ToolRow
+          icon={<OcrSearchIcon size={16} />}
+          label="Force re-OCR text layer"
+          description="Rebuild the invisible searchable text by re-rendering the whole file."
+          disabled={!hasDocument || isOcrActive(ocrState.phase, ocrStarting)}
+          onSelect={onForceOcr}
           onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         {ocrState.phase !== "idle" || ocrStarting ? (

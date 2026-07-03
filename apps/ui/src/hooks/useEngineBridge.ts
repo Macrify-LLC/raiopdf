@@ -22,6 +22,7 @@ interface EngineOcrToolchainStatus {
 }
 
 export interface RunOcrOptions {
+  ocrType?: "skip-text" | "force-ocr";
   onEngineReady?: () => void;
 }
 
@@ -145,7 +146,7 @@ export function useEngineBridge(): EngineBridge {
       try {
         outputHandle = await engine.ocr(sourceHandle, {
           languages: ["eng"],
-          ocrType: "skip-text",
+          ocrType: options.ocrType ?? "skip-text",
           deskew: false,
         });
 

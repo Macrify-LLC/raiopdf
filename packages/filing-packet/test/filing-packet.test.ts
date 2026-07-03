@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { extractAllText, extractPageTextByPage, extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { DocumentFacts, TextLayerCoverage } from "@raiopdf/rules";
 import { buildFilingPacket } from "../src/index";
@@ -151,7 +153,55 @@ describe("buildFilingPacket", () => {
     expect(searchableText?.detail).not.toContain("Part 1: The document facts report no searchable text.");
     expect(extractTextLayerCoverageForPart).toHaveBeenCalledTimes(3);
   });
+
+  it("runs make-searchable with force OCR for garbled text-layer coverage", async () => {
+    const motion = await writePdf("Garbled Motion.pdf", ["abc"]);
+    const outputDir = path.join(dir, "packet-force-ocr");
+    const engine = new RecordingFilingEngine();
+
+    await buildFilingPacket({
+      sources: [{
+        path: motion,
+        facts: {
+          ...sourceFacts(1),
+          searchableText: false,
+          textLayerCoverage: {
+            imageOnlyPages: [],
+            mixedPages: [],
+            textPages: [0],
+            garbledPages: [{
+              pageIndex: 0,
+              confidence: 0.9,
+              reason: "combined",
+              puaRatio: 0.2,
+              replacementRatio: 0.1,
+              alphaRatio: 0.02,
+            }],
+          },
+        },
+      }],
+      outputDir,
+      packId: "florida",
+      checklist: {
+        selectedStepIds: ["make-searchable"],
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(engine.ocrTypes).toEqual(["force-ocr"]);
+  });
 });
+
+class RecordingFilingEngine extends LocalPdfEngine {
+  readonly ocrTypes: Array<"force-ocr" | "skip-text" | undefined> = [];
+
+  async ocr(
+    document: PdfDocumentHandle,
+    options?: { languages?: readonly string[]; ocrType?: "force-ocr" | "skip-text" },
+  ): Promise<PdfDocumentHandle> {
+    this.ocrTypes.push(options?.ocrType);
+    return this.scrubMetadata(document);
+  }
+}
 
 function sourceFacts(pageCount: number): DocumentFacts {
   return {

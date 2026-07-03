@@ -145,6 +145,8 @@ interface ProducedPdf {
   oversized?: boolean | undefined;
 }
 
+type BatchCleanupOcrType = "skip-text" | "force-ocr";
+
 const DEFAULT_APP_VERSION = "0.0.0";
 const DEFAULT_OCR_MODE: BatchCleanupOcrMode = "auto-image-only";
 const DEFAULT_COMPRESSION_QUALITY = 5;
@@ -385,6 +387,7 @@ async function processFile(
       workingSourceBytes,
       workingFacts,
       plan.operations,
+      plan.ocrType,
       options,
       localEngine,
       sidecarEngine,
@@ -448,7 +451,12 @@ function planFileOperations(
   facts: DocumentFacts,
   options: NormalizedOptions,
   removedEncryption = false,
-): { operations: string[]; ocrDecision: string; skipReason: string | null } {
+): {
+  operations: string[];
+  ocrDecision: string;
+  ocrType: BatchCleanupOcrType;
+  skipReason: string | null;
+} {
   const operations: string[] = [];
   const add = (enabled: boolean, name: string): void => {
     if (enabled) {
@@ -476,6 +484,7 @@ function planFileOperations(
   return {
     operations,
     ocrDecision: ocrPlan.decision,
+    ocrType: ocrPlan.ocrType,
     skipReason: operations.length === 0 ? "No selected operation applies to this file." : null,
   };
 }
@@ -483,24 +492,27 @@ function planFileOperations(
 function ocrPlanFor(
   facts: DocumentFacts,
   mode: BatchCleanupOcrMode,
-): { run: boolean; decision: string } {
+): { run: boolean; ocrType: BatchCleanupOcrType; decision: string } {
   if (mode === "off") {
-    return { run: false, decision: "OCR disabled." };
+    return { run: false, ocrType: "skip-text", decision: "OCR disabled." };
   }
   if (mode === "force-ocr") {
-    return { run: true, decision: "Force OCR selected by user." };
+    return { run: true, ocrType: "force-ocr", decision: "Force OCR selected by user." };
   }
   if (!facts.textLayerCoverage) {
-    return { run: false, decision: "Text-layer coverage is unknown; OCR not selected by default." };
+    return { run: false, ocrType: "skip-text", decision: "Text-layer coverage is unknown; OCR not selected by default." };
+  }
+  if (facts.textLayerCoverage.garbledPages.length > 0) {
+    return { run: true, ocrType: "force-ocr", decision: "Garbled text layer detected; force OCR to rebuild it." };
   }
   if (isImageOnly(facts)) {
-    return { run: true, decision: "All pages are image-only; OCR selected by default." };
+    return { run: true, ocrType: "skip-text", decision: "All pages are image-only; OCR selected by default." };
   }
   if (mode === "skip-text") {
-    return { run: true, decision: "Skip-text OCR selected by user for a mixed or searchable document." };
+    return { run: true, ocrType: "skip-text", decision: "Skip-text OCR selected by user for a mixed or searchable document." };
   }
 
-  return { run: false, decision: "Document has text-layer coverage; default OCR skipped." };
+  return { run: false, ocrType: "skip-text", decision: "Document has text-layer coverage; default OCR skipped." };
 }
 
 function isImageOnly(facts: DocumentFacts): boolean {
@@ -524,6 +536,7 @@ async function runOperationPipeline(
   sourceBytes: Uint8Array,
   facts: DocumentFacts,
   operations: readonly string[],
+  ocrType: BatchCleanupOcrType,
   options: NormalizedOptions,
   localEngine: PdfEngine,
   sidecarEngine: PdfEngine | undefined,
@@ -566,6 +579,7 @@ async function runOperationPipeline(
       bytes,
       operation,
       facts,
+      ocrType,
       options,
       selectEngineForOperation(operation, localEngine, sidecarEngine),
     );
@@ -581,6 +595,7 @@ async function runSingleDocumentOperation(
   bytes: Uint8Array,
   operation: string,
   facts: DocumentFacts,
+  ocrType: BatchCleanupOcrType,
   options: NormalizedOptions,
   engine: PdfEngine | BatchCleanupSidecarEngine,
 ): Promise<Uint8Array> {
@@ -610,7 +625,7 @@ async function runSingleDocumentOperation(
     } else if (operation === "ocr") {
       produced = await requireOcrEngine(engine).ocr(document, {
         languages: ["eng"],
-        ocrType: options.operations.ocrMode === "force-ocr" ? "force-ocr" : "skip-text",
+        ocrType,
       });
     } else if (operation === "compress") {
       produced = await engine.compress(document, {

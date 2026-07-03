@@ -58,6 +58,7 @@ export interface AppShellProps {
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
+  onForceOcr: () => void;
   redaction: RedactionPanelState;
   scanner: ScannerPanelState;
   pendingRedactions: readonly PendingRedactionOverlay[];
@@ -106,6 +107,7 @@ export function AppShell({
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
+  onForceOcr,
   redaction,
   scanner,
   pendingRedactions,
@@ -233,6 +235,7 @@ export function AppShell({
           onLegalToolSelected={onLegalToolSelected}
           onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}
+          onForceOcr={onForceOcr}
           redaction={redaction}
           scanner={scanner}
           pendingEdits={editing.pendingEdits}
@@ -250,6 +253,7 @@ export function AppShell({
         pageSizeInches={hasDocument ? document.pageSizeInches : null}
         fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
         textLayerStatus={hasDocument ? deriveTextLayerStatus(document.textLayerCoverage) : null}
+        onFixGarbledText={onForceOcr}
       />
     </div>
   );

@@ -1144,7 +1144,7 @@ export function App() {
     [reorderPages, selectedIndexes],
   );
 
-  const saveToFile = useCallback((currentPath: string | null) => {
+  const saveToFile = useCallback((forceSaveAs: boolean) => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
     if (savingRef.current) {
@@ -1170,6 +1170,11 @@ export function App() {
         editing.clearPending();
       }
 
+      // saveDocument() awaits the mutation queue before reading the current
+      // filePath, so a redaction (or any other operation) that clears the
+      // path while this save was in flight is reflected here. Reading
+      // document.filePath at click time instead would race an in-flight
+      // path-clearing commit and could overwrite the original file.
       const saved = await saveDocument();
 
       if (!saved) {
@@ -1179,7 +1184,7 @@ export function App() {
       const written = await filePort.saveFile(
         saved.bytes,
         saved.fileName,
-        currentPath,
+        forceSaveAs ? null : saved.filePath,
       );
 
       if (written) {
@@ -1198,11 +1203,11 @@ export function App() {
   }, [applyEdits, editing, markSaved, saveDocument, setError]);
 
   const save = useCallback(() => {
-    saveToFile(document.filePath);
-  }, [document.filePath, saveToFile]);
+    saveToFile(false);
+  }, [saveToFile]);
 
   const saveAs = useCallback(() => {
-    saveToFile(null);
+    saveToFile(true);
   }, [saveToFile]);
 
   const printDocument = useCallback(() => {

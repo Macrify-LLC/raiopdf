@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Macrify-LLC/raiopdf/security/advisories/new
+    about: Please don't file security issues as public bug reports — use private vulnerability reporting instead. See SECURITY.md.

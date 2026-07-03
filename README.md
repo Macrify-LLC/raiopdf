@@ -15,7 +15,7 @@
 
 <p align="center">
   Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer.<br>
-  Plus the legal workflows Acrobat never bothered building.
+  Plus the legal workflows Adobe never bothered building.
 </p>
 
 <p align="center">
@@ -34,13 +34,21 @@
 
 ## The philosophy
 
-I didn't build this to pick a fight with anyone's business model. I built it because editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a little voice in the back of your head wondering what happens to the file once it leaves your machine. That's a lot of ceremony for a task your laptop can already do by itself.
+Nothing makes me feel more like a crotchety old man than how software works. I remember when you got software by someone handing you a floppy disk and that was that. But as software companies realized that their best way of making money was to stop selling their software and rent it out instead and sell you upcharges.
+
+The idea of making this came from talking to my staff. Nobody likes Acrobat. Its bloat stresses computers, its licensing quirks will sometimes bring work to a standstill, it constantly pushes features nobody wants to use, and we're all paying for the privilege. Editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a cavalcade of minor annoyances. So in this age of agentic coding, I asked how hard it would be to build a fully featured PDF program the old fashioned way.
 
 RaioPDF is the other way of doing it: **a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.**
 
 Turns out you don't need a subscription and a login screen to make solid software — you just have to build it. And once someone proves that, "this is just how PDF software works now" stops being true. That's really the point: not to out-feature any particular vendor, but to show a firm doesn't have to just accept whatever terms it's handed for a task this basic.
 
-Worth saying out loud since it's kind of funny: this went from an idea to a working prototype in about twelve hours. Not because I'm some engineering prodigy — I'm a lawyer — but because the tools for building solid, deterministic software have gotten genuinely good. If one attorney with a laptop can put a real dent in "free local PDF suite" over the course of an evening, the assumption that you need a giant company and a subscription to get decent software was already on its way out.
+And because you can just build it yourself, you can add in the functionality you've always wanted and leave out the stuff you don't. Regulating PDFs for efiling has always been a major annoyance of mine. Some features, like exporting a PDF into size-limited chunks just don't seem to exist in Acrobat (or I can't find them). Some are buried under a hundred configurations I don't want or understand. 
+
+I believe that using Raio is a genuinely **better experience** than using Acrobat. Without the bloat, it's snappier. Without all of the features I've never used, it's less confusing and clunky to operate. And with the additional law practice-specific improvements, a lot of pain points of practice are smoothed out. 
+
+This went from an idea to a working prototype in about twelve hours. Not because I'm an engineering prodigy — I'm a lawyer — but because the tools for building solid, deterministic software have gotten game-changingly powerful. If one attorney with a laptop can put a real dent in "free local PDF suite" over the course of an evening, the assumption that you need a giant company and a subscription to get decent software was already on its way out.
+
+The spirit airlines of software is arriving, and even if you don't like it, the Adobes, Microsofts, and others in the world are going to have to start competing not just with free, but **not annoying**. 
 
 ## What it does
 
@@ -65,6 +73,7 @@ Four ways it fits into an actual day at the firm:
 | Annotate | Highlight, comment, draw, stamp |
 | Fill & sign | Add text and images, fill forms, signature stamp + flatten |
 | Compress & protect | File compression, passwords, permissions |
+| Native MCP Integration | No AI features (intentional), but speaks natively to your AI Agents |
 | No catches | No watermarks, no nag screens, ever |
 
 ### Legal — the stuff nobody bothered building for lawyers
@@ -75,7 +84,7 @@ Four ways it fits into an actual day at the firm:
 | **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped and auto-bookmarked |
 | **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath |
 | **Bates numbering** | Across an entire document set, in one pass |
-| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425 |
+| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag--this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 | **e-filing preflight report** | Rule citations attached (Fla. R. Jud. Admin. 2.520 / 2.525) |
 
@@ -83,10 +92,10 @@ All of the above are planned/in-progress for the first release — see [Status](
 
 ## What it is not
 
-- **Not "AI-powered."** No AI runs anywhere in RaioPDF — that's a selling point, not a gap.
-- **Not released yet.** Pre-alpha, no promised date.
+- **Not "AI-powered."** No AI features built into RaioPDF — if I wanted an AI summary I could go to a million other more useful places first.
+- **Not released yet.** Pre-alpha, no promised date. But if you want it I'll give it to you.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
-- **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local alternative can exist at all.
+- **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
 
 ## How it's built
 
@@ -126,7 +135,7 @@ RaioPDF is licensed under [GPL-3.0](LICENSE). It bundles third-party components 
 ---
 
 <p align="center">
-  Published as a public service to the legal community by<br><br>
+  Published as a public good and also to swag on em by<br><br>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/assets/macrify-wordmark-light.png">
     <img src="site/assets/macrify-wordmark.svg" height="26" alt="Macrify">

@@ -373,6 +373,42 @@
   background: var(--warn-bg);
 }
 
+.filing-impact {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  border: 1px solid var(--warn-bg);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.filing-impact__title {
+  margin: 0;
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.filing-impact ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--body);
+}
+
+.filing-impact li {
+  margin: 0;
+}
+
+.filing-impact__hint {
+  margin: 0;
+  color: var(--body);
+  font-weight: 600;
+}
+
 .filing-progress p,
 .filing-result p {
   margin: 0;

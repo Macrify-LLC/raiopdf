@@ -13,7 +13,7 @@ export {
   verifyAppDataPackIntegrity,
   verifyBundledPackIntegrity,
 } from "./packIntegrity";
-export { preflight } from "./preflight";
+export { preflight, shouldConvertToPdfA } from "./preflight";
 export type {
   ConstraintApplicability,
   ConstraintEntry,
@@ -25,6 +25,7 @@ export type {
   PageOrientation,
   PageSizeInches,
   PdfARequirement,
+  PdfAStance,
   PortalPreflightStatus,
   PreflightCheck,
   PreflightReport,

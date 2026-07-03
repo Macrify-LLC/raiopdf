@@ -26,7 +26,11 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
-import { scrubPdfMetadataBytes } from "@raiopdf/engine-pdf-lib";
+import {
+  readPdfAIdentificationFromBytes,
+  scrubPdfMetadataBytes,
+  type PdfAIdentification,
+} from "@raiopdf/engine-pdf-lib";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -503,9 +507,20 @@ export class SidecarPdfEngine implements PdfEngine {
     const formData = createFormData(storedDocument.bytes);
     formData.append("deleteAll", "true");
 
-    const response = await this.request("/api/v1/misc/update-metadata", formData);
+    // Capture the PDF/A identification from the INPUT — Stirling's deleteAll pass may
+    // strip the XMP packet before the post-scrub ever sees it. Florida's ePortal
+    // conformity check fails a PDF/A file whose identification metadata was scrubbed,
+    // so the claim (and only the claim) is restored during the post-scrub. The local
+    // read overlaps the sidecar round trip.
+    const [identification, response] = await Promise.all([
+      readPdfAIdentificationFromBytes(storedDocument.bytes).catch(() => null),
+      this.request("/api/v1/misc/update-metadata", formData),
+    ]);
 
-    return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
+    return this.store(
+      await scrubReturnedMetadata(await readBytes(response), identification ?? false),
+      pageCount,
+    );
   }
 
   async extractTextRegions(
@@ -940,9 +955,15 @@ function toSidecarImageBox(area: PdfRedactionArea): {
   };
 }
 
-async function scrubReturnedMetadata(bytes: Uint8Array): Promise<Uint8Array> {
+// Defaults to a maximal scrub: redaction outputs are rasterized rewrites, so any
+// PDF/A conformance the input claimed no longer holds and is deliberately dropped.
+// The scrubMetadata path passes the identification it captured from input bytes.
+async function scrubReturnedMetadata(
+  bytes: Uint8Array,
+  preservePdfAIdentification: boolean | PdfAIdentification = false,
+): Promise<Uint8Array> {
   try {
-    return await scrubPdfMetadataBytes(bytes);
+    return await scrubPdfMetadataBytes(bytes, { preservePdfAIdentification });
   } catch (error) {
     throw new PdfEngineError(
       "INVALID_DOCUMENT",

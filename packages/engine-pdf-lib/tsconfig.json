@@ -1,7 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022"]
+    "lib": ["ES2022"],
+    // TextDecoder comes from the Node globals; the package runs in both Node and browsers.
+    "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

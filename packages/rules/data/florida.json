@@ -1,7 +1,7 @@
 {
   "id": "florida",
   "name": "Florida",
-  "packVersion": "1.0.0",
+  "packVersion": "1.1.0",
   "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
   "constraints": [
     {
@@ -73,9 +73,9 @@
   "maxFileBytes": 26214400,
   "recommendedMaxFileBytes": 25165824,
   "pdfa": {
-    "required": false,
-    "preferred": true,
-    "flavor": "pdfa-2b"
+    "stance": "preferred",
+    "flavor": "pdfa-2b",
+    "note": "The ePortal's PDF/A check is informational only; non-conformant files still file. PDF/A-2a preferred for born-digital, 2b for scanned."
   },
   "searchableTextRequired": true,
   "splitNaming": "{name} — Part {n} of {total}"

@@ -155,33 +155,76 @@ function checkClerkStampSpace(document: DocumentFacts, pack: JurisdictionPack): 
   });
 }
 
+/**
+ * Whether Prepare for Filing should convert output parts to PDF/A for this pack.
+ *
+ * Conversion is allow-listed to jurisdictions that document a benefit ("required" or
+ * "preferred"). Everywhere else it is skipped: PDF/A conversion rewrites the document
+ * and strips prohibited features (annotations, form fields, signatures), so running it
+ * where the portal rejects PDF/A (prohibited), gains nothing (accepted), or where the
+ * stance is unverified (unknown) is all risk and no benefit.
+ */
+export function shouldConvertToPdfA(pack: JurisdictionPack): boolean {
+  return pack.pdfa.stance === "required" || pack.pdfa.stance === "preferred";
+}
+
 function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  const { stance, flavor } = pack.pdfa;
+
+  if (stance === "prohibited") {
+    if (document.pdfaCompliant === true) {
+      return buildCheck(pack, "pdfa", {
+        status: "fix",
+        detail: "This portal rejects PDF/A files. Re-export the document as a standard PDF before filing.",
+      });
+    }
+
+    if (document.pdfaCompliant === undefined) {
+      return buildCheck(pack, "pdfa", {
+        status: "unknown",
+        detail: "This portal rejects PDF/A files and no compliance facts were provided.",
+      });
+    }
+
+    return buildCheck(pack, "pdfa", {
+      status: "pass",
+      detail: "This portal rejects PDF/A files; the filing copy is left as a standard PDF.",
+    });
+  }
+
+  if (stance === "unknown") {
+    return buildCheck(pack, "pdfa", {
+      status: "unknown",
+      detail: "This jurisdiction's PDF/A stance is unverified; no conversion is performed.",
+    });
+  }
+
+  if (stance === "accepted") {
+    return buildCheck(pack, "pdfa", {
+      status: "pass",
+      detail: "PDF/A is accepted but carries no benefit here; the filing copy is left as a standard PDF.",
+    });
+  }
+
   if (document.pdfaCompliant === true) {
     return buildCheck(pack, "pdfa", {
       status: "pass",
-      detail: `The document is reported PDF/A compliant for preferred flavor ${pack.pdfa.flavor}.`,
+      detail: `The document is reported PDF/A compliant for ${stance} flavor ${flavor}.`,
     });
   }
 
   if (document.pdfaCompliant === undefined) {
     return buildCheck(pack, "pdfa", {
       status: "unknown",
-      detail: `PDF/A ${pack.pdfa.flavor} compliance facts were not provided.`,
-    });
-  }
-
-  if (pack.pdfa.required || pack.pdfa.preferred) {
-    return buildCheck(pack, "pdfa", {
-      status: "fix",
-      detail: pack.pdfa.required
-        ? `PDF/A ${pack.pdfa.flavor} is required and the document is reported non-compliant.`
-        : `PDF/A ${pack.pdfa.flavor} is preferred by the portal and the document is reported non-compliant.`,
+      detail: `PDF/A ${flavor} compliance facts were not provided.`,
     });
   }
 
   return buildCheck(pack, "pdfa", {
-    status: "pass",
-    detail: "PDF/A is not required or preferred for this jurisdiction pack.",
+    status: "fix",
+    detail: stance === "required"
+      ? `PDF/A ${flavor} is required and the document is reported non-compliant.`
+      : `PDF/A ${flavor} is preferred by the portal and the document is reported non-compliant.`,
   });
 }
 

@@ -31,10 +31,24 @@ export type RectInches = {
   h: number;
 };
 
+/**
+ * A jurisdiction's documented posture toward PDF/A submissions.
+ *
+ * - "required"   — the portal rejects non-PDF/A files; conversion is mandatory.
+ * - "preferred"  — the portal accepts plain PDF but asks for PDF/A; conversion is beneficial.
+ * - "accepted"   — PDF/A passes the portal's checks but carries no benefit over plain PDF;
+ *                  conversion is skipped because it can only destroy (forms, annotations,
+ *                  signatures), never help.
+ * - "prohibited" — the portal rejects PDF/A outright (e.g. Missouri); conversion must not run.
+ * - "unknown"    — the jurisdiction's stance is unresearched or unverified; conversion is
+ *                  skipped rather than run on unverified data.
+ */
+export type PdfAStance = "required" | "preferred" | "accepted" | "prohibited" | "unknown";
+
 export type PdfARequirement = {
-  required: boolean;
-  preferred: boolean;
+  stance: PdfAStance;
   flavor: "pdfa-1" | "pdfa-2b" | "pdfa-3b";
+  note?: string;
 };
 
 export type JurisdictionPack = {

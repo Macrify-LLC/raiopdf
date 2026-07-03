@@ -78,6 +78,9 @@ importers:
       '@raiopdf/engine-local':
         specifier: workspace:*
         version: link:../../packages/engine-local
+      '@raiopdf/engine-pdf-lib':
+        specifier: workspace:*
+        version: link:../../packages/engine-pdf-lib
       '@raiopdf/engine-sidecar':
         specifier: workspace:*
         version: link:../../packages/engine-sidecar

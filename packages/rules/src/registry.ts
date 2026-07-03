@@ -28,8 +28,7 @@ export const unknownPack: JurisdictionPack = {
   maxFileBytes: Number.MAX_SAFE_INTEGER,
   recommendedMaxFileBytes: Number.MAX_SAFE_INTEGER,
   pdfa: {
-    required: false,
-    preferred: false,
+    stance: "unknown",
     flavor: "pdfa-2b",
   },
   searchableTextRequired: false,

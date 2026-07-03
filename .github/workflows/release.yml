@@ -84,7 +84,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          target="apps/shell/src-tauri/target/release"
+          target="target/release"
           mapfile -t manifests < <(find "$target" -type f -path '*/payload/RAIOPDF-PAYLOAD-MANIFEST.tsv' | sort)
 
           if [[ "${#manifests[@]}" -lt 1 ]]; then
@@ -317,8 +317,8 @@ jobs:
           ASSET_DIR="$PWD/release-assets"
           mkdir -p -- "$ASSET_DIR"
 
-          mapfile -t MSI_FILES < <(find apps/shell/src-tauri/target/release/bundle/msi -type f -name '*.msi' | sort)
-          mapfile -t EXE_FILES < <(find apps/shell/src-tauri/target/release/bundle/nsis -type f -name '*.exe' | sort)
+          mapfile -t MSI_FILES < <(find target/release/bundle/msi -type f -name '*.msi' | sort)
+          mapfile -t EXE_FILES < <(find target/release/bundle/nsis -type f -name '*.exe' | sort)
 
           if [[ "${#MSI_FILES[@]}" -lt 1 ]]; then
             echo "No MSI installer was produced." >&2

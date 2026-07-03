@@ -242,23 +242,6 @@ fn hex_value(byte: u8) -> Result<u8, String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_grants_resolve_only_shell_owned_paths() {
-        let grants = FileGrants::default();
-        let path = PathBuf::from("/tmp/case.pdf");
-
-        let grant = grants.grant(path.clone()).expect("grant should be issued");
-
-        assert_eq!(grants.resolve(&grant).expect("grant should resolve"), path);
-        assert!(!grant.contains("case.pdf"));
-        assert!(grants.resolve("/tmp/case.pdf").is_err());
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -340,4 +323,21 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .item(&edit)
         .item(&view)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_grants_resolve_only_shell_owned_paths() {
+        let grants = FileGrants::default();
+        let path = PathBuf::from("/tmp/case.pdf");
+
+        let grant = grants.grant(path.clone()).expect("grant should be issued");
+
+        assert_eq!(grants.resolve(&grant).expect("grant should resolve"), path);
+        assert!(!grant.contains("case.pdf"));
+        assert!(grants.resolve("/tmp/case.pdf").is_err());
+    }
 }

@@ -88,16 +88,13 @@ jobs:
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          workspaces: apps/shell/src-tauri -> target
+          workspaces: . -> target
 
       - name: Check formatting
-        run: cargo fmt --check
-        working-directory: apps/shell/src-tauri
+        run: cargo fmt --all --check
 
       - name: Lint
-        run: cargo clippy -- -D warnings
-        working-directory: apps/shell/src-tauri
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
-        working-directory: apps/shell/src-tauri
+        run: cargo test --workspace

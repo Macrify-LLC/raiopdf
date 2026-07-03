@@ -260,6 +260,60 @@
   font-size: var(--text-xs);
 }
 
+.tool-panel__pending-list {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.tool-panel__pending-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-1);
+}
+
+.tool-panel__pending-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tool-panel__pending-label {
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.tool-panel__pending-detail {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tool-panel__pending-remove {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+
+.tool-panel__pending-remove:hover {
+  background: var(--hover-ground);
+}
+
 .tool-panel__metadata-table {
   width: 100%;
   border-collapse: collapse;

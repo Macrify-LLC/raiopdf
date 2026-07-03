@@ -1,8 +1,11 @@
-import { useState } from "react";
+import type { ReactNode } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  CommentIcon,
+  DrawIcon,
   HighlightIcon,
+  ImageIcon,
   MinusIcon,
   OpenIcon,
   PlusIcon,
@@ -10,12 +13,27 @@ import {
   SaveIcon,
   SearchIcon,
   SelectTextIcon,
+  SignIcon,
+  TextBoxIcon,
   UndoIcon,
 } from "../icons";
+import type { EditToolId } from "../lib/edits";
 import { IconButton } from "./IconButton";
 import "./CommandBar.css";
 
-type EditTool = "select-text" | "highlight";
+const EDIT_TOOLS: ReadonlyArray<{
+  id: EditToolId;
+  label: string;
+  icon: (size: number) => ReactNode;
+}> = [
+  { id: "select", label: "Select", icon: (size) => <SelectTextIcon size={size} /> },
+  { id: "highlight", label: "Highlight", icon: (size) => <HighlightIcon size={size} /> },
+  { id: "textBox", label: "Text box", icon: (size) => <TextBoxIcon size={size} /> },
+  { id: "image", label: "Image", icon: (size) => <ImageIcon size={size} /> },
+  { id: "comment", label: "Comment", icon: (size) => <CommentIcon size={size} /> },
+  { id: "draw", label: "Draw", icon: (size) => <DrawIcon size={size} /> },
+  { id: "sign", label: "Sign", icon: (size) => <SignIcon size={size} /> },
+];
 
 export interface CommandBarProps {
   onOpen?: (() => void) | undefined;
@@ -29,6 +47,8 @@ export interface CommandBarProps {
   pageCount?: number;
   zoom?: number;
   hasDocument?: boolean;
+  editTool?: EditToolId;
+  onEditToolChange?: ((tool: EditToolId) => void) | undefined;
 }
 
 export function CommandBar({
@@ -43,8 +63,14 @@ export function CommandBar({
   pageCount = 0,
   zoom = 1,
   hasDocument = false,
+  editTool = "select",
+  onEditToolChange,
 }: CommandBarProps) {
-  const [activeTool, setActiveTool] = useState<EditTool>("select-text");
+  function toggleTool(toolId: EditToolId) {
+    // Tools are mutually exclusive toggles; re-clicking the active tool
+    // returns to Select, like every other mode toggle in the app.
+    onEditToolChange?.(editTool === toolId && toolId !== "select" ? "select" : toolId);
+  }
 
   return (
     <div className="command-bar">
@@ -63,18 +89,16 @@ export function CommandBar({
 
       <div className="command-bar__group">
         <IconButton icon={<UndoIcon size={17} />} label="Undo" disabled />
-        <IconButton
-          icon={<SelectTextIcon size={17} />}
-          label="Select text"
-          active={activeTool === "select-text"}
-          onClick={() => setActiveTool("select-text")}
-        />
-        <IconButton
-          icon={<HighlightIcon size={17} />}
-          label="Highlight"
-          active={activeTool === "highlight"}
-          onClick={() => setActiveTool("highlight")}
-        />
+        {EDIT_TOOLS.map((tool) => (
+          <IconButton
+            key={tool.id}
+            icon={tool.icon(17)}
+            label={tool.label}
+            active={editTool === tool.id}
+            disabled={!hasDocument && tool.id !== "select"}
+            onClick={() => toggleTool(tool.id)}
+          />
+        ))}
       </div>
 
       <div className="command-bar__center">

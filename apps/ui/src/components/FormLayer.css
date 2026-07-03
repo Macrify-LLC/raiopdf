@@ -1,0 +1,49 @@
+.form-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.form-layer__text,
+.form-layer__textarea,
+.form-layer__select,
+.form-layer__checkbox {
+  position: absolute;
+  pointer-events: auto;
+  box-sizing: border-box;
+  font-family: Helvetica, Arial, sans-serif;
+  color: var(--edit-ink);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--panel);
+}
+
+.form-layer__text,
+.form-layer__textarea {
+  padding: 0 2px;
+}
+
+.form-layer__textarea {
+  resize: none;
+}
+
+.form-layer__text:focus-visible,
+.form-layer__textarea:focus-visible,
+.form-layer__select:focus-visible,
+.form-layer__checkbox:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.form-layer__checkbox {
+  accent-color: var(--primary);
+  margin: 0;
+}
+
+.form-layer__text:disabled,
+.form-layer__textarea:disabled,
+.form-layer__select:disabled,
+.form-layer__checkbox:disabled {
+  opacity: 0.45;
+}

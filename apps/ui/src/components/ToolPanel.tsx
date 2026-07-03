@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type { PdfBatesStampOptions, PdfStampPlacement } from "@raiopdf/engine-api";
 import type { OcrUiState } from "../App";
+import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import {
   BatesIcon,
@@ -88,6 +89,8 @@ export interface ToolPanelProps {
   scanner: ScannerPanelState;
   scrubMetadata: ScrubMetadataPanelState;
   pageCount: number;
+  pendingEdits: readonly PendingEdit[];
+  onRemovePendingEdit: (id: string) => void;
   onConfirmRedactions: () => void;
   onCancelRedactions: () => void;
   onApplyBates: (options: PdfBatesStampOptions) => Promise<boolean>;
@@ -111,6 +114,8 @@ export function ToolPanel({
   scanner,
   scrubMetadata,
   pageCount,
+  pendingEdits,
+  onRemovePendingEdit,
   onConfirmRedactions,
   onCancelRedactions,
   onApplyBates,
@@ -119,6 +124,9 @@ export function ToolPanel({
   onScrubMetadata,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
+  const pendingComments = pendingEdits.filter(
+    (edit): edit is Extract<PendingEdit, { kind: "comment" }> => edit.kind === "comment",
+  );
 
   function toggleGroup(group: GroupId) {
     setOpenGroup((current) => (current === group ? null : group));
@@ -147,6 +155,9 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
+        {pendingEdits.length > 0 ? (
+          <PendingEditsCard edits={pendingEdits} onRemove={onRemovePendingEdit} />
+        ) : null}
         {ORGANIZE_TOOLS.map((tool) => (
           <div key={tool.id}>
             <ToolRow
@@ -179,7 +190,13 @@ export function ToolPanel({
         isOpen={openGroup === "comment"}
         onToggle={() => toggleGroup("comment")}
       >
-        <p className="accordion-group__empty">More tools coming soon.</p>
+        {pendingComments.length > 0 ? (
+          <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
+        ) : (
+          <p className="accordion-group__empty">
+            No comments yet. Use the Comment tool to drop a note on the page.
+          </p>
+        )}
       </AccordionGroup>
 
       <AccordionGroup
@@ -552,6 +569,84 @@ function ScrubMetadataPanel({
       >
         Scrub Metadata
       </button>
+    </div>
+  );
+}
+
+function PendingEditsCard({
+  edits,
+  onRemove,
+}: {
+  edits: readonly PendingEdit[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      <p className="tool-panel__card-title">
+        {edits.length} pending {edits.length === 1 ? "edit" : "edits"}
+      </p>
+      <p className="tool-panel__note">Applied to the document when you save.</p>
+      <div className="tool-panel__pending-list" role="list">
+        {edits.map((edit) => {
+          const { label, detail } = describePendingEdit(edit);
+
+          return (
+            <div key={edit.id} className="tool-panel__pending-row" role="listitem">
+              <span className="tool-panel__pending-text">
+                <span className="tool-panel__pending-label">
+                  {label} · Page {edit.pageIndex + 1}
+                </span>
+                {detail ? (
+                  <span className="tool-panel__pending-detail">{detail}</span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                className="tool-panel__pending-remove"
+                aria-label={`Remove pending ${label.toLowerCase()} on page ${edit.pageIndex + 1}`}
+                onClick={() => onRemove(edit.id)}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CommentsCard({
+  comments,
+  onRemove,
+}: {
+  comments: ReadonlyArray<Extract<PendingEdit, { kind: "comment" }>>;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      <p className="tool-panel__card-title">
+        {comments.length} {comments.length === 1 ? "comment" : "comments"}
+      </p>
+      <p className="tool-panel__note">Saved as real PDF annotations, not baked content.</p>
+      <div className="tool-panel__pending-list" role="list">
+        {comments.map((comment) => (
+          <div key={comment.id} className="tool-panel__pending-row" role="listitem">
+            <span className="tool-panel__pending-text">
+              <span className="tool-panel__pending-label">Page {comment.pageIndex + 1}</span>
+              <span className="tool-panel__pending-detail">{excerpt(comment.text)}</span>
+            </span>
+            <button
+              type="button"
+              className="tool-panel__pending-remove"
+              aria-label={`Delete comment on page ${comment.pageIndex + 1}`}
+              onClick={() => onRemove(comment.id)}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

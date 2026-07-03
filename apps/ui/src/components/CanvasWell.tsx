@@ -9,7 +9,21 @@ import {
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import { BoltIcon, OpenIcon } from "../icons";
+import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy, PDFPageProxy } from "../lib/pdfjs";
+import {
+  clamp,
+  pdfRectToViewportRect,
+  pointsToViewportRect,
+  toOverlayStyle,
+  viewportRectToPdfRect,
+  type PageViewport,
+  type ViewportPoint,
+  type ViewportRect,
+} from "../lib/viewportGeometry";
+import { EditLayer } from "./EditLayer";
+import { FormLayer } from "./FormLayer";
+import { SignatureCard } from "./SignatureCard";
 import "./CanvasWell.css";
 
 export interface PendingRedactionOverlay {
@@ -30,10 +44,11 @@ export interface CanvasWellProps {
   onRenderError?: ((message: string) => void) | undefined;
   workspace?: ReactNode;
   redactionMode?: boolean;
-  redactionModeBar?: ReactNode;
+  modeBar?: ReactNode;
   pendingRedactions?: readonly PendingRedactionOverlay[];
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
+  editing?: EditingState | undefined;
 }
 
 export function CanvasWell({
@@ -49,10 +64,11 @@ export function CanvasWell({
   onRenderError,
   workspace = null,
   redactionMode = false,
-  redactionModeBar = null,
+  modeBar = null,
   pendingRedactions = [],
   onRedactionAreaCreated,
   onRedactionAreaRemoved,
+  editing,
 }: CanvasWellProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -193,7 +209,7 @@ export function CanvasWell({
       return;
     }
 
-    setDraftRect(toViewportRect(start, point));
+    setDraftRect(pointsToViewportRect(start, point));
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
@@ -211,24 +227,17 @@ export function CanvasWell({
       return;
     }
 
-    const rect = toViewportRect(start, point);
+    const rect = pointsToViewportRect(start, point);
 
     if (rect.width < 4 || rect.height < 4) {
       return;
     }
 
-    const [firstX, firstY] = viewport.convertToPdfPoint(rect.left, rect.top);
-    const [secondX, secondY] = viewport.convertToPdfPoint(
-      rect.left + rect.width,
-      rect.top + rect.height,
-    );
+    const pdfRect = viewportRectToPdfRect(rect, viewport);
 
     onRedactionAreaCreated?.({
       pageIndex: currentPage - 1,
-      x: Math.min(firstX, secondX),
-      y: Math.min(firstY, secondY),
-      w: Math.abs(firstX - secondX),
-      h: Math.abs(firstY - secondY),
+      ...pdfRect,
     });
   }
 
@@ -247,6 +256,10 @@ export function CanvasWell({
     };
   }
 
+  const signatureCardOpen = Boolean(
+    editing && editing.tool === "sign" && editing.signatureCardOpen,
+  );
+
   return (
     <section
       className="canvas-well"
@@ -254,13 +267,23 @@ export function CanvasWell({
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
-      {hasDocument && !workspace && redactionModeBar ? (
-        <div className="canvas-well__mode-bar-slot">{redactionModeBar}</div>
+      {hasDocument && !workspace && modeBar ? (
+        <div className="canvas-well__mode-bar-slot">{modeBar}</div>
+      ) : null}
+      {hasDocument && !workspace && signatureCardOpen && editing ? (
+        <div className="canvas-well__signature-card-slot">
+          <SignatureCard editing={editing} />
+        </div>
       ) : null}
       {workspace ? (
         workspace
       ) : hasDocument ? (
         <div ref={stageRef} className="canvas-well__stage">
+          {editing?.hasFormFields ? (
+            <p className="canvas-well__form-note" role="status">
+              This PDF has fillable fields.
+            </p>
+          ) : null}
           <div
             className="canvas-well__page-frame"
             data-redaction-mode={redactionMode ? "true" : undefined}
@@ -278,6 +301,14 @@ export function CanvasWell({
               aria-label={`Page ${currentPage}`}
               data-testid="pdf-page-canvas"
             />
+            {viewport && page && editing?.hasFormFields ? (
+              <FormLayer
+                page={page}
+                viewport={viewport}
+                values={editing.formValues}
+                onValueChange={editing.setFormValue}
+              />
+            ) : null}
             {viewport
               ? pendingRedactions
                 .filter((overlay) => overlay.area.pageIndex === currentPage - 1)
@@ -290,6 +321,14 @@ export function CanvasWell({
                   />
                 ))
               : null}
+            {viewport && page && editing && !redactionMode ? (
+              <EditLayer
+                page={page}
+                viewport={viewport}
+                pageIndex={currentPage - 1}
+                editing={editing}
+              />
+            ) : null}
             {draftRect ? (
               <span
                 className="canvas-well__redaction-draft"
@@ -331,28 +370,16 @@ export function CanvasWell({
   );
 }
 
-interface ViewportPoint {
-  x: number;
-  y: number;
-}
-
-interface ViewportRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 function RedactionOverlay({
   overlay,
   viewport,
   onRemove,
 }: {
   overlay: PendingRedactionOverlay;
-  viewport: ReturnType<PDFPageProxy["getViewport"]>;
+  viewport: PageViewport;
   onRemove?: ((id: string) => void) | undefined;
 }) {
-  const rect = pdfAreaToViewportRect(overlay.area, viewport);
+  const rect = pdfRectToViewportRect(overlay.area, viewport);
 
   return (
     <span className="canvas-well__redaction-overlay" style={toOverlayStyle(rect)}>
@@ -367,54 +394,6 @@ function RedactionOverlay({
       </button>
     </span>
   );
-}
-
-function pdfAreaToViewportRect(
-  area: PdfRedactionArea,
-  viewport: ReturnType<PDFPageProxy["getViewport"]>,
-): ViewportRect {
-  const points = [
-    viewport.convertToViewportPoint(area.x, area.y),
-    viewport.convertToViewportPoint(area.x + area.w, area.y),
-    viewport.convertToViewportPoint(area.x, area.y + area.h),
-    viewport.convertToViewportPoint(area.x + area.w, area.y + area.h),
-  ];
-  const xs = points.map(([x]) => x);
-  const ys = points.map(([, y]) => y);
-  const left = Math.min(...xs);
-  const top = Math.min(...ys);
-
-  return {
-    left,
-    top,
-    width: Math.max(...xs) - left,
-    height: Math.max(...ys) - top,
-  };
-}
-
-function toViewportRect(first: ViewportPoint, second: ViewportPoint): ViewportRect {
-  const left = Math.min(first.x, second.x);
-  const top = Math.min(first.y, second.y);
-
-  return {
-    left,
-    top,
-    width: Math.abs(first.x - second.x),
-    height: Math.abs(first.y - second.y),
-  };
-}
-
-function toOverlayStyle(rect: ViewportRect) {
-  return {
-    left: `${rect.left}px`,
-    top: `${rect.top}px`,
-    width: `${rect.width}px`,
-    height: `${rect.height}px`,
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }
 
 function isCancelledRenderError(error: unknown): boolean {

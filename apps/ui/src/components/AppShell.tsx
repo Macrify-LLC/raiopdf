@@ -16,6 +16,7 @@ import type {
 } from "./ToolPanel";
 import type { PendingRedactionOverlay } from "./CanvasWell";
 import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api";
+import type { EditingState } from "../hooks/useEditing";
 import type { SensitiveHit } from "../lib/legalTools";
 import "./AppShell.css";
 
@@ -52,7 +53,8 @@ export interface AppShellProps {
   scanner: ScannerPanelState;
   scrubMetadata: ScrubMetadataPanelState;
   pendingRedactions: readonly PendingRedactionOverlay[];
-  redactionModeBar: ReactNode;
+  modeBar: ReactNode;
+  editing: EditingState;
   onRedactionAreaCreated: (area: PdfRedactionArea) => void;
   onRedactionAreaRemoved: (id: string) => void;
   onConfirmRedactions: () => void;
@@ -96,7 +98,8 @@ export function AppShell({
   scanner,
   scrubMetadata,
   pendingRedactions,
-  redactionModeBar,
+  modeBar,
+  editing,
   onRedactionAreaCreated,
   onRedactionAreaRemoved,
   onConfirmRedactions,
@@ -155,6 +158,8 @@ export function AppShell({
         pageCount={document.pageCount}
         zoom={document.zoom}
         hasDocument={hasDocument}
+        editTool={editing.tool}
+        onEditToolChange={editing.setTool}
       />
       <div className="app-shell__body">
         <ThumbnailRail
@@ -181,7 +186,8 @@ export function AppShell({
           onPageSizeChange={onPageSizeChange}
           onRenderError={onRenderError}
           redactionMode={activeLegalTool === "redact"}
-          redactionModeBar={redactionModeBar}
+          modeBar={modeBar}
+          editing={editing}
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}
           onRedactionAreaRemoved={onRedactionAreaRemoved}
@@ -201,6 +207,8 @@ export function AppShell({
           scanner={scanner}
           scrubMetadata={scrubMetadata}
           pageCount={document.pageCount}
+          pendingEdits={editing.pendingEdits}
+          onRemovePendingEdit={editing.removeEdit}
           onConfirmRedactions={onConfirmRedactions}
           onCancelRedactions={onCancelRedactions}
           onApplyBates={onApplyBates}

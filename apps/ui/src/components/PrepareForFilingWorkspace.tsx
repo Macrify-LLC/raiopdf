@@ -11,7 +11,7 @@ import type {
 import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
-import { BoltIcon, CheckIcon, ChevronDownIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
 import { LoadingSun } from "./LoadingSun";
 import "./PrepareForFilingWorkspace.css";
 
@@ -42,6 +42,36 @@ export interface FilingResultState {
   verifiedAt: string;
   skippedSteps: readonly string[];
   overrides: readonly string[];
+}
+
+export type FilingPacketLayoutMode = "separate-files" | "combined-pdf";
+
+export interface FilingPacketFile {
+  id: string;
+  name: string;
+  path: string | null;
+  pages: number;
+}
+
+export interface FilingPacketBuildInput {
+  files: readonly FilingPacketFile[];
+  outputDir: string;
+  layoutMode: FilingPacketLayoutMode;
+  prefixFilenames: boolean;
+  selectedStepIds: readonly PrepPlanStepId[];
+  customSplitMegabytes: number | null;
+}
+
+export interface FilingPacketProgress {
+  running: boolean;
+  message: string | null;
+  result: {
+    packageRoot: string;
+    manifestPdf: string;
+    packetJson: string;
+    combinedPdf: string | null;
+    outputs: readonly string[];
+  } | null;
 }
 
 export interface CertificateOfServiceDraft {
@@ -87,6 +117,14 @@ export interface PrepareForFilingWorkspaceProps {
   onCourtProfileSelect: (profileId: string) => void;
   onCourtProfileSave: (profile: { name: string; maxMegabytes: number }) => void;
   onPrepare: (certificate: CertificateOfServiceDraft | null, options: PrepareOptions) => void;
+  onAddPacketFile?: () => Promise<FilingPacketFile | null>;
+  onBuildPacket?: (input: FilingPacketBuildInput) => Promise<void>;
+  packetProgress?: FilingPacketProgress | undefined;
+  defaultPacketLayoutMode?: FilingPacketLayoutMode | undefined;
+  defaultPacketPrefixFilenames?: boolean | undefined;
+  onPacketPreferencesChange?: (
+    preferences: { layoutMode: FilingPacketLayoutMode; prefixFilenames: boolean },
+  ) => void;
   onDismissImpact: () => void;
   onCompressFirst: () => void;
 }
@@ -110,14 +148,35 @@ export function PrepareForFilingWorkspace({
   onCourtProfileSelect,
   onCourtProfileSave,
   onPrepare,
+  onAddPacketFile,
+  onBuildPacket,
+  packetProgress = { running: false, message: null, result: null },
+  defaultPacketLayoutMode = "separate-files",
+  defaultPacketPrefixFilenames = true,
+  onPacketPreferencesChange,
   onDismissImpact,
   onCompressFirst,
 }: PrepareForFilingWorkspaceProps) {
+  const [mode, setMode] = useState<"single" | "packet">("single");
   const [rulesOpen, setRulesOpen] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [certificateOpen, setCertificateOpen] = useState(false);
   const [checkedSteps, setCheckedSteps] = useState<Set<PrepPlanStepId>>(() => defaultCheckedSteps(prepPlan));
   const [customSplitMegabytes, setCustomSplitMegabytes] = useState("");
+  const [packetFiles, setPacketFiles] = useState<FilingPacketFile[]>(() => (
+    document.bytes
+      ? [{
+          id: `current-${document.fileName ?? "document"}`,
+          name: document.fileName ?? "Untitled.pdf",
+          path: document.filePath,
+          pages: document.pageCount,
+        }]
+      : []
+  ));
+  const [packetOutputDir, setPacketOutputDir] = useState("");
+  const [packetLayoutMode, setPacketLayoutMode] = useState<FilingPacketLayoutMode>(defaultPacketLayoutMode);
+  const [packetPrefixFilenames, setPacketPrefixFilenames] = useState(defaultPacketPrefixFilenames);
+  const [packetMessage, setPacketMessage] = useState<string | null>(null);
   const [certificate, setCertificate] = useState<CertificateOfServiceDraft>({
     caseCaption: "",
     serviceList: "",
@@ -161,6 +220,10 @@ export function PrepareForFilingWorkspace({
     selectedStepIds: selectedAvailableStepIds,
     customSplitMegabytes: parsePositiveNumber(customSplitMegabytes),
   });
+  const canBuildPacket = packetFiles.length > 0 &&
+    packetOutputDir.trim().length > 0 &&
+    Boolean(onBuildPacket) &&
+    !packetProgress.running;
 
   useEffect(() => {
     setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps));
@@ -170,6 +233,52 @@ export function PrepareForFilingWorkspace({
     event.preventDefault();
     setCertificateOpen(false);
     setOverflowOpen(false);
+  }
+
+  async function addPacketFile() {
+    if (!onAddPacketFile) {
+      return;
+    }
+    const file = await onAddPacketFile();
+    if (!file) {
+      return;
+    }
+    setPacketFiles((current) => [...current, file]);
+  }
+
+  function movePacketFile(index: number, delta: -1 | 1) {
+    setPacketFiles((current) => {
+      const target = index + delta;
+      const file = current[index];
+      if (!file || target < 0 || target >= current.length) {
+        return current;
+      }
+      const next = [...current];
+      next.splice(index, 1);
+      next.splice(target, 0, file);
+      return next;
+    });
+  }
+
+  async function buildPacket() {
+    setPacketMessage(null);
+    if (!onBuildPacket || !canBuildPacket) {
+      setPacketMessage("Add packet PDFs and choose an empty package root folder.");
+      return;
+    }
+    if (packetFiles.some((file) => !file.path)) {
+      setPacketMessage("Packet builder needs PDFs opened from local desktop paths.");
+      return;
+    }
+    onPacketPreferencesChange?.({ layoutMode: packetLayoutMode, prefixFilenames: packetPrefixFilenames });
+    await onBuildPacket({
+      files: packetFiles,
+      outputDir: packetOutputDir.trim(),
+      layoutMode: packetLayoutMode,
+      prefixFilenames: packetPrefixFilenames,
+      selectedStepIds: selectedAvailableStepIds,
+      customSplitMegabytes: parsePositiveNumber(customSplitMegabytes),
+    });
   }
 
   return (
@@ -212,6 +321,27 @@ export function PrepareForFilingWorkspace({
           </div>
         </header>
 
+        <div className="filing-mode-toggle" role="tablist" aria-label="Prepare mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "single"}
+            className="filing-mode-toggle__button"
+            onClick={() => setMode("single")}
+          >
+            Single document
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "packet"}
+            className="filing-mode-toggle__button"
+            onClick={() => setMode("packet")}
+          >
+            Filing packet
+          </button>
+        </div>
+
         <PackPicker
           pack={pack}
           availablePacks={availablePacks}
@@ -246,17 +376,36 @@ export function PrepareForFilingWorkspace({
           }}
         />
 
-        <div className="filing-card__primary-row">
-          <button
-            type="button"
-            className="filing-card__primary-button"
-            disabled={!canPrepare}
-            title={reportError ?? (canPrepare ? "Build a filing copy using the checks shown below." : "Run is available after RaioPDF reads the filing checks.")}
-            onClick={() => onPrepare(certificateOpen ? certificate : null, prepareOptions())}
-          >
-            {primaryLabel}
-          </button>
-        </div>
+        {mode === "packet" ? (
+          <PacketBuilderPanel
+            files={packetFiles}
+            outputDir={packetOutputDir}
+            layoutMode={packetLayoutMode}
+            prefixFilenames={packetPrefixFilenames}
+            progress={packetProgress}
+            localMessage={packetMessage}
+            canBuild={canBuildPacket}
+            onOutputDirChange={setPacketOutputDir}
+            onLayoutModeChange={setPacketLayoutMode}
+            onPrefixFilenamesChange={setPacketPrefixFilenames}
+            onAddFile={addPacketFile}
+            onMoveFile={movePacketFile}
+            onRemoveFile={(id) => setPacketFiles((current) => current.filter((file) => file.id !== id))}
+            onBuild={() => void buildPacket()}
+          />
+        ) : (
+          <div className="filing-card__primary-row">
+            <button
+              type="button"
+              className="filing-card__primary-button"
+              disabled={!canPrepare}
+              title={reportError ?? (canPrepare ? "Build a filing copy using the checks shown below." : "Run is available after RaioPDF reads the filing checks.")}
+              onClick={() => onPrepare(certificateOpen ? certificate : null, prepareOptions())}
+            >
+              {primaryLabel}
+            </button>
+          </div>
+        )}
 
         {!document.bytes ? (
           <p className="filing-card__empty" role="status">Open a PDF before preparing a filing copy.</p>
@@ -447,6 +596,143 @@ function ImpactWarning({
         </button>
       </div>
     </div>
+  );
+}
+
+function PacketBuilderPanel({
+  files,
+  outputDir,
+  layoutMode,
+  prefixFilenames,
+  progress,
+  localMessage,
+  canBuild,
+  onOutputDirChange,
+  onLayoutModeChange,
+  onPrefixFilenamesChange,
+  onAddFile,
+  onMoveFile,
+  onRemoveFile,
+  onBuild,
+}: {
+  files: readonly FilingPacketFile[];
+  outputDir: string;
+  layoutMode: FilingPacketLayoutMode;
+  prefixFilenames: boolean;
+  progress: FilingPacketProgress;
+  localMessage: string | null;
+  canBuild: boolean;
+  onOutputDirChange: (value: string) => void;
+  onLayoutModeChange: (value: FilingPacketLayoutMode) => void;
+  onPrefixFilenamesChange: (value: boolean) => void;
+  onAddFile: () => void;
+  onMoveFile: (index: number, delta: -1 | 1) => void;
+  onRemoveFile: (id: string) => void;
+  onBuild: () => void;
+}) {
+  return (
+    <section className="filing-packet" aria-label="Filing packet builder">
+      <div className="filing-packet__header">
+        <div>
+          <p className="filing-packet__title">Packet order</p>
+          <p className="filing-packet__subtitle">{files.length} document{files.length === 1 ? "" : "s"}</p>
+        </div>
+        <button type="button" className="filing-card__secondary-button" onClick={onAddFile}>
+          <PlusIcon size={14} /> Add PDF
+        </button>
+      </div>
+      <div className="filing-packet__files" role="list">
+        {files.map((file, index) => (
+          <article className="filing-packet__file" key={file.id} role="listitem">
+            <div>
+              <p className="filing-packet__file-name">{String(index + 1).padStart(2, "0")} - {file.name}</p>
+              <p className="filing-packet__file-meta">
+                {file.path ? "Local file" : "Path unavailable"} · {formatPageCount(file.pages)}
+              </p>
+            </div>
+            <div className="filing-packet__file-actions">
+              <button
+                type="button"
+                className="filing-card__icon-button"
+                aria-label={`Move ${file.name} up`}
+                disabled={index === 0}
+                onClick={() => onMoveFile(index, -1)}
+              >
+                <ArrowUpIcon size={14} />
+              </button>
+              <button
+                type="button"
+                className="filing-card__icon-button"
+                aria-label={`Move ${file.name} down`}
+                disabled={index === files.length - 1}
+                onClick={() => onMoveFile(index, 1)}
+              >
+                <ArrowDownIcon size={14} />
+              </button>
+              <button
+                type="button"
+                className="filing-card__ghost-button"
+                onClick={() => onRemoveFile(file.id)}
+              >
+                Remove
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="filing-packet__grid">
+        <label>
+          <span>Package root folder</span>
+          <input
+            value={outputDir}
+            onChange={(event) => onOutputDirChange(event.currentTarget.value)}
+            placeholder="/absolute/path/to/empty-folder"
+          />
+        </label>
+        <label>
+          <span>Layout</span>
+          <select
+            value={layoutMode}
+            onChange={(event) => onLayoutModeChange(event.currentTarget.value as FilingPacketLayoutMode)}
+          >
+            <option value="separate-files">Separate upload files</option>
+            <option value="combined-pdf">Single combined PDF</option>
+          </select>
+        </label>
+      </div>
+      <label className="filing-packet__toggle">
+        <input
+          type="checkbox"
+          checked={prefixFilenames}
+          onChange={(event) => onPrefixFilenamesChange(event.currentTarget.checked)}
+        />
+        <span>Prefix upload filenames with packet order</span>
+      </label>
+      <div className="filing-card__primary-row">
+        <button
+          type="button"
+          className="filing-card__primary-button"
+          disabled={!canBuild}
+          onClick={onBuild}
+        >
+          {progress.running ? "Building Packet..." : "Build Filing Packet"}
+        </button>
+      </div>
+      {localMessage || progress.message ? (
+        <p className="filing-card__status">{localMessage ?? progress.message}</p>
+      ) : null}
+      {progress.result ? (
+        <div className="filing-packet__result">
+          <p className="filing-card__status">Package: {progress.result.packageRoot}</p>
+          <p className="filing-card__status">
+            Manifest: {progress.result.manifestPdf} · JSON: {progress.result.packetJson}
+          </p>
+          {progress.result.combinedPdf ? (
+            <p className="filing-card__status">Combined upload: {progress.result.combinedPdf}</p>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
 

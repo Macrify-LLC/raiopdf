@@ -56,7 +56,11 @@ describe("bundled jurisdiction packs", () => {
 
       for (const constraint of pack.constraints) {
         expect(constraint.authority, `${packId}.${constraint.id}`).not.toBe("");
-        expect(constraint.lastVerified, `${packId}.${constraint.id}`).toBe("2026-07-02");
+        expect(constraint.lastVerified, `${packId}.${constraint.id}`).toBe(
+          packId === "florida" && constraint.id === "conferral-certificate"
+            ? "2026-07-03"
+            : "2026-07-02",
+        );
       }
 
       for (const [key, policy] of Object.entries(policyConstraints(pack))) {

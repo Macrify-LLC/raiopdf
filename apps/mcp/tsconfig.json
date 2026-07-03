@@ -2,7 +2,20 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM"],
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": "../..",
+    "paths": {
+      "@raiopdf/batch-cleanup": ["packages/batch-cleanup/src/index.ts"],
+      "@raiopdf/engine-api": ["packages/engine-api/src/index.ts"],
+      "@raiopdf/engine-local": ["packages/engine-local/src/index.ts"],
+      "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/src/index.ts"],
+      "@raiopdf/engine-sidecar": ["packages/engine-sidecar/src/index.ts"],
+      "@raiopdf/filing-packet": ["packages/filing-packet/src/index.ts"],
+      "@raiopdf/package-writer": ["packages/package-writer/src/index.ts"],
+      "@raiopdf/production-set": ["packages/production-set/src/index.ts"],
+      "@raiopdf/rules": ["packages/rules/src/index.ts"],
+      "@raiopdf/rules/node": ["packages/rules/src/node.ts"]
+    }
   },
   "include": ["src", "test"]
 }

@@ -1,5 +1,7 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
+import { buildFilingPacket } from "@raiopdf/filing-packet";
 import {
   buildDocumentFacts,
   DEFAULT_PACK_ID,
@@ -9,9 +11,9 @@ import {
 } from "@raiopdf/rules";
 import { extractPageTextByPage, extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { JurisdictionPack, JurisdictionPackId } from "@raiopdf/rules";
-import type { EngineHandle } from "../engine.js";
+import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, errorResult, successResult, type StructuredToolResult } from "../format.js";
-import { resolveInput } from "../paths.js";
+import { preparePackageOutputDir, resolveInput } from "../paths.js";
 
 const packIds: string[] = listPacks().map((pack) => pack.id);
 
@@ -48,6 +50,62 @@ export const filingOutputSchema = {
 export interface FilingInput {
   input: string;
   pack?: string | undefined;
+}
+
+const prepStepIdSchema = z.enum([
+  "remove-encryption",
+  "normalize-pages",
+  "sanitize-content",
+  "scrub-metadata",
+  "make-searchable",
+  "flatten-forms",
+  "convert-pdfa",
+  "split-by-size",
+]);
+
+export const filingPacketInputSchema = {
+  sources: z
+    .array(z.object({
+      path: z.string().describe("Absolute path to an existing PDF file."),
+      displayName: z.string().optional().describe("Optional filename to use in packet reports."),
+    }))
+    .min(1)
+    .describe("Ordered source PDFs in filing upload order."),
+  outputDir: z.string().describe("Absolute package root. The directory may not already contain files."),
+  pack: z
+    .string()
+    .optional()
+    .describe(`Jurisdiction pack id (default "${DEFAULT_PACK_ID}"). Available: ${packIds.join(", ")}.`),
+  layoutMode: z.enum(["separate-files", "combined-pdf"]).optional().describe("Default separate-files."),
+  prefixFilenames: z.boolean().optional().describe("Prefix upload filenames with 01 -, 02 -, etc. Default true."),
+  maxFileBytes: z.number().int().positive().optional().describe("Court profile per-file cap in bytes."),
+  maxEnvelopeBytes: z.number().int().positive().optional().describe("Court profile envelope cap in bytes."),
+  selectedStepIds: z.array(prepStepIdSchema).optional().describe("Explicit prep checklist steps to run."),
+  skippedStepIds: z.array(prepStepIdSchema).optional().describe("Explicit prep checklist steps to skip."),
+  splitSizeMb: z.number().positive().optional().describe("Per-run split cap override in megabytes."),
+  convertToPdfA: z.boolean().optional().describe("Explicitly enable/disable PDF/A conversion step."),
+};
+export const filingPacketOutputSchema = {
+  ...baseOutputSchema,
+  packageRoot: z.string().optional(),
+  outputs: z.array(z.string()).optional(),
+  manifestPdf: z.string().optional(),
+  packetJson: z.string().optional(),
+  combinedPdf: z.string().nullable().optional(),
+  selectionWarnings: z.array(z.string()).optional(),
+};
+export interface FilingPacketInput {
+  sources: { path: string; displayName?: string | undefined }[];
+  outputDir: string;
+  pack?: string | undefined;
+  layoutMode?: "separate-files" | "combined-pdf" | undefined;
+  prefixFilenames?: boolean | undefined;
+  maxFileBytes?: number | undefined;
+  maxEnvelopeBytes?: number | undefined;
+  selectedStepIds?: z.infer<typeof prepStepIdSchema>[] | undefined;
+  skippedStepIds?: z.infer<typeof prepStepIdSchema>[] | undefined;
+  splitSizeMb?: number | undefined;
+  convertToPdfA?: boolean | undefined;
 }
 
 /**
@@ -120,4 +178,79 @@ export async function handlePrepareForFiling(
     guidance: pack.guidanceNote,
     checks,
   });
+}
+
+export async function handleBuildFilingPacket(
+  input: FilingPacketInput,
+  engineHandle: EngineHandle,
+): Promise<StructuredToolResult> {
+  const packId = input.pack ?? DEFAULT_PACK_ID;
+  try {
+    getPack(packId as JurisdictionPackId);
+  } catch {
+    return errorResult(
+      "INVALID_ARGUMENT",
+      `Unknown jurisdiction pack "${packId}".`,
+      `Available packs: ${packIds.join(", ") || "(none available)"}.`,
+    );
+  }
+
+  const resolvedSources = await Promise.all(
+    input.sources.map(async (source) => {
+      const resolved = await resolveInput(source.path);
+      return {
+        path: resolved.realPath,
+        displayName: source.displayName ?? path.basename(source.path),
+      };
+    }),
+  );
+  const output = await preparePackageOutputDir(input.outputDir);
+  const sidecar = typeof engineHandle.getEngine === "function"
+    ? await engineHandle.getEngine().catch(() => undefined)
+    : undefined;
+  const result = await buildFilingPacket({
+    sources: resolvedSources,
+    outputDir: output.outputPath,
+    packId: packId as JurisdictionPackId,
+    ...(input.layoutMode === undefined ? {} : { layoutMode: input.layoutMode }),
+    ...(input.prefixFilenames === undefined ? {} : { prefixFilenames: input.prefixFilenames }),
+    ...(input.maxFileBytes === undefined && input.maxEnvelopeBytes === undefined
+      ? {}
+      : {
+          courtProfile: {
+            ...(input.maxFileBytes === undefined ? {} : { maxFileBytes: input.maxFileBytes }),
+            ...(input.maxEnvelopeBytes === undefined ? {} : { maxEnvelopeBytes: input.maxEnvelopeBytes }),
+          },
+        }),
+    checklist: {
+      ...(input.selectedStepIds === undefined ? {} : { selectedStepIds: input.selectedStepIds }),
+      ...(input.skippedStepIds === undefined ? {} : { skippedStepIds: input.skippedStepIds }),
+      ...(input.splitSizeMb === undefined ? {} : { splitSizeMb: input.splitSizeMb }),
+      ...(input.convertToPdfA === undefined ? {} : { convertToPdfA: input.convertToPdfA }),
+    },
+    factsOptions: {
+      textExtractor: {
+        extractTextLayerCoverage,
+        extractPageTextByPage,
+      },
+    },
+  }, {
+    local: getLocalEngine(),
+    ...(sidecar === undefined ? {} : { sidecar }),
+  });
+  const selectionWarnings = result.selectionChecks
+    .filter((check) => check.status !== "pass")
+    .map((check) => `${check.label}: ${check.detail}`);
+
+  return successResult(
+    `Built a filing packet with ${result.files.length} upload file(s) at ${result.packageRoot}.`,
+    {
+      packageRoot: result.packageRoot,
+      outputs: result.files.map((file) => file.packageRelativePath),
+      manifestPdf: result.manifestPdf,
+      packetJson: result.packetJson,
+      combinedPdf: result.combinedPdf,
+      selectionWarnings,
+    },
+  );
 }

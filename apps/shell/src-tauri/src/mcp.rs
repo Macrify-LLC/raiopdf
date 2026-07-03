@@ -74,6 +74,53 @@ pub struct ProductionSetShellOutput {
     file_count: usize,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingPacketSource {
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilingPacketOneShotInput {
+    sources: Vec<FilingPacketSource>,
+    output_dir: String,
+    pack: String,
+    layout_mode: String,
+    prefix_filenames: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_file_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_envelope_bytes: Option<u64>,
+    selected_step_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    split_size_mb: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FilingPacketOneShotOutput {
+    ok: bool,
+    error: Option<ToolError>,
+    package_root: Option<String>,
+    outputs: Option<Vec<String>>,
+    manifest_pdf: Option<String>,
+    packet_json: Option<String>,
+    combined_pdf: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingPacketShellOutput {
+    package_root: String,
+    outputs: Vec<String>,
+    manifest_pdf: String,
+    packet_json: String,
+    combined_pdf: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchCleanupOneShotInput {
@@ -279,6 +326,53 @@ pub fn batch_cleanup(
             .report_json
             .ok_or_else(|| "batch_cleanup result did not include reportJson".to_string())?,
         files: output.files.unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn build_filing_packet(
+    sources: Vec<FilingPacketSource>,
+    output_dir: String,
+    pack: String,
+    layout_mode: String,
+    prefix_filenames: bool,
+    max_file_bytes: Option<u64>,
+    max_envelope_bytes: Option<u64>,
+    selected_step_ids: Vec<String>,
+    split_size_mb: Option<f64>,
+) -> Result<FilingPacketShellOutput, String> {
+    let input = FilingPacketOneShotInput {
+        sources,
+        output_dir,
+        pack,
+        layout_mode,
+        prefix_filenames,
+        max_file_bytes,
+        max_envelope_bytes,
+        selected_step_ids,
+        split_size_mb,
+    };
+    let stdout = run_mcp_one_shot("build_filing_packet", &input)?;
+    let output: FilingPacketOneShotOutput = serde_json::from_slice(&stdout)
+        .map_err(|error| format!("failed to parse build_filing_packet result: {error}"))?;
+
+    if !output.ok {
+        return Err(format_tool_error("build_filing_packet", output.error));
+    }
+
+    Ok(FilingPacketShellOutput {
+        package_root: output
+            .package_root
+            .ok_or_else(|| "build_filing_packet result did not include packageRoot".to_string())?,
+        outputs: output.outputs.unwrap_or_default(),
+        manifest_pdf: output
+            .manifest_pdf
+            .ok_or_else(|| "build_filing_packet result did not include manifestPdf".to_string())?,
+        packet_json: output
+            .packet_json
+            .ok_or_else(|| "build_filing_packet result did not include packetJson".to_string())?,
+        combined_pdf: output.combined_pdf,
     })
 }
 

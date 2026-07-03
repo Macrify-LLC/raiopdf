@@ -4,7 +4,7 @@ import path from "node:path";
 import { degrees, PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EngineHandle } from "../src/engine.js";
-import { handlePrepareForFiling } from "../src/tools/filing.js";
+import { handleBuildFilingPacket, handlePrepareForFiling } from "../src/tools/filing.js";
 
 const engine = {} as EngineHandle;
 
@@ -94,5 +94,27 @@ describe("prepare_for_filing", () => {
       ok: false,
       error: { code: "INVALID_ARGUMENT" },
     });
+  });
+
+  it("builds a filing packet package through the MCP handler", async () => {
+    const first = await makePdf("Motion.pdf", 8.5, 11, true);
+    const second = await makePdf("Exhibit A.pdf", 8.5, 11, true);
+    const outputDir = path.join(dir, "packet");
+    const result = await handleBuildFilingPacket({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      pack: "florida",
+      selectedStepIds: ["normalize-pages"],
+      prefixFilenames: true,
+    }, engine);
+
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      packageRoot: outputDir,
+      manifestPdf: "filing-packet-manifest.pdf",
+      packetJson: "raio-manifest/filing-packet.json",
+    });
+    expect(await fs.stat(path.join(outputDir, "upload", "01 - Motion.pdf"))).toBeTruthy();
+    expect(await fs.stat(path.join(outputDir, "raio-manifest", "manifest.json"))).toBeTruthy();
   });
 });

@@ -233,10 +233,10 @@ test("makes an image-only PDF searchable through the mocked desktop OCR bridge",
     button.click();
   });
 
-  await expect(page.getByText("Starting the PDF engine...")).toBeVisible();
+  await expect(page.getByText("All 1 page will be processed.")).toBeVisible();
   await expect(makeSearchable).toBeDisabled();
-  await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
-  await expect(page.getByText("Verifying the text layer...")).toBeVisible();
+  await page.getByRole("button", { name: "Make searchable", exact: true }).click();
+
   await expect(page.locator(".tool-panel").getByText("Rebuilt the text layer on 1 page. Copy, paste, and search now return real text. Verified: all 1 page now has clean searchable text.")).toBeVisible();
   await expect(page.getByRole("contentinfo").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
@@ -251,6 +251,7 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   await openPdf(page, "scan.pdf", sourcePdf);
 
   await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
+  await page.getByRole("button", { name: "Make searchable", exact: true }).click();
 
   await expect(page.getByText("OCR ran, but 1 page still has no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
@@ -259,7 +260,7 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
 });
 
-test("keeps a rotate queued during mocked OCR and rejects the stale OCR result", async ({ page }) => {
+test("cancelling the OCR dialog mid-run discards the stale OCR result", async ({ page }) => {
   const sourcePdf = await createPdf([200]);
   const searchablePdf = await createTextPdf("Verified OCR text");
   await installOcrBridgeMock(page, searchablePdf, {
@@ -270,11 +271,14 @@ test("keeps a rotate queued during mocked OCR and rejects the stale OCR result",
   await openPdf(page, "scan.pdf", sourcePdf);
 
   await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
-  await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
+  await page.getByRole("button", { name: "Make searchable", exact: true }).click();
+  await expect(page.getByText("Making searchable…")).toBeVisible();
 
+  // The run is modal now; dismissing the dialog invalidates the run, then the
+  // document can be mutated freely. The late OCR result must be discarded.
+  await page.getByRole("button", { name: "Close Make Searchable" }).click();
   await page.getByRole("button", { name: "Rotate selected pages" }).click();
 
-  await expect(page.getByText("The document changed before OCR finished. The result was not applied.")).toBeVisible();
   await expect.poll(() => getOcrCallCount(page)).toBe(1);
 
   const saved = await savePdf(page);

@@ -79,6 +79,7 @@ import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDi
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
 import { LoadingSun } from "./components/LoadingSun";
+import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -101,6 +102,7 @@ import {
 } from "./lib/localPaths";
 import { writeProductionLastUsed } from "./lib/productionHints";
 import { formatWorkflowError } from "./lib/userMessages";
+import { recordDiagnosticEvent } from "./lib/diagnostics";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -176,6 +178,7 @@ declare global {
 
 export type OcrPhase =
   | "idle"
+  | "confirm"
   | "starting-engine"
   | "processing"
   | "verifying"
@@ -185,6 +188,15 @@ export type OcrPhase =
 export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
+}
+
+function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
+  return (
+    phase === "confirm" ||
+    phase === "starting-engine" ||
+    phase === "processing" ||
+    phase === "verifying"
+  );
 }
 
 type OcrType = "skip-text" | "force-ocr";
@@ -708,6 +720,7 @@ export function App() {
   }, [filingPack.id, filingPack.maxEnvelopeBytes, filingPack.maxFileBytes]);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
+  const pendingOcrTypeRef = useRef<OcrType>("skip-text");
   const savingRef = useRef(false);
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
@@ -1012,7 +1025,15 @@ export function App() {
     const isCurrentRun = () => (
       ocrRunRef.current === runId && getOpenToken() === sourceOpenToken
     );
-    const finishCurrentRun = () => {
+    // Busy-guard fix: this clears unconditionally once the run settles (see
+    // the .finally() below), even if the run went stale along the way.
+    // isCurrentRun() still gates every state write above -- it just no
+    // longer also gates whether the guard gets released. The old code only
+    // released it from inside the isCurrentRun()-gated branches, so a run
+    // that went stale without a newer run superseding it (e.g. the document
+    // changed but no new OCR was kicked off) left ocrActiveRef stuck at
+    // true forever, wedging "Make Searchable" shut.
+    const clearBusyGuard = () => {
       if (ocrRunRef.current === runId) {
         ocrActiveRef.current = false;
       }
@@ -1055,7 +1076,6 @@ export function App() {
         }
 
         if (verification.status === "failed") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: verification.message,
@@ -1075,7 +1095,6 @@ export function App() {
         }
 
         if (replaced === "stale") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: "The document changed before OCR finished. The result was not applied.",
@@ -1084,7 +1103,6 @@ export function App() {
         }
 
         if (replaced === "failed") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: "The searchable PDF could not be opened. The document was left unchanged.",
@@ -1093,7 +1111,6 @@ export function App() {
         }
 
         setSelectedPageIndexes(new Set([0]));
-        finishCurrentRun();
         setOcrState({
           phase: "done",
           message: verification.message,
@@ -1105,7 +1122,9 @@ export function App() {
         }
 
         if (isEngineBridgeUnavailableError(error)) {
-          finishCurrentRun();
+          // A missing desktop engine / OCR toolchain is a capability gap,
+          // not a bug -- surface its own specific, calm message and skip
+          // the diagnostics log (there's nothing actionable to investigate).
           setOcrState({
             phase: "error",
             message: error.message,
@@ -1113,19 +1132,52 @@ export function App() {
           return;
         }
 
-        const message = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
+        const detail = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
 
-        finishCurrentRun();
         setOcrState({
           phase: "error",
-          message,
+          message: "Couldn't make this document searchable.",
         });
-      });
+
+        void recordDiagnosticEvent("ocr.failed", detail, [
+          error instanceof Error && error.stack ? error.stack : null,
+        ]);
+      })
+      .finally(clearBusyGuard);
   }, [document.bytes, engineBridge, getOpenToken, replaceBytes]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
   }, []);
+
+  const openOcrDialog = useCallback((ocrType: OcrType) => {
+    if (!document.bytes) {
+      setOcrState({
+        phase: "error",
+        message: "Open a PDF before running OCR.",
+      });
+      return;
+    }
+
+    if (!engineBridge.ocrAvailable) {
+      setOcrState({
+        phase: "error",
+        message: engineBridge.available
+          ? "OCR toolchain missing from this installation."
+          : "This action is available in the desktop app.",
+      });
+      return;
+    }
+
+    pendingOcrTypeRef.current = ocrType;
+    // Silent pre-warm while the confirm dialog is up, so the engine may
+    // already be ready by the time the user clicks "Make searchable." A
+    // pre-warm failure is swallowed here (engineBridge.warmEngine never
+    // rejects) -- the real run surfaces its own error if the engine still
+    // won't start.
+    engineBridge.warmEngine();
+    setOcrState({ phase: "confirm", message: null });
+  }, [document.bytes, engineBridge]);
 
   const makeSearchable = useCallback(() => {
     const status = deriveTextLayerStatus(document.textLayerCoverage);
@@ -1135,8 +1187,23 @@ export function App() {
       return;
     }
 
-    runOcrWorkflow("skip-text");
-  }, [document.textLayerCoverage, requestForceOcr, runOcrWorkflow]);
+    openOcrDialog("skip-text");
+  }, [document.textLayerCoverage, openOcrDialog, requestForceOcr]);
+
+  const confirmOcrDialog = useCallback(() => {
+    runOcrWorkflow(pendingOcrTypeRef.current);
+  }, [runOcrWorkflow]);
+
+  const cancelOcrDialog = useCallback(() => {
+    // Dismissing mid-run (rather than at the confirm step) can't cancel the
+    // in-flight engine call -- there's no abort plumbing for that -- so this
+    // just invalidates the run the same way opening a new document does:
+    // isCurrentRun() stops applying its result once it eventually settles,
+    // and the busy guard is released immediately rather than waiting on it.
+    ocrRunRef.current += 1;
+    ocrActiveRef.current = false;
+    setOcrState({ phase: "idle", message: null });
+  }, []);
 
   const confirmForceOcr = useCallback(() => {
     setForceOcrConfirmation(null);
@@ -3222,6 +3289,14 @@ export function App() {
           reason={forceOcrConfirmation}
           onConfirm={confirmForceOcr}
           onCancel={() => setForceOcrConfirmation(null)}
+        />
+      ) : null}
+      {isOcrDialogPhase(ocrState.phase) ? (
+        <OcrDialog
+          phase={ocrState.phase}
+          pageCount={document.pageCount}
+          onConfirm={confirmOcrDialog}
+          onCancel={cancelOcrDialog}
         />
       ) : null}
       {helpOpen ? (

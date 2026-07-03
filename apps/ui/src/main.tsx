@@ -2,9 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { RpIconSprite } from "./icons/RpIcon";
+import { recordDiagnosticEvent } from "./lib/diagnostics";
 import "./styles.css";
-
-type TauriInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 declare global {
   interface Window {
@@ -46,32 +45,6 @@ function installLocalErrorLogging(): void {
       reasonStack(event.reason),
     ]);
   });
-}
-
-async function recordDiagnosticEvent(
-  kind: string,
-  message: string,
-  details: Array<string | null>,
-): Promise<void> {
-  try {
-    const invoke = await getTauriInvoke();
-    await invoke("diagnostics_record_event", {
-      event: {
-        source: "ui",
-        kind,
-        message,
-        details: details.filter(Boolean).join(" | ") || null,
-      },
-    });
-  } catch {
-    // Diagnostics must never create a second user-facing failure.
-  }
-}
-
-async function getTauriInvoke(): Promise<TauriInvoke> {
-  const { invoke } = await import("@tauri-apps/api/core");
-
-  return invoke;
 }
 
 function reasonMessage(reason: unknown): string {

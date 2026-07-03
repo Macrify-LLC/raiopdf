@@ -38,7 +38,6 @@ import {
 import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
 import { IconButton } from "./IconButton";
-import { LoadingSun } from "./LoadingSun";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
@@ -255,13 +254,8 @@ export function ToolPanel({
           onSelect={onForceOcr}
           onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
-        {ocrState.phase !== "idle" || ocrStarting ? (
-          <OcrStatusPanel
-            hasDocument={hasDocument}
-            ocrState={ocrState}
-            ocrAvailable={ocrAvailable}
-            ocrStarting={ocrStarting}
-          />
+        {ocrState.phase === "done" || ocrState.phase === "error" ? (
+          <OcrResultNotice ocrState={ocrState} ocrAvailable={ocrAvailable} />
         ) : null}
       </div>
 
@@ -321,48 +315,30 @@ export function ToolPanel({
   );
 }
 
-interface OcrStatusPanelProps {
-  hasDocument: boolean;
+interface OcrResultNoticeProps {
   ocrState: OcrUiState;
   ocrAvailable: boolean;
-  ocrStarting: boolean;
 }
 
-function OcrStatusPanel({
-  hasDocument,
-  ocrState,
-  ocrAvailable,
-  ocrStarting,
-}: OcrStatusPanelProps) {
-  const message = ocrState.message ?? getDefaultOcrMessage(hasDocument, ocrAvailable);
-  const phase = ocrStarting && ocrState.phase === "starting-engine"
-    ? "starting-engine"
-    : ocrState.phase;
-  const active = isOcrActive(phase, ocrStarting);
+// The active phases (confirm/starting-engine/processing/verifying) live in
+// the OcrDialog now -- this only ever renders for the terminal done/error
+// phases, as a brief result line under the Make Searchable/Force re-OCR
+// buttons, reusing the same InlineMessage pattern every other tool in this
+// panel (Redact, Sanitize, Repair, Compress, Scrub Metadata, Passwords)
+// already uses for its own result/availability messaging.
+function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
+  const message = ocrState.message ?? "OCR finished.";
 
-  // A missing capability (no desktop engine) is not a processing failure --
-  // OCR never ran. Every other tool in this panel (Redact, Sanitize, Repair,
-  // Compress, Scrub Metadata, Passwords) renders that same "not available
-  // here" fact as a calm, neutral note, never as an attention-grabbing error.
-  // OCR should read the same way instead of the only tool that flashes amber
-  // for a browser/desktop capability gap.
-  if (phase === "error" && !ocrAvailable) {
+  // A missing capability (no desktop engine, no OCR toolchain) is not a
+  // processing failure -- OCR never ran. Every other tool in this panel
+  // renders that same "not available here" fact as a calm, neutral note,
+  // never as an attention-grabbing error. OCR reads the same way.
+  if (ocrState.phase === "error" && !ocrAvailable) {
     return <InlineMessage tone="neutral" message={message} />;
   }
 
   return (
-    <div
-      className="tool-panel__ocr-status"
-      data-phase={phase}
-      role="status"
-      aria-live="polite"
-    >
-      <p className="tool-panel__ocr-status-label">
-        {active ? <LoadingSun size={13} label="OCR processing" /> : null}
-        {getOcrStatusLabel(phase)}
-      </p>
-      <p className="tool-panel__ocr-status-message">{message}</p>
-    </div>
+    <InlineMessage tone={ocrState.phase === "done" ? "ok" : "danger"} message={message} />
   );
 }
 
@@ -776,18 +752,6 @@ function InlineMessage({
   );
 }
 
-function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): string {
-  if (!hasDocument) {
-    return "Open a PDF before running OCR.";
-  }
-
-  if (!ocrAvailable) {
-    return "This action is available in the desktop app.";
-  }
-
-  return "Ready to make this PDF searchable.";
-}
-
 function parsePlacement(value: string): PdfStampPlacement {
   const [edge, align] = value.split("-");
 
@@ -797,35 +761,15 @@ function parsePlacement(value: string): PdfStampPlacement {
   };
 }
 
+// Covers the confirm dialog too -- once "Make Searchable" is clicked, the
+// buttons stay disabled through the confirm step and the whole run, not
+// just while bytes are actually moving.
 function isOcrActive(phase: OcrUiState["phase"], ocrStarting: boolean): boolean {
   return (
     ocrStarting ||
+    phase === "confirm" ||
     phase === "starting-engine" ||
     phase === "processing" ||
     phase === "verifying"
   );
-}
-
-function getOcrStatusLabel(phase: OcrUiState["phase"]): string {
-  if (phase === "done") {
-    return "Verified";
-  }
-
-  if (phase === "error") {
-    return "Needs attention";
-  }
-
-  if (phase === "starting-engine") {
-    return "Starting";
-  }
-
-  if (phase === "processing") {
-    return "Processing";
-  }
-
-  if (phase === "verifying") {
-    return "Verifying";
-  }
-
-  return "OCR";
 }

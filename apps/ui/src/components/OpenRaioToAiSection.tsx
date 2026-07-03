@@ -75,15 +75,27 @@ export function OpenRaioToAiSection({
 
   const copy = useCallback((key: string, text: string) => {
     setCopyFailedKey(null);
-    void navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        setCopiedKey(key);
-      })
-      .catch(() => {
+
+    try {
+      if (!navigator.clipboard?.writeText) {
         setCopiedKey(null);
         setCopyFailedKey(key);
-      });
+        return;
+      }
+
+      void navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          setCopiedKey(key);
+        })
+        .catch(() => {
+          setCopiedKey(null);
+          setCopyFailedKey(key);
+        });
+    } catch {
+      setCopiedKey(null);
+      setCopyFailedKey(key);
+    }
   }, []);
 
   const pathResolved = Boolean(mcpPath);

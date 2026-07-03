@@ -77,12 +77,13 @@ export function ProductionSetWorkspace({
   const [combinedPdf, setCombinedPdf] = useState(false);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
-  const [countingPages, setCountingPages] = useState(false);
+  const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
   const totalPages = files.reduce((sum, file) => sum + file.pages, 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
+  const countingPages = pendingPageCountReads > 0;
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
     !overflows &&
@@ -112,7 +113,7 @@ export function ProductionSetWorkspace({
       return;
     }
 
-    setCountingPages(true);
+    setPendingPageCountReads((current) => current + 1);
     setLocalMessage("Reading page count...");
 
     try {
@@ -129,7 +130,7 @@ export function ProductionSetWorkspace({
       setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
     } finally {
       if (mountedRef.current) {
-        setCountingPages(false);
+        setPendingPageCountReads((current) => Math.max(0, current - 1));
       }
     }
   }
@@ -181,6 +182,8 @@ export function ProductionSetWorkspace({
           type="button"
           className="production-workspace__secondary-button"
           onClick={addFile}
+          disabled={countingPages || progress.running}
+          title={countingPages ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
         >
           <PlusIcon size={14} /> Add PDF
         </button>

@@ -363,6 +363,7 @@ export function App() {
     };
   }, [settingsOpen]);
   const mcpToggleChainRef = useRef<Promise<void>>(Promise.resolve());
+  const mcpToggleRequestRef = useRef(0);
   const updateFilingPreferences = useCallback((next: FilingPreferences) => {
     setFilingPreferences(next);
     writeFilingPreferences(next);
@@ -385,6 +386,8 @@ export function App() {
     }));
   }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
+    const requestId = mcpToggleRequestRef.current + 1;
+    mcpToggleRequestRef.current = requestId;
     setMcpEnabled(next);
     setMcpStatus(null);
     // Serialize gate writes so rapid toggles persist in click order (the last
@@ -393,6 +396,10 @@ export function App() {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("mcp_set_enabled", { enabled: next });
+        if (mcpToggleRequestRef.current === requestId) {
+          setMcpEnabled(next);
+          setMcpStatus(null);
+        }
       } catch {
         // Best-effort resync to the persisted truth on failure.
         try {
@@ -400,11 +407,15 @@ export function App() {
           const status = await invoke<{ enabled: boolean; path: string | null }>(
             "mcp_status",
           );
-          setMcpEnabled(status.enabled);
-          setMcpStatus("Connector setting could not be saved. The switch was restored to the saved setting.");
+          if (mcpToggleRequestRef.current === requestId) {
+            setMcpEnabled(status.enabled);
+            setMcpStatus("Connector setting could not be saved. The switch was restored to the saved setting.");
+          }
         } catch {
-          setMcpEnabled(!next);
-          setMcpStatus("Connector setting could not be saved. Try again from the desktop app.");
+          if (mcpToggleRequestRef.current === requestId) {
+            setMcpEnabled(!next);
+            setMcpStatus("Connector setting could not be saved. Try again from the desktop app.");
+          }
         }
       }
     });

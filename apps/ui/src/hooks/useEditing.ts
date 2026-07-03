@@ -26,6 +26,8 @@ export interface SavedSignature {
 
 const SIGNATURES_STORAGE_KEY = "raiopdf.saved-signatures";
 const MAX_SAVED_SIGNATURES = 12;
+const MAX_SAVED_SIGNATURE_BYTES = 500 * 1024;
+const MAX_SAVED_SIGNATURES_BYTES = 2 * 1024 * 1024;
 
 export interface EditingState {
   tool: EditToolId;
@@ -44,7 +46,7 @@ export interface EditingState {
   signatureCardOpen: boolean;
   setSignatureCardOpen: (open: boolean) => void;
   savedSignatures: readonly SavedSignature[];
-  saveSignature: (dataUrl: string) => void;
+  saveSignature: (dataUrl: string) => boolean;
   deleteSavedSignature: (id: string) => void;
   armSignatureFromDataUrl: (dataUrl: string) => Promise<boolean>;
   disarmSignature: () => void;
@@ -160,27 +162,49 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }, []);
 
   const saveSignature = useCallback((dataUrl: string) => {
-    signatureIdRef.current += 1;
+    const nextSignatureId = signatureIdRef.current + 1;
+    const createdAt = Date.now();
     const signature: SavedSignature = {
-      id: `signature-${Date.now()}-${signatureIdRef.current}`,
+      id: `signature-${createdAt}-${nextSignatureId}`,
       dataUrl,
-      createdAt: Date.now(),
+      createdAt,
     };
 
-    setSavedSignatures((current) => {
-      const next = [signature, ...current].slice(0, MAX_SAVED_SIGNATURES);
-      persistSavedSignatures(next);
-      return next;
-    });
-  }, []);
+    if (storageBytes(JSON.stringify(signature)) > MAX_SAVED_SIGNATURE_BYTES) {
+      setMessage("That signature is too large to save.");
+      return false;
+    }
+
+    const next = [signature, ...savedSignatures].slice(0, MAX_SAVED_SIGNATURES);
+    const serialized = JSON.stringify(next);
+
+    if (storageBytes(serialized) > MAX_SAVED_SIGNATURES_BYTES) {
+      setMessage("Saved signatures are full. Delete one before saving another.");
+      return false;
+    }
+
+    if (!persistSavedSignatures(serialized)) {
+      setMessage("That signature could not be saved on this computer.");
+      return false;
+    }
+
+    signatureIdRef.current = nextSignatureId;
+    setSavedSignatures(next);
+    setMessage(null);
+    return true;
+  }, [savedSignatures]);
 
   const deleteSavedSignature = useCallback((id: string) => {
-    setSavedSignatures((current) => {
-      const next = current.filter((signature) => signature.id !== id);
-      persistSavedSignatures(next);
-      return next;
-    });
-  }, []);
+    const next = savedSignatures.filter((signature) => signature.id !== id);
+
+    if (!persistSavedSignatures(JSON.stringify(next))) {
+      setMessage("Saved signatures could not be updated on this computer.");
+      return;
+    }
+
+    setSavedSignatures(next);
+    setMessage(null);
+  }, [savedSignatures]);
 
   const armSignatureFromDataUrl = useCallback(async (dataUrl: string) => {
     try {
@@ -190,6 +214,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       setMessage(null);
       return true;
     } catch {
+      setArmedSignature(null);
       setMessage("That signature image could not be read.");
       return false;
     }
@@ -304,9 +329,12 @@ async function armStampFromFile(file: File): Promise<ArmedStamp> {
 }
 
 async function armStampFromDataUrl(dataUrl: string): Promise<ArmedStamp> {
-  const format: PdfEditImageFormat = dataUrl.startsWith("data:image/jpeg")
-    ? "jpeg"
-    : "png";
+  const format = imageFormatFromDataUrl(dataUrl);
+
+  if (!format) {
+    throw new Error("Unsupported signature image type.");
+  }
+
   const { width, height } = await measureImage(dataUrl);
 
   return {
@@ -324,6 +352,29 @@ function imageFormatFromFile(file: File): PdfEditImageFormat | null {
   }
 
   if (file.type === "image/jpeg" || /\.jpe?g$/i.test(file.name)) {
+    return "jpeg";
+  }
+
+  return null;
+}
+
+function imageFormatFromDataUrl(dataUrl: string): PdfEditImageFormat | null {
+  const commaIndex = dataUrl.indexOf(",");
+
+  if (commaIndex < 0) {
+    return null;
+  }
+
+  const mediaType = dataUrl.slice(0, commaIndex).toLowerCase();
+
+  if (mediaType === "data:image/png" || mediaType.startsWith("data:image/png;")) {
+    return "png";
+  }
+
+  if (
+    mediaType === "data:image/jpeg" ||
+    mediaType.startsWith("data:image/jpeg;")
+  ) {
     return "jpeg";
   }
 
@@ -382,10 +433,16 @@ function loadSavedSignatures(): SavedSignature[] {
   }
 }
 
-function persistSavedSignatures(signatures: readonly SavedSignature[]): void {
+function storageBytes(value: string): number {
+  return value.length;
+}
+
+function persistSavedSignatures(serializedSignatures: string): boolean {
   try {
-    window.localStorage.setItem(SIGNATURES_STORAGE_KEY, JSON.stringify(signatures));
+    window.localStorage.setItem(SIGNATURES_STORAGE_KEY, serializedSignatures);
+    return true;
   } catch {
     // Saved signatures are a convenience; storage failures must not break editing.
+    return false;
   }
 }

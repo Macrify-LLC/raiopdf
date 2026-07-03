@@ -211,7 +211,7 @@
 }
 
 .tool-panel__danger-button:hover {
-  background: #7f1d1d;
+  background: var(--danger);
 }
 
 .tool-panel__secondary-button {

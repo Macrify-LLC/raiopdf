@@ -110,8 +110,11 @@ export function SignatureCard({ editing }: SignatureCardProps) {
       return;
     }
 
-    editing.saveSignature(dataUrl);
-    void editing.armSignatureFromDataUrl(dataUrl);
+    void editing.armSignatureFromDataUrl(dataUrl).then((armed) => {
+      if (armed) {
+        editing.saveSignature(dataUrl);
+      }
+    });
   }
 
   function handleUploadFile(file: File | undefined) {

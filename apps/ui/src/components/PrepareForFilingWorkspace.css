@@ -161,6 +161,17 @@
   font-size: var(--text-sm);
 }
 
+.filing-card__stale {
+  border: 1px solid var(--warn-bg);
+  border-radius: var(--radius-chip);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: 3px var(--space-2);
+  text-transform: uppercase;
+}
+
 .filing-card__scope-note {
   flex-basis: 100%;
   margin: 0;
@@ -193,6 +204,9 @@
 }
 
 .filing-card__pack-select select,
+.filing-court-profile input,
+.filing-court-profile select,
+.filing-prep-row__override input,
 .filing-certificate input,
 .filing-certificate textarea {
   border: 1px solid var(--border);
@@ -208,11 +222,6 @@
   padding: 0 var(--space-2);
 }
 
-.filing-card__pack-select select:disabled {
-  color: var(--muted);
-  background: var(--chrome);
-}
-
 .filing-certificate {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
@@ -220,6 +229,99 @@
   padding: var(--space-3);
   display: grid;
   gap: var(--space-2);
+}
+
+.filing-court-profile,
+.filing-prep {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filing-court-profile {
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 190px) minmax(110px, 150px) minmax(86px, 110px) auto;
+  align-items: end;
+}
+
+.filing-court-profile p,
+.filing-prep p,
+.filing-prep-row p {
+  margin: 0;
+}
+
+.filing-court-profile__title,
+.filing-prep__header p,
+.filing-prep-row__title {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-court-profile p:not(.filing-court-profile__title),
+.filing-prep-row__detail,
+.filing-prep-row__impact,
+.filing-prep-row__authority,
+.filing-prep-row__override,
+.filing-court-profile label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.filing-court-profile label,
+.filing-prep-row__override {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.filing-court-profile input,
+.filing-court-profile select,
+.filing-prep-row__override input {
+  height: 30px;
+  padding: 0 var(--space-2);
+}
+
+.filing-prep__rows {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filing-prep-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: var(--space-3);
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  padding: var(--space-3);
+}
+
+.filing-prep-row[data-disabled="true"] {
+  opacity: 0.68;
+}
+
+.filing-prep-row__toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.filing-prep-row__toggle input {
+  margin-top: 2px;
+}
+
+.filing-prep-row__title,
+.filing-prep-row__detail {
+  display: block;
+}
+
+.filing-prep-row__authority {
+  font-size: var(--text-2xs);
 }
 
 .filing-certificate__title {

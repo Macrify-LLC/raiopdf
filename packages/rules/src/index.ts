@@ -18,6 +18,7 @@ export {
   buildDocumentFacts,
   detectEncryptionState,
 } from "./documentFacts.js";
+export { resolvePrepPlan } from "./prepPlan.js";
 export type {
   ActiveContentSignals,
   BuildDocumentFactsOptions,
@@ -42,6 +43,9 @@ export type {
   PolicyConstraint,
   PossibleUnappliedRedactions,
   PrepDefault,
+  PrepPlanStance,
+  PrepPlanStep,
+  PrepPlanStepId,
   PreflightCheck,
   PreflightReport,
   PreflightStatus,

@@ -8,7 +8,7 @@
 }
 
 .settings-dialog__panel {
-  width: min(480px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -56,24 +56,28 @@
   overflow-y: auto;
 }
 
-.settings-dialog__row {
+.settings-dialog__row,
+.settings-dialog__section {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
 }
 
-.settings-dialog__row span {
+.settings-dialog__row span,
+.settings-dialog__section span {
   display: grid;
   gap: var(--space-1);
 }
 
-.settings-dialog__row strong {
+.settings-dialog__row strong,
+.settings-dialog__section strong {
   font-size: var(--text-sm);
   color: var(--ink);
 }
 
-.settings-dialog__row small {
+.settings-dialog__row small,
+.settings-dialog__section small {
   font-size: var(--text-xs);
   color: var(--muted);
 }
@@ -86,4 +90,28 @@
   color: var(--body);
   background: var(--chrome);
   font: inherit;
+}
+
+.settings-dialog__section {
+  align-items: start;
+}
+
+.settings-dialog__button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  background: var(--chrome);
+  color: var(--body);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-dialog__button:hover {
+  background: var(--hover-ground);
+  color: var(--ink);
+}
+
+.settings-dialog__status {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
 }

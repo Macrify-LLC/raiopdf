@@ -1,6 +1,8 @@
+mod diagnostics;
 mod mcp;
 mod sidecar;
 
+use diagnostics::AppDiagnostics;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -251,11 +253,15 @@ pub fn run() {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();
+            let diagnostics = AppDiagnostics::new(app_data_dir.clone());
+            diagnostics.install_panic_hook();
+            let _ = diagnostics.record_shell_event("startup", "RaioPDF shell started");
             let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
                 app_data_dir,
                 resource_dir,
             ));
             app.manage(manager);
+            app.manage(diagnostics);
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
             Ok(())
@@ -278,6 +284,8 @@ pub fn run() {
             sidecar::engine_start,
             sidecar::engine_status,
             sidecar::engine_stop,
+            diagnostics::diagnostics_record_event,
+            diagnostics::diagnostics_export_dialog,
             mcp::mcp_status,
             mcp::mcp_set_enabled
         ])
@@ -291,6 +299,9 @@ pub fn run() {
             } = event
             {
                 if label == "main" {
+                    let _ = app_handle
+                        .state::<AppDiagnostics>()
+                        .record_shell_event("shutdown", "main window destroyed");
                     app_handle.state::<sidecar::SidecarManager>().shutdown();
                 }
             }
@@ -307,6 +318,8 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:print", "Print...")
         .text("file:protect", "Protect (passwords)...")
         .text("file:properties", "Document Properties")
+        .separator()
+        .text("file:export-diagnostics", "Export Diagnostics...")
         .separator()
         .text("file:preferences", "Preferences...")
         .text("file:open-raio-to-ai", "Open Raio to AI...")

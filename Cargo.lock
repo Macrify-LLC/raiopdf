@@ -2308,6 +2308,7 @@ name = "raiopdf-shell"
 version = "0.0.0"
 dependencies = [
  "engine-sidecar-core",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

@@ -1,25 +1,45 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type MouseEvent,
+} from "react";
 import { PDFDocument } from "pdf-lib";
 import type { ResizePreset } from "../lib/cropResize";
 import { readBrowserFile, type OpenedFile, type SavedFile } from "../lib/filePort";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import type { DocumentState } from "../hooks/useDocument";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   CombineExhibitsIcon,
   CropIcon,
+  DeleteIcon,
   ExtractIcon,
   InsertIcon,
   PlusIcon,
+  RotateIcon,
   SplitIcon,
 } from "../icons";
 import "./OrganizeWorkspace.css";
 
-export type OrganizeFlowId = "merge" | "split" | "extract" | "insert" | "crop";
+export type OrganizeFlowId = "pages" | "merge" | "insert" | "crop";
 
 export interface OrganizeWorkspaceProps {
   flow: OrganizeFlowId;
   document: DocumentState;
+  pdfDocument?: PDFDocumentProxy | null;
+  selectedPageIndexes?: ReadonlySet<number>;
   onCancel: () => void;
+  onPageSelected?: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
+  onRotateSelected?: () => void;
+  onDeleteSelected?: () => void;
+  onMoveSelectedUp?: () => void;
+  onMoveSelectedDown?: () => void;
+  onReorderPages?: (pageIndexes: readonly number[], currentPage: number) => Promise<boolean>;
   onMerge: (files: readonly OpenedFile[]) => Promise<boolean>;
   onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
@@ -33,7 +53,15 @@ export interface OrganizeWorkspaceProps {
 export function OrganizeWorkspace({
   flow,
   document,
+  pdfDocument = null,
+  selectedPageIndexes = new Set<number>(),
   onCancel,
+  onPageSelected,
+  onRotateSelected,
+  onDeleteSelected,
+  onMoveSelectedUp,
+  onMoveSelectedDown,
+  onReorderPages,
   onMerge,
   onExtract,
   onSplit,
@@ -53,6 +81,26 @@ export function OrganizeWorkspace({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onCancel]);
 
+  if (flow === "pages") {
+    return (
+      <OrganizePagesGrid
+        document={document}
+        pdfDocument={pdfDocument}
+        selectedPageIndexes={selectedPageIndexes}
+        onCancel={onCancel}
+        onPageSelected={onPageSelected}
+        onRotateSelected={onRotateSelected}
+        onDeleteSelected={onDeleteSelected}
+        onMoveSelectedUp={onMoveSelectedUp}
+        onMoveSelectedDown={onMoveSelectedDown}
+        onReorderPages={onReorderPages}
+        onExtract={onExtract}
+        onSplit={onSplit}
+        onInsert={onInsert}
+      />
+    );
+  }
+
   return (
     <section className="organize-workspace" aria-label={`${title} workspace`}>
       <div className="organize-card">
@@ -69,12 +117,6 @@ export function OrganizeWorkspace({
         {flow === "merge" ? (
           <MergeFlow document={document} onMerge={onMerge} />
         ) : null}
-        {flow === "split" ? (
-          <SplitFlow document={document} onSplit={onSplit} />
-        ) : null}
-        {flow === "extract" ? (
-          <ExtractFlow document={document} onExtract={onExtract} />
-        ) : null}
         {flow === "insert" ? (
           <InsertFlow document={document} onInsert={onInsert} />
         ) : null}
@@ -83,6 +125,277 @@ export function OrganizeWorkspace({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function OrganizePagesGrid({
+  document,
+  pdfDocument,
+  selectedPageIndexes,
+  onCancel,
+  onPageSelected,
+  onRotateSelected,
+  onDeleteSelected,
+  onMoveSelectedUp,
+  onMoveSelectedDown,
+  onReorderPages,
+  onExtract,
+  onSplit,
+  onInsert,
+}: {
+  document: DocumentState;
+  pdfDocument: PDFDocumentProxy | null;
+  selectedPageIndexes: ReadonlySet<number>;
+  onCancel: () => void;
+  onPageSelected?: ((pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void) | undefined;
+  onRotateSelected?: (() => void) | undefined;
+  onDeleteSelected?: (() => void) | undefined;
+  onMoveSelectedUp?: (() => void) | undefined;
+  onMoveSelectedDown?: (() => void) | undefined;
+  onReorderPages?: ((pageIndexes: readonly number[], currentPage: number) => Promise<boolean>) | undefined;
+  onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
+  onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
+  onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+}) {
+  const insertInputRef = useRef<HTMLInputElement>(null);
+  const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const pages = Array.from({ length: document.pageCount }, (_, index) => index);
+  const selectedIndexes = [...selectedPageIndexes].sort((left, right) => left - right);
+  const selectedCount = selectedIndexes.length;
+  const insertAt = selectedIndexes[0] ?? document.currentPage - 1;
+  const canMoveUp = selectedIndexes.some((pageIndex) => pageIndex > 0 && !selectedPageIndexes.has(pageIndex - 1));
+  const canMoveDown = selectedIndexes.some((pageIndex) => (
+    pageIndex < document.pageCount - 1 && !selectedPageIndexes.has(pageIndex + 1)
+  ));
+
+  async function extractSelection() {
+    if (selectedIndexes.length === 0) {
+      setStatus("Select one or more pages before extracting.");
+      return;
+    }
+
+    setStatus("Extracting selected pages...");
+    const extracted = await onExtract(selectedIndexes);
+    setStatus(extracted ? "Extracted pages opened as the working document." : "Selected pages could not be extracted.");
+  }
+
+  async function handleInsertFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const opened = await readBrowserFile(file);
+      setStatus("Inserting pages...");
+      const inserted = await onInsert(opened, insertAt);
+      setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted.");
+    } catch {
+      setStatus("This PDF could not be opened. Check the file and try again.");
+    }
+  }
+
+  async function dropOn(targetPageIndex: number) {
+    if (draggingPageIndex === null || draggingPageIndex === targetPageIndex) {
+      setDraggingPageIndex(null);
+      return;
+    }
+
+    const selectedSource = selectedPageIndexes.has(draggingPageIndex)
+      ? selectedIndexes
+      : [draggingPageIndex];
+    const moving = new Set(selectedSource);
+    const remaining = pages.filter((pageIndex) => !moving.has(pageIndex));
+    const targetInRemaining = remaining.indexOf(targetPageIndex);
+    const insertIndex = targetInRemaining === -1 ? remaining.length : targetInRemaining;
+    const nextOrder = [
+      ...remaining.slice(0, insertIndex),
+      ...selectedSource,
+      ...remaining.slice(insertIndex),
+    ];
+    const nextCurrentPage = nextOrder.indexOf(document.currentPage - 1) + 1;
+
+    setDraggingPageIndex(null);
+    await onReorderPages?.(nextOrder, nextCurrentPage);
+  }
+
+  return (
+    <section className="organize-pages" aria-label="Organize Pages workspace">
+      <header className="organize-pages__header">
+        <div>
+          <p className="organize-card__eyebrow">Organize</p>
+          <h2>Organize Pages</h2>
+          <p className="organize-pages__summary">
+            {document.pageCount} {document.pageCount === 1 ? "page" : "pages"} · {selectedCount} selected
+          </p>
+        </div>
+        <button type="button" className="organize-card__ghost" onClick={onCancel}>
+          Back to document
+        </button>
+      </header>
+
+      <div className="organize-pages__toolbar" aria-label="Selection actions">
+        <button type="button" className="organize-secondary" disabled={selectedCount === 0} onClick={onRotateSelected}>
+          <RotateIcon size={15} />
+          Rotate
+        </button>
+        <button type="button" className="organize-secondary" disabled={selectedCount === 0} onClick={onDeleteSelected}>
+          <DeleteIcon size={15} />
+          Delete
+        </button>
+        <button type="button" className="organize-secondary" disabled={selectedCount === 0} onClick={extractSelection}>
+          <ExtractIcon size={15} />
+          Extract
+        </button>
+        <input
+          ref={insertInputRef}
+          className="organize-file-input"
+          type="file"
+          accept="application/pdf"
+          aria-label="Insert PDF in Organize Pages"
+          onChange={handleInsertFile}
+        />
+        <button type="button" className="organize-secondary" onClick={() => insertInputRef.current?.click()}>
+          <InsertIcon size={15} />
+          Insert from File
+        </button>
+        <button type="button" className="organize-secondary" onClick={() => setSplitOpen(true)}>
+          <SplitIcon size={15} />
+          Split Document...
+        </button>
+        <span className="organize-pages__toolbar-spacer" aria-hidden="true" />
+        <button type="button" className="organize-secondary" disabled={selectedCount === 0 || !canMoveUp} onClick={onMoveSelectedUp}>
+          <ArrowUpIcon size={15} />
+          Move Up
+        </button>
+        <button type="button" className="organize-secondary" disabled={selectedCount === 0 || !canMoveDown} onClick={onMoveSelectedDown}>
+          <ArrowDownIcon size={15} />
+          Move Down
+        </button>
+      </div>
+
+      {status ? <p className="organize-flow__status" role="status">{status}</p> : null}
+
+      {splitOpen ? (
+        <div className="organize-pages__split-panel" role="dialog" aria-label="Split document">
+          <div className="organize-pages__split-head">
+            <p className="organize-card__eyebrow">Split Document</p>
+            <button type="button" className="organize-card__ghost" onClick={() => setSplitOpen(false)}>
+              Close
+            </button>
+          </div>
+          <SplitFlow document={document} onSplit={onSplit} />
+        </div>
+      ) : null}
+
+      <div className="organize-pages__grid" role="list" aria-label="Page grid">
+        {pages.map((pageIndex) => {
+          const pageNumber = pageIndex + 1;
+          const selected = selectedPageIndexes.has(pageIndex);
+
+          return (
+            <button
+              key={pageIndex}
+              type="button"
+              className="organize-page"
+              data-selected={selected ? "true" : undefined}
+              data-current={document.currentPage === pageNumber ? "true" : undefined}
+              aria-pressed={selected}
+              aria-label={`Organize page ${pageNumber}`}
+              draggable
+              onClick={(event) => onPageSelected?.(pageIndex, event)}
+              onDragStart={() => setDraggingPageIndex(pageIndex)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={() => void dropOn(pageIndex)}
+            >
+              <span className="organize-page__thumb">
+                {pdfDocument ? (
+                  <OrganizePageCanvas pdfDocument={pdfDocument} pageNumber={pageNumber} />
+                ) : null}
+              </span>
+              <span className="organize-page__number">Page {pageNumber}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function OrganizePageCanvas({
+  pdfDocument,
+  pageNumber,
+}: {
+  pdfDocument: PDFDocumentProxy;
+  pageNumber: number;
+}) {
+  const frameRef = useRef<HTMLSpanElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+
+    if (!frame) {
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setIsVisible(true);
+      }
+    }, { rootMargin: "220px" });
+
+    observer.observe(frame);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+
+    if (!isVisible || !canvas) {
+      return;
+    }
+
+    let cancelled = false;
+    let renderTask: ReturnType<Awaited<ReturnType<typeof pdfDocument.getPage>>["render"]> | null = null;
+
+    void pdfDocument.getPage(pageNumber).then((page) => {
+      if (cancelled) {
+        return;
+      }
+
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(120 / baseViewport.width, 156 / baseViewport.height);
+      const viewport = page.getViewport({ scale });
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+
+      renderTask = page.render({ canvas, viewport });
+      void renderTask.promise.catch((error: unknown) => {
+        if (error instanceof Error && error.name !== "RenderingCancelledException") {
+          console.error(error);
+        }
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      renderTask?.cancel();
+    };
+  }, [isVisible, pageNumber, pdfDocument]);
+
+  return (
+    <span ref={frameRef} className="organize-page__canvas-frame">
+      <canvas ref={canvasRef} className="organize-page__canvas" aria-hidden="true" />
+    </span>
   );
 }
 
@@ -181,46 +494,6 @@ function SplitFlow({
       onBlur={() => setTouched(true)}
       onChange={setRange}
       onSubmit={split}
-    />
-  );
-}
-
-function ExtractFlow({
-  document,
-  onExtract,
-}: {
-  document: DocumentState;
-  onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
-}) {
-  const [range, setRange] = useState(formatDefaultRange(document.pageCount));
-  const [touched, setTouched] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const parsed = useMemo(() => parsePageRanges(range, document.pageCount), [document.pageCount, range]);
-
-  async function extract() {
-    setTouched(true);
-
-    if (parsed.error) {
-      return;
-    }
-
-    setStatus("Extracting pages...");
-    const extracted = await onExtract(parsed.pageIndexes);
-    setStatus(extracted ? "Extracted pages opened as the working document." : "Those pages could not be extracted. Check the range and try again.");
-  }
-
-  return (
-    <PageRangeFlow
-      icon={<ExtractIcon size={16} />}
-      label="Pages to extract"
-      hint="Use 1,3-5 syntax."
-      value={range}
-      error={touched ? parsed.error : null}
-      buttonText={`Extract Pages ${range || ""}`}
-      status={status}
-      onBlur={() => setTouched(true)}
-      onChange={setRange}
-      onSubmit={extract}
     />
   );
 }
@@ -430,12 +703,10 @@ function getInsertError(value: string, pageCount: number): string | null {
 
 function getFlowTitle(flow: OrganizeFlowId): string {
   switch (flow) {
+    case "pages":
+      return "Organize Pages";
     case "merge":
       return "Merge PDFs";
-    case "split":
-      return "Split by Pages";
-    case "extract":
-      return "Extract Pages";
     case "insert":
       return "Insert from File";
     case "crop":

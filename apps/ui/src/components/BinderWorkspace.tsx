@@ -168,7 +168,7 @@ export function BinderWorkspace({
           <h2>Combine with Exhibits</h2>
         </div>
         <button type="button" className="binder-workspace__ghost" onClick={onCancel}>
-          Cancel
+          Back to document
         </button>
       </header>
 

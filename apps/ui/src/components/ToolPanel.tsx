@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import type { PdfBatesStampOptions, PdfStampPlacement } from "@raiopdf/engine-api";
 import type { OcrUiState } from "../App";
 import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
@@ -9,17 +9,22 @@ import {
   CombineExhibitsIcon,
   CommentIcon,
   CropIcon,
+  DrawIcon,
   EditIcon,
-  ExtractIcon,
+  HighlightIcon,
+  ImageIcon,
   InsertIcon,
   OcrSearchIcon,
   OrganizeIcon,
   RedactIcon,
+  RotateIcon,
   ScaleIcon,
   ScrubMetadataIcon,
   ShieldCheckIcon,
-  SplitIcon,
+  SignIcon,
+  TextBoxIcon,
 } from "../icons";
+import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
@@ -31,21 +36,32 @@ export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
 const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
   { id: "combine-exhibits", label: "Combine with Exhibits", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "make-searchable", label: "Make Searchable (OCR)", icon: <OcrSearchIcon size={16} /> },
   { id: "redact", label: "Redact", icon: <RedactIcon size={16} /> },
   { id: "bates-numbering", label: "Bates Numbering", icon: <BatesIcon size={16} /> },
   { id: "scanner-2425", label: "2.425 Scanner", icon: <ShieldCheckIcon size={16} /> },
   { id: "scrub-metadata", label: "Scrub Metadata", icon: <ScrubMetadataIcon size={16} /> },
+  { id: "passwords", label: "Passwords", icon: <ShieldCheckIcon size={16} /> },
 ] as const;
 
 const ORGANIZE_TOOLS = [
+  { id: "pages", label: "Organize Pages", icon: <OrganizeIcon size={16} /> },
   { id: "merge", label: "Merge PDFs...", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "split", label: "Split by Pages...", icon: <SplitIcon size={16} /> },
-  { id: "extract", label: "Extract Pages...", icon: <ExtractIcon size={16} /> },
   { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
   { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
-  { id: "passwords", label: "Passwords", icon: <ShieldCheckIcon size={16} /> },
+  { id: "rotate", label: "Rotate Pages", icon: <RotateIcon size={16} /> },
 ] as const;
+
+const EDIT_TOOLS: ReadonlyArray<{
+  id: Exclude<EditToolId, "select" | "comment">;
+  label: string;
+  icon: ReactNode;
+}> = [
+  { id: "textBox", label: "Text Box", icon: <TextBoxIcon size={16} /> },
+  { id: "image", label: "Image", icon: <ImageIcon size={16} /> },
+  { id: "highlight", label: "Highlight", icon: <HighlightIcon size={16} /> },
+  { id: "draw", label: "Draw", icon: <DrawIcon size={16} /> },
+  { id: "sign", label: "Sign", icon: <SignIcon size={16} /> },
+];
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -79,24 +95,21 @@ export interface ToolPanelProps {
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
+  activeEditTool: EditToolId;
   activeLegalTool: string | null;
   activeOrganizeTool: string | null;
+  onEditToolSelected: (toolId: EditToolId) => void;
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
   redaction: RedactionPanelState;
-  bates: BatesPanelState;
   scanner: ScannerPanelState;
-  scrubMetadata: ScrubMetadataPanelState;
-  pageCount: number;
   pendingEdits: readonly PendingEdit[];
   onRemovePendingEdit: (id: string) => void;
   onConfirmRedactions: () => void;
   onCancelRedactions: () => void;
-  onApplyBates: (options: PdfBatesStampOptions) => Promise<boolean>;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
-  onScrubMetadata: () => void;
 }
 
 export function ToolPanel({
@@ -104,44 +117,30 @@ export function ToolPanel({
   ocrState,
   ocrAvailable,
   ocrStarting,
+  activeEditTool,
   activeLegalTool,
   activeOrganizeTool,
+  onEditToolSelected,
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
   redaction,
-  bates,
   scanner,
-  scrubMetadata,
-  pageCount,
   pendingEdits,
   onRemovePendingEdit,
   onConfirmRedactions,
   onCancelRedactions,
-  onApplyBates,
   onRunScanner,
   onMarkScannerHit,
-  onScrubMetadata,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
     (edit): edit is Extract<PendingEdit, { kind: "comment" }> => edit.kind === "comment",
   );
+  const pendingContentEdits = pendingEdits.filter((edit) => edit.kind !== "comment");
 
   function toggleGroup(group: GroupId) {
     setOpenGroup((current) => (current === group ? null : group));
-  }
-
-  function selectLegalTool(toolId: string) {
-    onLegalToolSelected(toolId as LegalToolId);
-
-    if (toolId === "make-searchable") {
-      if (isOcrActive(ocrState.phase, ocrStarting)) {
-        return;
-      }
-
-      onMakeSearchable();
-    }
   }
 
   return (
@@ -155,22 +154,18 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        {pendingEdits.length > 0 ? (
-          <PendingEditsCard edits={pendingEdits} onRemove={onRemovePendingEdit} />
-        ) : null}
-        {ORGANIZE_TOOLS.map((tool) => (
-          <div key={tool.id}>
-            <ToolRow
-              icon={tool.icon}
-              label={tool.label}
-              selected={activeOrganizeTool === tool.id}
-              onSelect={() => onOrganizeToolSelected(tool.id)}
-            />
-            {tool.id === "passwords" && activeOrganizeTool === "passwords" ? (
-              <PasswordsPanel />
-            ) : null}
-          </div>
+        {EDIT_TOOLS.map((tool) => (
+          <ToolRow
+            key={tool.id}
+            icon={tool.icon}
+            label={tool.label}
+            selected={activeEditTool === tool.id}
+            onSelect={() => onEditToolSelected(tool.id)}
+          />
         ))}
+        {pendingContentEdits.length > 0 ? (
+          <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
+        ) : null}
       </AccordionGroup>
 
       <AccordionGroup
@@ -180,7 +175,15 @@ export function ToolPanel({
         isOpen={openGroup === "organize"}
         onToggle={() => toggleGroup("organize")}
       >
-        <p className="accordion-group__empty">More tools coming soon.</p>
+        {ORGANIZE_TOOLS.map((tool) => (
+          <ToolRow
+            key={tool.id}
+            icon={tool.icon}
+            label={tool.label}
+            selected={activeOrganizeTool === tool.id}
+            onSelect={() => onOrganizeToolSelected(tool.id)}
+          />
+        ))}
       </AccordionGroup>
 
       <AccordionGroup
@@ -194,10 +197,27 @@ export function ToolPanel({
           <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
         ) : (
           <p className="accordion-group__empty">
-            No comments yet. Use the Comment tool to drop a note on the page.
+            No comments.
           </p>
         )}
       </AccordionGroup>
+
+      <div className="tool-panel__top-row">
+        <ToolRow
+          icon={<OcrSearchIcon size={16} />}
+          label="Make Searchable (OCR)"
+          disabled={isOcrActive(ocrState.phase, ocrStarting)}
+          onSelect={onMakeSearchable}
+        />
+        {ocrState.phase !== "idle" || ocrStarting ? (
+          <OcrStatusPanel
+            hasDocument={hasDocument}
+            ocrState={ocrState}
+            ocrAvailable={ocrAvailable}
+            ocrStarting={ocrStarting}
+          />
+        ) : null}
+      </div>
 
       <AccordionGroup
         id="legal"
@@ -209,7 +229,6 @@ export function ToolPanel({
       >
         {LEGAL_TOOLS.map((tool) => {
           const selected = activeLegalTool === tool.id;
-          const disabled = tool.id === "make-searchable" && isOcrActive(ocrState.phase, ocrStarting);
 
           return (
             <div key={tool.id}>
@@ -217,17 +236,8 @@ export function ToolPanel({
                 icon={tool.icon}
                 label={tool.label}
                 selected={selected}
-                disabled={disabled}
-                onSelect={() => selectLegalTool(tool.id)}
+                onSelect={() => onLegalToolSelected(tool.id)}
               />
-              {tool.id === "make-searchable" && selected ? (
-                <OcrStatusPanel
-                  hasDocument={hasDocument}
-                  ocrState={ocrState}
-                  ocrAvailable={ocrAvailable}
-                  ocrStarting={ocrStarting}
-                />
-              ) : null}
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel
                   state={redaction}
@@ -237,12 +247,7 @@ export function ToolPanel({
                 />
               ) : null}
               {tool.id === "bates-numbering" && selected ? (
-                <BatesPanel
-                  state={bates}
-                  hasDocument={hasDocument}
-                  pageCount={pageCount}
-                  onApply={onApplyBates}
-                />
+                <InlineMessage tone="neutral" message="Configure Bates numbering in the document dialog." />
               ) : null}
               {tool.id === "scanner-2425" && selected ? (
                 <ScannerPanel
@@ -253,11 +258,10 @@ export function ToolPanel({
                 />
               ) : null}
               {tool.id === "scrub-metadata" && selected ? (
-                <ScrubMetadataPanel
-                  state={scrubMetadata}
-                  hasDocument={hasDocument}
-                  onScrub={onScrubMetadata}
-                />
+                <InlineMessage tone="neutral" message="Inspect and scrub metadata in the document dialog." />
+              ) : null}
+              {tool.id === "passwords" && selected ? (
+                <InlineMessage tone="neutral" message="Password controls open over the document." />
               ) : null}
             </div>
           );
@@ -355,7 +359,7 @@ function RedactionStatusPanel({
   );
 }
 
-function BatesPanel({
+export function BatesPanel({
   state,
   hasDocument,
   pageCount,
@@ -529,7 +533,7 @@ function ScannerPanel({
   );
 }
 
-function ScrubMetadataPanel({
+export function ScrubMetadataPanel({
   state,
   hasDocument,
   onScrub,
@@ -651,7 +655,7 @@ function CommentsCard({
   );
 }
 
-function PasswordsPanel() {
+export function PasswordsPanel() {
   return (
     <div className="tool-panel__inline-card">
       <div className="tool-panel__field">

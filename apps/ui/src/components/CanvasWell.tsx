@@ -22,6 +22,7 @@ import {
   type ViewportRect,
 } from "../lib/viewportGeometry";
 import { EditLayer } from "./EditLayer";
+import { FloatingDialog } from "./FloatingDialog";
 import { FormLayer } from "./FormLayer";
 import { SignatureCard } from "./SignatureCard";
 import "./CanvasWell.css";
@@ -43,6 +44,7 @@ export interface CanvasWellProps {
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
   onRenderError?: ((message: string) => void) | undefined;
   workspace?: ReactNode;
+  overlay?: ReactNode;
   redactionMode?: boolean;
   modeBar?: ReactNode;
   pendingRedactions?: readonly PendingRedactionOverlay[];
@@ -63,6 +65,7 @@ export function CanvasWell({
   onPageSizeChange,
   onRenderError,
   workspace = null,
+  overlay = null,
   redactionMode = false,
   modeBar = null,
   pendingRedactions = [],
@@ -271,77 +274,85 @@ export function CanvasWell({
         <div className="canvas-well__mode-bar-slot">{modeBar}</div>
       ) : null}
       {hasDocument && !workspace && signatureCardOpen && editing ? (
-        <div className="canvas-well__signature-card-slot">
+        <FloatingDialog
+          title="Signature"
+          eyebrow="Edit"
+          width="sm"
+          onClose={() => editing.setSignatureCardOpen(false)}
+        >
           <SignatureCard editing={editing} />
-        </div>
+        </FloatingDialog>
       ) : null}
       {workspace ? (
         workspace
       ) : hasDocument ? (
-        <div ref={stageRef} className="canvas-well__stage">
-          {editing?.hasFormFields ? (
-            <p className="canvas-well__form-note" role="status">
-              This PDF has fillable fields.
-            </p>
-          ) : null}
-          <div
-            className="canvas-well__page-frame"
-            data-redaction-mode={redactionMode ? "true" : undefined}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={() => {
-              dragStartRef.current = null;
-              setDraftRect(null);
-            }}
-          >
-            <canvas
-              ref={canvasRef}
-              className="canvas-well__page"
-              aria-label={`Page ${currentPage}`}
-              data-testid="pdf-page-canvas"
-            />
-            {viewport && page && editing?.hasFormFields ? (
-              <FormLayer
-                page={page}
-                viewport={viewport}
-                values={editing.formValues}
-                onValueChange={editing.setFormValue}
-              />
+        <>
+          <div ref={stageRef} className="canvas-well__stage">
+            {editing?.hasFormFields ? (
+              <p className="canvas-well__form-note" role="status">
+                This PDF has fillable fields.
+              </p>
             ) : null}
-            {viewport
-              ? pendingRedactions
-                .filter((overlay) => overlay.area.pageIndex === currentPage - 1)
-                .map((overlay) => (
-                  <RedactionOverlay
-                    key={overlay.id}
-                    overlay={overlay}
-                    viewport={viewport}
-                    onRemove={onRedactionAreaRemoved}
-                  />
-                ))
-              : null}
-            {viewport && page && editing && !redactionMode ? (
-              <EditLayer
-                page={page}
-                viewport={viewport}
-                pageIndex={currentPage - 1}
-                editing={editing}
+            <div
+              className="canvas-well__page-frame"
+              data-redaction-mode={redactionMode ? "true" : undefined}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={() => {
+                dragStartRef.current = null;
+                setDraftRect(null);
+              }}
+            >
+              <canvas
+                ref={canvasRef}
+                className="canvas-well__page"
+                aria-label={`Page ${currentPage}`}
+                data-testid="pdf-page-canvas"
               />
-            ) : null}
-            {draftRect ? (
-              <span
-                className="canvas-well__redaction-draft"
-                style={toOverlayStyle(draftRect)}
-              />
+              {viewport && page && editing?.hasFormFields ? (
+                <FormLayer
+                  page={page}
+                  viewport={viewport}
+                  values={editing.formValues}
+                  onValueChange={editing.setFormValue}
+                />
+              ) : null}
+              {viewport
+                ? pendingRedactions
+                  .filter((overlay) => overlay.area.pageIndex === currentPage - 1)
+                  .map((overlay) => (
+                    <RedactionOverlay
+                      key={overlay.id}
+                      overlay={overlay}
+                      viewport={viewport}
+                      onRemove={onRedactionAreaRemoved}
+                    />
+                  ))
+                : null}
+              {viewport && page && editing && !redactionMode ? (
+                <EditLayer
+                  page={page}
+                  viewport={viewport}
+                  pageIndex={currentPage - 1}
+                  editing={editing}
+                />
+              ) : null}
+              {draftRect ? (
+                <span
+                  className="canvas-well__redaction-draft"
+                  style={toOverlayStyle(draftRect)}
+                />
+              ) : null}
+            </div>
+            {error ? (
+              <p className="canvas-well__message" role="status">
+                {error}
+              </p>
             ) : null}
           </div>
-          {error ? (
-            <p className="canvas-well__message" role="status">
-              {error}
-            </p>
-          ) : null}
-        </div>
+          {overlay}
+        </>
       ) : (
         <div className="canvas-well__empty">
           <span className="canvas-well__mark">

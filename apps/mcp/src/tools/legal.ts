@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { PdfPageSelection, PdfSplitPart, PdfStampPlacement } from "@raiopdf/engine-api";
+import { buildProductionSet } from "@raiopdf/production-set";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, successResult, type StructuredToolResult } from "../format.js";
 import { resolveInput } from "../paths.js";
@@ -235,6 +236,77 @@ export async function handleBatesFolder(
       await engine.close(document).catch(() => undefined);
     }
   }
+}
+
+// ---- build_production_set ----
+export const productionSetInputSchema = {
+  sources: z
+    .array(z.object({
+      path: absoluteInput,
+      designation: z.string().optional().describe("Whole-document confidentiality designation."),
+    }))
+    .min(1)
+    .describe("Ordered source PDFs in production order."),
+  outputDir: z
+    .string()
+    .describe("Absolute package root. The directory may not already contain files."),
+  prefix: z.string().describe('Bates prefix, e.g. "SMITH".'),
+  start: z.number().int().nonnegative().optional().describe("First Bates number. Default 1."),
+  digits: z.number().int().min(1).optional().describe("Zero-padded width. Default 6."),
+  includeFilenameInIndex: z.boolean().optional().describe("Include produced filenames in the index. Default true."),
+  includeIndex: z.boolean().optional().describe("Write production-index.pdf and production-index.csv. Default true."),
+  combinedPdf: z.boolean().optional().describe("Also write a single combined production PDF. Default false."),
+  volumeSizeMb: z.number().positive().optional().describe("Optional volume folder cap in megabytes."),
+};
+export const productionSetOutputSchema = {
+  ...baseOutputSchema,
+  packageRoot: z.string().optional(),
+  outputs: z.array(z.string()).optional(),
+  nextNumber: z.number().optional(),
+  indexPdf: z.string().nullable().optional(),
+  indexCsv: z.string().nullable().optional(),
+  combinedPdf: z.string().nullable().optional(),
+};
+export interface ProductionSetInput {
+  sources: { path: string; designation?: string | undefined }[];
+  outputDir: string;
+  prefix: string;
+  start?: number | undefined;
+  digits?: number | undefined;
+  includeFilenameInIndex?: boolean | undefined;
+  includeIndex?: boolean | undefined;
+  combinedPdf?: boolean | undefined;
+  volumeSizeMb?: number | undefined;
+}
+export async function handleProductionSet(
+  input: ProductionSetInput,
+  _engine: EngineHandle,
+): Promise<StructuredToolResult> {
+  const result = await buildProductionSet({
+    sources: input.sources,
+    outputDir: input.outputDir,
+    prefix: input.prefix,
+    ...(input.start === undefined ? {} : { start: input.start }),
+    ...(input.digits === undefined ? {} : { digits: input.digits }),
+    ...(input.includeFilenameInIndex === undefined
+      ? {}
+      : { includeFilenameInIndex: input.includeFilenameInIndex }),
+    ...(input.includeIndex === undefined ? {} : { includeIndex: input.includeIndex }),
+    ...(input.combinedPdf === undefined ? {} : { combinedPdf: input.combinedPdf }),
+    ...(input.volumeSizeMb === undefined ? {} : { volumeSizeMb: input.volumeSizeMb }),
+  });
+
+  return successResult(
+    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.`,
+    {
+      packageRoot: result.packageRoot,
+      outputs: result.files.map((file) => file.packageRelativePath),
+      nextNumber: result.nextNumber,
+      indexPdf: result.indexPdf,
+      indexCsv: result.indexCsv,
+      combinedPdf: result.combinedPdf,
+    },
+  );
 }
 
 // ---- page_numbers ----

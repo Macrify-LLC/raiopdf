@@ -19,6 +19,12 @@ export default defineConfig({
       "@raiopdf/engine-pdf-lib": fileURLToPath(
         new URL("../../packages/engine-pdf-lib/src/index.ts", import.meta.url),
       ),
+      "@raiopdf/package-writer": fileURLToPath(
+        new URL("../../packages/package-writer/src/index.ts", import.meta.url),
+      ),
+      "@raiopdf/production-set": fileURLToPath(
+        new URL("../../packages/production-set/src/index.ts", import.meta.url),
+      ),
       "@raiopdf/rules": fileURLToPath(
         new URL("../../packages/rules/src/index.ts", import.meta.url),
       ),

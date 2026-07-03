@@ -60,9 +60,12 @@ import {
   handleBinder,
   handleExtract,
   handlePageNumbers,
+  handleProductionSet,
   handleSplit,
   pageNumbersInputSchema,
   pageNumbersOutputSchema,
+  productionSetInputSchema,
+  productionSetOutputSchema,
   splitInputSchema,
   splitOutputSchema,
   type BatesFolderInput,
@@ -70,6 +73,7 @@ import {
   type BinderInput,
   type ExtractInput,
   type PageNumbersInput,
+  type ProductionSetInput,
   type SplitInput,
 } from "./tools/legal.js";
 
@@ -283,6 +287,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
       dependencies,
       async (input: BatesFolderInput) =>
         await handleBatesFolder(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "build_production_set",
+    {
+      title: "Build production set",
+      description:
+        "Builds a Bates-stamped discovery production package with upload files, production index, manifest, checksums, optional volumes, and optional combined PDF.",
+      inputSchema: productionSetInputSchema,
+      outputSchema: productionSetOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: ProductionSetInput) =>
+        await handleProductionSet(input, dependencies.engineHandle),
     ),
   );
 

@@ -56,6 +56,9 @@ importers:
       '@raiopdf/engine-sidecar':
         specifier: workspace:*
         version: link:../../packages/engine-sidecar
+      '@raiopdf/production-set':
+        specifier: workspace:*
+        version: link:../../packages/production-set
       '@raiopdf/rules':
         specifier: workspace:*
         version: link:../../packages/rules
@@ -147,6 +150,21 @@ importers:
         version: 1.17.1
 
   packages/package-writer: {}
+
+  packages/production-set:
+    dependencies:
+      '@raiopdf/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
+      '@raiopdf/engine-local':
+        specifier: workspace:*
+        version: link:../engine-local
+      '@raiopdf/package-writer':
+        specifier: workspace:*
+        version: link:../package-writer
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
 
   packages/rules: {}
 

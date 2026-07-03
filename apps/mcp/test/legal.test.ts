@@ -10,6 +10,7 @@ import {
   handleBinder,
   handleExtract,
   handlePageNumbers,
+  handleProductionSet,
   handleSplit,
 } from "../src/tools/legal.js";
 
@@ -131,5 +132,40 @@ describe("legal tools (local pdf-lib engine)", () => {
     const content = structured(result);
     expect(content.outputs).toHaveLength(2);
     expect(content.nextNumber).toBe(6);
+  });
+
+  it("build_production_set writes a package with indexed upload files", async () => {
+    const first = await makePdf("prod-a.pdf", 2);
+    const second = await makePdf("prod-b.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [
+          { path: first, designation: "Confidential" },
+          { path: second },
+        ],
+        outputDir,
+        prefix: "PROD",
+        start: 10,
+        digits: 5,
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content).toMatchObject({
+      ok: true,
+      packageRoot: outputDir,
+      nextNumber: 13,
+      indexPdf: "production-index.pdf",
+      indexCsv: "production-index.csv",
+    });
+    expect(content.outputs).toEqual([
+      "upload/PROD00010 - PROD00011 - prod-a.pdf",
+      "upload/PROD00012 - PROD00012 - prod-b.pdf",
+    ]);
+    await expect(fs.access(path.join(outputDir, "raio-manifest", "manifest.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "raio-manifest", "checksums.txt"))).resolves.toBeUndefined();
   });
 });

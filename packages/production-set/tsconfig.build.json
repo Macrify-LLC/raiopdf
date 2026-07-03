@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@raiopdf/engine-api": ["packages/engine-api/dist/index.d.ts"],
+      "@raiopdf/engine-local": ["packages/engine-local/dist/index.d.ts"],
+      "@raiopdf/package-writer": ["packages/package-writer/dist/index.d.ts"]
+    },
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

@@ -45,6 +45,11 @@ import {
   type FilingResultState,
   type PrepareOptions,
 } from "./components/PrepareForFilingWorkspace";
+import {
+  ProductionSetWorkspace,
+  type ProductionSetProgress,
+  type ProductionSetRunInput,
+} from "./components/ProductionSetWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog } from "./components/FloatingDialog";
@@ -64,6 +69,7 @@ import {
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
+import { writeProductionLastUsed } from "./lib/productionHints";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -237,6 +243,11 @@ export function App() {
   });
   const [filingResult, setFilingResult] = useState<FilingResultState | null>(null);
   const [filingImpact, setFilingImpact] = useState<FilingImpactState | null>(null);
+  const [productionProgress, setProductionProgress] = useState<ProductionSetProgress>({
+    running: false,
+    message: null,
+    result: null,
+  });
   // The single pack binding read by BOTH the filing pipeline and the workspace UI.
   // A future jurisdiction selector replaces this one line — keeping the button's
   // promise and the pipeline's behavior from ever reading different packs.
@@ -329,6 +340,58 @@ export function App() {
       }
     })();
   }, []);
+
+  const buildProductionSetFromUi = useCallback(async (input: ProductionSetRunInput) => {
+    setProductionProgress({
+      running: true,
+      message: "Building production package...",
+      result: null,
+    });
+
+    try {
+      const sourcePaths = input.files.map((file) => file.path);
+      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
+        throw new Error("Production package output needs PDFs opened from local desktop paths.");
+      }
+
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{
+        packageRoot: string;
+        indexLocation: string | null;
+        nextNumber: number;
+        fileCount: number;
+      }>("build_production_set", {
+        sources: input.files.map((file) => ({
+          path: file.path,
+          designation: file.designation || undefined,
+        })),
+        outputDir: input.outputDir,
+        prefix: input.prefix,
+        start: input.start,
+        digits: input.digits,
+        includeIndex: input.includeIndex,
+        includeFilenameInIndex: input.includeFilenameInIndex,
+        combinedPdf: input.combinedPdf,
+        volumeSizeMb: input.volumeSizeMb ?? undefined,
+      });
+
+      writeProductionLastUsed(input.prefix, result.nextNumber - 1);
+      setProductionProgress({
+        running: false,
+        message: `Production package built for ${result.fileCount} file(s).`,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Production package could not be built.";
+      setProductionProgress({
+        running: false,
+        message,
+        result: null,
+      });
+    }
+  }, []);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
@@ -364,6 +427,7 @@ export function App() {
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
     setFilingImpact(null);
+    setProductionProgress({ running: false, message: null, result: null });
     setSidecarStatus({
       running: false,
       message: null,
@@ -386,6 +450,7 @@ export function App() {
     setFilingReportLoading(false);
     setFilingResult(null);
     setFilingImpact(null);
+    setProductionProgress({ running: false, message: null, result: null });
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
     }
@@ -754,6 +819,19 @@ export function App() {
         setError("This PDF could not be opened. The file may be corrupt or unsupported.");
       });
   }, [openOpenedFile, setError]);
+
+  const openProductionFile = useCallback(async (): Promise<OpenedFile | null> => {
+    try {
+      return await filePort.openFile();
+    } catch {
+      setProductionProgress({
+        running: false,
+        message: "This PDF could not be added to the production set.",
+        result: null,
+      });
+      return null;
+    }
+  }, []);
 
   const openDroppedFile = useCallback(
     (file: File) => {
@@ -2309,6 +2387,29 @@ export function App() {
       );
     }
 
+    if (activeLegalTool === "production-set") {
+      return (
+        <FloatingDialog
+          title="Production Set"
+          eyebrow="Legal"
+          width="lg"
+          onClose={closeWorkspace}
+        >
+          <ProductionSetWorkspace
+            currentFile={document.bytes ? {
+              bytes: document.bytes,
+              name: document.fileName ?? "Untitled.pdf",
+              path: document.filePath,
+            } : null}
+            currentPageCount={document.pageCount}
+            progress={productionProgress}
+            onAddFile={openProductionFile}
+            onRun={buildProductionSetFromUi}
+          />
+        </FloatingDialog>
+      );
+    }
+
     if (activeLegalTool === "bates-numbering") {
       return (
         <FloatingDialog title="Bates Numbering" eyebrow="Legal" onClose={closeWorkspace}>
@@ -3293,6 +3394,10 @@ function waitForTestDelay(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, delayMs);
   });
+}
+
+function looksLikeAbsolutePath(value: string | null): value is string {
+  return Boolean(value && (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)));
 }
 
 function isTauriRuntime(): boolean {

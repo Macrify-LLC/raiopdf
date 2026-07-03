@@ -315,6 +315,8 @@ pub fn run() {
             diagnostics::diagnostics_export_dialog,
             diagnostics::crash_report_take_pending,
             diagnostics::crash_report_never_ask,
+            diagnostics::crash_report_is_opted_out,
+            diagnostics::crash_report_set_opted_out,
             mcp::mcp_status,
             mcp::mcp_set_enabled,
             mcp::build_production_set,

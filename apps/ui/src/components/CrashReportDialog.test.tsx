@@ -55,13 +55,19 @@ describe("CrashReportDialog", () => {
 
     expect(getPayload()).toBeNull();
 
+    const disclosure = getButton("View exactly what will be sent");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+
     clickButton("View exactly what will be sent");
 
+    expect(getButton("Hide payload").getAttribute("aria-expanded")).toBe("true");
+    expect(getPayload()?.id).toBe(getButton("Hide payload").getAttribute("aria-controls"));
+    expect(getPayload()?.tabIndex).toBe(0);
     expect(getPayload()?.textContent).toBe(formatCrashReportPreview(payload));
     expect(getPayload()?.textContent).toContain(payload.body);
   });
 
-  it("fires the action callbacks from the four controls", () => {
+  it("fires the action callbacks from the three action controls", () => {
     const onOpenGitHubIssue = vi.fn();
     const onNotNow = vi.fn();
     const onNeverAsk = vi.fn();
@@ -78,11 +84,40 @@ describe("CrashReportDialog", () => {
     clickButton("Open GitHub issue");
     clickButton("Not now");
     clickButton("Never ask");
-    clickButton("View exactly what will be sent");
 
     expect(onOpenGitHubIssue).toHaveBeenCalledTimes(1);
     expect(onNotNow).toHaveBeenCalledTimes(1);
     expect(onNeverAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the primary action while the browser open is pending", () => {
+    renderDialog(
+      <CrashReportDialog
+        payload={payload}
+        onOpenGitHubIssue={() => undefined}
+        onNotNow={() => undefined}
+        onNeverAsk={() => undefined}
+        isOpening
+      />,
+    );
+
+    expect(getButton("Open GitHub issue").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("renders browser-open failures as an inline status", () => {
+    renderDialog(
+      <CrashReportDialog
+        payload={payload}
+        onOpenGitHubIssue={() => undefined}
+        onNotNow={() => undefined}
+        onNeverAsk={() => undefined}
+        openStatus="Couldn't open your browser — try again, or use File → Export Diagnostics."
+      />,
+    );
+
+    expect(document.querySelector("[role='status']")?.textContent).toContain(
+      "Couldn't open your browser",
+    );
   });
 
   function renderDialog(element: ReactNode) {
@@ -97,17 +132,23 @@ describe("CrashReportDialog", () => {
 });
 
 function clickButton(name: string) {
+  const button = getButton(name);
+
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function getButton(name: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(
-    (element) => element.textContent === name,
+    (element): element is HTMLButtonElement => element.textContent?.trim() === name,
   );
 
   if (!button) {
     throw new Error(`Button not found: ${name}`);
   }
 
-  act(() => {
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
+  return button;
 }
 
 function getPayload(): HTMLElement | null {

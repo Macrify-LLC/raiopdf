@@ -17,6 +17,7 @@ export interface FloatingDialogProps {
   onClose: () => void;
   width?: "sm" | "md" | "lg" | undefined;
   draggable?: boolean | undefined;
+  scrim?: boolean | undefined;
 }
 
 export function FloatingDialog({
@@ -26,6 +27,7 @@ export function FloatingDialog({
   onClose,
   width = "md",
   draggable = true,
+  scrim = false,
 }: FloatingDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -129,7 +131,11 @@ export function FloatingDialog({
   }
 
   return (
-    <div className="floating-dialog-layer" role="presentation">
+    <div
+      className="floating-dialog-layer"
+      role="presentation"
+      data-scrim={scrim ? "true" : undefined}
+    >
       <div
         ref={dialogRef}
         className="floating-dialog"

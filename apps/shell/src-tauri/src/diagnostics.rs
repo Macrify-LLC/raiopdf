@@ -132,7 +132,17 @@ impl AppDiagnostics {
         Ok(pending.take())
     }
 
-    fn set_crash_report_opt_out(&self) -> Result<(), String> {
+    fn set_crash_report_opted_out(&self, value: bool) -> Result<(), String> {
+        if !value {
+            match fs::remove_file(&self.crash_report_optout_path) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(format!("failed to save crash report preference: {error}"));
+                }
+            }
+        }
+
         if let Some(parent) = self.crash_report_optout_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create app data directory: {error}"))?;
@@ -381,7 +391,20 @@ pub fn crash_report_take_pending(
 
 #[tauri::command]
 pub fn crash_report_never_ask(diagnostics: tauri::State<'_, AppDiagnostics>) -> Result<(), String> {
-    diagnostics.set_crash_report_opt_out()
+    diagnostics.set_crash_report_opted_out(true)
+}
+
+#[tauri::command]
+pub fn crash_report_is_opted_out(diagnostics: tauri::State<'_, AppDiagnostics>) -> bool {
+    diagnostics.crash_report_opted_out()
+}
+
+#[tauri::command]
+pub fn crash_report_set_opted_out(
+    diagnostics: tauri::State<'_, AppDiagnostics>,
+    value: bool,
+) -> Result<(), String> {
+    diagnostics.set_crash_report_opted_out(value)
 }
 
 fn append_log_section(report: &mut String, title: &str, paths: &[PathBuf]) -> Result<(), String> {
@@ -888,7 +911,9 @@ mod tests {
         assert!(diagnostics
             .capture_pending_crash_for_startup()
             .expect("capture"));
-        diagnostics.set_crash_report_opt_out().expect("save optout");
+        diagnostics
+            .set_crash_report_opted_out(true)
+            .expect("save optout");
         assert!(root.join(CRASH_REPORT_OPTOUT_FILE_NAME).exists());
         assert!(diagnostics
             .take_pending_crash_report()
@@ -903,6 +928,27 @@ mod tests {
             .take_pending_crash_report()
             .expect("take after optout")
             .is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn set_crash_report_opted_out_false_removes_optout_file() {
+        let root = temp_root("optout-toggle");
+        let diagnostics = AppDiagnostics::new(root.clone());
+
+        diagnostics
+            .set_crash_report_opted_out(true)
+            .expect("save optout");
+        assert!(diagnostics.crash_report_opted_out());
+        assert!(root.join(CRASH_REPORT_OPTOUT_FILE_NAME).exists());
+
+        diagnostics
+            .set_crash_report_opted_out(false)
+            .expect("remove optout");
+
+        assert!(!diagnostics.crash_report_opted_out());
+        assert!(!root.join(CRASH_REPORT_OPTOUT_FILE_NAME).exists());
 
         let _ = fs::remove_dir_all(root);
     }

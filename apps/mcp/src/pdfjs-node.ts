@@ -1,13 +1,22 @@
+import { accessSync, constants } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
-import type { TextLayerCoverage } from "./types.js";
+import type { TextLayerCoverage } from "@raiopdf/rules";
 
 const require = createRequire(import.meta.url);
+const PDFJS_ASSET_DIR_ENV = "RAIOPDF_PDFJS_ASSET_DIR";
 
 function assetDir(name: string): string {
+  for (const root of assetRootCandidates()) {
+    const candidate = path.join(root, name);
+    if (isDirectory(candidate)) {
+      return toPdfjsFactoryUrl(candidate);
+    }
+  }
+
   const packageDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
   return toPdfjsFactoryUrl(path.join(packageDir, name));
 }
@@ -15,6 +24,37 @@ function assetDir(name: string): string {
 function toPdfjsFactoryUrl(directory: string): string {
   const withTrailingSeparator = /[\\/]$/.test(directory) ? directory : directory + path.sep;
   return pathToFileURL(withTrailingSeparator).href;
+}
+
+function assetRootCandidates(): string[] {
+  const candidates: string[] = [];
+  const explicit = process.env[PDFJS_ASSET_DIR_ENV];
+  if (explicit) {
+    candidates.push(explicit);
+  }
+
+  const execDir = path.dirname(process.execPath);
+  candidates.push(path.resolve(execDir, "..", "pdfjs"));
+  candidates.push(path.join(execDir, "pdfjs"));
+
+  const entry = process.argv[1];
+  if (entry) {
+    candidates.push(path.resolve(path.dirname(path.resolve(entry)), "..", "pdfjs"));
+  }
+
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  candidates.push(path.resolve(moduleDir, "..", "pdfjs"));
+
+  return [...new Set(candidates)];
+}
+
+function isDirectory(candidate: string): boolean {
+  try {
+    accessSync(candidate, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function openDocumentTask(bytes: Uint8Array): ReturnType<typeof getDocument> {
@@ -28,9 +68,6 @@ function openDocumentTask(bytes: Uint8Array): ReturnType<typeof getDocument> {
   });
 }
 
-/**
- * Extract only page-body text, not annotations or form fields.
- */
 export async function extractPageText(bytes: Uint8Array): Promise<string> {
   const pages = await extractPageTextByPage(bytes);
   return pages.map((page) => page.text).join("\n");
@@ -88,10 +125,6 @@ export async function extractTextLayerCoverage(bytes: Uint8Array): Promise<TextL
   }
 }
 
-/**
- * Extract page text plus annotation contents and form field values. This is used
- * by the redaction verifier, where hidden annotation/form text still matters.
- */
 export async function extractAllText(bytes: Uint8Array): Promise<string> {
   const task = openDocumentTask(bytes);
 

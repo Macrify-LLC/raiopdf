@@ -22,12 +22,22 @@ REQ_FILE="$REPO_ROOT/$OCRMYPDF_REQUIREMENTS"
 REQUIRED_PAYLOAD_FILES=(
   "jre/bin/java.exe"
   "engine/stirling.jar"
+  "mcp/app/index.mjs"
+  "mcp/node_modules/@napi-rs/canvas/package.json"
+  "mcp/node_modules/@napi-rs/canvas-win32-x64-msvc/package.json"
+  "mcp/node/LICENSE"
+  "mcp/node/node.exe"
   "ocr/THIRD-PARTY-PYTHON.md"
   "ocr/ocrmypdf.cmd"
   "ocr/python/python.exe"
   "ocr/tesseract/tesseract.exe"
   "ocr/tesseract/tessdata/eng.traineddata"
   "ocr/gs/bin/gswin64c.exe"
+)
+REQUIRED_PAYLOAD_DIRS=(
+  "mcp/pdfjs/cmaps"
+  "mcp/pdfjs/standard_fonts"
+  "mcp/pdfjs/wasm"
 )
 
 MODE=assemble
@@ -56,6 +66,29 @@ need() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+find_python() {
+  local candidate
+  if [[ -n "${PYTHON_CMD:-}" ]]; then
+    if "$PYTHON_CMD" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+      printf '%s\n' "$PYTHON_CMD"
+      return
+    fi
+    echo "PYTHON_CMD does not point to a usable Python 3.11+ executable: $PYTHON_CMD" >&2
+    exit 1
+  fi
+
+  for candidate in python3 python py; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+      "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  echo "Missing usable Python 3.11+ command (tried python3, python, py)." >&2
+  exit 1
 }
 
 sha256_file() {
@@ -94,7 +127,7 @@ extract_zip() {
   local dest=$2
   rm -rf -- "$dest"
   mkdir -p -- "$dest"
-  python3 - "$zip_file" "$dest" <<'PY'
+  "$PYTHON_CMD" - "$zip_file" "$dest" <<'PY'
 import sys
 import zipfile
 
@@ -113,6 +146,26 @@ find_7z() {
   done
 
   case "$(uname -s)-$(uname -m)" in
+    MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
+      local archive tool_dir bootstrap
+      archive=$(download_verified "7z-$SEVENZIP_VERSION-windows-x64.exe" "$SEVENZIP_WINDOWS_X64_URL" "$SEVENZIP_WINDOWS_X64_SHA256")
+      tool_dir="$CACHE_DIR/7zip-$SEVENZIP_VERSION-windows-x64"
+      if [[ ! -x "$tool_dir/7z.exe" ]]; then
+        if ! command -v node >/dev/null 2>&1; then
+          echo "Missing node; needed to locate bootstrap 7za for 7-Zip extraction." >&2
+          exit 1
+        fi
+        bootstrap=$(node -e 'try { process.stdout.write(require("7zip-bin").path7za || ""); } catch {}')
+        if [[ -z "$bootstrap" || ! -x "$bootstrap" ]]; then
+          echo "Missing bootstrap 7za from 7zip-bin." >&2
+          exit 1
+        fi
+        rm -rf -- "$tool_dir"
+        mkdir -p -- "$tool_dir"
+        "$bootstrap" x -y "-o$tool_dir" "$archive" >/dev/null
+      fi
+      printf '%s\n' "$tool_dir/7z.exe"
+      ;;
     Linux-x86_64|Linux-amd64)
       local archive tool_dir
       archive=$(download_verified "7z-$SEVENZIP_VERSION-linux-x64.tar.xz" "$SEVENZIP_LINUX_X64_URL" "$SEVENZIP_LINUX_X64_SHA256")
@@ -140,6 +193,25 @@ extract_with_7z() {
   "$seven_zip" x -y "-o$dest" "$archive" >/dev/null
 }
 
+is_windows_shell() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+windows_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 copy_single_root_contents() {
   local src=$1
   local dest=$2
@@ -164,6 +236,7 @@ copy_engine_jar() {
 
   dist_jar=$(find "$REPO_ROOT/engine/dist" -maxdepth 1 -type f -name "*-${TARGET_PLATFORM}.jar" -print -quit 2>/dev/null || true)
   if [[ -z "$dist_jar" ]]; then
+    configure_build_jdk "$BUILD_JDK_ZIP"
     bash "$REPO_ROOT/engine/vendor.sh"
     PLATFORM="$TARGET_PLATFORM" bash "$REPO_ROOT/engine/build.sh"
     dist_jar=$(find "$REPO_ROOT/engine/dist" -maxdepth 1 -type f -name "*-${TARGET_PLATFORM}.jar" -print -quit)
@@ -173,11 +246,53 @@ copy_engine_jar() {
   cp -- "$dist_jar" "$dest"
 }
 
+configure_build_jdk() {
+  local jdk_zip=$1
+  local extract_dir="$WORK_DIR/jdk"
+  local jdk_root
+
+  if command -v java >/dev/null 2>&1; then
+    return
+  fi
+
+  jdk_root=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -name "jdk-*" -print -quit)
+  if [[ -z "$jdk_root" ]]; then
+    extract_zip "$jdk_zip" "$extract_dir"
+    jdk_root=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -name "jdk-*" -print -quit)
+  fi
+  if [[ -z "$jdk_root" ]]; then
+    echo "Could not find Temurin JDK root in $jdk_zip" >&2
+    exit 1
+  fi
+
+  export JAVA_HOME="$jdk_root"
+  export PATH="$JAVA_HOME/bin:$PATH"
+}
+
+install_node_runtime() {
+  local node_zip=$1
+  local extract_dir="$WORK_DIR/node-runtime"
+  local node_dir="$PAYLOAD_DIR/mcp/node"
+  local node_root
+
+  extract_zip "$node_zip" "$extract_dir"
+  node_root=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d -name "node-v*-win-x64" -print -quit)
+  if [[ -z "$node_root" ]]; then
+    echo "Could not find Node runtime root in $node_zip" >&2
+    exit 1
+  fi
+
+  rm -rf -- "$node_dir"
+  mkdir -p -- "$node_dir"
+  cp -- "$node_root/node.exe" "$node_dir/node.exe"
+  cp -- "$node_root/LICENSE" "$node_dir/LICENSE"
+}
+
 generate_python_third_party_notice() {
   local site_packages=$1
   local notice_file=$2
 
-  python3 - "$site_packages" "$notice_file" <<'PY'
+  "$PYTHON_CMD" - "$site_packages" "$notice_file" <<'PY'
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -265,7 +380,7 @@ install_python_ocrmypdf() {
   copy_single_root_contents "$extract_dir" "$python_dir"
 
   mkdir -p -- "$python_dir/Lib/site-packages"
-  python3 -m pip install \
+  "$PYTHON_CMD" -m pip install \
     --upgrade \
     --no-compile \
     --target "$python_dir/Lib/site-packages" \
@@ -279,7 +394,7 @@ install_python_ocrmypdf() {
 
   pth_file=$(find "$python_dir" -maxdepth 1 -name "python*._pth" -print -quit)
   if [[ -n "$pth_file" ]]; then
-    python3 - "$pth_file" <<'PY'
+    "$PYTHON_CMD" - "$pth_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -310,6 +425,7 @@ PY
 @echo off
 set "PYTHONHOME=%~dp0python"
 set "PYTHONPATH=%~dp0python\Lib\site-packages"
+set "PYTHONDONTWRITEBYTECODE=1"
 "%~dp0python\python.exe" -m ocrmypdf %*
 EOF
 
@@ -323,7 +439,16 @@ install_tesseract() {
   local extract_dir="$WORK_DIR/tesseract"
   local tess_dir="$PAYLOAD_DIR/ocr/tesseract"
 
-  extract_with_7z "$installer" "$extract_dir" "$seven_zip"
+  if ! extract_with_7z "$installer" "$extract_dir" "$seven_zip"; then
+    if ! is_windows_shell; then
+      echo "Could not extract Tesseract installer with 7-Zip." >&2
+      exit 1
+    fi
+    rm -rf -- "$extract_dir"
+    mkdir -p -- "$extract_dir"
+    chmod +x "$installer"
+    "$installer" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$(windows_path "$extract_dir")"
+  fi
   rm -rf -- "$extract_dir/\$PLUGINSDIR"
   rm -f -- "$extract_dir/tesseract-uninstall.exe"
 
@@ -340,7 +465,16 @@ install_ghostscript() {
   local extract_dir="$WORK_DIR/ghostscript"
   local gs_dir="$PAYLOAD_DIR/ocr/gs"
 
-  extract_with_7z "$installer" "$extract_dir" "$seven_zip"
+  if ! extract_with_7z "$installer" "$extract_dir" "$seven_zip"; then
+    if ! is_windows_shell; then
+      echo "Could not extract Ghostscript installer with 7-Zip." >&2
+      exit 1
+    fi
+    rm -rf -- "$extract_dir"
+    mkdir -p -- "$extract_dir"
+    chmod +x "$installer"
+    "$installer" /S "/D=$(windows_path "$extract_dir")"
+  fi
   rm -rf -- "$extract_dir/\$PLUGINSDIR"
 
   rm -rf -- "$gs_dir"
@@ -349,7 +483,7 @@ install_ghostscript() {
 }
 
 generate_payload_manifest() {
-  python3 - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" <<'PY'
+  "$PYTHON_CMD" - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" <<'PY'
 from pathlib import Path
 import hashlib
 import sys
@@ -358,9 +492,13 @@ payload_dir = Path(sys.argv[1]).resolve()
 manifest_name = sys.argv[2]
 manifest_path = payload_dir / manifest_name
 
+def should_skip(path: Path) -> bool:
+    relative = path.relative_to(payload_dir)
+    return "__pycache__" in relative.parts or path.suffix == ".pyc"
+
 rows = []
 for path in sorted(payload_dir.rglob("*")):
-    if not path.is_file() or path.name == manifest_name:
+    if not path.is_file() or path.name == manifest_name or should_skip(path):
         continue
 
     relative_path = path.relative_to(payload_dir).as_posix()
@@ -375,14 +513,16 @@ PY
 }
 
 verify_payload_manifest() {
-  python3 - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" "${REQUIRED_PAYLOAD_FILES[@]}" <<'PY'
+  "$PYTHON_CMD" - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" "${#REQUIRED_PAYLOAD_FILES[@]}" "${REQUIRED_PAYLOAD_FILES[@]}" "${REQUIRED_PAYLOAD_DIRS[@]}" <<'PY'
 from pathlib import Path, PurePosixPath
 import hashlib
 import sys
 
 payload_dir = Path(sys.argv[1]).resolve()
 manifest_name = sys.argv[2]
-required_paths = set(sys.argv[3:])
+required_file_count = int(sys.argv[3])
+required_paths = set(sys.argv[4:4 + required_file_count])
+required_dirs = set(sys.argv[4 + required_file_count:])
 manifest_path = payload_dir / manifest_name
 
 if not manifest_path.is_file():
@@ -394,6 +534,11 @@ if not lines or lines[0] != "sha256\tsize\tpath":
 
 manifest = {}
 errors = []
+
+def should_skip(path: Path) -> bool:
+    relative = path.relative_to(payload_dir)
+    return "__pycache__" in relative.parts or path.suffix == ".pyc"
+
 for line_number, line in enumerate(lines[1:], start=2):
     parts = line.split("\t")
     if len(parts) != 3:
@@ -422,7 +567,7 @@ for line_number, line in enumerate(lines[1:], start=2):
 actual_paths = {
     path.relative_to(payload_dir).as_posix()
     for path in payload_dir.rglob("*")
-    if path.is_file() and path.name != manifest_name
+    if path.is_file() and path.name != manifest_name and not should_skip(path)
 }
 
 for relative_path, (expected_sha, expected_size) in sorted(manifest.items()):
@@ -445,6 +590,15 @@ missing_required = sorted(required_paths - set(manifest))
 for relative_path in missing_required:
     errors.append(f"Required payload file missing from manifest: {relative_path}")
 
+for relative_dir in sorted(required_dirs):
+    directory = payload_dir / relative_dir
+    if not directory.is_dir():
+        errors.append(f"Required payload directory missing: {relative_dir}")
+        continue
+    prefix = relative_dir.rstrip("/") + "/"
+    if not any(relative_path.startswith(prefix) for relative_path in manifest):
+        errors.append(f"Required payload directory has no manifest entries: {relative_dir}")
+
 extra_paths = sorted(actual_paths - set(manifest))
 for relative_path in extra_paths:
     errors.append(f"Payload file missing from manifest: {relative_path}")
@@ -466,12 +620,14 @@ verify_payload() {
 }
 
 if [[ "$MODE" == "verify" ]]; then
+  PYTHON_CMD=$(find_python)
   verify_payload
   exit 0
 fi
 
 need curl
-need python3
+need node
+PYTHON_CMD=$(find_python)
 need sha256sum
 need tar
 
@@ -485,6 +641,8 @@ mkdir -p -- "$PAYLOAD_DIR/ocr"
 touch "$PAYLOAD_DIR/.gitkeep"
 
 jre_zip=$(download_verified "temurin-jre-$TEMURIN_JRE_VERSION-windows-x64.zip" "$TEMURIN_JRE_URL" "$TEMURIN_JRE_SHA256")
+jdk_zip=$(download_verified "temurin-jdk-$TEMURIN_JDK_VERSION-windows-x64.zip" "$TEMURIN_JDK_URL" "$TEMURIN_JDK_SHA256")
+node_zip=$(download_verified "node-v$NODE_RUNTIME_VERSION-win-x64.zip" "$NODE_RUNTIME_URL" "$NODE_RUNTIME_SHA256")
 python_zip=$(download_verified "python-$PYTHON_EMBED_VERSION-embed-amd64.zip" "$PYTHON_EMBED_URL" "$PYTHON_EMBED_SHA256")
 tesseract_installer=$(download_verified "tesseract-$TESSERACT_VERSION-w64-setup.exe" "$TESSERACT_URL" "$TESSERACT_SHA256")
 tessdata_eng=$(download_verified "tessdata-fast-$TESSDATA_FAST_VERSION-eng.traineddata" "$TESSDATA_ENG_URL" "$TESSDATA_ENG_SHA256")
@@ -495,9 +653,12 @@ seven_zip=$(find_7z)
 extract_zip "$jre_zip" "$WORK_DIR/jre"
 copy_single_root_contents "$WORK_DIR/jre" "$PAYLOAD_DIR/jre"
 
+BUILD_JDK_ZIP="$jdk_zip"
 copy_engine_jar
+install_node_runtime "$node_zip"
 install_python_ocrmypdf "$python_zip"
 install_tesseract "$tesseract_installer" "$tessdata_eng" "$seven_zip"
 install_ghostscript "$ghostscript_installer" "$seven_zip"
+node "$SCRIPT_DIR/build-mcp-runtime.mjs"
 generate_payload_manifest
 verify_payload

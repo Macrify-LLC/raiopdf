@@ -46,6 +46,10 @@
     "resources": [
       "payload/**/*"
     ],
+    "externalBin": [
+      "binaries/raiopdf-engine-host",
+      "binaries/raiopdf-mcp"
+    ],
     "windows": {
       "allowDowngrades": false,
       "nsis": {

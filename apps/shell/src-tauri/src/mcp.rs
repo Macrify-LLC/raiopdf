@@ -197,8 +197,6 @@ fn is_enabled() -> bool {
     }
 }
 
-/// The bundled `raiopdf-mcp` binary is wired in the packaging phase (P6). Until
-/// then the UI shows a placeholder path and disables the Copy buttons.
 fn resolve_mcp_binary() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("RAIOPDF_MCP_BIN").map(PathBuf::from) {
         return explicit.exists().then_some(explicit);
@@ -212,8 +210,14 @@ fn resolve_mcp_binary() -> Option<PathBuf> {
     } else {
         "raiopdf-mcp"
     };
-    let sibling = exe_dir.join(binary);
-    sibling.exists().then_some(sibling)
+
+    [
+        exe_dir.join(binary),
+        exe_dir.join("resources").join(binary),
+        exe_dir.join("binaries").join(binary),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.exists())
 }
 
 #[tauri::command]

@@ -83,6 +83,10 @@ jobs:
           set -Eeuo pipefail
 
           VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' does not yield a valid semver version ('$VERSION'); refusing to stamp." >&2
+            exit 1
+          fi
           node - "$VERSION" <<'NODE'
           const fs = require("fs");
 
@@ -120,21 +124,23 @@ jobs:
             exit 1
           fi
 
-          mapfile -t VERSIONED_INSTALLERS < <(
-            find "${EXISTING_DIRS[@]}" -type f \
-              \( -name "*_${VERSION}_*-setup.exe" -o -name "*_${VERSION}_*.msi" \) \
-              | sort -u
+          mapfile -t NSIS_INSTALLERS < <(
+            find "${EXISTING_DIRS[@]}" -type f -name "*_${VERSION}_*-setup.exe" | sort -u
+          )
+          mapfile -t MSI_INSTALLERS < <(
+            find "${EXISTING_DIRS[@]}" -type f -name "*_${VERSION}_*.msi" | sort -u
           )
 
-          if [[ "${#VERSIONED_INSTALLERS[@]}" -lt 1 ]]; then
-            echo "No Windows installer filename contains stamped version $VERSION." >&2
+          if [[ "${#NSIS_INSTALLERS[@]}" -lt 1 || "${#MSI_INSTALLERS[@]}" -lt 1 ]]; then
+            echo "Expected both an NSIS and an MSI installer stamped with version $VERSION." >&2
+            echo "  NSIS matches: ${#NSIS_INSTALLERS[@]}; MSI matches: ${#MSI_INSTALLERS[@]}" >&2
             echo "Produced bundle files:" >&2
             find "${EXISTING_DIRS[@]}" -type f | sort >&2
             exit 1
           fi
 
           printf 'Versioned installer artifacts:\n'
-          printf '  %s\n' "${VERSIONED_INSTALLERS[@]}"
+          printf '  %s\n' "${NSIS_INSTALLERS[@]}" "${MSI_INSTALLERS[@]}"
 
       - name: Verify bundled payload manifest
         shell: bash

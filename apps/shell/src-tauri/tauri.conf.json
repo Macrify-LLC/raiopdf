@@ -31,7 +31,6 @@
       "nsis",
       "msi"
     ],
-    "createUpdaterArtifacts": true,
     "publisher": "Macrify LLC",
     "homepage": "https://raio.macrify.me",
     "copyright": "Copyright (c) 2026 Macrify LLC",

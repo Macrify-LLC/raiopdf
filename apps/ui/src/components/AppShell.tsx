@@ -1,6 +1,6 @@
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 import type { OcrUiState } from "../App";
-import type { DocumentState } from "../hooks/useDocument";
+import type { DocumentState, PageScrollIntent } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
@@ -29,6 +29,8 @@ export interface AppShellProps {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
   documentSearch: DocumentSearchState;
+  pageScrollIntent: PageScrollIntent | null;
+  onVisiblePageChange: (page: number) => void;
   selectedPageIndexes: ReadonlySet<number>;
   onOpenRequested: () => void;
   onFileDropped: (file: File) => void;
@@ -78,6 +80,8 @@ export function AppShell({
   document,
   pdfDocument,
   documentSearch,
+  pageScrollIntent,
+  onVisiblePageChange,
   selectedPageIndexes,
   onOpenRequested,
   onFileDropped,
@@ -206,6 +210,8 @@ export function AppShell({
           currentPage={document.currentPage}
           zoom={document.zoom}
           fitWidth={document.fitWidth}
+          scrollIntent={pageScrollIntent}
+          onVisiblePageChange={onVisiblePageChange}
           error={document.error}
           onZoomOut={onZoomOut}
           onZoomIn={onZoomIn}

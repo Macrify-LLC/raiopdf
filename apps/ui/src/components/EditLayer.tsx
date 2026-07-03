@@ -97,7 +97,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ id: string; rect: ViewportRect } | null>(
     null,
   );
@@ -110,7 +109,17 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const drawPointsRef = useRef<ViewportPoint[]>([]);
   const itemDragRef = useRef<ItemDrag | null>(null);
   const placementGuardRef = useRef(0);
-  const { tool, pendingEdits, addEdit, updateEdit, removeEdit } = editing;
+  const {
+    tool,
+    pendingEdits,
+    addEdit,
+    updateEdit,
+    removeEdit,
+    // Selection is shared editing state (not per-layer) because one
+    // EditLayer mounts per visible page in the continuous-scroll viewer.
+    selectedEditId: selectedId,
+    setSelectedEditId: setSelectedId,
+  } = editing;
   const scale = viewport.scale;
   const sideways = viewport.rotation % 180 !== 0;
   const pageEdits = useMemo(
@@ -150,7 +159,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setDrawDraft(null);
     setTextDraft(null);
     setCommentDraft(null);
-    setSelectedId(null);
     setDragPreview(null);
     setItemContextMenu(null);
     dragStartRef.current = null;
@@ -179,25 +187,35 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   // Delete/Backspace removes the currently selected placed item (stamp,
   // image, text box). Ignored while typing into a field (the text-box/
   // comment drafts have their own textareas, which this already covers) or
-  // while a dialog is open on top of the canvas.
+  // while a dialog is open on top of the canvas. One EditLayer mounts per
+  // visible page, so only the layer whose page owns the selected item acts.
+  const selectedIdOnThisPage = useMemo(
+    () => (selectedId && pageEdits.some((edit) => edit.id === selectedId) ? selectedId : null),
+    [pageEdits, selectedId],
+  );
+
   useEffect(() => {
+    if (!selectedIdOnThisPage) {
+      return;
+    }
+
     function handleKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key !== "Delete" && event.key !== "Backspace") {
         return;
       }
 
-      if (!selectedId || isTextEntryTarget(event.target) || hasOpenDialogStackEntry()) {
+      if (!selectedIdOnThisPage || isTextEntryTarget(event.target) || hasOpenDialogStackEntry()) {
         return;
       }
 
       event.preventDefault();
-      removeEdit(selectedId);
+      removeEdit(selectedIdOnThisPage);
       setSelectedId(null);
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [removeEdit, selectedId]);
+  }, [removeEdit, selectedIdOnThisPage, setSelectedId]);
 
   const getLayerPoint = useCallback(
     (event: ReactPointerEvent): ViewportPoint | null => {

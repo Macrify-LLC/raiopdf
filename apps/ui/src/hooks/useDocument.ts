@@ -80,6 +80,18 @@ interface ReplaceBytesOptions {
 
 export type ReplaceBytesResult = "replaced" | "stale" | "failed";
 
+/**
+ * A one-shot "scroll the viewer to this page" request. Every explicit
+ * navigation (prev/next commands, thumbnail clicks, search jumps, mutation
+ * commits that move the reader) emits one of these; the continuous-scroll
+ * viewer consumes it by nonce. Derived current-page updates from scrolling
+ * go through `syncVisiblePage` instead and never emit an intent.
+ */
+export interface PageScrollIntent {
+  page: number;
+  nonce: number;
+}
+
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
@@ -112,10 +124,17 @@ export interface BinderExhibitInput {
 export function useDocument() {
   const engine = useMemo<PdfEngine>(() => new LocalPdfEngine(), []);
   const [document, setDocument] = useState<DocumentState>(INITIAL_DOCUMENT);
+  const [pageScrollIntent, setPageScrollIntent] = useState<PageScrollIntent | null>(null);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
+  const scrollNonceRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const requestPageScroll = useCallback((page: number) => {
+    scrollNonceRef.current += 1;
+    setPageScrollIntent({ page, nonce: scrollNonceRef.current });
+  }, []);
 
   const setError = useCallback((error: string | null) => {
     setDocument((current) => ({ ...current, error }));
@@ -184,13 +203,21 @@ export function useDocument() {
         error: null,
       }));
 
+      // A mutation that explicitly moves the reader (merge -> 1, insert ->
+      // the inserted page, ...) is a navigation: it becomes a scroll intent.
+      // The function form (delete keeps the reader near its page) and
+      // in-place mutations leave the scroll position alone.
+      if (typeof options.currentPage === "number") {
+        requestPageScroll(clampPage(options.currentPage, pageCount));
+      }
+
       if (previousHandle !== engineHandle) {
         await closeHandle(previousHandle);
       }
 
       return true;
     },
-    [closeHandle, engine],
+    [closeHandle, engine, requestPageScroll],
   );
 
   const currentOperation = useCallback((): OperationContext | null => {
@@ -296,6 +323,7 @@ export function useDocument() {
           pageSizeInches: null,
           error: null,
         });
+        requestPageScroll(1);
         return true;
       } catch (error) {
         await closeHandle(openedHandle);
@@ -324,7 +352,7 @@ export function useDocument() {
         return false;
       }
     },
-    [closeHandle, engine],
+    [closeHandle, engine, requestPageScroll],
   );
 
   const replaceBytes = useCallback(
@@ -390,11 +418,34 @@ export function useDocument() {
 
   const getOpenToken = useCallback(() => openTokenRef.current, []);
 
+  /**
+   * Explicit navigation: updates `currentPage` AND emits a scroll intent so
+   * the continuous-scroll viewer brings the page into view. Every caller —
+   * prev/next commands, thumbnail clicks, search navigation — is a scroll
+   * intent by construction.
+   */
   const setCurrentPage = useCallback((page: number) => {
     setDocument((current) => ({
       ...current,
       currentPage: clampPage(page, current.pageCount),
     }));
+    // The viewer clamps against its own layout; an out-of-range intent can
+    // never scroll past the last page.
+    requestPageScroll(Math.max(1, Math.round(page)));
+  }, [requestPageScroll]);
+
+  /**
+   * Derived update from the viewer's scroll position (most-visible page).
+   * Never emits a scroll intent — that would fight the user's scrolling.
+   */
+  const syncVisiblePage = useCallback((page: number) => {
+    setDocument((current) => {
+      const clamped = clampPage(page, current.pageCount);
+
+      return clamped === current.currentPage
+        ? current
+        : { ...current, currentPage: clamped };
+    });
   }, []);
 
   const setZoom = useCallback((zoom: number) => {
@@ -933,10 +984,12 @@ export function useDocument() {
 
   return {
     document,
+    pageScrollIntent,
     openFile,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
+    syncVisiblePage,
     setZoom,
     setFitZoom,
     setHasTextLayer,

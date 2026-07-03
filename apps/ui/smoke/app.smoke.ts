@@ -90,7 +90,7 @@ test("renders page 1 in the main canvas after opening a PDF", async ({ page }) =
 
   await expect(page.locator(".canvas-well__empty")).toHaveCount(0);
   await expect(page.getByText("This PDF could not be opened. The file may be corrupt or unsupported.")).toHaveCount(0);
-  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]').first()).toBeVisible();
   await expect.poll(() => mainCanvasStats(page)).toMatchObject({
     widthReady: true,
     heightReady: true,
@@ -107,7 +107,7 @@ test("zooms the canvas with Acrobat-style shortcuts", async ({ page }) => {
   );
 
   const zoomLabel = page.locator(".command-bar__zoom-label");
-  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]').first();
   const bounds = await canvas.boundingBox();
 
   if (!bounds) {
@@ -149,7 +149,7 @@ test("renders page 1 in the main canvas after opening a 4-page PDF", async ({ pa
   await expect(page.getByRole("button", { name: "Page 4" })).toBeVisible();
   await expect(page.locator(".canvas-well__empty")).toHaveCount(0);
   await expect(page.getByText("This PDF could not be opened. The file may be corrupt or unsupported.")).toHaveCount(0);
-  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]').first()).toBeVisible();
   await expect.poll(() => mainCanvasStats(page)).toMatchObject({
     widthReady: true,
     heightReady: true,
@@ -173,7 +173,11 @@ test("renders the Word-generated DCM order fixture", async ({ page }) => {
   await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
   await expect.poll(() => searchResultCount(page)).toBeGreaterThan(0);
   await expect(page.getByText("Page 2 / 7")).toBeVisible();
-  await expect(page.locator('[data-testid="search-highlight"]')).toHaveCount(1);
+  // Continuous scroll keeps neighboring pages mounted, so highlights on
+  // adjacent pages can coexist — exactly one is ever the ACTIVE hit.
+  await expect(
+    page.locator('[data-testid="search-highlight"][data-active="true"]'),
+  ).toHaveCount(1);
 
   await page.getByRole("button", { name: "Next search result" }).click();
   await expect(page.locator(".command-bar__search-count")).toHaveText(/2 of [1-9]\d*/);
@@ -384,7 +388,7 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await openPdf(page, "bates.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
-  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]').first()).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
   await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
   await page.getByLabel("Prefix").fill("CASE");
@@ -653,7 +657,7 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   );
 
   const commandBar = page.locator(".command-bar");
-  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]').first();
 
   // Highlight: drag a band across the text line near the top of the page.
   // Retries in case the drag lands before the page's text layer resolves —
@@ -731,7 +735,7 @@ test("places a text box rotation-correctly on a rotated page", async ({ page }) 
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
   const commandBar = page.locator(".command-bar");
-  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]').first();
   await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
   await clickCanvasAt(page, canvas, 0.25, 0.25);
   await page.getByLabel("Text box content").fill("ROTCHECK");
@@ -757,7 +761,7 @@ test("rapid double-clicks cannot double-place or double-save", async ({ page }) 
   await openPdf(page, "double-click.pdf", await createPdf([300]));
 
   const commandBar = page.locator(".command-bar");
-  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]').first();
   await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
 
   // Two rapid clicks at the same spot must produce exactly one draft box.
@@ -810,7 +814,7 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
   });
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
-  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]').first()).toBeVisible();
 }
 
 async function readFixture(fileName: string): Promise<Uint8Array> {

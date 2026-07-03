@@ -13,8 +13,14 @@
   transition: padding-top var(--duration-fast) ease;
 }
 
-.canvas-well[data-mode-bar="true"] {
+.canvas-well[data-mode-bar="true"]:not([data-viewer="true"]) {
   padding-top: calc(var(--space-6) + 44px);
+}
+
+/* Continuous-scroll viewer mode: the PageList owns scrolling and padding. */
+.canvas-well[data-viewer="true"] {
+  padding: 0;
+  overflow: hidden;
 }
 
 .canvas-well__mode-bar-slot {
@@ -49,13 +55,23 @@
 
 .canvas-well__form-note {
   margin: 0;
-  align-self: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-chip);
   background: var(--chrome);
   color: var(--muted);
   font-size: var(--text-2xs);
   padding: 3px var(--space-3);
+  /* Floats over the page list, centered near the top of the well. */
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.canvas-well[data-mode-bar="true"] .canvas-well__form-note {
+  top: calc(var(--space-4) + 44px);
 }
 
 .canvas-well__empty {
@@ -145,79 +161,6 @@
   outline-offset: 2px;
 }
 
-.canvas-well__stage {
-  width: 100%;
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.canvas-well__page {
-  display: block;
-  background: var(--panel);
-}
-
-.canvas-well__page-frame {
-  position: relative;
-  box-shadow: var(--shadow-page);
-  background: var(--panel);
-  min-width: 120px;
-  min-height: 160px;
-}
-
-.canvas-well__page-frame[data-redaction-mode="true"] {
-  cursor: crosshair;
-}
-
-.canvas-well__redaction-overlay,
-.canvas-well__redaction-draft {
-  position: absolute;
-  border: 1px solid var(--danger);
-  background: var(--danger-bg);
-  opacity: 0.72;
-  pointer-events: none;
-}
-
-.canvas-well__search-highlight {
-  position: absolute;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: var(--highlight);
-  opacity: 0.42;
-  pointer-events: none;
-}
-
-.canvas-well__search-highlight[data-active="true"] {
-  border-color: var(--warn);
-  opacity: 0.68;
-}
-
-.canvas-well__redaction-draft {
-  border-style: dashed;
-}
-
-.canvas-well__redaction-remove {
-  position: absolute;
-  top: -9px;
-  right: -9px;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-control);
-  background: var(--panel);
-  color: var(--danger);
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  line-height: 1;
-  pointer-events: auto;
-  cursor: default;
-}
-
 .canvas-well__message {
   margin: 0;
   max-width: 420px;
@@ -229,15 +172,12 @@
   padding: var(--space-2) var(--space-3);
 }
 
-.canvas-well__render-pending {
+/* Error chip floating over the continuous-scroll viewer. */
+.canvas-well__message--floating {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  background: var(--panel);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  pointer-events: none;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  box-shadow: var(--shadow-control);
 }

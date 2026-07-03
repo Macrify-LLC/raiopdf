@@ -1,0 +1,206 @@
+/*
+ * Continuous-scroll page list + per-page layers.
+ *
+ * Z-order inside a page frame (bottom to top):
+ *   canvas (0) < text layer (1) < form fields (2) < redaction overlays (3)
+ *   < edit layer (4) < search highlights (5) < render-pending veil (6).
+ */
+
+.page-list {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: auto;
+  background: var(--well);
+}
+
+.page-list__content {
+  position: relative;
+  min-width: 100%;
+}
+
+.page-list__page {
+  position: absolute;
+  background: var(--panel);
+  box-shadow: var(--shadow-page);
+}
+
+.page-view {
+  position: absolute;
+  inset: 0;
+  /* pdf.js layer sizing contract: the TextLayer container is sized with
+     round(down, var(--total-scale-factor) * <page pt>px, ...). The
+     --scale-factor itself is set inline per page from the viewport. */
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor, 1) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+.page-view[data-redaction-mode="true"] {
+  cursor: crosshair;
+}
+
+.page-view__canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  display: block;
+  background: var(--panel);
+}
+
+/* ---- Text layer (pdf.js v6 TextLayer output) ---- */
+
+.page-view__text-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  /* Only the Select tool grants the text layer the pointer; every other
+     tool keeps the page's draw/place interactions on top. */
+  pointer-events: none;
+}
+
+.page-view[data-text-select="true"] .page-view__text-layer {
+  pointer-events: auto;
+}
+
+.page-view__text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.page-view__text-layer > :not(.markedContent),
+.page-view__text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --min-font-size-used: var(--min-font-size, 1);
+  font-size: calc(var(--total-scale-factor) * var(--min-font-size-used) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(calc(1 / var(--min-font-size-used)));
+}
+
+.page-view__text-layer .markedContent {
+  display: contents;
+}
+
+.page-view__text-layer ::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: transparent;
+}
+
+/* Rotated pages: pdf.js sizes the text layer in unrotated page space and
+   stamps data-main-rotation; CSS turns it into place. */
+.page-view [data-main-rotation="90"] {
+  transform: rotate(90deg) translateY(-100%);
+}
+
+.page-view [data-main-rotation="180"] {
+  transform: rotate(180deg) translate(-100%, -100%);
+}
+
+.page-view [data-main-rotation="270"] {
+  transform: rotate(270deg) translateX(-100%);
+}
+
+/* ---- Layer stacking + Select-tool pointer routing ---- */
+
+.page-view .form-layer {
+  z-index: 2;
+}
+
+.page-view .edit-layer {
+  z-index: 4;
+}
+
+/* Select tool: text selection wins over the edit layer and its items.
+   Form inputs deliberately stay live — they are small rects and filling
+   fields is the default-tool workflow. */
+.page-view[data-text-select="true"] .edit-layer,
+.page-view[data-text-select="true"] .edit-layer * {
+  pointer-events: none;
+}
+
+.page-view__render-pending {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
+/* ---- Redaction overlays ---- */
+
+.page-view__redaction-overlay,
+.page-view__redaction-draft {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.page-view__redaction-draft {
+  border-style: dashed;
+}
+
+.page-view__redaction-remove {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* ---- Search highlights ---- */
+
+.page-view__search-highlight {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: var(--highlight);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.page-view__search-highlight[data-active="true"] {
+  border-color: var(--warn);
+  opacity: 0.68;
+}

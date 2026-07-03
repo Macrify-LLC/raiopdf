@@ -21,7 +21,7 @@ import type {
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { floridaPack, preflight } from "@raiopdf/rules";
+import { getPack, getPackIntegrityBanner, preflight } from "@raiopdf/rules";
 import type {
   DocumentFacts,
   JurisdictionPack,
@@ -66,12 +66,14 @@ import {
   pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
 import {
+  collectRedactionAreaTexts,
   extractTextBoxes,
   findTextRedactionAreas,
   readMetadataSummary,
   scanSensitivePatterns,
   verifyRedactionAreasClear,
   type PdfMetadataSummary,
+  type RedactionVerificationResult,
   type SensitiveHit,
 } from "./lib/legalTools";
 import {
@@ -92,7 +94,8 @@ import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
-const FLORIDA_PACK: JurisdictionPack = floridaPack;
+const FLORIDA_PACK: JurisdictionPack = getPack();
+const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
 
 declare global {
@@ -1074,24 +1077,32 @@ export function App() {
     }
 
     setRedactionPhase("applying");
-    setRedactionMessage("Applying redactions and verifying removed text...");
+    setRedactionMessage("Applying redactions and verifying text layer, page images, annotations, and metadata...");
 
     try {
+      const redactedTerms = pdfDocument
+        ? await collectRedactionAreaTexts(pdfDocument, areas)
+        : [];
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return;
+      }
+
       const redactedBytes = await engineBridge.redactAreas(sourceBytes, areas);
 
       if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
         return;
       }
 
-      const verified = await verifyRedactionAreasClear(redactedBytes, areas);
+      const verified = await verifyRedactionAreasClear(redactedBytes, areas, redactedTerms);
 
       if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
         return;
       }
 
-      if (!verified) {
+      if (!verified.ok) {
         setRedactionPhase("error");
-        setRedactionMessage("Verification failed — text may remain. The document was NOT modified.");
+        setRedactionMessage(`${formatRedactionVerificationFailure(verified)} The document was NOT modified.`);
         return;
       }
 
@@ -1110,7 +1121,7 @@ export function App() {
 
       setPendingRedactions([]);
       setRedactionPhase("verified");
-      setRedactionMessage("Redacted and verified — the removed text no longer exists in the file.");
+      setRedactionMessage(formatRedactionVerificationSuccess(verified));
     } catch (error) {
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
@@ -1125,7 +1136,7 @@ export function App() {
       setRedactionPhase("error");
       setRedactionMessage(message);
     }
-  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pendingRedactions, replaceBytes]);
+  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pdfDocument, pendingRedactions, replaceBytes]);
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
@@ -2268,6 +2279,20 @@ export function App() {
 
   return (
     <>
+      {PACK_INTEGRITY_BANNER ? (
+        <div
+          role="alert"
+          style={{
+            background: "#fff4ce",
+            borderBottom: "1px solid #d9a441",
+            color: "#3b2a00",
+            fontSize: 13,
+            padding: "8px 16px",
+          }}
+        >
+          {PACK_INTEGRITY_BANNER}
+        </div>
+      ) : null}
       <AppShell
         document={document}
         pdfDocument={pdfDocument}
@@ -2805,6 +2830,30 @@ function runFilingPreflight(facts: DocumentFacts, pack: JurisdictionPack): Prefl
     (window.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ ?? 0) + 1;
 
   return preflight(facts, pack);
+}
+
+function formatRedactionVerificationSuccess(result: RedactionVerificationResult): string {
+  const textLayer = result.textLayer.status === "pass"
+    ? "text layer verified clean"
+    : "no source text was extractable from marked areas";
+
+  return [
+    `Redacted and verified: ${textLayer}`,
+    "redacted page images replaced",
+    "annotations cleaned",
+    "metadata scrubbed",
+  ].join("; ") + ".";
+}
+
+function formatRedactionVerificationFailure(result: RedactionVerificationResult): string {
+  const failedChecks = [
+    result.textLayer,
+    result.rasterizedPages,
+    result.annotations,
+    result.metadata,
+  ].filter((check) => check.status === "fail");
+
+  return `Verification failed: ${failedChecks.map((check) => check.detail).join(" ")}`;
 }
 
 function aggregateOutputReports(reports: readonly PreflightReport[]): PreflightReport {

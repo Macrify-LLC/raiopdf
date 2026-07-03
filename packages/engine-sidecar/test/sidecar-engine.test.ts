@@ -56,6 +56,23 @@ describe("SidecarPdfEngine", () => {
     await expectFormFile(calls[0], [1, 2, 3]);
   });
 
+  it("sends the sidecar auth token on every proxied request", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(9));
+    const engine = new SidecarPdfEngine({
+      authToken: "test-token",
+      baseUrl: "http://127.0.0.1:8080",
+      fetch: fetchImpl,
+    });
+    const document = await engine.open(bytes(1));
+
+    await engine.reorderPages(document, [0, 1, 2]);
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(headerValue(call, "X-RaioPDF-Auth")).toBe("test-token");
+    }
+  });
+
   it("reorders pages through rearrange-pages", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(9));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
@@ -204,7 +221,8 @@ describe("SidecarPdfEngine", () => {
   });
 
   it("redacts text through auto-redact with literal term mapping", async () => {
-    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(70));
+    const redactedPdf = await createPdfWithMetadata();
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfBytesResponse(redactedPdf));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
 
@@ -214,7 +232,7 @@ describe("SidecarPdfEngine", () => {
       rasterize: true,
     });
 
-    expect(await engine.saveToBytes(redacted)).toEqual(bytes(70));
+    await expectNoDocumentMetadata(await engine.saveToBytes(redacted));
     expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/auto-redact");
     expectFormField(calls[1], "listOfText", "Alice Smith\n123-45-6789");
     expectFormField(calls[1], "useRegex", "false");
@@ -240,7 +258,8 @@ describe("SidecarPdfEngine", () => {
   });
 
   it("redacts PDF point areas through redact-execute imageBoxes", async () => {
-    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(71));
+    const redactedPdf = await createPdfWithMetadata();
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfBytesResponse(redactedPdf));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
 
@@ -249,7 +268,7 @@ describe("SidecarPdfEngine", () => {
       { pageIndex: 2, x: 50, y: 60, w: 70, h: 80 },
     ]);
 
-    expect(await engine.saveToBytes(redacted)).toEqual(bytes(71));
+    await expectNoDocumentMetadata(await engine.saveToBytes(redacted));
     expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/redact-execute");
     expect(expectJsonFormField(calls[1], "imageBoxes")).toEqual([
       { pageIndex: 0, x1: 10, y1: 60, x2: 40, y2: 20 },
@@ -631,4 +650,19 @@ async function expectFormFile(call: FetchCall | undefined, expectedBytes: readon
 
 function pathFromUrl(url: string): string {
   return new URL(url).pathname;
+}
+
+function headerValue(call: FetchCall | undefined, name: string): string | null {
+  const headers = call?.init?.headers;
+  expect(headers).toBeDefined();
+
+  if (headers instanceof Headers) {
+    return headers.get(name);
+  }
+
+  if (Array.isArray(headers)) {
+    return new Headers(headers).get(name);
+  }
+
+  return new Headers(headers).get(name);
 }

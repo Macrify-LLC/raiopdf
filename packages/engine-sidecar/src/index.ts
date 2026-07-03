@@ -36,6 +36,7 @@ type StoredDocument = {
 };
 
 export type SidecarPdfEngineOptions = {
+  authToken?: string;
   baseUrl: string;
   fetch?: Fetch;
 };
@@ -113,25 +114,31 @@ const DEFAULT_MARGIN_IN = 0.5;
  *   ocrRenderType=sandwich, sidecar=false, and deskew.
  */
 export class SidecarPdfEngine implements PdfEngine {
+  private readonly authToken: string | undefined;
   private readonly baseUrl: string;
   private readonly fetchImpl: Fetch;
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
   private nextDocumentId = 1;
 
   constructor(options: SidecarPdfEngineOptions) {
+    this.authToken = options.authToken;
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.fetchImpl = options.fetch ?? globalThis.fetch;
   }
 
-  static async probe(baseUrl: string, fetchImpl: Fetch = globalThis.fetch): Promise<SidecarPdfEngineInfo | null> {
+  static async probe(
+    baseUrl: string,
+    fetchImpl: Fetch = globalThis.fetch,
+    authToken?: string,
+  ): Promise<SidecarPdfEngineInfo | null> {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
     try {
       const response = await fetchImpl(`${normalizedBaseUrl}/api/v1/info/status`, {
         method: "GET",
-        headers: {
+        headers: sidecarHeaders(authToken, {
           accept: "application/json",
-        },
+        }),
       });
 
       if (!response.ok) {
@@ -465,7 +472,7 @@ export class SidecarPdfEngine implements PdfEngine {
 
     const response = await this.request("/api/v1/security/redact-execute", formData);
 
-    return this.store(await readBytes(response), pageCount);
+    return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
   }
 
   async redactText(
@@ -487,7 +494,7 @@ export class SidecarPdfEngine implements PdfEngine {
 
     const response = await this.request("/api/v1/security/auto-redact", formData);
 
-    return this.store(await readBytes(response), pageCount);
+    return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
   }
 
   async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
@@ -721,6 +728,7 @@ export class SidecarPdfEngine implements PdfEngine {
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: "POST",
+        headers: sidecarHeaders(this.authToken),
         body,
       });
     } catch (error) {
@@ -739,6 +747,20 @@ export class SidecarPdfEngine implements PdfEngine {
 
 export function createSidecarPdfEngine(options: SidecarPdfEngineOptions): PdfEngine {
   return new SidecarPdfEngine(options);
+}
+
+function sidecarHeaders(
+  authToken: string | undefined,
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  if (!authToken) {
+    return headers;
+  }
+
+  return {
+    ...headers,
+    "X-RaioPDF-Auth": authToken,
+  };
 }
 
 function createFormData(bytes: Uint8Array): FormData {

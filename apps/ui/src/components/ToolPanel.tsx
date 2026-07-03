@@ -352,7 +352,7 @@ function RedactionStatusPanel({
           {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
         </p>
         <p className="tool-panel__card-copy">
-          Content is deleted, not covered. This cannot be undone after saving.
+          RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
         </p>
         <div className="tool-panel__button-row">
           <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>

@@ -17,6 +17,19 @@ import type {
 const SIZE_TOLERANCE_IN = 0.01;
 
 export function preflight(document: DocumentFacts, pack: JurisdictionPack): PreflightReport {
+  if (pack.id === "unknown") {
+    return {
+      checks: pack.constraints.map((constraint) => ({
+        checkId: constraint.id,
+        label: constraint.label,
+        authority: constraint.authority,
+        detail: "This check is unknown because the jurisdiction pack failed integrity verification.",
+        kind: constraint.kind,
+        status: "unknown",
+      })),
+    };
+  }
+
   return {
     checks: [
       checkPageSizeAndOrientation(document, pack),

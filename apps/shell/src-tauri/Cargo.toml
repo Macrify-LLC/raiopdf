@@ -23,6 +23,7 @@ serde_json = "1"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.1"
 uuid = { version = "1", features = ["v4"] }
+getrandom = "0.3"
 
 [patch.crates-io]
 # Tauri currently resolves plist 1.9.0, which hard-pins quick-xml 0.39.x.

@@ -1,4 +1,13 @@
-import { PDFDocument } from "pdf-lib";
+import {
+  decodePDFRawStream,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFRawStream,
+  PDFRef,
+  PDFStream,
+} from "pdf-lib";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { PDFDocumentProxy } from "./pdfjs";
 
@@ -30,6 +39,21 @@ export interface PdfMetadataSummary {
   removedFields: readonly string[];
 }
 
+export type RedactionVerificationStatus = "pass" | "fail" | "skipped";
+
+export interface RedactionVerificationCheck {
+  status: RedactionVerificationStatus;
+  detail: string;
+}
+
+export interface RedactionVerificationResult {
+  ok: boolean;
+  textLayer: RedactionVerificationCheck;
+  rasterizedPages: RedactionVerificationCheck;
+  annotations: RedactionVerificationCheck;
+  metadata: RedactionVerificationCheck;
+}
+
 type TextItemLike = {
   str?: unknown;
   transform?: unknown;
@@ -39,6 +63,12 @@ type TextItemLike = {
 };
 
 const REDACTION_PADDING_PT = 2;
+const TEXT_OPERATOR_BOUNDARY = String.raw`[\s[\]()<>/]`;
+const TEXT_OPERATOR_PATTERN = new RegExp(
+  String.raw`(?:^|${TEXT_OPERATOR_BOUNDARY})` +
+  String.raw`(?:BT|ET|Tc|Tw|Tz|TL|Tf|Tr|Ts|Td|TD|Tm|T\*|Tj|TJ|'|")` +
+  String.raw`(?=$|${TEXT_OPERATOR_BOUNDARY})`,
+);
 
 const SCAN_PATTERNS: ReadonlyArray<{
   category: LegalScanCategory;
@@ -339,25 +369,46 @@ function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedacti
 export async function verifyRedactionAreasClear(
   bytes: Uint8Array,
   areas: readonly PdfRedactionArea[],
-): Promise<boolean> {
+  redactedTerms: readonly string[] = [],
+): Promise<RedactionVerificationResult> {
   if (areas.length === 0) {
-    return true;
-  }
-
-  const { loadPdfDocument } = await import("./pdfjs");
-  const pdfDocument = await loadPdfDocument(bytes);
-
-  try {
-    const boxes = await extractTextBoxes(pdfDocument);
-
-    return !boxes.some((box) => {
-      return areas.some((area) => {
-        return box.text.trim().length > 0 && areasIntersect(box.area, area);
-      });
+    return redactionVerificationResult({
+      textLayer: pass("No redaction areas were marked."),
+      rasterizedPages: pass("No redaction pages were marked."),
+      annotations: pass("No redaction pages were marked."),
+      metadata: pass("Document metadata is scrubbed."),
     });
-  } finally {
-    await pdfDocument.loadingTask.destroy();
   }
+
+  const uniqueTerms = uniqueRedactionTerms(redactedTerms);
+  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms);
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const redactedPageIndexes = uniquePageIndexes(areas);
+
+  return redactionVerificationResult({
+    textLayer,
+    rasterizedPages: verifyRasterizedPages(pdf, redactedPageIndexes),
+    annotations: verifyRedactedPageAnnotations(pdf, redactedPageIndexes),
+    metadata: verifyDocumentMetadataScrubbed(pdf),
+  });
+}
+
+export async function collectRedactionAreaTexts(
+  pdfDocument: PDFDocumentProxy,
+  areas: readonly PdfRedactionArea[],
+): Promise<readonly string[]> {
+  if (areas.length === 0) {
+    return [];
+  }
+
+  const boxes = await extractTextBoxes(pdfDocument);
+
+  return uniqueRedactionTerms(
+    boxes
+      .filter((box) => box.text.trim().length > 0)
+      .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
+      .map((box) => box.text),
+  );
 }
 
 export async function readMetadataSummary(
@@ -490,6 +541,223 @@ function areasIntersect(left: PdfRedactionArea, right: PdfRedactionArea): boolea
     left.y + left.h <= right.y ||
     right.y + right.h <= left.y
   );
+}
+
+async function verifyFullDocumentTextLayer(
+  bytes: Uint8Array,
+  terms: readonly string[],
+): Promise<RedactionVerificationCheck> {
+  if (terms.length === 0) {
+    return skipped("No source text was extractable from the marked redaction areas.");
+  }
+
+  try {
+    const { loadPdfDocument } = await import("./pdfjs");
+    const pdfDocument = await loadPdfDocument(bytes);
+
+    try {
+      const pages = await extractPageText(pdfDocument);
+      const documentText = normalizeSearchText(pages.map((page) => page.text).join("\n"));
+      const remainingTerm = terms.find((term) => documentText.includes(normalizeSearchText(term)));
+
+      if (remainingTerm) {
+        return fail(`Text layer still contains "${remainingTerm}".`);
+      }
+
+      return pass("Text layer verified clean across the full document.");
+    } finally {
+      await pdfDocument.loadingTask.destroy();
+    }
+  } catch (error) {
+    return fail(`Text layer verification could not run: ${errorMessage(error)}`);
+  }
+}
+
+function verifyRasterizedPages(
+  pdf: PDFDocument,
+  pageIndexes: readonly number[],
+): RedactionVerificationCheck {
+  const pagesWithTextOperators = pageIndexes.filter((pageIndex) => {
+    return hasTextOperatorsInPage(pdf, pageIndex);
+  });
+
+  if (pagesWithTextOperators.length > 0) {
+    return fail(`Redacted pages still contain text operators: ${formatPageNumbers(pagesWithTextOperators)}.`);
+  }
+
+  return pass("Redacted page images replaced; no text operators remain on redacted pages.");
+}
+
+function verifyRedactedPageAnnotations(
+  pdf: PDFDocument,
+  pageIndexes: readonly number[],
+): RedactionVerificationCheck {
+  const pagesWithAnnotations = pageIndexes.filter((pageIndex) => {
+    const annotations = pdf.getPage(pageIndex).node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+    return annotations !== undefined && annotations.size() > 0;
+  });
+
+  if (pagesWithAnnotations.length > 0) {
+    return fail(`Annotations remain on redacted pages: ${formatPageNumbers(pagesWithAnnotations)}.`);
+  }
+
+  return pass("Annotations cleaned on redacted pages.");
+}
+
+function verifyDocumentMetadataScrubbed(pdf: PDFDocument): RedactionVerificationCheck {
+  if (pdf.context.trailerInfo.Info !== undefined || pdf.catalog.has(PDFName.of("Metadata"))) {
+    return fail("Document metadata remains after redaction.");
+  }
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFDict && object.has(PDFName.of("Metadata"))) {
+      return fail("Nested metadata remains after redaction.");
+    }
+  }
+
+  return pass("Document metadata scrubbed after redaction.");
+}
+
+function hasTextOperatorsInPage(pdf: PDFDocument, pageIndex: number): boolean {
+  const page = pdf.getPage(pageIndex).node;
+  const visited = new Set<string>();
+
+  return (
+    hasTextOperatorsInContentObject(pdf, page.Contents(), visited) ||
+    hasTextOperatorsInResources(pdf, page.Resources(), visited)
+  );
+}
+
+function hasTextOperatorsInContentObject(
+  pdf: PDFDocument,
+  object: PDFArray | PDFRef | PDFStream | undefined,
+  visited: Set<string>,
+): boolean {
+  if (!object) {
+    return false;
+  }
+
+  if (object instanceof PDFArray) {
+    return object.asArray().some((entry) => {
+      const resolved = entry instanceof PDFRef ? pdf.context.lookup(entry) : entry;
+      return (
+        resolved instanceof PDFStream &&
+        hasTextOperatorsInStream(pdf, resolved, visited)
+      );
+    });
+  }
+
+  const resolved = object instanceof PDFRef ? pdf.context.lookup(object) : object;
+  return resolved instanceof PDFStream && hasTextOperatorsInStream(pdf, resolved, visited);
+}
+
+function hasTextOperatorsInStream(
+  pdf: PDFDocument,
+  stream: PDFStream,
+  visited: Set<string>,
+): boolean {
+  const ref = pdf.context.getObjectRef(stream);
+
+  if (ref) {
+    if (visited.has(ref.tag)) {
+      return false;
+    }
+    visited.add(ref.tag);
+  }
+
+  return (
+    hasTextOperator(decodePdfStream(stream)) ||
+    hasTextOperatorsInResources(
+      pdf,
+      stream.dict.lookupMaybe(PDFName.Resources, PDFDict),
+      visited,
+    )
+  );
+}
+
+function hasTextOperatorsInResources(
+  pdf: PDFDocument,
+  resources: PDFDict | undefined,
+  visited: Set<string>,
+): boolean {
+  const xObjects = resources?.lookupMaybe(PDFName.XObject, PDFDict);
+
+  if (!xObjects) {
+    return false;
+  }
+
+  return xObjects.values().some((xObject) => {
+    const resolved = xObject instanceof PDFRef ? pdf.context.lookup(xObject) : xObject;
+
+    if (!(resolved instanceof PDFStream) || !isFormXObject(resolved)) {
+      return false;
+    }
+
+    return hasTextOperatorsInStream(pdf, resolved, visited);
+  });
+}
+
+function isFormXObject(stream: PDFStream): boolean {
+  const subtype = stream.dict.lookupMaybe(PDFName.of("Subtype"), PDFName);
+
+  return subtype?.asString() === "/Form";
+}
+
+function decodePdfStream(stream: PDFStream): string {
+  if (stream instanceof PDFRawStream) {
+    return new TextDecoder().decode(decodePDFRawStream(stream).decode());
+  }
+
+  return new TextDecoder().decode(stream.getContents());
+}
+
+function hasTextOperator(content: string): boolean {
+  return TEXT_OPERATOR_PATTERN.test(content);
+}
+
+function uniqueRedactionTerms(terms: readonly string[]): readonly string[] {
+  return [...new Set(terms.map(normalizeDisplayText).filter(Boolean))];
+}
+
+function uniquePageIndexes(areas: readonly PdfRedactionArea[]): readonly number[] {
+  return [...new Set(areas.map((area) => area.pageIndex))].sort((a, b) => a - b);
+}
+
+function redactionVerificationResult(
+  checks: Omit<RedactionVerificationResult, "ok">,
+): RedactionVerificationResult {
+  return {
+    ...checks,
+    ok: Object.values(checks).every((check) => check.status !== "fail"),
+  };
+}
+
+function pass(detail: string): RedactionVerificationCheck {
+  return { status: "pass", detail };
+}
+
+function fail(detail: string): RedactionVerificationCheck {
+  return { status: "fail", detail };
+}
+
+function skipped(detail: string): RedactionVerificationCheck {
+  return { status: "skipped", detail };
+}
+
+function normalizeDisplayText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeSearchText(text: string): string {
+  return normalizeDisplayText(text).toLocaleLowerCase();
+}
+
+function formatPageNumbers(pageIndexes: readonly number[]): string {
+  return pageIndexes.map((pageIndex) => pageIndex + 1).join(", ");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatPdfDate(date: Date | undefined): string {

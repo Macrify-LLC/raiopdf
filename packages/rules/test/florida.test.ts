@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PACK_ID, floridaPack, getPack, preflight } from "../src/index";
+import manifestJson from "../data/packs.manifest.json";
+import {
+  DEFAULT_PACK_ID,
+  getPack,
+  packJsonSha256,
+  preflight,
+  unknownPack,
+  verifyAppDataPackIntegrity,
+  verifyBundledPackIntegrity,
+  type PackManifest,
+} from "../src/index";
 import { loadJurisdictionPackFromJson } from "../src/packLoader";
 
 describe("Florida jurisdiction pack", () => {
+  const floridaPack = getPack();
+
   it("is the default pack and exposes machine-readable filing constraints", () => {
     expect(DEFAULT_PACK_ID).toBe("florida");
-    expect(getPack()).toBe(floridaPack);
+    expect(getPack()).toMatchObject({ id: "florida" });
     expect(floridaPack).toMatchObject({
       id: "florida",
       name: "Florida",
@@ -169,6 +181,73 @@ describe("Florida jurisdiction pack", () => {
     expect(report.checks.find((check) => check.checkId === "file-size")).toMatchObject({
       kind: "rule",
       status: "warn",
+    });
+  });
+
+  it("matches the committed pack manifest hash", () => {
+    const manifest = manifestJson as PackManifest;
+
+    expect(manifest.packs.florida?.sha256).toBe(packJsonSha256(floridaPack));
+    expect(verifyBundledPackIntegrity(manifest, "florida", floridaPack)).toBeNull();
+  });
+
+  it("refuses bundled packs when the manifest hash does not match", () => {
+    const issue = verifyBundledPackIntegrity(
+      manifestJson as PackManifest,
+      "florida",
+      {
+        ...floridaPack,
+        guidanceNote: "tampered",
+      },
+    );
+
+    expect(issue).toMatchObject({
+      packId: "florida",
+      reason: "Bundled pack hash does not match packs.manifest.json.",
+    });
+  });
+
+  it("preflights unknown when pack integrity is unavailable", () => {
+    const report = preflight(
+      {
+        fileBytes: 1,
+        searchableText: true,
+        pdfaCompliant: true,
+        pages: [
+          {
+            pageIndex: 0,
+            size: { w: 8.5, h: 11, in: true },
+            orientation: "portrait",
+          },
+        ],
+      },
+      unknownPack,
+    );
+
+    expect(report.checks.map((check) => check.status)).toEqual([
+      "unknown",
+      "unknown",
+      "unknown",
+      "unknown",
+      "unknown",
+    ]);
+  });
+
+  it("requires a signature-equivalent manifest match or hash acknowledgment for app-data packs", () => {
+    const rejected = verifyAppDataPackIntegrity("florida", floridaPack);
+    const acknowledged = verifyAppDataPackIntegrity("florida", floridaPack, {
+      acknowledgments: {
+        hasAcknowledgment: (_packId, sha256) => sha256 === packJsonSha256(floridaPack),
+      },
+    });
+
+    expect(rejected).toMatchObject({
+      accepted: false,
+      reason: "App-data pack hash has not been signed or explicitly acknowledged.",
+    });
+    expect(acknowledged).toEqual({
+      accepted: true,
+      sha256: packJsonSha256(floridaPack),
     });
   });
 });

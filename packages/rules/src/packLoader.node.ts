@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
 
+import manifestJson from "../data/packs.manifest.json";
+import type { PackManifest } from "./packIntegrity";
+import { verifyBundledPackIntegrity } from "./packIntegrity";
 import type { JurisdictionPack, JurisdictionPackId } from "./types";
 import {
   loadJurisdictionPackFromJson,
@@ -37,5 +40,15 @@ export function loadPackFromSource(
     throw new Error(`Unknown jurisdiction pack: ${packId}`);
   }
 
-  return loadJurisdictionPackFromJson(json, `${packId} jurisdiction pack`);
+  const pack = loadJurisdictionPackFromJson(json, `${packId} jurisdiction pack`);
+
+  if (source === bundledPackSource) {
+    const issue = verifyBundledPackIntegrity(manifestJson as PackManifest, packId, pack);
+
+    if (issue) {
+      throw new Error(`${packId} jurisdiction pack failed integrity verification: ${issue.reason}`);
+    }
+  }
+
+  return pack;
 }

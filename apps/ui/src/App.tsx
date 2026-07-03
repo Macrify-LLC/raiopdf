@@ -1271,7 +1271,7 @@ export function App() {
     [reorderPages, selectedIndexes],
   );
 
-  const saveToFile = useCallback((currentPath: string | null) => {
+  const saveToFile = useCallback((forceSaveAs: boolean) => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
     if (savingRef.current) {
@@ -1297,6 +1297,11 @@ export function App() {
         editing.clearPending();
       }
 
+      // saveDocument() awaits the mutation queue before reading the current
+      // filePath, so a redaction (or any other operation) that clears the
+      // path while this save was in flight is reflected here. Reading
+      // document.filePath at click time instead would race an in-flight
+      // path-clearing commit and could overwrite the original file.
       const saved = await saveDocument();
 
       if (!saved) {
@@ -1306,7 +1311,7 @@ export function App() {
       const written = await filePort.saveFile(
         saved.bytes,
         saved.fileName,
-        currentPath,
+        forceSaveAs ? null : saved.filePath,
       );
 
       if (written) {
@@ -1325,11 +1330,11 @@ export function App() {
   }, [applyEdits, editing, markSaved, saveDocument, setError]);
 
   const save = useCallback(() => {
-    saveToFile(document.filePath);
-  }, [document.filePath, saveToFile]);
+    saveToFile(false);
+  }, [saveToFile]);
 
   const saveAs = useCallback(() => {
-    saveToFile(null);
+    saveToFile(true);
   }, [saveToFile]);
 
   const printDocument = useCallback(() => {
@@ -1563,6 +1568,8 @@ export function App() {
         hasTextLayer: null,
         expectedOpenToken: sourceOpenToken,
         expectedSourceBytes: sourceBytes,
+        fileName: `${stripPdfExtension(document.fileName ?? "Untitled")}_redacted.pdf`,
+        filePath: null,
       });
 
       if (replaced !== "replaced") {
@@ -1586,7 +1593,16 @@ export function App() {
       setRedactionPhase("error");
       setRedactionMessage(message);
     }
-  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pdfDocument, pendingRedactions, replaceBytes]);
+  }, [
+    document.bytes,
+    document.fileName,
+    engineBridge,
+    getOpenToken,
+    isCurrentDocument,
+    pdfDocument,
+    pendingRedactions,
+    replaceBytes,
+  ]);
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
@@ -3805,12 +3821,15 @@ function formatRedactionVerificationSuccess(result: RedactionVerificationResult)
     ? "text layer verified clean"
     : "no source text was extractable from marked areas";
 
-  return [
-    `Redacted and verified: ${textLayer}`,
-    "redacted page images replaced",
-    "annotations cleaned",
-    "metadata scrubbed",
-  ].join("; ") + ".";
+  return (
+    [
+      `Redacted and verified: ${textLayer}`,
+      "redacted page images replaced",
+      "annotations cleaned",
+      "metadata scrubbed",
+    ].join("; ") +
+    ". Your original file is untouched — Save will prompt you for a new file name."
+  );
 }
 
 function formatRedactionVerificationFailure(result: RedactionVerificationResult): string {

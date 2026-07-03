@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   ConstraintEntry,
+  DocumentFacts,
   JurisdictionPack,
   JurisdictionPackId,
   PrepPlanStep,
@@ -84,6 +85,8 @@ export interface CertificateOfServiceDraft {
 export interface PrepareOptions {
   /** The user saw the conversion-impact warning and chose to continue anyway. */
   acknowledgeImpact?: boolean;
+  /** Current PDF open password for this one prepare run. Never persisted. */
+  removeEncryptionPassword?: string;
   selectedStepIds: readonly PrepPlanStepId[];
   customSplitMegabytes?: number | null;
 }
@@ -106,6 +109,7 @@ export interface PrepareForFilingWorkspaceProps {
   prepPlan: readonly PrepPlanStep[];
   courtProfiles: readonly CourtProfile[];
   selectedCourtProfile: CourtProfile | null;
+  facts: DocumentFacts | null;
   report: PreflightReport | null;
   loadingReport: boolean;
   reportError?: string | null;
@@ -138,6 +142,7 @@ export function PrepareForFilingWorkspace({
   prepPlan,
   courtProfiles,
   selectedCourtProfile,
+  facts,
   report,
   loadingReport,
   reportError = null,
@@ -180,6 +185,13 @@ export function PrepareForFilingWorkspace({
   const [packetLayoutMode, setPacketLayoutMode] = useState<FilingPacketLayoutMode>(defaultPacketLayoutMode);
   const [packetPrefixFilenames, setPacketPrefixFilenames] = useState(defaultPacketPrefixFilenames);
   const [packetMessage, setPacketMessage] = useState<string | null>(null);
+  const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
+  const [passwordValue, setPasswordValue] = useState("");
+  // Kept for the duration of one prepare run (through any impact-confirmation
+  // retry), separate from the input field above. Codex flagged that clearing
+  // the password on submit left the ImpactWarning continue action with
+  // nothing to resend, re-tripping the remove-encryption gate.
+  const [activeUnlockPassword, setActiveUnlockPassword] = useState<string | null>(null);
   const [certificate, setCertificate] = useState<CertificateOfServiceDraft>({
     caseCaption: "",
     serviceList: "",
@@ -227,6 +239,8 @@ export function PrepareForFilingWorkspace({
     packetOutputDir.trim().length > 0 &&
     Boolean(onBuildPacket) &&
     !packetProgress.running;
+  const removeEncryptionSelected = selectedAvailableStepIds.includes("remove-encryption");
+  const needsUnlockPassword = removeEncryptionSelected && hasEncryptedFacts(facts);
 
   useEffect(() => {
     setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps));
@@ -236,6 +250,31 @@ export function PrepareForFilingWorkspace({
     event.preventDefault();
     setCertificateOpen(false);
     setOverflowOpen(false);
+  }
+
+  function runSinglePrepare() {
+    if (needsUnlockPassword) {
+      setPasswordPromptOpen(true);
+      return;
+    }
+
+    setActiveUnlockPassword(null);
+    onPrepare(certificateOpen ? certificate : null, prepareOptions());
+  }
+
+  function submitPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const password = passwordValue;
+    if (!password) {
+      return;
+    }
+    setPasswordPromptOpen(false);
+    setPasswordValue("");
+    setActiveUnlockPassword(password);
+    onPrepare(certificateOpen ? certificate : null, {
+      ...prepareOptions(),
+      removeEncryptionPassword: password,
+    });
   }
 
   async function addPacketFile() {
@@ -412,7 +451,7 @@ export function PrepareForFilingWorkspace({
               className="filing-card__primary-button"
               disabled={!canPrepare}
               title={reportError ?? (canPrepare ? "Build a filing copy using the checks shown below." : "Run is available after RaioPDF reads the filing checks.")}
-              onClick={() => onPrepare(certificateOpen ? certificate : null, prepareOptions())}
+              onClick={runSinglePrepare}
             >
               {primaryLabel}
             </button>
@@ -429,9 +468,46 @@ export function PrepareForFilingWorkspace({
             onContinue={() => onPrepare(certificateOpen ? certificate : null, {
               ...prepareOptions(),
               acknowledgeImpact: true,
+              ...(activeUnlockPassword ? { removeEncryptionPassword: activeUnlockPassword } : {}),
             })}
-            onCancel={onDismissImpact}
+            onCancel={() => {
+              setActiveUnlockPassword(null);
+              onDismissImpact();
+            }}
           />
+        ) : null}
+
+        {passwordPromptOpen ? (
+          <form className="filing-password" role="dialog" aria-label="PDF password" onSubmit={submitPassword}>
+            <p className="filing-password__title">PDF password</p>
+            <label>
+              <span>Open password</span>
+              <input
+                autoFocus
+                type="password"
+                value={passwordValue}
+                onChange={(event) => setPasswordValue(event.currentTarget.value)}
+              />
+            </label>
+            <p className="filing-password__hint">
+              Used once to remove encryption for this filing copy. RaioPDF does not save it.
+            </p>
+            <div className="filing-card__button-row">
+              <button type="submit" className="filing-card__secondary-button" disabled={!passwordValue}>
+                Remove Encryption
+              </button>
+              <button
+                type="button"
+                className="filing-card__ghost-button"
+                onClick={() => {
+                  setPasswordPromptOpen(false);
+                  setPasswordValue("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
         ) : null}
 
         {certificateOpen ? (
@@ -1320,10 +1396,6 @@ function resolveUnavailableSteps(
   const unavailable = new Map<PrepPlanStepId, string>();
 
   for (const step of steps) {
-    if (step.id === "remove-encryption") {
-      unavailable.set(step.id, "not yet available in Raio");
-    }
-
     if (
       !availability.pdfAAvailable &&
       (step.id === "sanitize-content" || step.id === "make-searchable" || step.id === "convert-pdfa")
@@ -1333,6 +1405,10 @@ function resolveUnavailableSteps(
   }
 
   return unavailable;
+}
+
+function hasEncryptedFacts(facts: DocumentFacts | null): boolean {
+  return facts?.encryptionState === "encrypted" || facts?.encryptionState === "usage_restricted";
 }
 
 const STANCE_LABEL: Record<PrepPlanStep["stance"], string> = {

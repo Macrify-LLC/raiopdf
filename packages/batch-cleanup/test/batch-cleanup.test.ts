@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   PdfCompressOptions,
+  PdfBytes,
   PdfDocumentHandle,
   PdfSanitizeOptions,
   PdfSanitizeResult,
@@ -123,6 +124,60 @@ describe("runBatchCleanup", () => {
     expect(result.files.map((file) => file.status)).toEqual(["done", "failed", "done"]);
     expect(result.files[1]!.reason).toMatch(/password/i);
     expect(result.manifest.uploadFiles).toHaveLength(2);
+  });
+
+  it("reuses the per-run password for encrypted files without writing it to reports", async () => {
+    const encrypted = await makePdf("encrypted.pdf", 1);
+    const outputDir = path.join(dir, "package");
+    const engine = new RecordingEngine({ unlockPassword: "open-sesame" });
+
+    const result = await runBatchCleanup({
+      sources: [
+        { path: encrypted, facts: facts({ pages: 1, encryptionState: "encrypted" }) },
+      ],
+      outputDir,
+      password: "open-sesame",
+      operations: {
+        sanitize: false,
+        scrubMetadata: true,
+        ocrMode: "off",
+      },
+      createdAt: "2026-07-03T12:00:00.000Z",
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["remove-encryption", "scrub-metadata"]);
+    expect(engine.operations).toEqual(["remove-encryption"]);
+    expect(result.manifest.uploadFiles).toHaveLength(1);
+
+    const manifestText = JSON.stringify(result.manifest);
+    const reportText = await fs.readFile(path.join(outputDir, result.reportJson), "utf8");
+    expect(manifestText).not.toContain("open-sesame");
+    expect(reportText).not.toContain("open-sesame");
+  });
+
+  it("continues the batch when an encrypted file rejects the per-run password", async () => {
+    const encrypted = await makePdf("encrypted.pdf", 1);
+    const outputDir = path.join(dir, "package");
+    const engine = new RecordingEngine({ unlockPassword: "right-password" });
+
+    const result = await runBatchCleanup({
+      sources: [
+        { path: encrypted, facts: facts({ pages: 1, encryptionState: "encrypted" }) },
+      ],
+      outputDir,
+      password: "wrong-password",
+      operations: {
+        sanitize: false,
+        scrubMetadata: true,
+        ocrMode: "off",
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("failed");
+    expect(result.files[0]!.operations).toEqual(["remove-encryption"]);
+    expect(result.files[0]!.reason).toMatch(/unlock/i);
+    expect(JSON.stringify(result.manifest)).not.toContain("wrong-password");
   });
 
   it("runs engine work serially", async () => {
@@ -308,10 +363,21 @@ class RecordingEngine extends LocalPdfEngine implements BatchCleanupSidecarEngin
   maxActive = 0;
   private active = 0;
   private readonly delayMs: number;
+  private readonly unlockPassword: string | undefined;
 
-  constructor(options: { delayMs?: number } = {}) {
+  constructor(options: { delayMs?: number; unlockPassword?: string } = {}) {
     super();
     this.delayMs = options.delayMs ?? 0;
+    this.unlockPassword = options.unlockPassword;
+  }
+
+  override async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
+    return this.record("remove-encryption", async () => {
+      if (password !== this.unlockPassword) {
+        throw new Error("The PDF password was not accepted.");
+      }
+      return new Uint8Array(bytes);
+    });
   }
 
   override async repair(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {

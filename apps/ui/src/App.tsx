@@ -2297,12 +2297,46 @@ export function App() {
     });
 
     void (async () => {
+      let filingSourceBytes = sourceBytes;
+      if (
+        selectedSteps.has("remove-encryption") &&
+        (filingFacts?.encryptionState === "encrypted" || filingFacts?.encryptionState === "usage_restricted")
+      ) {
+        if (!options.removeEncryptionPassword) {
+          setFilingProgress({
+            phase: "error",
+            message: "Enter the PDF open password to remove encryption before preparing this file.",
+          });
+          return;
+        }
+        if (!engineBridge.available) {
+          setFilingProgress({
+            phase: "error",
+            message: "Encryption removal is available in the desktop app.",
+          });
+          return;
+        }
+
+        setFilingProgress({
+          phase: "normalizing",
+          message: "Removing encryption with the password you entered...",
+        });
+        filingSourceBytes = await engineBridge.removeEncryption(
+          sourceBytes,
+          options.removeEncryptionPassword,
+        );
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+      }
+
       // Destructive steps strip annotations, form fields, and signatures silently.
       // Surface what this run would destroy and stop for an explicit go-ahead.
       if (!options.acknowledgeImpact) {
         const needsImpactConfirmation = convertOutputToPdfA || selectedSteps.has("flatten-forms");
         const conversionImpact = needsImpactConfirmation
-          ? await getCachedConversionImpact(sourceBytes)
+          ? await getCachedConversionImpact(filingSourceBytes)
           : null;
 
         if (!isCurrentFilingRun()) {
@@ -2323,7 +2357,7 @@ export function App() {
       const closeHandles: PdfDocumentHandle[] = [];
 
       try {
-        workingHandle = await filingEngine.open(sourceBytes);
+        workingHandle = await filingEngine.open(filingSourceBytes);
         closeHandles.push(workingHandle);
 
         if (certificate && hasCertificateContent(certificate)) {
@@ -2531,6 +2565,7 @@ export function App() {
     document.fileName,
     engineBridge,
     filingEngine,
+    filingFacts,
     filingPack,
     filingPrepPlan,
     getOpenToken,
@@ -2853,6 +2888,7 @@ export function App() {
             prepPlan={filingPrepPlan}
             courtProfiles={filingPreferences.courtProfiles}
             selectedCourtProfile={selectedCourtProfile}
+            facts={filingFacts}
             report={filingReport}
             loadingReport={filingReportLoading}
             reportError={filingReportError}

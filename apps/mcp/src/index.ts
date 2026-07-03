@@ -31,6 +31,7 @@ import {
   handleCompress,
   handleMerge,
   handleOcr,
+  handleRemoveEncryption,
   handleRotate,
   handleSanitize,
   handleScrubMetadata,
@@ -38,6 +39,8 @@ import {
   mergeOutputSchema,
   ocrInputSchema,
   ocrOutputSchema,
+  removeEncryptionInputSchema,
+  removeEncryptionOutputSchema,
   rotateInputSchema,
   rotateOutputSchema,
   sanitizeInputSchema,
@@ -47,6 +50,7 @@ import {
   type CompressInput,
   type MergeInput,
   type OcrInput,
+  type RemoveEncryptionInput,
   type RotateInput,
   type SanitizeInput,
   type ScrubMetadataInput,
@@ -217,6 +221,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: CompressInput) => await handleCompress(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "remove_encryption",
+    {
+      title: "Remove PDF encryption",
+      description:
+        "Removes PDF password/encryption using a sensitive password parameter, then writes a new file. The password is never echoed in results.",
+      inputSchema: removeEncryptionInputSchema,
+      outputSchema: removeEncryptionOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: RemoveEncryptionInput) =>
+        await handleRemoveEncryption(input, dependencies.engineHandle),
     ),
   );
 

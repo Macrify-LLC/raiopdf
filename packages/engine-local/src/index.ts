@@ -121,6 +121,13 @@ export class LocalPdfEngine implements PdfEngine {
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
   private nextDocumentId = 1;
 
+  async removeEncryption(_bytes: PdfBytes, _password: string): Promise<Uint8Array> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "The local pdf-lib engine cannot remove PDF encryption; use the sidecar engine.",
+    );
+  }
+
   async open(bytes: PdfBytes): Promise<PdfDocumentHandle> {
     const normalizedBytes = normalizeBytes(bytes);
     await loadPdf(normalizedBytes);

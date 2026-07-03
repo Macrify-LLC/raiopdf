@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,7 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import type { EngineHandle } from "../src/engine.js";
-import { handleOcr } from "../src/tools/core.js";
+import { handleOcr, handleRemoveEncryption } from "../src/tools/core.js";
 
 let dir: string;
 
@@ -54,6 +55,47 @@ describe("handleOcr", () => {
   });
 });
 
+describe("handleRemoveEncryption", () => {
+  it("writes unlocked bytes without echoing the password", async () => {
+    const input = await writeInput("locked.pdf");
+    const output = path.join(dir, "unlocked.pdf");
+    const unlockedBytes = await pdfWithPageTexts(["unlocked"]);
+    const { handle } = fakeRemoveEncryptionEngine(unlockedBytes, "sensitive-password");
+
+    const result = await handleRemoveEncryption({
+      input,
+      output,
+      password: "sensitive-password",
+    }, handle);
+
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      output,
+    });
+    expect(JSON.stringify(result)).not.toContain("sensitive-password");
+    expect(await fs.readFile(output)).toEqual(Buffer.from(unlockedBytes));
+  });
+
+  it.skipIf(!hasQpdf())("round-trips a qpdf-encrypted fixture through remove_encryption", async () => {
+    const fixture = await createEncryptedPdfFixture("open-sesame");
+    const input = path.join(dir, "locked.pdf");
+    const output = path.join(dir, "unlocked.pdf");
+    await fs.writeFile(input, fixture.encrypted);
+    const { handle } = fakeRemoveEncryptionEngine(fixture.decrypted, "open-sesame");
+
+    const result = await handleRemoveEncryption({
+      input,
+      output,
+      password: "open-sesame",
+    }, handle);
+
+    expect(JSON.stringify(result)).not.toContain("open-sesame");
+    const outputBytes = await fs.readFile(output);
+    await expect(PDFDocument.load(outputBytes, { updateMetadata: false })).resolves.toBeTruthy();
+    expect(outputBytes.toString("latin1")).not.toContain("/Encrypt");
+  });
+});
+
 async function writeInput(name: string): Promise<string> {
   const filePath = path.join(dir, name);
   await fs.writeFile(filePath, await pdfWithPageTexts(["source"]));
@@ -80,6 +122,24 @@ function fakeOcrEngine(outputBytes: Uint8Array): { handle: EngineHandle } {
   };
 }
 
+function fakeRemoveEncryptionEngine(
+  outputBytes: Uint8Array,
+  expectedPassword: string,
+): { handle: EngineHandle } {
+  const engine = {
+    removeEncryption: async (_bytes: Uint8Array, password: string) => {
+      if (password !== expectedPassword) {
+        throw new Error("wrong password");
+      }
+      return outputBytes;
+    },
+  };
+
+  return {
+    handle: { getEngine: async () => engine } as unknown as EngineHandle,
+  };
+}
+
 async function pdfWithPageTexts(pageTexts: readonly string[]): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -90,4 +150,50 @@ async function pdfWithPageTexts(pageTexts: readonly string[]): Promise<Uint8Arra
     }
   }
   return pdf.save();
+}
+
+function hasQpdf(): boolean {
+  return spawnSync("qpdf", ["--version"], { stdio: "ignore" }).status === 0;
+}
+
+async function createEncryptedPdfFixture(password: string): Promise<{
+  decrypted: Uint8Array;
+  encrypted: Uint8Array;
+}> {
+  const fixtureDir = await fs.mkdtemp(path.join(dir, "qpdf-"));
+  const plainPath = path.join(fixtureDir, "plain.pdf");
+  const encryptedPath = path.join(fixtureDir, "encrypted.pdf");
+  const decryptedPath = path.join(fixtureDir, "decrypted.pdf");
+
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 200]);
+  await fs.writeFile(plainPath, await pdf.save());
+  runQpdf([
+    "--encrypt",
+    password,
+    password,
+    "256",
+    "--",
+    plainPath,
+    encryptedPath,
+  ]);
+  runQpdf([
+    `--password=${password}`,
+    "--decrypt",
+    encryptedPath,
+    decryptedPath,
+  ]);
+
+  return {
+    encrypted: await fs.readFile(encryptedPath),
+    decrypted: await fs.readFile(decryptedPath),
+  };
+}
+
+function runQpdf(args: readonly string[]): void {
+  const result = spawnSync("qpdf", [...args], { encoding: "utf8" });
+
+  if (result.status !== 0) {
+    throw new Error(`qpdf failed: ${result.stderr || result.stdout}`);
+  }
 }

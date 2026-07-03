@@ -296,10 +296,22 @@ export function useDocument() {
         if (openTokenRef.current === token) {
           activeHandleRef.current = null;
           activeBytesRef.current = null;
-          setDocument({
-            ...INITIAL_DOCUMENT,
-            error: getEngineErrorMessage(error),
-          });
+          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+            activeBytesRef.current = file.bytes;
+            setDocument({
+              ...INITIAL_DOCUMENT,
+              bytes: file.bytes,
+              fileName: file.name,
+              filePath: file.path ?? null,
+              fileSizeBytes: file.bytes.byteLength,
+              error: getEngineErrorMessage(error),
+            });
+          } else {
+            setDocument({
+              ...INITIAL_DOCUMENT,
+              error: getEngineErrorMessage(error),
+            });
+          }
         }
 
         return false;
@@ -1010,7 +1022,7 @@ function resolveCurrentPage(
 
 function getEngineErrorMessage(error: unknown): string {
   if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-    return "This PDF is encrypted. Encrypted documents are not supported yet.";
+    return "This PDF is encrypted. Use Legal > Prepare for Filing to remove encryption with the open password.";
   }
 
   if (error instanceof PdfEngineError && error.code === "EMPTY_RESULT") {
@@ -1026,7 +1038,7 @@ function getActionErrorMessage(action: string, error: unknown): string {
   }
 
   if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-    return "This PDF is encrypted. Encrypted documents are not supported yet.";
+    return "This PDF is encrypted. Remove encryption with the open password before editing.";
   }
 
   if (action === "rotate") {

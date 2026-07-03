@@ -738,7 +738,7 @@ export function PasswordsPanel() {
         Allow copying
       </label>
       <p className="tool-panel__note">
-        Never stored. Password changes are unavailable in this build: pdf-lib does not encrypt PDFs, and the verified sidecar notes list no password endpoints.
+        Never stored. Prepare for Filing can remove encryption with the open password. Setting or changing PDF passwords remains unavailable in this build.
       </p>
       <div className="tool-panel__button-row">
         <button type="button" className="tool-panel__primary-button" disabled>

@@ -21,7 +21,7 @@ export const LEGAL_TOOLS = [
   { id: "bates-numbering", label: "Bates Numbering", group: "legal", helpArticleId: "bates-numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width." },
   { id: "scanner-2425", label: "2.425 Scanner", group: "legal", helpArticleId: "scanner-2425", description: "Look for common Florida Rule 2.425 sensitive-information patterns." },
   { id: "scrub-metadata", label: "Scrub Metadata", group: "legal", helpArticleId: "scrub-metadata", description: "Inspect and remove document metadata without changing page content." },
-  { id: "passwords", label: "Passwords", group: "legal", helpArticleId: "passwords", description: "Review password controls; encryption changes are unavailable in this build." },
+  { id: "passwords", label: "Passwords", group: "legal", helpArticleId: "passwords", description: "Review password controls; filing prep can remove encryption with the open password." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const ORGANIZE_TOOLS = [

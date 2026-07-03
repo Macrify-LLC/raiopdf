@@ -7,7 +7,6 @@ import {
   type DragEvent,
   type PointerEvent,
   type ReactNode,
-  type WheelEvent,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
@@ -86,6 +85,7 @@ export function CanvasWell({
 }: CanvasWellProps) {
   const wellRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const pageFrameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wheelZoomAnchorRef = useRef<{
     clientX: number;
@@ -219,6 +219,58 @@ export function CanvasWell({
     dragStartRef.current = null;
   }, [currentPage, redactionMode, zoom]);
 
+  useEffect(() => {
+    const pageFrame = pageFrameRef.current;
+
+    if (!pageFrame) {
+      return;
+    }
+
+    function handleWheel(event: globalThis.WheelEvent) {
+      if (!event.ctrlKey || event.deltaY === 0) {
+        return;
+      }
+
+      const canvas = canvasRef.current;
+
+      if (!canvas) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const bounds = canvas.getBoundingClientRect();
+      const anchor = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        localX: clamp(event.clientX - bounds.left, 0, bounds.width),
+        localY: clamp(event.clientY - bounds.top, 0, bounds.height),
+        zoom,
+      };
+      wheelZoomAnchorRef.current = anchor;
+
+      if (event.deltaY < 0) {
+        onZoomIn?.();
+      } else {
+        onZoomOut?.();
+      }
+
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          if (wheelZoomAnchorRef.current === anchor) {
+            wheelZoomAnchorRef.current = null;
+          }
+        });
+      });
+    }
+
+    pageFrame.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      pageFrame.removeEventListener("wheel", handleWheel);
+    };
+  }, [hasDocument, onZoomIn, onZoomOut, workspace, zoom]);
+
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     const file = Array.from(event.dataTransfer.files).find(
@@ -293,44 +345,6 @@ export function CanvasWell({
     });
   }
 
-  function handleWheel(event: WheelEvent<HTMLDivElement>) {
-    if (!event.ctrlKey || event.deltaY === 0) {
-      return;
-    }
-
-    const canvas = canvasRef.current;
-
-    if (!canvas) {
-      return;
-    }
-
-    event.preventDefault();
-
-    const bounds = canvas.getBoundingClientRect();
-    const anchor = {
-      clientX: event.clientX,
-      clientY: event.clientY,
-      localX: clamp(event.clientX - bounds.left, 0, bounds.width),
-      localY: clamp(event.clientY - bounds.top, 0, bounds.height),
-      zoom,
-    };
-    wheelZoomAnchorRef.current = anchor;
-
-    if (event.deltaY < 0) {
-      onZoomIn?.();
-    } else {
-      onZoomOut?.();
-    }
-
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        if (wheelZoomAnchorRef.current === anchor) {
-          wheelZoomAnchorRef.current = null;
-        }
-      });
-    });
-  }
-
   function getViewportPoint(event: PointerEvent<HTMLDivElement>): ViewportPoint | null {
     const canvas = canvasRef.current;
 
@@ -382,12 +396,12 @@ export function CanvasWell({
               </p>
             ) : null}
             <div
+              ref={pageFrameRef}
               className="canvas-well__page-frame"
               data-redaction-mode={redactionMode ? "true" : undefined}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
-              onWheel={handleWheel}
               onPointerCancel={() => {
                 dragStartRef.current = null;
                 setDraftRect(null);

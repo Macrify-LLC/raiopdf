@@ -1,11 +1,10 @@
 import { promises as fs } from "node:fs";
 import { z } from "zod";
-import { DEFAULT_PACK_ID, getPack, listPacks, preflight } from "@raiopdf/rules";
+import { buildDocumentFacts, DEFAULT_PACK_ID, getPack, listPacks, preflight } from "@raiopdf/rules";
 import type { JurisdictionPack, JurisdictionPackId } from "@raiopdf/rules";
 import type { EngineHandle } from "../engine.js";
 import { baseOutputSchema, errorResult, successResult, type StructuredToolResult } from "../format.js";
 import { resolveInput } from "../paths.js";
-import { buildDocumentFacts } from "../filing/facts.js";
 
 const packIds: string[] = listPacks().map((pack) => pack.id);
 

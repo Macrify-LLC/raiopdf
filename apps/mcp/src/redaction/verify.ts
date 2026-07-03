@@ -1,4 +1,4 @@
-import { extractAllText } from "./pdfjs-node.js";
+import { extractAllText } from "@raiopdf/rules";
 
 export type RedactionVerification = {
   /** True when none of the redacted terms remain extractable. */

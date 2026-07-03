@@ -40,6 +40,7 @@ describe("filing output preflight", () => {
 
     expect(selections).toEqual([
       {
+        envelopeBytes: 28 * MiB,
         files: [
           { filename: "motion - part 1 of 2.pdf", fileBytes: 14 * MiB },
           { filename: "motion - part 2 of 2.pdf", fileBytes: 14 * MiB },

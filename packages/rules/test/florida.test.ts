@@ -191,6 +191,13 @@ describe("Florida jurisdiction pack", () => {
         fileBytes: 2 * 1024 * 1024,
         searchableText: true,
         pdfaCompliant: true,
+        encryptionState: "none",
+        activeContentSignals: {
+          possiblyPresent: false,
+          signals: [],
+        },
+        embeddedFileCount: 0,
+        formFields: { count: 0, anyFilled: false },
         pages: [
           {
             pageIndex: 0,
@@ -203,14 +210,19 @@ describe("Florida jurisdiction pack", () => {
       floridaPack,
     );
 
-    expect(report.checks.map((check) => check.status)).toEqual([
-      "pass",
-      "pass",
-      "pass",
-      "pass",
-      "pass",
-      "pass",
-    ]);
+    expect(Object.fromEntries(report.checks.map((check) => [check.checkId, check.status]))).toEqual({
+      "page-size-orientation": "pass",
+      "searchable-text": "pass",
+      "file-size": "pass",
+      filename: "pass",
+      "clerk-stamp-space": "pass",
+      pdfa: "pass",
+      "active-content": "pass",
+      encryption: "pass",
+      "embedded-files": "pass",
+      "metadata-scrub": "unknown",
+      "flatten-forms": "pass",
+    });
   });
 
   it("preflights warning-only Florida facts", () => {
@@ -220,6 +232,13 @@ describe("Florida jurisdiction pack", () => {
         fileBytes: 24.5 * 1024 * 1024,
         searchableText: false,
         pdfaCompliant: false,
+        encryptionState: "encrypted",
+        activeContentSignals: {
+          possiblyPresent: true,
+          signals: ["javascriptNameTree"],
+        },
+        embeddedFileCount: 1,
+        formFields: { count: 1, anyFilled: true },
         pages: [
           {
             pageIndex: 0,
@@ -239,6 +258,11 @@ describe("Florida jurisdiction pack", () => {
       filename: "pass",
       "clerk-stamp-space": "warn",
       pdfa: "warn",
+      "active-content": "warn",
+      encryption: "warn",
+      "embedded-files": "warn",
+      "metadata-scrub": "unknown",
+      "flatten-forms": "warn",
     });
   });
 
@@ -263,6 +287,39 @@ describe("Florida jurisdiction pack", () => {
       filename: "unknown",
       "clerk-stamp-space": "unknown",
       pdfa: "unknown",
+      "active-content": "unknown",
+      encryption: "unknown",
+      "embedded-files": "unknown",
+      "metadata-scrub": "unknown",
+      "flatten-forms": "unknown",
+    });
+  });
+
+  it("renders detector failures as unknown instead of pass", () => {
+    const report = preflight(
+      {
+        pages: [],
+        encryptionState: "detector_failed",
+        activeContentSignals: {
+          possiblyPresent: false,
+          signals: [],
+        },
+        embeddedFileCount: 0,
+        formFields: { count: 0, anyFilled: false },
+        errors: [
+          { fact: "activeContentSignals", reason: "fixture failure" },
+          { fact: "embeddedFileCount", reason: "fixture failure" },
+          { fact: "formFields", reason: "fixture failure" },
+        ],
+      },
+      floridaPack,
+    );
+
+    expect(Object.fromEntries(report.checks.map((check) => [check.checkId, check.status]))).toMatchObject({
+      "active-content": "unknown",
+      encryption: "unknown",
+      "embedded-files": "unknown",
+      "flatten-forms": "unknown",
     });
   });
 

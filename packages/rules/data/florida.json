@@ -100,6 +100,56 @@
       "applicability": {
         "scope": "statewide"
       }
+    },
+    {
+      "id": "active-content",
+      "label": "Active content",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "encryption",
+      "label": "Encryption and restrictions",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "embedded-files",
+      "label": "Embedded files",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "metadata-scrub",
+      "label": "Metadata scrub",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025; Florida Courts E-Filing Authority PDF/A FAQ, revised Aug. 2021",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "flatten-forms",
+      "label": "Flatten forms",
+      "kind": "portal",
+      "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
     }
   ],
   "pageSize": {

@@ -39,6 +39,7 @@ export function buildOutputSelectionFacts(
   parts: readonly FilingOutputPreflightPart[],
 ): SelectionFacts {
   return {
+    envelopeBytes: parts.reduce((sum, part) => sum + part.bytes.byteLength, 0),
     files: parts.map((part) => ({
       filename: part.fileName,
       fileBytes: part.bytes.byteLength,

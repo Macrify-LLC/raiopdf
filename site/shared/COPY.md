@@ -24,19 +24,31 @@ This is not hidden or soft-pedaled. It sits near the top on every option.
 Everything you use Acrobat for, day to day — free, full-featured, and it
 never leaves your computer.
 
-Sub-headline: Plus the legal workflows Acrobat never bothered building.
+Sub-headline: Plus the legal workflows Adobe never bothered building.
 
-## Positioning frame (short paragraph, upper page) — updated 2026-07-03
+## Positioning frame (short paragraph, upper page) — updated 2026-07-03 (rev. 2)
 
 Written in Jacob's own first-person voice, not third-person product copy —
-direct, plainspoken, a little wry, not corporate-marketing-serious:
+direct, plainspoken, a little wry, not corporate-marketing-serious. This is
+now a real, opinionated founder essay, not a sanitized paragraph — the words
+below are canonical, pulled verbatim from the repo's `README.md` (Jacob's own
+edit, "Human editing" commit, 2026-07-02). Reproduce it verbatim wherever the
+full version is used; do not paraphrase it into corporate voice:
 
-> I didn't build this to pick a fight with anyone's business model. I built
-> it because editing a file that's already sitting on your own computer
-> shouldn't require an account, a cloud upload, and a little voice in the
-> back of your head wondering what happens to the file once it leaves your
-> machine. That's a lot of ceremony for a task your laptop can already do by
-> itself.
+> Nothing makes me feel more like a crotchety old man than how software
+> works. I remember when you got software by someone handing you a floppy
+> disk and that was that. But as software companies realized that their
+> best way of making money was to stop selling their software and rent it
+> out instead and sell you upcharges.
+>
+> The idea of making this came from talking to my staff. Nobody likes
+> Acrobat. Its bloat stresses computers, its licensing quirks will
+> sometimes bring work to a standstill, it constantly pushes features
+> nobody wants to use, and we're all paying for the privilege. Editing a
+> file that's already sitting on your own computer shouldn't require an
+> account, a cloud upload, and a cavalcade of minor annoyances. So in this
+> age of agentic coding, I asked how hard it would be to build a fully
+> featured PDF program the old fashioned way.
 >
 > RaioPDF is the other way of doing it: a full, genuinely useful PDF suite —
 > including the less-glamorous legal stuff like true redaction and Bates
@@ -49,20 +61,53 @@ direct, plainspoken, a little wry, not corporate-marketing-serious:
 > point: not to out-feature any particular vendor, but to show a firm
 > doesn't have to just accept whatever terms it's handed for a task this
 > basic.
+>
+> And because you can just build it yourself, you can add in the
+> functionality you've always wanted and leave out the stuff you don't.
+> Regulating PDFs for e-filing has always been a major annoyance of mine.
+> Some features, like exporting a PDF into size-limited chunks, just don't
+> seem to exist in Acrobat (or I can't find them). Some are buried under a
+> hundred configurations I don't want or understand.
+>
+> I believe that using Raio is a genuinely better experience than using
+> Acrobat. Without the bloat, it's snappier. Without all of the features
+> I've never used, it's less confusing and clunky to operate. And with the
+> additional law-practice-specific improvements, a lot of pain points of
+> practice are smoothed out.
+>
+> This went from an idea to a working prototype in about twelve hours. Not
+> because I'm an engineering prodigy — I'm a lawyer — but because the tools
+> for building solid, deterministic software have gotten game-changingly
+> powerful. If one attorney with a laptop can put a real dent in "free local
+> PDF suite" over the course of an evening, the assumption that you need a
+> giant company and a subscription to get decent software was already on
+> its way out.
+>
+> The spirit airlines of software is arriving, and even if you don't like
+> it, the Adobes, Microsofts, and others in the world are going to have to
+> start competing not just with free, but not annoying.
 
-Never say "kills Adobe," "Adobe killer," or anything reading as an attack on
-Adobe the company. Never name Adobe/Acrobat as a direct point of comparison
-at all — no "Adobe does X, we do Y," even factual ones, and no
-feature-by-feature comparison table. "Acrobat" as a plain category reference
-(e.g. the hero one-liner above) is fine for orientation; a value-judgment
-comparison is not. The pitch is what RaioPDF *is* and the idea behind it —
-not a rebuttal of any specific company.
+**Revised guidance (2026-07-03): this IS partially a protest — a personal
+one, not a corporate one.** Naming Adobe (and, per the closer line above,
+Microsoft) directly is fine — the tagline itself now says "the legal
+workflows Adobe never bothered building." What's still off-limits is
+*corporate-sounding* framing: no "warning shot," no "rebuke of the
+subscription-SaaS pattern," no strategic-market-positioning language. This
+reads as a specific person (a practicing attorney) griping about specific,
+lived annoyances — bloat, licensing quirks, features nobody asked for — and
+building the alternative himself. Keep it personal and specific, never
+abstract/strategic. A first-person belief claim like "I believe this is a
+genuinely better experience" is fine even pre-1.0 (the hedge is "I
+believe," not a claim about the product being finished) — an unattributed,
+third-person "RaioPDF is better than Acrobat" stated as flat fact is not,
+until there's a real release to back it.
 
-Where it fits naturally (not every option needs it), the concept-to-working-
-prototype timeline — about twelve hours — is a fair, lighthearted aside for
-the same point: you don't need a giant company to build something solid.
-Don't force it in if the design doesn't have room; it's a bonus beat, not a
-required claim.
+Where it fits naturally (not every option needs the full essay), the
+concept-to-working-prototype timeline — about twelve hours — is a fair,
+lighthearted beat for the same point: you don't need a giant company to
+build something solid. It now belongs in the main flow of the essay (Jacob
+folded it out of a separate "fun aside" and into the narrative itself) —
+don't isolate it into its own callout box if you're using the full text.
 
 ## Concrete inputs (a "how you'd actually use it" section — 3–4 items)
 
@@ -86,25 +131,39 @@ required claim.
   underneath.
 - **Bates numbering** across an entire document set in one pass.
 - **Sensitive-info scanner** — assistive detection of SSNs and account
-  numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out.
+  numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out. Always
+  pair with the honest caveat: this is assistive only — never trust AI with
+  legal reasoning, verify before relying on it. Don't feature this one
+  without the caveat attached.
 - **Metadata scrubbing** before production or filing.
 - **e-filing preflight report** with the actual rule citations (Fla. R. Jud.
   Admin. 2.520/2.525) attached.
+- **Native MCP integration** (added 2026-07-03) — no AI built into RaioPDF
+  itself, but it speaks natively to a user's own AI agents and tools. Keep
+  the "no AI in the product" claim and the "MCP-native" claim next to each
+  other so it doesn't read as a contradiction — the product has no AI
+  features; it exposes an interface AI agents can call.
 
-## Why now (short section, can double as a pull-quote) — updated 2026-07-03
+## Why now (short section, can double as a pull-quote) — updated 2026-07-03 (rev. 2)
 
-Turns out you don't need a subscription and a login screen to make solid
-software — you just have to build it. RaioPDF is proof: free, full-featured,
-on-device, nothing collected. (Same first-person-voice guidance as the
-positioning frame above applies here.)
+> The spirit airlines of software is arriving, and even if you don't like
+> it, the Adobes, Microsofts, and others in the world are going to have to
+> start competing not just with free, but not annoying.
 
-## What it is NOT (small, honest, near the download panel or footer)
+(Same first-person-voice guidance as the positioning frame above applies
+here — this is Jacob's line, pulled verbatim from the README's closing
+paragraph.)
 
-- Not "AI-powered." No AI runs anywhere in RaioPDF — that's a selling point,
-  not a gap.
-- Not released yet. Pre-alpha, no promised date.
+## What it is NOT (small, honest, near the download panel or footer) — updated 2026-07-03
+
+- Not "AI-powered." No AI features built into RaioPDF — if I wanted an AI
+  summary I could go to a million other more useful places first.
+- Not released yet. Pre-alpha, no promised date. But if you want it, I'll
+  give it to you.
 - Windows first. macOS later — no date promised.
-- Not a feature-by-feature Acrobat killer. A different bet on the same job.
+- Not trying to win a features arms race. This isn't about beating anyone
+  spec-for-spec — it's about proving the free, local, and genuinely
+  **competitive** alternative can exist at all.
 
 ## Download panel copy
 
@@ -137,24 +196,38 @@ browser would show if you visited the repo directly.
 third-party requests" — the page does load its own typefaces the normal way.
 Don't overclaim past what's actually true.)
 
-## License / footer
+## License / footer — updated 2026-07-03
 
 - GPL-3.0. Bundles the MIT-licensed Stirling-PDF engine and other
   third-party components under their own licenses.
-- "Published as a public service to the legal community by Macrify LLC."
-  Link to macrify.me. Wordmark per `logo-system.md` — the Macrify wordmark
-  file, never hand-typed next to a block mark.
+- "Published as a public good and also to swag on em by Macrify LLC."
+  (Replaces the older "public service to the legal community" line — same
+  fact, Jacob's own idiom. "Swag on em" is an established personal phrase of
+  his, not a one-off — keep it verbatim, don't smooth it into formal
+  language.) Link to macrify.me. Wordmark per `logo-system.md` — the Macrify
+  wordmark file, never hand-typed next to a block mark.
 - Support: GitHub Issues (primary) and support@macrify.me (best-effort,
   free/community-supported software — say so plainly, don't imply an SLA).
 
-## Legal/tone guardrails
+## Legal/tone guardrails — updated 2026-07-03
 
 - No dollar/time/hour estimates that aren't backed by measured data. "Free"
   and "$0" are fine (factual). Never "saves you X hours." The
   concept-to-prototype "about twelve hours" line is a stated fact from
   Jacob, not a productivity/savings estimate — it's fine to use where noted
   above.
-- No superlatives ("game-changing," "revolutionary," "best-in-class").
+- **Superlatives carve-out for Jacob's own founder-voice copy.** The
+  org-wide "no superlatives" rule (`sales-positioning.md`) still applies to
+  generic/third-person marketing copy for every other product — but RaioPDF's
+  first-person essay content is Jacob's own voice, and he used
+  "game-changingly powerful" in his own README edit. Don't strip color out
+  of his verbatim quotes. Do still avoid inventing *new* superlatives in
+  copy that isn't a direct quote from him.
+- **"Better than Acrobat" claims are fine in first person, hedged.** "I
+  believe using Raio is a genuinely better experience than Acrobat" is
+  Jacob's own line and stays. Don't write new unattributed/third-person
+  "RaioPDF beats Acrobat" claims — the difference is the "I believe," not
+  whether a comparison is made at all.
 - No fear framing ("never miss a redaction"). Lead with what the software
   does, not what goes wrong without it.
 - RaioPDF is not tier-scoped — it's a free public download and brand/lead-gen

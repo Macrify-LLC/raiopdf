@@ -34,11 +34,13 @@
 
 ## The philosophy
 
-**A warning shot, not a feature race.** Adobe has spent years pushing Acrobat toward pricier tiers and more features nobody asked for, while locking a fundamentally local task — editing a file that already lives on your machine — behind a mandatory account and a cloud round-trip.
+I didn't build this to pick a fight with anyone's business model. I built it because editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a little voice in the back of your head wondering what happens to the file once it leaves your machine. That's a lot of ceremony for a task your laptop can already do by itself.
 
-RaioPDF is the opposite bet: **free, full-featured for daily use, entirely on-device, and honest that it collects nothing.**
+RaioPDF is the other way of doing it: **a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.**
 
-That's not a claim to beat Acrobat feature-for-feature — it's a different bet on the same job. No cloud, no account, no telemetry, no AI, no data collection. Every operation runs locally, including the ones that normally mean a server round-trip somewhere else: text recognition, redaction, exhibit assembly. Download it, install it, use it. That's the whole deal.
+Turns out you don't need a subscription and a login screen to make solid software — you just have to build it. And once someone proves that, "this is just how PDF software works now" stops being true. That's really the point: not to out-feature any particular vendor, but to show a firm doesn't have to just accept whatever terms it's handed for a task this basic.
+
+Worth saying out loud since it's kind of funny: this went from an idea to a working prototype in about twelve hours. Not because I'm some engineering prodigy — I'm a lawyer — but because the tools for building solid, deterministic software have gotten genuinely good. If one attorney with a laptop can put a real dent in "free local PDF suite" over the course of an evening, the assumption that you need a giant company and a subscription to get decent software was already on its way out.
 
 ## What it does
 
@@ -53,7 +55,7 @@ Four ways it fits into an actual day at the firm:
 
 ## Features
 
-### Core — the day-to-day Acrobat replacement
+### Core — the everyday stuff
 
 | Capability | What it means |
 |---|---|
@@ -65,7 +67,7 @@ Four ways it fits into an actual day at the firm:
 | Compress & protect | File compression, passwords, permissions |
 | No catches | No watermarks, no nag screens, ever |
 
-### Legal — the workflows Acrobat doesn't ship
+### Legal — the stuff nobody bothered building for lawyers
 
 | Workflow | What it means |
 |---|---|
@@ -84,7 +86,7 @@ All of the above are planned/in-progress for the first release — see [Status](
 - **Not "AI-powered."** No AI runs anywhere in RaioPDF — that's a selling point, not a gap.
 - **Not released yet.** Pre-alpha, no promised date.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
-- **Not a feature-by-feature Acrobat killer.** A different bet on the same job.
+- **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local alternative can exist at all.
 
 ## How it's built
 
@@ -102,7 +104,7 @@ flowchart LR
     style OCR fill:#EDF4FB,color:#0B1A2E,stroke:#D4DFEE
 ```
 
-A [Tauri](https://tauri.app) desktop shell with a custom, Acrobat-familiar UI, running the MIT-licensed [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) backend engine as a bundled localhost sidecar — no Docker, no Java setup, it's all inside the installer — plus a bundled Tesseract/Ghostscript/OCRmyPDF toolchain for fully offline OCR.
+A [Tauri](https://tauri.app) desktop shell with a custom UI built to feel familiar from the first click, running the MIT-licensed [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) backend engine as a bundled localhost sidecar — no Docker, no Java setup, it's all inside the installer — plus a bundled Tesseract/Ghostscript/OCRmyPDF toolchain for fully offline OCR.
 
 Everything in that diagram runs on your machine. Nothing in it talks to the internet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown, including how the Stirling-PDF engine is vendored and scrubbed to its MIT-licensed core only ([`docs/ENGINE-VENDORING.md`](docs/ENGINE-VENDORING.md)).
 

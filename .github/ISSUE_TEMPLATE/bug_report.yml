@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in RaioPDF isn't working right.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. **If this is a security issue** (crash on a malicious file, a way to escape the sandbox, credential exposure, etc.), please don't file it here — see [SECURITY.md](../../SECURITY.md) for private reporting instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a PDF with...
+        2. Click...
+        3. See error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RaioPDF version
+      description: Found in Settings > About, or the installer filename if pre-release.
+    validations:
+      required: false
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or a sample PDF (strip anything sensitive first — this is a legal-document tool and issues are public).
+    validations:
+      required: false

@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a workflow, tool, or improvement for RaioPDF.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: What are you trying to do that RaioPDF doesn't support today? Real day-at-the-firm context is more useful than a feature name.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you want instead?
+      description: If you have a specific idea for how it should work, describe it. If not, that's fine too.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+      description: How are you handling this today (Acrobat, another tool, manually)?
+    validations:
+      required: false

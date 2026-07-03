@@ -371,6 +371,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         const { bytes, engineHandle, signatureInvalidationNotice } = prepared;
+        const signatureInvalidated = Boolean(signatureInvalidationNotice);
         const pageCount = await engine.pageCount(engineHandle);
 
         if (openTokenRef.current !== token) {
@@ -390,9 +391,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
           currentPage: 1,
           zoom: 1,
           fitWidth: true,
-          dirty: false,
+          dirty: signatureInvalidated,
           fileName: file.name,
-          filePath: file.path ?? null,
+          filePath: signatureInvalidated ? null : file.path ?? null,
           fileSizeBytes: bytes.byteLength,
           hasTextLayer: null,
           textLayerCoverage: null,
@@ -462,21 +463,24 @@ export function useDocument(options: UseDocumentOptions = {}) {
           return null;
         }
 
+        const signatureInvalidationNotice = mergeSignatureInvalidationNotice(
+          options.signatureInvalidationNotice ?? null,
+          prepared.signatureInvalidationNotice,
+        );
         const commitOptions: CommitOptions = {
-          dirty: options.dirty,
+          dirty: options.dirty || Boolean(signatureInvalidationNotice),
           hasTextLayer: options.hasTextLayer ?? null,
           textLayerCoverage: options.textLayerCoverage ?? null,
-          signatureInvalidationNotice: mergeSignatureInvalidationNotice(
-            options.signatureInvalidationNotice ?? null,
-            prepared.signatureInvalidationNotice,
-          ),
+          signatureInvalidationNotice,
         };
 
         if (options.fileName !== undefined) {
           commitOptions.fileName = options.fileName;
         }
 
-        if (options.filePath !== undefined) {
+        if (signatureInvalidationNotice) {
+          commitOptions.filePath = null;
+        } else if (options.filePath !== undefined) {
           commitOptions.filePath = options.filePath;
         }
 

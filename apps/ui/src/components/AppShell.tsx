@@ -186,7 +186,7 @@ export function AppShell({
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
       />
-      {documentBanner}
+      <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">
         <ThumbnailRail
           pdfDocument={pdfDocument}

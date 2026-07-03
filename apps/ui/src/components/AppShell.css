@@ -22,6 +22,10 @@
   min-height: 0;
 }
 
+.app-shell__document-banner {
+  min-height: 0;
+}
+
 .app-shell__file-input {
   position: absolute;
   inline-size: 1px;

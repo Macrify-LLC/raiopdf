@@ -1,9 +1,11 @@
+import { scoreGarbledPage, type GarbledPageInfo } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "./pdfjs";
 
 export interface TextLayerCoverage {
   pageCount: number;
   pagesWithText: number[];
   missingTextPages: number[];
+  garbledPages: GarbledPageInfo[];
   allPagesHaveText: boolean;
   hasAnyText: boolean;
 }
@@ -28,16 +30,18 @@ export async function pdfDocumentTextLayerCoverage(
 ): Promise<TextLayerCoverage> {
   const pagesWithText: number[] = [];
   const missingTextPages: number[] = [];
+  const garbledPages: GarbledPageInfo[] = [];
 
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
     const textContent = await page.getTextContent();
+    const pageText = textContent.items.map((item) => "str" in item ? item.str : "").join(" ");
+    const garbleInfo = scoreGarbledPage(pageText, pageNumber - 1);
+    if (garbleInfo) {
+      garbledPages.push(garbleInfo);
+    }
 
-    if (
-      textContent.items.some((item) => {
-        return "str" in item && item.str.trim().length > 0;
-      })
-    ) {
+    if (pageText.trim().length > 0) {
       pagesWithText.push(pageNumber);
     } else {
       missingTextPages.push(pageNumber);
@@ -48,6 +52,7 @@ export async function pdfDocumentTextLayerCoverage(
     pageCount: pdfDocument.numPages,
     pagesWithText,
     missingTextPages,
+    garbledPages,
     allPagesHaveText: pdfDocument.numPages > 0 && missingTextPages.length === 0,
     hasAnyText: pagesWithText.length > 0,
   };

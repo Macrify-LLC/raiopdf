@@ -202,6 +202,7 @@ describe("Florida jurisdiction pack", () => {
           imageOnlyPages: [],
           mixedPages: [],
           textPages: [0],
+          garbledPages: [],
         },
         pageTextByPage: [
           {
@@ -255,6 +256,7 @@ describe("Florida jurisdiction pack", () => {
           imageOnlyPages: [],
           mixedPages: [],
           textPages: [0],
+          garbledPages: [],
         },
         pageTextByPage: [
           {
@@ -319,6 +321,7 @@ describe("Florida jurisdiction pack", () => {
         imageOnlyPages: [0],
         mixedPages: [],
         textPages: [],
+        garbledPages: [],
       },
       pageTextByPage: [],
     })).toBe("unknown");
@@ -651,6 +654,7 @@ function basePhraseFacts(): Parameters<typeof preflight>[0] {
       imageOnlyPages: [],
       mixedPages: [],
       textPages: [0],
+      garbledPages: [],
     },
     pages: [
       {

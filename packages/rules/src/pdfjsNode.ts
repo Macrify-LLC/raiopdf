@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
 import type { TextLayerCoverage } from "./types.js";
+import { scoreGarbledPage } from "./garbleScore.js";
 
 const require = createRequire(import.meta.url);
 
@@ -64,14 +65,20 @@ export async function extractTextLayerCoverage(bytes: Uint8Array): Promise<TextL
     const imageOnlyPages: number[] = [];
     const mixedPages: number[] = [];
     const textPages: number[] = [];
+    const garbledPages: TextLayerCoverage["garbledPages"][number][] = [];
 
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
-      const hasText = content.items.some((item) => isTextItem(item) && item.str.trim().length > 0);
+      const pageText = content.items.map((item) => isTextItem(item) ? item.str : "").join(" ");
+      const hasText = pageText.trim().length > 0;
       const operatorList = await page.getOperatorList();
       const hasImage = operatorList.fnArray.some(isImageOperator);
       const pageIndex = pageNumber - 1;
+      const garbleInfo = scoreGarbledPage(pageText, pageIndex);
+      if (garbleInfo) {
+        garbledPages.push(garbleInfo);
+      }
 
       if (!hasText) {
         imageOnlyPages.push(pageIndex);
@@ -82,7 +89,7 @@ export async function extractTextLayerCoverage(bytes: Uint8Array): Promise<TextL
       }
     }
 
-    return { imageOnlyPages, mixedPages, textPages };
+    return { imageOnlyPages, mixedPages, textPages, garbledPages };
   } finally {
     await task.destroy();
   }

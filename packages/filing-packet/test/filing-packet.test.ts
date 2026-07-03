@@ -111,9 +111,9 @@ describe("buildFilingPacket", () => {
     const motion = await writePdf("Motion to Compel.pdf", ["page one", "page two", "page three"]);
     const outputDir = path.join(dir, "packet-part-numbering");
     const coverageByPart: TextLayerCoverage[] = [
-      { imageOnlyPages: [], mixedPages: [], textPages: [0] },
-      { imageOnlyPages: [], mixedPages: [], textPages: [0] },
-      { imageOnlyPages: [0], mixedPages: [], textPages: [] },
+      { imageOnlyPages: [], mixedPages: [], textPages: [0], garbledPages: [] },
+      { imageOnlyPages: [], mixedPages: [], textPages: [0], garbledPages: [] },
+      { imageOnlyPages: [0], mixedPages: [], textPages: [], garbledPages: [] },
     ];
     const extractTextLayerCoverageForPart = vi.fn(async () => {
       const coverage = coverageByPart.shift();

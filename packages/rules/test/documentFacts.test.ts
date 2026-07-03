@@ -68,6 +68,7 @@ describe("document fact extractors", () => {
           imageOnlyPages: [],
           mixedPages: [],
           textPages: [0],
+          garbledPages: [],
         }),
       },
     });
@@ -88,6 +89,7 @@ describe("document fact extractors", () => {
       imageOnlyPages: [],
       mixedPages: [],
       textPages: [0],
+      garbledPages: [],
     });
     expect(facts.searchableText).toBe(true);
     expect(facts.errors).toBeUndefined();
@@ -121,6 +123,7 @@ describe("document fact extractors", () => {
       textPages: [0],
       imageOnlyPages: [1],
       mixedPages: [2],
+      garbledPages: [],
     });
     expect(facts.pageTextByPage?.map((page) => page.text.trim())).toEqual([
       "searchable text",
@@ -150,6 +153,7 @@ describe("document fact extractors", () => {
       textPages: [0, 1],
       imageOnlyPages: [],
       mixedPages: [],
+      garbledPages: [],
     });
   });
 

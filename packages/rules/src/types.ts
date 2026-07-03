@@ -141,7 +141,49 @@ export type TextLayerCoverage = {
   imageOnlyPages: readonly number[];
   mixedPages: readonly number[];
   textPages: readonly number[];
+  garbledPages: readonly GarbledPageInfo[];
 };
+
+export type GarbleReason = "pua_glyphs" | "replacement_chars" | "low_alpha_entropy" | "combined";
+
+export type GarbledPageInfo = {
+  pageIndex: number;
+  confidence: number;
+  reason: GarbleReason;
+  puaRatio: number;
+  replacementRatio: number;
+  alphaRatio: number;
+};
+
+export type TextLayerQuality = {
+  cleanPages: number;
+  garbledPages: number;
+  imageOnlyPages: number;
+  totalPages: number;
+  verdict: "clean" | "garbled" | "image_only" | "mixed" | "unknown";
+};
+
+export function deriveTextLayerQuality(coverage: TextLayerCoverage): TextLayerQuality {
+  const imageOnlyPages = coverage.imageOnlyPages.length;
+  const garbledPages = coverage.garbledPages.length;
+  const totalPages = coverage.imageOnlyPages.length + coverage.mixedPages.length + coverage.textPages.length;
+  const cleanPages = Math.max(0, totalPages - imageOnlyPages - garbledPages);
+
+  if (totalPages === 0) {
+    return { cleanPages, garbledPages, imageOnlyPages, totalPages, verdict: "unknown" };
+  }
+  if (imageOnlyPages === totalPages) {
+    return { cleanPages, garbledPages, imageOnlyPages, totalPages, verdict: "image_only" };
+  }
+  if (garbledPages === totalPages) {
+    return { cleanPages, garbledPages, imageOnlyPages, totalPages, verdict: "garbled" };
+  }
+  if (cleanPages === totalPages) {
+    return { cleanPages, garbledPages, imageOnlyPages, totalPages, verdict: "clean" };
+  }
+
+  return { cleanPages, garbledPages, imageOnlyPages, totalPages, verdict: "mixed" };
+}
 
 export type PageTextByPage = readonly { pageIndex: number; text: string }[];
 

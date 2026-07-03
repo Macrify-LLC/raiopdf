@@ -187,6 +187,11 @@ export function PrepareForFilingWorkspace({
   const [packetMessage, setPacketMessage] = useState<string | null>(null);
   const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
   const [passwordValue, setPasswordValue] = useState("");
+  // Kept for the duration of one prepare run (through any impact-confirmation
+  // retry), separate from the input field above. Codex flagged that clearing
+  // the password on submit left the ImpactWarning continue action with
+  // nothing to resend, re-tripping the remove-encryption gate.
+  const [activeUnlockPassword, setActiveUnlockPassword] = useState<string | null>(null);
   const [certificate, setCertificate] = useState<CertificateOfServiceDraft>({
     caseCaption: "",
     serviceList: "",
@@ -253,6 +258,7 @@ export function PrepareForFilingWorkspace({
       return;
     }
 
+    setActiveUnlockPassword(null);
     onPrepare(certificateOpen ? certificate : null, prepareOptions());
   }
 
@@ -264,6 +270,7 @@ export function PrepareForFilingWorkspace({
     }
     setPasswordPromptOpen(false);
     setPasswordValue("");
+    setActiveUnlockPassword(password);
     onPrepare(certificateOpen ? certificate : null, {
       ...prepareOptions(),
       removeEncryptionPassword: password,
@@ -461,8 +468,12 @@ export function PrepareForFilingWorkspace({
             onContinue={() => onPrepare(certificateOpen ? certificate : null, {
               ...prepareOptions(),
               acknowledgeImpact: true,
+              ...(activeUnlockPassword ? { removeEncryptionPassword: activeUnlockPassword } : {}),
             })}
-            onCancel={onDismissImpact}
+            onCancel={() => {
+              setActiveUnlockPassword(null);
+              onDismissImpact();
+            }}
           />
         ) : null}
 

@@ -20,6 +20,7 @@
     "engine:vendor": "bash engine/vendor.sh",
     "engine:build": "bash engine/build.sh",
     "engine:verify": "bash engine/verify-live.sh",
+    "prepare": "husky",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"
@@ -34,6 +35,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.6.0",
     "globals": "^17.7.0",
+    "husky": "^9.1.7",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.0.0",
     "vite": "^8.1.3",

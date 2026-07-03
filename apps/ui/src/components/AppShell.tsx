@@ -69,6 +69,7 @@ export interface AppShellProps {
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onOpenAbout: () => void;
+  onHelpRequested: () => void;
 }
 
 export function AppShell({
@@ -116,6 +117,7 @@ export function AppShell({
   onRunScanner,
   onMarkScannerHit,
   onOpenAbout,
+  onHelpRequested,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
@@ -177,6 +179,7 @@ export function AppShell({
         onSearchPrevious={documentSearch.goToPrevious}
         onSearchNext={documentSearch.goToNext}
         onSearchClear={documentSearch.clear}
+        onHelp={onHelpRequested}
       />
       <div className="app-shell__body">
         <ThumbnailRail
@@ -194,6 +197,7 @@ export function AppShell({
           workspace={workspace}
           overlay={overlay}
           onOpenRequested={requestOpen}
+          onHelpRequested={onHelpRequested}
           onFileDropped={onFileDropped}
           pdfDocument={pdfDocument}
           currentPage={document.currentPage}

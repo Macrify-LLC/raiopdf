@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CommentIcon,
   DrawIcon,
+  HelpIcon,
   HighlightIcon,
   ImageIcon,
   MinusIcon,
@@ -18,22 +19,19 @@ import {
   UndoIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
+import { COMMAND_BAR_EDIT_TOOLS } from "../lib/toolRegistry";
 import { IconButton } from "./IconButton";
 import "./CommandBar.css";
 
-const EDIT_TOOLS: ReadonlyArray<{
-  id: EditToolId;
-  label: string;
-  icon: (size: number) => ReactNode;
-}> = [
-  { id: "select", label: "Select", icon: (size) => <SelectTextIcon size={size} /> },
-  { id: "highlight", label: "Highlight", icon: (size) => <HighlightIcon size={size} /> },
-  { id: "textBox", label: "Text box", icon: (size) => <TextBoxIcon size={size} /> },
-  { id: "image", label: "Image", icon: (size) => <ImageIcon size={size} /> },
-  { id: "comment", label: "Comment", icon: (size) => <CommentIcon size={size} /> },
-  { id: "draw", label: "Draw", icon: (size) => <DrawIcon size={size} /> },
-  { id: "sign", label: "Sign", icon: (size) => <SignIcon size={size} /> },
-];
+const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
+  select: (size) => <SelectTextIcon size={size} />,
+  highlight: (size) => <HighlightIcon size={size} />,
+  textBox: (size) => <TextBoxIcon size={size} />,
+  image: (size) => <ImageIcon size={size} />,
+  comment: (size) => <CommentIcon size={size} />,
+  draw: (size) => <DrawIcon size={size} />,
+  sign: (size) => <SignIcon size={size} />,
+};
 
 export interface CommandBarProps {
   onOpen?: (() => void) | undefined;
@@ -57,6 +55,7 @@ export interface CommandBarProps {
   onSearchPrevious?: (() => void) | undefined;
   onSearchNext?: (() => void) | undefined;
   onSearchClear?: (() => void) | undefined;
+  onHelp?: (() => void) | undefined;
 }
 
 export function CommandBar({
@@ -81,6 +80,7 @@ export function CommandBar({
   onSearchPrevious,
   onSearchNext,
   onSearchClear,
+  onHelp,
 }: CommandBarProps) {
   function toggleTool(toolId: EditToolId) {
     // Tools are mutually exclusive toggles; re-clicking the active tool
@@ -134,16 +134,20 @@ export function CommandBar({
 
       <div className="command-bar__group">
         <IconButton icon={<UndoIcon size={17} />} label="Undo" disabled />
-        {EDIT_TOOLS.map((tool) => (
+        {COMMAND_BAR_EDIT_TOOLS.map((tool) => (
           <IconButton
             key={tool.id}
-            icon={tool.icon(17)}
+            icon={EDIT_TOOL_ICONS[tool.id](17)}
             label={tool.label}
             active={editTool === tool.id}
             disabled={!hasDocument && tool.id !== "select"}
             onClick={() => toggleTool(tool.id)}
           />
         ))}
+      </div>
+
+      <div className="command-bar__group">
+        <IconButton icon={<HelpIcon size={17} />} label="Help" onClick={onHelp} />
       </div>
 
       <div className="command-bar__center">

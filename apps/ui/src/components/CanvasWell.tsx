@@ -37,6 +37,7 @@ export interface PendingRedactionOverlay {
 
 export interface CanvasWellProps {
   onOpenRequested?: (() => void) | undefined;
+  onHelpRequested?: (() => void) | undefined;
   onFileDropped?: ((file: File) => void) | undefined;
   pdfDocument?: PDFDocumentProxy | null;
   currentPage?: number;
@@ -62,6 +63,7 @@ export interface CanvasWellProps {
 
 export function CanvasWell({
   onOpenRequested,
+  onHelpRequested,
   onFileDropped,
   pdfDocument = null,
   currentPage = 1,
@@ -519,6 +521,13 @@ export function CanvasWell({
           >
             <OpenIcon size={16} />
             Open a PDF
+          </button>
+          <button
+            type="button"
+            className="canvas-well__help-link"
+            onClick={onHelpRequested}
+          >
+            New here? Open Help
           </button>
           {error ? (
             <p className="canvas-well__message" role="status">

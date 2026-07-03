@@ -64,7 +64,8 @@ import {
 } from "./components/ProductionSetWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
-import { FloatingDialog } from "./components/FloatingDialog";
+import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
+import { HelpPanel } from "./components/HelpPanel";
 import { LoadingSun } from "./components/LoadingSun";
 import {
   isEngineBridgeUnavailableError,
@@ -295,6 +296,7 @@ export function App() {
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [settingsFocusSection, setSettingsFocusSection] = useState<
     "open-raio-to-ai" | "about-macrify" | null
   >(null);
@@ -2285,6 +2287,24 @@ export function App() {
     setSettingsFocusSection("about-macrify");
     setSettingsOpen(true);
   }, []);
+  const openHelp = useCallback(() => {
+    setHelpOpen(true);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "F1" || event.defaultPrevented || hasOpenDialogStackEntry()) {
+        return;
+      }
+
+      event.preventDefault();
+      setHelpOpen(true);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleNativeMenuCommand = useCallback(
     (command: string) => {
@@ -2323,6 +2343,9 @@ export function App() {
           setSettingsFocusSection("open-raio-to-ai");
           setSettingsOpen(true);
           break;
+        case "help:open":
+          openHelp();
+          break;
         case "file:about-macrify":
           openAboutMacrify();
           break;
@@ -2347,6 +2370,7 @@ export function App() {
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,
+      openHelp,
       openAboutMacrify,
       openFile,
       printDocument,
@@ -2725,7 +2749,11 @@ export function App() {
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
         onOpenAbout={openAboutMacrify}
+        onHelpRequested={openHelp}
       />
+      {helpOpen ? (
+        <HelpPanel onClose={() => setHelpOpen(false)} />
+      ) : null}
       {settingsOpen ? (
         <SettingsDialog
           onClose={() => {

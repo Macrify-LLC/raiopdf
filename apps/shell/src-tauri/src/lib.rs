@@ -338,11 +338,15 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("view:zoom-out", "Zoom Out")
         .text("view:fit", "Fit")
         .build()?;
+    let help = SubmenuBuilder::new(app, "Help")
+        .text("help:open", "RaioPDF Help")
+        .build()?;
 
     MenuBuilder::new(app)
         .item(&file)
         .item(&edit)
         .item(&view)
+        .item(&help)
         .build()
 }
 

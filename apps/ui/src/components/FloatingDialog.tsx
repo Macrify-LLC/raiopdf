@@ -183,6 +183,10 @@ export function isTopDialogStackEntry(dialogId: string): boolean {
   return dialogStack[dialogStack.length - 1] === dialogId;
 }
 
+export function hasOpenDialogStackEntry(): boolean {
+  return dialogStack.length > 0;
+}
+
 export function resetDialogStackForTests(): void {
   dialogStack.splice(0, dialogStack.length);
 }

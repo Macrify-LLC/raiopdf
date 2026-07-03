@@ -1,37 +1,45 @@
 .batch-workspace {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: min(720px, 86vw);
-  color: var(--color-text);
+  display: grid;
+  gap: var(--space-3);
+  color: var(--body);
 }
 
-.batch-workspace__header,
-.batch-workspace__actions,
-.batch-workspace__file-row {
+/* Chrome-background section, white-panel rows inside -- same nesting as
+   Prepare for Filing's .filing-prep / .filing-checks sections and
+   Production Set's .production-workspace__section. */
+.batch-workspace__section {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-popover);
+  background: var(--chrome);
+  padding: var(--space-3);
+}
+
+.batch-workspace__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
-.batch-workspace__eyebrow {
-  margin: 0 0 2px;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.batch-workspace h2 {
+.batch-workspace__title {
   margin: 0;
-  font-size: 20px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.batch-workspace__subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
 }
 
 .batch-workspace__header-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
 }
 
 .batch-workspace__header-actions .icon-button {
@@ -40,154 +48,333 @@
   border-color: transparent;
   background: transparent;
   box-shadow: none;
-  color: var(--color-text-muted);
+  color: var(--muted);
 }
 
 .batch-workspace__header-actions .icon-button:hover:not(:disabled),
 .batch-workspace__header-actions .icon-button:focus-visible {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
 }
 
 .batch-workspace__file-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
+  max-height: 250px;
+  overflow: auto;
+}
+
+.batch-workspace__empty {
+  margin: 0;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  padding: var(--space-3);
+  text-align: center;
 }
 
 .batch-workspace__file-row {
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  padding: var(--space-2) var(--space-3);
 }
 
 .batch-workspace__file-name,
-.batch-workspace__file-meta,
-.batch-workspace__status {
+.batch-workspace__file-meta {
   margin: 0;
 }
 
 .batch-workspace__file-name {
-  font-weight: 650;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
-.batch-workspace__file-meta,
-.batch-workspace__status {
-  color: var(--color-text-muted);
-  font-size: 12px;
+.batch-workspace__file-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
 }
 
+/* Status chip vocabulary -- same shape (radius-chip, uppercase micro type)
+   and the same status-color mapping as Prepare for Filing's preflight chips
+   and stance badges, so "queued / running / done / needs attention /
+   skipped" reads like the same product family as "pass / warning / review". */
 .batch-workspace__status-chip {
-  min-width: 68px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 3px 8px;
+  flex: 0 0 auto;
+  min-width: 84px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
   text-align: center;
-  font-size: 12px;
-  text-transform: capitalize;
+  padding: 3px var(--space-2);
+  white-space: nowrap;
 }
 
-.batch-workspace__status-chip--done {
-  border-color: #2f8f5b;
-  color: #1f6b43;
+.batch-workspace__status-chip[data-status="pending"] {
+  border-style: dashed;
+  background: var(--chrome);
 }
 
-.batch-workspace__status-chip--failed {
-  border-color: #bd4d43;
-  color: #9f3028;
+.batch-workspace__status-chip[data-status="running"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
 }
 
-.batch-workspace__status-chip--skipped {
-  border-color: #9b8a50;
-  color: #745f20;
+.batch-workspace__status-chip[data-status="done"] {
+  border-color: var(--ok-bg);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.batch-workspace__status-chip[data-status="failed"] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.batch-workspace__status-chip[data-status="skipped"] {
+  border-color: var(--warn);
+  background: var(--panel);
+  color: var(--warn);
 }
 
 .batch-workspace__grid {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.2fr);
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .batch-workspace label {
   display: grid;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--color-text-muted);
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
 }
 
 .batch-workspace input,
 .batch-workspace select {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px 9px;
-  color: var(--color-text);
-  background: var(--color-surface);
-}
-
-.batch-workspace__section {
-  display: grid;
-  gap: 12px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
 }
 
 .batch-workspace__checks {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 14px;
+  gap: var(--space-2) var(--space-3);
 }
 
-.batch-workspace__checkbox-row {
-  display: flex !important;
-  grid-template-columns: none;
+/* An element selector on the label itself keeps this at the same
+   specificity as the generic `.batch-workspace label` rule above, so
+   cascade order (this rule comes later) decides the row layout. */
+label.batch-workspace__checkbox-row {
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.batch-workspace__checkbox-row input {
+  width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
 }
 
 .batch-workspace__number {
   max-width: 180px;
 }
 
+.batch-workspace__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .batch-workspace__primary-button,
+.batch-workspace__secondary-button {
+  min-height: 32px;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 0 var(--space-3);
+  box-shadow: var(--shadow-control);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
 .batch-workspace__secondary-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  min-height: 34px;
-  padding: 0 12px;
-  font-weight: 650;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--body);
 }
 
 .batch-workspace__primary-button {
-  border-color: #2d5b8f;
-  color: #ffffff;
-  background: #2d5b8f;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-primary);
 }
 
-.batch-workspace__secondary-button {
-  color: var(--color-text);
-  background: var(--color-surface);
+.batch-workspace__primary-button:hover:not(:disabled) {
+  background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.batch-workspace__secondary-button:hover:not(:disabled) {
+  background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.batch-workspace__primary-button:active:not(:disabled),
+.batch-workspace__secondary-button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .batch-workspace__primary-button:disabled,
 .batch-workspace__secondary-button:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
+.batch-workspace__status {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+/* Result -- receipt style, matching Prepare for Filing's ResultCard and
+   Production Set's result section. */
 .batch-workspace__result {
   display: grid;
-  gap: 4px;
+  gap: var(--space-2);
+  border: 1px solid var(--ok-bg);
+  border-radius: var(--radius-control);
+  background: var(--ok-bg);
+  padding: var(--space-3);
+  animation: batch-panel-in var(--duration-fast) ease;
+}
+
+.batch-workspace__result-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ok);
+}
+
+.batch-workspace__result-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.batch-workspace__result-subtitle {
+  margin: 0;
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.batch-workspace__result-parts {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.batch-workspace__result-part {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px dashed var(--border-soft);
+  font-size: var(--text-xs);
+}
+
+.batch-workspace__result-part:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.batch-workspace__result-part-label {
+  color: var(--muted);
+}
+
+.batch-workspace__result-part-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes batch-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .batch-workspace__result {
+    animation: none;
+  }
+}
+
+/* Safety net for the control the app-wide baseline focus rule misses --
+   it covers button/input/[tabindex] but not select. */
+.batch-workspace select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 @media (max-width: 720px) {
-  .batch-workspace {
-    min-width: 0;
-  }
-
   .batch-workspace__grid,
   .batch-workspace__checks {
     grid-template-columns: 1fr;
+  }
+
+  .batch-workspace__file-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

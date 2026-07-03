@@ -419,92 +419,89 @@ export function CanvasWell({
       {workspace ? (
         workspace
       ) : hasDocument ? (
-        <>
-          <div ref={stageRef} className="canvas-well__stage">
-            {editing?.hasFormFields ? (
-              <p className="canvas-well__form-note" role="status">
-                This PDF has fillable fields.
-              </p>
+        <div ref={stageRef} className="canvas-well__stage">
+          {editing?.hasFormFields ? (
+            <p className="canvas-well__form-note" role="status">
+              This PDF has fillable fields.
+            </p>
+          ) : null}
+          <div
+            ref={pageFrameRef}
+            className="canvas-well__page-frame"
+            data-redaction-mode={redactionMode ? "true" : undefined}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={() => {
+              dragStartRef.current = null;
+              setDraftRect(null);
+            }}
+          >
+            <canvas
+              ref={canvasRef}
+              className="canvas-well__page"
+              aria-label={`Page ${currentPage}`}
+              data-testid="pdf-page-canvas"
+            />
+            {pagePending || renderPending ? (
+              <div className="canvas-well__render-pending" role="status" aria-live="polite">
+                <LoadingSun size={18} label="Rendering page" />
+                Rendering page
+              </div>
             ) : null}
-            <div
-              ref={pageFrameRef}
-              className="canvas-well__page-frame"
-              data-redaction-mode={redactionMode ? "true" : undefined}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={() => {
-                dragStartRef.current = null;
-                setDraftRect(null);
-              }}
-            >
-              <canvas
-                ref={canvasRef}
-                className="canvas-well__page"
-                aria-label={`Page ${currentPage}`}
-                data-testid="pdf-page-canvas"
+            {viewport && page && editing?.hasFormFields ? (
+              <FormLayer
+                page={page}
+                viewport={viewport}
+                values={editing.formValues}
+                onValueChange={editing.setFormValue}
               />
-              {pagePending || renderPending ? (
-                <div className="canvas-well__render-pending" role="status" aria-live="polite">
-                  <LoadingSun size={18} label="Rendering page" />
-                  Rendering page
-                </div>
-              ) : null}
-              {viewport && page && editing?.hasFormFields ? (
-                <FormLayer
-                  page={page}
-                  viewport={viewport}
-                  values={editing.formValues}
-                  onValueChange={editing.setFormValue}
-                />
-              ) : null}
-              {viewport
-                ? pendingRedactions
-                  .filter((overlay) => overlay.area.pageIndex === currentPage - 1)
-                  .map((overlay) => (
-                    <RedactionOverlay
-                      key={overlay.id}
-                      overlay={overlay}
-                      viewport={viewport}
-                      onRemove={onRedactionAreaRemoved}
-                    />
-                  ))
-                : null}
-              {viewport
-                ? searchResults
-                  .filter((result) => result.area.pageIndex === currentPage - 1)
-                  .map((result) => (
-                    <SearchHighlight
-                      key={result.id}
-                      result={result}
-                      active={result.id === activeSearchResultId}
-                      viewport={viewport}
-                    />
-                  ))
-                : null}
-              {viewport && page && editing && !redactionMode ? (
-                <EditLayer
-                  page={page}
-                  viewport={viewport}
-                  pageIndex={currentPage - 1}
-                  editing={editing}
-                />
-              ) : null}
-              {draftRect ? (
-                <span
-                  className="canvas-well__redaction-draft"
-                  style={toOverlayStyle(draftRect)}
-                />
-              ) : null}
-            </div>
-            {error ? (
-              <p className="canvas-well__message" role="status">
-                {error}
-              </p>
+            ) : null}
+            {viewport
+              ? pendingRedactions
+                .filter((overlay) => overlay.area.pageIndex === currentPage - 1)
+                .map((overlay) => (
+                  <RedactionOverlay
+                    key={overlay.id}
+                    overlay={overlay}
+                    viewport={viewport}
+                    onRemove={onRedactionAreaRemoved}
+                  />
+                ))
+              : null}
+            {viewport
+              ? searchResults
+                .filter((result) => result.area.pageIndex === currentPage - 1)
+                .map((result) => (
+                  <SearchHighlight
+                    key={result.id}
+                    result={result}
+                    active={result.id === activeSearchResultId}
+                    viewport={viewport}
+                  />
+                ))
+              : null}
+            {viewport && page && editing && !redactionMode ? (
+              <EditLayer
+                page={page}
+                viewport={viewport}
+                pageIndex={currentPage - 1}
+                editing={editing}
+              />
+            ) : null}
+            {draftRect ? (
+              <span
+                className="canvas-well__redaction-draft"
+                style={toOverlayStyle(draftRect)}
+              />
             ) : null}
           </div>
-          {overlay}
-        </>
+          {error ? (
+            <p className="canvas-well__message" role="status">
+              {error}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <div className="canvas-well__empty">
           <span className="canvas-well__mark">
@@ -536,6 +533,7 @@ export function CanvasWell({
           ) : null}
         </div>
       )}
+      {overlay}
     </section>
   );
 }

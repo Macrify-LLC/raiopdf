@@ -33,6 +33,34 @@ test("disables doc-dependent chrome and hover echoes for reduced motion", async 
   }).toBe("none");
 });
 
+test("opens legal workflow dialogs before a document is loaded", async ({ page }) => {
+  await page.goto("/");
+
+  for (const legalTool of [
+    {
+      name: "Prepare for Filing",
+      emptyState: "Open a PDF before preparing a filing copy.",
+    },
+    {
+      name: "Batch Cleanup",
+      emptyState: "Add PDFs to build the cleanup queue.",
+    },
+    {
+      name: "Production Set",
+      emptyState: "Add PDFs to build the production order.",
+    },
+  ]) {
+    await page.getByRole("button", { name: legalTool.name, exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: legalTool.name });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(legalTool.emptyState)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  }
+});
+
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "round-trip.pdf", await createPdf([200, 210, 220, 230]));
@@ -565,6 +593,21 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect(page.locator('.filing-row[data-kind="rule"] .filing-row__chip', { hasText: "warning" })).toHaveCount(0);
   await expect.poll(() => getFilingPreflightRuns(page)).toBeGreaterThanOrEqual(2);
   await expect.poll(() => getPdfACallCount(page)).toBe(1);
+});
+
+test("prepare for filing closes an open organize workspace", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "organize-to-filing.pdf", await createPdf([200, 210, 220]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Page grid" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Legal" }).click();
+  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+
+  await expect(page.getByRole("list", { name: "Page grid" })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
 });
 
 test("compressing an oversize filing under the cap clears the split prompt", async ({ page }) => {

@@ -93,6 +93,15 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Prepare shell external-bin stubs
+        run: |
+          if [ -f installer/prepare-external-bins.mjs ]; then
+            node installer/prepare-external-bins.mjs --stub
+          else
+            echo "prepare-external-bins.mjs not present yet — skipping (arrives with the MCP packaging PR)"
+          fi
+        shell: bash
+
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
 

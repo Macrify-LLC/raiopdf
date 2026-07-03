@@ -9,11 +9,11 @@ import {
   listPacks,
   preflight,
 } from "@raiopdf/rules";
-import { extractPageTextByPage, extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { JurisdictionPack, JurisdictionPackId } from "@raiopdf/rules";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, errorResult, successResult, type StructuredToolResult } from "../format.js";
 import { preparePackageOutputDir, resolveInput } from "../paths.js";
+import { extractPageTextByPage, extractTextLayerCoverage } from "../pdfjs-node.js";
 
 const packIds: string[] = listPacks().map((pack) => pack.id);
 

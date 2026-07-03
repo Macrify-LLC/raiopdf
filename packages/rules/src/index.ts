@@ -19,6 +19,13 @@ export {
   detectEncryptionState,
 } from "./documentFacts.js";
 export { resolvePrepPlan } from "./prepPlan.js";
+export {
+  GARBLE_ALPHA_RATIO_THRESHOLD,
+  GARBLE_MIN_NON_WHITESPACE_CHARS,
+  GARBLE_PUNCT_OR_SYMBOL_RATIO_THRESHOLD,
+  GARBLE_VOWELLESS_TOKEN_RATIO_THRESHOLD,
+  scoreGarbledPage,
+} from "./garbleScore.js";
 export type {
   ActiveContentSignals,
   BuildDocumentFactsOptions,
@@ -32,6 +39,8 @@ export type {
   DocumentFactsTextExtractor,
   EncryptionState,
   FormFieldFacts,
+  GarbledPageInfo,
+  GarbleReason,
   JurisdictionPack,
   JurisdictionPackId,
   PageFacts,
@@ -54,7 +63,9 @@ export type {
   SelectionFacts,
   SelectionFileFacts,
   TextLayerCoverage,
+  TextLayerQuality,
 } from "./types.js";
+export { deriveTextLayerQuality } from "./types.js";
 export type {
   AppDataPackIntegrityResult,
   PackAcknowledgmentStore,

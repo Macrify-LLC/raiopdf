@@ -28,6 +28,7 @@ import {
   listPacks,
   preflight,
   resolvePrepPlan,
+  scoreGarbledPage,
 } from "@raiopdf/rules";
 import type {
   DocumentFactsTextExtractor,
@@ -944,6 +945,8 @@ export function App() {
           message: "Verifying the text layer...",
         });
 
+        // PHASE 3: A force-OCR "Fix garbled text" action must remain manually triggerable
+        // regardless of detector verdict, including documents scored clean.
         const hasTextLayer = await hasExtractableTextLayer(ocrBytes);
 
         if (!isCurrentRun()) {
@@ -3736,14 +3739,20 @@ async function extractUiTextLayerCoverage(
     const imageOnlyPages: number[] = [];
     const mixedPages: number[] = [];
     const textPages: number[] = [];
+    const garbledPages: NonNullable<DocumentFacts["textLayerCoverage"]>["garbledPages"][number][] = [];
 
     for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
       const page = await pdfDocument.getPage(pageNumber);
       const content = await page.getTextContent();
-      const hasText = content.items.some((item) => textItemString(item).trim().length > 0);
+      const pageText = content.items.map(textItemString).join(" ");
+      const hasText = pageText.trim().length > 0;
       const operatorList = await page.getOperatorList();
       const hasImage = operatorList.fnArray.some(isImageOperator);
       const pageIndex = pageNumber - 1;
+      const garbleInfo = scoreGarbledPage(pageText, pageIndex);
+      if (garbleInfo) {
+        garbledPages.push(garbleInfo);
+      }
 
       if (!hasText) {
         imageOnlyPages.push(pageIndex);
@@ -3754,7 +3763,7 @@ async function extractUiTextLayerCoverage(
       }
     }
 
-    return { imageOnlyPages, mixedPages, textPages };
+    return { imageOnlyPages, mixedPages, textPages, garbledPages };
   });
 }
 

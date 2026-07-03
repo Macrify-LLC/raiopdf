@@ -159,7 +159,7 @@ describe("runBatchCleanup", () => {
           path: searchable,
           facts: facts({
             pages: 1,
-            textLayerCoverage: { imageOnlyPages: [], mixedPages: [], textPages: [0] },
+            textLayerCoverage: { imageOnlyPages: [], mixedPages: [], textPages: [0], garbledPages: [] },
           }),
         },
       ],
@@ -414,6 +414,7 @@ function imageOnlyFacts(pages: number): DocumentFacts {
       imageOnlyPages: Array.from({ length: pages }, (_, index) => index),
       mixedPages: [],
       textPages: [],
+      garbledPages: [],
     },
   });
 }

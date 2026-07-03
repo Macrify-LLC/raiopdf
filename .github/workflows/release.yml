@@ -76,8 +76,65 @@ jobs:
       - name: Build workspaces
         run: pnpm -r build
 
+      - name: Stamp shell package version from release tag
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          node - "$VERSION" <<'NODE'
+          const fs = require("fs");
+
+          const packagePath = "apps/shell/package.json";
+          const version = process.argv[2];
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          packageJson.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+
       - name: Build Tauri shell
         run: pnpm build:shell
+
+      - name: Assert installer filenames include stamped version
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUNDLE_DIRS=(
+            "apps/shell/src-tauri/target/release/bundle"
+            "target/release/bundle"
+          )
+          EXISTING_DIRS=()
+          for dir in "${BUNDLE_DIRS[@]}"; do
+            if [[ -d "$dir" ]]; then
+              EXISTING_DIRS+=("$dir")
+            fi
+          done
+
+          if [[ "${#EXISTING_DIRS[@]}" -lt 1 ]]; then
+            echo "No Tauri bundle directory was produced." >&2
+            printf 'Checked: %s\n' "${BUNDLE_DIRS[@]}" >&2
+            exit 1
+          fi
+
+          mapfile -t VERSIONED_INSTALLERS < <(
+            find "${EXISTING_DIRS[@]}" -type f \
+              \( -name "*_${VERSION}_*-setup.exe" -o -name "*_${VERSION}_*.msi" \) \
+              | sort -u
+          )
+
+          if [[ "${#VERSIONED_INSTALLERS[@]}" -lt 1 ]]; then
+            echo "No Windows installer filename contains stamped version $VERSION." >&2
+            echo "Produced bundle files:" >&2
+            find "${EXISTING_DIRS[@]}" -type f | sort >&2
+            exit 1
+          fi
+
+          printf 'Versioned installer artifacts:\n'
+          printf '  %s\n' "${VERSIONED_INSTALLERS[@]}"
 
       - name: Verify bundled payload manifest
         shell: bash

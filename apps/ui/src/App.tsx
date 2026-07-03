@@ -26,9 +26,9 @@ import type {
   DocumentFacts,
   JurisdictionPack,
   PageFacts,
-  PreflightCheck,
   PreflightReport,
   RectInches,
+  SelectionFacts,
 } from "@raiopdf/rules";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
@@ -64,6 +64,10 @@ import {
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
+import {
+  aggregateOutputReports,
+  runFilingOutputPreflights,
+} from "./lib/filingOutputPreflight";
 import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
@@ -573,7 +577,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -1953,24 +1957,22 @@ export function App() {
           message: "Re-running preflight on the output files...",
         });
 
-        const outputReports: PreflightReport[] = [];
-        const outputParts: FilingOutputPart[] = [];
-
-        for (const part of convertedParts) {
-          const facts = await getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
+        const outputReports = await runFilingOutputPreflights(
+          convertedParts,
+          filingPack,
+          (part) => getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
             fileBytes: part.bytes.byteLength,
             filename: part.fileName,
             ...(convertOutputToPdfA ? { pdfaCompliant: true } : {}),
-          });
-          const report = runFilingPreflight(facts, filingPack);
-          outputReports.push(report);
-          outputParts.push({
-            fileName: part.fileName,
-            byteLength: part.bytes.byteLength,
-            pageIndexes: part.pageIndexes,
-            oversized: part.oversized,
-          });
-        }
+          }),
+          runFilingPreflight,
+        );
+        const outputParts: FilingOutputPart[] = convertedParts.map((part) => ({
+          fileName: part.fileName,
+          byteLength: part.bytes.byteLength,
+          pageIndexes: part.pageIndexes,
+          oversized: part.oversized,
+        }));
 
         const finalReport = aggregateOutputReports(outputReports);
 
@@ -3099,11 +3101,15 @@ async function readOccupiedRegions(
   }
 }
 
-function runFilingPreflight(facts: DocumentFacts, pack: JurisdictionPack): PreflightReport {
+function runFilingPreflight(
+  facts: DocumentFacts,
+  pack: JurisdictionPack,
+  selection?: SelectionFacts,
+): PreflightReport {
   window.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ =
     (window.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ ?? 0) + 1;
 
-  return preflight(facts, pack);
+  return preflight(facts, pack, selection);
 }
 
 function formatRedactionVerificationSuccess(result: RedactionVerificationResult): string {
@@ -3128,45 +3134,6 @@ function formatRedactionVerificationFailure(result: RedactionVerificationResult)
   ].filter((check) => check.status === "fail");
 
   return `Verification failed: ${failedChecks.map((check) => check.detail).join(" ")}`;
-}
-
-function aggregateOutputReports(reports: readonly PreflightReport[]): PreflightReport {
-  const [firstReport] = reports;
-
-  if (!firstReport) {
-    return { checks: [] };
-  }
-
-  return {
-    checks: firstReport.checks.map((firstCheck) => {
-      const matchingChecks = reports
-        .map((report) => report.checks.find((check) => check.checkId === firstCheck.checkId))
-        .filter((check): check is PreflightCheck => Boolean(check));
-      const failedChecks = matchingChecks.filter((check) => check.status !== "pass");
-
-      return {
-        ...firstCheck,
-        status: aggregateStatus(matchingChecks),
-        detail: failedChecks.length === 0
-          ? `All ${reports.length} output ${reports.length === 1 ? "file passes" : "files pass"}.`
-          : failedChecks.map((check, index) => `Part ${index + 1}: ${check.detail}`).join(" "),
-      } as PreflightCheck;
-    }),
-  };
-}
-
-function aggregateStatus(
-  checks: readonly PreflightCheck[],
-): PreflightCheck["status"] {
-  if (checks.some((check) => check.status === "warn")) {
-    return "warn";
-  }
-
-  if (checks.some((check) => check.status === "unknown")) {
-    return "unknown";
-  }
-
-  return "pass";
 }
 
 function formatFilingOutputName(

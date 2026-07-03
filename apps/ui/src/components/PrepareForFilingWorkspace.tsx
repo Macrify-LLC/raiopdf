@@ -271,6 +271,9 @@ export function PrepareForFilingWorkspace({
           {activeReport?.checks.map((check) => (
             <PreflightRow key={check.checkId} check={check} />
           ))}
+          {activeReport?.selectionChecks?.map((check) => (
+            <PreflightRow key={check.checkId} check={check} />
+          ))}
         </div>
 
         {!pdfAAvailable && convertsToPdfA ? (

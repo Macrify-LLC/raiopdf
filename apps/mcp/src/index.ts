@@ -79,6 +79,12 @@ import {
   redactOutputSchema,
   type RedactInput,
 } from "./tools/redact.js";
+import {
+  filingInputSchema,
+  filingOutputSchema,
+  handlePrepareForFiling,
+  type FilingInput,
+} from "./tools/filing.js";
 
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
@@ -340,6 +346,28 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: RedactInput) => await handleRedact(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "prepare_for_filing",
+    {
+      title: "E-filing preflight",
+      description:
+        "Checks a PDF against a jurisdiction's e-filing rules (page size, orientation, searchable text, file-size caps, PDF/A) and returns each check with its rule citation plus a guidance disclaimer. Read-only — does not modify the file.",
+      inputSchema: filingInputSchema,
+      outputSchema: filingOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    withGate(
+      dependencies,
+      async (input: FilingInput) =>
+        await handlePrepareForFiling(input, dependencies.engineHandle),
     ),
   );
 }

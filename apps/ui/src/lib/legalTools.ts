@@ -9,7 +9,15 @@ import {
   PDFStream,
 } from "pdf-lib";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
-import type { PDFDocumentProxy } from "./pdfjs";
+import {
+  extractPageText,
+  extractPageTextForIndexes,
+  type ExtractedPageText,
+  type PageTextInput,
+} from "./pageTextCache";
+
+export { extractPageText } from "./pageTextCache";
+export type { ExtractedPageText } from "./pageTextCache";
 
 export type LegalScanCategory =
   | "SSN"
@@ -54,15 +62,6 @@ export interface RedactionVerificationResult {
   metadata: RedactionVerificationCheck;
 }
 
-type TextItemLike = {
-  str?: unknown;
-  transform?: unknown;
-  width?: unknown;
-  height?: unknown;
-  hasEOL?: unknown;
-};
-
-const REDACTION_PADDING_PT = 2;
 const TEXT_OPERATOR_BOUNDARY = String.raw`[\s[\]()<>/]`;
 const TEXT_OPERATOR_PATTERN = new RegExp(
   String.raw`(?:^|${TEXT_OPERATOR_BOUNDARY})` +
@@ -96,10 +95,13 @@ const SCAN_PATTERNS: ReadonlyArray<{
 ];
 
 export async function extractTextBoxes(
-  pdfDocument: PDFDocumentProxy,
+  input: PageTextInput,
+  options: { pageIndexes?: readonly number[] } = {},
 ): Promise<ExtractedTextBox[]> {
   const boxes: ExtractedTextBox[] = [];
-  const pages = await extractPageText(pdfDocument);
+  const pages = options.pageIndexes
+    ? await extractPageTextForIndexes(input, options.pageIndexes)
+    : await extractPageText(input);
 
   for (const page of pages) {
     for (const span of page.spans) {
@@ -115,10 +117,10 @@ export async function extractTextBoxes(
 }
 
 export async function findTextRedactionAreas(
-  pdfDocument: PDFDocumentProxy,
+  input: PageTextInput,
   query: string,
 ): Promise<PdfRedactionArea[]> {
-  const pages = await extractPageText(pdfDocument);
+  const pages = await extractPageText(input);
 
   return findTextRedactionAreasInPages(pages, query);
 }
@@ -164,9 +166,9 @@ export function findTextRedactionAreasInPages(
 }
 
 export async function scanSensitivePatterns(
-  pdfDocument: PDFDocumentProxy,
+  input: PageTextInput,
 ): Promise<SensitiveHit[]> {
-  const pages = await extractPageText(pdfDocument);
+  const pages = await extractPageText(input);
   const hits: SensitiveHit[] = [];
 
   pages.forEach((page) => {
@@ -202,133 +204,6 @@ export async function scanSensitivePatterns(
   });
 
   return hits;
-}
-
-interface TextSpan {
-  start: number;
-  end: number;
-  area: PdfRedactionArea;
-}
-
-export interface ExtractedPageText {
-  pageIndex: number;
-  text: string;
-  spans: TextSpan[];
-}
-
-export async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<ExtractedPageText[]> {
-  const pages: ExtractedPageText[] = [];
-
-  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-    const page = await pdfDocument.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const spans: TextSpan[] = [];
-    let text = "";
-    let previousTextItem: TextItemLike | null = null;
-
-    for (const rawItem of textContent.items) {
-      const item = rawItem as TextItemLike;
-      const itemText = typeof item.str === "string" ? item.str : "";
-
-      if (previousTextItem && itemText) {
-        text += inferTextSeparator(previousTextItem, item);
-      }
-
-      const start = text.length;
-      text += itemText;
-      const end = text.length;
-
-      if (itemText.trim()) {
-        const area = textItemToRedactionArea(item, pageNumber - 1);
-
-        if (area) {
-          spans.push({ start, end, area });
-        }
-      }
-
-      if (item.hasEOL === true && text && !text.endsWith("\n")) {
-        text += "\n";
-      }
-
-      if (!itemText) {
-        continue;
-      }
-
-      previousTextItem = item;
-    }
-
-    pages.push({
-      pageIndex: pageNumber - 1,
-      text,
-      spans,
-    });
-  }
-
-  return pages;
-}
-
-function inferTextSeparator(previous: TextItemLike, current: TextItemLike): "" | " " | "\n" {
-  const previousText = typeof previous.str === "string" ? previous.str : "";
-  const currentText = typeof current.str === "string" ? current.str : "";
-
-  if (
-    !previousText ||
-    !currentText ||
-    /\s$/.test(previousText) ||
-    /^\s/.test(currentText) ||
-    previous.hasEOL === true
-  ) {
-    return "";
-  }
-
-  const previousMetrics = getTextItemMetrics(previous);
-  const currentMetrics = getTextItemMetrics(current);
-
-  if (!previousMetrics || !currentMetrics) {
-    return "";
-  }
-
-  const lineThreshold = Math.max(previousMetrics.height, currentMetrics.height, 8) * 0.5;
-
-  if (Math.abs(previousMetrics.y - currentMetrics.y) > lineThreshold) {
-    return "\n";
-  }
-
-  const gap = currentMetrics.x - (previousMetrics.x + previousMetrics.width);
-  const spaceThreshold = Math.max(1, Math.max(previousMetrics.height, currentMetrics.height, 8) * 0.15);
-
-  return gap > spaceThreshold ? " " : "";
-}
-
-function getTextItemMetrics(
-  item: TextItemLike,
-): { x: number; y: number; width: number; height: number } | null {
-  if (!Array.isArray(item.transform) || item.transform.length < 6) {
-    return null;
-  }
-
-  const transform = item.transform;
-  const x = Number(transform[4]);
-  const y = Number(transform[5]);
-  const width = Number(item.width);
-  const transformHeight = Math.abs(Number(transform[3]));
-  const itemHeight = Number(item.height);
-  const height = Math.max(
-    Number.isFinite(itemHeight) ? Math.abs(itemHeight) : 0,
-    Number.isFinite(transformHeight) ? transformHeight : 0,
-    8,
-  );
-
-  if (
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    !Number.isFinite(width) ||
-    !Number.isFinite(height)
-  ) {
-    return null;
-  }
-
-  return { x, y, width, height };
 }
 
 function escapeRegExp(value: string): string {
@@ -394,14 +269,14 @@ export async function verifyRedactionAreasClear(
 }
 
 export async function collectRedactionAreaTexts(
-  pdfDocument: PDFDocumentProxy,
+  input: PageTextInput,
   areas: readonly PdfRedactionArea[],
 ): Promise<readonly string[]> {
   if (areas.length === 0) {
     return [];
   }
 
-  const boxes = await extractTextBoxes(pdfDocument);
+  const boxes = await extractTextBoxes(input);
 
   return uniqueRedactionTerms(
     boxes
@@ -433,39 +308,6 @@ export async function readMetadataSummary(
     removedFields: rows
       .filter((row) => row.value && row.value !== "0")
       .map((row) => row.label),
-  };
-}
-
-function textItemToRedactionArea(
-  item: TextItemLike,
-  pageIndex: number,
-): PdfRedactionArea | null {
-  if (!Array.isArray(item.transform) || item.transform.length < 6) {
-    return null;
-  }
-
-  const transform = item.transform;
-  const x = Number(transform[4]);
-  const baselineY = Number(transform[5]);
-  const width = Number(item.width);
-  const transformHeight = Math.abs(Number(transform[3]));
-  const itemHeight = Number(item.height);
-  const height = Math.max(
-    Number.isFinite(itemHeight) ? Math.abs(itemHeight) : 0,
-    Number.isFinite(transformHeight) ? transformHeight : 0,
-    8,
-  );
-
-  if (!Number.isFinite(x) || !Number.isFinite(baselineY) || !Number.isFinite(width)) {
-    return null;
-  }
-
-  return {
-    pageIndex,
-    x: Math.max(0, x - REDACTION_PADDING_PT),
-    y: Math.max(0, baselineY - height * 0.35 - REDACTION_PADDING_PT),
-    w: Math.max(1, width + REDACTION_PADDING_PT * 2),
-    h: Math.max(1, height * 1.35 + REDACTION_PADDING_PT * 2),
   };
 }
 
@@ -556,7 +398,7 @@ async function verifyFullDocumentTextLayer(
     const pdfDocument = await loadPdfDocument(bytes);
 
     try {
-      const pages = await extractPageText(pdfDocument);
+      const pages = await extractPageText({ bytes, pdfDocument });
       const documentText = normalizeSearchText(pages.map((page) => page.text).join("\n"));
       const remainingTerm = terms.find((term) => documentText.includes(normalizeSearchText(term)));
 

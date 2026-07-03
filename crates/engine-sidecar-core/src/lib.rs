@@ -591,6 +591,9 @@ impl SidecarManager {
         let engine_port = engine_reservation
             .port()
             .map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
+        // The proxy binds a fresh loopback port per boot (port 0 = OS-assigned), which is
+        // why the webview CSP connect-src can only scope to 127.0.0.1 and not a fixed port.
+        // Tightening that to a single origin (or a custom protocol) is tracked post-v1.0.
         let proxy_listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
         let proxy_port = proxy_listener
@@ -1302,8 +1305,23 @@ pub fn request_has_valid_auth(request_head: &[u8], token: &str) -> bool {
             return false;
         };
 
-        name.trim().eq_ignore_ascii_case(AUTH_HEADER_NAME) && value.trim() == token
+        name.trim().eq_ignore_ascii_case(AUTH_HEADER_NAME)
+            && constant_time_eq(value.trim().as_bytes(), token.as_bytes())
     })
+}
+
+/// Constant-time byte comparison so auth-token checking doesn't leak length or
+/// content through timing. The token is 32 OS-random bytes on loopback, so the
+/// exposure is low, but the check should not be an early-exit `==`.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (a, b) in left.iter().zip(right.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
 }
 
 fn is_cors_preflight(request_head: &[u8]) -> bool {

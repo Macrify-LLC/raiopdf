@@ -15,12 +15,12 @@ name = "raiopdf-shell"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.6.3" }
 
 [dependencies]
 engine-sidecar-core = { path = "../../../crates/engine-sidecar-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2.11.5", features = [] }
+tauri = { version = "2.11.5" }
 tauri-plugin-dialog = "2.7.1"
 uuid = { version = "1", features = ["v4"] }

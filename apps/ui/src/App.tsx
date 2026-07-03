@@ -125,6 +125,18 @@ interface PendingRedaction {
   area: PdfRedactionArea;
 }
 
+interface FilingFactsCache {
+  byBytes: WeakMap<Uint8Array, Map<string, Promise<DocumentFacts>>>;
+}
+
+interface FilingFactsOptions {
+  fileBytes: number;
+  searchableText?: boolean;
+  pdfaCompliant?: boolean;
+  pdfDocument?: PDFDocumentProxy | null;
+  occupiedRegionPages?: "first" | "all";
+}
+
 export function App() {
   const {
     document,
@@ -244,6 +256,9 @@ export function App() {
   const preserveFilingProgressForBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
+  const filingFactsCacheRef = useRef<FilingFactsCache>({
+    byBytes: new WeakMap(),
+  });
   const nativeMenuCommandRef = useRef<(command: string) => void>(() => {});
   const filingEngine = useMemo(() => new LocalPdfEngine(), []);
 
@@ -261,6 +276,8 @@ export function App() {
     setScannerState({ scanning: false, message: null, hits: [] });
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
+    setFilingReport(null);
+    setFilingReportLoading(false);
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
     setSidecarStatus({
@@ -281,6 +298,8 @@ export function App() {
     filingRunRef.current += 1;
     setPendingRedactions([]);
     setScannerState({ scanning: false, message: null, hits: [] });
+    setFilingReport(null);
+    setFilingReportLoading(false);
     setFilingResult(null);
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
@@ -427,20 +446,18 @@ export function App() {
     let disposed = false;
     const sourceBytes = document.bytes;
 
+    if (activeLegalTool !== "prepare-for-filing") {
+      setFilingReportLoading(false);
+      return;
+    }
+
     if (!sourceBytes) {
       setFilingReport(null);
       setFilingReportLoading(false);
       return;
     }
 
-    setFilingReportLoading(true);
-
-    const factsOptions: {
-      fileBytes: number;
-      searchableText?: boolean;
-      pdfaCompliant?: boolean;
-      pdfDocument?: PDFDocumentProxy | null;
-    } = {
+    const factsOptions: FilingFactsOptions = {
       fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
       pdfaCompliant: false,
       pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
@@ -448,9 +465,12 @@ export function App() {
 
     if (document.hasTextLayer !== null) {
       factsOptions.searchableText = document.hasTextLayer;
+      factsOptions.occupiedRegionPages = "first";
     }
 
-    void readFilingFacts(sourceBytes, factsOptions)
+    setFilingReportLoading(true);
+
+    void getCachedFilingFacts(filingFactsCacheRef, sourceBytes, factsOptions)
       .then((facts) => {
         if (disposed || documentBytesRef.current !== sourceBytes) {
           return;
@@ -472,7 +492,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -1012,7 +1032,10 @@ export function App() {
         return;
       }
 
-      const areas = await findTextRedactionAreas(pdfDocument, redactionSearchText);
+      const areas = await findTextRedactionAreas(
+        { bytes: sourceBytes, pdfDocument },
+        redactionSearchText,
+      );
 
       if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
         return;
@@ -1082,7 +1105,7 @@ export function App() {
 
     try {
       const redactedTerms = pdfDocument
-        ? await collectRedactionAreaTexts(pdfDocument, areas)
+        ? await collectRedactionAreaTexts({ bytes: sourceBytes, pdfDocument }, areas)
         : [];
 
       if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
@@ -1640,7 +1663,7 @@ export function App() {
       }
 
       try {
-        return await scanSensitivePatterns(scanDocument);
+        return await scanSensitivePatterns({ bytes: sourceBytes, pdfDocument: scanDocument });
       } finally {
         await loadedForScan?.loadingTask.destroy();
       }
@@ -1824,7 +1847,7 @@ export function App() {
         const outputParts: FilingOutputPart[] = [];
 
         for (const part of convertedParts) {
-          const facts = await readFilingFacts(part.bytes, {
+          const facts = await getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
             fileBytes: part.bytes.byteLength,
             pdfaCompliant: true,
           });
@@ -2787,18 +2810,54 @@ function SidecarStatusLine({
   );
 }
 
+function getCachedFilingFacts(
+  cacheRef: { current: FilingFactsCache },
+  bytes: Uint8Array,
+  options: FilingFactsOptions,
+): Promise<DocumentFacts> {
+  const key = filingFactsCacheKey(options);
+  let factsForBytes = cacheRef.current.byBytes.get(bytes);
+
+  if (!factsForBytes) {
+    factsForBytes = new Map();
+    cacheRef.current.byBytes.set(bytes, factsForBytes);
+  }
+
+  const cached = factsForBytes.get(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  const facts = readFilingFacts(bytes, options);
+  factsForBytes.set(key, facts);
+  return facts;
+}
+
+function filingFactsCacheKey(options: FilingFactsOptions): string {
+  return JSON.stringify({
+    fileBytes: options.fileBytes,
+    searchableText: options.searchableText ?? null,
+    pdfaCompliant: options.pdfaCompliant ?? null,
+    occupiedRegionPages: options.occupiedRegionPages ?? "all",
+  });
+}
+
 async function readFilingFacts(
   bytes: Uint8Array,
-  options: {
-    fileBytes: number;
-    searchableText?: boolean;
-    pdfaCompliant?: boolean;
-    pdfDocument?: PDFDocumentProxy | null;
-  },
+  options: FilingFactsOptions,
 ): Promise<DocumentFacts> {
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
-  const pageOccupiedRegions = await readOccupiedRegions(bytes, options.pdfDocument ?? null);
-  const pages: PageFacts[] = pdf.getPages().map((page, pageIndex) => {
+  const pdfPages = pdf.getPages();
+  const occupiedRegionPageIndexes = options.occupiedRegionPages === "first" && pdfPages.length > 0
+    ? [0]
+    : undefined;
+  const pageOccupiedRegions = await readOccupiedRegions(
+    bytes,
+    options.pdfDocument ?? null,
+    occupiedRegionPageIndexes,
+  );
+  const pages: PageFacts[] = pdfPages.map((page, pageIndex) => {
     const widthIn = page.getWidth() / POINTS_PER_INCH;
     const heightIn = page.getHeight() / POINTS_PER_INCH;
     const occupiedRegions = pageOccupiedRegions.get(pageIndex);
@@ -2842,6 +2901,7 @@ async function readFilingFacts(
 async function readOccupiedRegions(
   bytes: Uint8Array,
   currentPdfDocument: PDFDocumentProxy | null,
+  pageIndexes?: readonly number[],
 ): Promise<Map<number, RectInches[]>> {
   let loadedDocument: PDFDocumentProxy | null = null;
   const pdfDocument = currentPdfDocument ?? await loadPdfDocument(bytes);
@@ -2851,7 +2911,10 @@ async function readOccupiedRegions(
   }
 
   try {
-    const boxes = await extractTextBoxes(pdfDocument);
+    const boxes = await extractTextBoxes(
+      { bytes, pdfDocument },
+      pageIndexes ? { pageIndexes } : undefined,
+    );
 
     if (boxes.length === 0) {
       return new Map();

@@ -4,14 +4,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
   extractPageText,
   findTextRedactionAreasInPages,
-  type ExtractedPageText,
 } from "../lib/legalTools";
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -19,12 +17,6 @@ const SEARCH_DEBOUNCE_MS = 250;
 interface DocumentSearchSource {
   bytes: Uint8Array;
   proxy: PDFDocumentProxy;
-}
-
-interface PageTextCache {
-  bytes: Uint8Array;
-  proxy: PDFDocumentProxy;
-  pages: Promise<ExtractedPageText[]>;
 }
 
 export interface DocumentSearchMatch {
@@ -62,7 +54,6 @@ export function useDocumentSearch({
   const [status, setStatus] = useState<DocumentSearchState["status"]>("idle");
   const documentBytesRef = useRef<Uint8Array | null>(documentBytes);
   const pdfDocumentStateRef = useRef<DocumentSearchSource | null>(pdfDocumentState);
-  const pageTextCacheRef = useRef<PageTextCache | null>(null);
   const searchRunRef = useRef(0);
 
   useEffect(() => {
@@ -83,7 +74,6 @@ export function useDocumentSearch({
   }, []);
 
   useEffect(() => {
-    pageTextCacheRef.current = null;
     clear();
   }, [clear, documentBytes]);
 
@@ -135,7 +125,7 @@ export function useDocumentSearch({
     const sourceProxy = source.proxy;
     setStatus("searching");
 
-    void getCachedPageText(source, pageTextCacheRef)
+    void extractPageText({ bytes: source.bytes, pdfDocument: source.proxy })
       .then((pages) => {
         if (
           searchRunRef.current !== runId ||
@@ -235,24 +225,4 @@ export function useDocumentSearch({
     goToNext,
     goToPrevious,
   };
-}
-
-function getCachedPageText(
-  source: DocumentSearchSource,
-  cacheRef: MutableRefObject<PageTextCache | null>,
-): Promise<ExtractedPageText[]> {
-  const cached = cacheRef.current;
-
-  if (cached?.bytes === source.bytes && cached.proxy === source.proxy) {
-    return cached.pages;
-  }
-
-  const pages = extractPageText(source.proxy);
-  cacheRef.current = {
-    bytes: source.bytes,
-    proxy: source.proxy,
-    pages,
-  };
-
-  return pages;
 }

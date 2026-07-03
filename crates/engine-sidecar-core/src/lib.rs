@@ -1612,6 +1612,7 @@ fn payload_path_entries(payload_dir: &Path) -> Vec<PathBuf> {
         payload_dir.join("ocr").join("python"),
         payload_dir.join("ocr").join("tesseract"),
         payload_dir.join("ocr").join("gs").join("bin"),
+        payload_dir.join("ocr").join("qpdf").join("bin"),
     ]
     .into_iter()
     .filter(|path| path.is_dir())
@@ -2015,6 +2016,11 @@ mod tests {
                 && env::split_paths(&key_value.1)
                     .any(|path| path == payload.join("ocr").join("gs").join("bin"))
         }));
+        assert!(spec.envs.iter().any(|key_value| {
+            key_value.0.to_string_lossy() == "PATH"
+                && env::split_paths(&key_value.1)
+                    .any(|path| path == payload.join("ocr").join("qpdf").join("bin"))
+        }));
 
         assert!(!app_data.join("configs").join("settings.yml").exists());
         let settings = fs::read_to_string(app_data.join("configs").join("custom_settings.yml"))
@@ -2232,6 +2238,13 @@ mod tests {
         );
         touch(&payload.join("ocr").join("tesseract").join("tesseract.exe"));
         touch(&payload.join("ocr").join("gs").join("bin").join("gs.exe"));
+        touch(
+            &payload
+                .join("ocr")
+                .join("qpdf")
+                .join("bin")
+                .join("qpdf.exe"),
+        );
     }
 
     fn touch(path: &Path) {

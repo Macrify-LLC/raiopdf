@@ -11,6 +11,7 @@ import {
   DragHandleIcon,
   OpenIcon,
   PlusIcon,
+  SaveIcon,
   SlipSheetIcon,
 } from "../icons";
 import { PdfMiniThumb } from "./PdfMiniThumb";
@@ -22,9 +23,22 @@ type PlacementEdge = "header" | "footer";
 type PlacementAlign = "left" | "center" | "right";
 type StampPages = "first" | "all";
 
+interface BinderPresetV1 {
+  version: 1;
+  identifierStyle: IdentifierStyle;
+  prefix: string;
+  placementEdge: PlacementEdge;
+  placementAlign: PlacementAlign;
+  stampPages: StampPages;
+  slipSheets: boolean;
+  indexEnabled: boolean;
+  indexIncludeSourceFileName: boolean;
+}
+
 export interface ExhibitFile {
   id: string;
   name: string;
+  description: string;
   bytes: Uint8Array;
   pageCount: number;
 }
@@ -32,7 +46,12 @@ export interface ExhibitFile {
 export interface BinderWorkspaceProps {
   document: DocumentState;
   onBuildBinder: (
-    exhibits: readonly { bytes: Uint8Array; label: string }[],
+    exhibits: readonly {
+      bytes: Uint8Array;
+      label: string;
+      description?: string | undefined;
+      sourceFileName?: string | undefined;
+    }[],
     options: PdfBinderOptions,
     fileName: string,
   ) => Promise<boolean>;
@@ -48,12 +67,21 @@ export function BinderWorkspace({
 }: BinderWorkspaceProps) {
   const addInputRef = useRef<HTMLInputElement>(null);
   const [exhibits, setExhibits] = useState<ExhibitFile[]>([]);
-  const [identifierStyle, setIdentifierStyle] = useState<IdentifierStyle>("letters");
-  const [prefix, setPrefix] = useState("Exhibit");
-  const [placementEdge, setPlacementEdge] = useState<PlacementEdge>("footer");
-  const [placementAlign, setPlacementAlign] = useState<PlacementAlign>("center");
-  const [stampPages, setStampPages] = useState<StampPages>("first");
-  const [slipSheets, setSlipSheets] = useState(false);
+  const initialPreset = useMemo(loadBinderPreset, []);
+  const [identifierStyle, setIdentifierStyle] = useState<IdentifierStyle>(
+    initialPreset.identifierStyle,
+  );
+  const [prefix, setPrefix] = useState(initialPreset.prefix);
+  const [placementEdge, setPlacementEdge] = useState<PlacementEdge>(initialPreset.placementEdge);
+  const [placementAlign, setPlacementAlign] = useState<PlacementAlign>(
+    initialPreset.placementAlign,
+  );
+  const [stampPages, setStampPages] = useState<StampPages>(initialPreset.stampPages);
+  const [slipSheets, setSlipSheets] = useState(initialPreset.slipSheets);
+  const [indexEnabled, setIndexEnabled] = useState(initialPreset.indexEnabled);
+  const [indexIncludeSourceFileName, setIndexIncludeSourceFileName] = useState(
+    initialPreset.indexIncludeSourceFileName,
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const mainName = document.fileName ?? "Untitled.pdf";
@@ -62,7 +90,7 @@ export function BinderWorkspace({
     () => exhibits.map((_, index) => formatExhibitLabel(prefix, identifierStyle, index)),
     [exhibits, identifierStyle, prefix],
   );
-  const totalPages = mainPages + exhibits.reduce(
+  const totalPages = mainPages + (indexEnabled ? 1 : 0) + exhibits.reduce(
     (total, exhibit) => total + exhibit.pageCount + (slipSheets ? 1 : 0),
     0,
   );
@@ -121,6 +149,50 @@ export function BinderWorkspace({
     setExhibits((current) => current.filter((exhibit) => exhibit.id !== id));
   }
 
+  function updateExhibitDescription(id: string, description: string) {
+    setExhibits((current) =>
+      current.map((exhibit) => exhibit.id === id ? { ...exhibit, description } : exhibit),
+    );
+  }
+
+  function currentPreset(): BinderPresetV1 {
+    return {
+      version: 1,
+      identifierStyle,
+      prefix,
+      placementEdge,
+      placementAlign,
+      stampPages,
+      slipSheets,
+      indexEnabled,
+      indexIncludeSourceFileName,
+    };
+  }
+
+  function applyPreset(preset: BinderPresetV1) {
+    setIdentifierStyle(preset.identifierStyle);
+    setPrefix(preset.prefix);
+    setPlacementEdge(preset.placementEdge);
+    setPlacementAlign(preset.placementAlign);
+    setStampPages(preset.stampPages);
+    setSlipSheets(preset.slipSheets);
+    setIndexEnabled(preset.indexEnabled);
+    setIndexIncludeSourceFileName(preset.indexIncludeSourceFileName);
+  }
+
+  function savePreset() {
+    if (persistBinderPreset(currentPreset())) {
+      setStatus("Binder preset saved.");
+    } else {
+      setStatus("Binder preset could not be saved.");
+    }
+  }
+
+  function applySavedPreset() {
+    applyPreset(loadBinderPreset());
+    setStatus("Binder preset applied.");
+  }
+
   async function buildBinder() {
     if (!document.bytes || exhibits.length === 0 || building) {
       return;
@@ -134,9 +206,15 @@ export function BinderWorkspace({
         exhibits.map((exhibit, index) => ({
           bytes: exhibit.bytes,
           label: labels[index]!,
+          description: exhibit.description,
+          sourceFileName: exhibit.name,
         })),
         {
           slipSheets,
+          index: {
+            enabled: indexEnabled,
+            includeSourceFileName: indexIncludeSourceFileName,
+          },
           placement: {
             edge: placementEdge,
             align: placementAlign,
@@ -215,6 +293,15 @@ export function BinderWorkspace({
                   <p className="binder-exhibit__name">{exhibit.name}</p>
                   <p className="binder-exhibit__meta">{exhibit.pageCount} {exhibit.pageCount === 1 ? "page" : "pages"}</p>
                   <span className="binder-exhibit__chip">{labels[index]}</span>
+                  <label className="binder-exhibit__description">
+                    <span>Description</span>
+                    <input
+                      value={exhibit.description}
+                      onChange={(event) =>
+                        updateExhibitDescription(exhibit.id, event.currentTarget.value)}
+                      disabled={building}
+                    />
+                  </label>
                 </div>
                 <div className="binder-exhibit__actions">
                   <button
@@ -303,6 +390,29 @@ export function BinderWorkspace({
             <input type="checkbox" checked={slipSheets} onChange={(event) => setSlipSheets(event.currentTarget.checked)} disabled={building} />
             <span><SlipSheetIcon size={15} /> Slip sheets</span>
           </label>
+          <label className="binder-toggle">
+            <input type="checkbox" checked={indexEnabled} onChange={(event) => setIndexEnabled(event.currentTarget.checked)} disabled={building} />
+            <span>Exhibit Index</span>
+          </label>
+          <label className="binder-toggle">
+            <input
+              type="checkbox"
+              checked={indexIncludeSourceFileName}
+              onChange={(event) => setIndexIncludeSourceFileName(event.currentTarget.checked)}
+              disabled={building || !indexEnabled}
+            />
+            <span>Source filename column</span>
+          </label>
+          <div className="binder-preset-actions">
+            <button type="button" className="binder-workspace__secondary" onClick={savePreset} disabled={building}>
+              <SaveIcon size={15} />
+              Save preset
+            </button>
+            <button type="button" className="binder-workspace__secondary" onClick={applySavedPreset} disabled={building}>
+              <OpenIcon size={15} />
+              Apply preset
+            </button>
+          </div>
           <p className="binder-card__hint">Insert a separator page before each exhibit</p>
           <p className="binder-card__hint">Each exhibit is bookmarked automatically.</p>
         </section>
@@ -342,9 +452,85 @@ async function readExhibitFile(file: File): Promise<ExhibitFile> {
   return {
     id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
     name: opened.name,
+    description: stripPdfExtension(opened.name),
     bytes: opened.bytes,
     pageCount: pdf.getPageCount(),
   };
+}
+
+const BINDER_PRESET_STORAGE_KEY = "raiopdf:binder-preset:v1";
+
+function defaultBinderPreset(): BinderPresetV1 {
+  return {
+    version: 1,
+    identifierStyle: "letters",
+    prefix: "Exhibit",
+    placementEdge: "footer",
+    placementAlign: "center",
+    stampPages: "first",
+    slipSheets: false,
+    indexEnabled: true,
+    indexIncludeSourceFileName: false,
+  };
+}
+
+function loadBinderPreset(): BinderPresetV1 {
+  if (typeof window === "undefined") {
+    return defaultBinderPreset();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(BINDER_PRESET_STORAGE_KEY);
+
+    if (!raw) {
+      return defaultBinderPreset();
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+
+    if (!isBinderPreset(parsed)) {
+      return defaultBinderPreset();
+    }
+
+    return parsed;
+  } catch {
+    return defaultBinderPreset();
+  }
+}
+
+function persistBinderPreset(preset: BinderPresetV1): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    window.localStorage.setItem(BINDER_PRESET_STORAGE_KEY, JSON.stringify(preset));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isBinderPreset(value: unknown): value is BinderPresetV1 {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const preset = value as BinderPresetV1;
+
+  return preset.version === 1 &&
+    (preset.identifierStyle === "letters" || preset.identifierStyle === "numbers") &&
+    typeof preset.prefix === "string" &&
+    (preset.placementEdge === "header" || preset.placementEdge === "footer") &&
+    (
+      preset.placementAlign === "left" ||
+      preset.placementAlign === "center" ||
+      preset.placementAlign === "right"
+    ) &&
+    (preset.stampPages === "first" || preset.stampPages === "all") &&
+    typeof preset.slipSheets === "boolean" &&
+    typeof preset.indexEnabled === "boolean" &&
+    typeof preset.indexIncludeSourceFileName === "boolean";
 }
 
 function formatExhibitLabel(

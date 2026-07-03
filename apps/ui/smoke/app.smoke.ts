@@ -292,19 +292,21 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   await page.keyboard.press("Enter");
 
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Page 5" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page 6" })).toBeVisible();
 
   const saved = await savePdf(page);
   await expectPdf(saved, {
-    widths: [200, 210, 350, 300, 310],
-    rotations: [0, 0, 0, 0, 0],
+    widths: [200, 210, 200, 350, 300, 310],
+    rotations: [0, 0, 0, 0, 0, 0],
   });
-  await expectPageContentToContainLabel(saved, 2, "Exhibit A");
-  await expectPageContentToContainLabel(saved, 3, "Exhibit B");
+  await expectPageContentToContainLabel(saved, 2, "Exhibit Index");
+  await expectPageContentToContainLabel(saved, 3, "Exhibit A");
+  await expectPageContentToContainLabel(saved, 4, "Exhibit B");
   await expectOutlineEntries(saved, [
     { title: "Main document", pageIndex: 0 },
-    { title: "Exhibit A", pageIndex: 2 },
-    { title: "Exhibit B", pageIndex: 3 },
+    { title: "Exhibit Index", pageIndex: 2 },
+    { title: "Exhibit A", pageIndex: 3 },
+    { title: "Exhibit B", pageIndex: 4 },
   ]);
 });
 

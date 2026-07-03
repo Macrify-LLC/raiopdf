@@ -64,6 +64,36 @@ type OutlineEntry = {
 
 type PageRotation = 0 | 90 | 180 | 270;
 
+export type ExhibitBinderIndexExhibit = {
+  label: string;
+  pageCount: number;
+  description?: string | undefined;
+  sourceFileName?: string | undefined;
+};
+
+export type ExhibitIndexEntry = ExhibitBinderIndexExhibit & {
+  binderPageStart: number;
+  binderPageEnd: number;
+  pageRange: string;
+  descriptionGeneratedFromSourceFileName?: boolean | undefined;
+};
+
+export type ExhibitIndexLayoutInput = {
+  pageSize: readonly [number, number];
+  mainPageCount: number;
+  exhibits: readonly ExhibitBinderIndexExhibit[];
+  slipSheets: boolean;
+  includeSourceFileName?: boolean | undefined;
+  maxIterations?: number | undefined;
+};
+
+export type ExhibitIndexLayoutResult = {
+  bytes: Uint8Array;
+  pageCount: number;
+  entries: readonly ExhibitIndexEntry[];
+  iterations: number;
+};
+
 const DEFAULT_FONT_SIZE_PT = 11;
 const DEFAULT_MARGIN_IN = 0.5;
 const POINTS_PER_INCH = 72;
@@ -71,6 +101,9 @@ const DEFAULT_BINDER_PLACEMENT: PdfStampPlacement = {
   edge: "footer",
   align: "right",
 };
+const DEFAULT_BINDER_INDEX_ENABLED = true;
+const DEFAULT_BINDER_INDEX_SOURCE_FILENAME = false;
+const EXHIBIT_INDEX_MAX_ITERATIONS = 5;
 const STAMP_COLOR = rgb(0.08, 0.08, 0.08);
 const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
 const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
@@ -576,8 +609,18 @@ export class LocalPdfEngine implements PdfEngine {
     options: PdfBinderOptions,
   ): Promise<PdfDocumentHandle> {
     const mainPdf = await this.load(main);
+    const loadedExhibits: Array<PdfBinderExhibit & { pdf: PDFDocument }> = [];
+    for (const exhibit of exhibits) {
+      assertNonEmptyText(exhibit.label);
+      loadedExhibits.push({
+        ...exhibit,
+        pdf: await this.load(exhibit.doc),
+      });
+    }
+
     const output = await PDFDocument.create();
     const outlineEntries: OutlineEntry[] = [{ title: "Main document", pageIndex: 0 }];
+    const indexOptions = normalizeBinderIndexOptions(options);
 
     await copyPagesInto(output, mainPdf, mainPdf.getPageIndices());
 
@@ -586,10 +629,27 @@ export class LocalPdfEngine implements PdfEngine {
     const stampOptions = normalizeBinderStampOptions(options);
     const stampFont = await output.embedFont(StandardFonts.Helvetica);
 
-    for (const exhibit of exhibits) {
-      assertNonEmptyText(exhibit.label);
+    if (indexOptions.enabled) {
+      const indexLayout = await createStableExhibitIndex({
+        pageSize: slipSheetSize,
+        mainPageCount: mainPdf.getPageCount(),
+        slipSheets: options.slipSheets,
+        includeSourceFileName: indexOptions.includeSourceFileName,
+        exhibits: loadedExhibits.map((exhibit) => ({
+          label: exhibit.label,
+          pageCount: exhibit.pdf.getPageCount(),
+          description: exhibit.description,
+          sourceFileName: exhibit.sourceFileName,
+        })),
+      });
+      const indexPdf = await loadPdf(indexLayout.bytes);
 
-      const exhibitPdf = await this.load(exhibit.doc);
+      outlineEntries.push({ title: "Exhibit Index", pageIndex: output.getPageCount() });
+      await copyPagesInto(output, indexPdf, indexPdf.getPageIndices());
+    }
+
+    for (const exhibit of loadedExhibits) {
+      const exhibitPdf = exhibit.pdf;
       const sectionStartPageIndex = output.getPageCount();
       outlineEntries.push({ title: exhibit.label, pageIndex: sectionStartPageIndex });
 
@@ -718,6 +778,101 @@ export class LocalPdfEngine implements PdfEngine {
 
 export function createLocalPdfEngine(): PdfEngine {
   return new LocalPdfEngine();
+}
+
+export function defaultExhibitDescription(
+  sourceFileName: string | undefined,
+  fallback: string,
+): string {
+  if (!sourceFileName) {
+    return fallback;
+  }
+
+  const fileName = sourceFileName.split(/[\\/]/).pop() ?? sourceFileName;
+  const withoutExtension = fileName.replace(/\.[^.]+$/u, "").trim();
+
+  return withoutExtension || fallback;
+}
+
+export function planExhibitIndexEntries(options: {
+  mainPageCount: number;
+  indexPageCount: number;
+  slipSheets: boolean;
+  exhibits: readonly ExhibitBinderIndexExhibit[];
+}): ExhibitIndexEntry[] {
+  assertNonNegativeInteger(options.mainPageCount, "mainPageCount");
+  assertNonNegativeInteger(options.indexPageCount, "indexPageCount");
+
+  let nextBinderPage = options.mainPageCount + options.indexPageCount + 1;
+
+  return options.exhibits.map((exhibit) => {
+    assertNonEmptyText(exhibit.label);
+    assertNonNegativeInteger(exhibit.pageCount, "pageCount");
+
+    const sectionPageCount = exhibit.pageCount + (options.slipSheets ? 1 : 0);
+    const binderPageStart = nextBinderPage;
+    const binderPageEnd = binderPageStart + sectionPageCount - 1;
+    nextBinderPage = binderPageEnd + 1;
+
+    const explicitDescription = exhibit.description?.trim();
+    const descriptionGeneratedFromSourceFileName =
+      (!explicitDescription || explicitDescription.length === 0) && Boolean(exhibit.sourceFileName);
+    const description = explicitDescription ||
+      defaultExhibitDescription(exhibit.sourceFileName, exhibit.label);
+
+    return {
+      label: exhibit.label,
+      pageCount: exhibit.pageCount,
+      description,
+      descriptionGeneratedFromSourceFileName,
+      sourceFileName: exhibit.sourceFileName,
+      binderPageStart,
+      binderPageEnd,
+      pageRange: formatBinderPageRange(binderPageStart, binderPageEnd),
+    };
+  });
+}
+
+export async function createStableExhibitIndex(
+  input: ExhibitIndexLayoutInput,
+): Promise<ExhibitIndexLayoutResult> {
+  const maxIterations = input.maxIterations ?? EXHIBIT_INDEX_MAX_ITERATIONS;
+
+  if (!Number.isInteger(maxIterations) || maxIterations <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "maxIterations must be a positive integer.");
+  }
+
+  let indexPageCount = 0;
+
+  for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
+    const entries = planExhibitIndexEntries({
+      mainPageCount: input.mainPageCount,
+      indexPageCount,
+      slipSheets: input.slipSheets,
+      exhibits: input.exhibits,
+    });
+    const rendered = await renderExhibitIndex({
+      pageSize: input.pageSize,
+      entries,
+      includeSourceFileName: input.includeSourceFileName ?? DEFAULT_BINDER_INDEX_SOURCE_FILENAME,
+    });
+
+    if (rendered.pageCount === indexPageCount) {
+      return {
+        bytes: rendered.bytes,
+        pageCount: rendered.pageCount,
+        entries,
+        iterations: iteration,
+      };
+    }
+
+    indexPageCount = rendered.pageCount;
+  }
+
+  throw new PdfEngineError(
+    "INVALID_DOCUMENT",
+    `Exhibit index pagination did not stabilize within ${maxIterations} iterations.`,
+  );
 }
 
 async function copyPagesInto(
@@ -1460,6 +1615,336 @@ function computeStampX(
   return pageWidth - marginPt - textWidth;
 }
 
+async function renderExhibitIndex(options: {
+  pageSize: readonly [number, number];
+  entries: readonly ExhibitIndexEntry[];
+  includeSourceFileName: boolean;
+}): Promise<{ bytes: Uint8Array; pageCount: number }> {
+  const [pageWidth, pageHeight] = options.pageSize;
+  assertPositiveNumber(pageWidth, "index page width");
+  assertPositiveNumber(pageHeight, "index page height");
+
+  const pdf = await PDFDocument.create();
+  const bodyFont = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const margin = Math.min(54, Math.max(24, pageWidth * 0.075));
+  const titleSize = 16;
+  const headerSize = 8;
+  const bodySize = 8.5;
+  const rowHeight = 18;
+  const titleY = pageHeight - margin - titleSize;
+  const headerY = titleY - 30;
+  const firstRowY = headerY - 20;
+  const usableRowHeight = Math.max(rowHeight, firstRowY - margin);
+  const rowsPerPage = Math.max(1, Math.floor(usableRowHeight / rowHeight));
+  const pageCount = Math.max(1, Math.ceil(options.entries.length / rowsPerPage));
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const page = pdf.addPage([pageWidth, pageHeight]);
+    const columns = computeExhibitIndexColumns({
+      pageWidth,
+      margin,
+      includeSourceFileName: options.includeSourceFileName,
+    });
+
+    page.drawText("Exhibit Index", {
+      x: margin,
+      y: titleY,
+      size: titleSize,
+      font: boldFont,
+      color: STAMP_COLOR,
+    });
+
+    if (pageCount > 1) {
+      const pageLabel = `${pageIndex + 1} of ${pageCount}`;
+      page.drawText(pageLabel, {
+        x: pageWidth - margin - bodyFont.widthOfTextAtSize(pageLabel, headerSize),
+        y: titleY + 2,
+        size: headerSize,
+        font: bodyFont,
+        color: STAMP_COLOR,
+      });
+    }
+
+    drawIndexHeader(page, boldFont, columns, headerY, headerSize);
+
+    const start = pageIndex * rowsPerPage;
+    const rows = options.entries.slice(start, start + rowsPerPage);
+
+    rows.forEach((entry, rowIndex) => {
+      drawIndexRow(
+        page,
+        bodyFont,
+        entry,
+        columns,
+        firstRowY - (rowIndex * rowHeight),
+        bodySize,
+        options.includeSourceFileName,
+      );
+    });
+  }
+
+  return {
+    bytes: new Uint8Array(await pdf.save()),
+    pageCount,
+  };
+}
+
+function computeExhibitIndexColumns(options: {
+  pageWidth: number;
+  margin: number;
+  includeSourceFileName: boolean;
+}): {
+  labelX: number;
+  labelWidth: number;
+  descriptionX: number;
+  descriptionWidth: number;
+  pageCountX: number;
+  pageCountWidth: number;
+  pageRangeX: number;
+  pageRangeWidth: number;
+  sourceFileNameX?: number | undefined;
+  sourceFileNameWidth?: number | undefined;
+} {
+  const contentWidth = options.pageWidth - (2 * options.margin);
+  const gap = 10;
+  const labelWidth = Math.min(88, contentWidth * 0.2);
+  const pageCountWidth = 54;
+  const pageRangeWidth = 76;
+  const sourceFileNameWidth = options.includeSourceFileName ? Math.min(120, contentWidth * 0.22) : 0;
+  const fixedWidth = labelWidth + pageCountWidth + pageRangeWidth + sourceFileNameWidth +
+    (gap * (options.includeSourceFileName ? 4 : 3));
+  const descriptionWidth = Math.max(60, contentWidth - fixedWidth);
+  const labelX = options.margin;
+  const descriptionX = labelX + labelWidth + gap;
+  const sourceFileNameX = options.includeSourceFileName
+    ? descriptionX + descriptionWidth + gap
+    : undefined;
+  const pageCountX = options.includeSourceFileName && sourceFileNameX !== undefined
+    ? sourceFileNameX + sourceFileNameWidth + gap
+    : descriptionX + descriptionWidth + gap;
+  const pageRangeX = pageCountX + pageCountWidth + gap;
+
+  return {
+    labelX,
+    labelWidth,
+    descriptionX,
+    descriptionWidth,
+    pageCountX,
+    pageCountWidth,
+    pageRangeX,
+    pageRangeWidth,
+    sourceFileNameX,
+    sourceFileNameWidth: options.includeSourceFileName ? sourceFileNameWidth : undefined,
+  };
+}
+
+function drawIndexHeader(
+  page: ReturnType<PDFDocument["getPage"]>,
+  font: PDFFont,
+  columns: ReturnType<typeof computeExhibitIndexColumns>,
+  y: number,
+  fontSize: number,
+): void {
+  page.drawText("Exhibit", { x: columns.labelX, y, size: fontSize, font, color: STAMP_COLOR });
+  page.drawText("Description", {
+    x: columns.descriptionX,
+    y,
+    size: fontSize,
+    font,
+    color: STAMP_COLOR,
+  });
+
+  if (columns.sourceFileNameX !== undefined) {
+    page.drawText("Source file", {
+      x: columns.sourceFileNameX,
+      y,
+      size: fontSize,
+      font,
+      color: STAMP_COLOR,
+    });
+  }
+
+  drawRightAlignedText(page, font, "Pages", columns.pageCountX, columns.pageCountWidth, y, fontSize);
+  drawRightAlignedText(
+    page,
+    font,
+    "Binder pages",
+    columns.pageRangeX,
+    columns.pageRangeWidth,
+    y,
+    fontSize,
+  );
+  page.drawLine({
+    start: { x: columns.labelX, y: y - 6 },
+    end: { x: columns.pageRangeX + columns.pageRangeWidth, y: y - 6 },
+    thickness: 0.5,
+    color: STAMP_COLOR,
+  });
+}
+
+function drawIndexRow(
+  page: ReturnType<PDFDocument["getPage"]>,
+  font: PDFFont,
+  entry: ExhibitIndexEntry,
+  columns: ReturnType<typeof computeExhibitIndexColumns>,
+  y: number,
+  fontSize: number,
+  includeSourceFileName: boolean,
+): void {
+  const label = sanitizeIndexTextForFont(font, entry.label);
+
+  page.drawText(fitTextToWidth(font, label, fontSize, columns.labelWidth), {
+    x: columns.labelX,
+    y,
+    size: fontSize,
+    font,
+    color: STAMP_COLOR,
+  });
+  page.drawText(
+    fitTextToWidth(
+      font,
+      displayIndexDescription(font, entry),
+      fontSize,
+      columns.descriptionWidth,
+    ),
+    {
+      x: columns.descriptionX,
+      y,
+      size: fontSize,
+      font,
+      color: STAMP_COLOR,
+    },
+  );
+
+  if (
+    includeSourceFileName &&
+    columns.sourceFileNameX !== undefined &&
+    columns.sourceFileNameWidth !== undefined
+  ) {
+    const sourceFileName = sanitizeIndexTextForFont(font, entry.sourceFileName ?? "");
+
+    page.drawText(
+      fitTextToWidth(font, sourceFileName, fontSize, columns.sourceFileNameWidth),
+      {
+        x: columns.sourceFileNameX,
+        y,
+        size: fontSize,
+        font,
+        color: STAMP_COLOR,
+      },
+    );
+  }
+
+  drawRightAlignedText(
+    page,
+    font,
+    String(entry.pageCount),
+    columns.pageCountX,
+    columns.pageCountWidth,
+    y,
+    fontSize,
+  );
+  drawRightAlignedText(
+    page,
+    font,
+    entry.pageRange,
+    columns.pageRangeX,
+    columns.pageRangeWidth,
+    y,
+    fontSize,
+  );
+}
+
+function displayIndexDescription(font: PDFFont, entry: ExhibitIndexEntry): string {
+  const rawDescription = entry.description ?? defaultExhibitDescription(entry.sourceFileName, entry.label);
+  const description = sanitizeIndexTextForFont(font, rawDescription);
+
+  if (description.length > 0 || entry.descriptionGeneratedFromSourceFileName !== true) {
+    return description;
+  }
+
+  return sanitizeIndexTextForFont(font, entry.label);
+}
+
+function sanitizeIndexTextForFont(font: PDFFont, text: string): string {
+  let sanitized = "";
+
+  for (const character of text) {
+    if (isWhitespace(character) || isControlCharacter(character)) {
+      sanitized += " ";
+      continue;
+    }
+
+    try {
+      font.widthOfTextAtSize(character, 1);
+      sanitized += character;
+    } catch {
+      sanitized += " ";
+    }
+  }
+
+  return sanitized.replace(/\s+/gu, " ").trim();
+}
+
+function isWhitespace(character: string): boolean {
+  return /\s/u.test(character);
+}
+
+function isControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+
+  return codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f);
+}
+
+function drawRightAlignedText(
+  page: ReturnType<PDFDocument["getPage"]>,
+  font: PDFFont,
+  text: string,
+  x: number,
+  width: number,
+  y: number,
+  fontSize: number,
+): void {
+  const fitted = fitTextToWidth(font, text, fontSize, width);
+  page.drawText(fitted, {
+    x: x + width - font.widthOfTextAtSize(fitted, fontSize),
+    y,
+    size: fontSize,
+    font,
+    color: STAMP_COLOR,
+  });
+}
+
+function fitTextToWidth(font: PDFFont, text: string, fontSize: number, maxWidth: number): string {
+  if (font.widthOfTextAtSize(text, fontSize) <= maxWidth) {
+    return text;
+  }
+
+  const marker = "...";
+  let fitted = text;
+
+  while (fitted.length > 0 && font.widthOfTextAtSize(`${fitted}${marker}`, fontSize) > maxWidth) {
+    fitted = fitted.slice(0, -1);
+  }
+
+  return fitted.length === 0 ? "" : `${fitted}${marker}`;
+}
+
+function formatBinderPageRange(start: number, end: number): string {
+  return start === end ? String(start) : `${start}-${end}`;
+}
+
+function normalizeBinderIndexOptions(
+  options: PdfBinderOptions,
+): { enabled: boolean; includeSourceFileName: boolean } {
+  return {
+    enabled: options.index?.enabled ?? DEFAULT_BINDER_INDEX_ENABLED,
+    includeSourceFileName: options.index?.includeSourceFileName ??
+      DEFAULT_BINDER_INDEX_SOURCE_FILENAME,
+  };
+}
+
 function normalizeBinderStampOptions(
   options: PdfBinderOptions,
 ): Required<PdfStampTextOptions> {
@@ -1699,6 +2184,12 @@ function assertPositiveNumber(value: number, fieldName: string): void {
 function assertNonNegativeNumber(value: number, fieldName: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must not be negative.`);
+  }
+}
+
+function assertNonNegativeInteger(value: number, fieldName: string): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a non-negative integer.`);
   }
 }
 

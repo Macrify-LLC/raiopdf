@@ -595,6 +595,21 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect.poll(() => getPdfACallCount(page)).toBe(1);
 });
 
+test("prepare for filing closes an open organize workspace", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "organize-to-filing.pdf", await createPdf([200, 210, 220]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize Pages" }).click();
+  await expect(page.getByRole("list", { name: "Page grid" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Legal" }).click();
+  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+
+  await expect(page.getByRole("list", { name: "Page grid" })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
+});
+
 test("compressing an oversize filing under the cap clears the split prompt", async ({ page }) => {
   const sourcePdf = await createPaddedPdf(
     await createMultiPageTextPdf(["Oversize filing page"]),

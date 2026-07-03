@@ -1350,9 +1350,7 @@ export function App() {
         editing.setTool("select");
       }
 
-      if (toolId === "combine-exhibits") {
-        setActiveOrganizeTool(null);
-      }
+      setActiveOrganizeTool(null);
     },
     [editing],
   );

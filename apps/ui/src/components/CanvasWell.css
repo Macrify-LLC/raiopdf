@@ -1,9 +1,13 @@
+/*
+ * The well is a flex scroller. Children center via `margin: auto` instead of
+ * align/justify `center` — flexbox centering pushes an overflowing child into
+ * unreachable negative overflow (the top of a tall page could never be
+ * scrolled to, which broke drag placement near the page top).
+ */
 .canvas-well {
   position: relative;
   background: var(--well);
   display: flex;
-  align-items: center;
-  justify-content: center;
   padding: var(--space-6);
   overflow: auto;
 }
@@ -23,7 +27,34 @@
   pointer-events: auto;
 }
 
+.canvas-well__signature-card-slot {
+  position: absolute;
+  top: 68px;
+  left: var(--space-4);
+  right: var(--space-4);
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.canvas-well__signature-card-slot > * {
+  pointer-events: auto;
+}
+
+.canvas-well__form-note {
+  margin: 0;
+  align-self: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  padding: 3px var(--space-3);
+}
+
 .canvas-well__empty {
+  margin: auto;
   display: flex;
   flex-direction: column;
   align-items: center;

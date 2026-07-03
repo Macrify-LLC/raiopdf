@@ -34,11 +34,14 @@ import {
   type FilingProgressState,
   type FilingResultState,
 } from "./components/PrepareForFilingWorkspace";
+import { EditModeBar } from "./components/EditModeBar";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
 } from "./hooks/useEngineBridge";
 import { useDocument } from "./hooks/useDocument";
+import { useEditing } from "./hooks/useEditing";
+import type { EditToolId } from "./lib/edits";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
@@ -118,12 +121,14 @@ export function App() {
     cropResizePages,
     buildBinder,
     batesStamp,
+    applyEdits,
     scrubMetadata,
     save: saveDocument,
     markSaved,
   } = useDocument();
   const engineBridge = useEngineBridge();
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const editing = useEditing(pdfDocument);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
@@ -171,6 +176,7 @@ export function App() {
   });
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
+  const savingRef = useRef(false);
   const redactionIdRef = useRef(0);
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
@@ -273,6 +279,42 @@ export function App() {
   useEffect(() => {
     clearDocumentBoundLegalState();
   }, [clearDocumentBoundLegalState, document.bytes]);
+
+  // Pending edits and form values are geometry- and page-bound, so any change
+  // to the underlying bytes (rotate, delete, reorder, apply) invalidates them.
+  const resetEditingForDocument = editing.resetForDocument;
+  useEffect(() => {
+    resetEditingForDocument();
+  }, [resetEditingForDocument, document.bytes]);
+
+  const selectEditTool = useCallback(
+    (toolId: EditToolId) => {
+      if (toolId !== "select" && activeLegalTool === "redact") {
+        setActiveLegalTool(null);
+      }
+
+      editing.setTool(toolId);
+    },
+    [activeLegalTool, editing],
+  );
+
+  // Esc exits any edit mode. Inline editors (text draft, comment popover)
+  // consume their own Escape via stopPropagation before this fires.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+
+      if (editing.tool !== "select") {
+        editing.setTool("select");
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [editing]);
 
   useEffect(() => {
     let disposed = false;
@@ -668,37 +710,72 @@ export function App() {
   );
 
   const save = useCallback(() => {
-    void saveDocument()
-      .then(async (saved) => {
-        if (!saved) {
+    // Re-entry guard: rapid double-clicks must not apply the same pending
+    // edits twice or start a second file write mid-save.
+    if (savingRef.current) {
+      return;
+    }
+
+    savingRef.current = true;
+
+    void (async () => {
+      const pendingApply = editing.collectEdits();
+
+      if (pendingApply) {
+        const applied = await applyEdits(pendingApply.edits, {
+          flatten: pendingApply.flatten,
+        });
+
+        if (!applied) {
+          // The mutation queue already surfaced the error; the document is
+          // unchanged, so the pending list stays for another attempt.
           return;
         }
 
-        const written = await filePort.saveFile(
-          saved.bytes,
-          saved.fileName,
-          saved.filePath,
-        );
+        editing.clearPending();
+      }
 
-        if (written) {
-          markSaved({
-            fileName: written.name,
-            filePath: written.path,
-          });
-        }
-      })
+      const saved = await saveDocument();
+
+      if (!saved) {
+        return;
+      }
+
+      const written = await filePort.saveFile(
+        saved.bytes,
+        saved.fileName,
+        saved.filePath,
+      );
+
+      if (written) {
+        markSaved({
+          fileName: written.name,
+          filePath: written.path,
+        });
+      }
+    })()
       .catch(() => {
         setError("This PDF could not be saved. Try reopening the document and saving again.");
+      })
+      .finally(() => {
+        savingRef.current = false;
       });
-  }, [markSaved, saveDocument, setError]);
+  }, [applyEdits, editing, markSaved, saveDocument, setError]);
 
-  const selectLegalTool = useCallback((toolId: LegalToolId) => {
-    setActiveLegalTool(toolId);
+  const selectLegalTool = useCallback(
+    (toolId: LegalToolId) => {
+      setActiveLegalTool(toolId);
 
-    if (toolId === "combine-exhibits") {
-      setActiveOrganizeTool(null);
-    }
-  }, []);
+      if (toolId === "redact" && editing.tool !== "select") {
+        editing.setTool("select");
+      }
+
+      if (toolId === "combine-exhibits") {
+        setActiveOrganizeTool(null);
+      }
+    },
+    [editing],
+  );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
     setActiveOrganizeTool(toolId);
@@ -1236,7 +1313,12 @@ export function App() {
     message: scrubState.message,
     removedFields: scrubState.removedFields,
   };
-  const redactionModeBar = activeLegalTool === "redact" ? (
+  const editingForShell = useMemo(
+    () => ({ ...editing, setTool: selectEditTool }),
+    [editing, selectEditTool],
+  );
+
+  const modeBar = activeLegalTool === "redact" ? (
     <RedactionModeBar
       pendingCount={pendingRedactions.length}
       searchOpen={redactionSearchOpen}
@@ -1248,6 +1330,8 @@ export function App() {
       onApply={requestApplyRedactions}
       onExit={() => setActiveLegalTool(null)}
     />
+  ) : editing.tool !== "select" ? (
+    <EditModeBar editing={editingForShell} />
   ) : null;
 
   const workspace = activeLegalTool === "prepare-for-filing" ? (
@@ -1315,7 +1399,8 @@ export function App() {
       scanner={scannerState}
       scrubMetadata={scrubMetadataPanel}
       pendingRedactions={pendingRedactions}
-      redactionModeBar={redactionModeBar}
+      modeBar={modeBar}
+      editing={editingForShell}
       onRedactionAreaCreated={addPendingRedaction}
       onRedactionAreaRemoved={removePendingRedaction}
       onConfirmRedactions={confirmRedactions}

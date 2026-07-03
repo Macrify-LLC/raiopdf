@@ -19,6 +19,24 @@
   white-space: nowrap;
 }
 
+.legal-mode-bar__hint {
+  flex: 2 1 220px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+}
+
+.legal-mode-bar__file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+}
+
 .legal-mode-bar__button,
 .legal-mode-bar__danger-button {
   min-height: 30px;

@@ -305,6 +305,161 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect.poll(() => getPdfACallCount(page)).toBe(1);
 });
 
+test("places a text box, highlight, and comment, saves, and re-opens with all present", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "edit-round-trip.pdf",
+    await createMultiPageTextPdf(["The parties stipulate to the facts set forth herein."]),
+  );
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+
+  // Highlight: drag a band across the text line near the top of the page.
+  // Retries in case the drag lands before the page's text layer resolves —
+  // a miss adds nothing, so retrying cannot double-place.
+  await commandBar.getByRole("button", { name: "Highlight", exact: true }).click();
+  await expect(async () => {
+    if ((await page.locator(".edit-layer__highlight").count()) === 0) {
+      await dragOnCanvas(page, canvas, 0.08, 0.06, 0.92, 0.13);
+    }
+
+    await expect(page.locator(".edit-layer__highlight").first()).toBeVisible({
+      timeout: 1_000,
+    });
+  }).toPass({ timeout: 15_000 });
+
+  // Text box: click to place, type, Enter commits.
+  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await clickCanvasAt(page, canvas, 0.3, 0.4);
+  await page.getByLabel("Text box content").fill("Deposition note");
+  await page.getByLabel("Text box content").press("Enter");
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+
+  // Comment: click drops a pin, popover takes the note text.
+  await commandBar.getByRole("button", { name: "Comment", exact: true }).click();
+  await clickCanvasAt(page, canvas, 0.6, 0.5);
+  await page.getByLabel("Comment text").fill("Check exhibit reference");
+  await page.getByRole("button", { name: "Save Note" }).click();
+  await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(1);
+
+  // The Edit panel group lists all pending items with per-item remove.
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(toolPanel.getByText("3 pending edits")).toBeVisible();
+
+  // The Comment panel group lists the note with its page and excerpt.
+  await toolPanel.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(toolPanel.getByText("1 comment", { exact: true })).toBeVisible();
+  await expect(
+    toolPanel.locator("#accordion-panel-comment").getByText("Check exhibit reference"),
+  ).toBeVisible();
+
+  const saved = await savePdf(page);
+
+  // The pending list clears only on verified success.
+  await expect(toolPanel.getByText("3 pending edits")).toHaveCount(0);
+  await expect(page.getByLabel("Unsaved changes")).toBeHidden();
+
+  // Saved bytes carry the baked text box, the highlight fill, and a live
+  // /Text annotation for the comment.
+  const content = await readDecodedPageContent(saved, 0);
+  expect(content).toContain(encodeTextAsHex("Deposition note"));
+  expect(content).toMatch(/1 0\.9 0\.3 rg/);
+  await expectTextAnnotation(saved, 0, "Check exhibit reference");
+
+  // Re-open the saved file: it loads and renders cleanly, with nothing pending.
+  await openPdf(page, "edit-round-trip-reopened.pdf", saved);
+  await expect.poll(() => mainCanvasStats(page)).toMatchObject({
+    widthReady: true,
+    heightReady: true,
+    hasTextPixels: true,
+  });
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(0);
+  await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(0);
+});
+
+test("places a text box rotation-correctly on a rotated page", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "rotated-edit.pdf", await createPdf([300]));
+
+  // Rotate the page 90 degrees, then place a text box at a known spot.
+  await page.getByRole("button", { name: "Rotate selected pages" }).click();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await clickCanvasAt(page, canvas, 0.25, 0.25);
+  await page.getByLabel("Text box content").fill("ROTCHECK");
+  await page.getByLabel("Text box content").press("Enter");
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+
+  const saved = await savePdf(page);
+  const pdf = await PDFDocument.load(saved);
+  expect(pdf.getPage(0).getRotation().angle).toBe(90);
+  expect(await readDecodedPageContent(saved, 0)).toContain(encodeTextAsHex("ROTCHECK"));
+
+  // Re-open the saved file: the baked text must render where it was placed
+  // (near the click point), not mirrored to another corner by a bad mapping.
+  await openPdf(page, "rotated-edit-reopened.pdf", saved);
+  await expect
+    .poll(() => canvasRegionInkPixels(page, 0.2, 0.2, 0.6, 0.38))
+    .toBeGreaterThan(0);
+  expect(await canvasRegionInkPixels(page, 0.62, 0.55, 0.98, 0.98)).toBe(0);
+});
+
+test("rapid double-clicks cannot double-place or double-save", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "double-click.pdf", await createPdf([300]));
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+
+  // Two rapid clicks at the same spot must produce exactly one draft box.
+  const box = await canvas.boundingBox();
+
+  if (!box) {
+    throw new Error("Canvas bounding box unavailable.");
+  }
+
+  await page.mouse.dblclick(box.x + box.width * 0.3, box.y + box.height * 0.4);
+  await expect(page.getByLabel("Text box content")).toHaveCount(1);
+  await page.getByLabel("Text box content").fill("ONCE");
+  await page.getByLabel("Text box content").press("Enter");
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+
+  // Two rapid Save clicks must apply the pending edits exactly once and
+  // produce exactly one download.
+  let downloadCount = 0;
+  page.on("download", () => {
+    downloadCount += 1;
+  });
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save", exact: true }).evaluate((element) => {
+    const button = element as HTMLButtonElement;
+    button.click();
+    button.click();
+  });
+  const download = await downloadPromise;
+  const path = await download.path();
+
+  if (!path) {
+    throw new Error("Saved PDF download did not produce a local file.");
+  }
+
+  const saved = new Uint8Array(await readFile(path));
+  const content = await readDecodedPageContent(saved, 0);
+  expect(countOccurrences(content, encodeTextAsHex("ONCE"))).toBe(1);
+
+  // Give a second (erroneous) download a moment to appear, then confirm
+  // there was only ever one.
+  await page.waitForTimeout(500);
+  expect(downloadCount).toBe(1);
+});
+
 async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
@@ -630,6 +785,126 @@ async function getFilingPreflightRuns(page: Page): Promise<number> {
       __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
     }).__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ ?? 0;
   });
+}
+
+async function clickCanvasAt(
+  page: Page,
+  canvas: ReturnType<Page["locator"]>,
+  xFraction: number,
+  yFraction: number,
+): Promise<void> {
+  const box = await canvas.boundingBox();
+
+  if (!box) {
+    throw new Error("Canvas bounding box unavailable.");
+  }
+
+  await page.mouse.click(box.x + box.width * xFraction, box.y + box.height * yFraction);
+}
+
+async function dragOnCanvas(
+  page: Page,
+  canvas: ReturnType<Page["locator"]>,
+  x0Fraction: number,
+  y0Fraction: number,
+  x1Fraction: number,
+  y1Fraction: number,
+): Promise<void> {
+  const box = await canvas.boundingBox();
+
+  if (!box) {
+    throw new Error("Canvas bounding box unavailable.");
+  }
+
+  await page.mouse.move(box.x + box.width * x0Fraction, box.y + box.height * y0Fraction);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * x1Fraction, box.y + box.height * y1Fraction, {
+    steps: 6,
+  });
+  await page.mouse.up();
+}
+
+async function canvasRegionInkPixels(
+  page: Page,
+  x0Fraction: number,
+  y0Fraction: number,
+  x1Fraction: number,
+  y1Fraction: number,
+): Promise<number> {
+  return page.evaluate(
+    ([x0f, y0f, x1f, y1f]) => {
+      const canvas = document.querySelector('[data-testid="pdf-page-canvas"]');
+
+      if (!(canvas instanceof HTMLCanvasElement) || canvas.width === 0) {
+        return -1;
+      }
+
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        return -1;
+      }
+
+      const x = Math.floor(canvas.width * (x0f ?? 0));
+      const y = Math.floor(canvas.height * (y0f ?? 0));
+      const width = Math.max(1, Math.floor(canvas.width * ((x1f ?? 0) - (x0f ?? 0))));
+      const height = Math.max(1, Math.floor(canvas.height * ((y1f ?? 0) - (y0f ?? 0))));
+      const image = context.getImageData(x, y, width, height).data;
+      let inkPixels = 0;
+
+      for (let index = 0; index < image.length; index += 4) {
+        const alpha = image[index + 3] ?? 0;
+        const red = image[index] ?? 255;
+        const green = image[index + 1] ?? 255;
+        const blue = image[index + 2] ?? 255;
+
+        if (alpha !== 0 && (red < 200 || green < 200 || blue < 200)) {
+          inkPixels += 1;
+        }
+      }
+
+      return inkPixels;
+    },
+    [x0Fraction, y0Fraction, x1Fraction, y1Fraction],
+  );
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+
+  return count;
+}
+
+async function expectTextAnnotation(
+  bytes: Uint8Array,
+  pageIndex: number,
+  contents: string,
+): Promise<void> {
+  const pdf = await PDFDocument.load(bytes);
+  const annotations = pdf
+    .getPage(pageIndex)
+    .node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+  expect(annotations, "expected the page to carry an /Annots array").toBeTruthy();
+
+  const found = annotations!
+    .asArray()
+    .map((entry) => (entry instanceof PDFRef ? pdf.context.lookup(entry, PDFDict) : entry))
+    .filter((entry): entry is PDFDict => entry instanceof PDFDict)
+    .some((dict) => {
+      const subtype = dict.get(PDFName.of("Subtype"));
+      const text = dict.lookupMaybe(PDFName.of("Contents"), PDFString, PDFHexString);
+
+      return subtype === PDFName.of("Text") && text?.decodeText() === contents;
+    });
+
+  expect(found, `expected a /Text annotation with contents "${contents}"`).toBe(true);
 }
 
 async function expectPdf(

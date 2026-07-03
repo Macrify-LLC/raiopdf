@@ -3,6 +3,7 @@ import type {
   PdfBatesStampOptions,
   PdfBinderOptions,
   PdfDocumentHandle,
+  PdfEdit,
   PdfEngine,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
@@ -681,6 +682,37 @@ export function useDocument() {
     [engine, enqueueMutation],
   );
 
+  const applyEdits = useCallback(
+    async (edits: readonly PdfEdit[], options: { flatten: boolean }) => {
+      if (edits.length === 0) {
+        return false;
+      }
+
+      return enqueueMutation("apply edits", async ({ handle }) => {
+        let editedHandle: PdfDocumentHandle | null = await engine.applyEdits(handle, edits);
+
+        try {
+          if (options.flatten) {
+            const flattenedHandle = await engine.flattenForm(editedHandle);
+            await closeHandle(editedHandle);
+            editedHandle = flattenedHandle;
+          }
+
+          const engineHandle = editedHandle;
+          editedHandle = null;
+
+          return {
+            engineHandle,
+            options: { dirty: true, hasTextLayer: null },
+          };
+        } finally {
+          await closeHandle(editedHandle);
+        }
+      });
+    },
+    [closeHandle, engine, enqueueMutation],
+  );
+
   const scrubMetadata = useCallback(async () => {
     return enqueueMutation("scrub metadata", async ({ handle }) => ({
       engineHandle: await engine.scrubMetadata(handle),
@@ -764,6 +796,7 @@ export function useDocument() {
     cropResizePages,
     buildBinder,
     batesStamp,
+    applyEdits,
     scrubMetadata,
     save,
     markSaved,
@@ -891,6 +924,10 @@ function getActionErrorMessage(action: string, error: unknown): string {
 
   if (action === "build binder") {
     return "The binder could not be built. Check the exhibit files and try again.";
+  }
+
+  if (action === "apply edits") {
+    return "The edits could not be applied. The document was left unchanged.";
   }
 
   if (action === "save") {

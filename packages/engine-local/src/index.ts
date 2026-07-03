@@ -41,7 +41,6 @@ import {
   PDFName,
   PDFOptionList,
   PDFRadioGroup,
-  PDFRef,
   PDFString,
   PDFTextField,
   rgb,

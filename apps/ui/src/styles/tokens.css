@@ -37,6 +37,12 @@
      hover-state wash for chrome buttons and panel rows. */
   --hover-ground: #e7eef7;
 
+  /* Add-content editing overlays. --highlight matches the engine's marker
+     yellow (rgb(1, .9, .3)); --edit-ink matches the engine's near-black
+     default ink so pending overlays preview what actually bakes on save. */
+  --highlight: #ffe64d;
+  --edit-ink: #111111;
+
   /* The RaioPDF product mark (bolt) fill, and the gradient accent bar
      that always sits at the very top of the app window. */
   --bolt: #7ec8f0;

@@ -26,18 +26,43 @@ never leaves your computer.
 
 Sub-headline: Plus the legal workflows Acrobat never bothered building.
 
-## Positioning frame (short paragraph, upper page)
+## Positioning frame (short paragraph, upper page) — updated 2026-07-03
 
-Adobe has spent years pushing Acrobat toward pricier tiers and more features
-nobody asked for, while locking a fundamentally local task — editing a file
-that already lives on your machine — behind a mandatory account and a cloud
-round-trip. RaioPDF is the opposite bet: free, full-featured for daily use,
-entirely on-device, and honest that it collects nothing.
+Written in Jacob's own first-person voice, not third-person product copy —
+direct, plainspoken, a little wry, not corporate-marketing-serious:
+
+> I didn't build this to pick a fight with anyone's business model. I built
+> it because editing a file that's already sitting on your own computer
+> shouldn't require an account, a cloud upload, and a little voice in the
+> back of your head wondering what happens to the file once it leaves your
+> machine. That's a lot of ceremony for a task your laptop can already do by
+> itself.
+>
+> RaioPDF is the other way of doing it: a full, genuinely useful PDF suite —
+> including the less-glamorous legal stuff like true redaction and Bates
+> numbering — given away for free, running entirely on your own machine,
+> permanently.
+>
+> Turns out you don't need a subscription and a login screen to make solid
+> software — you just have to build it. And once someone proves that, "this
+> is just how PDF software works now" stops being true. That's really the
+> point: not to out-feature any particular vendor, but to show a firm
+> doesn't have to just accept whatever terms it's handed for a task this
+> basic.
 
 Never say "kills Adobe," "Adobe killer," or anything reading as an attack on
-Adobe the company. Never run a feature-by-feature comparison table against
-Acrobat by name. The pitch is the model — free/local/no-account vs.
-subscription/cloud/bloat — not a spec fight.
+Adobe the company. Never name Adobe/Acrobat as a direct point of comparison
+at all — no "Adobe does X, we do Y," even factual ones, and no
+feature-by-feature comparison table. "Acrobat" as a plain category reference
+(e.g. the hero one-liner above) is fine for orientation; a value-judgment
+comparison is not. The pitch is what RaioPDF *is* and the idea behind it —
+not a rebuttal of any specific company.
+
+Where it fits naturally (not every option needs it), the concept-to-working-
+prototype timeline — about twelve hours — is a fair, lighthearted aside for
+the same point: you don't need a giant company to build something solid.
+Don't force it in if the design doesn't have room; it's a bonus beat, not a
+required claim.
 
 ## Concrete inputs (a "how you'd actually use it" section — 3–4 items)
 
@@ -66,12 +91,12 @@ subscription/cloud/bloat — not a spec fight.
 - **e-filing preflight report** with the actual rule citations (Fla. R. Jud.
   Admin. 2.520/2.525) attached.
 
-## Why now (short section, can double as a pull-quote)
+## Why now (short section, can double as a pull-quote) — updated 2026-07-03
 
-Adobe has spent years pushing Acrobat toward pricier tiers and features
-nobody asked for, while a task that's fundamentally local — editing your own
-file — now requires an account and a cloud round-trip. RaioPDF is the
-opposite bet: free, full-featured, on-device, nothing collected.
+Turns out you don't need a subscription and a login screen to make solid
+software — you just have to build it. RaioPDF is proof: free, full-featured,
+on-device, nothing collected. (Same first-person-voice guidance as the
+positioning frame above applies here.)
 
 ## What it is NOT (small, honest, near the download panel or footer)
 
@@ -125,7 +150,10 @@ Don't overclaim past what's actually true.)
 ## Legal/tone guardrails
 
 - No dollar/time/hour estimates that aren't backed by measured data. "Free"
-  and "$0" are fine (factual). Never "saves you X hours."
+  and "$0" are fine (factual). Never "saves you X hours." The
+  concept-to-prototype "about twelve hours" line is a stated fact from
+  Jacob, not a productivity/savings estimate — it's fine to use where noted
+  above.
 - No superlatives ("game-changing," "revolutionary," "best-in-class").
 - No fear framing ("never miss a redaction"). Lead with what the software
   does, not what goes wrong without it.

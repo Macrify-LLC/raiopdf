@@ -21,7 +21,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Newsreader:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%23F5B942' d='M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="./assets/raiopdf/raiopdf-favicon.svg">
+<link rel="icon" type="image/png" sizes="545x545" href="./assets/raiopdf/raiopdf-favicon.png">
+<link rel="apple-touch-icon" href="./assets/raiopdf/raiopdf-favicon.png">
 
 <style>
   :root{
@@ -87,10 +89,21 @@
     max-width:1120px; margin:0 auto; padding:16px 24px;
     display:flex; align-items:center; justify-content:space-between; gap:16px;
   }
-  .nav__brand{ display:flex; align-items:center; gap:10px; }
-  .sun-icon{ width:22px; height:22px; flex:none; filter:drop-shadow(0 0 6px rgba(245,185,66,.55)); }
-  .nav__wordmark{ font-family:var(--font-display); font-size:20px; color:#fff; letter-spacing:.01em; }
-  .nav__wordmark .wt-bold{ font-weight:700; color:var(--gold); }
+  .nav__brand{ display:flex; align-items:center; }
+  .nav__logo{
+    height:28px; width:auto;
+    /* No light-on-dark variant ships for the RaioPDF lockup yet, so we flatten
+       it to solid white for this dark nav bar rather than leaving the navy
+       wordmark text unreadable against the storm gradient — the warm drop-shadow
+       keeps a hint of the gold sunbreak color instead of losing it outright.
+       Swap this filter for a purpose-built light variant if one is ever cut. */
+    filter:brightness(0) invert(1) drop-shadow(0 0 10px rgba(245,185,66,.35));
+    transition:filter .2s ease, transform .2s ease;
+  }
+  .nav__brand:hover .nav__logo{
+    filter:brightness(0) invert(1) drop-shadow(0 0 16px rgba(245,185,66,.55));
+    transform:translateY(-1px);
+  }
   .nav__links{ display:flex; align-items:center; gap:22px; }
   .nav__links a{
     font-size:14px; font-weight:600; color:rgba(255,255,255,.82);
@@ -225,8 +238,13 @@
   }
 
   .hero__positioning{
-    margin-top:28px; max-width:56ch; font-size:16px; line-height:1.7; color:rgba(234,242,251,.86);
+    margin-top:28px; max-width:52ch; font-size:16px; line-height:1.7; color:rgba(234,242,251,.86);
   }
+  .hero__jump{
+    color:var(--light-blue); text-decoration:underline; text-underline-offset:3px;
+    font-weight:600; white-space:nowrap;
+  }
+  .hero__jump:hover{ color:var(--gold); }
 
   /* ---------- download panel ---------- */
   .download-panel{
@@ -286,6 +304,38 @@
     color:var(--text-primary); margin-top:10px; line-height:1.15;
   }
   .section-head p{ margin-top:12px; font-size:16px; color:var(--text-muted); max-width:52ch; }
+
+  /* ---------- philosophy section ---------- */
+  .philosophy{ position:relative; overflow:hidden; background:var(--bg-alt); }
+  .philosophy__glow{
+    position:absolute; top:-14%; right:-10%; width:520px; height:520px;
+    opacity:.09; pointer-events:none; z-index:0;
+    animation:philosophy-spin 120s linear infinite;
+  }
+  @keyframes philosophy-spin{ from{ transform:rotate(0deg); } to{ transform:rotate(360deg); } }
+
+  .philosophy__inner{ position:relative; z-index:1; }
+  .philosophy__letter{ max-width:640px; border-left:3px solid var(--gold-deep); padding-left:28px; }
+  .philosophy__letter p{
+    font-family:var(--font-editorial); font-weight:400; font-size:clamp(1.05rem, 1.6vw, 1.25rem);
+    line-height:1.7; color:var(--text-body); margin-top:20px;
+  }
+  .philosophy__letter p:first-child{ margin-top:0; }
+  .philosophy__signoff{
+    display:flex; align-items:center; gap:10px; margin-top:26px;
+    font-family:var(--font-body); font-weight:700; font-size:13px;
+    letter-spacing:.03em; color:var(--text-muted);
+  }
+  .philosophy__signoff img{ width:20px; height:20px; }
+
+  .philosophy__aside{
+    display:flex; gap:14px; align-items:flex-start; margin-top:32px; margin-left:28px;
+    max-width:600px; padding:18px 20px; background:#fff; border:1px solid var(--border);
+    border-radius:12px; box-shadow:0 2px 14px rgba(11,26,46,.04);
+  }
+  .philosophy__aside svg{ width:18px; height:18px; flex:none; color:var(--gold-deep); margin-top:2px; }
+  .philosophy__aside p{ font-size:14px; color:var(--text-body); line-height:1.6; }
+  .philosophy__aside strong{ color:var(--text-primary); }
 
   /* ---------- inputs section ---------- */
   .inputs{ background:var(--surface); }
@@ -384,6 +434,8 @@
     .footer__inner{ grid-template-columns:1fr; gap:32px; }
     .spotlight-group--strong .spotlight-beam--primary,
     .spotlight-group--strong .spotlight-beam--core-a{ width:60vw; }
+    .philosophy__glow{ width:340px; height:340px; }
+    .philosophy__aside{ margin-left:0; }
   }
 
   @media (max-width:560px){
@@ -391,6 +443,8 @@
     .outcomes-grid .outcome-card--wide{ grid-column:span 1; }
     .download-panel{ padding:22px; }
     .footer__bottom{ flex-direction:column; }
+    .philosophy__letter{ padding-left:18px; }
+    .philosophy__aside{ padding:16px; }
   }
 </style>
 </head>
@@ -405,10 +459,10 @@
 <header class="nav">
   <div class="nav__inner">
     <a class="nav__brand" href="#top">
-      <img class="sun-icon" src="shared/sun-mark.svg" alt="" aria-hidden="true">
-      <span class="nav__wordmark"><span class="wt-light">Raio</span><span class="wt-bold">PDF</span></span>
+      <img class="nav__logo" src="./assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
     </a>
     <nav class="nav__links" aria-label="Primary">
+      <a href="#philosophy">Why</a>
       <a href="#inputs">How it works</a>
       <a href="#outcomes">Features</a>
       <a href="#honest">What it isn't</a>
@@ -448,10 +502,9 @@
       <p class="hero__subhead">Plus the legal workflows Acrobat never bothered building.</p>
 
       <p class="hero__positioning">
-        Adobe has spent years pushing Acrobat toward pricier tiers and more features nobody asked
-        for, while locking a fundamentally local task — editing a file that already lives on your
-        machine — behind a mandatory account and a cloud round-trip. RaioPDF is the opposite bet:
-        free, full-featured for daily use, entirely on-device, and honest that it collects nothing.
+        I built this because editing a file that's already on your machine shouldn't need an
+        account and a cloud trip first. There's more to that story a couple scrolls down —
+        <a class="hero__jump" href="#philosophy">why I built it, and why it's free <span aria-hidden="true">↓</span></a>
       </p>
 
       <div class="download-panel" id="downloadPanel">
@@ -477,6 +530,51 @@
       </div>
 
       <p class="hero__meta-note">Windows only today. macOS later — no date promised.</p>
+    </div>
+  </section>
+
+  <section class="philosophy" id="philosophy">
+    <img class="philosophy__glow" src="shared/sun-mark.svg" alt="" aria-hidden="true">
+    <div class="container philosophy__inner">
+      <div class="section-head">
+        <span class="eyebrow">From the person who built it</span>
+        <h2>Why this exists</h2>
+      </div>
+
+      <div class="philosophy__letter">
+        <p>I didn't build this to pick a fight with anyone's business model. I built
+        it because editing a file that's already sitting on your own computer
+        shouldn't require an account, a cloud upload, and a little voice in the
+        back of your head wondering what happens to the file once it leaves your
+        machine. That's a lot of ceremony for a task your laptop can already do
+        by itself.</p>
+
+        <p>RaioPDF is the other way of doing it: a full, genuinely useful PDF
+        suite — including the less-glamorous legal stuff like true redaction and
+        Bates numbering — given away for free, running entirely on your own
+        machine, permanently.</p>
+
+        <p>Turns out you don't need a subscription and a login screen to make
+        solid software — you just have to build it. And once someone proves
+        that, "this is just how PDF software works now" stops being true.
+        That's really the point: not to out-feature any particular vendor, but
+        to show a firm doesn't have to just accept whatever terms it's handed
+        for a task this basic.</p>
+
+        <p class="philosophy__signoff">
+          <img src="shared/sun-mark.svg" alt="" aria-hidden="true">
+          Jacob — attorney, and the one who built RaioPDF
+        </p>
+      </div>
+
+      <aside class="philosophy__aside">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <p>Worth saying out loud since it's kind of funny: this went from an idea
+        to a working prototype in about <strong>twelve hours</strong>. Not
+        because I'm some engineering prodigy — I'm a lawyer — but because the
+        tools for building solid, deterministic software have gotten genuinely
+        good.</p>
+      </aside>
     </div>
   </section>
 
@@ -558,9 +656,8 @@
     <div class="container">
       <div class="pullquote__inner">
         <blockquote>
-          Adobe has spent years pushing Acrobat toward pricier tiers and features nobody asked for,
-          while a task that's fundamentally local — editing your own file — now requires an account
-          and a cloud round-trip. RaioPDF is the opposite bet: free, full-featured, on-device,
+          Turns out you don't need a subscription and a login screen to make solid software —
+          you just have to build it. RaioPDF is proof: free, full-featured, on-device,
           nothing collected.
         </blockquote>
         <cite>Why now</cite>
@@ -589,7 +686,8 @@
         </div>
         <div class="honest-item">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
-          <p>Not a feature-by-feature Acrobat killer. A different bet on the same job.</p>
+          <p>Not trying to win a features arms race. This isn't about beating anyone
+          spec-for-spec — it's about proving the free, local alternative can exist at all.</p>
         </div>
       </div>
     </div>

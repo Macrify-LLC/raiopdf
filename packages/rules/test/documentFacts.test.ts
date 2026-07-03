@@ -8,6 +8,7 @@ import {
 import {
   buildDocumentFacts,
   detectEncryptionState,
+  deriveTextLayerQuality,
 } from "../src/index";
 import {
   extractPageTextByPage,
@@ -154,6 +155,37 @@ describe("document fact extractors", () => {
       imageOnlyPages: [],
       mixedPages: [],
       garbledPages: [],
+    });
+  });
+
+  it("does not mark a document searchable when the text layer is garbled", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]);
+
+    const garbledPage = {
+      pageIndex: 0,
+      confidence: 0.91,
+      reason: "low_alpha_entropy" as const,
+      puaRatio: 0,
+      replacementRatio: 0,
+      alphaRatio: 0.01,
+    };
+    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }), {
+      textExtractor: {
+        extractTextLayerCoverage: async () => ({
+          textPages: [0],
+          imageOnlyPages: [],
+          mixedPages: [],
+          garbledPages: [garbledPage],
+        }),
+      },
+    });
+
+    expect(facts.searchableText).toBe(false);
+    expect(deriveTextLayerQuality(facts.textLayerCoverage!)).toMatchObject({
+      garbledPages: 1,
+      totalPages: 1,
+      verdict: "garbled",
     });
   });
 

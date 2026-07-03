@@ -1,0 +1,35 @@
+.text-layer-detail {
+  display: grid;
+  gap: var(--space-3);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.text-layer-detail p {
+  margin: 0;
+}
+
+.text-layer-detail__reasons {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--warn-bg);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.text-layer-detail__disabled-action {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: not-allowed;
+  opacity: 0.8;
+}

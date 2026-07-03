@@ -116,6 +116,12 @@ const mockDocument: DocumentState = {
   filePath: null,
   fileSizeBytes: 28 * MiB,
   hasTextLayer: true,
+  textLayerCoverage: {
+    imageOnlyPages: [],
+    mixedPages: [],
+    textPages: [0, 1],
+    garbledPages: [],
+  },
   pageSizeInches: null,
   error: null,
 };

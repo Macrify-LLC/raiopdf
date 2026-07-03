@@ -292,6 +292,36 @@ describe("Florida jurisdiction pack", () => {
     });
   });
 
+  it("preflights garbled text layers as re-OCR warnings", () => {
+    const report = preflight(
+      {
+        ...basePhraseFacts(),
+        searchableText: false,
+        textLayerCoverage: {
+          imageOnlyPages: [],
+          mixedPages: [],
+          textPages: [0, 1],
+          garbledPages: [{
+            pageIndex: 1,
+            confidence: 0.92,
+            reason: "low_alpha_entropy",
+            puaRatio: 0,
+            replacementRatio: 0,
+            alphaRatio: 0.01,
+          }],
+        },
+      },
+      floridaPack,
+    );
+
+    const searchable = report.checks.find((check) => check.checkId === "searchable-text");
+
+    expect(searchable).toMatchObject({
+      status: "warn",
+      detail: "The document's text layer looks unreliable on 1 of 2 pages; re-OCR is recommended.",
+    });
+  });
+
   it("checks Fla. R. Civ. P. 1.202 certificate language only for apparent motions", () => {
     const status = (facts: Partial<Parameters<typeof preflight>[0]>) =>
       preflight({ ...basePhraseFacts(), ...facts }, floridaPack)

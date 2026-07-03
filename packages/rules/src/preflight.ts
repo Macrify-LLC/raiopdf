@@ -148,8 +148,24 @@ function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): P
     status: document.searchableText ? "pass" : "warn",
     detail: document.searchableText
       ? "The document has searchable text."
-      : "The document facts report no searchable text.",
+      : searchableTextWarningDetail(document),
   });
+}
+
+function searchableTextWarningDetail(document: DocumentFacts): string {
+  const garbledPages = document.textLayerCoverage?.garbledPages.length ?? 0;
+  const totalPages = document.textLayerCoverage
+    ? document.textLayerCoverage.imageOnlyPages.length +
+      document.textLayerCoverage.mixedPages.length +
+      document.textLayerCoverage.textPages.length
+    : document.pages.length;
+
+  if (garbledPages > 0) {
+    const totalText = totalPages > 0 ? ` on ${garbledPages} of ${totalPages} pages` : "";
+    return `The document's text layer looks unreliable${totalText}; re-OCR is recommended.`;
+  }
+
+  return "The document facts report no searchable text.";
 }
 
 function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import manifestJson from "../data/packs.manifest.json";
 import {
   DEFAULT_PACK_ID,
-  floridaPack,
   getPack,
   packJsonSha256,
   preflight,
@@ -14,9 +13,11 @@ import {
 import { loadJurisdictionPackFromJson } from "../src/packLoader";
 
 describe("Florida jurisdiction pack", () => {
+  const floridaPack = getPack();
+
   it("is the default pack and exposes machine-readable filing constraints", () => {
     expect(DEFAULT_PACK_ID).toBe("florida");
-    expect(getPack()).toBe(floridaPack);
+    expect(getPack()).toMatchObject({ id: "florida" });
     expect(floridaPack).toMatchObject({
       id: "florida",
       name: "Florida",

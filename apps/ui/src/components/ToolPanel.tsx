@@ -352,7 +352,7 @@ function RedactionStatusPanel({
           {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
         </p>
         <p className="tool-panel__card-copy">
-          RaioPDF verifies: text layer clean; redacted page images replaced; annotations cleaned; metadata scrubbed.
+          RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
         </p>
         <div className="tool-panel__button-row">
           <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>

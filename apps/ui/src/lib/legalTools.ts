@@ -5,6 +5,7 @@ import {
   PDFDocument,
   PDFName,
   PDFRawStream,
+  PDFRef,
   PDFStream,
 } from "pdf-lib";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
@@ -62,6 +63,12 @@ type TextItemLike = {
 };
 
 const REDACTION_PADDING_PT = 2;
+const TEXT_OPERATOR_BOUNDARY = String.raw`[\s[\]()<>/]`;
+const TEXT_OPERATOR_PATTERN = new RegExp(
+  String.raw`(?:^|${TEXT_OPERATOR_BOUNDARY})` +
+  String.raw`(?:BT|ET|Tc|Tw|Tz|TL|Tf|Tr|Ts|Td|TD|Tm|T\*|Tj|TJ|'|")` +
+  String.raw`(?=$|${TEXT_OPERATOR_BOUNDARY})`,
+);
 
 const SCAN_PATTERNS: ReadonlyArray<{
   category: LegalScanCategory;
@@ -571,7 +578,7 @@ function verifyRasterizedPages(
   pageIndexes: readonly number[],
 ): RedactionVerificationCheck {
   const pagesWithTextOperators = pageIndexes.filter((pageIndex) => {
-    return hasTextShowingOperator(readDecodedPageContent(pdf, pageIndex));
+    return hasTextOperatorsInPage(pdf, pageIndex);
   });
 
   if (pagesWithTextOperators.length > 0) {
@@ -611,16 +618,89 @@ function verifyDocumentMetadataScrubbed(pdf: PDFDocument): RedactionVerification
   return pass("Document metadata scrubbed after redaction.");
 }
 
-function readDecodedPageContent(pdf: PDFDocument, pageIndex: number): string {
-  const contents = pdf.getPage(pageIndex).node.Contents();
-  const contentObjects =
-    contents instanceof PDFArray ? contents.asArray() : contents ? [contents] : [];
+function hasTextOperatorsInPage(pdf: PDFDocument, pageIndex: number): boolean {
+  const page = pdf.getPage(pageIndex).node;
+  const visited = new Set<string>();
 
-  return contentObjects
-    .map((object) => (object instanceof PDFStream ? object : pdf.context.lookup(object)))
-    .filter((object): object is PDFStream => object instanceof PDFStream)
-    .map((stream) => decodePdfStream(stream))
-    .join("\n");
+  return (
+    hasTextOperatorsInContentObject(pdf, page.Contents(), visited) ||
+    hasTextOperatorsInResources(pdf, page.Resources(), visited)
+  );
+}
+
+function hasTextOperatorsInContentObject(
+  pdf: PDFDocument,
+  object: PDFArray | PDFRef | PDFStream | undefined,
+  visited: Set<string>,
+): boolean {
+  if (!object) {
+    return false;
+  }
+
+  if (object instanceof PDFArray) {
+    return object.asArray().some((entry) => {
+      const resolved = entry instanceof PDFRef ? pdf.context.lookup(entry) : entry;
+      return (
+        resolved instanceof PDFStream &&
+        hasTextOperatorsInStream(pdf, resolved, visited)
+      );
+    });
+  }
+
+  const resolved = object instanceof PDFRef ? pdf.context.lookup(object) : object;
+  return resolved instanceof PDFStream && hasTextOperatorsInStream(pdf, resolved, visited);
+}
+
+function hasTextOperatorsInStream(
+  pdf: PDFDocument,
+  stream: PDFStream,
+  visited: Set<string>,
+): boolean {
+  const ref = pdf.context.getObjectRef(stream);
+
+  if (ref) {
+    if (visited.has(ref.tag)) {
+      return false;
+    }
+    visited.add(ref.tag);
+  }
+
+  return (
+    hasTextOperator(decodePdfStream(stream)) ||
+    hasTextOperatorsInResources(
+      pdf,
+      stream.dict.lookupMaybe(PDFName.Resources, PDFDict),
+      visited,
+    )
+  );
+}
+
+function hasTextOperatorsInResources(
+  pdf: PDFDocument,
+  resources: PDFDict | undefined,
+  visited: Set<string>,
+): boolean {
+  const xObjects = resources?.lookupMaybe(PDFName.XObject, PDFDict);
+
+  if (!xObjects) {
+    return false;
+  }
+
+  return xObjects.values().some((xObject) => {
+    const resolved = xObject instanceof PDFRef ? pdf.context.lookup(xObject) : xObject;
+
+    if (!(resolved instanceof PDFStream) || !isFormXObject(resolved)) {
+      return false;
+    }
+
+    return hasTextOperatorsInStream(pdf, resolved, visited);
+  });
+}
+
+function isFormXObject(stream: PDFStream): boolean {
+  const subtype = stream.dict.lookupMaybe(PDFName.of("Subtype"), PDFName);
+
+  return subtype?.asString() === "/Form";
 }
 
 function decodePdfStream(stream: PDFStream): string {
@@ -631,8 +711,8 @@ function decodePdfStream(stream: PDFStream): string {
   return new TextDecoder().decode(stream.getContents());
 }
 
-function hasTextShowingOperator(content: string): boolean {
-  return /(?:^|\s)(?:Tj|TJ|'|")(?=\s|$)/.test(content);
+function hasTextOperator(content: string): boolean {
+  return TEXT_OPERATOR_PATTERN.test(content);
 }
 
 function uniqueRedactionTerms(terms: readonly string[]): readonly string[] {

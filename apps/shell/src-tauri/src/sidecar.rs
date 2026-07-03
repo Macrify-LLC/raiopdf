@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    net::{Shutdown, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -30,6 +30,8 @@ const ENGINE_LOG_FILE_NAME: &str = "engine.log";
 const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const ENGINE_LOG_GENERATIONS: usize = 2;
 const AUTH_HEADER_NAME: &str = "x-raiopdf-auth";
+const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth";
+const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
 const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
@@ -1233,6 +1235,12 @@ fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io::Res
 
     let (request_head, buffered_body) = read_request_head(&mut client)?;
 
+    if is_cors_preflight(&request_head) {
+        write_cors_preflight_response(&mut client, &request_head)?;
+        let _ = client.shutdown(Shutdown::Both);
+        return Ok(());
+    }
+
     if !request_has_valid_auth(&request_head, token) {
         client.write_all(
             b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -1241,13 +1249,18 @@ fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io::Res
         return Ok(());
     }
 
-    let mut upstream = TcpStream::connect(("127.0.0.1", engine_port))?;
-    upstream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    client.set_read_timeout(None)?;
+    client.set_write_timeout(None)?;
+
+    let upstream_addr = SocketAddr::from(([127, 0, 0, 1], engine_port));
+    let mut upstream = TcpStream::connect_timeout(&upstream_addr, Duration::from_secs(5))?;
     upstream.set_write_timeout(Some(Duration::from_secs(30)))?;
     upstream.write_all(&request_head)?;
     if !buffered_body.is_empty() {
         upstream.write_all(&buffered_body)?;
     }
+    upstream.set_read_timeout(None)?;
+    upstream.set_write_timeout(None)?;
 
     let mut upstream_writer = upstream.try_clone()?;
     let mut client_reader = client.try_clone()?;
@@ -1311,6 +1324,77 @@ fn request_has_valid_auth(request_head: &[u8], token: &str) -> bool {
 
         name.trim().eq_ignore_ascii_case(AUTH_HEADER_NAME) && value.trim() == token
     })
+}
+
+fn is_cors_preflight(request_head: &[u8]) -> bool {
+    request_method(request_head).is_some_and(|method| method.eq_ignore_ascii_case("OPTIONS"))
+        && request_header(request_head, "origin").is_some()
+        && request_header(request_head, "access-control-request-method").is_some()
+}
+
+fn write_cors_preflight_response(client: &mut TcpStream, request_head: &[u8]) -> io::Result<()> {
+    let Some(origin) = request_header(request_head, "origin") else {
+        client.write_all(
+            b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        )?;
+        return Ok(());
+    };
+
+    if !is_allowed_cors_origin(origin) {
+        client.write_all(
+            b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        )?;
+        return Ok(());
+    }
+
+    write!(
+        client,
+        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Headers: {CORS_ALLOW_HEADERS}\r\nAccess-Control-Allow-Methods: {CORS_ALLOW_METHODS}\r\nAccess-Control-Max-Age: 600\r\nVary: Origin\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    )
+}
+
+fn request_method(request_head: &[u8]) -> Option<&str> {
+    let request_head = std::str::from_utf8(request_head).ok()?;
+    request_head.lines().next()?.split_whitespace().next()
+}
+
+fn request_header<'a>(request_head: &'a [u8], header_name: &str) -> Option<&'a str> {
+    let request_head = std::str::from_utf8(request_head).ok()?;
+
+    request_head.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case(header_name) {
+            Some(value.trim())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_allowed_cors_origin(origin: &str) -> bool {
+    matches_origin_host(origin, "http", "tauri.localhost")
+        || matches_origin_host(origin, "https", "tauri.localhost")
+        || matches_origin_host(origin, "tauri", "localhost")
+        || matches_origin_host(origin, "http", "localhost")
+        || matches_origin_host(origin, "https", "localhost")
+        || matches_origin_host(origin, "http", "127.0.0.1")
+        || matches_origin_host(origin, "https", "127.0.0.1")
+        || matches_origin_host(origin, "http", "[::1]")
+        || matches_origin_host(origin, "https", "[::1]")
+}
+
+fn matches_origin_host(origin: &str, scheme: &str, host: &str) -> bool {
+    let Some(host_and_port) = origin.trim().strip_prefix(&format!("{scheme}://")) else {
+        return false;
+    };
+
+    host_and_port == host
+        || host_and_port.strip_prefix(host).is_some_and(|port| {
+            let digits = &port[1..];
+            port.starts_with(':')
+                && !digits.is_empty()
+                && digits.chars().all(|char| char.is_ascii_digit())
+        })
 }
 
 fn generate_auth_token() -> String {
@@ -1545,6 +1629,39 @@ mod tests {
         let response = send_proxy_request(
             proxy_port,
             b"POST /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"));
+        assert!(stub
+            .received_request()
+            .expect("stub should receive authorized request")
+            .starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
+    }
+
+    #[test]
+    fn auth_proxy_answers_cors_preflight_before_authorized_post() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let preflight = send_proxy_request(
+            proxy_port,
+            b"OPTIONS /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://tauri.localhost\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: X-RaioPDF-Auth, Content-Type\r\nConnection: close\r\n\r\n",
+        );
+
+        assert!(preflight.starts_with("HTTP/1.1 204 No Content"));
+        assert!(preflight.contains("Access-Control-Allow-Origin: http://tauri.localhost"));
+        assert!(preflight.contains("Access-Control-Allow-Headers: Content-Type, X-RaioPDF-Auth"));
+        assert!(preflight
+            .contains("Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS"));
+        assert_eq!(stub.received_request(), None);
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://tauri.localhost\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
         );
 
         stop_proxy(&Arc::new(Mutex::new(Some(proxy))));

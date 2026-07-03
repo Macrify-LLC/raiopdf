@@ -150,6 +150,29 @@ describe("legalTools", () => {
       metadata: { status: "pass" },
     });
   });
+
+  it("fails verification when a redacted page keeps text operators in a Form XObject", async () => {
+    const term = "Privileged Codename";
+    const sourcePdf = mockPdf([
+      textItem(term, 36, 140),
+    ]);
+
+    const areas = await findTextRedactionAreas(sourcePdf, term);
+    const redactedTerms = await collectRedactionAreaTexts(sourcePdf, areas);
+
+    const outputBytes = await addTextFormXObject(
+      await createRedactionFixturePdf({
+        annotationText: "",
+        visibleText: "",
+      }),
+    );
+    pdfjsMock.document = mockPdf([]);
+    const result = await verifyRedactionAreasClear(outputBytes, areas, redactedTerms);
+
+    expect(result.ok).toBe(false);
+    expect(result.rasterizedPages.status).toBe("fail");
+    expect(result.rasterizedPages.detail).toContain("text operators");
+  });
 });
 
 function mockPdf(items: unknown[]): PDFDocumentProxy {
@@ -243,6 +266,31 @@ async function scrubFixtureMetadata(bytes: Uint8Array): Promise<Uint8Array> {
   }
 
   return new Uint8Array(await pdf.save());
+}
+
+async function addTextFormXObject(bytes: Uint8Array): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const page = pdf.getPage(0);
+  const resources = page.node.Resources() ?? pdf.context.obj({});
+  const xObjects = resources.lookupMaybe(PDFName.XObject, PDFDict) ?? pdf.context.obj({});
+  const formStream = pdf.context.flateStream(
+    "BT /F1 12 Tf 1 0 0 1 12 12 Tm ET",
+    {
+      Type: "XObject",
+      Subtype: "Form",
+      BBox: [0, 0, 50, 50],
+      Resources: {},
+    },
+  );
+  const formRef = pdf.context.register(formStream);
+  const contentRef = pdf.context.register(pdf.context.flateStream("q /Fm1 Do Q"));
+
+  xObjects.set(PDFName.of("Fm1"), formRef);
+  resources.set(PDFName.XObject, xObjects);
+  page.node.set(PDFName.Resources, resources);
+  page.node.set(PDFName.Contents, contentRef);
+
+  return scrubFixtureMetadata(new Uint8Array(await pdf.save({ updateFieldAppearances: false })));
 }
 
 function isPdfRef(value: unknown): value is PDFRef {

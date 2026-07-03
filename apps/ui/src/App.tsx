@@ -36,6 +36,7 @@ import {
 } from "./components/PrepareForFilingWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
+import { FloatingDialog } from "./components/FloatingDialog";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -62,7 +63,13 @@ import {
   type PdfMetadataSummary,
   type SensitiveHit,
 } from "./lib/legalTools";
-import type { LegalToolId, OrganizeToolId } from "./components/ToolPanel";
+import {
+  BatesPanel,
+  PasswordsPanel,
+  ScrubMetadataPanel,
+  type LegalToolId,
+  type OrganizeToolId,
+} from "./components/ToolPanel";
 import type {
   BatesPanelState,
   RedactionPanelState,
@@ -79,6 +86,7 @@ const POINTS_PER_INCH = 72;
 declare global {
   interface Window {
     __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
   }
 }
 
@@ -179,6 +187,7 @@ export function App() {
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
+  const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
@@ -714,6 +723,28 @@ export function App() {
     [document.currentPage, document.pageCount, reorderPages, selectedIndexes],
   );
 
+  const reorderPagesFromGrid = useCallback(
+    async (pageOrder: readonly number[], nextCurrentPage: number) => {
+      const selected = new Set(selectedIndexes());
+      const nextSelectedPageIndexes = new Set<number>();
+      pageOrder.forEach((sourcePageIndex, nextPageIndex) => {
+        if (selected.has(sourcePageIndex)) {
+          nextSelectedPageIndexes.add(nextPageIndex);
+        }
+      });
+
+      await waitForTestDelay(window.__RAIOPDF_TEST_REORDER_DELAY_MS__ ?? 0);
+      const reordered = await reorderPages(pageOrder, nextCurrentPage);
+
+      if (reordered) {
+        setSelectedPageIndexes(nextSelectedPageIndexes);
+      }
+
+      return reordered;
+    },
+    [reorderPages, selectedIndexes],
+  );
+
   const saveToFile = useCallback((currentPath: string | null) => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
@@ -800,17 +831,21 @@ export function App() {
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
+    if (toolId === "rotate") {
+      rotateSelected();
+      setActiveOrganizeTool(null);
+      setActiveLegalTool(null);
+      return;
+    }
+
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
-  }, []);
+  }, [rotateSelected]);
 
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
-
-    if (activeLegalTool === "combine-exhibits") {
-      setActiveLegalTool(null);
-    }
-  }, [activeLegalTool]);
+    setActiveLegalTool(null);
+  }, []);
 
   const splitAndSavePages = useCallback(
     async (pageGroups: readonly (readonly number[])[]) => {
@@ -1012,18 +1047,59 @@ export function App() {
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
-      setBatesState({ applying: true, message: "Applying Bates numbers..." });
-      const applied = await batesStamp(options);
-      setBatesState({
-        applying: false,
-        message: applied
-          ? "Bates numbers applied."
-          : "Bates numbers could not be applied. Check the format and try again.",
-      });
+      if (batesApplyingRef.current) {
+        return true;
+      }
 
-      return applied;
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setBatesState({
+          applying: false,
+          message: "Open a PDF before applying Bates numbers.",
+        });
+        return false;
+      }
+
+      batesApplyingRef.current = true;
+      setBatesState({ applying: true, message: "Applying Bates numbers..." });
+      let applied = false;
+
+      try {
+        applied = await batesStamp(options, {
+          expectedOpenToken: sourceOpenToken,
+          expectedSourceBytes: sourceBytes,
+        });
+
+        if (applied) {
+          setBatesState({
+            applying: false,
+            message: "Bates numbers applied.",
+          });
+          return true;
+        }
+
+        if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          setBatesState({
+            applying: false,
+            message: "Bates numbers could not be applied. Check the format and try again.",
+          });
+          return false;
+        }
+
+        return true;
+      } finally {
+        batesApplyingRef.current = false;
+
+        if (!applied && isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          setBatesState((current) => (
+            current.applying ? { ...current, applying: false } : current
+          ));
+        }
+      }
     },
-    [batesStamp],
+    [batesStamp, document.bytes, getOpenToken, isCurrentDocument],
   );
 
   const runScanner = useCallback(() => {
@@ -1341,8 +1417,8 @@ export function App() {
   }, [document.bytes, prepareFilingCopy, setError]);
 
   const showPasswordProtection = useCallback(() => {
-    setActiveLegalTool(null);
-    setActiveOrganizeTool("passwords");
+    setActiveOrganizeTool(null);
+    setActiveLegalTool("passwords");
   }, []);
 
   const fitToPageWidth = useCallback(() => {
@@ -1471,29 +1547,26 @@ export function App() {
     <EditModeBar editing={editingForShell} />
   ) : null;
 
-  const workspace = activeLegalTool === "prepare-for-filing" ? (
-    <PrepareForFilingWorkspace
-      document={document}
-      pack={FLORIDA_PACK}
-      report={filingReport}
-      loadingReport={filingReportLoading}
-      progress={filingProgress}
-      result={filingResult}
-      pdfAAvailable={engineBridge.available}
-      onPrepare={prepareFilingCopy}
-    />
-  ) : activeLegalTool === "combine-exhibits" ? (
+  const workspace = activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
       onBuildBinder={buildBinder}
       onOpenRequested={openFile}
       onCancel={closeWorkspace}
     />
-  ) : activeOrganizeTool && activeOrganizeTool !== "passwords" ? (
+  ) : activeOrganizeTool === "pages" ? (
     <OrganizeWorkspace
-      flow={activeOrganizeTool as OrganizeFlowId}
+      flow="pages"
       document={document}
+      pdfDocument={pdfDocument}
+      selectedPageIndexes={selectedPageIndexes}
       onCancel={closeWorkspace}
+      onPageSelected={handleThumbnailClick}
+      onRotateSelected={rotateSelected}
+      onDeleteSelected={deleteSelected}
+      onMoveSelectedUp={() => moveSelected(-1)}
+      onMoveSelectedDown={() => moveSelected(1)}
+      onReorderPages={reorderPagesFromGrid}
       onMerge={mergeWithFiles}
       onExtract={extractPages}
       onSplit={splitAndSavePages}
@@ -1501,6 +1574,88 @@ export function App() {
       onCropResize={cropResize}
     />
   ) : null;
+
+  const overlay = getFloatingDialog();
+
+  function getFloatingDialog() {
+    if (activeLegalTool === "prepare-for-filing") {
+      return (
+        <FloatingDialog
+          title="Prepare for Filing"
+          eyebrow="Legal"
+          width="lg"
+          onClose={closeWorkspace}
+        >
+          <PrepareForFilingWorkspace
+            document={document}
+            pack={FLORIDA_PACK}
+            report={filingReport}
+            loadingReport={filingReportLoading}
+            progress={filingProgress}
+            result={filingResult}
+            pdfAAvailable={engineBridge.available}
+            onPrepare={prepareFilingCopy}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeLegalTool === "bates-numbering") {
+      return (
+        <FloatingDialog title="Bates Numbering" eyebrow="Legal" onClose={closeWorkspace}>
+          <BatesPanel
+            state={batesState}
+            hasDocument={Boolean(document.bytes)}
+            pageCount={document.pageCount}
+            onApply={applyBates}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeLegalTool === "scrub-metadata") {
+      return (
+        <FloatingDialog title="Scrub Metadata" eyebrow="Legal" onClose={closeWorkspace}>
+          <ScrubMetadataPanel
+            state={scrubMetadataPanel}
+            hasDocument={Boolean(document.bytes)}
+            onScrub={scrubDocumentMetadata}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeLegalTool === "passwords") {
+      return (
+        <FloatingDialog title="Passwords" eyebrow="Legal" onClose={closeWorkspace}>
+          <PasswordsPanel />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "merge" || activeOrganizeTool === "insert" || activeOrganizeTool === "crop") {
+      return (
+        <FloatingDialog
+          title={getOrganizeDialogTitle(activeOrganizeTool)}
+          eyebrow="Organize"
+          onClose={closeWorkspace}
+        >
+          <OrganizeWorkspace
+            flow={activeOrganizeTool as OrganizeFlowId}
+            document={document}
+            onCancel={closeWorkspace}
+            onMerge={mergeWithFiles}
+            onExtract={extractPages}
+            onSplit={splitAndSavePages}
+            onInsert={insertFile}
+            onCropResize={cropResize}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    return null;
+  }
 
   return (
     <>
@@ -1528,15 +1683,14 @@ export function App() {
         ocrAvailable={engineBridge.ocrAvailable}
         ocrStarting={engineBridge.starting}
         workspace={workspace}
+        overlay={overlay}
         activeLegalTool={activeLegalTool}
         activeOrganizeTool={activeOrganizeTool}
         onLegalToolSelected={selectLegalTool}
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
         redaction={redactionPanel}
-        bates={batesState}
         scanner={scannerState}
-        scrubMetadata={scrubMetadataPanel}
         pendingRedactions={pendingRedactions}
         modeBar={modeBar}
         editing={editingForShell}
@@ -1544,10 +1698,8 @@ export function App() {
         onRedactionAreaRemoved={removePendingRedaction}
         onConfirmRedactions={confirmRedactions}
         onCancelRedactions={cancelRedactions}
-        onApplyBates={applyBates}
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
-        onScrubMetadata={scrubDocumentMetadata}
       />
       {settingsOpen ? (
         <SettingsDialog onClose={() => setSettingsOpen(false)} />
@@ -1858,8 +2010,29 @@ function roundInches(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function getOrganizeDialogTitle(flow: Exclude<OrganizeFlowId, "pages">): string {
+  switch (flow) {
+    case "merge":
+      return "Merge PDFs";
+    case "insert":
+      return "Insert from File";
+    case "crop":
+      return "Crop / Resize";
+  }
+}
+
 function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
+}
+
+function waitForTestDelay(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
 }
 
 function isTauriRuntime(): boolean {

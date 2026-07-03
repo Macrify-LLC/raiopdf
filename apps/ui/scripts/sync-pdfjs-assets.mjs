@@ -1,6 +1,7 @@
 import { cp, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { URL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const pdfjsRoot = dirname(require.resolve("pdfjs-dist/package.json"));

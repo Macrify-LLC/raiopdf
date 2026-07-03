@@ -1,0 +1,98 @@
+.floating-dialog-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: start center;
+  padding: 56px var(--space-5) var(--space-5);
+  pointer-events: none;
+}
+
+.floating-dialog {
+  width: min(100%, 520px);
+  max-height: calc(100vh - 194px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--body);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.floating-dialog[data-width="sm"] {
+  width: min(100%, 420px);
+}
+
+.floating-dialog[data-width="lg"] {
+  width: min(100%, 720px);
+}
+
+.floating-dialog:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.floating-dialog__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  user-select: none;
+}
+
+.floating-dialog__header[data-draggable="true"] {
+  cursor: move;
+}
+
+.floating-dialog__eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.floating-dialog__header h2 {
+  margin: 1px 0 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+
+.floating-dialog__close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+
+.floating-dialog__close:hover {
+  border-color: var(--border);
+  background: var(--hover-ground);
+}
+
+.floating-dialog__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.floating-dialog__body {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+}

@@ -129,7 +129,7 @@ test("makes an image-only PDF searchable through the mocked desktop OCR bridge",
   await expect(makeSearchable).toBeDisabled();
   await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
   await expect(page.getByText("Verifying the text layer...")).toBeVisible();
-  await expect(page.getByLabel("Legal").getByText("Searchable — verified")).toBeVisible();
+  await expect(page.locator(".tool-panel").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByRole("contentinfo").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
   await expect.poll(() => getOcrCallCount(page)).toBe(1);
@@ -270,11 +270,87 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await openPdf(page, "bates.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
   await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
   await page.getByLabel("Prefix").fill("CASE");
   await page.getByLabel("Start").fill("42");
   await page.getByLabel("Digits").fill("4");
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
+});
+
+test("stacked floating dialogs let Escape close only the top dialog", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "stacked-dialogs.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.locator(".tool-panel").getByRole("button", { name: "Sign" }).click();
+  const signatureDialog = page.getByRole("dialog", { name: "Signature", exact: true });
+  await expect(signatureDialog).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(signatureDialog).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeHidden();
+});
+
+test("organize page grid multi-select extracts selected pages round trip", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "organize-extract.pdf", await createPdf([200, 210, 220, 230]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize Pages" }).click();
+  await expect(page.getByRole("heading", { name: "Organize Pages" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Organize page 2" }).click();
+  await page.keyboard.down(process.platform === "darwin" ? "Meta" : "Control");
+  await page.getByRole("button", { name: "Organize page 4" }).click();
+  await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
+
+  await page.getByRole("button", { name: "Extract" }).click();
+  await expect(page.getByText("Page 1 / 2")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [210, 230],
+    rotations: [0, 0],
+  });
+});
+
+test("organize page grid ignores rapid second drag while a reorder is pending", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as typeof window & {
+      __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
+    }).__RAIOPDF_TEST_REORDER_DELAY_MS__ = 250;
+  });
+  await page.goto("/");
+  await openPdf(page, "organize-rapid-drag.pdf", await createPdf([200, 210, 220, 230]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize Pages" }).click();
+
+  const grid = page.getByRole("list", { name: "Page grid" });
+  await page.getByRole("button", { name: "Organize page 1" })
+    .dragTo(page.getByRole("button", { name: "Organize page 3" }));
+  await expect(grid).toHaveAttribute("aria-busy", "true");
+
+  await page.getByRole("button", { name: "Organize page 4" })
+    .dragTo(page.getByRole("button", { name: "Organize page 2" }), { force: true });
+  await expect(grid).toHaveAttribute("aria-busy", "false");
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [210, 200, 220, 230],
+    rotations: [0, 0, 0, 0],
+  });
 });
 
 test("prepares an oversize landscape filing copy and re-runs preflight on output", async ({ page }) => {
@@ -294,7 +370,7 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await openPdf(page, "landscape-oversize.pdf", sourcePdf);
   await page.getByRole("button", { name: "Prepare for Filing" }).click();
 
-  await expect(page.getByRole("heading", { name: "Prepare for Filing" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
   await expect(page.getByText("Florida — Rule 2.520/2.525 + ePortal")).toBeVisible();
   await expect(page.getByText("These checks are guidance only")).toBeVisible();
   await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();
@@ -356,10 +432,13 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await page.getByRole("button", { name: "Save Note" }).click();
   await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(1);
 
-  // The Edit panel group lists all pending items with per-item remove.
+  // The Edit panel group lists content edits only; comments live in Comment.
   const toolPanel = page.locator(".tool-panel");
   await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
-  await expect(toolPanel.getByText("3 pending edits")).toBeVisible();
+  await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
+  await expect(
+    toolPanel.locator("#accordion-panel-edit").getByText("Check exhibit reference"),
+  ).toHaveCount(0);
 
   // The Comment panel group lists the note with its page and excerpt.
   await toolPanel.getByRole("button", { name: "Comment", exact: true }).click();
@@ -371,7 +450,7 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   const saved = await savePdf(page);
 
   // The pending list clears only on verified success.
-  await expect(toolPanel.getByText("3 pending edits")).toHaveCount(0);
+  await expect(toolPanel.getByText("2 pending edits")).toHaveCount(0);
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 
   // Saved bytes carry the baked text box, the highlight fill, and a live

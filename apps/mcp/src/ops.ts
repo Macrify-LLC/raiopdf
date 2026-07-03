@@ -1,9 +1,9 @@
 import { promises as fs } from "node:fs";
-import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import type { PdfDocumentHandle, PdfEngine } from "@raiopdf/engine-api";
 import type { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
-import type { EngineHandle } from "./engine.js";
+import { getLocalEngine, type EngineHandle } from "./engine.js";
 import { successResult, type StructuredToolResult } from "./format.js";
-import { prepareOutput, resolveInput } from "./paths.js";
+import { prepareOutput, resolveInput, type PreparedOutput } from "./paths.js";
 
 export type OpProduction = {
   /** The document to save to the output path. */
@@ -14,31 +14,24 @@ export type OpProduction = {
   extra?: Record<string, unknown>;
 };
 
-/**
- * Shared runner for file-in / file-out engine tools. Applies the hardened path
- * policy (realpath inputs, exclusive no-clobber output via temp+atomic rename),
- * opens each input, runs `produce`, saves the produced document to the output,
- * and always closes every opened document. On any failure the partial output is
- * removed.
- */
-export async function runOutputOp(
-  engineHandle: EngineHandle,
+/** The engine surface the shared runner needs, satisfied by both engines. */
+type EngineOps = Pick<PdfEngine, "open" | "close" | "saveToBytes">;
+
+async function runOutputOpCore<E extends EngineOps>(
+  getEngine: () => Promise<E>,
   inputPaths: readonly string[],
   outputPath: string,
-  produce: (
-    engine: SidecarPdfEngine,
-    documents: PdfDocumentHandle[],
-  ) => Promise<OpProduction>,
+  produce: (engine: E, documents: PdfDocumentHandle[]) => Promise<OpProduction>,
 ): Promise<StructuredToolResult> {
   const resolvedInputs = await Promise.all(inputPaths.map((path) => resolveInput(path)));
   const output = await prepareOutput(outputPath);
   const opened: PdfDocumentHandle[] = [];
-  let engine: SidecarPdfEngine | undefined;
+  let engine: E | undefined;
   let produced: PdfDocumentHandle | undefined;
 
   try {
-    // Inside the try so a sidecar-start failure still aborts the reserved output.
-    engine = await engineHandle.getEngine();
+    // Inside the try so an engine-start failure still aborts the reserved output.
+    engine = await getEngine();
     for (const input of resolvedInputs) {
       const bytes = await fs.readFile(input.realPath);
       opened.push(await engine.open(bytes));
@@ -58,7 +51,6 @@ export async function runOutputOp(
     if (engine !== undefined) {
       const toClose = [...opened];
       if (produced !== undefined && !opened.includes(produced)) {
-        // Close the freshly produced handle too, even if save/write/commit failed.
         toClose.push(produced);
       }
       for (const document of toClose) {
@@ -68,7 +60,22 @@ export async function runOutputOp(
   }
 }
 
-/** Single-input variant of {@link runOutputOp} that hands `produce` one document. */
+// ---- sidecar (engine-host) runners ----
+
+export function runOutputOp(
+  engineHandle: EngineHandle,
+  inputPaths: readonly string[],
+  outputPath: string,
+  produce: (engine: SidecarPdfEngine, documents: PdfDocumentHandle[]) => Promise<OpProduction>,
+): Promise<StructuredToolResult> {
+  return runOutputOpCore<SidecarPdfEngine>(
+    () => engineHandle.getEngine(),
+    inputPaths,
+    outputPath,
+    produce,
+  );
+}
+
 export function runSingleOutputOp(
   engineHandle: EngineHandle,
   inputPath: string,
@@ -84,9 +91,38 @@ export function runSingleOutputOp(
   });
 }
 
+// ---- local (in-process pdf-lib) runners ----
+
+export function runLocalOutputOp(
+  inputPaths: readonly string[],
+  outputPath: string,
+  produce: (engine: PdfEngine, documents: PdfDocumentHandle[]) => Promise<OpProduction>,
+): Promise<StructuredToolResult> {
+  return runOutputOpCore<PdfEngine>(
+    () => Promise.resolve(getLocalEngine()),
+    inputPaths,
+    outputPath,
+    produce,
+  );
+}
+
+export function runLocalSingleOutputOp(
+  inputPath: string,
+  outputPath: string,
+  produce: (engine: PdfEngine, document: PdfDocumentHandle) => Promise<OpProduction>,
+): Promise<StructuredToolResult> {
+  return runLocalOutputOp([inputPath], outputPath, async (engine, documents) => {
+    const document = documents[0];
+    if (document === undefined) {
+      throw new Error("Expected exactly one opened input document.");
+    }
+    return produce(engine, document);
+  });
+}
+
 /** Resolve a `"all" | number[]` page selection to concrete zero-based indexes. */
 export async function resolvePageIndexes(
-  engine: SidecarPdfEngine,
+  engine: Pick<PdfEngine, "pageCount">,
   document: PdfDocumentHandle,
   pages: readonly number[] | "all",
 ): Promise<number[]> {
@@ -95,4 +131,40 @@ export async function resolvePageIndexes(
     return Array.from({ length: count }, (_, index) => index);
   }
   return [...pages];
+}
+
+/**
+ * Write several output files all-or-nothing: every target is reserved
+ * (exclusive-create, no clobber) and written before any is committed, and any
+ * failure aborts every reservation. Used by the multi-output tools (split,
+ * bates_stamp_folder).
+ */
+export async function writeManyOutputs(
+  outputs: readonly { path: string; bytes: Uint8Array }[],
+): Promise<string[]> {
+  const prepared: PreparedOutput[] = [];
+  const committed: string[] = [];
+  try {
+    for (const output of outputs) {
+      const handle = await prepareOutput(output.path);
+      prepared.push(handle);
+      await handle.write(output.bytes);
+    }
+    for (const handle of prepared) {
+      await handle.commit();
+      committed.push(handle.outputPath);
+    }
+    return committed;
+  } catch (error) {
+    // abort() cleans up any not-yet-committed reservation + temp file.
+    for (const handle of prepared) {
+      await handle.abort().catch(() => undefined);
+    }
+    // A commit can fail after earlier ones already renamed into place; remove
+    // those so the batch is best-effort all-or-nothing.
+    for (const outputPath of committed) {
+      await fs.rm(outputPath, { force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
 }

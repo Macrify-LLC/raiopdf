@@ -47,6 +47,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@raiopdf/engine-api':
+        specifier: workspace:*
+        version: link:../../packages/engine-api
+      '@raiopdf/engine-local':
+        specifier: workspace:*
+        version: link:../../packages/engine-local
       '@raiopdf/engine-sidecar':
         specifier: workspace:*
         version: link:../../packages/engine-sidecar

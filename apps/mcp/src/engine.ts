@@ -3,6 +3,8 @@ import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import type { PdfEngine } from "@raiopdf/engine-api";
+import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
 import { z } from "zod";
 
@@ -103,6 +105,19 @@ export async function healthProbe(): Promise<EngineHealth> {
 
 export async function disposeEngine(): Promise<void> {
   await defaultEngineHandle.dispose();
+}
+
+let localEngine: PdfEngine | undefined;
+
+/**
+ * The in-process pdf-lib engine for pure-local operations (binder assembly,
+ * Bates numbering, page numbers, split, extract). Runs entirely in Node with no
+ * engine-host / Stirling sidecar — so these tools work even when the engine
+ * payload is unavailable.
+ */
+export function getLocalEngine(): PdfEngine {
+  localEngine ??= createLocalPdfEngine();
+  return localEngine;
 }
 
 async function startEngineHost(): Promise<StartedEngine> {

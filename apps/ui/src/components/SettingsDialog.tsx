@@ -13,6 +13,8 @@ export interface SettingsDialogProps {
   /** Set when Preferences was opened via "Open Raio to AI..." specifically. */
   focusSection?: SettingsFocusSection | null | undefined;
   onFocusSectionHandled?: (() => void) | undefined;
+  diagnosticsStatus?: string | null | undefined;
+  onExportDiagnostics: () => void;
 }
 
 export function SettingsDialog({
@@ -22,6 +24,8 @@ export function SettingsDialog({
   mcpPath,
   focusSection,
   onFocusSectionHandled,
+  diagnosticsStatus,
+  onExportDiagnostics,
 }: SettingsDialogProps) {
   return (
     <div className="settings-dialog" role="presentation" onMouseDown={onClose}>
@@ -60,6 +64,24 @@ export function SettingsDialog({
               <option value="florida">Florida</option>
             </select>
           </label>
+          <section className="settings-dialog__section" aria-labelledby="diagnostics-heading">
+            <span>
+              <strong id="diagnostics-heading">Diagnostics</strong>
+              <small>Save a scrubbed local report for troubleshooting</small>
+            </span>
+            <button
+              type="button"
+              className="settings-dialog__button"
+              onClick={onExportDiagnostics}
+            >
+              Export diagnostics...
+            </button>
+            {diagnosticsStatus ? (
+              <small className="settings-dialog__status" role="status">
+                {diagnosticsStatus}
+              </small>
+            ) : null}
+          </section>
 
           <OpenRaioToAiSection
             enabled={mcpEnabled}

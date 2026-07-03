@@ -358,6 +358,12 @@ pub struct EngineStopResponse {
     stopped: bool,
 }
 
+impl EngineStopResponse {
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineState {
     status: EngineStatus,

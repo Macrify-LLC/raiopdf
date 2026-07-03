@@ -265,6 +265,7 @@ export function App() {
   >(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [mcpPath, setMcpPath] = useState<string | null>(null);
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
   useEffect(() => {
     if (!settingsOpen) {
       return;
@@ -310,6 +311,18 @@ export function App() {
         }
       }
     });
+  }, []);
+  const handleExportDiagnostics = useCallback(() => {
+    setDiagnosticsStatus("Preparing diagnostics...");
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const result = await invoke<{ path: string } | null>("diagnostics_export_dialog");
+        setDiagnosticsStatus(result ? `Saved to ${result.path}` : "Export canceled.");
+      } catch {
+        setDiagnosticsStatus("Diagnostics could not be exported.");
+      }
+    })();
   }, []);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
@@ -2140,6 +2153,9 @@ export function App() {
           setActiveLegalTool(null);
           setActiveOrganizeTool("properties");
           break;
+        case "file:export-diagnostics":
+          handleExportDiagnostics();
+          break;
         case "file:preferences":
           setSettingsFocusSection(null);
           setSettingsOpen(true);
@@ -2168,6 +2184,7 @@ export function App() {
       document.zoom,
       exportPdfA,
       fitToPageWidth,
+      handleExportDiagnostics,
       openFile,
       printDocument,
       save,
@@ -2509,6 +2526,8 @@ export function App() {
           mcpPath={mcpPath}
           focusSection={settingsFocusSection}
           onFocusSectionHandled={() => setSettingsFocusSection(null)}
+          diagnosticsStatus={diagnosticsStatus}
+          onExportDiagnostics={handleExportDiagnostics}
         />
       ) : null}
     </>

@@ -1,4 +1,5 @@
 import { createKitIcon, RpIcon, type RpIconProps } from "./RpIcon";
+export { TextBoxIcon } from "./TextBoxIcon";
 import type { IconProps } from "./types";
 
 export interface BoltIconProps extends IconProps {
@@ -43,7 +44,6 @@ export const PrintIcon = createKitIcon("print");
 export const UndoIcon = createKitIcon("undo");
 export const SelectTextIcon = createKitIcon("select-text");
 export const HighlightIcon = createKitIcon("highlight");
-export const TextBoxIcon = createKitIcon("text-box");
 export const EditIcon = createKitIcon("edit");
 export const OrganizeIcon = createKitIcon("organize");
 export const CommentIcon = createKitIcon("comment");

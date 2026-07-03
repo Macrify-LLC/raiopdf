@@ -44,7 +44,6 @@ type RpIconName =
   | "shield-check-bare"
   | "slip-sheet"
   | "split"
-  | "text-box"
   | "undo";
 
 const symbolChildrenById = parseSprite(spriteMarkup);

@@ -88,6 +88,7 @@ export function CanvasWell({
   const stageRef = useRef<HTMLDivElement>(null);
   const pageFrameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderRunRef = useRef(0);
   const wheelZoomAnchorRef = useRef<{
     clientX: number;
     clientY: number;
@@ -208,6 +209,10 @@ export function CanvasWell({
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
 
+    const renderRun = renderRunRef.current + 1;
+    renderRunRef.current = renderRun;
+    let cancelled = false;
+
     const renderTask = page.render({ canvas, viewport });
     setRenderPending(true);
     void renderTask.promise
@@ -218,10 +223,13 @@ export function CanvasWell({
         }
       })
       .finally(() => {
-        setRenderPending(false);
+        if (!cancelled && renderRunRef.current === renderRun) {
+          setRenderPending(false);
+        }
       });
 
     return () => {
+      cancelled = true;
       renderTask.cancel();
     };
   }, [onRenderError, page, viewport]);

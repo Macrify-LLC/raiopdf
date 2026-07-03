@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["apps/shell/src-tauri", "crates/engine-sidecar-core"]
+members = [
+  "apps/engine-host",
+  "apps/shell/src-tauri",
+  "crates/engine-sidecar-core",
+]
 
 [patch.crates-io]
 # Tauri currently resolves plist 1.9.0, which hard-pins quick-xml 0.39.x.

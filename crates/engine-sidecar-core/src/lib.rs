@@ -305,7 +305,7 @@ pub struct EngineStartResponse {
 }
 
 impl EngineStartResponse {
-    fn disabled(ocr_toolchain: OcrToolchainStatus) -> Self {
+    fn disabled_response(ocr_toolchain: OcrToolchainStatus) -> Self {
         Self {
             disabled: true,
             port: None,
@@ -321,6 +321,18 @@ impl EngineStartResponse {
             token: Some(token.to_string()),
             ocr_toolchain,
         }
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    pub fn disabled(&self) -> bool {
+        self.disabled
     }
 }
 
@@ -427,6 +439,7 @@ impl IdleShutdownTimer {
 #[derive(Debug)]
 pub struct IdleShutdownState {
     timer: IdleShutdownTimer,
+    active_requests: usize,
     stopped: bool,
 }
 
@@ -475,6 +488,7 @@ impl SidecarManager {
         let idle = Arc::new((
             Mutex::new(IdleShutdownState {
                 timer: IdleShutdownTimer::new(Instant::now(), config.idle_shutdown),
+                active_requests: 0,
                 stopped: false,
             }),
             Condvar::new(),
@@ -505,7 +519,9 @@ impl SidecarManager {
 
         if self.config.disabled() {
             set_state(&self.state, EngineState::disabled());
-            return Ok(EngineStartResponse::disabled(self.config.ocr_toolchain()));
+            return Ok(EngineStartResponse::disabled_response(
+                self.config.ocr_toolchain(),
+            ));
         }
 
         let _guard = self
@@ -626,13 +642,17 @@ impl SidecarManager {
             &self.child,
         ) {
             StartupOutcome::Ready => {
-                let proxy = start_auth_proxy(proxy_listener, engine_port, self.auth_token.clone())
-                    .map_err(|error| {
-                        let message =
-                            format!("failed to start authenticated engine proxy: {error}");
-                        set_state(&self.state, EngineState::error(Some(proxy_port), &message));
-                        StartAttemptError::Stopped(message)
-                    })?;
+                let proxy = start_auth_proxy_with_idle(
+                    proxy_listener,
+                    engine_port,
+                    self.auth_token.clone(),
+                    Arc::clone(&self.idle),
+                )
+                .map_err(|error| {
+                    let message = format!("failed to start authenticated engine proxy: {error}");
+                    set_state(&self.state, EngineState::error(Some(proxy_port), &message));
+                    StartAttemptError::Stopped(message)
+                })?;
                 *self.proxy.lock().expect("sidecar proxy lock poisoned") = Some(proxy);
                 set_state(&self.state, EngineState::ready(proxy_port));
                 spawn_child_supervisor(
@@ -1116,6 +1136,14 @@ pub fn start_idle_supervisor(
             return;
         }
 
+        if idle_state.active_requests > 0 {
+            idle_state = wake_idle
+                .wait(idle_state)
+                .expect("sidecar idle lock poisoned");
+            drop(idle_state);
+            continue;
+        }
+
         if !idle_state.timer.expired(Instant::now()) {
             continue;
         }
@@ -1171,12 +1199,32 @@ pub fn start_auth_proxy(
     engine_port: u16,
     token: String,
 ) -> io::Result<ProxyHandle> {
+    start_auth_proxy_inner(listener, engine_port, token, None)
+}
+
+fn start_auth_proxy_with_idle(
+    listener: TcpListener,
+    engine_port: u16,
+    token: String,
+    idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
+) -> io::Result<ProxyHandle> {
+    start_auth_proxy_inner(listener, engine_port, token, Some(idle))
+}
+
+fn start_auth_proxy_inner(
+    listener: TcpListener,
+    engine_port: u16,
+    token: String,
+    idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
+) -> io::Result<ProxyHandle> {
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_for_thread = Arc::clone(&shutdown);
 
-    thread::spawn(move || run_auth_proxy(listener, engine_port, token, shutdown_for_thread));
+    thread::spawn(move || {
+        run_auth_proxy_inner(listener, engine_port, token, shutdown_for_thread, idle);
+    });
 
     Ok(ProxyHandle { port, shutdown })
 }
@@ -1187,12 +1235,28 @@ pub fn run_auth_proxy(
     token: String,
     shutdown: Arc<AtomicBool>,
 ) {
+    run_auth_proxy_inner(listener, engine_port, token, shutdown, None);
+}
+
+fn run_auth_proxy_inner(
+    listener: TcpListener,
+    engine_port: u16,
+    token: String,
+    shutdown: Arc<AtomicBool>,
+    idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
+) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
                 let request_token = token.clone();
+                let request_idle = idle.as_ref().map(Arc::clone);
                 thread::spawn(move || {
-                    let _ = proxy_client(client, engine_port, &request_token);
+                    let _ = proxy_client_with_activity(
+                        client,
+                        engine_port,
+                        &request_token,
+                        request_idle,
+                    );
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -1212,7 +1276,16 @@ fn stop_proxy(proxy: &Arc<Mutex<Option<ProxyHandle>>>) {
     let _ = TcpStream::connect(("127.0.0.1", proxy.port));
 }
 
-pub fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io::Result<()> {
+pub fn proxy_client(client: TcpStream, engine_port: u16, token: &str) -> io::Result<()> {
+    proxy_client_with_activity(client, engine_port, token, None)
+}
+
+fn proxy_client_with_activity(
+    mut client: TcpStream,
+    engine_port: u16,
+    token: &str,
+    idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
+) -> io::Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     client.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -1234,6 +1307,7 @@ pub fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io:
 
     client.set_read_timeout(None)?;
     client.set_write_timeout(None)?;
+    let _active_request = idle.map(ActiveProxyRequest::new);
 
     let upstream_addr = SocketAddr::from(([127, 0, 0, 1], engine_port));
     let mut upstream = TcpStream::connect_timeout(&upstream_addr, Duration::from_secs(5))?;
@@ -1257,6 +1331,32 @@ pub fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io:
     let _ = copy_request.join();
 
     Ok(())
+}
+
+struct ActiveProxyRequest {
+    idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
+}
+
+impl ActiveProxyRequest {
+    fn new(idle: Arc<(Mutex<IdleShutdownState>, Condvar)>) -> Self {
+        let (idle_lock, wake_idle) = &*idle;
+        let mut idle_state = idle_lock.lock().expect("sidecar idle lock poisoned");
+        idle_state.active_requests += 1;
+        wake_idle.notify_one();
+        drop(idle_state);
+
+        Self { idle }
+    }
+}
+
+impl Drop for ActiveProxyRequest {
+    fn drop(&mut self) {
+        let (idle_lock, wake_idle) = &*self.idle;
+        let mut idle_state = idle_lock.lock().expect("sidecar idle lock poisoned");
+        idle_state.active_requests = idle_state.active_requests.saturating_sub(1);
+        idle_state.timer.touch(Instant::now());
+        wake_idle.notify_one();
+    }
 }
 
 pub fn read_request_head(stream: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
@@ -1776,6 +1876,50 @@ mod tests {
     }
 
     #[test]
+    fn active_proxy_request_suppresses_idle_shutdown() {
+        let idle = test_idle(Some(Duration::from_millis(20)));
+        let state = Arc::new(Mutex::new(EngineState::ready(49152)));
+        let child = Arc::new(Mutex::new(Some(spawn_sleep_child())));
+        let proxy = Arc::new(Mutex::new(None));
+        let lifecycle_lock = Arc::new(Mutex::new(()));
+        let active_request = ActiveProxyRequest::new(Arc::clone(&idle));
+
+        start_idle_supervisor(
+            Arc::clone(&idle),
+            state,
+            Arc::clone(&child),
+            proxy,
+            lifecycle_lock,
+            false,
+        );
+
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            child
+                .lock()
+                .expect("child lock")
+                .as_mut()
+                .expect("child should still be tracked")
+                .try_wait()
+                .expect("child status")
+                .is_none(),
+            "idle supervisor should not kill an in-flight proxied request"
+        );
+
+        drop(active_request);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.lock().expect("child lock").is_some() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        stop_idle(&idle);
+        assert!(
+            child.lock().expect("child lock").is_none(),
+            "idle supervisor should kill after the proxied request completes"
+        );
+    }
+
+    #[test]
     fn payload_resolution_builds_launch_spec_and_settings_without_spawning() {
         let root = test_temp_dir("payload-launch");
         let exe_dir = root.join("bin");
@@ -2007,6 +2151,41 @@ mod tests {
         let path = env::temp_dir().join(unique);
         fs::create_dir_all(&path).expect("temp dir should be created");
         path
+    }
+
+    fn test_idle(shutdown_after: Option<Duration>) -> Arc<(Mutex<IdleShutdownState>, Condvar)> {
+        Arc::new((
+            Mutex::new(IdleShutdownState {
+                timer: IdleShutdownTimer::new(Instant::now(), shutdown_after),
+                active_requests: 0,
+                stopped: false,
+            }),
+            Condvar::new(),
+        ))
+    }
+
+    fn stop_idle(idle: &Arc<(Mutex<IdleShutdownState>, Condvar)>) {
+        let (idle_lock, wake_idle) = &**idle;
+        let mut idle_state = idle_lock.lock().expect("idle lock");
+        idle_state.stopped = true;
+        wake_idle.notify_one();
+    }
+
+    #[cfg(unix)]
+    fn spawn_sleep_child() -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .spawn()
+            .expect("sleep child should spawn")
+    }
+
+    #[cfg(windows)]
+    fn spawn_sleep_child() -> Child {
+        Command::new("cmd")
+            .args(["/C", "ping -n 5 127.0.0.1 >NUL"])
+            .spawn()
+            .expect("sleep child should spawn")
     }
 
     fn create_payload_tree(payload: &Path) {

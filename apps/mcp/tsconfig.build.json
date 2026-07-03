@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@raiopdf/engine-sidecar": ["packages/engine-sidecar/dist/index.d.ts"],
+      "@raiopdf/engine-api": ["packages/engine-api/dist/index.d.ts"],
+      "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/dist/index.d.ts"]
+    },
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

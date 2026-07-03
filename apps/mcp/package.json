@@ -1,0 +1,23 @@
+{
+  "name": "@raiopdf/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "raiopdf-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@raiopdf/engine-sidecar": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "pdf-lib": "^1.17.1"
+  }
+}

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { degrees, PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EngineHandle } from "../src/engine.js";
 import { handlePrepareForFiling } from "../src/tools/filing.js";
@@ -18,9 +18,16 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-async function makePdf(name: string, widthIn: number, heightIn: number, withText: boolean): Promise<string> {
+async function makePdf(
+  name: string,
+  widthIn: number,
+  heightIn: number,
+  withText: boolean,
+  rotateDegrees = 0,
+): Promise<string> {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([widthIn * 72, heightIn * 72]);
+  page.setRotation(degrees(rotateDegrees));
   if (withText) {
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     page.drawText("Filing document text", { x: 20, y: 40, size: 10, font });
@@ -57,6 +64,19 @@ describe("prepare_for_filing", () => {
     const checks = content.checks as Check[];
     const anyNonPass = checks.some((check) => check.status !== "pass");
     expect(content.confirmedReady === false || anyNonPass).toBe(true);
+  });
+
+  it("treats a 90-degree rotated letter page as landscape for Florida preflight", async () => {
+    const input = await makePdf("rotated-letter.pdf", 8.5, 11, true, 90);
+    const content = structured(await handlePrepareForFiling({ input }, engine));
+    const checks = content.checks as Check[];
+    const pageSizeCheck = checks.find((check) => check.label === "Letter portrait pages");
+
+    expect(pageSizeCheck).toMatchObject({
+      status: "warn",
+      detail: "Pages 1 are not 8.5 x 11 in portrait.",
+    });
+    expect(content.noBlockingIssues).toBe(false);
   });
 
   it("never reports confirmed-ready while clerk-stamp / PDF-A remain unverified", async () => {

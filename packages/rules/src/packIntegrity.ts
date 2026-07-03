@@ -1,4 +1,4 @@
-import type { JurisdictionPackId } from "./types";
+import type { JurisdictionPackId } from "./types.js";
 
 export type PackManifest = {
   version: 1;

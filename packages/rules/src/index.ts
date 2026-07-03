@@ -6,14 +6,14 @@ export {
   listPacks,
   UNKNOWN_PACK_ID,
   unknownPack,
-} from "./registry";
+} from "./registry.js";
 export {
   canonicalPackJson,
   packJsonSha256,
   verifyAppDataPackIntegrity,
   verifyBundledPackIntegrity,
-} from "./packIntegrity";
-export { preflight, shouldConvertToPdfA } from "./preflight";
+} from "./packIntegrity.js";
+export { preflight, shouldConvertToPdfA } from "./preflight.js";
 export type {
   ConstraintApplicability,
   ConstraintEntry,
@@ -32,11 +32,11 @@ export type {
   PreflightStatus,
   RectInches,
   RulePreflightStatus,
-} from "./types";
+} from "./types.js";
 export type {
   AppDataPackIntegrityResult,
   PackAcknowledgmentStore,
   PackIntegrityIssue,
   PackManifest,
   PackManifestEntry,
-} from "./packIntegrity";
+} from "./packIntegrity.js";

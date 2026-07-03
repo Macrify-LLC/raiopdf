@@ -8,7 +8,7 @@ import type {
   PageSizeInches,
   PdfARequirement,
   RectInches,
-} from "./types";
+} from "./types.js";
 
 export type PackJsonSource = {
   readPackJson: (packId: JurisdictionPackId) => string | undefined;

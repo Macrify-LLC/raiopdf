@@ -18,8 +18,13 @@ export async function buildDocumentFacts(bytes: Uint8Array): Promise<DocumentFac
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const pages: PageFacts[] = pdf.getPages().map((page, pageIndex) => {
     // Pass unrounded inches so the rules engine's own tolerance decides pass/fail.
-    const widthIn = page.getWidth() / POINTS_PER_INCH;
-    const heightIn = page.getHeight() / POINTS_PER_INCH;
+    const rawWidthIn = page.getWidth() / POINTS_PER_INCH;
+    const rawHeightIn = page.getHeight() / POINTS_PER_INCH;
+    const rotation = normalizeRotation(page.getRotation().angle);
+    const sideways = rotation === 90 || rotation === 270;
+    const widthIn = sideways ? rawHeightIn : rawWidthIn;
+    const heightIn = sideways ? rawWidthIn : rawHeightIn;
+
     return {
       pageIndex,
       size: { w: widthIn, h: heightIn, in: true },
@@ -36,4 +41,8 @@ export async function buildDocumentFacts(bytes: Uint8Array): Promise<DocumentFac
     fileBytes: bytes.length,
     searchableText: text.length > 0,
   };
+}
+
+function normalizeRotation(angle: number): number {
+  return ((angle % 360) + 360) % 360;
 }

@@ -1,1 +1,1 @@
-export { bundledPackSource, loadPackFromSource } from "./packLoader.node";
+export { bundledPackSource, loadPackFromSource } from "./packLoader.node.js";

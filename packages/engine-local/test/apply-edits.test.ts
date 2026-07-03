@@ -6,6 +6,7 @@ import {
   PDFDocument,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFRawStream,
   PDFRef,
   PDFStream,
@@ -173,6 +174,49 @@ describe("LocalPdfEngine.applyEdits", () => {
       readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
       { x: 60, y: 20 },
     );
+  });
+
+  it("renders custom highlight, text, and ink styles into page content", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "highlight",
+        pageIndex: 0,
+        rects: [{ x: 40, y: 100, w: 120, h: 14 }],
+        color: { r: 0.2, g: 0.7, b: 0.1 },
+        opacity: 0.65,
+      },
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 72, y: 700, w: 200, h: 40 },
+        text: "Custom text",
+        color: { r: 0.8, g: 0.1, b: 0.2 },
+      },
+      {
+        type: "ink",
+        pageIndex: 0,
+        strokes: [
+          [
+            { x: 10, y: 10 },
+            { x: 30, y: 40 },
+          ],
+        ],
+        strokeWidthPt: 5,
+        color: { r: 0.1, g: 0.2, b: 0.9 },
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const pdf = await PDFDocument.load(bytes);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [0.2, 0.7, 0.1]);
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [0.8, 0.1, 0.2]);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.1, 0.2, 0.9]);
+    expect(readExtGStateFillAlphaValues(pdf, 0)).toContain(0.65);
+    expect(content).toMatch(/\b5 w\b/);
   });
 
   it("stores comment edits as real /Text annotations in /Annots", async () => {
@@ -451,6 +495,51 @@ function expectSomePointWithin1Pt(
       `Expected a point within 1pt of (${expected.x}, ${expected.y}); saw ${JSON.stringify(points)}`,
     );
   }
+}
+
+function expectSomeOperandsWithin(
+  operands: ReadonlyArray<readonly number[]>,
+  expected: readonly number[],
+  tolerance = 0.001,
+): void {
+  const found = operands.some(
+    (actual) =>
+      actual.length === expected.length &&
+      actual.every((value, index) => Math.abs(value - expected[index]!) <= tolerance),
+  );
+
+  if (!found) {
+    throw new Error(
+      `Expected operands within ${tolerance} of ${JSON.stringify(expected)}; saw ${JSON.stringify(operands)}`,
+    );
+  }
+}
+
+function readExtGStateFillAlphaValues(pdf: PDFDocument, pageIndex: number): number[] {
+  const resources = pdf.getPage(pageIndex).node.Resources();
+  const extGState = resources?.lookupMaybe(PDFName.of("ExtGState"), PDFDict);
+
+  if (!extGState) {
+    return [];
+  }
+
+  const values: number[] = [];
+
+  for (const [, entry] of extGState.entries()) {
+    const dict = entry instanceof PDFRef ? pdf.context.lookup(entry, PDFDict) : entry;
+
+    if (!(dict instanceof PDFDict)) {
+      continue;
+    }
+
+    const alpha = dict.lookupMaybe(PDFName.of("ca"), PDFNumber)?.asNumber();
+
+    if (alpha !== undefined) {
+      values.push(alpha);
+    }
+  }
+
+  return values;
 }
 
 function readTextAnnotations(

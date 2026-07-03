@@ -73,6 +73,87 @@ describe("toPdfEdits", () => {
     expect(edits[5]).toMatchObject({ strokeWidthPt: 1.5 });
   });
 
+  it("omits optional edit colors and opacity when they were not set", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "highlight",
+        id: "a",
+        pageIndex: 0,
+        rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+      },
+      {
+        kind: "textBox",
+        id: "b",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "No style",
+        fontSizePt: 12,
+      },
+      {
+        kind: "ink",
+        id: "c",
+        pageIndex: 0,
+        strokes: [
+          [
+            { x: 0, y: 0 },
+            { x: 20, y: 20 },
+          ],
+        ],
+      },
+    ]);
+
+    expect(edits[0]).not.toHaveProperty("color");
+    expect(edits[0]).not.toHaveProperty("opacity");
+    expect(edits[1]).not.toHaveProperty("color");
+    expect(edits[2]).not.toHaveProperty("color");
+    expect(edits[2]).toMatchObject({ strokeWidthPt: 1.5 });
+  });
+
+  it("emits chosen edit colors, highlight opacity, and ink stroke width", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "highlight",
+        id: "a",
+        pageIndex: 0,
+        rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+        color: { r: 0.2, g: 0.8, b: 0.3 },
+        opacity: 0.55,
+      },
+      {
+        kind: "textBox",
+        id: "b",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Styled",
+        fontSizePt: 12,
+        color: { r: 0.8, g: 0.1, b: 0.2 },
+      },
+      {
+        kind: "ink",
+        id: "c",
+        pageIndex: 0,
+        strokes: [
+          [
+            { x: 0, y: 0 },
+            { x: 20, y: 20 },
+          ],
+        ],
+        strokeWidthPt: 5,
+        color: { r: 0.1, g: 0.2, b: 0.9 },
+      },
+    ]);
+
+    expect(edits[0]).toMatchObject({
+      color: { r: 0.2, g: 0.8, b: 0.3 },
+      opacity: 0.55,
+    });
+    expect(edits[1]).toMatchObject({ color: { r: 0.8, g: 0.1, b: 0.2 } });
+    expect(edits[2]).toMatchObject({
+      color: { r: 0.1, g: 0.2, b: 0.9 },
+      strokeWidthPt: 5,
+    });
+  });
+
   it("appends changed form values as one trailing document-scoped edit", () => {
     const edits = toPdfEdits([], { name: "Ada", agreed: true });
 

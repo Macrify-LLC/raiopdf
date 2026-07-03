@@ -1,6 +1,17 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { EditToolId } from "../lib/edits";
 import type { EditingState } from "../hooks/useEditing";
+import {
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_INK_COLOR,
+  DEFAULT_TEXT_COLOR,
+  HIGHLIGHT_COLOR_OPTIONS,
+  INK_STROKE_WIDTH_OPTIONS,
+  INK_TEXT_COLOR_OPTIONS,
+  pdfEditColorToHex,
+  type EditColorOption,
+} from "../lib/editStyles";
 import "./LegalModeBar.css";
 
 const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
@@ -51,6 +62,7 @@ export function EditModeBar({ editing }: EditModeBarProps) {
         {pendingCount === 1 ? "edit" : "edits"}
       </span>
       <span className="legal-mode-bar__hint">{editing.message ?? getToolHint(editing)}</span>
+      <ToolOptions editing={editing} />
       {tool === "image" ? (
         <>
           <input
@@ -95,6 +107,120 @@ export function EditModeBar({ editing }: EditModeBarProps) {
       </button>
     </div>
   );
+}
+
+function ToolOptions({ editing }: { editing: EditingState }) {
+  if (editing.tool === "highlight") {
+    const selectedColor = editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR;
+    const opacity = editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
+
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label="Highlight options">
+        <ColorSwatches
+          labelPrefix="Highlight color"
+          options={HIGHLIGHT_COLOR_OPTIONS}
+          selectedColor={selectedColor}
+          onSelect={(color) => editing.updateHighlightStyle({ color })}
+        />
+        <label className="legal-mode-bar__range">
+          <span className="legal-mode-bar__range-label">Opacity</span>
+          <input
+            type="range"
+            min="0.2"
+            max="0.8"
+            step="0.05"
+            aria-label="Highlight opacity"
+            value={opacity}
+            onChange={(event) =>
+              editing.updateHighlightStyle({ opacity: Number(event.currentTarget.value) })
+            }
+          />
+          <span className="legal-mode-bar__range-value">{Math.round(opacity * 100)}%</span>
+        </label>
+      </span>
+    );
+  }
+
+  if (editing.tool === "textBox") {
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label="Text box options">
+        <ColorSwatches
+          labelPrefix="Text color"
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={editing.textBoxStyle.color ?? DEFAULT_TEXT_COLOR}
+          onSelect={(color) => editing.updateTextBoxStyle({ color })}
+        />
+      </span>
+    );
+  }
+
+  if (editing.tool === "draw") {
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label="Draw options">
+        <ColorSwatches
+          labelPrefix="Draw color"
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={editing.inkStyle.color ?? DEFAULT_INK_COLOR}
+          onSelect={(color) => editing.updateInkStyle({ color })}
+        />
+        <span className="legal-mode-bar__width-group" aria-label="Stroke width">
+          {INK_STROKE_WIDTH_OPTIONS.map((width) => (
+            <button
+              key={width}
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label={`Set draw stroke width to ${formatStrokeWidth(width)} points`}
+              aria-pressed={editing.inkStyle.strokeWidthPt === width}
+              onClick={() => editing.updateInkStyle({ strokeWidthPt: width })}
+            >
+              {formatStrokeWidth(width)}
+            </button>
+          ))}
+        </span>
+      </span>
+    );
+  }
+
+  return null;
+}
+
+function ColorSwatches({
+  labelPrefix,
+  options,
+  selectedColor,
+  onSelect,
+}: {
+  labelPrefix: string;
+  options: readonly EditColorOption[];
+  selectedColor: EditColorOption["color"];
+  onSelect: (color: EditColorOption["color"]) => void;
+}) {
+  const selectedHex = pdfEditColorToHex(selectedColor);
+
+  return (
+    <span className="legal-mode-bar__swatches" aria-label={labelPrefix}>
+      {options.map((option) => {
+        const hex = pdfEditColorToHex(option.color);
+
+        return (
+          <button
+            key={option.id}
+            type="button"
+            className="legal-mode-bar__swatch"
+            style={{ "--tool-swatch-color": hex } as CSSProperties}
+            aria-label={`${labelPrefix}: ${option.label}`}
+            aria-pressed={hex === selectedHex}
+            title={option.label}
+            onClick={() => onSelect(option.color)}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+function formatStrokeWidth(width: number): string {
+  return Number.isInteger(width) ? String(width) : width.toFixed(1);
 }
 
 function getToolHint(editing: EditingState): string {

@@ -14,7 +14,8 @@ spot — saved right into the PDF.
 ## How to do it
 
 1. Choose **Draw**, from the toolbar or the **Edit** tools.
-2. Drag on the page to draw.
+2. Pick a color or line width if you want a different mark.
+3. Drag on the page to draw.
 
 ## What to know
 

@@ -125,11 +125,13 @@ app, resolved at runtime and shown to the user in the "Open Raio to AI" snippet:
 
   One packaging detail to get right: the redaction/preflight verifier loads
   **pdf.js**, which needs its `cmaps/`, `standard_fonts/`, and `wasm/` asset
-  directories at runtime. Under SEA there is no `node_modules`, so
-  `require.resolve("pdfjs-dist/...")` does not work — those asset directories are
-  copied next to the `raiopdf-mcp` executable and the loader resolves them
-  relative to `process.execPath` (with the `RAIOPDF_MCP_ENGINE_ASSETS` / package
-  `node_modules` fallback for a from-source run).
+  directories at runtime. The current loader resolves them via
+  `require.resolve("pdfjs-dist/...")`, which works from source / the built `dist`
+  with `node_modules` present. Under SEA there is no `node_modules`, so that
+  resolution won't work — so the SEA packaging step must copy those asset
+  directories next to the `raiopdf-mcp` executable **and** add a loader fallback
+  that resolves them relative to `process.execPath`. That loader fallback is part
+  of the tracked packaging step below, not yet implemented.
 
 The UI reads the resolved binary path via the shell's `mcp_status` command
 (overridable with `RAIOPDF_MCP_BIN`). Until the installer bundles the exe, the

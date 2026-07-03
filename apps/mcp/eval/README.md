@@ -24,10 +24,15 @@ node eval/make-fixtures.mjs
 
 ## Running
 
-The engine-backed tools require the RaioPDF engine host to be reachable and the
-`Open Raio to AI` gate enabled. To run the evals, point an MCP evaluation harness
-at the built connector (`raiopdf-mcp`), supply `fixtures/` as absolute paths and
-a writable temp directory for tool outputs, and compare each tool result against
-the expected answer. The page-count / merge / extract / binder / rotate questions
-exercise the in-process pdf-lib tools; the preflight questions exercise the rules
-engine — none of those require the Stirling sidecar.
+To run the evals, point an MCP evaluation harness at the built connector
+(`raiopdf-mcp`) with the `Open Raio to AI` gate enabled, supply `fixtures/` as
+absolute paths and a writable temp directory for tool outputs, and compare each
+tool result against the expected answer.
+
+Which questions need the engine host (Stirling sidecar):
+
+- **No sidecar** (in-process pdf-lib / rules engine): the `extract_pages`,
+  `build_exhibit_binder`, and `prepare_for_filing` questions.
+- **Needs the engine host**: the `pdf_page_count`, `merge_pdfs`, and
+  `rotate_pages` questions route through the sidecar, so those require the engine
+  host to be reachable.

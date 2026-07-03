@@ -1,7 +1,8 @@
+import { AboutMacrifySection } from "./AboutMacrifySection";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import "./SettingsDialog.css";
 
-export type SettingsFocusSection = "open-raio-to-ai";
+export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify";
 
 export interface SettingsDialogProps {
   onClose: () => void;
@@ -88,6 +89,11 @@ export function SettingsDialog({
             onToggle={onToggleMcpEnabled}
             mcpPath={mcpPath}
             focused={focusSection === "open-raio-to-ai"}
+            onFocusHandled={onFocusSectionHandled}
+          />
+
+          <AboutMacrifySection
+            focused={focusSection === "about-macrify"}
             onFocusHandled={onFocusSectionHandled}
           />
         </div>

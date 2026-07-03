@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./SunMarkIcon";
+export * from "./MacrifyMarkIcon";
 export * from "./ImageIcon";
 export * from "./DrawIcon";
 export * from "./SignIcon";

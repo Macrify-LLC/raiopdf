@@ -1,0 +1,63 @@
+/* The one gradient this app allows itself, per brand-guidelines-detail.md's
+   "Client Apps" restraint rule -- the same Navy -> Primary -> Accent bar
+   already used at the top of the app window (.app-shell__accent-bar),
+   echoed here as a thin top edge rather than a decorative background.
+   Layered on top of the shared .settings-section shell from
+   SettingsSectionCard.css.
+
+   This is a plain gradient block, matching AppShell.css's own technique --
+   NOT `border-image`. `border-image` paints across all four edges using
+   each side's own border-width, even when only `border-top` is redefined,
+   so it was leaking a second gradient bar onto the bottom edge and thin
+   colored slivers onto the left/right edges instead of staying a quiet
+   top-only accent. */
+.about-macrify {
+  position: relative;
+  overflow: hidden;
+}
+
+.about-macrify::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: 5px 5px 0 0;
+  background: linear-gradient(
+    90deg,
+    var(--accent-bar-start),
+    var(--accent-bar-mid) 45%,
+    var(--accent-bar-end)
+  );
+}
+
+.about-macrify__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 7px var(--space-3);
+  text-decoration: none;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.about-macrify__cta:hover {
+  background: var(--hover-ground);
+  border-color: var(--primary);
+}
+
+.about-macrify__cta:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.about-macrify__cta svg {
+  flex: 0 0 auto;
+}

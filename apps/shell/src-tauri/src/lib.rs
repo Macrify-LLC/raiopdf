@@ -325,6 +325,8 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:preferences", "Preferences...")
         .text("file:open-raio-to-ai", "Open Raio to AI...")
         .separator()
+        .text("file:about-macrify", "About Macrify...")
+        .separator()
         .text(MENU_EXIT, "Exit")
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")

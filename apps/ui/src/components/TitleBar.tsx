@@ -11,9 +11,10 @@ export interface DocumentTabInfo {
 
 export interface TitleBarProps {
   tabs?: DocumentTabInfo[];
+  onOpenAbout?: () => void;
 }
 
-export function TitleBar({ tabs = [] }: TitleBarProps) {
+export function TitleBar({ tabs = [], onOpenAbout }: TitleBarProps) {
   const showWindowControls = isTauriRuntime();
   const hasTabs = tabs.length > 0;
 
@@ -66,7 +67,14 @@ export function TitleBar({ tabs = [] }: TitleBarProps) {
       )}
 
       <div className="title-bar__meta" data-tauri-drag-region>
-        <span className="title-bar__byline">Built by Macrify</span>
+        <button
+          type="button"
+          className="title-bar__byline"
+          onClick={onOpenAbout}
+          title="About Macrify"
+        >
+          Built by Macrify
+        </button>
         {showWindowControls ? <WindowControls /> : null}
       </div>
     </header>

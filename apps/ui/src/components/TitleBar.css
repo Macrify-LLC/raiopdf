@@ -82,8 +82,27 @@
 }
 
 .title-bar__byline {
+  border: 0;
+  background: transparent;
+  padding: 4px 2px;
+  font: inherit;
   font-size: var(--text-2xs);
   color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.title-bar__byline:hover,
+.title-bar__byline:focus-visible {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.title-bar__byline:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
 }
 
 .title-bar__window-controls {

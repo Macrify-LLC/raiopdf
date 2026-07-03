@@ -119,9 +119,11 @@ export async function buildDocumentFacts(
     try {
       facts.textLayerCoverage = await options.textExtractor.extractTextLayerCoverage(bytes);
       // Page-body text only, and every page must have it — one text page must
-      // not make an otherwise image-only scan look searchable.
+      // not make an otherwise image-only scan look searchable. A poisoned text
+      // layer is also not verified-searchable, even when text is present.
       facts.searchableText = facts.pages.length > 0 &&
-        facts.textLayerCoverage.imageOnlyPages.length === 0;
+        facts.textLayerCoverage.imageOnlyPages.length === 0 &&
+        facts.textLayerCoverage.garbledPages.length === 0;
     } catch (error) {
       errors.push(detectorError("textLayerCoverage", errorMessage(error)));
       try {

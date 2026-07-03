@@ -121,8 +121,8 @@ import {
 } from "./lib/crashReportIssue";
 import {
   hasExtractableTextLayer,
-  pdfDocumentHasTextLayer,
 } from "./lib/textLayer";
+import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -197,7 +197,6 @@ interface FilingFactsCache {
 interface FilingFactsOptions {
   fileBytes: number;
   filename?: string;
-  searchableText?: boolean;
   pdfaCompliant?: boolean;
   pdfDocument?: PDFDocumentProxy | null;
   occupiedRegionPages?: "first" | "all";
@@ -213,6 +212,7 @@ export function App() {
     setZoom,
     setFitZoom,
     setHasTextLayer,
+    setTextLayerCoverage,
     setPageSizeInches,
     setError,
     rotatePages,
@@ -802,22 +802,31 @@ export function App() {
   }, [document.bytes, setError]);
 
   useEffect(() => {
-    if (!pdfDocument) {
+    const sourceBytes = document.bytes;
+
+    if (!pdfDocument || !sourceBytes) {
       return;
     }
 
     let disposed = false;
 
-    void pdfDocumentHasTextLayer(pdfDocument)
-      .then((hasTextLayer) => {
+    void extractUiTextLayerCoverage(sourceBytes, pdfDocument)
+      .then((textLayerCoverage) => {
         if (disposed) {
           return;
         }
 
-        setHasTextLayer(hasTextLayer);
+        setTextLayerCoverage(textLayerCoverage);
+        setHasTextLayer(
+          textLayerCoverage.imageOnlyPages.length +
+            textLayerCoverage.mixedPages.length +
+            textLayerCoverage.textPages.length > 0 &&
+            textLayerCoverage.imageOnlyPages.length === 0,
+        );
       })
       .catch(() => {
         if (!disposed) {
+          setTextLayerCoverage(null);
           setHasTextLayer(false);
         }
       });
@@ -825,7 +834,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [pdfDocument, setHasTextLayer]);
+  }, [document.bytes, pdfDocument, setHasTextLayer, setTextLayerCoverage]);
 
   useEffect(() => {
     const previousBytes = legalStateDocumentBytesRef.current;
@@ -919,8 +928,7 @@ export function App() {
       pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
     };
 
-    if (document.hasTextLayer !== null) {
-      factsOptions.searchableText = document.hasTextLayer;
+    if (document.textLayerCoverage !== null) {
       factsOptions.occupiedRegionPages = "first";
     }
 
@@ -953,7 +961,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.hasTextLayer, filingPack, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -3566,7 +3574,7 @@ function DocumentPropertiesPanel({
     { label: "Page size", value: document.pageSizeInches ? `${document.pageSizeInches.width} x ${document.pageSizeInches.height} in` : "Not set" },
     { label: "File size", value: document.fileSizeBytes ? formatBytes(document.fileSizeBytes) : "Not set" },
     { label: "Encryption", value: document.bytes ? "Not encrypted" : "Not set" },
-    { label: "Searchable", value: document.hasTextLayer === null ? "Not checked" : document.hasTextLayer ? "Yes" : "No" },
+    { label: "Searchable", value: describeTextLayerStatus(deriveTextLayerStatus(document.textLayerCoverage)) },
   ];
 
   return (
@@ -3691,7 +3699,13 @@ function emptyDocumentFacts(document: DocumentState): DocumentFacts {
     pages: [],
     ...(document.fileName ? { filename: document.fileName } : {}),
     ...(document.fileSizeBytes !== null ? { fileBytes: document.fileSizeBytes } : {}),
-    ...(document.hasTextLayer !== null ? { searchableText: document.hasTextLayer } : {}),
+    ...(document.textLayerCoverage
+      ? {
+          textLayerCoverage: document.textLayerCoverage,
+          searchableText: document.textLayerCoverage.imageOnlyPages.length === 0 &&
+            document.textLayerCoverage.garbledPages.length === 0,
+        }
+      : {}),
   };
 }
 
@@ -3749,7 +3763,6 @@ function filingFactsCacheKey(options: FilingFactsOptions): string {
   return JSON.stringify({
     fileBytes: options.fileBytes,
     filename: options.filename ?? null,
-    searchableText: options.searchableText ?? null,
     pdfaCompliant: options.pdfaCompliant ?? null,
     occupiedRegionPages: options.occupiedRegionPages ?? "all",
   });
@@ -3811,9 +3824,7 @@ async function readFilingFacts(
     });
   }
 
-  if (options.searchableText !== undefined) {
-    facts.searchableText = options.searchableText;
-  } else if (facts.searchableText === undefined) {
+  if (facts.searchableText === undefined) {
     facts.searchableText = hasExtractedTextOnEveryPage;
   }
 

@@ -114,6 +114,27 @@ describe("resolvePrepPlan", () => {
     });
   });
 
+  it("describes garbled text layers as re-OCR work", () => {
+    const plan = resolvePrepPlan(getPack("florida"), {
+      ...baseFacts,
+      textLayerCoverage: {
+        imageOnlyPages: [],
+        mixedPages: [],
+        textPages: [0],
+        garbledPages: [{
+          pageIndex: 0,
+          confidence: 0.91,
+          reason: "low_alpha_entropy",
+          puaRatio: 0,
+          replacementRatio: 0,
+          alphaRatio: 0.01,
+        }],
+      },
+    });
+
+    expect(byId(plan, "make-searchable").impact).toBe("Text layer looks unreliable - re-OCR is recommended.");
+  });
+
   it("degrades honestly when Phase 1b fact fields are not available yet", () => {
     const plan = resolvePrepPlan(getPack("florida"), baseFacts);
 

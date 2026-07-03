@@ -193,6 +193,12 @@ function searchableImpact(facts: DocumentFacts): string {
   }
 
   if (facts.searchableText === false) {
+    const garbledPages = facts.textLayerCoverage?.garbledPages.length ?? 0;
+
+    if (garbledPages > 0) {
+      return "Text layer looks unreliable - re-OCR is recommended.";
+    }
+
     return "No searchable text detected - OCR may add a text layer.";
   }
 

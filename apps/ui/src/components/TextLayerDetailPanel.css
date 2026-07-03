@@ -1,0 +1,120 @@
+.text-layer-detail {
+  display: grid;
+  gap: var(--space-4);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.text-layer-detail p {
+  margin: 0;
+}
+
+/* Lede -- the panel's "why am I here" row. The icon badge deliberately reuses
+   the same OCR glyph and warn tokens as the status-bar chip that opened this
+   panel, so the two surfaces read as one continuous explanation. */
+.text-layer-detail__lede {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.text-layer-detail__lede-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.text-layer-detail__intro {
+  padding-top: 3px;
+  color: var(--body);
+}
+
+.text-layer-detail__label {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.text-layer-detail__label--warn {
+  color: var(--warn);
+}
+
+/* Affected pages -- one card per garble reason so each page group reads as
+   its own finding instead of a wall of amber text. */
+.text-layer-detail__reasons {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.text-layer-detail__reason {
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  padding: var(--space-2) var(--space-3);
+}
+
+.text-layer-detail__reason-pages {
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.text-layer-detail__reason-copy {
+  color: var(--body);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+/* The fix -- deliberately neutral, not amber. Problem reads as urgent above;
+   the resolution should read as calm and next-step, not another alarm. */
+.text-layer-detail__fix {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-3);
+}
+
+.text-layer-detail__fix-copy {
+  color: var(--body);
+}
+
+/* Disabled action -- must read as unavailable, not merely quiet. Dashed
+   border matches the app's existing "not available yet" vocabulary (see
+   .filing-card__empty / [data-stance="unknown"]), and there is no hover or
+   focus treatment on purpose: nothing about this control should invite a
+   click. */
+.text-layer-detail__disabled-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: max-content;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.text-layer-detail__disabled-note {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+}

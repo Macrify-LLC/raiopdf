@@ -22,6 +22,7 @@ import type { PendingRedactionOverlay } from "./CanvasWell";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { EditingState } from "../hooks/useEditing";
 import type { SensitiveHit } from "../lib/legalTools";
+import { deriveTextLayerStatus } from "../lib/textLayerStatus";
 import "./AppShell.css";
 
 export interface AppShellProps {
@@ -248,7 +249,7 @@ export function AppShell({
         pageCount={hasDocument ? document.pageCount : null}
         pageSizeInches={hasDocument ? document.pageSizeInches : null}
         fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
-        hasTextLayer={hasDocument ? document.hasTextLayer : null}
+        textLayerStatus={hasDocument ? deriveTextLayerStatus(document.textLayerCoverage) : null}
       />
     </div>
   );

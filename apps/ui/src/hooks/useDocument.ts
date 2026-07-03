@@ -15,6 +15,7 @@ import {
   RESIZE_PRESET_SIZES,
   type ResizePreset,
 } from "../lib/cropResize";
+import type { TextLayerCoverage } from "@raiopdf/rules";
 
 export interface PageSizeInches {
   width: number;
@@ -33,6 +34,7 @@ export interface DocumentState {
   filePath: string | null;
   fileSizeBytes: number | null;
   hasTextLayer: boolean | null;
+  textLayerCoverage: TextLayerCoverage | null;
   pageSizeInches: PageSizeInches | null;
   error: string | null;
 }
@@ -52,6 +54,7 @@ const INITIAL_DOCUMENT: DocumentState = {
   filePath: null,
   fileSizeBytes: null,
   hasTextLayer: null,
+  textLayerCoverage: null,
   pageSizeInches: null,
   error: null,
 };
@@ -60,6 +63,7 @@ interface CommitOptions {
   dirty: boolean;
   currentPage?: number | ((current: DocumentState, pageCount: number) => number);
   hasTextLayer?: boolean | null;
+  textLayerCoverage?: TextLayerCoverage | null;
   fileName?: string;
   filePath?: string | null;
 }
@@ -67,6 +71,7 @@ interface CommitOptions {
 interface ReplaceBytesOptions {
   dirty: boolean;
   hasTextLayer?: boolean | null;
+  textLayerCoverage?: TextLayerCoverage | null;
   expectedOpenToken?: number;
   expectedSourceBytes?: Uint8Array | null;
   fileName?: string;
@@ -174,6 +179,7 @@ export function useDocument() {
         filePath: options.filePath !== undefined ? options.filePath : current.filePath,
         fileSizeBytes: bytes.byteLength,
         hasTextLayer: options.hasTextLayer ?? null,
+        textLayerCoverage: options.textLayerCoverage ?? null,
         pageSizeInches: null,
         error: null,
       }));
@@ -286,6 +292,7 @@ export function useDocument() {
           filePath: file.path ?? null,
           fileSizeBytes: file.bytes.byteLength,
           hasTextLayer: null,
+          textLayerCoverage: null,
           pageSizeInches: null,
           error: null,
         });
@@ -351,6 +358,7 @@ export function useDocument() {
           const commitOptions: CommitOptions = {
             dirty: options.dirty,
             hasTextLayer: options.hasTextLayer ?? null,
+            textLayerCoverage: options.textLayerCoverage ?? null,
           };
 
           if (options.fileName !== undefined) {
@@ -407,6 +415,10 @@ export function useDocument() {
 
   const setHasTextLayer = useCallback((hasTextLayer: boolean) => {
     setDocument((current) => ({ ...current, hasTextLayer }));
+  }, []);
+
+  const setTextLayerCoverage = useCallback((textLayerCoverage: TextLayerCoverage | null) => {
+    setDocument((current) => ({ ...current, textLayerCoverage }));
   }, []);
 
   const setPageSizeInches = useCallback((pageSizeInches: PageSizeInches) => {
@@ -928,6 +940,7 @@ export function useDocument() {
     setZoom,
     setFitZoom,
     setHasTextLayer,
+    setTextLayerCoverage,
     setPageSizeInches,
     setError,
     rotatePages,

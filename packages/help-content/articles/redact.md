@@ -27,13 +27,13 @@ RaioPDF's **Redact** tool removes it, then double-checks its own work.
 1. Open the PDF.
 2. In the **Legal** tools, choose **Redact**.
 3. Drag a box over each thing you want removed. Add as many boxes as you need.
-4. Click **Confirm**. RaioPDF removes everything you marked and checks its work.
+4. Click **Apply Redactions**. RaioPDF tells you how many areas will be
+   permanently removed — confirm, and it removes them and checks its work.
 5. **Save** the file — or use **Save As** to write the redacted version to a new
    file and keep your original untouched.
 
-Confirming applies the redaction to the document you have open. Nothing is
-written to disk until you save, so you decide whether to replace the original or
-keep both.
+Applying redactions changes the document you have open. Nothing is written to
+disk until you save, so you decide whether to replace the original or keep both.
 
 ## What "verified" means
 
@@ -47,8 +47,8 @@ When you see **Verified**, the content is actually gone.
 
 ## What to know
 
-- **Your original is safe until you save.** Confirming changes the document
-  you have open, not the file on your disk. To keep the unredacted original, use
+- **Your original is safe until you save.** Applying redactions changes the
+  document you have open, not the file on your disk. To keep the unredacted original, use
   **Save As** and give the redacted version a new name — then you have both.
 - **The removed text is gone for good.** Once you save the redacted version,
   the words are deleted from that file, not hidden. There's no recovering them

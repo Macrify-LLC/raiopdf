@@ -37,11 +37,11 @@ AI assistant use RaioPDF's tools. It's **off** by default, and even when you
 turn it on, it talks only to the AI program you connected — over a direct
 on-device channel, not the internet.
 
-## The one thing that can reach out
+## Nothing goes out
 
-To be straight with you: RaioPDF can check whether a newer version has been
-released, from the project's official releases. That check is the only part that
-reaches the internet, and it's about the app itself — never your documents.
+RaioPDF doesn't reach the internet at all. There's no sign-in, no sync, no
+background upload — it opens your file, does the work, and saves, entirely on
+your machine.
 
 ## Related
 

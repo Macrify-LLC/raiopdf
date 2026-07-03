@@ -26,7 +26,9 @@ pieces — is the kind of fiddly work that eats an afternoon. This does it for y
 2. In the **Legal** tools, choose **Prepare for Filing**.
 3. RaioPDF runs a quick **preflight** check — it reads the document and lists
    anything the portal won't accept.
-4. Click **Make Filing-Ready**.
+4. Click the action button to build it. Depending on what the file needs, it
+   reads **Make Filing-Ready** (when there's cleanup to do) or **Export PDF/A for
+   ePortal** (when it's already in shape).
 
 You get back a filing-ready file. If the document was too big for the portal,
 you get it split into properly labeled, sequential parts instead.

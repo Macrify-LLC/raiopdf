@@ -93,6 +93,30 @@
   background: var(--danger-bg);
 }
 
+.tool-panel__card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.tool-panel__card-header .icon-button {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.tool-panel__card-header .icon-button:hover:not(:disabled),
+.tool-panel__card-header .icon-button:focus-visible {
+  background: var(--panel);
+  border-color: var(--border-soft);
+  color: var(--body);
+}
+
 .tool-panel__card-title,
 .tool-panel__card-copy,
 .tool-panel__note,

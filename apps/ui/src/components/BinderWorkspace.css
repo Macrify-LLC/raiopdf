@@ -23,6 +23,28 @@
   color: var(--ink);
 }
 
+.binder-workspace__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.binder-workspace__header-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.binder-workspace__header-actions .icon-button:hover:not(:disabled),
+.binder-workspace__header-actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 .binder-workspace__eyebrow,
 .binder-card__label,
 .binder-fieldset legend {

@@ -16,26 +16,6 @@ const KNOWN_HELP_ONLY_ARTICLE_IDS = new Set([
   "data-stays-local",
 ]);
 
-// Phase 2 removes this allowance when the remaining tool articles ship.
-const STUB_PENDING = new Set([
-  "pages",
-  "compress",
-  "repair",
-  "merge",
-  "insert",
-  "insert-images",
-  "crop",
-  "properties",
-  "rotate",
-  "page-numbers",
-  "watermark",
-  "textBox",
-  "image",
-  "highlight",
-  "draw",
-  "sign",
-]);
-
 describe("help content completeness", () => {
   it("keeps the runtime tool registry and generated articles in sync", () => {
     const articleIds = new Set<string>();
@@ -56,11 +36,10 @@ describe("help content completeness", () => {
 
     for (const tool of TOOL_REGISTRY) {
       const mappedArticleExists = articleIds.has(tool.helpArticleId);
-      const stubbedForPhaseTwo = STUB_PENDING.has(tool.id);
 
       expect(
-        mappedArticleExists || stubbedForPhaseTwo,
-        `${tool.id} should map to a shipped article or be stub-pending`,
+        mappedArticleExists,
+        `${tool.id} should map to a shipped article`,
       ).toBe(true);
     }
 

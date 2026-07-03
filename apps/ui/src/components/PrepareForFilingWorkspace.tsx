@@ -11,7 +11,8 @@ import type {
 import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
-import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, HelpIcon, PlusIcon } from "../icons";
+import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import "./PrepareForFilingWorkspace.css";
 
@@ -127,6 +128,7 @@ export interface PrepareForFilingWorkspaceProps {
   ) => void;
   onDismissImpact: () => void;
   onCompressFirst: () => void;
+  onHelpRequested?: (() => void) | undefined;
 }
 
 export function PrepareForFilingWorkspace({
@@ -156,6 +158,7 @@ export function PrepareForFilingWorkspace({
   onPacketPreferencesChange,
   onDismissImpact,
   onCompressFirst,
+  onHelpRequested,
 }: PrepareForFilingWorkspaceProps) {
   const [mode, setMode] = useState<"single" | "packet">("single");
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -294,30 +297,39 @@ export function PrepareForFilingWorkspace({
             <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
             <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
           </p>
-          <div className="filing-card__overflow">
-            <button
-              type="button"
-              className="filing-card__icon-button"
-              aria-label="Prepare for Filing menu"
-              aria-expanded={overflowOpen}
-              onClick={() => setOverflowOpen((current) => !current)}
-            >
-              ⋯
-            </button>
-            {overflowOpen ? (
-              <div className="filing-card__menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setCertificateOpen(true);
-                    setOverflowOpen(false);
-                  }}
-                >
-                  Insert Certificate of Service page...
-                </button>
-              </div>
+          <div className="filing-card__header-actions">
+            {onHelpRequested ? (
+              <IconButton
+                icon={<HelpIcon size={14} />}
+                label="Help: Prepare for Filing"
+                onClick={onHelpRequested}
+              />
             ) : null}
+            <div className="filing-card__overflow">
+              <button
+                type="button"
+                className="filing-card__icon-button"
+                aria-label="Prepare for Filing menu"
+                aria-expanded={overflowOpen}
+                onClick={() => setOverflowOpen((current) => !current)}
+              >
+                ⋯
+              </button>
+              {overflowOpen ? (
+                <div className="filing-card__menu" role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setCertificateOpen(true);
+                      setOverflowOpen(false);
+                    }}
+                  >
+                    Insert Certificate of Service page...
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
 

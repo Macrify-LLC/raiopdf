@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { JurisdictionPack } from "@raiopdf/rules";
 import type { OpenedFile } from "../lib/filePort";
 import { formatBatchFailureReason } from "../lib/userMessages";
-import { PlusIcon } from "../icons";
+import { HelpIcon, PlusIcon } from "../icons";
+import { IconButton } from "./IconButton";
 import "./BatchCleanupWorkspace.css";
 
 export type BatchCleanupStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -57,6 +58,7 @@ export interface BatchCleanupWorkspaceProps {
   progress: BatchCleanupProgress;
   onAddFile: () => Promise<OpenedFile | null>;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
+  onHelpRequested?: (() => void) | undefined;
 }
 
 const OCR_MODE_HELP: Record<BatchCleanupOcrMode, string> = {
@@ -88,6 +90,7 @@ export function BatchCleanupWorkspace({
   progress,
   onAddFile,
   onRun,
+  onHelpRequested,
 }: BatchCleanupWorkspaceProps) {
   const [files, setFiles] = useState<BatchCleanupFile[]>(() =>
     currentFile ? [fromOpenedFile(currentFile)] : [],
@@ -168,9 +171,18 @@ export function BatchCleanupWorkspace({
           <p className="batch-workspace__eyebrow">Legal</p>
           <h2>Batch Cleanup</h2>
         </div>
-        <button type="button" className="batch-workspace__secondary-button" onClick={addFile}>
-          <PlusIcon size={14} /> Add PDF
-        </button>
+        <div className="batch-workspace__header-actions">
+          {onHelpRequested ? (
+            <IconButton
+              icon={<HelpIcon size={14} />}
+              label="Help: Batch Cleanup"
+              onClick={onHelpRequested}
+            />
+          ) : null}
+          <button type="button" className="batch-workspace__secondary-button" onClick={addFile}>
+            <PlusIcon size={14} /> Add PDF
+          </button>
+        </div>
       </header>
 
       <div className="batch-workspace__file-list">

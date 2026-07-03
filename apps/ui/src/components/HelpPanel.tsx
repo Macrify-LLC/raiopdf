@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -27,10 +28,13 @@ const defaultArticleId = articleById.has("getting-started")
 
 export interface HelpPanelProps {
   onClose: () => void;
+  initialArticleId?: string | undefined;
 }
 
-export function HelpPanel({ onClose }: HelpPanelProps) {
-  const [selectedArticleId, setSelectedArticleId] = useState<string>(defaultArticleId);
+export function HelpPanel({ onClose, initialArticleId }: HelpPanelProps) {
+  const [selectedArticleId, setSelectedArticleId] = useState<string>(
+    () => resolveInitialArticleId(initialArticleId),
+  );
   const [query, setQuery] = useState("");
   const [externalLinkNote, setExternalLinkNote] = useState<string | null>(null);
   const articleRegionId = useId();
@@ -39,6 +43,10 @@ export function HelpPanel({ onClose }: HelpPanelProps) {
   const filteredGroups = useMemo(() => groupArticles(query), [query]);
   const visibleArticles = filteredGroups.flatMap((group) => group.articles);
   const indexButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  useEffect(() => {
+    selectArticle(resolveInitialArticleId(initialArticleId));
+  }, [initialArticleId]);
 
   function selectArticle(articleId: string) {
     setSelectedArticleId(articleId);
@@ -67,7 +75,7 @@ export function HelpPanel({ onClose }: HelpPanelProps) {
 
     if (href.startsWith("https:")) {
       event.preventDefault();
-      setExternalLinkNote("External links open in Phase 2.");
+      void openExternalHttpsLink(href, setExternalLinkNote);
     }
   }
 
@@ -226,6 +234,35 @@ function compareArticles(left: typeof helpArticles[number], right: typeof helpAr
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function resolveInitialArticleId(articleId: string | undefined) {
+  return articleId && articleById.has(articleId) ? articleId : defaultArticleId;
+}
+
+async function openExternalHttpsLink(
+  href: string,
+  setExternalLinkNote: (message: string | null) => void,
+) {
+  let url: URL;
+
+  try {
+    url = new URL(href);
+  } catch {
+    return;
+  }
+
+  if (url.protocol !== "https:") {
+    return;
+  }
+
+  try {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url.href);
+    setExternalLinkNote(null);
+  } catch {
+    setExternalLinkNote("External links open in the desktop app.");
+  }
 }
 
 function formatResultCount(count: number) {

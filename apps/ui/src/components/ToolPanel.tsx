@@ -21,6 +21,7 @@ import {
   CropIcon,
   DrawIcon,
   EditIcon,
+  HelpIcon,
   HighlightIcon,
   ImageIcon,
   InsertIcon,
@@ -36,6 +37,7 @@ import {
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
+import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
@@ -123,6 +125,7 @@ export interface ToolPanelProps {
   onCancelRedactions: () => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
+  onHelpRequested: (articleId: string) => void;
 }
 
 export function ToolPanel({
@@ -147,6 +150,7 @@ export function ToolPanel({
   onCancelRedactions,
   onRunScanner,
   onMarkScannerHit,
+  onHelpRequested,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -177,6 +181,7 @@ export function ToolPanel({
             description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {EDIT_DIALOG_TOOLS.map((tool) => (
@@ -187,6 +192,7 @@ export function ToolPanel({
             description={tool.description}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {pendingContentEdits.length > 0 ? (
@@ -209,6 +215,7 @@ export function ToolPanel({
             description={tool.description}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
       </AccordionGroup>
@@ -236,6 +243,7 @@ export function ToolPanel({
           description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
+          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         {ocrState.phase !== "idle" || ocrStarting ? (
           <OcrStatusPanel
@@ -266,6 +274,7 @@ export function ToolPanel({
                 description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
+                onHelp={() => onHelpRequested(tool.helpArticleId)}
               />
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel
@@ -273,6 +282,7 @@ export function ToolPanel({
                   hasDocument={hasDocument}
                   onConfirm={onConfirmRedactions}
                   onCancel={onCancelRedactions}
+                  onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
               {tool.id === "bates-numbering" && selected ? (
@@ -284,6 +294,7 @@ export function ToolPanel({
                   hasDocument={hasDocument}
                   onRunScanner={onRunScanner}
                   onMarkHit={onMarkScannerHit}
+                  onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
               {tool.id === "scrub-metadata" && selected ? (
@@ -350,11 +361,13 @@ function RedactionStatusPanel({
   hasDocument,
   onConfirm,
   onCancel,
+  onHelp,
 }: {
   state: RedactionPanelState;
   hasDocument: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  onHelp: () => void;
 }) {
   if (!hasDocument) {
     return <InlineMessage tone="neutral" message="Open a PDF before marking redactions." />;
@@ -367,9 +380,12 @@ function RedactionStatusPanel({
   if (state.phase === "confirming") {
     return (
       <div className="tool-panel__inline-card">
-        <p className="tool-panel__card-title">
-          {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
-        </p>
+        <div className="tool-panel__card-header">
+          <p className="tool-panel__card-title">
+            {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
+          </p>
+          <IconButton icon={<HelpIcon size={14} />} label="Help: Redact" onClick={onHelp} />
+        </div>
         <p className="tool-panel__card-copy">
           RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
         </p>
@@ -524,17 +540,22 @@ function ScannerPanel({
   hasDocument,
   onRunScanner,
   onMarkHit,
+  onHelp,
 }: {
   state: ScannerPanelState;
   hasDocument: boolean;
   onRunScanner: () => void;
   onMarkHit: (hit: SensitiveHit) => void;
+  onHelp: () => void;
 }) {
   return (
     <div className="tool-panel__inline-card">
-      <p className="tool-panel__note">
-        Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
-      </p>
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__note">
+          Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
+        </p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: 2.425 Scanner" onClick={onHelp} />
+      </div>
       <button
         type="button"
         className="tool-panel__primary-button"

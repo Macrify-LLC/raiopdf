@@ -69,7 +69,7 @@ export interface AppShellProps {
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onOpenAbout: () => void;
-  onHelpRequested: () => void;
+  onHelpRequested: (articleId?: string) => void;
 }
 
 export function AppShell({
@@ -240,6 +240,7 @@ export function AppShell({
           onCancelRedactions={onCancelRedactions}
           onRunScanner={onRunScanner}
           onMarkScannerHit={onMarkScannerHit}
+          onHelpRequested={onHelpRequested}
         />
       </div>
       <StatusBar

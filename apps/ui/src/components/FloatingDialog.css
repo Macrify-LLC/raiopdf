@@ -65,6 +65,28 @@
   font-weight: 700;
 }
 
+.floating-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.floating-dialog__actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.floating-dialog__actions .icon-button:hover:not(:disabled),
+.floating-dialog__actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 .floating-dialog__close {
   display: grid;
   place-items: center;

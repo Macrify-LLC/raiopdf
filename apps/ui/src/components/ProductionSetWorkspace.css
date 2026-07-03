@@ -32,6 +32,28 @@
   font-size: var(--text-sm);
 }
 
+.production-workspace__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.production-workspace__header-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.production-workspace__header-actions .icon-button:hover:not(:disabled),
+.production-workspace__header-actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 .production-workspace__section {
   display: flex;
   flex-direction: column;

@@ -206,6 +206,28 @@
   font-size: var(--text-md);
 }
 
+.organize-pages__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.organize-pages__header-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.organize-pages__header-actions .icon-button:hover:not(:disabled),
+.organize-pages__header-actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 .organize-pages__summary {
   margin: var(--space-1) 0 0;
   color: var(--muted);

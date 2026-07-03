@@ -179,6 +179,13 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
       });
     }
 
+    if (document.pdfaCompliant === undefined) {
+      return buildCheck(pack, "pdfa", {
+        status: "unknown",
+        detail: "This portal rejects PDF/A files and no compliance facts were provided.",
+      });
+    }
+
     return buildCheck(pack, "pdfa", {
       status: "pass",
       detail: "This portal rejects PDF/A files; the filing copy is left as a standard PDF.",

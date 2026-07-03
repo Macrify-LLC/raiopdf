@@ -228,9 +228,11 @@ describe("Florida jurisdiction pack", () => {
     expect(pdfaStatus("preferred", true)).toBe("pass");
     expect(pdfaStatus("accepted", false)).toBe("pass");
     expect(pdfaStatus("unknown", false)).toBe("unknown");
-    // A prohibited portal treats an already-PDF/A document as outstanding portal work.
+    // A prohibited portal treats an already-PDF/A document as outstanding portal work,
+    // and refuses to call unverified facts safe.
     expect(pdfaStatus("prohibited", true)).toBe("fix");
     expect(pdfaStatus("prohibited", false)).toBe("pass");
+    expect(pdfaStatus("prohibited", undefined)).toBe("unknown");
   });
 
   it("rejects packs whose pdfa stance is missing or invalid", () => {

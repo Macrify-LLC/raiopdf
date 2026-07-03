@@ -103,8 +103,6 @@ export function PrepareForFilingWorkspace({
   const activeReport = result?.report ?? report;
   const convertsToPdfA = shouldConvertToPdfA(pack);
   const hasFixes = Boolean(report?.checks.some((check) => check.kind === "portal" && check.status === "fix"));
-  const needsPdfA = convertsToPdfA &&
-    Boolean(report?.checks.some((check) => check.checkId === "pdfa" && check.status !== "pass"));
   const needsMechanicalWork = Boolean(report?.checks.some((check) => check.status !== "pass"));
   const overPortalSize = Boolean(
     document.fileSizeBytes && document.fileSizeBytes > pack.recommendedMaxFileBytes,
@@ -112,13 +110,16 @@ export function PrepareForFilingWorkspace({
   const primaryLabel = hasFixes || needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
+  // Gate on "this pack will convert", not on the report's pdfa status — an input
+  // that already passes the PDF/A check still gets converted by the pipeline, so
+  // the button must stay disabled wherever the conversion engine is unavailable.
   const canPrepare = Boolean(document.bytes && report) &&
     progress.phase !== "normalizing" &&
     progress.phase !== "splitting" &&
     progress.phase !== "converting" &&
     progress.phase !== "verifying" &&
     !impact &&
-    !(needsPdfA && !pdfAAvailable);
+    !(convertsToPdfA && !pdfAAvailable);
 
   function submitCertificate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -272,7 +273,7 @@ export function PrepareForFilingWorkspace({
           ))}
         </div>
 
-        {!pdfAAvailable && needsPdfA ? (
+        {!pdfAAvailable && convertsToPdfA ? (
           <p className="filing-card__unavailable" role="status">
             PDF/A export is available in the desktop app. Normalize and split remain available here.
           </p>

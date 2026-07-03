@@ -10,6 +10,7 @@ export interface StatusBarProps {
   pageSizeInches?: { width: number; height: number } | null;
   fileSizeBytes?: number | null;
   textLayerStatus?: TextLayerStatus | null;
+  onFixGarbledText?: (() => void) | undefined;
 }
 
 export function StatusBar({
@@ -18,6 +19,7 @@ export function StatusBar({
   pageSizeInches = null,
   fileSizeBytes = null,
   textLayerStatus = null,
+  onFixGarbledText,
 }: StatusBarProps) {
   const [detailOpen, setDetailOpen] = useState(false);
 
@@ -39,6 +41,7 @@ export function StatusBar({
       {detailOpen && textLayerStatus?.state === "garbled" ? (
         <TextLayerDetailPanel
           garbledPages={textLayerStatus.garbledPages}
+          onFixGarbledText={onFixGarbledText}
           onClose={() => setDetailOpen(false)}
         />
       ) : null}

@@ -23,6 +23,60 @@ body {
   padding: var(--space-2) var(--space-4);
 }
 
+.force-ocr-confirmation {
+  display: grid;
+  gap: var(--space-3);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.force-ocr-confirmation p {
+  margin: 0;
+}
+
+.force-ocr-confirmation__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.force-ocr-confirmation__primary-button,
+.force-ocr-confirmation__secondary-button {
+  min-height: 30px;
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0 var(--space-3);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+}
+
+.force-ocr-confirmation__primary-button {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-primary);
+}
+
+.force-ocr-confirmation__primary-button:hover {
+  background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.force-ocr-confirmation__secondary-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--body);
+}
+
+.force-ocr-confirmation__secondary-button:hover {
+  background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
+}
+
 *,
 *::before,
 *::after {

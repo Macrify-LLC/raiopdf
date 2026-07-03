@@ -230,6 +230,45 @@ describe("runBatchCleanup", () => {
     expect(result.files[0]!.operations).toEqual(["ocr"]);
     expect(result.files[1]!.ocrDecision).toMatch(/skipped/i);
     expect(engine.operations).toEqual(["ocr"]);
+    expect(engine.ocrTypes).toEqual(["skip-text"]);
+  });
+
+  it("forces OCR when default OCR sees a garbled text layer", async () => {
+    const source = await makePdf("garbled.pdf", 1);
+    const engine = new RecordingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{
+        path: source,
+        facts: facts({
+          pages: 1,
+          textLayerCoverage: {
+            imageOnlyPages: [],
+            mixedPages: [],
+            textPages: [0],
+            garbledPages: [{
+              pageIndex: 0,
+              confidence: 0.93,
+              reason: "combined",
+              puaRatio: 0.2,
+              replacementRatio: 0.1,
+              alphaRatio: 0.02,
+            }],
+          },
+        }),
+      }],
+      outputDir: path.join(dir, "package"),
+      operations: {
+        sanitize: false,
+        scrubMetadata: false,
+        ocrMode: "auto-image-only",
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["ocr"]);
+    expect(result.files[0]!.ocrDecision).toBe("Garbled text layer detected; force OCR to rebuild it.");
+    expect(engine.ocrTypes).toEqual(["force-ocr"]);
   });
 
   it("refuses to create a package in a non-empty output folder", async () => {
@@ -360,6 +399,7 @@ describe("runBatchCleanup", () => {
 
 class RecordingEngine extends LocalPdfEngine implements BatchCleanupSidecarEngine {
   readonly operations: string[] = [];
+  readonly ocrTypes: Array<"force-ocr" | "skip-text" | undefined> = [];
   maxActive = 0;
   private active = 0;
   private readonly delayMs: number;
@@ -410,8 +450,9 @@ class RecordingEngine extends LocalPdfEngine implements BatchCleanupSidecarEngin
 
   async ocr(
     document: PdfDocumentHandle,
-    _options: { languages?: readonly string[]; ocrType?: "force-ocr" | "skip-text" },
+    options: { languages?: readonly string[]; ocrType?: "force-ocr" | "skip-text" },
   ): Promise<PdfDocumentHandle> {
+    this.ocrTypes.push(options.ocrType);
     return this.record("ocr", async () => this.scrubMetadata(document));
   }
 

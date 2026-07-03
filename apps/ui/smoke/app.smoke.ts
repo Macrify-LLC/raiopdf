@@ -237,7 +237,7 @@ test("makes an image-only PDF searchable through the mocked desktop OCR bridge",
   await expect(makeSearchable).toBeDisabled();
   await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
   await expect(page.getByText("Verifying the text layer...")).toBeVisible();
-  await expect(page.locator(".tool-panel").getByText("Searchable — verified")).toBeVisible();
+  await expect(page.locator(".tool-panel").getByText("Rebuilt the text layer on 1 page. Copy, paste, and search now return real text. Verified: all 1 page now has clean searchable text.")).toBeVisible();
   await expect(page.getByRole("contentinfo").getByText("Searchable — verified")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
   await expect.poll(() => getOcrCallCount(page)).toBe(1);
@@ -252,7 +252,7 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
 
   await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
 
-  await expect(page.getByText("OCR produced no text layer. The document was left unchanged.")).toBeVisible();
+  await expect(page.getByText("OCR ran, but 1 page still has no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 
   const saved = await savePdf(page);

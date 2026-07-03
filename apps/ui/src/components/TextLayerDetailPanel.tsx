@@ -5,6 +5,7 @@ import "./TextLayerDetailPanel.css";
 
 export interface TextLayerDetailPanelProps {
   garbledPages: readonly GarbledPageInfo[];
+  onFixGarbledText?: (() => void) | undefined;
   onClose: () => void;
 }
 
@@ -17,6 +18,7 @@ const REASON_COPY: Record<GarbleReason, string> = {
 
 export function TextLayerDetailPanel({
   garbledPages,
+  onFixGarbledText,
   onClose,
 }: TextLayerDetailPanelProps) {
   const reasonGroups = groupByReason(garbledPages);
@@ -53,12 +55,18 @@ export function TextLayerDetailPanel({
         <section className="text-layer-detail__fix">
           <p className="text-layer-detail__label">The fix</p>
           <p className="text-layer-detail__fix-copy">
-            The fix is to rebuild the text layer with OCR. That can run offline on this device and should leave the visible page images unchanged.
+            The fix is to rebuild the text layer with OCR. That runs offline on this device and should leave the visible page images unchanged.
           </p>
-          <button type="button" className="text-layer-detail__disabled-action" disabled>
+          <button
+            type="button"
+            className="text-layer-detail__fix-action"
+            onClick={() => {
+              onClose();
+              onFixGarbledText?.();
+            }}
+          >
             <OcrSearchIcon size={13} />
             <span>Fix garbled text</span>
-            <span className="text-layer-detail__disabled-note">(coming in a later update)</span>
           </button>
         </section>
       </div>

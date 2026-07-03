@@ -5,7 +5,7 @@ import type { PdfPageSelection, PdfSplitPart, PdfStampPlacement } from "@raiopdf
 import { buildProductionSet } from "@raiopdf/production-set";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, successResult, type StructuredToolResult } from "../format.js";
-import { resolveInput } from "../paths.js";
+import { prepareOutput, resolveInput } from "../paths.js";
 import { runLocalOutputOp, runLocalSingleOutputOp, writeManyOutputs } from "../ops.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
@@ -282,31 +282,49 @@ export async function handleProductionSet(
   input: ProductionSetInput,
   _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
-  const result = await buildProductionSet({
-    sources: input.sources,
-    outputDir: input.outputDir,
-    prefix: input.prefix,
-    ...(input.start === undefined ? {} : { start: input.start }),
-    ...(input.digits === undefined ? {} : { digits: input.digits }),
-    ...(input.includeFilenameInIndex === undefined
-      ? {}
-      : { includeFilenameInIndex: input.includeFilenameInIndex }),
-    ...(input.includeIndex === undefined ? {} : { includeIndex: input.includeIndex }),
-    ...(input.combinedPdf === undefined ? {} : { combinedPdf: input.combinedPdf }),
-    ...(input.volumeSizeMb === undefined ? {} : { volumeSizeMb: input.volumeSizeMb }),
-  });
-
-  return successResult(
-    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.`,
-    {
-      packageRoot: result.packageRoot,
-      outputs: result.files.map((file) => file.packageRelativePath),
-      nextNumber: result.nextNumber,
-      indexPdf: result.indexPdf,
-      indexCsv: result.indexCsv,
-      combinedPdf: result.combinedPdf,
-    },
+  const resolvedSources = await Promise.all(
+    input.sources.map(async (source) => ({
+      ...source,
+      path: (await resolveInput(source.path)).realPath,
+    })),
   );
+  const output = await prepareOutput(input.outputDir);
+  let outputReserved = true;
+
+  try {
+    await output.abort();
+    outputReserved = false;
+
+    const result = await buildProductionSet({
+      sources: resolvedSources,
+      outputDir: output.outputPath,
+      prefix: input.prefix,
+      ...(input.start === undefined ? {} : { start: input.start }),
+      ...(input.digits === undefined ? {} : { digits: input.digits }),
+      ...(input.includeFilenameInIndex === undefined
+        ? {}
+        : { includeFilenameInIndex: input.includeFilenameInIndex }),
+      ...(input.includeIndex === undefined ? {} : { includeIndex: input.includeIndex }),
+      ...(input.combinedPdf === undefined ? {} : { combinedPdf: input.combinedPdf }),
+      ...(input.volumeSizeMb === undefined ? {} : { volumeSizeMb: input.volumeSizeMb }),
+    });
+
+    return successResult(
+      `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.`,
+      {
+        packageRoot: result.packageRoot,
+        outputs: result.files.map((file) => file.packageRelativePath),
+        nextNumber: result.nextNumber,
+        indexPdf: result.indexPdf,
+        indexCsv: result.indexCsv,
+        combinedPdf: result.combinedPdf,
+      },
+    );
+  } finally {
+    if (outputReserved) {
+      await output.abort().catch(() => undefined);
+    }
+  }
 }
 
 // ---- page_numbers ----

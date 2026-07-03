@@ -287,7 +287,8 @@ pub fn run() {
             diagnostics::diagnostics_record_event,
             diagnostics::diagnostics_export_dialog,
             mcp::mcp_status,
-            mcp::mcp_set_enabled
+            mcp::mcp_set_enabled,
+            mcp::build_production_set
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

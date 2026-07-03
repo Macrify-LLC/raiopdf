@@ -168,4 +168,61 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(path.join(outputDir, "raio-manifest", "manifest.json"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "raio-manifest", "checksums.txt"))).resolves.toBeUndefined();
   });
+
+  it("build_production_set rejects relative source paths before writing output", async () => {
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: "relative.pdf" }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Input path must be absolute/);
+
+    await expect(fs.access(outputDir)).rejects.toBeTruthy();
+  });
+
+  it("build_production_set rejects source symlink components before writing output", async () => {
+    const source = await makePdf("source.pdf", 1);
+    const linkDir = path.join(dir, "linked");
+    await fs.symlink(dir, linkDir);
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: path.join(linkDir, path.basename(source)) }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Path contains a symlink component/);
+
+    await expect(fs.access(outputDir)).rejects.toBeTruthy();
+  });
+
+  it("build_production_set rejects output symlink components before writing output", async () => {
+    const source = await makePdf("source.pdf", 1);
+    const linkDir = path.join(dir, "linked-output");
+    await fs.symlink(dir, linkDir);
+    const outputDir = path.join(linkDir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: source }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Path contains a symlink component/);
+
+    await expect(fs.access(path.join(dir, "production-package"))).rejects.toBeTruthy();
+  });
 });

@@ -4,6 +4,15 @@ import type { OcrUiState } from "../App";
 import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import {
+  EDIT_DIALOG_TOOLS,
+  LEGAL_TOOLS,
+  ORGANIZE_TOOLS,
+  TOOL_PANEL_EDIT_TOOLS,
+  type EditDialogToolId,
+  type LegalToolId,
+  type OrganizeToolId,
+} from "../lib/toolRegistry";
+import {
   BatesIcon,
   BoltIcon,
   CombineExhibitsIcon,
@@ -31,51 +40,36 @@ import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
 type GroupId = "edit" | "organize" | "comment" | "legal";
-export type LegalToolId = typeof LEGAL_TOOLS[number]["id"];
-export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
-export type EditDialogToolId = typeof EDIT_DIALOG_TOOLS[number]["id"];
+export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 
-const LEGAL_TOOLS = [
-  { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
-  { id: "batch-cleanup", label: "Batch Cleanup", icon: <OcrSearchIcon size={16} /> },
-  { id: "production-set", label: "Production Set", icon: <BatesIcon size={16} /> },
-  { id: "combine-exhibits", label: "Combine with Exhibits", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "sanitize", label: "Sanitize...", icon: <ShieldCheckIcon size={16} /> },
-  { id: "redact", label: "Redact", icon: <RedactIcon size={16} /> },
-  { id: "bates-numbering", label: "Bates Numbering", icon: <BatesIcon size={16} /> },
-  { id: "scanner-2425", label: "2.425 Scanner", icon: <ShieldCheckIcon size={16} /> },
-  { id: "scrub-metadata", label: "Scrub Metadata", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "passwords", label: "Passwords", icon: <ShieldCheckIcon size={16} /> },
-] as const;
-
-const ORGANIZE_TOOLS = [
-  { id: "pages", label: "Organize Pages", icon: <OrganizeIcon size={16} /> },
-  { id: "compress", label: "Compress...", icon: <CropIcon size={16} /> },
-  { id: "repair", label: "Repair...", icon: <ShieldCheckIcon size={16} /> },
-  { id: "merge", label: "Merge PDFs...", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
-  { id: "insert-images", label: "Insert images as pages...", icon: <ImageIcon size={16} /> },
-  { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
-  { id: "properties", label: "Document Properties", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "rotate", label: "Rotate Pages", icon: <RotateIcon size={16} /> },
-] as const;
-
-const EDIT_TOOLS: ReadonlyArray<{
-  id: Exclude<EditToolId, "select" | "comment">;
-  label: string;
-  icon: ReactNode;
-}> = [
-  { id: "textBox", label: "Text Box", icon: <TextBoxIcon size={16} /> },
-  { id: "image", label: "Image", icon: <ImageIcon size={16} /> },
-  { id: "highlight", label: "Highlight", icon: <HighlightIcon size={16} /> },
-  { id: "draw", label: "Draw", icon: <DrawIcon size={16} /> },
-  { id: "sign", label: "Sign", icon: <SignIcon size={16} /> },
-];
-
-const EDIT_DIALOG_TOOLS = [
-  { id: "page-numbers", label: "Page Numbers...", icon: <BatesIcon size={16} /> },
-  { id: "watermark", label: "Watermark...", icon: <ScrubMetadataIcon size={16} /> },
-] as const;
+const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
+  "prepare-for-filing": <BoltIcon variant="outline" size={16} />,
+  "batch-cleanup": <OcrSearchIcon size={16} />,
+  "production-set": <BatesIcon size={16} />,
+  "combine-exhibits": <CombineExhibitsIcon size={16} />,
+  sanitize: <ShieldCheckIcon size={16} />,
+  redact: <RedactIcon size={16} />,
+  "bates-numbering": <BatesIcon size={16} />,
+  "scanner-2425": <ShieldCheckIcon size={16} />,
+  "scrub-metadata": <ScrubMetadataIcon size={16} />,
+  passwords: <ShieldCheckIcon size={16} />,
+  pages: <OrganizeIcon size={16} />,
+  compress: <CropIcon size={16} />,
+  repair: <ShieldCheckIcon size={16} />,
+  merge: <CombineExhibitsIcon size={16} />,
+  insert: <InsertIcon size={16} />,
+  "insert-images": <ImageIcon size={16} />,
+  crop: <CropIcon size={16} />,
+  properties: <ScrubMetadataIcon size={16} />,
+  rotate: <RotateIcon size={16} />,
+  textBox: <TextBoxIcon size={16} />,
+  image: <ImageIcon size={16} />,
+  highlight: <HighlightIcon size={16} />,
+  draw: <DrawIcon size={16} />,
+  sign: <SignIcon size={16} />,
+  "page-numbers": <BatesIcon size={16} />,
+  watermark: <ScrubMetadataIcon size={16} />,
+};
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -172,10 +166,10 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        {EDIT_TOOLS.map((tool) => (
+        {TOOL_PANEL_EDIT_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
@@ -184,7 +178,7 @@ export function ToolPanel({
         {EDIT_DIALOG_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
@@ -205,7 +199,7 @@ export function ToolPanel({
         {ORGANIZE_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
@@ -260,7 +254,7 @@ export function ToolPanel({
           return (
             <div key={tool.id}>
               <ToolRow
-                icon={tool.icon}
+                icon={TOOL_PANEL_ICONS[tool.id]}
                 label={tool.label}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}

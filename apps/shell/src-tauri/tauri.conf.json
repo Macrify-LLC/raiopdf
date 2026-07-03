@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RaioPDF",
-  "version": "0.0.0",
+  "version": "../package.json",
   "identifier": "me.macrify.raiopdf",
   "build": {
     "beforeDevCommand": "pnpm --dir ../ui dev --host 127.0.0.1 --port 5173 --strictPort",
@@ -23,11 +23,6 @@
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
-    }
-  },
-  "plugins": {
-    "shell": {
-      "open": "https://.+"
     }
   },
   "bundle": {
@@ -52,6 +47,7 @@
       "payload/**/*"
     ],
     "windows": {
+      "allowDowngrades": false,
       "nsis": {
         "headerImage": "../../../installer/artwork/nsis-header.bmp",
         "sidebarImage": "../../../installer/artwork/nsis-sidebar.bmp",
@@ -66,6 +62,20 @@
       "wix": {
         "bannerPath": "../../../installer/artwork/wix-banner.bmp",
         "dialogImagePath": "../../../installer/artwork/wix-dialog.bmp"
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": "https://.+"
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/Macrify-LLC/raiopdf/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFFRTFBNkE1RTRDQkIyQUEKUldTcXNzdmtwYWJoSGtpclh5QnAvSTlxalZCZ25FL3hqS0IrNEZRNmFFcWRzRFgwVitsZmprRkgK",
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

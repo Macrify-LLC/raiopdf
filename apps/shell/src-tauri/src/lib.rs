@@ -266,6 +266,8 @@ fn hex_value(byte: u8) -> Result<u8, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             app.set_menu(build_native_menu(app.handle())?)?;

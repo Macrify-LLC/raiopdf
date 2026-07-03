@@ -76,8 +76,62 @@ jobs:
       - name: Build workspaces
         run: pnpm -r build
 
+      - name: Stamp shell package version from release tag
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Shared stamper (also used by the local `build:shell:signed` path) — it
+          # validates semver and writes apps/shell/package.json, failing loudly on a
+          # bad tag rather than stamping an invalid version.
+          node scripts/stamp-shell-version.mjs "$VERSION"
+
       - name: Build Tauri shell
         run: pnpm build:shell
+
+      - name: Assert installer filenames include stamped version
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUNDLE_DIRS=(
+            "apps/shell/src-tauri/target/release/bundle"
+            "target/release/bundle"
+          )
+          EXISTING_DIRS=()
+          for dir in "${BUNDLE_DIRS[@]}"; do
+            if [[ -d "$dir" ]]; then
+              EXISTING_DIRS+=("$dir")
+            fi
+          done
+
+          if [[ "${#EXISTING_DIRS[@]}" -lt 1 ]]; then
+            echo "No Tauri bundle directory was produced." >&2
+            printf 'Checked: %s\n' "${BUNDLE_DIRS[@]}" >&2
+            exit 1
+          fi
+
+          mapfile -t NSIS_INSTALLERS < <(
+            find "${EXISTING_DIRS[@]}" -type f -name "*_${VERSION}_*-setup.exe" | sort -u
+          )
+          mapfile -t MSI_INSTALLERS < <(
+            find "${EXISTING_DIRS[@]}" -type f -name "*_${VERSION}_*.msi" | sort -u
+          )
+
+          if [[ "${#NSIS_INSTALLERS[@]}" -lt 1 || "${#MSI_INSTALLERS[@]}" -lt 1 ]]; then
+            echo "Expected both an NSIS and an MSI installer stamped with version $VERSION." >&2
+            echo "  NSIS matches: ${#NSIS_INSTALLERS[@]}; MSI matches: ${#MSI_INSTALLERS[@]}" >&2
+            echo "Produced bundle files:" >&2
+            find "${EXISTING_DIRS[@]}" -type f | sort >&2
+            exit 1
+          fi
+
+          printf 'Versioned installer artifacts:\n'
+          printf '  %s\n' "${NSIS_INSTALLERS[@]}" "${MSI_INSTALLERS[@]}"
 
       - name: Verify bundled payload manifest
         shell: bash

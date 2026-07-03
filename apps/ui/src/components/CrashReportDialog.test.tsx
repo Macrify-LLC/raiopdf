@@ -100,7 +100,7 @@ describe("CrashReportDialog", () => {
     expect(onNeverAsk).toHaveBeenCalledTimes(1);
   });
 
-  it("disables the GitHub action while the browser open is pending", () => {
+  it("shows and disables the GitHub action while the browser open is pending", () => {
     renderDialog(
       <CrashReportDialog
         payload={payload}
@@ -112,7 +112,8 @@ describe("CrashReportDialog", () => {
       />,
     );
 
-    expect(getButton("Open GitHub issue").hasAttribute("disabled")).toBe(true);
+    expect(findButton("Open GitHub issue")).toBeNull();
+    expect(getButton("Opening...").hasAttribute("disabled")).toBe(true);
   });
 
   it("disables the save action while the report save is pending", async () => {
@@ -178,8 +179,11 @@ describe("CrashReportDialog", () => {
     expect(onSaveReport).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain("/Users/jane/Desktop/raiopdf-crash-report.txt");
     expect(document.body.textContent).toContain("crash-reports@macrify.me");
-    expect(getButton("Copy email address")).toBeTruthy();
-    expect(getButton("Done")).toBeTruthy();
+    expect(document.activeElement).toBe(getButton("Copy email address"));
+    expect(getButton("Copy email address").classList).toContain(
+      "crash-report-dialog__primary-button",
+    );
+    expect(getButton("Done").classList).toContain("crash-report-dialog__secondary-button");
     expect(findButton("Save report to email")).toBeNull();
   });
 
@@ -204,6 +208,11 @@ describe("CrashReportDialog", () => {
     await clickButtonAndFlush("Copy email address");
 
     expect(writeText).toHaveBeenCalledWith("crash-reports@macrify.me");
+    expect(getButton("Copied")).toBeTruthy();
+    expect(document.querySelector("[role='status']")?.textContent).toBe(
+      "Email address copied to clipboard.",
+    );
+    expect(document.querySelector("[role='status']")?.getAttribute("aria-live")).toBe("polite");
   });
 
   it("leaves the normal dialog state when the save dialog is canceled", async () => {
@@ -260,6 +269,7 @@ async function clickButtonAndFlush(name: string) {
 
   await act(async () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
     await Promise.resolve();
   });
 }

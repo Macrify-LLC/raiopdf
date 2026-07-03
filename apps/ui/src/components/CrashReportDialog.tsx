@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, ShieldCheckIcon } from "../icons";
 import { FloatingDialog } from "./FloatingDialog";
 import "./CrashReportDialog.css";
@@ -38,6 +38,13 @@ export function CrashReportDialog({
   const [copiedEmail, setCopiedEmail] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const payloadId = useId();
+  const copyButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (savedPath) {
+      copyButtonRef.current?.focus();
+    }
+  }, [savedPath]);
 
   useEffect(() => {
     if (!copiedEmail) {
@@ -121,9 +128,8 @@ export function CrashReportDialog({
           <strong>Nothing is sent automatically — you choose what to share.</strong>
         </p>
         <p className="crash-report-dialog__copy">
-          RaioPDF noticed the last session did not exit cleanly. You can email us
-          the report — no GitHub account needed — or open it as a GitHub issue you
-          submit yourself.
+          The easiest way: save a report and email it to us — no GitHub account
+          needed. You can also open it as a GitHub issue you submit yourself.
         </p>
         <div className="crash-report-dialog__included" aria-label="Report includes">
           <span>App version</span>
@@ -173,10 +179,16 @@ export function CrashReportDialog({
                 Clipboard access was blocked. Select the email address and copy it manually.
               </p>
             ) : null}
+            {copiedEmail ? (
+              <p className="visually-hidden" role="status" aria-live="polite">
+                Email address copied to clipboard.
+              </p>
+            ) : null}
             <div className="crash-report-dialog__success-actions">
               <button
                 type="button"
-                className="crash-report-dialog__secondary-button crash-report-dialog__copy-email-button"
+                ref={copyButtonRef}
+                className="crash-report-dialog__primary-button crash-report-dialog__copy-email-button"
                 data-copy-state={copiedEmail ? "copied" : copyFailed ? "failed" : undefined}
                 onClick={copySupportEmail}
               >
@@ -185,7 +197,7 @@ export function CrashReportDialog({
               </button>
               <button
                 type="button"
-                className="crash-report-dialog__primary-button"
+                className="crash-report-dialog__secondary-button"
                 onClick={onNotNow}
               >
                 Done
@@ -200,14 +212,14 @@ export function CrashReportDialog({
 
         {savedPath ? null : (
           <div className="crash-report-dialog__actions">
-            <button
-              type="button"
-              className="crash-report-dialog__tertiary-button"
-              onClick={onNeverAsk}
-            >
-              Never ask
-            </button>
-            <div className="crash-report-dialog__decision-actions">
+            <div className="crash-report-dialog__exit-row">
+              <button
+                type="button"
+                className="crash-report-dialog__tertiary-button"
+                onClick={onNeverAsk}
+              >
+                Never ask
+              </button>
               <button
                 type="button"
                 className="crash-report-dialog__secondary-button"
@@ -215,13 +227,15 @@ export function CrashReportDialog({
               >
                 Not now
               </button>
+            </div>
+            <div className="crash-report-dialog__send-row">
               <button
                 type="button"
                 className="crash-report-dialog__secondary-button"
                 onClick={onOpenGitHubIssue}
                 disabled={isOpening}
               >
-                Open GitHub issue
+                {isOpening ? "Opening..." : "Open GitHub issue"}
               </button>
               <button
                 type="button"

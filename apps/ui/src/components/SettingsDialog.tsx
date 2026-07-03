@@ -14,6 +14,7 @@ export interface SettingsDialogProps {
   /** Set when Preferences was opened via "Open Raio to AI..." specifically. */
   focusSection?: SettingsFocusSection | null | undefined;
   onFocusSectionHandled?: (() => void) | undefined;
+  mcpStatus?: string | null | undefined;
   diagnosticsStatus?: string | null | undefined;
   onExportDiagnostics: () => void;
 }
@@ -25,6 +26,7 @@ export function SettingsDialog({
   mcpPath,
   focusSection,
   onFocusSectionHandled,
+  mcpStatus,
   diagnosticsStatus,
   onExportDiagnostics,
 }: SettingsDialogProps) {
@@ -88,6 +90,7 @@ export function SettingsDialog({
             enabled={mcpEnabled}
             onToggle={onToggleMcpEnabled}
             mcpPath={mcpPath}
+            status={mcpStatus}
             focused={focusSection === "open-raio-to-ai"}
             onFocusHandled={onFocusSectionHandled}
           />

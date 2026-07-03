@@ -7,60 +7,62 @@ export interface ToolRegistryEntry {
   label: string;
   group: ToolGroupId;
   helpArticleId: string;
+  tooltip?: string;
+  description?: string;
 }
 
 export const LEGAL_TOOLS = [
-  { id: "prepare-for-filing", label: "Prepare for Filing", group: "legal", helpArticleId: "prepare-for-filing" },
-  { id: "batch-cleanup", label: "Batch Cleanup", group: "legal", helpArticleId: "batch-cleanup" },
-  { id: "production-set", label: "Production Set", group: "legal", helpArticleId: "production-set" },
-  { id: "combine-exhibits", label: "Combine with Exhibits", group: "legal", helpArticleId: "combine-exhibits" },
-  { id: "sanitize", label: "Sanitize...", group: "legal", helpArticleId: "sanitize" },
-  { id: "redact", label: "Redact", group: "legal", helpArticleId: "redact" },
-  { id: "bates-numbering", label: "Bates Numbering", group: "legal", helpArticleId: "bates-numbering" },
-  { id: "scanner-2425", label: "2.425 Scanner", group: "legal", helpArticleId: "scanner-2425" },
-  { id: "scrub-metadata", label: "Scrub Metadata", group: "legal", helpArticleId: "scrub-metadata" },
-  { id: "passwords", label: "Passwords", group: "legal", helpArticleId: "passwords" },
+  { id: "prepare-for-filing", label: "Prepare for Filing", group: "legal", helpArticleId: "prepare-for-filing", description: "Check filing limits, normalize pages, split if needed, and verify the output." },
+  { id: "batch-cleanup", label: "Batch Cleanup", group: "legal", helpArticleId: "batch-cleanup", description: "Run OCR, cleanup, metadata removal, and filing splits across local PDFs." },
+  { id: "production-set", label: "Production Set", group: "legal", helpArticleId: "production-set", description: "Build a Bates-numbered production package with index files and optional volumes." },
+  { id: "combine-exhibits", label: "Combine with Exhibits", group: "legal", helpArticleId: "combine-exhibits", description: "Append exhibits, stamp exhibit labels, add bookmarks, and optionally add an index." },
+  { id: "sanitize", label: "Sanitize...", group: "legal", helpArticleId: "sanitize", description: "Remove active content such as JavaScript, links, and embedded files." },
+  { id: "redact", label: "Redact", group: "legal", helpArticleId: "redact", description: "Mark areas for permanent removal, then verify redacted content is gone." },
+  { id: "bates-numbering", label: "Bates Numbering", group: "legal", helpArticleId: "bates-numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width." },
+  { id: "scanner-2425", label: "2.425 Scanner", group: "legal", helpArticleId: "scanner-2425", description: "Look for common Florida Rule 2.425 sensitive-information patterns." },
+  { id: "scrub-metadata", label: "Scrub Metadata", group: "legal", helpArticleId: "scrub-metadata", description: "Inspect and remove document metadata without changing page content." },
+  { id: "passwords", label: "Passwords", group: "legal", helpArticleId: "passwords", description: "Review password controls; encryption changes are unavailable in this build." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const ORGANIZE_TOOLS = [
-  { id: "pages", label: "Organize Pages", group: "organize", helpArticleId: "pages" },
-  { id: "compress", label: "Compress...", group: "organize", helpArticleId: "compress" },
-  { id: "repair", label: "Repair...", group: "organize", helpArticleId: "repair" },
-  { id: "merge", label: "Merge PDFs...", group: "organize", helpArticleId: "merge" },
-  { id: "insert", label: "Insert from File...", group: "organize", helpArticleId: "insert" },
-  { id: "insert-images", label: "Insert images as pages...", group: "organize", helpArticleId: "insert-images" },
-  { id: "crop", label: "Crop / Resize...", group: "organize", helpArticleId: "crop" },
-  { id: "properties", label: "Document Properties", group: "organize", helpArticleId: "properties" },
-  { id: "rotate", label: "Rotate Pages", group: "organize", helpArticleId: "rotate" },
+  { id: "pages", label: "Organize Pages", group: "organize", helpArticleId: "pages", description: "Select, reorder, rotate, delete, extract, or split pages." },
+  { id: "compress", label: "Compress...", group: "organize", helpArticleId: "compress", description: "Reduce file size through the desktop engine while preserving a PDF output." },
+  { id: "repair", label: "Repair...", group: "organize", helpArticleId: "repair", description: "Ask the desktop engine to rebuild a PDF that will not open cleanly." },
+  { id: "merge", label: "Merge PDFs...", group: "organize", helpArticleId: "merge", description: "Append other PDFs after the current document." },
+  { id: "insert", label: "Insert from File...", group: "organize", helpArticleId: "insert", description: "Insert pages from another PDF at the selected position." },
+  { id: "insert-images", label: "Insert images as pages...", group: "organize", helpArticleId: "insert-images", description: "Convert image files into PDF pages and insert them." },
+  { id: "crop", label: "Crop / Resize...", group: "organize", helpArticleId: "crop", description: "Crop margins or resize selected pages to a standard page size." },
+  { id: "properties", label: "Document Properties", group: "organize", helpArticleId: "properties", description: "View document metadata, size, page count, and text-layer status." },
+  { id: "rotate", label: "Rotate Pages", group: "organize", helpArticleId: "rotate", description: "Rotate the selected pages clockwise." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_PANEL_EDIT_TOOLS = [
-  { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox" },
-  { id: "image", label: "Image", group: "edit", helpArticleId: "image" },
-  { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight" },
-  { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw" },
-  { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign" },
+  { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
+  { id: "image", label: "Image", group: "edit", helpArticleId: "image", description: "Place an image on the current page before saving." },
+  { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight", description: "Drag over text to create a saved highlight annotation." },
+  { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw", description: "Draw freehand ink that will be saved with the PDF." },
+  { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
 ] as const satisfies readonly (ToolRegistryEntry & {
   id: Exclude<EditToolId, "select" | "comment">;
 })[];
 
 export const EDIT_DIALOG_TOOLS = [
-  { id: "page-numbers", label: "Page Numbers...", group: "edit", helpArticleId: "page-numbers" },
-  { id: "watermark", label: "Watermark...", group: "edit", helpArticleId: "watermark" },
+  { id: "page-numbers", label: "Page Numbers...", group: "edit", helpArticleId: "page-numbers", description: "Stamp generated page numbers into selected page positions." },
+  { id: "watermark", label: "Watermark...", group: "edit", helpArticleId: "watermark", description: "Add repeated visible text across document pages." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const COMMAND_BAR_EDIT_TOOLS = [
-  { id: "select", label: "Select", group: "edit", helpArticleId: "getting-started" },
-  { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight" },
-  { id: "textBox", label: "Text box", group: "edit", helpArticleId: "textBox" },
-  { id: "image", label: "Image", group: "edit", helpArticleId: "image" },
-  { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment" },
-  { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw" },
-  { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign" },
+  { id: "select", label: "Select", group: "edit", helpArticleId: "getting-started", tooltip: "Select text or return to the normal pointer." },
+  { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight", tooltip: "Drag over text to create a saved highlight annotation." },
+  { id: "textBox", label: "Text box", group: "edit", helpArticleId: "textBox", tooltip: "Place editable text on the current page before saving." },
+  { id: "image", label: "Image", group: "edit", helpArticleId: "image", tooltip: "Place an image on the current page before saving." },
+  { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment", tooltip: "Add a PDF note annotation on the current page." },
+  { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw", tooltip: "Draw freehand ink that will be saved with the PDF." },
+  { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", tooltip: "Place a signature image as a visible page edit." },
 ] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 
 export const HELP_ONLY_TOOL_ENTRIES = [
-  { id: "make-searchable", label: "Make Searchable (OCR)", group: "comment-ocr", helpArticleId: "make-searchable" },
+  { id: "make-searchable", label: "Make Searchable (OCR)", group: "comment-ocr", helpArticleId: "make-searchable", description: "Run OCR through the desktop engine and verify the output has searchable text." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_REGISTRY = [

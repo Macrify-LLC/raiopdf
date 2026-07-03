@@ -544,11 +544,7 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
   await expect(filingDialog).toBeVisible();
   const jurisdictionHeader = filingDialog.locator(".filing-card__jurisdiction");
-  await expect(
-    jurisdictionHeader.locator(":scope > span").filter({
-      hasText: /^Florida — Florida Courts E-Filing Portal$/,
-    }),
-  ).toBeVisible();
+  await expect(jurisdictionHeader.getByRole("combobox", { name: "Jurisdiction pack" })).toHaveValue("florida");
   await expect(page.getByText("State trial and appellate courts")).toBeVisible();
   await expect(page.getByText("These checks are guidance only")).toBeVisible();
   await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();
@@ -1058,6 +1054,13 @@ async function installFilingBridgeMock(
         });
       }
 
+      if (url.endsWith("/api/v1/security/sanitize-pdf") || url.endsWith("/api/v1/misc/ocr-pdf")) {
+        return new Response(new Uint8Array(convertedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
       return new Response("Not found", { status: 404 });
     };
   }, {
@@ -1116,6 +1119,13 @@ async function installFilingAndCompressBridgeMock(
         testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
 
+        return new Response(new Uint8Array(convertedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/security/sanitize-pdf") || url.endsWith("/api/v1/misc/ocr-pdf")) {
         return new Response(new Uint8Array(convertedContents), {
           status: 200,
           headers: { "content-type": "application/pdf" },

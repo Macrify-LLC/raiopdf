@@ -139,6 +139,7 @@ export function CommandBar({
             key={tool.id}
             icon={EDIT_TOOL_ICONS[tool.id](17)}
             label={tool.label}
+            tooltip={tool.tooltip}
             active={editTool === tool.id}
             disabled={!hasDocument && tool.id !== "select"}
             onClick={() => toggleTool(tool.id)}

@@ -61,10 +61,12 @@ export interface FormLayerProps {
  */
 export function FormLayer({ page, viewport, values, onValueChange }: FormLayerProps) {
   const [widgets, setWidgets] = useState<readonly FormWidget[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
 
+    setLoadError(null);
     void page
       .getAnnotations()
       .then((annotations) => {
@@ -75,6 +77,7 @@ export function FormLayer({ page, viewport, values, onValueChange }: FormLayerPr
       .catch(() => {
         if (!disposed) {
           setWidgets([]);
+          setLoadError("Fillable fields could not be shown on this page.");
         }
       });
 
@@ -83,12 +86,17 @@ export function FormLayer({ page, viewport, values, onValueChange }: FormLayerPr
     };
   }, [page, viewport]);
 
-  if (widgets.length === 0) {
+  if (widgets.length === 0 && !loadError) {
     return null;
   }
 
   return (
     <div className="form-layer">
+      {loadError ? (
+        <p className="form-layer__message" role="status">
+          {loadError}
+        </p>
+      ) : null}
       {widgets.map((widget) => (
         <FormWidgetInput
           key={widget.key}

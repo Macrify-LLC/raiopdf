@@ -5,6 +5,7 @@ import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import {
   EDIT_DIALOG_TOOLS,
+  HELP_ONLY_TOOL_ENTRIES,
   LEGAL_TOOLS,
   ORGANIZE_TOOLS,
   TOOL_PANEL_EDIT_TOOLS,
@@ -70,6 +71,8 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   "page-numbers": <BatesIcon size={16} />,
   watermark: <ScrubMetadataIcon size={16} />,
 };
+
+const MAKE_SEARCHABLE_TOOL = HELP_ONLY_TOOL_ENTRIES[0];
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -171,6 +174,7 @@ export function ToolPanel({
             key={tool.id}
             icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
+            description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
           />
@@ -180,6 +184,7 @@ export function ToolPanel({
             key={tool.id}
             icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
+            description={tool.description}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
           />
@@ -201,6 +206,7 @@ export function ToolPanel({
             key={tool.id}
             icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
+            description={tool.description}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
           />
@@ -226,7 +232,8 @@ export function ToolPanel({
       <div className="tool-panel__top-row">
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
-          label="Make Searchable (OCR)"
+          label={MAKE_SEARCHABLE_TOOL.label}
+          description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
         />
@@ -256,6 +263,7 @@ export function ToolPanel({
               <ToolRow
                 icon={TOOL_PANEL_ICONS[tool.id]}
                 label={tool.label}
+                description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
               />

@@ -26,6 +26,78 @@ afterEach(async () => {
 });
 
 describe("runBatchCleanup", () => {
+  it("defaults to local-only cleanup when no sidecar engine is supplied", async () => {
+    const source = await makePdf("source.pdf", 1);
+    const outputDir = path.join(dir, "package");
+    const engine = new RecordingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{ path: source, facts: imageOnlyFacts(1) }],
+      outputDir,
+    }, { local: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["scrub-metadata"]);
+    expect(result.files[0]!.ocrDecision).toBe("OCR disabled.");
+    expect(engine.operations).toEqual([]);
+    await expect(fs.access(path.join(outputDir, "upload", "source - cleaned.pdf"))).resolves.toBeUndefined();
+  });
+
+  it("does not implicitly schedule pack sanitize or OCR without a sidecar engine", async () => {
+    const source = await makePdf("scripted-scan.pdf", 1);
+    const engine = new RecordingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{
+        path: source,
+        facts: imageOnlyFacts(1),
+      }],
+      outputDir: path.join(dir, "package"),
+      packId: "federal-cmecf",
+    }, { local: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["scrub-metadata"]);
+    expect(result.files[0]!.ocrDecision).toBe("OCR disabled.");
+    expect(engine.operations).toEqual([]);
+  });
+
+  it("preserves pack sanitize defaults when a sidecar engine is supplied", async () => {
+    const source = await makePdf("scripted.pdf", 1);
+    const engine = new RecordingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{ path: source, facts: facts({ pages: 1 }) }],
+      outputDir: path.join(dir, "package"),
+      packId: "federal-cmecf",
+      operations: {
+        ocrMode: "off",
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["sanitize", "scrub-metadata"]);
+    expect(engine.operations).toEqual(["sanitize"]);
+  });
+
+  it("reports explicit sidecar-only operations clearly when no sidecar engine is supplied", async () => {
+    const source = await makePdf("source.pdf", 1);
+
+    const result = await runBatchCleanup({
+      sources: [{ path: source, facts: facts({ pages: 1 }) }],
+      outputDir: path.join(dir, "package"),
+      operations: {
+        sanitize: true,
+        ocrMode: "off",
+        scrubMetadata: false,
+      },
+    }, { local: new RecordingEngine() });
+
+    expect(result.files[0]!.status).toBe("failed");
+    expect(result.files[0]!.reason).toMatch(/sanitize requires the desktop sidecar engine/i);
+    expect(result.manifest.uploadFiles).toHaveLength(0);
+  });
+
   it("continues the queue after a failing encrypted file", async () => {
     const first = await makePdf("first.pdf", 1);
     const encrypted = await makePdf("encrypted.pdf", 1);

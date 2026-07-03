@@ -44,7 +44,8 @@
   outline-offset: -2px;
 }
 
-.tool-row[data-selected="true"] {
+.tool-row[data-selected="true"],
+.tool-row[data-selected="true"]:hover:not(:disabled) {
   background: var(--identity-amber-soft);
   border-left-color: var(--primary);
   border-top-color: var(--border-soft);

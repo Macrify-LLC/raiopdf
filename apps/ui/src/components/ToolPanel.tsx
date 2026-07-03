@@ -315,6 +315,16 @@ function OcrStatusPanel({
     : ocrState.phase;
   const active = isOcrActive(phase, ocrStarting);
 
+  // A missing capability (no desktop engine) is not a processing failure --
+  // OCR never ran. Every other tool in this panel (Redact, Sanitize, Repair,
+  // Compress, Scrub Metadata, Passwords) renders that same "not available
+  // here" fact as a calm, neutral note, never as an attention-grabbing error.
+  // OCR should read the same way instead of the only tool that flashes amber
+  // for a browser/desktop capability gap.
+  if (phase === "error" && !ocrAvailable) {
+    return <InlineMessage tone="neutral" message={message} />;
+  }
+
   return (
     <div
       className="tool-panel__ocr-status"
@@ -529,12 +539,14 @@ function ScannerPanel({
       >
         Scan Document
       </button>
+      {/* `state.message` already carries the right copy for every outcome --
+          "No obvious sensitive patterns found...", "N possible items found.",
+          or a genuine failure like "The scanner could not read text from
+          this PDF." A second hardcoded "no patterns found" line here used to
+          render underneath *any* message once scanning finished, including
+          a real failure -- telling the reader the scan came back clean right
+          after saying it didn't run. Don't duplicate/contradict it. */}
       {state.message ? <p className="tool-panel__status-line">{state.message}</p> : null}
-      {state.hits.length === 0 && !state.scanning && state.message ? (
-        <p className="tool-panel__empty-state">
-          No obvious sensitive patterns found. Review remains yours.
-        </p>
-      ) : null}
       {state.hits.length ? (
         <div className="tool-panel__hit-list" role="list">
           {state.hits.map((hit) => (

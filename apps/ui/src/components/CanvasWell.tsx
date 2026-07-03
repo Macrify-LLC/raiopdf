@@ -102,6 +102,7 @@ export function CanvasWell({
   const [draftRect, setDraftRect] = useState<ViewportRect | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const hasDocument = Boolean(pdfDocument);
+  const hasWorkspace = Boolean(workspace);
   const viewport = useMemo(() => page?.getViewport({ scale: zoom }) ?? null, [page, zoom]);
 
   useLayoutEffect(() => {
@@ -232,7 +233,14 @@ export function CanvasWell({
       cancelled = true;
       renderTask.cancel();
     };
-  }, [onRenderError, page, viewport]);
+    // `hasWorkspace` is a real dependency, not a lint appeasement: a workspace
+    // (Organize grid, Combine with Exhibits, Prepare for Filing) fully replaces
+    // this subtree while open, so the <canvas> node underneath is unmounted.
+    // Closing the workspace remounts a *new* canvas element, but `page` and
+    // `viewport` are unchanged from before -- without this dependency the
+    // effect would not re-fire, and the freshly mounted canvas would stay
+    // permanently blank until the reader changed page or zoom.
+  }, [onRenderError, page, viewport, hasWorkspace]);
 
   useEffect(() => {
     setDraftRect(null);

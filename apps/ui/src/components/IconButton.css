@@ -39,7 +39,8 @@
   box-shadow: none;
 }
 
-.icon-button[data-active="true"] {
+.icon-button[data-active="true"],
+.icon-button[data-active="true"]:hover:not(:disabled) {
   background: var(--identity-amber-soft);
   border-color: var(--border);
   color: var(--primary);

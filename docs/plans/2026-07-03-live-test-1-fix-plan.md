@@ -174,6 +174,22 @@
 - Risks: this is the largest-blast-radius workstream (every canvas-adjacent feature
   touches it). It ships as its own PR with a manual regression pass over redaction,
   search, stamps, forms, and rotation on a 100+ page fixture.
+- **Round-2 Codex guardrails (accepted, binding on the implementation):**
+  - pdf.js 6 `TextLayer` lifecycle = `cancel()` render + clear container DOM +
+    release page/canvas refs (+ optional static `TextLayer.cleanup()` on document
+    swap). There is no instance `destroy()`.
+  - Every navigation path becomes scroll intent (prev/next commands, search
+    next/previous, active search hit, every `setCurrentPage` caller) — not just
+    thumbnail clicks.
+  - Never recycle a canvas until its pdf.js render task is canceled/settled; reset
+    dimensions on release (frees backing memory, prevents stale-bitmap flashes).
+  - Cap overscan by pixel/canvas memory, not page count alone (high zoom!).
+  - Don't unmount pages aggressively while a text-selection drag is active.
+  - Per-page overlays carry their own `pageIndex`; redaction creation stops using
+    global `currentPage - 1`.
+  - Search highlight on an offscreen page = two steps: scroll page into mounted
+    range, then highlight/scroll to match.
+  - Page-size cache invalidates on document swap, rotation, reorder, and zoom.
 
 ## Workstream D — UX restructure (6, 7, 10, 11, 13, 18, 19) — needs Jacob's direction sign-off per item before build
 
@@ -237,6 +253,11 @@
 - Rotation root-cause corrected to repro-first investigation — ACCEPTED.
 - Keep idle shutdown at 5 min — REJECTED (owner decision: 15 min; env override
   remains).
+
+**Round 2 (2026-07-03): verdict CONSENSUS — no substantive objections.** TextLayer
+lifecycle correction + virtualization pitfalls folded into Workstream C above.
+Plan is FINAL; execution proceeds commander-style (Codex = non-UI worker,
+frontend-specialist = UI/UX worker, ≤3 parallel).
 
 ## Test plan (high level)
 

@@ -17,7 +17,8 @@
         "width": 1280,
         "height": 800,
         "minWidth": 1024,
-        "minHeight": 680
+        "minHeight": 680,
+        "decorations": false
       }
     ],
     "security": {
@@ -32,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "payload/"
+      "payload/**/*"
     ]
   }
 }

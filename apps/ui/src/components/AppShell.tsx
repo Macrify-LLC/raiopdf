@@ -27,6 +27,7 @@ export interface AppShellProps {
   onOpenRequested: () => void;
   onFileDropped: (file: File) => void;
   onSave: () => void;
+  onPrint: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
   onZoomOut: () => void;
@@ -72,6 +73,7 @@ export function AppShell({
   onOpenRequested,
   onFileDropped,
   onSave,
+  onPrint,
   onPreviousPage,
   onNextPage,
   onZoomOut,
@@ -150,6 +152,7 @@ export function AppShell({
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}
+        onPrint={onPrint}
         onPreviousPage={onPreviousPage}
         onNextPage={onNextPage}
         onZoomOut={onZoomOut}

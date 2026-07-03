@@ -2,6 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2022"],
+    // packLoader.node.ts uses node:fs, URL, and import.meta.url for bundled pack loading.
+    "types": ["node"],
     "rootDir": ".",
     "outDir": "dist"
   },

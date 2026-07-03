@@ -21,7 +21,7 @@ export function loadJurisdictionPackFromJson(json: string, sourceName: string): 
     raw = JSON.parse(json);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${sourceName}: invalid JSON: ${message}`);
+    throw new Error(`${sourceName}: invalid JSON: ${message}`, { cause: error });
   }
 
   return validateJurisdictionPack(raw, sourceName);

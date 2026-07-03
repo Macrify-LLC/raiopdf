@@ -1141,7 +1141,7 @@ export function App() {
     });
 
     void (async () => {
-      let workingHandle: PdfDocumentHandle | null = null;
+      let workingHandle: PdfDocumentHandle;
       const closeHandles: PdfDocumentHandle[] = [];
 
       try {

@@ -174,18 +174,15 @@ export function PrepareForFilingWorkspace({
     <section className="filing-workspace" aria-label="Prepare for Filing">
       <div className="filing-card">
         <header className="filing-card__header">
-          <div className="filing-card__title-row">
-            <span className="filing-card__icon" aria-hidden="true">
-              <BoltIcon variant="outline" size={17} />
-            </span>
-            <div>
-              <p className="filing-card__eyebrow">Legal</p>
-              <h2>Prepare for Filing</h2>
-              <p className="filing-card__document-line">
-                {document.fileName ?? "No document"} · {formatPageCount(document.pageCount)}
-              </p>
-            </div>
-          </div>
+          {/* The dialog chrome already shows the "Legal / Prepare for Filing"
+              title (see FloatingDialog in App.tsx) -- repeating it here was a
+              second title stacked on the first. This line carries the one
+              thing the dialog title doesn't: which document is in play. */}
+          <p className="filing-card__document-line">
+            <BoltIcon variant="outline" size={14} />
+            <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
+            <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
+          </p>
           <div className="filing-card__overflow">
             <button
               type="button"
@@ -259,7 +256,7 @@ export function PrepareForFilingWorkspace({
         </div>
 
         {!document.bytes ? (
-          <p className="filing-card__empty">Open a PDF before preparing a filing copy.</p>
+          <p className="filing-card__empty" role="status">Open a PDF before preparing a filing copy.</p>
         ) : null}
 
         {impact ? (
@@ -323,20 +320,28 @@ export function PrepareForFilingWorkspace({
           </form>
         ) : null}
 
-        <div className="filing-checks" aria-label="Preflight checks">
-          {loadingReport ? (
-            <p className="filing-card__status" role="status">
-              <LoadingSun size={14} label="Reading document facts" />
-              Reading document facts...
+        <section className="filing-checks" aria-label="Preflight checks">
+          <div className="filing-checks__header">
+            <p className="filing-checks__title">Preflight checks</p>
+            <p className="filing-checks__subtitle">
+              What a clerk might flag -- none of it blocks your export.
             </p>
-          ) : null}
-          {activeReport?.checks.map((check) => (
-            <PreflightRow key={check.checkId} check={check} />
-          ))}
-          {activeReport?.selectionChecks?.map((check) => (
-            <PreflightRow key={check.checkId} check={check} />
-          ))}
-        </div>
+          </div>
+          <div className="filing-checks__rows">
+            {loadingReport ? (
+              <p className="filing-card__status" role="status">
+                <LoadingSun size={14} label="Reading document facts" />
+                Reading document facts...
+              </p>
+            ) : null}
+            {activeReport?.checks.map((check) => (
+              <PreflightRow key={check.checkId} check={check} />
+            ))}
+            {activeReport?.selectionChecks?.map((check) => (
+              <PreflightRow key={check.checkId} check={check} />
+            ))}
+          </div>
+        </section>
 
         {!pdfAAvailable && prepPlan.some((step) => step.id === "convert-pdfa" && checkedSteps.has(step.id)) ? (
           <p className="filing-card__unavailable" role="status">
@@ -382,6 +387,7 @@ export function PrepareForFilingWorkspace({
               ) : null}
               {formatProgressLabel(progress.phase)}
             </p>
+            <FilingProgressSteps phase={progress.phase} />
             <p>{progress.message}</p>
           </div>
         ) : null}
@@ -487,24 +493,38 @@ function PackPicker({
   const staleHint = packStalenessHint(oldestVerified);
 
   return (
-    <div className="filing-card__jurisdiction" title={`${pack.scopeNote} Oldest rule verified ${oldestVerified}`}>
-      <label className="filing-card__pack-select">
-        <span>Jurisdiction</span>
-        <select
-          value={pack.id}
-          aria-label="Jurisdiction pack"
-          onChange={(event) => onPackChange(event.target.value as JurisdictionPackId)}
-        >
-          {availablePacks.map((availablePack) => (
-            <option key={availablePack.id} value={availablePack.id}>
-              {availablePack.jurisdiction} - {availablePack.portal} - {availablePack.scopeNote}
-            </option>
-          ))}
-        </select>
-      </label>
-      <span>{pack.courtSystem}</span>
-      {staleHint ? <span className="filing-card__stale">{staleHint}</span> : null}
-      <p className="filing-card__scope-note">{pack.scopeNote}</p>
+    // The outer class name stays `filing-card__jurisdiction` -- the smoke
+    // suite locates the combobox through it.
+    <div className="filing-card__jurisdiction">
+      <div className="filing-pack__select-row">
+        <label className="filing-pack__select">
+          <span className="filing-pack__eyebrow">Jurisdiction</span>
+          <span className="filing-pack__select-control">
+            <select
+              value={pack.id}
+              aria-label="Jurisdiction pack"
+              onChange={(event) => onPackChange(event.target.value as JurisdictionPackId)}
+            >
+              {availablePacks.map((availablePack) => (
+                <option key={availablePack.id} value={availablePack.id}>
+                  {availablePack.jurisdiction} - {availablePack.portal}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon size={12} />
+          </span>
+        </label>
+        {staleHint ? (
+          <span className="filing-pack__stale" title={`Oldest rule verified ${oldestVerified}`}>
+            {staleHint}
+          </span>
+        ) : null}
+      </div>
+      <div className="filing-pack__summary">
+        <p className="filing-pack__portal">{pack.portal}</p>
+        <p className="filing-pack__court-system">{pack.courtSystem}</p>
+        <p className="filing-pack__scope-note">{pack.scopeNote}</p>
+      </div>
     </div>
   );
 }
@@ -537,23 +557,13 @@ function CourtProfilePrompt({
   }
 
   return (
-    <form
-      className="filing-court-profile"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const parsed = parsePositiveNumber(maxMegabytes);
-        if (!name.trim() || parsed === null) {
-          return;
-        }
-        onSave({ name: name.trim(), maxMegabytes: parsed });
-      }}
-    >
-      <div>
+    <div className="filing-court-profile">
+      <div className="filing-court-profile__intro">
         <p className="filing-court-profile__title">Court file-size cap</p>
-        <p>Set your court's cap; without it, size checks stay unknown.</p>
+        <p className="filing-court-profile__hint">Set your court's cap; without it, size checks stay unknown.</p>
       </div>
       {packProfiles.length > 0 ? (
-        <label>
+        <label className="filing-court-profile__saved">
           <span>Saved profile</span>
           <select
             value={selectedProfile?.id ?? ""}
@@ -568,26 +578,38 @@ function CourtProfilePrompt({
           </select>
         </label>
       ) : null}
-      <label>
-        <span>Name</span>
-        <input
-          value={name}
-          placeholder="S.D. Fla. - 50 MB"
-          onChange={(event) => setName(event.target.value)}
-        />
-      </label>
-      <label>
-        <span>Cap MB</span>
-        <input
-          inputMode="decimal"
-          value={maxMegabytes}
-          onChange={(event) => setMaxMegabytes(event.target.value)}
-        />
-      </label>
-      <button type="submit" className="filing-card__secondary-button">
-        Save profile
-      </button>
-    </form>
+      <form
+        className="filing-court-profile__form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const parsed = parsePositiveNumber(maxMegabytes);
+          if (!name.trim() || parsed === null) {
+            return;
+          }
+          onSave({ name: name.trim(), maxMegabytes: parsed });
+        }}
+      >
+        <label>
+          <span>Name</span>
+          <input
+            value={name}
+            placeholder="S.D. Fla. - 50 MB"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Cap MB</span>
+          <input
+            inputMode="decimal"
+            value={maxMegabytes}
+            onChange={(event) => setMaxMegabytes(event.target.value)}
+          />
+        </label>
+        <button type="submit" className="filing-card__secondary-button">
+          Save profile
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -606,12 +628,18 @@ function PrepChecklist({
   onCustomSplitMegabytesChange: (value: string) => void;
   onToggle: (stepId: PrepPlanStepId) => void;
 }) {
+  const runnableSteps = steps.filter((step) => !step.disabledReason && !unavailableSteps.get(step.id));
+  const activeCount = runnableSteps.filter((step) => checkedSteps.has(step.id)).length;
+
   return (
     <section className="filing-prep" aria-label="Preparation checklist">
       <div className="filing-prep__header">
-        <p>Prep checklist</p>
+        <p className="filing-prep__title">Prep checklist</p>
+        <p className="filing-prep__subtitle">
+          {activeCount} of {runnableSteps.length} step{runnableSteps.length === 1 ? "" : "s"} will run
+        </p>
       </div>
-      <div className="filing-prep__rows">
+      <div className="filing-prep__rows" role="list">
         {steps.map((step) => (
           <PrepStepRow
             key={step.id}
@@ -643,44 +671,78 @@ function PrepStepRow({
   onCustomSplitMegabytesChange: (value: string) => void;
   onToggle: () => void;
 }) {
-  const disabledReason = step.disabledReason ?? unavailableReason;
+  // Two different reasons a row can be locked, and they read differently:
+  // a pack POLICY forbidding the property (this is a legal fact) vs. Raio
+  // itself not shipping the capability yet (a product fact, not a legal one).
+  const policyBlockedReason = step.disabledReason;
+  const productUnavailableReason = unavailableReason;
+  const blockedReason = policyBlockedReason ?? productUnavailableReason;
+  const disabled = Boolean(blockedReason);
+  const descriptionId = `filing-step-${step.id}-body`;
+  const showCustomSplit = step.id === "split-by-size" && checked && !disabled;
 
   return (
     <article
       className="filing-prep-row"
+      role="listitem"
       data-checked={checked ? "true" : "false"}
-      data-disabled={disabledReason ? "true" : "false"}
+      data-disabled={disabled ? "true" : "false"}
     >
-      <label className="filing-prep-row__toggle">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={Boolean(disabledReason)}
-          onChange={onToggle}
-        />
-        <span>
-          <span className="filing-prep-row__title">{step.label}</span>
-          <span className="filing-prep-row__detail">
-            {formatStance(step.stance)}
-            {step.condition ? ` - ${step.condition}` : ""}
-            {disabledReason ? ` - ${disabledReason}` : ""}
-          </span>
-        </span>
-      </label>
-      <p className="filing-prep-row__impact">{step.impact}</p>
-      <p className="filing-prep-row__authority">{step.authority}</p>
-      {step.id === "split-by-size" && checked && !disabledReason ? (
-        <label className="filing-prep-row__override">
-          <span>Custom MB</span>
+      <div className="filing-prep-row__main">
+        <label className="filing-prep-row__toggle">
           <input
-            inputMode="decimal"
-            value={customSplitMegabytes}
-            placeholder="Pack default"
-            onChange={(event) => onCustomSplitMegabytesChange(event.target.value)}
+            type="checkbox"
+            checked={checked}
+            disabled={disabled}
+            aria-describedby={descriptionId}
+            onChange={onToggle}
           />
+          <span className="filing-prep-row__title">{step.label}</span>
         </label>
-      ) : null}
+        <StepStanceBadge stance={step.stance} />
+      </div>
+
+      <div id={descriptionId} className="filing-prep-row__body">
+        {step.condition ? <p className="filing-prep-row__condition">{step.condition}</p> : null}
+        {step.note ? <p className="filing-prep-row__note">{step.note}</p> : null}
+        {policyBlockedReason ? (
+          <p className="filing-prep-row__blocked" data-tone="policy">{policyBlockedReason}</p>
+        ) : productUnavailableReason ? (
+          <p className="filing-prep-row__blocked" data-tone="product">{capitalize(productUnavailableReason)}.</p>
+        ) : null}
+        {step.destructive ? (
+          <div className="filing-prep-row__warning" data-tone={checked ? "active" : "quiet"}>
+            <p className="filing-prep-row__warning-label">Detected impact</p>
+            <p className="filing-prep-row__warning-text">{step.impact}</p>
+          </div>
+        ) : (
+          <p className="filing-prep-row__impact">{step.impact}</p>
+        )}
+        {showCustomSplit ? (
+          <label className="filing-prep-row__override">
+            <span>Custom split size</span>
+            <span className="filing-prep-row__override-input">
+              <input
+                inputMode="decimal"
+                value={customSplitMegabytes}
+                placeholder="Pack default"
+                onChange={(event) => onCustomSplitMegabytesChange(event.target.value)}
+              />
+              <span>MB</span>
+            </span>
+          </label>
+        ) : null}
+        <p className="filing-prep-row__authority">{formatStepAuthority(step)}</p>
+      </div>
     </article>
+  );
+}
+
+function StepStanceBadge({ stance }: { stance: PrepPlanStep["stance"] }) {
+  return (
+    <span className="filing-prep-row__stance" data-stance={stance}>
+      {STANCE_LABEL[stance]}
+    </span>
   );
 }
 
@@ -758,31 +820,58 @@ function ResultCard({
         <CheckIcon size={15} />
         <div>
           <p className="filing-result__title">Output preflight re-run complete</p>
-          <p>Verified after re-running preflight on the output.</p>
+          <p className="filing-result__subtitle">Verified after re-running preflight on the output.</p>
         </div>
       </div>
       <div className="filing-result__parts" role="list">
         {result.parts.map((part) => (
           <div key={part.fileName} className="filing-result__part" role="listitem">
-            <span>{part.fileName}</span>
-            <span>{formatBytes(part.byteLength)}</span>
+            <span className="filing-result__part-name">{part.fileName}</span>
+            <span className="filing-result__part-size">{formatBytes(part.byteLength)}</span>
           </div>
         ))}
       </div>
-      <p className="filing-result__fine">
-        Pack {pack.packVersion}; final report generated {result.verifiedAt}.
-      </p>
-      {result.skippedSteps.length > 0 ? (
+      <div className="filing-result__footer">
         <p className="filing-result__fine">
-          Skipped: {result.skippedSteps.join("; ")}.
+          Pack {pack.packVersion}; final report generated {result.verifiedAt}.
         </p>
-      ) : null}
-      {result.overrides.length > 0 ? (
-        <p className="filing-result__fine">
-          Overrides: {result.overrides.join("; ")}.
-        </p>
-      ) : null}
+        {result.skippedSteps.length > 0 ? (
+          <p className="filing-result__fine">
+            Skipped: {result.skippedSteps.join("; ")}.
+          </p>
+        ) : null}
+        {result.overrides.length > 0 ? (
+          <p className="filing-result__fine">
+            Overrides: {result.overrides.join("; ")}.
+          </p>
+        ) : null}
+      </div>
     </section>
+  );
+}
+
+function FilingProgressSteps({ phase }: { phase: FilingProgressPhase }) {
+  if (phase === "idle" || phase === "error") {
+    return null;
+  }
+
+  const currentIndex = phase === "done" ? PHASE_SEQUENCE.length : PHASE_SEQUENCE.indexOf(phase);
+
+  return (
+    <ol className="filing-progress__steps" aria-hidden="true">
+      {PHASE_SEQUENCE.map((step, index) => {
+        const state = index < currentIndex ? "done" : index === currentIndex ? "active" : "pending";
+
+        return (
+          <li key={step} className="filing-progress__step" data-state={state}>
+            <span className="filing-progress__step-dot">
+              {state === "done" ? <CheckIcon size={9} /> : null}
+            </span>
+            {PHASE_STEP_LABEL[step]}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -904,13 +993,40 @@ function resolveUnavailableSteps(
   return unavailable;
 }
 
-function formatStance(stance: PrepPlanStep["stance"]): string {
-  if (stance === "standard") {
-    return "standard prep";
+const STANCE_LABEL: Record<PrepPlanStep["stance"], string> = {
+  required: "Required",
+  preferred: "Preferred",
+  accepted: "Accepted",
+  prohibited: "Prohibited",
+  unknown: "Unknown",
+  standard: "Standard prep",
+};
+
+// Mirrors packages/rules/src/prepPlan.ts's internal UNKNOWN_LAST_VERIFIED
+// sentinel -- that module doesn't export it, so a genuinely-unverified date
+// never surfaces as a fake 1970 timestamp in the UI.
+const UNVERIFIED_SENTINEL = "1970-01-01";
+
+function formatStepAuthority(step: PrepPlanStep): string {
+  if (!step.lastVerified || step.lastVerified === UNVERIFIED_SENTINEL) {
+    return step.authority;
   }
 
-  return stance;
+  return `${step.authority} - verified ${step.lastVerified}`;
 }
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : `${value[0]!.toUpperCase()}${value.slice(1)}`;
+}
+
+const PHASE_SEQUENCE = ["normalizing", "splitting", "converting", "verifying"] as const;
+
+const PHASE_STEP_LABEL: Record<(typeof PHASE_SEQUENCE)[number], string> = {
+  normalizing: "Normalize",
+  splitting: "Split",
+  converting: "Convert",
+  verifying: "Verify",
+};
 
 function parsePositiveNumber(value: string): number | null {
   const trimmed = value.trim();

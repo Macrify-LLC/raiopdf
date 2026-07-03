@@ -26,29 +26,32 @@ never leaves your computer.
 
 Sub-headline: Plus the legal workflows Adobe never bothered building.
 
-## Positioning frame (short paragraph, upper page) — updated 2026-07-03 (rev. 2)
+## Positioning frame (short paragraph, upper page) — updated 2026-07-03 (rev. 3)
 
 Written in Jacob's own first-person voice, not third-person product copy —
 direct, plainspoken, a little wry, not corporate-marketing-serious. This is
 now a real, opinionated founder essay, not a sanitized paragraph — the words
 below are canonical, pulled verbatim from the repo's `README.md` (Jacob's own
-edit, "Human editing" commit, 2026-07-02). Reproduce it verbatim wherever the
-full version is used; do not paraphrase it into corporate voice:
+style-fix pass, 2026-07-03). Reproduce it verbatim wherever the full version
+is used; do not paraphrase it into corporate voice:
 
 > Nothing makes me feel more like a crotchety old man than how software
-> works. I remember when you got software by someone handing you a floppy
-> disk and that was that. But as software companies realized that their
-> best way of making money was to stop selling their software and rent it
-> out instead and sell you upcharges.
+> works today. I remember when you got software by someone handing you a
+> floppy disk and that was that. But at some point, software companies
+> realized that they could make unlimited money by renting the software out
+> to users rather than selling it, and that became the only way
+> productivity software was sold. And because software was so technically
+> complicated and expensive to make, customers didn't have much of a choice
+> in the matter.
 >
-> The idea of making this came from talking to my staff. Nobody likes
-> Acrobat. Its bloat stresses computers, its licensing quirks will
-> sometimes bring work to a standstill, it constantly pushes features
-> nobody wants to use, and we're all paying for the privilege. Editing a
-> file that's already sitting on your own computer shouldn't require an
-> account, a cloud upload, and a cavalcade of minor annoyances. So in this
-> age of agentic coding, I asked how hard it would be to build a fully
-> featured PDF program the old fashioned way.
+> Nobody at my firm likes dealing with Acrobat. Its bloat stresses
+> computers, its licensing quirks can bring work to a standstill, it
+> constantly pushes features nobody wants to use, and we're paying
+> thousands for the privilege. Editing a file that's already sitting on
+> your own computer shouldn't require an account, a cloud upload, and a
+> cavalcade of minor annoyances. So in this age of agentic coding, I asked
+> how hard it would be to build a fully featured PDF program the old
+> fashioned way. Turns out it's not that hard.
 >
 > RaioPDF is the other way of doing it: a full, genuinely useful PDF suite —
 > including the less-glamorous legal stuff like true redaction and Bates
@@ -72,7 +75,7 @@ full version is used; do not paraphrase it into corporate voice:
 > I believe that using Raio is a genuinely better experience than using
 > Acrobat. Without the bloat, it's snappier. Without all of the features
 > I've never used, it's less confusing and clunky to operate. And with the
-> additional law-practice-specific improvements, a lot of pain points of
+> additional law practice-specific improvements, a lot of pain points of
 > practice are smoothed out.
 >
 > This went from an idea to a working prototype in about twelve hours. Not
@@ -85,7 +88,8 @@ full version is used; do not paraphrase it into corporate voice:
 >
 > The spirit airlines of software is arriving, and even if you don't like
 > it, the Adobes, Microsofts, and others in the world are going to have to
-> start competing not just with free, but not annoying.
+> start competing with software that is free, convenient, reliable, and
+> easy to use.
 
 **Revised guidance (2026-07-03): this IS partially a protest — a personal
 one, not a corporate one.** Naming Adobe (and, per the closer line above,
@@ -144,11 +148,12 @@ don't isolate it into its own callout box if you're using the full text.
   other so it doesn't read as a contradiction — the product has no AI
   features; it exposes an interface AI agents can call.
 
-## Why now (short section, can double as a pull-quote) — updated 2026-07-03 (rev. 2)
+## Why now (short section, can double as a pull-quote) — updated 2026-07-03 (rev. 3)
 
 > The spirit airlines of software is arriving, and even if you don't like
 > it, the Adobes, Microsofts, and others in the world are going to have to
-> start competing not just with free, but not annoying.
+> start competing with software that is free, convenient, reliable, and
+> easy to use.
 
 (Same first-person-voice guidance as the positioning frame above applies
 here — this is Jacob's line, pulled verbatim from the README's closing

@@ -36,19 +36,19 @@
 
 Nothing makes me feel more like a crotchety old man than how software works today. I remember when you got software by someone handing you a floppy disk and that was that. But at some point, software companies realized that they could make unlimited money by renting the software out to users rather than selling it, and that became the only way productivity software was sold. And because software was so technically complicated and expensive to make, customers didn't have much of a choice in the matter.
 
-Nobody at my firm likes dealing with Acrobat. Its bloat stresses computers, its licensing quirks can bring work to a standstill, it constantly pushes features nobody wants to use, and we're paying thousands for the privilege. Editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a cavalcade of minor annoyances. So in this age of agentic coding, I asked how hard it would be to build a fully featured PDF program the old fashioned way. Turns out its not that hard.
+Nobody at my firm likes dealing with Acrobat. Its bloat stresses computers, its licensing quirks can bring work to a standstill, it constantly pushes features nobody wants to use, and we're paying thousands for the privilege. Editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a cavalcade of minor annoyances. So in this age of agentic coding, I asked how hard it would be to build a fully featured PDF program the old fashioned way. Turns out it's not that hard.
 
 RaioPDF is the other way of doing it: **a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.**
 
 Turns out you don't need a subscription and a login screen to make solid software — you just have to build it. And once someone proves that, "this is just how PDF software works now" stops being true. That's really the point: not to out-feature any particular vendor, but to show a firm doesn't have to just accept whatever terms it's handed for a task this basic.
 
-And because you can just build it yourself, you can add in the functionality you've always wanted and leave out the stuff you don't. Regulating PDFs for efiling has always been a major annoyance of mine. Some features, like exporting a PDF into size-limited chunks just don't seem to exist in Acrobat (or I can't find them). Some are buried under a hundred configurations I don't want or understand. 
+And because you can just build it yourself, you can add in the functionality you've always wanted and leave out the stuff you don't. Regulating PDFs for e-filing has always been a major annoyance of mine. Some features, like exporting a PDF into size-limited chunks, just don't seem to exist in Acrobat (or I can't find them). Some are buried under a hundred configurations I don't want or understand.
 
-I believe that using Raio is a genuinely **better experience** than using Acrobat. Without the bloat, it's snappier. Without all of the features I've never used, it's less confusing and clunky to operate. And with the additional law practice-specific improvements, a lot of pain points of practice are smoothed out. 
+I believe that using Raio is a genuinely **better experience** than using Acrobat. Without the bloat, it's snappier. Without all of the features I've never used, it's less confusing and clunky to operate. And with the additional law practice-specific improvements, a lot of pain points of practice are smoothed out.
 
 This went from an idea to a working prototype in about twelve hours. Not because I'm an engineering prodigy — I'm a lawyer — but because the tools for building solid, deterministic software have gotten game-changingly powerful. If one attorney with a laptop can put a real dent in "free local PDF suite" over the course of an evening, the assumption that you need a giant company and a subscription to get decent software was already on its way out.
 
-The spirit airlines of software is arriving, and even if you don't like it, the Adobes, Microsofts, and others in the world are going to have to start competing not just with free, but **not annoying**. 
+The spirit airlines of software is arriving, and even if you don't like it, the Adobes, Microsofts, and others in the world are going to have to start competing with software that is **free, convenient, reliable, and easy to use**.
 
 ## What it does
 
@@ -73,7 +73,7 @@ Four ways it fits into an actual day at the firm:
 | Annotate | Highlight, comment, draw, stamp |
 | Fill & sign | Add text and images, fill forms, signature stamp + flatten |
 | Compress & protect | File compression, passwords, permissions |
-| Native MCP Integration | No AI features (intentional), but speaks natively to your AI Agents |
+| Native MCP Integration | No AI features (intentional), but speaks natively to your AI agents |
 | No catches | No watermarks, no nag screens, ever |
 
 ### Legal — the stuff nobody bothered building for lawyers
@@ -84,7 +84,7 @@ Four ways it fits into an actual day at the firm:
 | **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped and auto-bookmarked |
 | **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath |
 | **Bates numbering** | Across an entire document set, in one pass |
-| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag--this is vibe coded and you should never trust AI with legal reasoning. |
+| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 | **e-filing preflight report** | Rule citations attached (Fla. R. Jud. Admin. 2.520 / 2.525) |
 

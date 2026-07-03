@@ -73,6 +73,13 @@ import {
   type SplitInput,
 } from "./tools/legal.js";
 
+import {
+  handleRedact,
+  redactInputSchema,
+  redactOutputSchema,
+  type RedactInput,
+} from "./tools/redact.js";
+
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -317,6 +324,22 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: ExtractInput) => await handleExtract(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "redact_terms",
+    {
+      title: "Redact terms",
+      description:
+        "Redacts text terms by rasterizing the pages so the text is truly removed, then verifies no term remains extractable. Writes a new file only if verification passes.",
+      inputSchema: redactInputSchema,
+      outputSchema: redactOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: RedactInput) => await handleRedact(input, dependencies.engineHandle),
     ),
   );
 }

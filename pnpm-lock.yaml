@@ -56,6 +56,9 @@ importers:
       '@raiopdf/engine-sidecar':
         specifier: workspace:*
         version: link:../../packages/engine-sidecar
+      pdfjs-dist:
+        specifier: ^6.1.200
+        version: 6.1.200
       zod:
         specifier: ^4.4.3
         version: 4.4.3

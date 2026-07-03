@@ -12,7 +12,11 @@ export const baseOutputSchema = {
   error: errorSchema.optional(),
 };
 
-export type ToolErrorCode = "MCP_DISABLED" | "ENGINE_ERROR" | "PATH_POLICY";
+export type ToolErrorCode =
+  | "MCP_DISABLED"
+  | "ENGINE_ERROR"
+  | "PATH_POLICY"
+  | "REDACTION_UNVERIFIED";
 
 export type StructuredToolResult = CallToolResult & {
   structuredContent: Record<string, unknown>;

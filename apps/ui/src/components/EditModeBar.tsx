@@ -1,11 +1,14 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import type { EditToolId } from "../lib/edits";
 import type { EditingState } from "../hooks/useEditing";
+import type { PdfTextBoxAlign, PdfTextBoxFontFamily } from "@raiopdf/engine-api";
 import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
+  DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
+  DEFAULT_TEXT_FONT_FAMILY,
   HIGHLIGHT_COLOR_OPTIONS,
   INK_STROKE_WIDTH_OPTIONS,
   INK_TEXT_COLOR_OPTIONS,
@@ -150,6 +153,56 @@ function ToolOptions({ editing }: { editing: EditingState }) {
           selectedColor={editing.textBoxStyle.color ?? DEFAULT_TEXT_COLOR}
           onSelect={(color) => editing.updateTextBoxStyle({ color })}
         />
+        <select
+          className="legal-mode-bar__select"
+          aria-label="Text font family"
+          value={editing.textBoxStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          onChange={(event) =>
+            editing.updateTextBoxStyle({
+              fontFamily: event.currentTarget.value as PdfTextBoxFontFamily,
+            })
+          }
+        >
+          <option value="helvetica">Helvetica</option>
+          <option value="times">Times</option>
+          <option value="courier">Courier</option>
+        </select>
+        <span className="legal-mode-bar__width-group" aria-label="Text style">
+          <button
+            type="button"
+            className="legal-mode-bar__width-button"
+            aria-label="Bold text"
+            aria-pressed={Boolean(editing.textBoxStyle.bold)}
+            onClick={() => editing.updateTextBoxStyle({ bold: !editing.textBoxStyle.bold })}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="legal-mode-bar__width-button"
+            aria-label="Italic text"
+            aria-pressed={Boolean(editing.textBoxStyle.italic)}
+            onClick={() =>
+              editing.updateTextBoxStyle({ italic: !editing.textBoxStyle.italic })
+            }
+          >
+            I
+          </button>
+        </span>
+        <span className="legal-mode-bar__width-group" aria-label="Text alignment">
+          {(["left", "center", "right"] as const).map((align) => (
+            <button
+              key={align}
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label={`Align text ${align}`}
+              aria-pressed={(editing.textBoxStyle.align ?? DEFAULT_TEXT_ALIGN) === align}
+              onClick={() => editing.updateTextBoxStyle({ align })}
+            >
+              {formatAlignLabel(align)}
+            </button>
+          ))}
+        </span>
       </span>
     );
   }
@@ -221,6 +274,18 @@ function ColorSwatches({
 
 function formatStrokeWidth(width: number): string {
   return Number.isInteger(width) ? String(width) : width.toFixed(1);
+}
+
+function formatAlignLabel(align: PdfTextBoxAlign): string {
+  if (align === "center") {
+    return "C";
+  }
+
+  if (align === "right") {
+    return "R";
+  }
+
+  return "L";
 }
 
 function getToolHint(editing: EditingState): string {

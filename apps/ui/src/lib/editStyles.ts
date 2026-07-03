@@ -1,4 +1,8 @@
-import type { PdfEditColor } from "@raiopdf/engine-api";
+import type {
+  PdfEditColor,
+  PdfTextBoxAlign,
+  PdfTextBoxFontFamily,
+} from "@raiopdf/engine-api";
 
 export interface EditColorOption {
   id: string;
@@ -13,6 +17,10 @@ export interface HighlightEditStyle {
 
 export interface TextBoxEditStyle {
   color?: PdfEditColor;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
 }
 
 export interface InkEditStyle {
@@ -23,6 +31,8 @@ export interface InkEditStyle {
 export const DEFAULT_HIGHLIGHT_COLOR: PdfEditColor = { r: 1, g: 0.9, b: 0.3 };
 export const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
 export const DEFAULT_TEXT_COLOR: PdfEditColor = hexToPdfEditColor("#111111");
+export const DEFAULT_TEXT_FONT_FAMILY: PdfTextBoxFontFamily = "helvetica";
+export const DEFAULT_TEXT_ALIGN: PdfTextBoxAlign = "left";
 export const DEFAULT_INK_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 export const INK_STROKE_WIDTH_OPTIONS = [1, 1.5, 3, 5] as const;

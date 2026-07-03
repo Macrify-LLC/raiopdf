@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
   computeHighlightLineRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
@@ -20,13 +21,19 @@ import {
   type PendingStamp,
   type PendingTextBox,
 } from "../lib/edits";
-import type { PdfEditColor } from "@raiopdf/engine-api";
+import {
+  type PdfEditColor,
+  type PdfTextBoxAlign,
+  type PdfTextBoxFontFamily,
+} from "@raiopdf/engine-api";
 import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
   DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
+  DEFAULT_TEXT_FONT_FAMILY,
   pdfEditColorToHex,
 } from "../lib/editStyles";
 import { newEditId, type EditingState } from "../hooks/useEditing";
@@ -44,6 +51,7 @@ import {
   type ViewportPoint,
   type ViewportRect,
 } from "../lib/viewportGeometry";
+import { computeTextBoxPreviewLines } from "../lib/textBoxPreview";
 import { CommentMarkerIcon } from "../icons";
 import "./EditLayer.css";
 
@@ -60,6 +68,10 @@ interface TextDraft {
   text: string;
   fontSizePt: number;
   color?: PdfEditColor;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
 }
 
 interface CommentDraft {
@@ -69,6 +81,9 @@ interface CommentDraft {
 }
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
+type TextBoxStyleUpdate = Partial<
+  Pick<PendingTextBox, "fontFamily" | "bold" | "italic" | "align">
+>;
 
 interface ItemDrag {
   id: string;
@@ -223,6 +238,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                 text,
                 fontSizePt: draft.fontSizePt,
                 ...(draft.color ? { color: draft.color } : {}),
+                fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+                bold: Boolean(draft.bold),
+                italic: Boolean(draft.italic),
+                align: draft.align ?? DEFAULT_TEXT_ALIGN,
               }
             : edit,
         );
@@ -235,6 +254,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           text,
           fontSizePt: draft.fontSizePt,
           ...(draft.color ? { color: draft.color } : {}),
+          fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+          bold: Boolean(draft.bold),
+          italic: Boolean(draft.italic),
+          align: draft.align ?? DEFAULT_TEXT_ALIGN,
         });
       }
 
@@ -341,6 +364,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         text: "",
         fontSizePt: DEFAULT_TEXT_BOX_FONT_SIZE,
         ...(editing.textBoxStyle.color ? { color: editing.textBoxStyle.color } : {}),
+        fontFamily: editing.textBoxStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+        bold: Boolean(editing.textBoxStyle.bold),
+        italic: Boolean(editing.textBoxStyle.italic),
+        align: editing.textBoxStyle.align ?? DEFAULT_TEXT_ALIGN,
       });
       return;
     }
@@ -609,6 +636,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       text: edit.text,
       fontSizePt: edit.fontSizePt,
       ...(edit.color ? { color: edit.color } : {}),
+      fontFamily: edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+      bold: Boolean(edit.bold),
+      italic: Boolean(edit.italic),
+      align: edit.align ?? DEFAULT_TEXT_ALIGN,
     });
     suppressPlacement();
   }
@@ -665,6 +696,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onFontSizeChange={(fontSizePt) =>
                 updateEdit(edit.id, (current) =>
                   current.kind === "textBox" ? { ...current, fontSizePt } : current,
+                )
+              }
+              onTextStyleChange={(style) =>
+                updateEdit(edit.id, (current) =>
+                  current.kind === "textBox" ? { ...current, ...style } : current,
                 )
               }
               onRemove={() => removeEdit(edit.id)}
@@ -772,6 +808,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           onFontSizeChange={(fontSizePt) =>
             setTextDraft((current) => (current ? { ...current, fontSizePt } : null))
           }
+          onTextStyleChange={(style) =>
+            setTextDraft((current) => (current ? { ...current, ...style } : null))
+          }
           onCommit={commitTextDraft}
           onCancel={() => {
             setTextDraft(null);
@@ -847,6 +886,7 @@ function TextBoxOverlay({
   onResizeStart,
   onEditRequested,
   onFontSizeChange,
+  onTextStyleChange,
   onRemove,
 }: {
   edit: PendingTextBox;
@@ -860,9 +900,25 @@ function TextBoxOverlay({
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onEditRequested: () => void;
   onFontSizeChange: (fontSizePt: number) => void;
+  onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const font = useTextBoxPreviewFont(
+    edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(edit.bold),
+    Boolean(edit.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: edit.text,
+        boxWidthPt: rect.width / scale,
+        fontSizePt: edit.fontSizePt,
+        font,
+      }),
+    [edit.fontSizePt, edit.text, font, rect.width, scale],
+  );
 
   return (
     <div
@@ -879,14 +935,23 @@ function TextBoxOverlay({
     >
       <span
         className="edit-layer__text-content"
-        style={textContentStyle(edit.fontSizePt, scale, edit.color ?? DEFAULT_TEXT_COLOR)}
+        style={textContentStyle(edit, scale, edit.color ?? DEFAULT_TEXT_COLOR)}
       >
-        {edit.text}
+        {lines.map((line, lineIndex) => (
+          <span key={lineIndex} className="edit-layer__text-line">
+            {line}
+          </span>
+        ))}
       </span>
       {selected ? (
         <ItemChrome
           fontSizePt={edit.fontSizePt}
           onFontSizeChange={onFontSizeChange}
+          fontFamily={edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          bold={Boolean(edit.bold)}
+          italic={Boolean(edit.italic)}
+          align={edit.align ?? DEFAULT_TEXT_ALIGN}
+          onTextStyleChange={onTextStyleChange}
           onRemove={onRemove}
         />
       ) : null}
@@ -980,10 +1045,20 @@ function CommentPin({
 function ItemChrome({
   fontSizePt,
   onFontSizeChange,
+  fontFamily,
+  bold,
+  italic,
+  align,
+  onTextStyleChange,
   onRemove,
 }: {
   fontSizePt?: number;
   onFontSizeChange?: (fontSizePt: number) => void;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
+  onTextStyleChange?: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
 }) {
   return (
@@ -1002,6 +1077,15 @@ function ItemChrome({
           ))}
         </select>
       ) : null}
+      {fontFamily && align && onTextStyleChange ? (
+        <TextBoxStyleControls
+          fontFamily={fontFamily}
+          bold={Boolean(bold)}
+          italic={Boolean(italic)}
+          align={align}
+          onChange={onTextStyleChange}
+        />
+      ) : null}
       <button
         type="button"
         className="edit-layer__item-remove"
@@ -1011,6 +1095,71 @@ function ItemChrome({
         ×
       </button>
     </span>
+  );
+}
+
+function TextBoxStyleControls({
+  fontFamily,
+  bold,
+  italic,
+  align,
+  onChange,
+}: {
+  fontFamily: PdfTextBoxFontFamily;
+  bold: boolean;
+  italic: boolean;
+  align: PdfTextBoxAlign;
+  onChange: (style: TextBoxStyleUpdate) => void;
+}) {
+  return (
+    <>
+      <select
+        className="edit-layer__font-family"
+        aria-label="Font family"
+        value={fontFamily}
+        onChange={(event) =>
+          onChange({ fontFamily: event.currentTarget.value as PdfTextBoxFontFamily })
+        }
+      >
+        <option value="helvetica">Helvetica</option>
+        <option value="times">Times</option>
+        <option value="courier">Courier</option>
+      </select>
+      <span className="edit-layer__text-toggle-group" aria-label="Text style">
+        <button
+          type="button"
+          className="edit-layer__text-toggle"
+          aria-label="Bold"
+          aria-pressed={bold}
+          onClick={() => onChange({ bold: !bold })}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          className="edit-layer__text-toggle"
+          aria-label="Italic"
+          aria-pressed={italic}
+          onClick={() => onChange({ italic: !italic })}
+        >
+          I
+        </button>
+      </span>
+      <span className="edit-layer__align-group" aria-label="Text alignment">
+        {(["left", "center", "right"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className="edit-layer__align-button"
+            aria-label={`Align ${option}`}
+            aria-pressed={align === option}
+            onClick={() => onChange({ align: option })}
+          >
+            {option === "left" ? "L" : option === "center" ? "C" : "R"}
+          </button>
+        ))}
+      </span>
+    </>
   );
 }
 
@@ -1035,11 +1184,12 @@ function ResizeHandles({
   );
 }
 
-function TextBoxDraftEditor({
+export function TextBoxDraftEditor({
   draft,
   scale,
   onTextChange,
   onFontSizeChange,
+  onTextStyleChange,
   onCommit,
   onCancel,
 }: {
@@ -1047,9 +1197,33 @@ function TextBoxDraftEditor({
   scale: number;
   onTextChange: (text: string) => void;
   onFontSizeChange: (fontSizePt: number) => void;
+  onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onCommit: () => void;
   onCancel: () => void;
 }) {
+  const color = draft.color ?? DEFAULT_TEXT_COLOR;
+  const font = useTextBoxPreviewFont(
+    draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(draft.bold),
+    Boolean(draft.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: draft.text,
+        boxWidthPt: draft.rect.width / scale,
+        fontSizePt: draft.fontSizePt,
+        font,
+      }),
+    [draft.fontSizePt, draft.rect.width, draft.text, font, scale],
+  );
+  const contentStyle = textContentStyle(draft, scale, color);
+  const inputStyle: CSSProperties = {
+    ...contentStyle,
+    color: "transparent",
+    caretColor: pdfEditColorToHex(color),
+  };
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1084,14 +1258,33 @@ function TextBoxDraftEditor({
             </option>
           ))}
         </select>
+        <TextBoxStyleControls
+          fontFamily={draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          bold={Boolean(draft.bold)}
+          italic={Boolean(draft.italic)}
+          align={draft.align ?? DEFAULT_TEXT_ALIGN}
+          onChange={onTextStyleChange}
+        />
         <span className="edit-layer__chrome-hint">Enter commits · Esc cancels</span>
+      </span>
+      <span
+        className="edit-layer__text-content edit-layer__text-draft-preview"
+        style={contentStyle}
+        aria-hidden="true"
+      >
+        {lines.map((line, lineIndex) => (
+          <span key={lineIndex} className="edit-layer__text-line">
+            {line}
+          </span>
+        ))}
       </span>
       <textarea
         className="edit-layer__text-input"
-        style={textContentStyle(draft.fontSizePt, scale, draft.color ?? DEFAULT_TEXT_COLOR)}
+        style={inputStyle}
         aria-label="Text box content"
         value={draft.text}
         autoFocus
+        spellCheck={false}
         onChange={(event) => onTextChange(event.target.value)}
         onKeyDown={handleKeyDown}
       />
@@ -1190,15 +1383,109 @@ function highlightStyle(
 }
 
 function textContentStyle(
-  fontSizePt: number,
+  textStyle: Pick<
+    PendingTextBox | TextDraft,
+    "fontSizePt" | "fontFamily" | "bold" | "italic" | "align"
+  >,
   scale: number,
   color: PdfEditColor,
 ): CSSProperties {
   return {
-    fontSize: `${fontSizePt * scale}px`,
+    fontFamily: cssTextBoxFontFamily(textStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY),
+    fontSize: `${textStyle.fontSizePt * scale}px`,
+    fontWeight: textStyle.bold ? 700 : 400,
+    fontStyle: textStyle.italic ? "italic" : "normal",
     lineHeight: TEXT_BOX_LINE_HEIGHT,
+    textAlign: textStyle.align ?? DEFAULT_TEXT_ALIGN,
     color: pdfEditColorToHex(color),
   };
+}
+
+function cssTextBoxFontFamily(fontFamily: PdfTextBoxFontFamily): string {
+  switch (fontFamily) {
+    case "times":
+      return '"Times New Roman", Times, serif';
+    case "courier":
+      return '"Courier New", Courier, monospace';
+    case "helvetica":
+      return "Helvetica, Arial, sans-serif";
+  }
+}
+
+function useTextBoxPreviewFont(
+  fontFamily: PdfTextBoxFontFamily,
+  bold: boolean,
+  italic: boolean,
+): PDFFont | null {
+  const [font, setFont] = useState<PDFFont | null>(null);
+  const key = textBoxFontKey(fontFamily, bold, italic);
+
+  useEffect(() => {
+    let disposed = false;
+
+    setFont(null);
+    void loadTextBoxPreviewFont(key).then((loadedFont) => {
+      if (!disposed) {
+        setFont(loadedFont);
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [key]);
+
+  return font;
+}
+
+type TextBoxPreviewFontKey =
+  `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
+
+const TEXT_BOX_PREVIEW_STANDARD_FONTS: Record<TextBoxPreviewFontKey, StandardFonts> = {
+  "helvetica:regular": StandardFonts.Helvetica,
+  "helvetica:bold": StandardFonts.HelveticaBold,
+  "helvetica:italic": StandardFonts.HelveticaOblique,
+  "helvetica:boldItalic": StandardFonts.HelveticaBoldOblique,
+  "times:regular": StandardFonts.TimesRoman,
+  "times:bold": StandardFonts.TimesRomanBold,
+  "times:italic": StandardFonts.TimesRomanItalic,
+  "times:boldItalic": StandardFonts.TimesRomanBoldItalic,
+  "courier:regular": StandardFonts.Courier,
+  "courier:bold": StandardFonts.CourierBold,
+  "courier:italic": StandardFonts.CourierOblique,
+  "courier:boldItalic": StandardFonts.CourierBoldOblique,
+};
+const textBoxPreviewFontCache = new Map<TextBoxPreviewFontKey, Promise<PDFFont>>();
+
+function textBoxFontKey(
+  fontFamily: PdfTextBoxFontFamily,
+  bold: boolean,
+  italic: boolean,
+): TextBoxPreviewFontKey {
+  if (bold && italic) {
+    return `${fontFamily}:boldItalic`;
+  }
+
+  if (bold) {
+    return `${fontFamily}:bold`;
+  }
+
+  if (italic) {
+    return `${fontFamily}:italic`;
+  }
+
+  return `${fontFamily}:regular`;
+}
+
+function loadTextBoxPreviewFont(key: TextBoxPreviewFontKey): Promise<PDFFont> {
+  let font = textBoxPreviewFontCache.get(key);
+
+  if (!font) {
+    font = PDFDocument.create().then((pdf) => pdf.embedFont(TEXT_BOX_PREVIEW_STANDARD_FONTS[key]));
+    textBoxPreviewFontCache.set(key, font);
+  }
+
+  return font;
 }
 
 function moveRect(

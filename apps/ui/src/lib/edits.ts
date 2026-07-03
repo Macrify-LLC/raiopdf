@@ -5,6 +5,8 @@ import type {
   PdfEditPoint,
   PdfEditRect,
   PdfFormFieldValue,
+  PdfTextBoxAlign,
+  PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
 import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
 
@@ -41,6 +43,10 @@ export interface PendingTextBox {
   text: string;
   fontSizePt: number;
   color?: PdfEditColor;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
 }
 
 export interface PendingStamp {
@@ -113,6 +119,12 @@ export function toPdfEdits(
           text: edit.text,
           fontSizePt: edit.fontSizePt,
           ...(edit.color ? { color: edit.color } : {}),
+          ...(edit.fontFamily && edit.fontFamily !== "helvetica"
+            ? { fontFamily: edit.fontFamily }
+            : {}),
+          ...(edit.bold ? { bold: edit.bold } : {}),
+          ...(edit.italic ? { italic: edit.italic } : {}),
+          ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
         };
       case "image":
       case "signature":

@@ -1,4 +1,5 @@
 import { PdfEngineError } from "@raiopdf/engine-api";
+import { wrapTextBoxLines } from "@raiopdf/engine-api";
 import {
   decodePDFRawStream,
   PDFArray,
@@ -11,6 +12,7 @@ import {
   PDFRef,
   PDFStream,
   PDFString,
+  StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createLocalPdfEngine } from "../src/index";
@@ -83,6 +85,190 @@ describe("LocalPdfEngine.applyEdits", () => {
     expectWithin1Pt(matrix[3]!, 1);
     expectWithin1Pt(matrix[4]!, 72);
     expectWithin1Pt(matrix[5]!, 700 + 40 - 12);
+  });
+
+  it("preserves authored whitespace for text box lines that do not need wrapping", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 200]]));
+    const text = "  Alpha   beta  gamma";
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 40, y: 120, w: 220, h: 40 },
+        text,
+        fontSizePt: 12,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(readTextDraws(content)).toEqual([text]);
+    expect(content).toContain(encodeTextAsHex(text));
+  });
+
+  it("renders all standard text box font faces as page font resources", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const faces = [
+      ["helvetica", false, false, "Helvetica"],
+      ["helvetica", true, false, "Helvetica-Bold"],
+      ["helvetica", false, true, "Helvetica-Oblique"],
+      ["helvetica", true, true, "Helvetica-BoldOblique"],
+      ["times", false, false, "Times-Roman"],
+      ["times", true, false, "Times-Bold"],
+      ["times", false, true, "Times-Italic"],
+      ["times", true, true, "Times-BoldItalic"],
+      ["courier", false, false, "Courier"],
+      ["courier", true, false, "Courier-Bold"],
+      ["courier", false, true, "Courier-Oblique"],
+      ["courier", true, true, "Courier-BoldOblique"],
+    ] as const;
+
+    const edited = await engine.applyEdits(
+      document,
+      faces.map(([fontFamily, bold, italic], index) => ({
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 40, y: 720 - index * 20, w: 220, h: 18 },
+        text: `Face ${index}`,
+        fontSizePt: 10,
+        fontFamily,
+        bold,
+        italic,
+      })),
+    );
+    const bytes = await engine.saveToBytes(edited);
+    const pdf = await PDFDocument.load(bytes);
+    const content = await readDecodedPageContent(bytes, 0);
+    const baseFonts = readPageBaseFonts(pdf, 0);
+
+    for (const [, , , baseFont] of faces) {
+      expect(baseFonts).toContain(baseFont);
+    }
+    expect(content.match(/\/\S+ 10 Tf/g) ?? []).toHaveLength(faces.length);
+  });
+
+  it("offsets each text box line for left, center, and right alignment", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 200]]));
+    const measurePdf = await PDFDocument.create();
+    const font = await measurePdf.embedFont(StandardFonts.Helvetica);
+    const text = "Align";
+    const fontSizePt = 10;
+    const rect = { x: 20, y: 120, w: 100, h: 20 };
+    const lineWidth = font.widthOfTextAtSize(text, fontSizePt);
+
+    const edited = await engine.applyEdits(document, [
+      { type: "textBox", pageIndex: 0, rect, text, fontSizePt, align: "left" },
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { ...rect, y: 90 },
+        text,
+        fontSizePt,
+        align: "center",
+      },
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { ...rect, y: 60 },
+        text,
+        fontSizePt,
+        align: "right",
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const matrices = readOperandPairs(await readDecodedPageContent(bytes, 0), "Tm");
+
+    expectWithin1Pt(matrices[0]![4]!, rect.x);
+    expectWithin1Pt(matrices[1]![4]!, rect.x + (rect.w - lineWidth) / 2);
+    expectWithin1Pt(matrices[2]![4]!, rect.x + rect.w - lineWidth);
+  });
+
+  it("applies text alignment offsets through the existing rotated-page mapping", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+    const rotated = await engine.rotatePages(document, [0], 90);
+    const measurePdf = await PDFDocument.create();
+    const font = await measurePdf.embedFont(StandardFonts.Helvetica);
+    const text = "Rot";
+    const fontSizePt = 12;
+    const visualWidth = 80;
+    const lineWidth = font.widthOfTextAtSize(text, fontSizePt);
+
+    const edited = await engine.applyEdits(rotated, [
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 120, y: 50, w: 30, h: 80 },
+        text,
+        fontSizePt,
+        align: "right",
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const [matrix] = readOperandPairs(await readDecodedPageContent(bytes, 0), "Tm");
+
+    if (!matrix) {
+      throw new Error("Expected the rotated page to contain a text matrix.");
+    }
+
+    expectWithin1Pt(matrix[0]!, 0);
+    expectWithin1Pt(matrix[1]!, 1);
+    expectWithin1Pt(matrix[2]!, -1);
+    expectWithin1Pt(matrix[3]!, 0);
+    expectWithin1Pt(matrix[4]!, 132);
+    expectWithin1Pt(matrix[5]!, 50 + visualWidth - lineWidth);
+  });
+
+  it("wraps text boxes with pdf-lib font metrics, including long words", async () => {
+    const measurePdf = await PDFDocument.create();
+    const font = await measurePdf.embedFont(StandardFonts.Helvetica);
+    const lines = wrapTextBoxLines({
+      text: "Alpha beta extraordinarilylongword",
+      boxWidthPt: 60,
+      fontSizePt: 12,
+      font,
+    });
+
+    expect(lines.length).toBeGreaterThan(2);
+    expect(lines[0]).toBe("Alpha beta");
+    expect(lines.some((line) => line.length < "extraordinarilylongword".length)).toBe(true);
+    for (const line of lines) {
+      expect(font.widthOfTextAtSize(line, 12)).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("bakes wrapped lines with the selected font metrics", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[240, 240]]));
+    const text = "Preview wraps these words\nand splits supercalifragilistic";
+    const expectedLines = [
+      "Preview wraps ",
+      "these words",
+      "and splits ",
+      "supercalifragilist",
+      "ic",
+    ];
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 24, y: 100, w: 86, h: 100 },
+        text,
+        fontSizePt: 12,
+        fontFamily: "times",
+        bold: true,
+        italic: true,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const bakedLines = readTextDraws(await readDecodedPageContent(bytes, 0));
+
+    expect(bakedLines).toEqual(expectedLines);
   });
 
   it("draws image edits scaled into the target rect", async () => {
@@ -476,6 +662,47 @@ function encodeTextAsHex(text: string): string {
   return `<${[...new TextEncoder().encode(text)]
     .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
     .join("")}>`;
+}
+
+function readTextDraws(content: string): string[] {
+  return [...content.matchAll(/<([0-9A-F]+)> Tj/gi)].map((match) => decodeHexText(match[1]!));
+}
+
+function decodeHexText(hex: string): string {
+  const bytes = new Uint8Array(hex.length / 2);
+
+  for (let index = 0; index < hex.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16);
+  }
+
+  return new TextDecoder().decode(bytes);
+}
+
+function readPageBaseFonts(pdf: PDFDocument, pageIndex: number): string[] {
+  const resources = pdf.getPage(pageIndex).node.Resources();
+  const fonts = resources?.lookupMaybe(PDFName.of("Font"), PDFDict);
+
+  if (!fonts) {
+    return [];
+  }
+
+  const baseFonts: string[] = [];
+
+  for (const [, entry] of fonts.entries()) {
+    const font = entry instanceof PDFRef ? pdf.context.lookup(entry, PDFDict) : entry;
+
+    if (!(font instanceof PDFDict)) {
+      continue;
+    }
+
+    const baseFont = font.lookupMaybe(PDFName.of("BaseFont"), PDFName);
+
+    if (baseFont) {
+      baseFonts.push(baseFont.toString().replace(/^\//, ""));
+    }
+  }
+
+  return baseFonts;
 }
 
 function expectWithin1Pt(actual: number, expected: number): void {

@@ -24,8 +24,8 @@ image you've saved before.
 - **Flatten on save** is on by default, which bakes the signature into the page
   when you Save — it becomes part of the page rather than a removable layer. That's
   usually what you want on a signed document.
-- **It's held until you Save.** Reorganizing pages before saving clears an unplaced
-  signature — save first.
+- **It's held until you Save.** Reorganizing pages before saving clears a
+  signature you've placed but not yet saved — save first.
 
 ## Related
 

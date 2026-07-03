@@ -17,7 +17,8 @@ choose, and gives you back a single combined file.
 2. In the **Organize** tools, choose **Merge PDFs...**.
 3. Click **Add PDFs...** and choose the files.
 4. They're listed after the current one, in order.
-5. Click **Merge Files**.
+5. Click the **Merge Files** button — it shows the count (for example,
+   *Merge 3 Files*).
 
 ## What to know
 

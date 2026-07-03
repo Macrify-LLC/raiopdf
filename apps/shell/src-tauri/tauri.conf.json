@@ -22,8 +22,6 @@
       }
     ],
     "security": {
-      // The sidecar proxy binds a fresh loopback port per boot, so CSP cannot pin a single port yet.
-      // Keep loopback-only connect-src for this safe audit pass; custom protocol pinning is tracked separately.
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
     }
   },

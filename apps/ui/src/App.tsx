@@ -183,6 +183,7 @@ export function App() {
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
+  const nativeMenuCommandRef = useRef<(command: string) => void>(() => {});
   const filingEngine = useMemo(() => new LocalPdfEngine(), []);
 
   useLayoutEffect(() => {
@@ -1407,6 +1408,10 @@ export function App() {
   );
 
   useEffect(() => {
+    nativeMenuCommandRef.current = handleNativeMenuCommand;
+  }, [handleNativeMenuCommand]);
+
+  useEffect(() => {
     if (!isTauriRuntime()) {
       return;
     }
@@ -1416,7 +1421,7 @@ export function App() {
 
     void import("@tauri-apps/api/event")
       .then(({ listen }) => listen<string>("raiopdf-menu", (event) => {
-        handleNativeMenuCommand(event.payload);
+        nativeMenuCommandRef.current(event.payload);
       }))
       .then((nextUnlisten) => {
         if (disposed) {
@@ -1431,7 +1436,7 @@ export function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [handleNativeMenuCommand]);
+  }, []);
 
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,

@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -24,6 +24,8 @@ const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 5;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const PAYLOAD_DIR_NAME: &str = "payload";
 const ENGINE_LOG_FILE_NAME: &str = "engine.log";
+const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const ENGINE_LOG_GENERATIONS: usize = 2;
 const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
 const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
 const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
@@ -704,7 +706,11 @@ struct EngineSpawnSpec {
 
 fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child> {
     let spec = engine_spawn_spec(config, port)?;
-    let log_file = open_rotated_engine_log(&spec.log_path)?;
+    let log_writer = Arc::new(Mutex::new(RotatingLogWriter::new(
+        &spec.log_path,
+        ENGINE_LOG_MAX_BYTES,
+        ENGINE_LOG_GENERATIONS,
+    )?));
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
     if let Some(current_dir) = spec.current_dir {
@@ -713,10 +719,19 @@ fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child> {
     for (key, value) in spec.envs {
         command.env(key, value);
     }
-    command.stdout(Stdio::from(log_file.try_clone()?));
-    command.stderr(Stdio::from(log_file));
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
     apply_platform_spawn_flags(&mut command);
-    command.spawn()
+    let mut child = command.spawn()?;
+
+    if let Some(stdout) = child.stdout.take() {
+        copy_pipe_to_log(stdout, Arc::clone(&log_writer));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        copy_pipe_to_log(stderr, log_writer);
+    }
+
+    Ok(child)
 }
 
 fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<EngineSpawnSpec> {
@@ -761,12 +776,16 @@ fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<Engin
     })
 }
 
-fn open_rotated_engine_log(path: &Path) -> std::io::Result<File> {
+fn open_rotated_engine_log(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    rotate_engine_log(path, 3)?;
+    rotate_engine_log(path, ENGINE_LOG_GENERATIONS)?;
+    open_truncated_engine_log(path)
+}
+
+fn open_truncated_engine_log(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .create(true)
         .write(true)
@@ -774,7 +793,98 @@ fn open_rotated_engine_log(path: &Path) -> std::io::Result<File> {
         .open(path)
 }
 
-fn rotate_engine_log(path: &Path, generations: usize) -> std::io::Result<()> {
+struct RotatingLogWriter {
+    path: PathBuf,
+    max_bytes: u64,
+    generations: usize,
+    bytes_written: u64,
+    file: Option<File>,
+}
+
+impl RotatingLogWriter {
+    fn new(path: &Path, max_bytes: u64, generations: usize) -> io::Result<Self> {
+        let file = open_rotated_engine_log(path)?;
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            max_bytes,
+            generations,
+            bytes_written: 0,
+            file: Some(file),
+        })
+    }
+
+    fn write_all(&mut self, mut buffer: &[u8]) -> io::Result<()> {
+        while !buffer.is_empty() {
+            if self.max_bytes > 0 && self.bytes_written >= self.max_bytes {
+                self.rotate()?;
+            }
+
+            let bytes_available = if self.max_bytes == 0 {
+                buffer.len()
+            } else {
+                self.max_bytes.saturating_sub(self.bytes_written) as usize
+            };
+            let write_len = bytes_available.min(buffer.len());
+
+            if write_len == 0 {
+                self.rotate()?;
+                continue;
+            }
+
+            let file = self.file.as_mut().expect("log file is open");
+            file.write_all(&buffer[..write_len])?;
+            self.bytes_written += write_len as u64;
+            buffer = &buffer[write_len..];
+        }
+
+        if let Some(file) = self.file.as_mut() {
+            file.flush()?;
+        }
+
+        Ok(())
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        if let Some(mut file) = self.file.take() {
+            file.flush()?;
+        }
+
+        rotate_engine_log(&self.path, self.generations)?;
+        self.file = Some(open_truncated_engine_log(&self.path)?);
+        self.bytes_written = 0;
+
+        Ok(())
+    }
+}
+
+fn copy_pipe_to_log<R>(mut pipe: R, log_writer: Arc<Mutex<RotatingLogWriter>>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = [0; 16 * 1024];
+
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let Ok(mut writer) = log_writer.lock() else {
+                        break;
+                    };
+
+                    if writer.write_all(&buffer[..bytes_read]).is_err() {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn rotate_engine_log(path: &Path, generations: usize) -> io::Result<()> {
     for index in (1..=generations).rev() {
         let from = if index == 1 {
             path.to_path_buf()
@@ -1466,6 +1576,45 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&log).expect("fresh log should exist"),
             ""
+        );
+    }
+
+    #[test]
+    fn rotating_log_writer_caps_active_log_during_writes() {
+        let root = test_temp_dir("engine-log-size-cap");
+        let log = root.join("app-data").join(ENGINE_LOG_FILE_NAME);
+        let mut writer = RotatingLogWriter::new(&log, 10, 2).expect("log writer should open");
+
+        writer
+            .write_all(b"1234567890abc")
+            .expect("first write should rotate");
+        writer
+            .write_all(b"defghijklmn")
+            .expect("second write should rotate");
+        writer
+            .write_all(b"opqrstuvwxyz")
+            .expect("third write should rotate");
+        drop(writer);
+
+        assert_eq!(
+            fs::read_to_string(&log).expect("active log should exist"),
+            "uvwxyz"
+        );
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 1)).expect("newer rotated log"),
+            "klmnopqrst"
+        );
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 2)).expect("older rotated log"),
+            "abcdefghij"
+        );
+        assert!(
+            !rotated_log_path(&log, 3).exists(),
+            "only configured generations should be kept"
+        );
+        assert!(
+            fs::metadata(&log).expect("active log metadata").len() <= 10,
+            "active log should stay within the size cap"
         );
     }
 

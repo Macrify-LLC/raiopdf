@@ -279,6 +279,28 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
 });
 
+test("stacked floating dialogs let Escape close only the top dialog", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "stacked-dialogs.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.locator(".tool-panel").getByRole("button", { name: "Sign" }).click();
+  const signatureDialog = page.getByRole("dialog", { name: "Signature", exact: true });
+  await expect(signatureDialog).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(signatureDialog).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeHidden();
+});
+
 test("organize page grid multi-select extracts selected pages round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "organize-extract.pdf", await createPdf([200, 210, 220, 230]));
@@ -300,6 +322,34 @@ test("organize page grid multi-select extracts selected pages round trip", async
   await expectPdf(saved, {
     widths: [210, 230],
     rotations: [0, 0],
+  });
+});
+
+test("organize page grid ignores rapid second drag while a reorder is pending", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as typeof window & {
+      __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
+    }).__RAIOPDF_TEST_REORDER_DELAY_MS__ = 250;
+  });
+  await page.goto("/");
+  await openPdf(page, "organize-rapid-drag.pdf", await createPdf([200, 210, 220, 230]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize Pages" }).click();
+
+  const grid = page.getByRole("list", { name: "Page grid" });
+  await page.getByRole("button", { name: "Organize page 1" })
+    .dragTo(page.getByRole("button", { name: "Organize page 3" }));
+  await expect(grid).toHaveAttribute("aria-busy", "true");
+
+  await page.getByRole("button", { name: "Organize page 4" })
+    .dragTo(page.getByRole("button", { name: "Organize page 2" }), { force: true });
+  await expect(grid).toHaveAttribute("aria-busy", "false");
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [210, 200, 220, 230],
+    rotations: [0, 0, 0, 0],
   });
 });
 

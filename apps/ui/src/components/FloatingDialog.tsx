@@ -8,6 +8,8 @@ import {
 } from "react";
 import "./FloatingDialog.css";
 
+const dialogStack: string[] = [];
+
 export interface FloatingDialogProps {
   title: string;
   eyebrow?: string | undefined;
@@ -27,6 +29,7 @@ export function FloatingDialog({
 }: FloatingDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  const stackId = useId();
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -44,9 +47,16 @@ export function FloatingDialog({
 
     dialog?.focus();
 
+    const unregister = registerDialogStackEntry(stackId);
+
     function handleKeyDown(event: KeyboardEvent) {
+      if (!isTopDialogStackEntry(stackId)) {
+        return;
+      }
+
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopImmediatePropagation();
         onClose();
         return;
       }
@@ -55,6 +65,7 @@ export function FloatingDialog({
         return;
       }
 
+      event.stopImmediatePropagation();
       const focusable = getFocusableElements(dialogRef.current);
 
       if (focusable.length === 0) {
@@ -74,13 +85,14 @@ export function FloatingDialog({
       }
     }
 
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      unregister();
       previouslyFocused?.focus();
     };
-  }, [onClose]);
+  }, [onClose, stackId]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!draggable || event.button !== 0) {
@@ -153,6 +165,26 @@ export function FloatingDialog({
       </div>
     </div>
   );
+}
+
+export function registerDialogStackEntry(dialogId: string): () => void {
+  dialogStack.push(dialogId);
+
+  return () => {
+    const index = dialogStack.lastIndexOf(dialogId);
+
+    if (index !== -1) {
+      dialogStack.splice(index, 1);
+    }
+  };
+}
+
+export function isTopDialogStackEntry(dialogId: string): boolean {
+  return dialogStack[dialogStack.length - 1] === dialogId;
+}
+
+export function resetDialogStackForTests(): void {
+  dialogStack.splice(0, dialogStack.length);
 }
 
 function getFocusableElements(root: HTMLElement): HTMLElement[] {

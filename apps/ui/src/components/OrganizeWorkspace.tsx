@@ -159,6 +159,7 @@ function OrganizePagesGrid({
 }) {
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
+  const [reorderPending, setReorderPending] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const pages = Array.from({ length: document.pageCount }, (_, index) => index);
@@ -200,7 +201,7 @@ function OrganizePagesGrid({
   }
 
   async function dropOn(targetPageIndex: number) {
-    if (draggingPageIndex === null || draggingPageIndex === targetPageIndex) {
+    if (reorderPending || draggingPageIndex === null || draggingPageIndex === targetPageIndex) {
       setDraggingPageIndex(null);
       return;
     }
@@ -220,7 +221,18 @@ function OrganizePagesGrid({
     const nextCurrentPage = nextOrder.indexOf(document.currentPage - 1) + 1;
 
     setDraggingPageIndex(null);
-    await onReorderPages?.(nextOrder, nextCurrentPage);
+
+    if (!onReorderPages) {
+      return;
+    }
+
+    setReorderPending(true);
+
+    try {
+      await onReorderPages(nextOrder, nextCurrentPage);
+    } finally {
+      setReorderPending(false);
+    }
   }
 
   return (
@@ -292,7 +304,13 @@ function OrganizePagesGrid({
         </div>
       ) : null}
 
-      <div className="organize-pages__grid" role="list" aria-label="Page grid">
+      <div
+        className="organize-pages__grid"
+        role="list"
+        aria-label="Page grid"
+        aria-busy={reorderPending}
+        data-busy={reorderPending ? "true" : undefined}
+      >
         {pages.map((pageIndex) => {
           const pageNumber = pageIndex + 1;
           const selected = selectedPageIndexes.has(pageIndex);
@@ -306,10 +324,23 @@ function OrganizePagesGrid({
               data-current={document.currentPage === pageNumber ? "true" : undefined}
               aria-pressed={selected}
               aria-label={`Organize page ${pageNumber}`}
-              draggable
-              onClick={(event) => onPageSelected?.(pageIndex, event)}
-              onDragStart={() => setDraggingPageIndex(pageIndex)}
-              onDragOver={(event) => event.preventDefault()}
+              disabled={reorderPending}
+              draggable={!reorderPending}
+              onClick={(event) => {
+                if (!reorderPending) {
+                  onPageSelected?.(pageIndex, event);
+                }
+              }}
+              onDragStart={() => {
+                if (!reorderPending) {
+                  setDraggingPageIndex(pageIndex);
+                }
+              }}
+              onDragOver={(event) => {
+                if (!reorderPending) {
+                  event.preventDefault();
+                }
+              }}
               onDrop={() => void dropOn(pageIndex)}
             >
               <span className="organize-page__thumb">

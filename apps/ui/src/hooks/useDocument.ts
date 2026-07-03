@@ -673,11 +673,32 @@ export function useDocument() {
   );
 
   const batesStamp = useCallback(
-    async (options: PdfBatesStampOptions) => {
-      return enqueueMutation("Bates numbering", async ({ handle }) => ({
-        engineHandle: await engine.batesStamp(handle, options),
-        options: { dirty: true },
-      }));
+    async (
+      options: PdfBatesStampOptions,
+      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+    ) => {
+      const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
+
+      return enqueueMutation("Bates numbering", async ({ handle }) => {
+        if (
+          guards.expectedOpenToken !== undefined &&
+          openTokenRef.current !== guards.expectedOpenToken
+        ) {
+          return null;
+        }
+
+        if (
+          guards.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== guards.expectedSourceBytes
+        ) {
+          return null;
+        }
+
+        return {
+          engineHandle: await engine.batesStamp(handle, options),
+          options: { dirty: true },
+        };
+      }, requestedToken);
     },
     [engine, enqueueMutation],
   );

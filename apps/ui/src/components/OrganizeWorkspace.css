@@ -219,6 +219,11 @@
   padding: var(--space-1);
 }
 
+.organize-pages__grid[data-busy="true"] {
+  opacity: 0.72;
+  cursor: progress;
+}
+
 .organize-page {
   min-width: 0;
   display: grid;
@@ -233,9 +238,13 @@
   cursor: default;
 }
 
-.organize-page:hover {
+.organize-page:hover:not(:disabled) {
   border-color: var(--border);
   background: var(--hover-ground);
+}
+
+.organize-page:disabled {
+  color: var(--body);
 }
 
 .organize-page:focus-visible {

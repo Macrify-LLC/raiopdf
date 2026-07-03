@@ -86,6 +86,7 @@ const POINTS_PER_INCH = 72;
 declare global {
   interface Window {
     __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
   }
 }
 
@@ -186,6 +187,7 @@ export function App() {
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
+  const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
@@ -731,6 +733,7 @@ export function App() {
         }
       });
 
+      await waitForTestDelay(window.__RAIOPDF_TEST_REORDER_DELAY_MS__ ?? 0);
       const reordered = await reorderPages(pageOrder, nextCurrentPage);
 
       if (reordered) {
@@ -1044,18 +1047,59 @@ export function App() {
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
-      setBatesState({ applying: true, message: "Applying Bates numbers..." });
-      const applied = await batesStamp(options);
-      setBatesState({
-        applying: false,
-        message: applied
-          ? "Bates numbers applied."
-          : "Bates numbers could not be applied. Check the format and try again.",
-      });
+      if (batesApplyingRef.current) {
+        return true;
+      }
 
-      return applied;
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setBatesState({
+          applying: false,
+          message: "Open a PDF before applying Bates numbers.",
+        });
+        return false;
+      }
+
+      batesApplyingRef.current = true;
+      setBatesState({ applying: true, message: "Applying Bates numbers..." });
+      let applied = false;
+
+      try {
+        applied = await batesStamp(options, {
+          expectedOpenToken: sourceOpenToken,
+          expectedSourceBytes: sourceBytes,
+        });
+
+        if (applied) {
+          setBatesState({
+            applying: false,
+            message: "Bates numbers applied.",
+          });
+          return true;
+        }
+
+        if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          setBatesState({
+            applying: false,
+            message: "Bates numbers could not be applied. Check the format and try again.",
+          });
+          return false;
+        }
+
+        return true;
+      } finally {
+        batesApplyingRef.current = false;
+
+        if (!applied && isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          setBatesState((current) => (
+            current.applying ? { ...current, applying: false } : current
+          ));
+        }
+      }
     },
-    [batesStamp],
+    [batesStamp, document.bytes, getOpenToken, isCurrentDocument],
   );
 
   const runScanner = useCallback(() => {
@@ -1979,6 +2023,16 @@ function getOrganizeDialogTitle(flow: Exclude<OrganizeFlowId, "pages">): string 
 
 function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
+}
+
+function waitForTestDelay(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
 }
 
 function isTauriRuntime(): boolean {

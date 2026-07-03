@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -87,6 +87,24 @@ describe("package writer", () => {
     ).rejects.toThrow(/must not contain absolute paths/);
   });
 
+  it("rejects control characters in package output paths", async () => {
+    const cases = [
+      { name: "line\nbreak.pdf", label: "newline" },
+      { name: "carriage\rreturn.pdf", label: "CR" },
+      { name: "tab\tname.pdf", label: "tab" },
+      { name: "delete\u007fname.pdf", label: "DEL" },
+    ];
+
+    for (const testCase of cases) {
+      const rootDir = await packageRoot();
+      const session = createPackage(rootDir, meta());
+
+      await expect(session.addUploadFile(bytes(testCase.label), testCase.name)).rejects.toThrow(
+        /control characters/,
+      );
+    }
+  });
+
   it("refuses writes and second finalize after finalization", async () => {
     const rootDir = await packageRoot();
     const session = createPackage(rootDir, meta());
@@ -154,6 +172,17 @@ describe("package writer", () => {
         id: "batch-1",
       },
     });
+  });
+
+  it("rejects truncated manifests", async () => {
+    const rootDir = await packageRoot();
+    await mkdir(join(rootDir, "raio-manifest"));
+    await writeFile(
+      join(rootDir, "raio-manifest", "manifest.json"),
+      `${JSON.stringify({ manifestVersion: 1 })}\n`,
+    );
+
+    await expect(readPackageManifest(rootDir)).rejects.toThrow(/Invalid RaioPDF package manifest/);
   });
 
   it("checksums every package file except checksums.txt", async () => {

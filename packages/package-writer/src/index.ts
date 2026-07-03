@@ -393,6 +393,10 @@ function normalizeManifestJsonName(name: string): string {
 }
 
 function normalizePackageRelativePath(name: string): string {
+  if (hasControlCharacter(name)) {
+    throw new Error(`Package output paths must not contain control characters: ${name}`);
+  }
+
   const trimmed = name.trim();
   if (trimmed.length === 0) {
     throw new Error("Package output names must not be empty.");
@@ -403,7 +407,6 @@ function normalizePackageRelativePath(name: string): string {
   if (trimmed.includes("\\") || trimmed.includes("\0")) {
     throw new Error(`Invalid package output path: ${name}`);
   }
-
   const parts = trimmed.split("/");
   if (parts.some((part) => part === "..")) {
     throw new Error(`Package output paths must not contain traversal segments: ${name}`);
@@ -427,6 +430,17 @@ function compareRelativePath(left: string, right: string): number {
     return 1;
   }
   return 0;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function assertDetailKey(key: string): void {
@@ -542,7 +556,25 @@ function isPackageManifest(value: unknown): value is PackageManifest {
     return false;
   }
 
-  return value.manifestVersion === MANIFEST_VERSION;
+  return (
+    value.manifestVersion === MANIFEST_VERSION &&
+    isManifestProvenance(value.provenance) &&
+    Array.isArray(value.uploadFiles) &&
+    Array.isArray(value.rootDocuments) &&
+    Array.isArray(value.machineReports) &&
+    Array.isArray(value.overrides) &&
+    Array.isArray(value.checks) &&
+    isRecord(value.details)
+  );
+}
+
+function isManifestProvenance(value: unknown): value is PackageManifest["provenance"] {
+  return (
+    isRecord(value) &&
+    typeof value.appVersion === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.confirmCurrentRequirements === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

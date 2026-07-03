@@ -83,19 +83,10 @@ jobs:
           set -Eeuo pipefail
 
           VERSION="${GITHUB_REF_NAME#v}"
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag '$GITHUB_REF_NAME' does not yield a valid semver version ('$VERSION'); refusing to stamp." >&2
-            exit 1
-          fi
-          node - "$VERSION" <<'NODE'
-          const fs = require("fs");
-
-          const packagePath = "apps/shell/package.json";
-          const version = process.argv[2];
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-          packageJson.version = version;
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-          NODE
+          # Shared stamper (also used by the local `build:shell:signed` path) — it
+          # validates semver and writes apps/shell/package.json, failing loudly on a
+          # bad tag rather than stamping an invalid version.
+          node scripts/stamp-shell-version.mjs "$VERSION"
 
       - name: Build Tauri shell
         run: pnpm build:shell

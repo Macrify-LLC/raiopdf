@@ -28,8 +28,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "publisher": "Macrify LLC",
     "homepage": "https://raio.macrify.me",
@@ -62,10 +61,6 @@
           "English"
         ],
         "compression": "lzma"
-      },
-      "wix": {
-        "bannerPath": "../../../installer/artwork/wix-banner.bmp",
-        "dialogImagePath": "../../../installer/artwork/wix-dialog.bmp"
       }
     }
   },

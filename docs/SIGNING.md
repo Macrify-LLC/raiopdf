@@ -90,7 +90,7 @@ git tag v0.1.0   # example
 pnpm build:shell:signed
 ```
 
-Output lands in `apps/shell/src-tauri/target/release/bundle/` (`nsis/*.exe`, `msi/*.msi`).
+Output lands in `apps/shell/src-tauri/target/release/bundle/` (`nsis/*.exe`).
 
 ### Verify the signature
 

@@ -62,9 +62,8 @@
       return { available: false, totalDownloads };
     }
 
-    const msi = pickAsset(latest.assets, /\.msi$/i);
     const exe = pickAsset(latest.assets, /\.exe$/i);
-    const primary = msi || exe;
+    const primary = exe;
     const checksums = pickAsset(latest.assets, /SHA256SUMS/i);
 
     return {

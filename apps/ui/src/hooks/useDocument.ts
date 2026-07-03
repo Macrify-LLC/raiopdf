@@ -80,6 +80,11 @@ interface OperationContext {
   token: number;
 }
 
+interface MutationGuards {
+  expectedOpenToken?: number;
+  expectedSourceBytes?: Uint8Array | null;
+}
+
 export interface DocumentFileInput {
   bytes: Uint8Array;
   name: string;
@@ -807,16 +812,38 @@ export function useDocument() {
   );
 
   const insertImagePages = useCallback(
-    async (images: readonly PdfImagePageInput[], insertAtPageIndex: number) => {
-      return enqueueMutation("insert image pages", async ({ handle }) => ({
-        engineHandle: await engine.insertImagePages(handle, insertAtPageIndex, images),
-        options: {
-          dirty: true,
-          currentPage: insertAtPageIndex + 1,
-          fileName: "Inserted Images.pdf",
-          filePath: null,
-        },
-      }));
+    async (
+      images: readonly PdfImagePageInput[],
+      insertAtPageIndex: number,
+      guards: MutationGuards = {},
+    ) => {
+      const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
+
+      return enqueueMutation("insert image pages", async ({ handle }) => {
+        if (
+          guards.expectedOpenToken !== undefined &&
+          openTokenRef.current !== guards.expectedOpenToken
+        ) {
+          return null;
+        }
+
+        if (
+          guards.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== guards.expectedSourceBytes
+        ) {
+          return null;
+        }
+
+        return {
+          engineHandle: await engine.insertImagePages(handle, insertAtPageIndex, images),
+          options: {
+            dirty: true,
+            currentPage: insertAtPageIndex + 1,
+            fileName: "Inserted Images.pdf",
+            filePath: null,
+          },
+        };
+      }, requestedToken);
     },
     [engine, enqueueMutation],
   );

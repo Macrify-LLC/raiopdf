@@ -837,13 +837,20 @@ function drawStampText(
   options: Required<PdfStampTextOptions>,
 ): void {
   const marginPt = options.marginIn * POINTS_PER_INCH;
-  const textWidth = font.widthOfTextAtSize(options.text, options.fontSizePt);
   const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const visualWidth = isSidewaysRotation(pageRotation) ? page.getHeight() : page.getWidth();
+  const maxTextWidth = visualWidth - (2 * marginPt);
+  const fontSizePt = fitFontSizeToWidth(
+    font.widthOfTextAtSize(options.text, options.fontSizePt),
+    options.fontSizePt,
+    maxTextWidth,
+  );
+  const textWidth = font.widthOfTextAtSize(options.text, fontSizePt);
   const { x, y } = computeStampPosition({
     pageWidth: page.getWidth(),
     pageHeight: page.getHeight(),
     textWidth,
-    fontSize: options.fontSizePt,
+    fontSize: fontSizePt,
     marginPt,
     placement: options.placement,
     pageRotation,
@@ -852,7 +859,7 @@ function drawStampText(
   page.drawText(options.text, {
     x,
     y,
-    size: options.fontSizePt,
+    size: fontSizePt,
     font,
     color: STAMP_COLOR,
     rotate: pdfDegrees(pageRotation),
@@ -867,25 +874,79 @@ function drawWatermarkText(
   const pageRotation = normalizePageRotation(page.getRotation().angle);
   const visualWidth = isSidewaysRotation(pageRotation) ? page.getHeight() : page.getWidth();
   const visualHeight = isSidewaysRotation(pageRotation) ? page.getWidth() : page.getHeight();
-  const textWidth = font.widthOfTextAtSize(options.text, options.fontSizePt);
+  const relativeRotation = options.orientation === "diagonal" ? 45 : 0;
+  const baseTextWidth = font.widthOfTextAtSize(options.text, options.fontSizePt);
+  const baseBounds = rotatedTextBounds(baseTextWidth, options.fontSizePt, relativeRotation);
+  const fitScale = Math.min(
+    1,
+    visualWidth / baseBounds.width,
+    visualHeight / baseBounds.height,
+  );
+  const fontSizePt = options.fontSizePt * fitScale;
+  const textWidth = font.widthOfTextAtSize(options.text, fontSizePt);
+  const bounds = rotatedTextBounds(textWidth, fontSizePt, relativeRotation);
   const anchor = mapVisualPointToPagePoint({
-    visualX: (visualWidth - textWidth) / 2,
-    visualY: visualHeight / 2,
+    visualX: (visualWidth - bounds.width) / 2 - bounds.minX,
+    visualY: (visualHeight - bounds.height) / 2 - bounds.minY,
     pageWidth: page.getWidth(),
     pageHeight: page.getHeight(),
     pageRotation,
   });
-  const rotation = normalizeRotation(pageRotation + (options.orientation === "diagonal" ? 45 : 0));
+  const rotation = normalizeRotation(pageRotation + relativeRotation);
 
   page.drawText(options.text, {
     x: anchor.x,
     y: anchor.y,
-    size: options.fontSizePt,
+    size: fontSizePt,
     font,
     color: rgb(0.35, 0.35, 0.35),
     opacity: options.opacity,
     rotate: pdfDegrees(rotation),
   });
+}
+
+function fitFontSizeToWidth(textWidth: number, fontSize: number, maxTextWidth: number): number {
+  if (maxTextWidth <= 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Stamp margin leaves no room for text.");
+  }
+
+  if (textWidth <= maxTextWidth) {
+    return fontSize;
+  }
+
+  return fontSize * (maxTextWidth / textWidth);
+}
+
+function rotatedTextBounds(
+  textWidth: number,
+  fontSize: number,
+  rotation: number,
+): { minX: number; minY: number; width: number; height: number } {
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const points = [
+    { x: 0, y: 0 },
+    { x: textWidth * cos, y: textWidth * sin },
+    { x: -fontSize * sin, y: fontSize * cos },
+    {
+      x: textWidth * cos - fontSize * sin,
+      y: textWidth * sin + fontSize * cos,
+    },
+  ];
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  return {
+    minX,
+    minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
 }
 
 function computeStampPosition(options: {

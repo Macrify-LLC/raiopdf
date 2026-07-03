@@ -97,6 +97,7 @@ const POINTS_PER_INCH = 72;
 declare global {
   interface Window {
     __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    __RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__?: number;
     __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
   }
 }
@@ -150,7 +151,12 @@ export function App() {
     markSaved,
   } = useDocument();
   const engineBridge = useEngineBridge();
-  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [pdfDocumentState, setPdfDocumentState] = useState<{
+    bytes: Uint8Array;
+    proxy: PDFDocumentProxy;
+  } | null>(null);
+  const pdfDocument = pdfDocumentState?.proxy ?? null;
+  const pdfDocumentBytes = pdfDocumentState?.bytes ?? null;
   const editing = useEditing(pdfDocument);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
@@ -269,15 +275,16 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let loadedDocument: PDFDocumentProxy | null = null;
+    const sourceBytes = document.bytes;
 
-    if (!document.bytes) {
-      setPdfDocument(null);
+    if (!sourceBytes) {
+      setPdfDocumentState(null);
       return;
     }
 
-    setPdfDocument(null);
+    setPdfDocumentState(null);
 
-    void loadPdfDocument(document.bytes)
+    void loadPdfDocument(sourceBytes)
       .then((loaded) => {
         loadedDocument = loaded;
 
@@ -286,7 +293,7 @@ export function App() {
           return;
         }
 
-        setPdfDocument(loaded);
+        setPdfDocumentState({ bytes: sourceBytes, proxy: loaded });
       })
       .catch((error: unknown) => {
         if (!disposed) {
@@ -412,7 +419,7 @@ export function App() {
     } = {
       fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
       pdfaCompliant: false,
-      pdfDocument,
+      pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
     };
 
     if (document.hasTextLayer !== null) {
@@ -441,7 +448,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument]);
+  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -1470,9 +1477,12 @@ export function App() {
     [document.bytes, document.fileName, engineBridge, openDocumentFile, repairCandidate],
   );
 
-  const insertImagesAsPages = useCallback(
-    async (images: readonly PdfImagePageInput[]) => {
-      if (!document.bytes) {
+  const insertImageFilesAsPages = useCallback(
+    async (files: readonly File[]) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
         setSidecarStatus({
           running: false,
           message: "Open a PDF before inserting image pages.",
@@ -1491,7 +1501,23 @@ export function App() {
         beforeBytes: null,
         afterBytes: null,
       });
-      const inserted = await insertImagePages(images, insertAt);
+      const images = await Promise.all(files.map(readImagePageInput));
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        setSidecarStatus({
+          running: false,
+          message: "The document changed before image pages finished loading.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      const inserted = await insertImagePages(images, insertAt, {
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
       setSidecarStatus({
         running: false,
         message: inserted ? "Image pages inserted." : "Image pages could not be inserted.",
@@ -1501,7 +1527,7 @@ export function App() {
       });
       return inserted;
     },
-    [document.bytes, document.currentPage, insertImagePages, selectedPageIndexes],
+    [document.bytes, document.currentPage, getOpenToken, insertImagePages, isCurrentDocument, selectedPageIndexes],
   );
 
   const exportPageAsImage = useCallback(
@@ -2174,7 +2200,7 @@ export function App() {
           <InsertImagesPanel
             hasDocument={Boolean(document.bytes)}
             status={sidecarStatus}
-            onInsert={insertImagesAsPages}
+            onInsert={insertImageFilesAsPages}
           />
         </FloatingDialog>
       );
@@ -2588,13 +2614,12 @@ function InsertImagesPanel({
 }: {
   hasDocument: boolean;
   status: SidecarStatus;
-  onInsert: (images: readonly PdfImagePageInput[]) => Promise<boolean>;
+  onInsert: (files: readonly File[]) => Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<readonly File[]>([]);
 
   async function submit() {
-    const images = await Promise.all(selected.map(readImagePageInput));
-    await onInsert(images);
+    await onInsert(selected);
   }
 
   return (
@@ -2944,6 +2969,8 @@ async function readImagePageInput(file: File): Promise<PdfImagePageInput> {
   const format = file.type === "image/jpeg" || lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
     ? "jpeg"
     : "png";
+
+  await waitForTestDelay(window.__RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__ ?? 0);
 
   return {
     bytes: new Uint8Array(await file.arrayBuffer()),

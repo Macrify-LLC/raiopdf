@@ -340,6 +340,34 @@ test("inserts an image as a full PDF page", async ({ page }) => {
   });
 });
 
+test("drops insert-image results if another PDF opens while images are read", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "insert-image-race.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Insert images as pages..." }).click();
+  await page.locator("#insert-image-pages").setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(onePixelPng()),
+  });
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__?: number;
+    }).__RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__ = 250;
+  });
+
+  await page.getByRole("button", { name: "Insert Images", exact: true }).click();
+  await openPdf(page, "opened-during-image-read.pdf", await createPdf([260]));
+
+  await expect(page.getByText("The document changed before image pages finished loading.")).toBeVisible();
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [260],
+    rotations: [0],
+  });
+});
+
 test("stacked floating dialogs let Escape close only the top dialog", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "stacked-dialogs.pdf", await createPdf([200, 210]));
@@ -451,6 +479,36 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect(page.getByText("landscape-oversize — filing.pdf")).toBeVisible();
   await expect(page.locator('.filing-row[data-kind="rule"] .filing-row__chip', { hasText: "WILL FIX" })).toHaveCount(0);
   await expect.poll(() => getFilingPreflightRuns(page)).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => getPdfACallCount(page)).toBe(1);
+});
+
+test("compressing an oversize filing under the cap clears the split prompt", async ({ page }) => {
+  const sourcePdf = await createPaddedPdf(
+    await createMultiPageTextPdf(["Oversize filing page"]),
+    26 * 1024 * 1024,
+  );
+  const compressedPdf = await createMultiPageTextPdf(["Compressed filing page"]);
+  const convertedPdf = await createMultiPageTextPdf(["Converted compressed filing page"]);
+  await installFilingAndCompressBridgeMock(page, {
+    compressedBytes: compressedPdf,
+    convertedBytes: convertedPdf,
+  });
+  await page.goto("/");
+  await openPdf(page, "oversize-compressed.pdf", sourcePdf);
+  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+
+  await expect(page.getByRole("button", { name: "Compress first" })).toBeVisible();
+  await page.getByRole("button", { name: "Compress first" }).click();
+  await expect(page.getByText("Compression complete. Preflight will re-run on the compressed document.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compress first" })).toBeHidden();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Make Filing-Ready" }).click();
+  await downloadPromise;
+
+  await expect(page.getByText("oversize-compressed — filing.pdf")).toBeVisible();
+  await expect(page.getByText(/Part 1 of/)).toHaveCount(0);
+  await expect.poll(() => getCompressCallCount(page)).toBe(1);
   await expect.poll(() => getPdfACallCount(page)).toBe(1);
 });
 
@@ -908,6 +966,71 @@ async function installFilingBridgeMock(
     };
   }, {
     convertedContents: [...convertedBytes],
+  });
+}
+
+async function installFilingAndCompressBridgeMock(
+  page: Page,
+  options: {
+    compressedBytes: Uint8Array;
+    convertedBytes: Uint8Array;
+  },
+): Promise<void> {
+  await page.addInitScript(({ compressedContents, convertedContents }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_COMPRESS_CALL_COUNT__?: number;
+      __RAIOPDF_TEST_PDFA_CALL_COUNT__?: number;
+      __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ = 0;
+    testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ = 0;
+    testWindow.__RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      return { port: 39393 } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (url.endsWith("/api/v1/analysis/basic-info")) {
+        return new Response(JSON.stringify({ pageCount: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/misc/compress-pdf")) {
+        testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ ?? 0) + 1;
+
+        return new Response(new Uint8Array(compressedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      if (url.endsWith("/api/v1/convert/pdf/pdfa")) {
+        testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
+
+        return new Response(new Uint8Array(convertedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    compressedContents: [...options.compressedBytes],
+    convertedContents: [...options.convertedBytes],
   });
 }
 

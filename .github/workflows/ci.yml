@@ -93,6 +93,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Prepare shell external-bin stubs
+        run: node installer/prepare-external-bins.mjs --stub
+
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
 

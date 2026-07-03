@@ -11,9 +11,17 @@ GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export type { PDFDocumentProxy, PDFPageProxy };
 
+const pdfjsAssetBaseUrl = `${import.meta.env.BASE_URL}pdfjs/`;
+
 export async function loadPdfDocument(bytes: Uint8Array): Promise<PDFDocumentProxy> {
   const copy = new Uint8Array(bytes);
-  return getDocument({ data: copy }).promise;
+  return getDocument({
+    data: copy,
+    cMapUrl: `${pdfjsAssetBaseUrl}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${pdfjsAssetBaseUrl}standard_fonts/`,
+    wasmUrl: `${pdfjsAssetBaseUrl}wasm/`,
+  }).promise;
 }
 
 export function getPdfLoadErrorMessage(error: unknown): string {

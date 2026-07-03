@@ -76,6 +76,18 @@ test("renders page 1 in the main canvas after opening a 4-page PDF", async ({ pa
   });
 });
 
+test("renders the Word-generated DCM order fixture", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+
+  await expect(page.getByRole("button", { name: "Page 7" })).toBeVisible();
+  await expect.poll(() => mainCanvasStats(page)).toMatchObject({
+    widthReady: true,
+    heightReady: true,
+    hasTextPixels: true,
+  });
+});
+
 test("queues rapid rotate and delete clicks without losing the delete", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "rapid-fire.pdf", await createPdf([200, 210, 220]));
@@ -469,6 +481,10 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
   await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
+}
+
+async function readFixture(fileName: string): Promise<Uint8Array> {
+  return new Uint8Array(await readFile(new URL(`./fixtures/${fileName}`, import.meta.url)));
 }
 
 async function mainCanvasStats(page: Page): Promise<{

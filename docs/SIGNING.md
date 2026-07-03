@@ -41,6 +41,15 @@ read from an environment variable.
 
 ## Cutting a signed release
 
+The signing overlay enables `createUpdaterArtifacts`, so a signed build also produces the
+Tauri **updater signatures** (`*-setup.exe.sig`). That step needs the **minisign updater
+key** — separate from the Certum Authenticode cert — supplied via `TAURI_SIGNING_PRIVATE_KEY`
++ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Both live in 1Password (Macrify vault, item
+*"Raio Tauri Private Signing Key 7/3"*: `credential` field = private key, `password` field =
+password). The build also stamps the app version from the **git tag on the current commit**,
+so tag the release before building — an untagged commit fails the stamp rather than shipping
+`0.0.0`.
+
 ```powershell
 # 1. Log in with SimplySign Desktop (scan the QR with the mobile app).
 
@@ -49,7 +58,14 @@ $env:RAIOPDF_SIGN_THUMBPRINT = "PASTE_YOUR_THUMBPRINT_HERE"
 # Optional — defaults to http://time.certum.pl:
 # $env:RAIOPDF_SIGN_TIMESTAMP_URL = "http://time.certum.pl"
 
-# 3. Build the signed installers:
+# 3. Supply the minisign updater key (from 1Password) so updater .sig files are produced:
+$env:TAURI_SIGNING_PRIVATE_KEY = op read "op://Macrify/Raio Tauri Private Signing Key 7/3/credential"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = op read "op://Macrify/Raio Tauri Private Signing Key 7/3/password"
+
+# 4. Tag the release commit (the build stamps the version from this tag):
+git tag v0.1.0   # example
+
+# 5. Build the signed installers (stamps version, signs, emits updater .sig):
 pnpm build:shell:signed
 ```
 

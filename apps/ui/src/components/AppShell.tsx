@@ -198,6 +198,8 @@ export function AppShell({
           zoom={document.zoom}
           fitWidth={document.fitWidth}
           error={document.error}
+          onZoomOut={onZoomOut}
+          onZoomIn={onZoomIn}
           onFitZoomResolved={onFitZoomResolved}
           onPageSizeChange={onPageSizeChange}
           onRenderError={onRenderError}

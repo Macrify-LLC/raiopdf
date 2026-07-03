@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent,
   type PointerEvent,
   type ReactNode,
+  type WheelEvent,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
@@ -41,6 +43,8 @@ export interface CanvasWellProps {
   zoom?: number;
   fitWidth?: boolean;
   error?: string | null;
+  onZoomIn?: (() => void) | undefined;
+  onZoomOut?: (() => void) | undefined;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
   onRenderError?: ((message: string) => void) | undefined;
@@ -64,6 +68,8 @@ export function CanvasWell({
   zoom = 1,
   fitWidth = false,
   error = null,
+  onZoomIn,
+  onZoomOut,
   onFitZoomResolved,
   onPageSizeChange,
   onRenderError,
@@ -78,13 +84,51 @@ export function CanvasWell({
   searchResults = [],
   activeSearchResultId = null,
 }: CanvasWellProps) {
+  const wellRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wheelZoomAnchorRef = useRef<{
+    clientX: number;
+    clientY: number;
+    localX: number;
+    localY: number;
+    zoom: number;
+  } | null>(null);
   const [page, setPage] = useState<PDFPageProxy | null>(null);
   const [draftRect, setDraftRect] = useState<ViewportRect | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const hasDocument = Boolean(pdfDocument);
   const viewport = useMemo(() => page?.getViewport({ scale: zoom }) ?? null, [page, zoom]);
+
+  useLayoutEffect(() => {
+    const anchor = wheelZoomAnchorRef.current;
+
+    if (!anchor) {
+      return;
+    }
+
+    if (anchor.zoom === zoom) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const well = wellRef.current;
+      const canvas = canvasRef.current;
+
+      if (!well || !canvas) {
+        return;
+      }
+
+      const zoomRatio = zoom / anchor.zoom;
+      const bounds = canvas.getBoundingClientRect();
+
+      well.scrollLeft += bounds.left + anchor.localX * zoomRatio - anchor.clientX;
+      well.scrollTop += bounds.top + anchor.localY * zoomRatio - anchor.clientY;
+      wheelZoomAnchorRef.current = null;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [zoom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,7 +185,7 @@ export function CanvasWell({
     return () => observer.disconnect();
   }, [fitWidth, onFitZoomResolved, page]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
 
     if (!canvas || !page) {
@@ -249,6 +293,44 @@ export function CanvasWell({
     });
   }
 
+  function handleWheel(event: WheelEvent<HTMLDivElement>) {
+    if (!event.ctrlKey || event.deltaY === 0) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const bounds = canvas.getBoundingClientRect();
+    const anchor = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      localX: clamp(event.clientX - bounds.left, 0, bounds.width),
+      localY: clamp(event.clientY - bounds.top, 0, bounds.height),
+      zoom,
+    };
+    wheelZoomAnchorRef.current = anchor;
+
+    if (event.deltaY < 0) {
+      onZoomIn?.();
+    } else {
+      onZoomOut?.();
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (wheelZoomAnchorRef.current === anchor) {
+          wheelZoomAnchorRef.current = null;
+        }
+      });
+    });
+  }
+
   function getViewportPoint(event: PointerEvent<HTMLDivElement>): ViewportPoint | null {
     const canvas = canvasRef.current;
 
@@ -270,6 +352,7 @@ export function CanvasWell({
 
   return (
     <section
+      ref={wellRef}
       className="canvas-well"
       aria-label="Document canvas"
       onDragOver={(event) => event.preventDefault()}
@@ -304,6 +387,7 @@ export function CanvasWell({
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
+              onWheel={handleWheel}
               onPointerCancel={() => {
                 dragStartRef.current = null;
                 setDraftRect(null);

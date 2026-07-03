@@ -52,6 +52,41 @@ test("renders page 1 in the main canvas after opening a PDF", async ({ page }) =
   });
 });
 
+test("zooms the canvas with Acrobat-style shortcuts", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "zoom-shortcuts.pdf",
+    await createMultiPageTextPdf(["Zoom shortcut smoke"]),
+  );
+
+  const zoomLabel = page.locator(".command-bar__zoom-label");
+  const canvas = page.locator('[data-testid="pdf-page-canvas"]');
+  const bounds = await canvas.boundingBox();
+
+  if (!bounds) {
+    throw new Error("Rendered canvas did not produce a bounding box.");
+  }
+
+  await canvas.click({ position: { x: bounds.width / 2, y: bounds.height / 2 } });
+  await page.keyboard.press("Control+0");
+  await expect(zoomLabel).toHaveText("100%");
+
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.keyboard.down("Control");
+
+  try {
+    await page.mouse.wheel(0, 400);
+  } finally {
+    await page.keyboard.up("Control");
+  }
+
+  await expect.poll(async () => (await zoomLabel.textContent())?.trim()).not.toBe("100%");
+
+  await page.keyboard.press("Control+0");
+  await expect(zoomLabel).toHaveText("100%");
+});
+
 test("renders page 1 in the main canvas after opening a 4-page PDF", async ({ page }) => {
   await page.goto("/");
   await openPdf(

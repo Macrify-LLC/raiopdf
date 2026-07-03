@@ -142,6 +142,20 @@
   pointer-events: none;
 }
 
+.canvas-well__search-highlight {
+  position: absolute;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: var(--highlight);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.canvas-well__search-highlight[data-active="true"] {
+  border-color: var(--warn);
+  opacity: 0.68;
+}
+
 .canvas-well__redaction-draft {
   border-style: dashed;
 }

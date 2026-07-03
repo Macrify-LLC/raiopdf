@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
+import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy, PDFPageProxy } from "../lib/pdfjs";
@@ -51,6 +52,8 @@ export interface CanvasWellProps {
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
+  searchResults?: readonly DocumentSearchMatch[];
+  activeSearchResultId?: string | null;
 }
 
 export function CanvasWell({
@@ -72,6 +75,8 @@ export function CanvasWell({
   onRedactionAreaCreated,
   onRedactionAreaRemoved,
   editing,
+  searchResults = [],
+  activeSearchResultId = null,
 }: CanvasWellProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -330,6 +335,18 @@ export function CanvasWell({
                     />
                   ))
                 : null}
+              {viewport
+                ? searchResults
+                  .filter((result) => result.area.pageIndex === currentPage - 1)
+                  .map((result) => (
+                    <SearchHighlight
+                      key={result.id}
+                      result={result}
+                      active={result.id === activeSearchResultId}
+                      viewport={viewport}
+                    />
+                  ))
+                : null}
               {viewport && page && editing && !redactionMode ? (
                 <EditLayer
                   page={page}
@@ -378,6 +395,41 @@ export function CanvasWell({
         </div>
       )}
     </section>
+  );
+}
+
+function SearchHighlight({
+  result,
+  active,
+  viewport,
+}: {
+  result: DocumentSearchMatch;
+  active: boolean;
+  viewport: PageViewport;
+}) {
+  const highlightRef = useRef<HTMLSpanElement>(null);
+  const rect = pdfRectToViewportRect(result.area, viewport);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    highlightRef.current?.scrollIntoView({
+      block: "center",
+      inline: "center",
+    });
+  }, [active]);
+
+  return (
+    <span
+      ref={highlightRef}
+      className="canvas-well__search-highlight"
+      data-active={active ? "true" : undefined}
+      data-testid="search-highlight"
+      style={toOverlayStyle(rect)}
+      aria-hidden="true"
+    />
   );
 }
 

@@ -86,6 +86,33 @@ test("renders the Word-generated DCM order fixture", async ({ page }) => {
     heightReady: true,
     hasTextPixels: true,
   });
+
+  const searchInput = page.getByLabel("Search document");
+  await searchInput.fill("Uniform Order Setting Trial");
+  await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
+  await expect.poll(() => searchResultCount(page)).toBeGreaterThan(0);
+  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+  await expect(page.locator('[data-testid="search-highlight"]')).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Next search result" }).click();
+  await expect(page.locator(".command-bar__search-count")).toHaveText(/2 of [1-9]\d*/);
+  await expect(page.getByText("Page 3 / 7")).toBeVisible();
+
+  await page.getByRole("button", { name: "Previous search result" }).click();
+  await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
+  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+
+  await searchInput.press("Enter");
+  await expect(page.locator(".command-bar__search-count")).toHaveText(/2 of [1-9]\d*/);
+  await expect(page.getByText("Page 3 / 7")).toBeVisible();
+
+  await searchInput.press("Shift+Enter");
+  await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
+  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+
+  await searchInput.press("Escape");
+  await expect(searchInput).toHaveValue("");
+  await expect(page.locator(".command-bar__search-count")).toHaveCount(0);
 });
 
 test("queues rapid rotate and delete clicks without losing the delete", async ({ page }) => {
@@ -733,6 +760,13 @@ async function savePdf(page: Page): Promise<Uint8Array> {
   }
 
   return new Uint8Array(await readFile(path));
+}
+
+async function searchResultCount(page: Page): Promise<number> {
+  return page.locator(".command-bar__search-count").evaluate((element) => {
+    const match = element.textContent?.match(/of\s+(\d+)/);
+    return match ? Number(match[1]) : 0;
+  });
 }
 
 async function createPdf(pageWidths: readonly number[]): Promise<Uint8Array> {

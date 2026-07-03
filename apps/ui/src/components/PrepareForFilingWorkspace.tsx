@@ -7,6 +7,7 @@ import type {
 } from "@raiopdf/rules";
 import type { DocumentState } from "../hooks/useDocument";
 import { BoltIcon, CheckIcon, ChevronDownIcon } from "../icons";
+import { LoadingSun } from "./LoadingSun";
 import "./PrepareForFilingWorkspace.css";
 
 export type FilingProgressPhase =
@@ -161,6 +162,17 @@ export function PrepareForFilingWorkspace({
           </label>
         </div>
 
+        <div className="filing-card__primary-row">
+          <button
+            type="button"
+            className="filing-card__primary-button"
+            disabled={!canPrepare}
+            onClick={() => onPrepare(certificateOpen ? certificate : null)}
+          >
+            {primaryLabel}
+          </button>
+        </div>
+
         {!document.bytes ? (
           <p className="filing-card__empty">Open a PDF before preparing a filing copy.</p>
         ) : null}
@@ -217,7 +229,10 @@ export function PrepareForFilingWorkspace({
 
         <div className="filing-checks" aria-label="Preflight checks">
           {loadingReport ? (
-            <p className="filing-card__status" role="status">Reading document facts...</p>
+            <p className="filing-card__status" role="status">
+              <LoadingSun size={14} label="Reading document facts" />
+              Reading document facts...
+            </p>
           ) : null}
           {activeReport?.checks.map((check) => (
             <PreflightRow key={check.checkId} check={check} />
@@ -226,7 +241,7 @@ export function PrepareForFilingWorkspace({
 
         {!pdfAAvailable && needsPdfA ? (
           <p className="filing-card__unavailable" role="status">
-            PDF/A export runs in the desktop app. Normalize and split remain available here.
+            PDF/A export is available in the desktop app. Normalize and split remain available here.
           </p>
         ) : null}
 
@@ -262,7 +277,12 @@ export function PrepareForFilingWorkspace({
 
         {progress.message ? (
           <div className="filing-progress" data-phase={progress.phase} role="status" aria-live="polite">
-            <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
+            <p className="filing-progress__label">
+              {isFilingProgressActive(progress.phase) ? (
+                <LoadingSun size={14} label="Preparing filing output" />
+              ) : null}
+              {formatProgressLabel(progress.phase)}
+            </p>
             <p>{progress.message}</p>
           </div>
         ) : null}
@@ -275,14 +295,6 @@ export function PrepareForFilingWorkspace({
           <p>
             Checks cite the rules in force when this pack was verified ({latestVerified}) — confirm current requirements.
           </p>
-          <button
-            type="button"
-            className="filing-card__primary-button"
-            disabled={!canPrepare}
-            onClick={() => onPrepare(certificateOpen ? certificate : null)}
-          >
-            {primaryLabel}
-          </button>
         </footer>
       </div>
     </section>
@@ -419,6 +431,13 @@ function formatProgressLabel(phase: FilingProgressPhase): string {
   }
 
   return "Ready";
+}
+
+function isFilingProgressActive(phase: FilingProgressPhase): boolean {
+  return phase === "normalizing" ||
+    phase === "splitting" ||
+    phase === "converting" ||
+    phase === "verifying";
 }
 
 function latestDate(constraints: readonly ConstraintEntry[]): string {

@@ -51,7 +51,7 @@ declare global {
 }
 
 export class EngineBridgeUnavailableError extends Error {
-  constructor(message = "OCR runs in the desktop app.") {
+  constructor(message = "This action is available in the desktop app.") {
     super(message);
     this.name = "EngineBridgeUnavailableError";
   }

@@ -14,6 +14,7 @@ import {
   SlipSheetIcon,
 } from "../icons";
 import { PdfMiniThumb } from "./PdfMiniThumb";
+import { LoadingSun } from "./LoadingSun";
 import "./BinderWorkspace.css";
 
 type IdentifierStyle = "letters" | "numbers";
@@ -312,7 +313,12 @@ export function BinderWorkspace({
           <p>
             {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPages} {totalPages === 1 ? "page" : "pages"}
           </p>
-          {status ? <p className="binder-workspace__status" role="status">{status}</p> : null}
+          {status ? (
+            <p className="binder-workspace__status" role="status">
+              {building ? <LoadingSun size={13} label="Building binder" /> : null}
+              {status}
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -321,6 +327,7 @@ export function BinderWorkspace({
           disabled={!document.bytes || exhibits.length === 0 || building}
         >
           <CombineExhibitsIcon size={16} />
+          {building ? <LoadingSun size={14} label="Building binder" /> : null}
           {building ? "Building Binder" : "Build Binder"}
         </button>
       </footer>

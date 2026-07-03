@@ -26,6 +26,7 @@ import {
 import { EditLayer } from "./EditLayer";
 import { FloatingDialog } from "./FloatingDialog";
 import { FormLayer } from "./FormLayer";
+import { LoadingSun } from "./LoadingSun";
 import { SignatureCard } from "./SignatureCard";
 import "./CanvasWell.css";
 
@@ -87,6 +88,7 @@ export function CanvasWell({
   const stageRef = useRef<HTMLDivElement>(null);
   const pageFrameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderRunRef = useRef(0);
   const wheelZoomAnchorRef = useRef<{
     clientX: number;
     clientY: number;
@@ -95,6 +97,8 @@ export function CanvasWell({
     zoom: number;
   } | null>(null);
   const [page, setPage] = useState<PDFPageProxy | null>(null);
+  const [pagePending, setPagePending] = useState(false);
+  const [renderPending, setRenderPending] = useState(false);
   const [draftRect, setDraftRect] = useState<ViewportRect | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const hasDocument = Boolean(pdfDocument);
@@ -135,9 +139,11 @@ export function CanvasWell({
 
     if (!pdfDocument) {
       setPage(null);
+      setPagePending(false);
       return;
     }
 
+    setPagePending(true);
     setPage(null);
 
     void pdfDocument
@@ -145,6 +151,7 @@ export function CanvasWell({
       .then((loadedPage) => {
         if (!cancelled) {
           setPage(loadedPage);
+          setPagePending(false);
           const viewport = loadedPage.getViewport({ scale: 1 });
           onPageSizeChange?.({
             width: viewport.width / 72,
@@ -154,6 +161,7 @@ export function CanvasWell({
       })
       .catch((pageError: unknown) => {
         if (!cancelled && !isCancelledRenderError(pageError)) {
+          setPagePending(false);
           onRenderError?.("This page could not be displayed.");
         }
       });
@@ -201,15 +209,27 @@ export function CanvasWell({
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
 
+    const renderRun = renderRunRef.current + 1;
+    renderRunRef.current = renderRun;
+    let cancelled = false;
+
     const renderTask = page.render({ canvas, viewport });
-    void renderTask.promise.catch((renderError: unknown) => {
-      if (!isCancelledRenderError(renderError)) {
-        console.error(renderError);
-        onRenderError?.("This page could not be displayed.");
-      }
-    });
+    setRenderPending(true);
+    void renderTask.promise
+      .catch((renderError: unknown) => {
+        if (!isCancelledRenderError(renderError)) {
+          console.error(renderError);
+          onRenderError?.("This page could not be displayed.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled && renderRunRef.current === renderRun) {
+          setRenderPending(false);
+        }
+      });
 
     return () => {
+      cancelled = true;
       renderTask.cancel();
     };
   }, [onRenderError, page, viewport]);
@@ -368,6 +388,7 @@ export function CanvasWell({
     <section
       ref={wellRef}
       className="canvas-well"
+      data-mode-bar={hasDocument && !workspace && modeBar ? "true" : undefined}
       aria-label="Document canvas"
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
@@ -413,6 +434,12 @@ export function CanvasWell({
                 aria-label={`Page ${currentPage}`}
                 data-testid="pdf-page-canvas"
               />
+              {pagePending || renderPending ? (
+                <div className="canvas-well__render-pending" role="status" aria-live="polite">
+                  <LoadingSun size={18} label="Rendering page" />
+                  Rendering page
+                </div>
+              ) : null}
               {viewport && page && editing?.hasFormFields ? (
                 <FormLayer
                   page={page}

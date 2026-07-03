@@ -117,16 +117,28 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
-  background: transparent;
+  background: var(--panel);
   color: var(--body);
+  box-shadow: var(--shadow-control);
   cursor: default;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
 .command-bar__search-button:hover:not(:disabled) {
   background: var(--hover-ground);
   border-color: var(--border);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.command-bar__search-button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .command-bar__search-button:focus-visible {
@@ -136,4 +148,5 @@
 
 .command-bar__search-button:disabled {
   opacity: 0.45;
+  box-shadow: none;
 }

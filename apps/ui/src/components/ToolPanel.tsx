@@ -26,6 +26,7 @@ import {
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
+import { LoadingSun } from "./LoadingSun";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
@@ -312,6 +313,7 @@ function OcrStatusPanel({
   const phase = ocrStarting && ocrState.phase === "starting-engine"
     ? "starting-engine"
     : ocrState.phase;
+  const active = isOcrActive(phase, ocrStarting);
 
   return (
     <div
@@ -320,7 +322,10 @@ function OcrStatusPanel({
       role="status"
       aria-live="polite"
     >
-      <p className="tool-panel__ocr-status-label">{getOcrStatusLabel(phase)}</p>
+      <p className="tool-panel__ocr-status-label">
+        {active ? <LoadingSun size={13} label="OCR processing" /> : null}
+        {getOcrStatusLabel(phase)}
+      </p>
       <p className="tool-panel__ocr-status-message">{message}</p>
     </div>
   );
@@ -342,7 +347,7 @@ function RedactionStatusPanel({
   }
 
   if (!state.available) {
-    return <InlineMessage tone="neutral" message="True redaction runs in the desktop app." />;
+    return <InlineMessage tone="neutral" message="This action is available in the desktop app." />;
   }
 
   if (state.phase === "confirming") {
@@ -729,7 +734,7 @@ function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): stri
   }
 
   if (!ocrAvailable) {
-    return "OCR runs in the desktop app.";
+    return "This action is available in the desktop app.";
   }
 
   return "Ready to make this PDF searchable.";

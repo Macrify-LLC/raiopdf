@@ -1,0 +1,55 @@
+/* RaioPDF icon kit — Geometric Line. Structure in icons.svg; this owns visuals.
+   20x20/1.5px grid matching apps/ui/src/icons/types.ts. Sandevistan echo + gestures.
+   The Batch C job adapts colors to real tokens (tokens.css vars) and wires data-active. */
+:root {
+  --rp-body: var(--body); --rp-muted: var(--muted); --rp-primary: var(--primary);
+  --rp-accent: var(--accent); --rp-primary-deep: var(--primary-deep);
+  --rp-stroke-color: var(--rp-body); --rp-echo-color: var(--rp-accent);
+}
+.rp-icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.rp-icon { width: 20px; height: 20px; overflow: visible; flex-shrink: 0; cursor: default; color: var(--rp-stroke-color); }
+.rp-glyph-main { fill: none; stroke: var(--rp-stroke-color); stroke-width: 1.5; }
+.rp-echo { fill: none; stroke: var(--rp-echo-color); stroke-width: 1; opacity: 0; transform-box: view-box; transform-origin: 10px 10px; transition: opacity 0.35s ease-out, transform 0.35s ease-out; }
+@keyframes rp-emit { 0% { transform: translate(0.4px, -0.4px); opacity: 0.5; } 100% { transform: translate(10px, -10px); opacity: 0; } }
+.rp-icon:hover .rp-echo-1 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0s; }
+.rp-icon:hover .rp-echo-2 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0.15s; }
+.rp-icon:hover .rp-echo-3 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0.3s; }
+.rp-icon:hover .rp-echo-4 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0.45s; }
+.rp-icon:hover .rp-echo-5 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0.6s; }
+.rp-icon:hover .rp-echo-6 { animation: rp-emit 0.9s ease-out infinite; animation-delay: 0.75s; }
+.rp-glyph-main, .rp-echo { stroke-linecap: butt; stroke-linejoin: miter; }
+.rp-icon--bolt-filled .rp-glyph-main { fill: var(--rp-stroke-color); stroke: none; }
+.rp-icon--bolt-filled .rp-echo { fill: var(--rp-echo-color); stroke: none; }
+.rp-glyph-main .rp-redact-bar { fill: var(--rp-stroke-color); stroke: none; }
+.rp-echo .rp-redact-bar { fill: var(--rp-echo-color); stroke: none; }
+.rp-heavy { stroke-width: 2; }
+.rp-icon[data-active="true"] .rp-glyph-main { stroke: var(--rp-primary); }
+.rp-icon--bolt-filled[data-active="true"] .rp-glyph-main { fill: var(--rp-primary); }
+[data-active="true"] > .rp-icon .rp-glyph-main,
+[data-selected="true"] .rp-icon .rp-glyph-main,
+[aria-current="true"] .rp-icon .rp-glyph-main { stroke: var(--rp-primary); }
+[data-active="true"] > .rp-icon--bolt-filled .rp-glyph-main,
+[data-selected="true"] .rp-icon--bolt-filled .rp-glyph-main,
+[aria-current="true"] .rp-icon--bolt-filled .rp-glyph-main { fill: var(--rp-primary); }
+.g-nudge, .g-pulse, .g-spin, .g-squash { transform-box: view-box; }
+@keyframes rp-nudge { 0% { transform: translate(0, 0); } 50% { transform: translate(var(--nx, 0), var(--ny, 0)); } 100% { transform: translate(0, 0); } }
+@keyframes rp-pulse { 0% { transform: scale(1); } 45% { transform: scale(var(--ps, 1.15)); } 100% { transform: scale(1); } }
+@keyframes rp-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+@keyframes rp-squash { 0% { transform: scaleY(1); } 40% { transform: scaleY(var(--sy, 0.8)); } 100% { transform: scaleY(1); } }
+@keyframes rp-draw { 0% { stroke-dashoffset: var(--dash, 16); } 100% { stroke-dashoffset: 0; } }
+.g-draw { stroke-dasharray: var(--dash, 16); stroke-dashoffset: 0; }
+.rp-icon:hover .rp-glyph-main .g-nudge { animation: rp-nudge .6s ease-in-out 1; }
+.rp-icon:hover .rp-glyph-main .g-pulse { animation: rp-pulse .6s ease-in-out 1; }
+.rp-icon:hover .rp-glyph-main .g-spin { animation: rp-spin .6s ease-in-out 1; }
+.rp-icon:hover .rp-glyph-main .g-squash { animation: rp-squash .6s ease-in-out 1; }
+.rp-icon:hover .rp-glyph-main .g-draw { animation: rp-draw .6s ease-in-out 1; }
+.rp-icon--sm { width: 16px; height: 16px; }
+.rp-icon--lg { width: 40px; height: 40px; }
+@media (prefers-reduced-motion: reduce) {
+  .rp-icon:hover .rp-echo-1, .rp-icon:hover .rp-echo-2, .rp-icon:hover .rp-echo-3,
+  .rp-icon:hover .rp-echo-4, .rp-icon:hover .rp-echo-5, .rp-icon:hover .rp-echo-6,
+  .rp-icon:hover .rp-glyph-main .g-nudge, .rp-icon:hover .rp-glyph-main .g-pulse,
+  .rp-icon:hover .rp-glyph-main .g-spin, .rp-icon:hover .rp-glyph-main .g-squash,
+  .rp-icon:hover .rp-glyph-main .g-draw { animation: none; }
+  .rp-echo { transition: none; opacity: 0; }
+}

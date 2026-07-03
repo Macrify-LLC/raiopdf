@@ -13,12 +13,9 @@ export interface TitleBarProps {
   tabs?: DocumentTabInfo[];
 }
 
-const DEMO_TABS: DocumentTabInfo[] = [
-  { id: "demo-doc", fileName: "Roe v. Acme Citrus — MSJ.pdf", active: true },
-];
-
-export function TitleBar({ tabs = DEMO_TABS }: TitleBarProps) {
+export function TitleBar({ tabs = [] }: TitleBarProps) {
   const showWindowControls = isTauriRuntime();
+  const hasTabs = tabs.length > 0;
 
   function handleDragRegionDoubleClick(event: MouseEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest("button")) {
@@ -43,24 +40,30 @@ export function TitleBar({ tabs = DEMO_TABS }: TitleBarProps) {
         </span>
       </div>
 
-      <div className="title-bar__tabs" data-tauri-drag-region>
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className="title-bar__tab"
-            aria-current={tab.active ? "page" : undefined}
-          >
-            {tab.dirty ? (
-              <span
-                className="title-bar__tab-dot"
-                aria-label="Unsaved changes"
-                title="Unsaved changes"
-              />
-            ) : null}
-            {tab.fileName}
-          </div>
-        ))}
-      </div>
+      {hasTabs ? (
+        <div className="title-bar__tabs" data-tauri-drag-region>
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className="title-bar__tab"
+              aria-current={tab.active ? "page" : undefined}
+            >
+              {tab.dirty ? (
+                <span
+                  className="title-bar__tab-dot"
+                  aria-label="Unsaved changes"
+                  title="Unsaved changes"
+                />
+              ) : null}
+              {tab.fileName}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="title-bar__hint" data-tauri-drag-region>
+          Open a PDF to work locally
+        </p>
+      )}
 
       <div className="title-bar__meta" data-tauri-drag-region>
         <span className="title-bar__byline">Built by Macrify</span>

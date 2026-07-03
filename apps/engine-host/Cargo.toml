@@ -1,0 +1,12 @@
+[package]
+name = "raiopdf-engine-host"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "raiopdf-engine-host"
+path = "src/main.rs"
+
+[dependencies]
+engine-sidecar-core = { path = "../../crates/engine-sidecar-core" }
+serde_json = "1"

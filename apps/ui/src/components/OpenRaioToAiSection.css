@@ -141,9 +141,14 @@
   cursor: not-allowed;
 }
 
-.open-raio-to-ai__copy-button[data-copied="true"] {
+.open-raio-to-ai__copy-button[data-copy-state="copied"] {
   border-color: var(--ok);
   color: var(--ok);
+}
+
+.open-raio-to-ai__copy-button[data-copy-state="failed"] {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .open-raio-to-ai__code {
@@ -167,6 +172,13 @@
   margin: 0;
   font-size: var(--text-2xs);
   color: var(--muted);
+  line-height: 1.4;
+}
+
+.open-raio-to-ai__block-status {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-2xs);
   line-height: 1.4;
 }
 

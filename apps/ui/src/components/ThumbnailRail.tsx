@@ -140,6 +140,7 @@ const ThumbnailCanvas = memo(function ThumbnailCanvas({ pdfDocument, pageNumber 
   const frameRef = useRef<HTMLSpanElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isVisible, setIsVisible] = useState(false);
+  const [renderError, setRenderError] = useState(false);
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -169,26 +170,35 @@ const ThumbnailCanvas = memo(function ThumbnailCanvas({ pdfDocument, pageNumber 
     let cancelled = false;
     let renderTask: ReturnType<Awaited<ReturnType<typeof pdfDocument.getPage>>["render"]> | null = null;
 
-    void pdfDocument.getPage(pageNumber).then((page) => {
-      if (cancelled) {
-        return;
-      }
+    setRenderError(false);
 
-      const baseViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(88 / baseViewport.width, 114 / baseViewport.height);
-      const viewport = page.getViewport({ scale });
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
+    void pdfDocument
+      .getPage(pageNumber)
+      .then((page) => {
+        if (cancelled) {
+          return;
+        }
 
-      renderTask = page.render({ canvas, viewport });
-      void renderTask.promise.catch((error: unknown) => {
-        if (error instanceof Error && error.name !== "RenderingCancelledException") {
-          console.error(error);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(88 / baseViewport.width, 114 / baseViewport.height);
+        const viewport = page.getViewport({ scale });
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+
+        renderTask = page.render({ canvas, viewport });
+        void renderTask.promise.catch((error: unknown) => {
+          if (!cancelled && !isCancelledRenderError(error)) {
+            setRenderError(true);
+          }
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRenderError(true);
         }
       });
-    });
 
     return () => {
       cancelled = true;
@@ -198,7 +208,21 @@ const ThumbnailCanvas = memo(function ThumbnailCanvas({ pdfDocument, pageNumber 
 
   return (
     <span ref={frameRef} className="thumbnail__canvas-frame">
-      <canvas ref={canvasRef} className="thumbnail__canvas" aria-hidden="true" />
+      {renderError ? (
+        <span className="thumbnail__error" role="status">
+          Preview unavailable
+        </span>
+      ) : null}
+      <canvas
+        ref={canvasRef}
+        className="thumbnail__canvas"
+        aria-hidden="true"
+        data-hidden={renderError ? "true" : undefined}
+      />
     </span>
   );
 });
+
+function isCancelledRenderError(error: unknown): boolean {
+  return error instanceof Error && error.name === "RenderingCancelledException";
+}

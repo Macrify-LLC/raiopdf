@@ -13,6 +13,7 @@ const PLACEHOLDER_PATH = "<RAIOPDF_MCP_PATH>";
 const MCP_DOCS_URL = "https://github.com/Macrify-LLC/raiopdf/blob/main/docs/MCP.md";
 
 const COPIED_LABEL_MS = 1600;
+const COPY_FAILED_LABEL_MS = 2400;
 
 export interface OpenRaioToAiSectionProps {
   /** Whether the MCP connector's access gate is on. Off by default. */
@@ -52,6 +53,7 @@ export function OpenRaioToAiSection({
 }: OpenRaioToAiSectionProps) {
   const { sectionRef, showFocusRing } = useSectionFocus(focused, onFocusHandled);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!copiedKey) {
@@ -62,13 +64,25 @@ export function OpenRaioToAiSection({
     return () => window.clearTimeout(timeoutId);
   }, [copiedKey]);
 
+  useEffect(() => {
+    if (!copyFailedKey) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopyFailedKey(null), COPY_FAILED_LABEL_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyFailedKey]);
+
   const copy = useCallback((key: string, text: string) => {
+    setCopyFailedKey(null);
     void navigator.clipboard
       .writeText(text)
-      .then(() => setCopiedKey(key))
+      .then(() => {
+        setCopiedKey(key);
+      })
       .catch(() => {
-        // Clipboard permission denied or unavailable in this webview --
-        // the block underneath is still plain selectable text.
+        setCopiedKey(null);
+        setCopyFailedKey(key);
       });
   }, []);
 
@@ -150,6 +164,7 @@ export function OpenRaioToAiSection({
             code={desktopSnippet}
             copyKey="desktop"
             copiedKey={copiedKey}
+            copyFailedKey={copyFailedKey}
             onCopy={copy}
             pathResolved={pathResolved}
           />
@@ -160,6 +175,7 @@ export function OpenRaioToAiSection({
             code={codeCommand}
             copyKey="code"
             copiedKey={copiedKey}
+            copyFailedKey={copyFailedKey}
             onCopy={copy}
             pathResolved={pathResolved}
           />
@@ -197,12 +213,23 @@ interface CopyBlockProps {
   code: string;
   copyKey: string;
   copiedKey: string | null;
+  copyFailedKey: string | null;
   onCopy: (key: string, text: string) => void;
   pathResolved: boolean;
 }
 
-function CopyBlock({ label, caption, code, copyKey, copiedKey, onCopy, pathResolved }: CopyBlockProps) {
+function CopyBlock({
+  label,
+  caption,
+  code,
+  copyKey,
+  copiedKey,
+  copyFailedKey,
+  onCopy,
+  pathResolved,
+}: CopyBlockProps) {
   const justCopied = copiedKey === copyKey;
+  const copyFailed = copyFailedKey === copyKey;
 
   return (
     <div className="open-raio-to-ai__block">
@@ -211,7 +238,7 @@ function CopyBlock({ label, caption, code, copyKey, copiedKey, onCopy, pathResol
         <button
           type="button"
           className="open-raio-to-ai__copy-button"
-          data-copied={justCopied ? "true" : undefined}
+          data-copy-state={justCopied ? "copied" : copyFailed ? "failed" : undefined}
           aria-disabled={pathResolved ? undefined : "true"}
           aria-describedby={pathResolved ? undefined : "open-raio-to-ai-resolving"}
           onClick={() => {
@@ -222,9 +249,14 @@ function CopyBlock({ label, caption, code, copyKey, copiedKey, onCopy, pathResol
           title={pathResolved ? `Copy the ${label} snippet` : "Waiting for Raio to resolve its install path"}
         >
           {justCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          {justCopied ? "Copied" : "Copy"}
+          {justCopied ? "Copied" : copyFailed ? "Could not copy" : "Copy"}
         </button>
       </div>
+      {copyFailed ? (
+        <p className="open-raio-to-ai__block-status" role="status">
+          Clipboard access was blocked. Select the text below and copy it manually.
+        </p>
+      ) : null}
       <pre className="open-raio-to-ai__code">
         <code>{code}</code>
       </pre>

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { PDFDocument } from "pdf-lib";
 import type { OpenedFile } from "../lib/filePort";
 import {
   productionHintMessage,
@@ -63,6 +64,7 @@ export function ProductionSetWorkspace({
   onAddFile,
   onRun,
 }: ProductionSetWorkspaceProps) {
+  const mountedRef = useRef(true);
   const [files, setFiles] = useState<ProductionSetFile[]>(() =>
     currentFile ? [fromOpenedFile(currentFile, currentPageCount)] : [],
   );
@@ -75,12 +77,23 @@ export function ProductionSetWorkspace({
   const [combinedPdf, setCombinedPdf] = useState(false);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
+  const [countingPages, setCountingPages] = useState(false);
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
   const totalPages = files.reduce((sum, file) => sum + file.pages, 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
-  const canRun = files.length > 0 && outputDir.trim().length > 0 && !overflows && !progress.running;
+  const canRun = files.length > 0 &&
+    outputDir.trim().length > 0 &&
+    !overflows &&
+    !countingPages &&
+    !progress.running;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const lastUsed = readProductionLastUsed(prefix);
@@ -94,7 +107,31 @@ export function ProductionSetWorkspace({
     if (!opened) {
       return;
     }
-    setFiles((current) => [...current, fromOpenedFile(opened, 0)]);
+
+    if (!mountedRef.current) {
+      return;
+    }
+
+    setCountingPages(true);
+    setLocalMessage("Reading page count...");
+
+    try {
+      const pages = await readProductionSetPageCount(opened.bytes);
+      if (!mountedRef.current) {
+        return;
+      }
+      setFiles((current) => [...current, fromOpenedFile(opened, pages)]);
+      setLocalMessage(null);
+    } catch {
+      if (!mountedRef.current) {
+        return;
+      }
+      setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
+    } finally {
+      if (mountedRef.current) {
+        setCountingPages(false);
+      }
+    }
   }
 
   function moveFile(index: number, delta: -1 | 1) {
@@ -156,11 +193,8 @@ export function ProductionSetWorkspace({
             <div className="production-workspace__file-row" key={file.id}>
               <div>
                 <p className="production-workspace__file-name">{file.name}</p>
-                <p
-                  className="production-workspace__file-meta"
-                  title={file.pages > 0 ? "Pages counted from the opened PDF." : "Additional file page counts are not available in this view yet."}
-                >
-                  {file.pages > 0 ? `${file.pages} page${file.pages === 1 ? "" : "s"}` : "Page count pending"}
+                <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
+                  {file.pages} page{file.pages === 1 ? "" : "s"}
                 </p>
               </div>
               <label title="Optional confidentiality text to include for this source in the production package.">
@@ -326,6 +360,11 @@ function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
     pages,
     designation: "",
   };
+}
+
+export async function readProductionSetPageCount(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes);
+  return pdf.getPageCount();
 }
 
 function designationSelectValue(value: string): string {

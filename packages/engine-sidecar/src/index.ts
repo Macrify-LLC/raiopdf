@@ -68,6 +68,7 @@ type StirlingErrorBody = {
 
 const DEFAULT_FONT_SIZE_PT = 11;
 const DEFAULT_MARGIN_IN = 0.5;
+const SLASH_CHAR_CODE = "/".charCodeAt(0);
 
 /**
  * PdfEngine implementation backed by Stirling PDF's current v2 API surface.
@@ -798,7 +799,12 @@ function normalizeBytes(bytes: PdfBytes): Uint8Array {
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl.charCodeAt(end - 1) === SLASH_CHAR_CODE) {
+    end -= 1;
+  }
+
+  return baseUrl.slice(0, end);
 }
 
 function normalizeStampOptions(options: PdfStampTextOptions): Required<PdfStampTextOptions> {

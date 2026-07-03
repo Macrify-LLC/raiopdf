@@ -270,7 +270,8 @@
   outline-offset: 2px;
 }
 
-.organize-page[data-selected="true"] {
+.organize-page[data-selected="true"],
+.organize-page[data-selected="true"]:hover:not(:disabled) {
   border-color: var(--primary);
   background: var(--accent-pale);
 }

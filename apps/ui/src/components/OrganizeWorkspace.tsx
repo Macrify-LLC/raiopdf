@@ -109,16 +109,10 @@ export function OrganizeWorkspace({
   return (
     <section className="organize-workspace" aria-label={`${title} workspace`}>
       <div className="organize-card">
-        <header className="organize-card__header">
-          <div>
-            <p className="organize-card__eyebrow">Organize</p>
-            <h2>{title}</h2>
-          </div>
-          <button type="button" className="organize-card__ghost" onClick={onCancel}>
-            Cancel
-          </button>
-        </header>
-
+        {/* This flow only ever mounts inside a FloatingDialog (see App.tsx),
+            which already renders the "Organize" eyebrow, the flow title, and
+            the close control -- an inner header here would just duplicate
+            it verbatim. */}
         {flow === "merge" ? (
           <MergeFlow document={document} onMerge={onMerge} />
         ) : null}

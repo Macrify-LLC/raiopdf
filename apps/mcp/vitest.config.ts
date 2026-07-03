@@ -22,6 +22,9 @@ export default defineConfig({
       "@raiopdf/package-writer": fileURLToPath(
         new URL("../../packages/package-writer/src/index.ts", import.meta.url),
       ),
+      "@raiopdf/batch-cleanup": fileURLToPath(
+        new URL("../../packages/batch-cleanup/src/index.ts", import.meta.url),
+      ),
       "@raiopdf/production-set": fileURLToPath(
         new URL("../../packages/production-set/src/index.ts", import.meta.url),
       ),

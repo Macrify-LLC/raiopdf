@@ -37,6 +37,7 @@ export type EditDialogToolId = typeof EDIT_DIALOG_TOOLS[number]["id"];
 
 const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
+  { id: "batch-cleanup", label: "Batch Cleanup", icon: <OcrSearchIcon size={16} /> },
   { id: "production-set", label: "Production Set", icon: <BatesIcon size={16} /> },
   { id: "combine-exhibits", label: "Combine with Exhibits", icon: <CombineExhibitsIcon size={16} /> },
   { id: "sanitize", label: "Sanitize...", icon: <ShieldCheckIcon size={16} /> },

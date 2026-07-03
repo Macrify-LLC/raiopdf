@@ -7,13 +7,14 @@
     "raiopdf-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && pnpm --filter @raiopdf/engine-local build && pnpm --filter @raiopdf/package-writer build && pnpm --filter @raiopdf/production-set build && pnpm --filter @raiopdf/rules build && tsc -p tsconfig.build.json",
+    "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && pnpm --filter @raiopdf/engine-local build && pnpm --filter @raiopdf/package-writer build && pnpm --filter @raiopdf/rules build && pnpm --filter @raiopdf/batch-cleanup build && pnpm --filter @raiopdf/production-set build && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint ."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@raiopdf/batch-cleanup": "workspace:*",
     "@raiopdf/engine-api": "workspace:*",
     "@raiopdf/engine-local": "workspace:*",
     "@raiopdf/engine-sidecar": "workspace:*",

@@ -1,0 +1,171 @@
+.batch-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: min(720px, 86vw);
+  color: var(--color-text);
+}
+
+.batch-workspace__header,
+.batch-workspace__actions,
+.batch-workspace__file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.batch-workspace__eyebrow {
+  margin: 0 0 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.batch-workspace h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.batch-workspace__file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.batch-workspace__file-row {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+}
+
+.batch-workspace__file-name,
+.batch-workspace__file-meta,
+.batch-workspace__status {
+  margin: 0;
+}
+
+.batch-workspace__file-name {
+  font-weight: 650;
+}
+
+.batch-workspace__file-meta,
+.batch-workspace__status {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.batch-workspace__status-chip {
+  min-width: 68px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  text-align: center;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.batch-workspace__status-chip--done {
+  border-color: #2f8f5b;
+  color: #1f6b43;
+}
+
+.batch-workspace__status-chip--failed {
+  border-color: #bd4d43;
+  color: #9f3028;
+}
+
+.batch-workspace__status-chip--skipped {
+  border-color: #9b8a50;
+  color: #745f20;
+}
+
+.batch-workspace__grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.2fr);
+  gap: 12px;
+}
+
+.batch-workspace label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.batch-workspace input,
+.batch-workspace select {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 9px;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.batch-workspace__section {
+  display: grid;
+  gap: 12px;
+}
+
+.batch-workspace__checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.batch-workspace__checkbox-row {
+  display: flex !important;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-workspace__number {
+  max-width: 180px;
+}
+
+.batch-workspace__primary-button,
+.batch-workspace__secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  font-weight: 650;
+}
+
+.batch-workspace__primary-button {
+  border-color: #2d5b8f;
+  color: #ffffff;
+  background: #2d5b8f;
+}
+
+.batch-workspace__secondary-button {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.batch-workspace__primary-button:disabled,
+.batch-workspace__secondary-button:disabled {
+  opacity: 0.55;
+}
+
+.batch-workspace__result {
+  display: grid;
+  gap: 4px;
+}
+
+@media (max-width: 720px) {
+  .batch-workspace {
+    min-width: 0;
+  }
+
+  .batch-workspace__grid,
+  .batch-workspace__checks {
+    grid-template-columns: 1fr;
+  }
+}

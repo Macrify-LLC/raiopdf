@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { EngineHandle, defaultEngineHandle } from "./engine.js";
@@ -157,8 +158,18 @@ function installShutdownHandlers(
 }
 
 function isMainModule(): boolean {
-  return process.argv[1] !== undefined
-    && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  const entry = process.argv[1];
+  if (entry === undefined) {
+    return false;
+  }
+  const modulePath = fileURLToPath(import.meta.url);
+  // When launched via the declared `raiopdf-mcp` bin, argv[1] is usually a
+  // symlink into node_modules/.bin; dereference it so the CLI actually starts.
+  try {
+    return realpathSync(entry) === modulePath;
+  } catch {
+    return path.resolve(entry) === modulePath;
+  }
 }
 
 if (isMainModule()) {

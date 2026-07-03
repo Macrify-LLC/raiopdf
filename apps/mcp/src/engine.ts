@@ -66,7 +66,27 @@ export class EngineHandle {
   }
 
   private start(): Promise<StartedEngine> {
-    this.startPromise ??= startEngineHost();
+    if (this.startPromise === null) {
+      const pending = startEngineHost();
+      this.startPromise = pending;
+      // Never cache a dead handle: drop the cache if the start rejects, or once
+      // the engine-host child exits (crash, or a future idle shutdown), so the
+      // next tool call spawns a fresh host instead of reusing a broken one.
+      pending.then(
+        (started) => {
+          started.child.once("exit", () => {
+            if (this.startPromise === pending) {
+              this.startPromise = null;
+            }
+          });
+        },
+        () => {
+          if (this.startPromise === pending) {
+            this.startPromise = null;
+          }
+        },
+      );
+    }
     return this.startPromise;
   }
 }
@@ -88,6 +108,10 @@ export async function disposeEngine(): Promise<void> {
 async function startEngineHost(): Promise<StartedEngine> {
   const child = spawn(resolveEngineHostBinary(), [], {
     stdio: ["pipe", "pipe", "inherit"],
+    // The MCP owns this engine's lifecycle (disposed on server shutdown), so
+    // disable the engine-host's idle self-shutdown — otherwise the proxy could
+    // vanish mid-session while a cached handle still points at it.
+    env: { ...process.env, RAIOPDF_ENGINE_IDLE_SHUTDOWN_MINUTES: "0" },
   });
 
   try {

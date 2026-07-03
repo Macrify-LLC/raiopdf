@@ -370,6 +370,7 @@ function RedactionStatusPanel({
         </p>
         <p className="tool-panel__card-copy">
           RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
+          Your open file on disk is left untouched — Save will prompt you for a new file name.
         </p>
         <div className="tool-panel__button-row">
           <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>

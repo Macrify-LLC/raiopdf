@@ -1438,6 +1438,8 @@ export function App() {
         hasTextLayer: null,
         expectedOpenToken: sourceOpenToken,
         expectedSourceBytes: sourceBytes,
+        fileName: `${stripPdfExtension(document.fileName ?? "Untitled")}_redacted.pdf`,
+        filePath: null,
       });
 
       if (replaced !== "replaced") {
@@ -1463,7 +1465,16 @@ export function App() {
       setRedactionPhase("error");
       setRedactionMessage(message);
     }
-  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pdfDocument, pendingRedactions, replaceBytes]);
+  }, [
+    document.bytes,
+    document.fileName,
+    engineBridge,
+    getOpenToken,
+    isCurrentDocument,
+    pdfDocument,
+    pendingRedactions,
+    replaceBytes,
+  ]);
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
@@ -3676,12 +3687,15 @@ function formatRedactionVerificationSuccess(result: RedactionVerificationResult)
     ? "text layer verified clean"
     : "no source text was extractable from marked areas";
 
-  return [
-    `Redacted and verified: ${textLayer}`,
-    "redacted page images replaced",
-    "annotations cleaned",
-    "metadata scrubbed",
-  ].join("; ") + ".";
+  return (
+    [
+      `Redacted and verified: ${textLayer}`,
+      "redacted page images replaced",
+      "annotations cleaned",
+      "metadata scrubbed",
+    ].join("; ") +
+    ". Your original file is untouched — Save will prompt you for a new file name."
+  );
 }
 
 function formatRedactionVerificationFailure(result: RedactionVerificationResult): string {

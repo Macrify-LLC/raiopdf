@@ -60,9 +60,12 @@ import {
   handleBinder,
   handleExtract,
   handlePageNumbers,
+  handleProductionSet,
   handleSplit,
   pageNumbersInputSchema,
   pageNumbersOutputSchema,
+  productionSetInputSchema,
+  productionSetOutputSchema,
   splitInputSchema,
   splitOutputSchema,
   type BatesFolderInput,
@@ -70,6 +73,7 @@ import {
   type BinderInput,
   type ExtractInput,
   type PageNumbersInput,
+  type ProductionSetInput,
   type SplitInput,
 } from "./tools/legal.js";
 
@@ -287,6 +291,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
   );
 
   server.registerTool(
+    "build_production_set",
+    {
+      title: "Build production set",
+      description:
+        "Builds a Bates-stamped discovery production package with upload files, production index, manifest, checksums, optional volumes, and optional combined PDF.",
+      inputSchema: productionSetInputSchema,
+      outputSchema: productionSetOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: ProductionSetInput) =>
+        await handleProductionSet(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
     "page_numbers",
     {
       title: "Add page numbers",
@@ -413,6 +434,35 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
+async function runOneShot(): Promise<void> {
+  const toolName = process.argv[3];
+  const input = JSON.parse(await readStdin()) as unknown;
+
+  if (toolName !== "build_production_set") {
+    throw new Error(`Unsupported one-shot tool: ${toolName ?? "(missing)"}`);
+  }
+
+  try {
+    const result = await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
+    console.log(JSON.stringify(result.structuredContent));
+  } catch (error) {
+    const result = toolError(error);
+    console.error(JSON.stringify(result.structuredContent));
+    process.exitCode = 1;
+  }
+}
+
+async function readStdin(): Promise<string> {
+  process.stdin.setEncoding("utf8");
+  let contents = "";
+
+  for await (const chunk of process.stdin) {
+    contents += chunk;
+  }
+
+  return contents;
+}
+
 function toolError(error: unknown): StructuredToolResult {
   if (error instanceof PathPolicyError) {
     return errorResult("PATH_POLICY", error.message, error.action);
@@ -471,7 +521,9 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
-  main().catch((error: unknown) => {
+  const entrypoint = process.argv[2] === "--one-shot" ? runOneShot : main;
+
+  entrypoint().catch((error: unknown) => {
     console.error(error);
     process.exit(1);
   });

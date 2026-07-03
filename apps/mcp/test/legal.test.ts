@@ -10,6 +10,7 @@ import {
   handleBinder,
   handleExtract,
   handlePageNumbers,
+  handleProductionSet,
   handleSplit,
 } from "../src/tools/legal.js";
 
@@ -131,5 +132,97 @@ describe("legal tools (local pdf-lib engine)", () => {
     const content = structured(result);
     expect(content.outputs).toHaveLength(2);
     expect(content.nextNumber).toBe(6);
+  });
+
+  it("build_production_set writes a package with indexed upload files", async () => {
+    const first = await makePdf("prod-a.pdf", 2);
+    const second = await makePdf("prod-b.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [
+          { path: first, designation: "Confidential" },
+          { path: second },
+        ],
+        outputDir,
+        prefix: "PROD",
+        start: 10,
+        digits: 5,
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content).toMatchObject({
+      ok: true,
+      packageRoot: outputDir,
+      nextNumber: 13,
+      indexPdf: "production-index.pdf",
+      indexCsv: "production-index.csv",
+    });
+    expect(content.outputs).toEqual([
+      "upload/PROD00010 - PROD00011 - prod-a.pdf",
+      "upload/PROD00012 - PROD00012 - prod-b.pdf",
+    ]);
+    await expect(fs.access(path.join(outputDir, "raio-manifest", "manifest.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "raio-manifest", "checksums.txt"))).resolves.toBeUndefined();
+  });
+
+  it("build_production_set rejects relative source paths before writing output", async () => {
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: "relative.pdf" }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Input path must be absolute/);
+
+    await expect(fs.access(outputDir)).rejects.toBeTruthy();
+  });
+
+  it("build_production_set rejects source symlink components before writing output", async () => {
+    const source = await makePdf("source.pdf", 1);
+    const linkDir = path.join(dir, "linked");
+    await fs.symlink(dir, linkDir);
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: path.join(linkDir, path.basename(source)) }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Path contains a symlink component/);
+
+    await expect(fs.access(outputDir)).rejects.toBeTruthy();
+  });
+
+  it("build_production_set rejects output symlink components before writing output", async () => {
+    const source = await makePdf("source.pdf", 1);
+    const linkDir = path.join(dir, "linked-output");
+    await fs.symlink(dir, linkDir);
+    const outputDir = path.join(linkDir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: source }],
+          outputDir,
+          prefix: "PROD",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Path contains a symlink component/);
+
+    await expect(fs.access(path.join(dir, "production-package"))).rejects.toBeTruthy();
   });
 });

@@ -140,6 +140,7 @@ interface FilingFactsCache {
 
 interface FilingFactsOptions {
   fileBytes: number;
+  filename?: string;
   searchableText?: boolean;
   pdfaCompliant?: boolean;
   pdfDocument?: PDFDocumentProxy | null;
@@ -539,6 +540,7 @@ export function App() {
 
     const factsOptions: FilingFactsOptions = {
       fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
+      ...(document.fileName ? { filename: document.fileName } : {}),
       pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
     };
 
@@ -1957,6 +1959,7 @@ export function App() {
         for (const part of convertedParts) {
           const facts = await getCachedFilingFacts(filingFactsCacheRef, part.bytes, {
             fileBytes: part.bytes.byteLength,
+            filename: part.fileName,
             ...(convertOutputToPdfA ? { pdfaCompliant: true } : {}),
           });
           const report = runFilingPreflight(facts, filingPack);
@@ -1970,19 +1973,6 @@ export function App() {
         }
 
         const finalReport = aggregateOutputReports(outputReports);
-
-        if (hasPortalFix(finalReport)) {
-          setFilingProgress({
-            phase: "error",
-            message: "Output preflight still found portal work. The files were not saved.",
-          });
-          setFilingResult({
-            parts: outputParts,
-            report: finalReport,
-            verifiedAt: new Date().toISOString(),
-          });
-          return;
-        }
 
         for (const part of convertedParts) {
           if (!isCurrentFilingRun()) {
@@ -2991,6 +2981,7 @@ function getCachedFilingFacts(
 function filingFactsCacheKey(options: FilingFactsOptions): string {
   return JSON.stringify({
     fileBytes: options.fileBytes,
+    filename: options.filename ?? null,
     searchableText: options.searchableText ?? null,
     pdfaCompliant: options.pdfaCompliant ?? null,
     occupiedRegionPages: options.occupiedRegionPages ?? "all",
@@ -3040,6 +3031,7 @@ async function readFilingFacts(
   const facts: DocumentFacts = {
     pages,
     fileBytes: options.fileBytes,
+    ...(options.filename ? { filename: options.filename } : {}),
   };
 
   facts.searchableText = options.searchableText ?? hasExtractedText;
@@ -3154,7 +3146,7 @@ function aggregateOutputReports(reports: readonly PreflightReport[]): PreflightR
 
       return {
         ...firstCheck,
-        status: aggregateStatus(firstCheck, matchingChecks),
+        status: aggregateStatus(matchingChecks),
         detail: failedChecks.length === 0
           ? `All ${reports.length} output ${reports.length === 1 ? "file passes" : "files pass"}.`
           : failedChecks.map((check, index) => `Part ${index + 1}: ${check.detail}`).join(" "),
@@ -3164,21 +3156,8 @@ function aggregateOutputReports(reports: readonly PreflightReport[]): PreflightR
 }
 
 function aggregateStatus(
-  firstCheck: PreflightCheck,
   checks: readonly PreflightCheck[],
 ): PreflightCheck["status"] {
-  if (firstCheck.kind === "portal") {
-    if (checks.some((check) => check.status === "fix")) {
-      return "fix";
-    }
-
-    if (checks.some((check) => check.status === "unknown")) {
-      return "unknown";
-    }
-
-    return "pass";
-  }
-
   if (checks.some((check) => check.status === "warn")) {
     return "warn";
   }
@@ -3188,10 +3167,6 @@ function aggregateStatus(
   }
 
   return "pass";
-}
-
-function hasPortalFix(report: PreflightReport): boolean {
-  return report.checks.some((check) => check.kind === "portal" && check.status === "fix");
 }
 
 function formatFilingOutputName(

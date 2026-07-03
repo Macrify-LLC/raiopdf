@@ -2,13 +2,18 @@ import type {
   ConstraintApplicability,
   ConstraintEntry,
   ConstraintKind,
+  ConstraintStance,
   JurisdictionPack,
   JurisdictionPackId,
   PageOrientation,
   PageSizeInches,
   PdfARequirement,
+  PolicyConstraint,
+  PrepDefault,
   RectInches,
 } from "./types.js";
+
+export const SUPPORTED_PACK_SCHEMA_VERSION = 2;
 
 export type PackJsonSource = {
   readPackJson: (packId: JurisdictionPackId) => string | undefined;
@@ -31,11 +36,20 @@ export function validateJurisdictionPack(raw: unknown, sourceName: string): Juri
   const pack = requireObject(raw, sourceName);
 
   const id = readString(pack, "id", sourceName) as JurisdictionPackId;
+  const schemaVersion = readSchemaVersion(pack, sourceName);
   const name = readString(pack, "name", sourceName);
   const packVersion = readSemver(pack, "packVersion", sourceName);
+  const jurisdiction = readString(pack, "jurisdiction", sourceName);
+  const courtSystem = readString(pack, "courtSystem", sourceName);
+  const portal = readString(pack, "portal", sourceName);
+  const scopeNote = readString(pack, "scopeNote", sourceName);
   const guidanceNote = readString(pack, "guidanceNote", sourceName);
   const maxFileBytes = readPositiveInteger(pack, "maxFileBytes", sourceName);
   const recommendedMaxFileBytes = readPositiveInteger(pack, "recommendedMaxFileBytes", sourceName);
+  const maxEnvelopeBytes = readOptionalPositiveInteger(pack, "maxEnvelopeBytes", sourceName);
+  const filenameMaxChars = readOptionalPositiveInteger(pack, "filenameMaxChars", sourceName);
+  const filenameCharset = readOptionalString(pack, "filenameCharset", sourceName);
+  const userConfigurable = readUserConfigurable(pack, sourceName);
 
   if (recommendedMaxFileBytes > maxFileBytes) {
     throw new Error(`${sourceName}.recommendedMaxFileBytes must be less than or equal to maxFileBytes`);
@@ -43,8 +57,13 @@ export function validateJurisdictionPack(raw: unknown, sourceName: string): Juri
 
   return {
     id,
+    schemaVersion,
     name,
     packVersion,
+    jurisdiction,
+    courtSystem,
+    portal,
+    scopeNote,
     guidanceNote,
     constraints: readConstraints(pack, sourceName),
     pageSize: readPageSize(pack, "pageSize", sourceName),
@@ -52,10 +71,35 @@ export function validateJurisdictionPack(raw: unknown, sourceName: string): Juri
     clerkStampSpace: readClerkStampSpace(pack, sourceName),
     maxFileBytes,
     recommendedMaxFileBytes,
+    ...(maxEnvelopeBytes === undefined ? {} : { maxEnvelopeBytes }),
+    ...(filenameMaxChars === undefined ? {} : { filenameMaxChars }),
+    ...(filenameCharset === undefined ? {} : { filenameCharset }),
+    ...(userConfigurable === undefined ? {} : { userConfigurable }),
     pdfa: readPdfA(pack, sourceName),
-    searchableTextRequired: readBoolean(pack, "searchableTextRequired", sourceName),
+    activeContent: readPolicyConstraint(pack, "activeContent", sourceName),
+    encryption: readPolicyConstraint(pack, "encryption", sourceName),
+    embeddedFiles: readPolicyConstraint(pack, "embeddedFiles", sourceName),
+    metadataScrub: readPolicyConstraint(pack, "metadataScrub", sourceName),
+    ocr: readPolicyConstraint(pack, "ocr", sourceName),
+    flattenForms: readPolicyConstraint(pack, "flattenForms", sourceName),
     splitNaming: readString(pack, "splitNaming", sourceName),
   };
+}
+
+function readSchemaVersion(pack: Record<string, unknown>, sourceName: string): 2 {
+  const schemaVersion = readPositiveInteger(pack, "schemaVersion", sourceName);
+
+  if (schemaVersion > SUPPORTED_PACK_SCHEMA_VERSION) {
+    throw new Error(
+      `${sourceName} uses schemaVersion ${schemaVersion}, but this RaioPDF build supports schemaVersion ${SUPPORTED_PACK_SCHEMA_VERSION}. Update RaioPDF to load this jurisdiction pack.`,
+    );
+  }
+
+  if (schemaVersion !== 2) {
+    throw new Error(`${sourceName}.schemaVersion must be 2`);
+  }
+
+  return 2;
 }
 
 function readConstraints(pack: Record<string, unknown>, sourceName: string): readonly ConstraintEntry[] {
@@ -68,6 +112,7 @@ function readConstraints(pack: Record<string, unknown>, sourceName: string): rea
   return constraints.map((entry, index) => {
     const path = `${sourceName}.constraints[${index}]`;
     const constraint = requireObject(entry, path);
+    const note = readOptionalString(constraint, "note", path);
 
     return {
       id: readString(constraint, "id", path),
@@ -75,6 +120,7 @@ function readConstraints(pack: Record<string, unknown>, sourceName: string): rea
       kind: readConstraintKind(constraint, "kind", path),
       authority: readString(constraint, "authority", path),
       lastVerified: readDateString(constraint, "lastVerified", path),
+      ...(note === undefined ? {} : { note }),
       applicability: readApplicability(constraint, path),
     };
   });
@@ -121,33 +167,37 @@ function readClerkStampSpace(
 
 function readPdfA(pack: Record<string, unknown>, sourceName: string): PdfARequirement {
   const pdfa = requireObject(pack.pdfa, `${sourceName}.pdfa`);
+  const constraint = readPolicyConstraint(pack, "pdfa", sourceName);
   const flavor = pdfa.flavor;
 
   if (flavor !== "pdfa-1" && flavor !== "pdfa-2b" && flavor !== "pdfa-3b") {
     throw new Error(`${sourceName}.pdfa.flavor must be "pdfa-1", "pdfa-2b", or "pdfa-3b"`);
   }
 
-  const stance = pdfa.stance;
+  return { ...constraint, flavor };
+}
 
-  if (
-    stance !== "required" &&
-    stance !== "preferred" &&
-    stance !== "accepted" &&
-    stance !== "prohibited" &&
-    stance !== "unknown"
-  ) {
-    throw new Error(
-      `${sourceName}.pdfa.stance must be "required", "preferred", "accepted", "prohibited", or "unknown"`,
-    );
-  }
+function readPolicyConstraint(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): PolicyConstraint {
+  const constraint = requireObject(object[key], `${sourceName}.${key}`);
+  const stance = readConstraintStance(constraint, "stance", `${sourceName}.${key}`);
+  const prepDefault = readPrepDefault(constraint, "prepDefault", `${sourceName}.${key}`);
+  const condition = readOptionalString(constraint, "condition", `${sourceName}.${key}`);
+  const authority = readOptionalString(constraint, "authority", `${sourceName}.${key}`);
+  const lastVerified = readOptionalDateString(constraint, "lastVerified", `${sourceName}.${key}`);
+  const note = readOptionalString(constraint, "note", `${sourceName}.${key}`);
 
-  const note = pdfa.note;
-
-  if (note !== undefined && typeof note !== "string") {
-    throw new Error(`${sourceName}.pdfa.note must be a string when present`);
-  }
-
-  return note === undefined ? { stance, flavor } : { stance, flavor, note };
+  return {
+    stance,
+    prepDefault,
+    ...(condition === undefined ? {} : { condition }),
+    ...(authority === undefined ? {} : { authority }),
+    ...(lastVerified === undefined ? {} : { lastVerified }),
+    ...(note === undefined ? {} : { note }),
+  };
 }
 
 function readPageSize(
@@ -208,11 +258,65 @@ function readConstraintKind(
   return kind;
 }
 
+function readConstraintStance(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): ConstraintStance {
+  const stance = object[key];
+
+  if (
+    stance !== "required" &&
+    stance !== "preferred" &&
+    stance !== "accepted" &&
+    stance !== "prohibited" &&
+    stance !== "unknown"
+  ) {
+    throw new Error(
+      `${sourceName}.${key} must be "required", "preferred", "accepted", "prohibited", or "unknown"`,
+    );
+  }
+
+  return stance;
+}
+
+function readPrepDefault(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): PrepDefault {
+  const prepDefault = object[key];
+
+  if (prepDefault !== "on" && prepDefault !== "off" && prepDefault !== "n_a") {
+    throw new Error(`${sourceName}.${key} must be "on", "off", or "n_a"`);
+  }
+
+  return prepDefault;
+}
+
 function readString(object: Record<string, unknown>, key: string, sourceName: string): string {
   const value = object[key];
 
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${sourceName}.${key} must be a non-empty string`);
+  }
+
+  return value;
+}
+
+function readOptionalString(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): string | undefined {
+  const value = object[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${sourceName}.${key} must be a non-empty string when present`);
   }
 
   return value;
@@ -238,11 +342,37 @@ function readDateString(object: Record<string, unknown>, key: string, sourceName
   return value;
 }
 
-function readBoolean(object: Record<string, unknown>, key: string, sourceName: string): boolean {
+function readOptionalDateString(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): string | undefined {
+  const value = readOptionalString(object, key, sourceName);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${sourceName}.${key} must use YYYY-MM-DD format when present`);
+  }
+
+  return value;
+}
+
+function readOptionalBoolean(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): boolean | undefined {
   const value = object[key];
 
+  if (value === undefined) {
+    return undefined;
+  }
+
   if (typeof value !== "boolean") {
-    throw new Error(`${sourceName}.${key} must be a boolean`);
+    throw new Error(`${sourceName}.${key} must be a boolean when present`);
   }
 
   return value;
@@ -253,6 +383,24 @@ function readPositiveInteger(object: Record<string, unknown>, key: string, sourc
 
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${sourceName}.${key} must be a positive integer`);
+  }
+
+  return value;
+}
+
+function readOptionalPositiveInteger(
+  object: Record<string, unknown>,
+  key: string,
+  sourceName: string,
+): number | undefined {
+  const value = object[key];
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${sourceName}.${key} must be a positive integer when present`);
   }
 
   return value;
@@ -276,6 +424,28 @@ function readNumber(object: Record<string, unknown>, key: string, sourceName: st
   }
 
   return value;
+}
+
+function readUserConfigurable(
+  pack: Record<string, unknown>,
+  sourceName: string,
+): JurisdictionPack["userConfigurable"] {
+  if (pack.userConfigurable === undefined) {
+    return undefined;
+  }
+
+  const userConfigurable = requireObject(pack.userConfigurable, `${sourceName}.userConfigurable`);
+  const maxFileBytes = readOptionalBoolean(userConfigurable, "maxFileBytes", `${sourceName}.userConfigurable`);
+  const maxEnvelopeBytes = readOptionalBoolean(
+    userConfigurable,
+    "maxEnvelopeBytes",
+    `${sourceName}.userConfigurable`,
+  );
+
+  return {
+    ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
+    ...(maxEnvelopeBytes === undefined ? {} : { maxEnvelopeBytes }),
+  };
 }
 
 function requireObject(raw: unknown, sourceName: string): Record<string, unknown> {

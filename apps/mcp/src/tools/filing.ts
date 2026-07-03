@@ -18,9 +18,9 @@ export const filingInputSchema = {
 };
 export const filingOutputSchema = {
   ...baseOutputSchema,
-  /** No known blocking issue (no rule "warn" / portal "fix"). Not a green light. */
-  noBlockingIssues: z.boolean().optional(),
-  /** Every check passed — nothing blocking AND nothing unverified. */
+  /** No known warnings. Not a green light while checks remain unverified. */
+  noWarnings: z.boolean().optional(),
+  /** Every check passed — no warnings and nothing unverified. */
   confirmedReady: z.boolean().optional(),
   /** Labels of checks that could not be verified here (report as "unknown"). */
   unverified: z.array(z.string()).optional(),
@@ -83,28 +83,26 @@ export async function handlePrepareForFiling(
     status: check.status,
     detail: check.detail,
   }));
-  const blocking = report.checks.filter(
-    (check) => check.status === "warn" || check.status === "fix",
-  );
+  const warnings = report.checks.filter((check) => check.status === "warn");
   const unverified = report.checks
     .filter((check) => check.status === "unknown")
     .map((check) => check.label);
-  const noBlockingIssues = blocking.length === 0;
-  const confirmedReady = noBlockingIssues && unverified.length === 0;
+  const noWarnings = warnings.length === 0;
+  const confirmedReady = noWarnings && unverified.length === 0;
 
   let summary: string;
   if (confirmedReady) {
     summary = `Filing preflight passed all ${checks.length} checks for the ${pack.name} pack. ${pack.guidanceNote}`;
-  } else if (noBlockingIssues) {
-    summary = `No blocking issues for the ${pack.name} pack, but ${unverified.length} check(s) could not be verified here (${unverified.join("; ")}) — confirm those manually. ${pack.guidanceNote}`;
+  } else if (noWarnings) {
+    summary = `No warnings for the ${pack.name} pack, but ${unverified.length} check(s) could not be verified here (${unverified.join("; ")}) — confirm those manually. ${pack.guidanceNote}`;
   } else {
-    summary = `Filing preflight found ${blocking.length} blocking issue(s) for the ${pack.name} pack: ${blocking
+    summary = `Filing preflight found ${warnings.length} warning(s) for the ${pack.name} pack: ${warnings
       .map((check) => check.label)
       .join("; ")}. ${pack.guidanceNote}`;
   }
 
   return successResult(summary, {
-    noBlockingIssues,
+    noWarnings,
     confirmedReady,
     unverified,
     pack: { id: pack.id, name: pack.name, version: pack.packVersion },

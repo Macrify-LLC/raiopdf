@@ -7,16 +7,17 @@ import type {
   PreflightCheck,
   PreflightReport,
   PreflightStatus,
-  PortalPreflightCheck,
-  PortalPreflightStatus,
   RectInches,
-  RulePreflightCheck,
-  RulePreflightStatus,
+  SelectionFacts,
 } from "./types.js";
 
 const SIZE_TOLERANCE_IN = 0.01;
 
-export function preflight(document: DocumentFacts, pack: JurisdictionPack): PreflightReport {
+export function preflight(
+  document: DocumentFacts,
+  pack: JurisdictionPack,
+  selection?: SelectionFacts,
+): PreflightReport {
   if (pack.id === "unknown") {
     return {
       checks: pack.constraints.map((constraint) => ({
@@ -27,6 +28,7 @@ export function preflight(document: DocumentFacts, pack: JurisdictionPack): Pref
         kind: constraint.kind,
         status: "unknown",
       })),
+      ...(selection ? { selectionChecks: buildUnknownSelectionChecks(pack) } : {}),
     };
   }
 
@@ -35,9 +37,11 @@ export function preflight(document: DocumentFacts, pack: JurisdictionPack): Pref
       checkPageSizeAndOrientation(document, pack),
       checkSearchableText(document, pack),
       checkFileSize(document, pack),
+      checkFilename(document, pack),
       checkClerkStampSpace(document, pack),
       checkPdfA(document, pack),
     ],
+    ...(selection ? { selectionChecks: checkSelection(selection, pack) } : {}),
   };
 }
 
@@ -68,7 +72,14 @@ function checkPageSizeAndOrientation(
 }
 
 function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
-  if (!pack.searchableTextRequired) {
+  if (pack.ocr.stance === "unknown") {
+    return buildCheck(pack, "searchable-text", {
+      status: "unknown",
+      detail: "This jurisdiction's searchable-text stance is unverified.",
+    });
+  }
+
+  if (pack.ocr.stance === "accepted" || pack.ocr.stance === "prohibited") {
     return buildCheck(pack, "searchable-text", {
       status: "pass",
       detail: "Searchable text is not required for this jurisdiction pack.",
@@ -100,14 +111,14 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
 
   if (document.fileBytes > pack.maxFileBytes) {
     return buildCheck(pack, "file-size", {
-      status: "fix",
+      status: "warn",
       detail: `The document is ${formatBytes(document.fileBytes)}, exceeding the ${formatBytes(pack.maxFileBytes)} portal cap.`,
     });
   }
 
   if (document.fileBytes > pack.recommendedMaxFileBytes) {
     return buildCheck(pack, "file-size", {
-      status: "fix",
+      status: "warn",
       detail: `The document is ${formatBytes(document.fileBytes)}, under the portal cap but above the ${formatBytes(pack.recommendedMaxFileBytes)} mechanical safety margin.`,
     });
   }
@@ -115,6 +126,31 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
   return buildCheck(pack, "file-size", {
     status: "pass",
     detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(pack.recommendedMaxFileBytes)} safety margin.`,
+  });
+}
+
+function checkFilename(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  if (!pack.filenameMaxChars && !pack.filenameCharset) {
+    return buildCheck(pack, "filename", {
+      status: "pass",
+      detail: "This jurisdiction pack has no filename length or character-set limit.",
+    });
+  }
+
+  if (!document.filename) {
+    return buildCheck(pack, "filename", {
+      status: "unknown",
+      detail: "No filename fact was provided.",
+    });
+  }
+
+  const issues = findFilenameIssues(document.filename, pack);
+
+  return buildCheck(pack, "filename", {
+    status: issues.length === 0 ? "pass" : "warn",
+    detail: issues.length === 0
+      ? `The filename "${document.filename}" matches the configured portal filename limits.`
+      : issues.join(" "),
   });
 }
 
@@ -158,14 +194,13 @@ function checkClerkStampSpace(document: DocumentFacts, pack: JurisdictionPack): 
 /**
  * Whether Prepare for Filing should convert output parts to PDF/A for this pack.
  *
- * Conversion is allow-listed to jurisdictions that document a benefit ("required" or
- * "preferred"). Everywhere else it is skipped: PDF/A conversion rewrites the document
- * and strips prohibited features (annotations, form fields, signatures), so running it
- * where the portal rejects PDF/A (prohibited), gains nothing (accepted), or where the
- * stance is unverified (unknown) is all risk and no benefit.
+ * Conversion depends on both axes in the schema: the court/portal stance must
+ * document a benefit, and Raio's prep-default axis must explicitly enable the
+ * step for this pack.
  */
 export function shouldConvertToPdfA(pack: JurisdictionPack): boolean {
-  return pack.pdfa.stance === "required" || pack.pdfa.stance === "preferred";
+  return pack.pdfa.prepDefault === "on" &&
+    (pack.pdfa.stance === "required" || pack.pdfa.stance === "preferred");
 }
 
 function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
@@ -174,7 +209,7 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   if (stance === "prohibited") {
     if (document.pdfaCompliant === true) {
       return buildCheck(pack, "pdfa", {
-        status: "fix",
+        status: "warn",
         detail: "This portal rejects PDF/A files. Re-export the document as a standard PDF before filing.",
       });
     }
@@ -221,11 +256,133 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   }
 
   return buildCheck(pack, "pdfa", {
-    status: "fix",
+    status: "warn",
     detail: stance === "required"
       ? `PDF/A ${flavor} is required and the document is reported non-compliant.`
       : `PDF/A ${flavor} is preferred by the portal and the document is reported non-compliant.`,
   });
+}
+
+function checkSelection(selection: SelectionFacts, pack: JurisdictionPack): readonly PreflightCheck[] {
+  return [
+    checkEnvelopeSize(selection, pack),
+    checkSelectionFilenames(selection, pack),
+    checkFilenameCollisions(selection, pack),
+  ];
+}
+
+function buildUnknownSelectionChecks(pack: JurisdictionPack): readonly PreflightCheck[] {
+  return [
+    buildCheck(pack, "envelope-size", {
+      status: "unknown",
+      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+    }),
+    buildCheck(pack, "selection-filenames", {
+      status: "unknown",
+      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+    }),
+    buildCheck(pack, "filename-collisions", {
+      status: "unknown",
+      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+    }),
+  ];
+}
+
+function checkEnvelopeSize(selection: SelectionFacts, pack: JurisdictionPack): PreflightCheck {
+  if (!pack.maxEnvelopeBytes) {
+    return buildCheck(pack, "envelope-size", {
+      status: "pass",
+      detail: "This jurisdiction pack has no configured envelope-size cap.",
+    });
+  }
+
+  const filesWithoutSizes = selection.files.filter((file) => file.fileBytes === undefined);
+
+  if (filesWithoutSizes.length > 0) {
+    return buildCheck(pack, "envelope-size", {
+      status: "unknown",
+      detail: `No file-size facts were provided for ${filesWithoutSizes.length} selected file(s).`,
+    });
+  }
+
+  const envelopeBytes = selection.files.reduce((sum, file) => sum + (file.fileBytes ?? 0), 0);
+
+  return buildCheck(pack, "envelope-size", {
+    status: envelopeBytes > pack.maxEnvelopeBytes ? "warn" : "pass",
+    detail: envelopeBytes > pack.maxEnvelopeBytes
+      ? `The selected files total ${formatBytes(envelopeBytes)}, exceeding the ${formatBytes(pack.maxEnvelopeBytes)} envelope cap.`
+      : `The selected files total ${formatBytes(envelopeBytes)}, within the ${formatBytes(pack.maxEnvelopeBytes)} envelope cap.`,
+  });
+}
+
+function checkSelectionFilenames(selection: SelectionFacts, pack: JurisdictionPack): PreflightCheck {
+  if (!pack.filenameMaxChars && !pack.filenameCharset) {
+    return buildCheck(pack, "selection-filenames", {
+      status: "pass",
+      detail: "This jurisdiction pack has no filename length or character-set limit.",
+    });
+  }
+
+  const fileIssues = selection.files
+    .map((file) => {
+      const issues = findFilenameIssues(file.filename, pack);
+      return issues.length === 0 ? null : `${file.filename}: ${issues.join(" ")}`;
+    })
+    .filter((issue): issue is string => issue !== null);
+
+  return buildCheck(pack, "selection-filenames", {
+    status: fileIssues.length === 0 ? "pass" : "warn",
+    detail: fileIssues.length === 0
+      ? `All ${selection.files.length} selected filename(s) match the configured portal filename limits.`
+      : fileIssues.join(" "),
+  });
+}
+
+function checkFilenameCollisions(selection: SelectionFacts, pack: JurisdictionPack): PreflightCheck {
+  const seen = new Map<string, string[]>();
+
+  for (const file of selection.files) {
+    const normalized = file.filename.toLocaleLowerCase();
+    const filenames = seen.get(normalized) ?? [];
+    filenames.push(file.filename);
+    seen.set(normalized, filenames);
+  }
+
+  const collisions = [...seen.values()].filter((filenames) => filenames.length > 1);
+
+  return buildCheck(pack, "filename-collisions", {
+    status: collisions.length === 0 ? "pass" : "warn",
+    detail: collisions.length === 0
+      ? `No filename collisions were found across ${selection.files.length} selected file(s).`
+      : `Duplicate filenames in the selected set: ${collisions.map((files) => files.join(", ")).join("; ")}.`,
+  });
+}
+
+function findFilenameIssues(filename: string, pack: JurisdictionPack): string[] {
+  const issues: string[] = [];
+  const portalFilename = filename.replace(/\.pdf$/i, "");
+
+  if (pack.filenameMaxChars && [...portalFilename].length > pack.filenameMaxChars) {
+    issues.push(`The portal filename is ${[...portalFilename].length} characters, exceeding the ${pack.filenameMaxChars}-character portal limit.`);
+  }
+
+  if (pack.filenameCharset) {
+    let charset: RegExp;
+
+    try {
+      charset = new RegExp(pack.filenameCharset, "u");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      issues.push(`The configured filename character rule is invalid: ${message}.`);
+      return issues;
+    }
+
+    if (!charset.test(portalFilename)) {
+      issues.push("The filename contains characters outside the configured portal character set.");
+    }
+  }
+
+  return issues;
 }
 
 function sameSize(actual: PageFacts["size"], expected: JurisdictionPack["pageSize"]): boolean {
@@ -248,33 +405,25 @@ function intersects(a: RectInches, b: RectInches): boolean {
 function buildCheck(
   pack: JurisdictionPack,
   checkId: string,
-  result: { status: PreflightStatus; detail: string },
+  result: { status: PreflightStatus; detail: string; kind?: ConstraintKind },
 ): PreflightCheck {
-  const constraint = findConstraint(pack, checkId);
+  const constraint = findConstraint(pack, checkId, result.kind);
 
-  const base = {
+  return {
     checkId,
     label: constraint.label,
     authority: constraint.authority,
     detail: result.detail,
+    kind: constraint.kind,
+    status: result.status,
   };
-
-  if (constraint.kind === "rule") {
-    return {
-      ...base,
-      kind: "rule",
-      status: toRuleStatus(result.status),
-    } satisfies RulePreflightCheck;
-  }
-
-  return {
-    ...base,
-    kind: "portal",
-    status: toPortalStatus(result.status),
-  } satisfies PortalPreflightCheck;
 }
 
-function findConstraint(pack: JurisdictionPack, checkId: string): ConstraintEntry {
+function findConstraint(
+  pack: JurisdictionPack,
+  checkId: string,
+  fallbackKind: ConstraintKind = "rule",
+): ConstraintEntry {
   const constraint = pack.constraints.find((entry) => entry.id === checkId);
 
   if (constraint) {
@@ -284,19 +433,11 @@ function findConstraint(pack: JurisdictionPack, checkId: string): ConstraintEntr
   return {
     id: checkId,
     label: checkId,
-    kind: "rule" satisfies ConstraintKind,
+    kind: fallbackKind,
     authority: "Unspecified",
     lastVerified: "1970-01-01",
     applicability: { scope: "statewide" },
   };
-}
-
-function toRuleStatus(status: PreflightStatus): RulePreflightStatus {
-  return status === "fix" ? "warn" : status;
-}
-
-function toPortalStatus(status: PreflightStatus): PortalPreflightStatus {
-  return status === "warn" ? "fix" : status;
 }
 
 function formatPageNumbers(pages: readonly PageFacts[]): string {

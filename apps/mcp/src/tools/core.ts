@@ -1,7 +1,16 @@
+import { promises as fs } from "node:fs";
 import { z } from "zod";
+import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import { extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { EngineHandle } from "../engine.js";
-import { baseOutputSchema, type StructuredToolResult } from "../format.js";
+import {
+  baseOutputSchema,
+  errorResult,
+  successResult,
+  type StructuredToolResult,
+} from "../format.js";
 import { resolvePageIndexes, runOutputOp, runSingleOutputOp } from "../ops.js";
+import { prepareOutput, resolveInput } from "../paths.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 const absoluteOutput = z
@@ -17,21 +26,123 @@ export const ocrInputSchema = {
   languages: z.array(z.string()).optional().describe('OCR languages (default ["eng"]).'),
   force: z.boolean().optional().describe("Re-OCR pages that already contain text."),
 };
-export const ocrOutputSchema = outputResultSchema;
+export const ocrOutputSchema = {
+  ...outputResultSchema,
+  verifiedPages: z.number().optional(),
+  missingTextPages: z.array(z.number()).optional(),
+};
 export interface OcrInput {
   input: string;
   output: string;
   languages?: string[] | undefined;
   force?: boolean | undefined;
 }
-export function handleOcr(input: OcrInput, engine: EngineHandle): Promise<StructuredToolResult> {
-  return runSingleOutputOp(engine, input.input, input.output, async (e, document) => {
-    const result = await e.ocr(document, {
+export async function handleOcr(
+  input: OcrInput,
+  engineHandle: EngineHandle,
+): Promise<StructuredToolResult> {
+  const source = await resolveInput(input.input);
+  const output = await prepareOutput(input.output);
+  const opened: PdfDocumentHandle[] = [];
+  const produced: PdfDocumentHandle[] = [];
+  let engine: Awaited<ReturnType<EngineHandle["getEngine"]>> | undefined;
+
+  try {
+    // Inside the try so an engine-start failure still aborts the reserved output.
+    engine = await engineHandle.getEngine();
+    const bytes = await fs.readFile(source.realPath);
+    const document = await engine.open(bytes);
+    opened.push(document);
+
+    const searchable = await engine.ocr(document, {
       languages: input.languages ?? ["eng"],
       ocrType: input.force ? "force-ocr" : "skip-text",
     });
-    return { result, summary: `Made searchable via OCR: ${input.output}.` };
-  });
+    if (searchable !== document) {
+      produced.push(searchable);
+    }
+
+    const searchableBytes = await engine.saveToBytes(searchable);
+    const coverage = summarizeTextLayerCoverage(await extractTextLayerCoverage(searchableBytes));
+    if (!coverage.allPagesHaveText) {
+      await output.abort();
+      const result = errorResult(
+        "OCR_UNVERIFIED",
+        `${formatOcrCoverageFailure(coverage)} The document was NOT written.`,
+        "Re-run OCR with different settings or inspect the source scan quality.",
+      );
+      return {
+        ...result,
+        structuredContent: {
+          ...result.structuredContent,
+          missingTextPages: coverage.missingTextPages,
+          verifiedPages: coverage.pagesWithText.length,
+        },
+      };
+    }
+
+    await output.write(searchableBytes);
+    await output.commit();
+
+    return successResult(
+      `Made searchable via OCR: ${output.outputPath}; verified text on ${coverage.pageCount} page(s).`,
+      { output: output.outputPath, verifiedPages: coverage.pageCount },
+    );
+  } catch (error) {
+    await output.abort();
+    throw error;
+  } finally {
+    if (engine !== undefined) {
+      for (const document of [...produced, ...opened]) {
+        await engine.close(document).catch(() => undefined);
+      }
+    }
+  }
+}
+
+// pdf.js's coverage detector buckets by 0-indexed page position and by
+// image/text/mixed content; OCR verification only cares whether page-body
+// text exists at all, reported as 1-indexed page numbers.
+function summarizeTextLayerCoverage(layer: {
+  imageOnlyPages: readonly number[];
+  mixedPages: readonly number[];
+  textPages: readonly number[];
+}): {
+  pageCount: number;
+  pagesWithText: number[];
+  missingTextPages: number[];
+  allPagesHaveText: boolean;
+  hasAnyText: boolean;
+} {
+  const pagesWithText = [...layer.mixedPages, ...layer.textPages]
+    .map((pageIndex) => pageIndex + 1)
+    .sort((a, b) => a - b);
+  const missingTextPages = [...layer.imageOnlyPages].map((pageIndex) => pageIndex + 1).sort((a, b) => a - b);
+  const pageCount = pagesWithText.length + missingTextPages.length;
+
+  return {
+    pageCount,
+    pagesWithText,
+    missingTextPages,
+    allPagesHaveText: pageCount > 0 && missingTextPages.length === 0,
+    hasAnyText: pagesWithText.length > 0,
+  };
+}
+
+function formatOcrCoverageFailure(coverage: {
+  pageCount: number;
+  hasAnyText: boolean;
+  missingTextPages: readonly number[];
+}): string {
+  if (coverage.pageCount === 0) {
+    return "OCR verification failed because the output PDF has no pages.";
+  }
+
+  if (!coverage.hasAnyText) {
+    return "OCR verification failed because the output PDF has no extractable page text.";
+  }
+
+  return `OCR verification failed because page(s) ${coverage.missingTextPages.join(", ")} have no extractable text.`;
 }
 
 // ---- merge_pdfs ----

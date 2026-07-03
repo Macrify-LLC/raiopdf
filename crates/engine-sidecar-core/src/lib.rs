@@ -35,6 +35,7 @@ pub const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 pub const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 pub const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
 pub const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
+pub const PYTHON_RELATIVE: &[&str] = &["ocr", "python", "python.exe"];
 pub const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
 pub const TESSERACT_RELATIVE: &[&str] = &["ocr", "tesseract", "tesseract.exe"];
 pub const TESSDATA_ENG_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata", "eng.traineddata"];
@@ -47,6 +48,8 @@ pub struct SidecarConfig {
     engine_log_path: PathBuf,
     stirling_base_path: Option<PathBuf>,
     ocrmypdf_path: Option<PathBuf>,
+    python_path: Option<PathBuf>,
+    ocr_python_required: bool,
     tessdata_dir: Option<PathBuf>,
     tesseract_path: Option<PathBuf>,
     tessdata_eng_path: Option<PathBuf>,
@@ -98,6 +101,8 @@ impl SidecarConfig {
         let mut payload_dir = None;
         let mut stirling_base_path = None;
         let mut ocrmypdf_path = None;
+        let mut ocrmypdf_path_from_env = false;
+        let mut python_path = None;
         let mut tessdata_dir = None;
         let mut tesseract_path = None;
         let mut tessdata_eng_path = None;
@@ -142,6 +147,7 @@ impl SidecarConfig {
                     let value = value.to_string_lossy().trim().to_string();
                     if !value.is_empty() {
                         ocrmypdf_path = Some(PathBuf::from(value));
+                        ocrmypdf_path_from_env = true;
                     }
                 }
                 "RAIOPDF_ENGINE_TESSDATA_DIR" => {
@@ -186,10 +192,13 @@ impl SidecarConfig {
             )
         });
 
+        let mut ocr_python_required = false;
         if let Some(payload_dir) = payload_dir.as_deref() {
             jar_path = jar_path.or_else(|| existing_join(payload_dir, ENGINE_JAR_RELATIVE));
             java_path = java_path.or_else(|| payload_java_path(payload_dir));
             ocrmypdf_path = ocrmypdf_path.or_else(|| existing_join(payload_dir, OCRMYPDF_RELATIVE));
+            python_path = python_path.or_else(|| existing_join(payload_dir, PYTHON_RELATIVE));
+            ocr_python_required = !ocrmypdf_path_from_env;
             tessdata_dir = tessdata_dir.or_else(|| existing_join(payload_dir, TESSDATA_RELATIVE));
             tesseract_path =
                 tesseract_path.or_else(|| existing_join(payload_dir, TESSERACT_RELATIVE));
@@ -221,6 +230,8 @@ impl SidecarConfig {
             engine_log_path,
             stirling_base_path,
             ocrmypdf_path,
+            python_path,
+            ocr_python_required,
             tessdata_dir,
             tesseract_path,
             tessdata_eng_path,
@@ -264,6 +275,9 @@ impl SidecarConfig {
 
         if self.ocrmypdf_path.is_none() {
             missing.push("ocr/ocrmypdf.cmd".to_string());
+        }
+        if self.ocr_python_required && self.python_path.is_none() {
+            missing.push("ocr/python/python.exe".to_string());
         }
         if self.tesseract_path.is_none() {
             missing.push("ocr/tesseract/tesseract.exe".to_string());
@@ -1956,6 +1970,10 @@ mod tests {
             Some(payload.join("ocr").join("ocrmypdf.cmd"))
         );
         assert_eq!(
+            config.python_path,
+            Some(payload.join("ocr").join("python").join("python.exe"))
+        );
+        assert_eq!(
             config.tessdata_dir,
             Some(payload.join("ocr").join("tesseract").join("tessdata"))
         );
@@ -2077,6 +2095,7 @@ mod tests {
                 available: false,
                 missing: vec![
                     "ocr/ocrmypdf.cmd".to_string(),
+                    "ocr/python/python.exe".to_string(),
                     "ocr/tesseract/tesseract.exe".to_string(),
                     "ocr/tesseract/tessdata/eng.traineddata".to_string(),
                     "ocr/gs/bin/gswin64c.exe".to_string(),
@@ -2198,6 +2217,7 @@ mod tests {
         touch(&payload.join("jre").join("bin").join("java.exe"));
         touch(&payload.join("engine").join("stirling.jar"));
         touch(&payload.join("ocr").join("ocrmypdf.cmd"));
+        touch(&payload.join("ocr").join("python").join("python.exe"));
         touch(
             &payload
                 .join("ocr")

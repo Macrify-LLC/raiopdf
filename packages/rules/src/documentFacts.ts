@@ -118,14 +118,17 @@ export async function buildDocumentFacts(
   if (options.textExtractor) {
     try {
       facts.textLayerCoverage = await options.textExtractor.extractTextLayerCoverage(bytes);
-      facts.searchableText = facts.textLayerCoverage.textPages.length > 0 ||
-        facts.textLayerCoverage.mixedPages.length > 0;
+      // Page-body text only, and every page must have it — one text page must
+      // not make an otherwise image-only scan look searchable.
+      facts.searchableText = facts.pages.length > 0 &&
+        facts.textLayerCoverage.imageOnlyPages.length === 0;
     } catch (error) {
       errors.push(detectorError("textLayerCoverage", errorMessage(error)));
       try {
         const pageText = await options.textExtractor.extractPageTextByPage?.(bytes);
         if (pageText) {
-          facts.searchableText = pageText.some((page) => page.text.trim().length > 0);
+          facts.searchableText = pageText.length > 0 &&
+            pageText.every((page) => page.text.trim().length > 0);
         }
       } catch {
         // searchableText is derived from the same pdf.js detector family; leave it unknown.

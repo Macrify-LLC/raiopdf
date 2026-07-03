@@ -61,9 +61,12 @@ export interface SidecarOcrOptions {
 }
 
 type StirlingErrorBody = {
+  detail?: unknown;
   error?: unknown;
+  errorCode?: unknown;
   message?: unknown;
   status?: unknown;
+  title?: unknown;
 };
 
 const DEFAULT_FONT_SIZE_PT = 11;
@@ -1073,9 +1076,11 @@ function readStringProperty(body: unknown, propertyName: string): string | undef
 async function throwResponseError(response: Response): Promise<never> {
   const errorBody = await readErrorBody(response);
   const message = readErrorMessage(errorBody) ?? response.statusText;
-  const code = mapHttpStatusToErrorCode(response.status, message);
+  const errorCode = readErrorCode(errorBody);
+  const code = mapHttpStatusToErrorCode(response.status, message, errorCode);
+  const detail = errorCode ? `${message} (${errorCode})` : message;
 
-  throw new PdfEngineError(code, `Stirling PDF request failed: ${message}`);
+  throw new PdfEngineError(code, `Stirling PDF request failed: ${detail}`);
 }
 
 async function readErrorBody(response: Response): Promise<StirlingErrorBody | null> {
@@ -1093,6 +1098,10 @@ function readErrorMessage(errorBody: StirlingErrorBody | null): string | null {
     return null;
   }
 
+  if (typeof errorBody.detail === "string") {
+    return errorBody.detail;
+  }
+
   if (typeof errorBody.message === "string") {
     return errorBody.message;
   }
@@ -1101,14 +1110,35 @@ function readErrorMessage(errorBody: StirlingErrorBody | null): string | null {
     return errorBody.error;
   }
 
+  if (typeof errorBody.title === "string") {
+    return errorBody.title;
+  }
+
   return null;
 }
 
-function mapHttpStatusToErrorCode(status: number, message: string): PdfEngineErrorCode {
+function readErrorCode(errorBody: StirlingErrorBody | null): string | null {
+  return typeof errorBody?.errorCode === "string" ? errorBody.errorCode : null;
+}
+
+function mapHttpStatusToErrorCode(
+  status: number,
+  message: string,
+  errorCode: string | null,
+): PdfEngineErrorCode {
   const normalizedMessage = message.toLowerCase();
+  const normalizedErrorCode = errorCode?.toLowerCase() ?? "";
 
   if (normalizedMessage.includes("encrypted") || normalizedMessage.includes("password")) {
     return "ENCRYPTED_DOCUMENT";
+  }
+
+  if (
+    status === 403 ||
+    normalizedErrorCode.includes("disabled") ||
+    (normalizedMessage.includes("endpoint") && normalizedMessage.includes("disabled"))
+  ) {
+    return "UNSUPPORTED";
   }
 
   if (normalizedMessage.includes("page")) {

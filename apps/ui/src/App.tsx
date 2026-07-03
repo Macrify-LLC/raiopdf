@@ -3252,7 +3252,11 @@ async function readFilingFacts(
       pageOccupiedRegions = new Map();
     }
   }
-  const hasExtractedText = [...pageOccupiedRegions.values()].some((regions) => regions.length > 0);
+  // Page-body text only, and every page must have it — one text page must not
+  // make an otherwise image-only scan look searchable. Only used as a fallback
+  // when the shared text-layer detector above couldn't determine searchability.
+  const hasExtractedTextOnEveryPage = facts.pages.length > 0
+    && facts.pages.every((page) => (pageOccupiedRegions.get(page.pageIndex)?.length ?? 0) > 0);
 
   if (pageOccupiedRegions.size > 0) {
     facts.pages = facts.pages.map((page) => {
@@ -3264,7 +3268,7 @@ async function readFilingFacts(
   if (options.searchableText !== undefined) {
     facts.searchableText = options.searchableText;
   } else if (facts.searchableText === undefined) {
-    facts.searchableText = hasExtractedText;
+    facts.searchableText = hasExtractedTextOnEveryPage;
   }
 
   if (pageOccupiedRegions.has(0)) {

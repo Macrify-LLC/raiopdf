@@ -1,27 +1,35 @@
-import { loadPdfDocument, type PDFDocumentProxy } from "./pdfjs";
+import type { PDFDocumentProxy } from "./pdfjs";
 
-const DEFAULT_TEXT_PROBE_PAGES = 5;
+export interface TextLayerCoverage {
+  pageCount: number;
+  pagesWithText: number[];
+  missingTextPages: number[];
+  allPagesHaveText: boolean;
+  hasAnyText: boolean;
+}
 
-export async function hasExtractableTextLayer(
-  bytes: Uint8Array,
-  maxPages = DEFAULT_TEXT_PROBE_PAGES,
-): Promise<boolean> {
+export async function inspectTextLayer(bytes: Uint8Array): Promise<TextLayerCoverage> {
+  const { loadPdfDocument } = await import("./pdfjs");
   const pdfDocument = await loadPdfDocument(bytes);
 
   try {
-    return await pdfDocumentHasTextLayer(pdfDocument, maxPages);
+    return await pdfDocumentTextLayerCoverage(pdfDocument);
   } finally {
     await pdfDocument.loadingTask.destroy();
   }
 }
 
-export async function pdfDocumentHasTextLayer(
-  pdfDocument: PDFDocumentProxy,
-  maxPages = DEFAULT_TEXT_PROBE_PAGES,
-): Promise<boolean> {
-  const pageLimit = Math.min(maxPages, pdfDocument.numPages);
+export async function hasExtractableTextLayer(bytes: Uint8Array): Promise<boolean> {
+  return (await inspectTextLayer(bytes)).allPagesHaveText;
+}
 
-  for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+export async function pdfDocumentTextLayerCoverage(
+  pdfDocument: PDFDocumentProxy,
+): Promise<TextLayerCoverage> {
+  const pagesWithText: number[] = [];
+  const missingTextPages: number[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
     const textContent = await page.getTextContent();
 
@@ -30,9 +38,23 @@ export async function pdfDocumentHasTextLayer(
         return "str" in item && item.str.trim().length > 0;
       })
     ) {
-      return true;
+      pagesWithText.push(pageNumber);
+    } else {
+      missingTextPages.push(pageNumber);
     }
   }
 
-  return false;
+  return {
+    pageCount: pdfDocument.numPages,
+    pagesWithText,
+    missingTextPages,
+    allPagesHaveText: pdfDocument.numPages > 0 && missingTextPages.length === 0,
+    hasAnyText: pagesWithText.length > 0,
+  };
+}
+
+export async function pdfDocumentHasTextLayer(
+  pdfDocument: PDFDocumentProxy,
+): Promise<boolean> {
+  return (await pdfDocumentTextLayerCoverage(pdfDocument)).allPagesHaveText;
 }

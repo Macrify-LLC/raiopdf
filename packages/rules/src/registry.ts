@@ -1,4 +1,8 @@
+import { federalCmecfPack } from "./federal-cmecf.js";
 import { floridaPack } from "./florida.js";
+import { georgiaEfilegaPack } from "./georgia-efilega.js";
+import { georgiaPeachcourtPack } from "./georgia-peachcourt.js";
+import { indianaIefsPack } from "./indiana-iefs.js";
 import manifestJson from "../data/packs.manifest.json" with { type: "json" };
 import type { PackIntegrityIssue, PackManifest } from "./packIntegrity.js";
 import { verifyBundledPackIntegrity } from "./packIntegrity.js";
@@ -54,6 +58,10 @@ const packIntegrityIssues: PackIntegrityIssue[] = [];
 const packs = new Map<JurisdictionPackId, JurisdictionPack>();
 
 registerBundledPack(floridaPack);
+registerBundledPack(federalCmecfPack);
+registerBundledPack(georgiaEfilegaPack);
+registerBundledPack(georgiaPeachcourtPack);
+registerBundledPack(indianaIefsPack);
 
 export function getPack(id: JurisdictionPackId = DEFAULT_PACK_ID): JurisdictionPack {
   const pack = packs.get(id);

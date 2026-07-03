@@ -10,7 +10,11 @@ import {
 } from "./packLoader.js";
 
 const bundledPackFiles = new Map<JurisdictionPackId, URL>([
+  ["federal-cmecf", new URL("../data/federal-cmecf.json", import.meta.url)],
   ["florida", new URL("../data/florida.json", import.meta.url)],
+  ["georgia-efilega", new URL("../data/georgia-efilega.json", import.meta.url)],
+  ["georgia-peachcourt", new URL("../data/georgia-peachcourt.json", import.meta.url)],
+  ["indiana-iefs", new URL("../data/indiana-iefs.json", import.meta.url)],
 ]);
 
 /** Node-only pack source reading the JSON bundled with the package. */

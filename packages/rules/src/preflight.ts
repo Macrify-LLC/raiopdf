@@ -33,16 +33,23 @@ export function preflight(
   }
 
   return {
-    checks: [
-      checkPageSizeAndOrientation(document, pack),
-      checkSearchableText(document, pack),
-      checkFileSize(document, pack),
-      checkFilename(document, pack),
-      checkClerkStampSpace(document, pack),
-      checkPdfA(document, pack),
-    ],
+    checks: buildDocumentChecks(document, pack),
     ...(selection ? { selectionChecks: checkSelection(selection, pack) } : {}),
   };
+}
+
+function buildDocumentChecks(
+  document: DocumentFacts,
+  pack: JurisdictionPack,
+): readonly PreflightCheck[] {
+  return [
+    hasConstraint(pack, "page-size-orientation") ? checkPageSizeAndOrientation(document, pack) : null,
+    hasConstraint(pack, "searchable-text") ? checkSearchableText(document, pack) : null,
+    hasConstraint(pack, "file-size") ? checkFileSize(document, pack) : null,
+    hasConstraint(pack, "filename") ? checkFilename(document, pack) : null,
+    hasConstraint(pack, "clerk-stamp-space") ? checkClerkStampSpace(document, pack) : null,
+    hasConstraint(pack, "pdfa") ? checkPdfA(document, pack) : null,
+  ].filter((check): check is PreflightCheck => check !== null);
 }
 
 function checkPageSizeAndOrientation(
@@ -102,6 +109,9 @@ function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): P
 }
 
 function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
+  const maxFileBytes = pack.maxFileBytes;
+  const recommendedMaxFileBytes = pack.recommendedMaxFileBytes;
+
   if (document.fileBytes === undefined) {
     return buildCheck(pack, "file-size", {
       status: "unknown",
@@ -109,23 +119,57 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
     });
   }
 
-  if (document.fileBytes > pack.maxFileBytes) {
+  if (pack.maxFileBytes === undefined && pack.userConfigurable?.maxFileBytes === true) {
     return buildCheck(pack, "file-size", {
-      status: "warn",
-      detail: `The document is ${formatBytes(document.fileBytes)}, exceeding the ${formatBytes(pack.maxFileBytes)} portal cap.`,
+      status: "unknown",
+      detail: `The document is ${formatBytes(document.fileBytes)}. Set this court's file-size cap before RaioPDF can evaluate this check.`,
     });
   }
 
-  if (document.fileBytes > pack.recommendedMaxFileBytes) {
+  if (maxFileBytes !== undefined && document.fileBytes > maxFileBytes) {
     return buildCheck(pack, "file-size", {
       status: "warn",
-      detail: `The document is ${formatBytes(document.fileBytes)}, under the portal cap but above the ${formatBytes(pack.recommendedMaxFileBytes)} mechanical safety margin.`,
+      detail: `The document is ${formatBytes(document.fileBytes)}, exceeding the ${formatBytes(maxFileBytes)} portal cap.`,
+    });
+  }
+
+  if (recommendedMaxFileBytes !== undefined && document.fileBytes > recommendedMaxFileBytes) {
+    const authority = findConstraint(pack, "file-size").authority;
+
+    return buildCheck(pack, "file-size", {
+      status: "warn",
+      detail: maxFileBytes === undefined
+        ? `The document is ${formatBytes(document.fileBytes)}, above the ${authority} recommended limit of ${formatBytes(recommendedMaxFileBytes)}.`
+        : `The document is ${formatBytes(document.fileBytes)}, under the portal cap but above the ${formatBytes(recommendedMaxFileBytes)} recommended limit.`,
+    });
+  }
+
+  if (recommendedMaxFileBytes === undefined && maxFileBytes === undefined) {
+    return buildCheck(pack, "file-size", {
+      status: "unknown",
+      detail: "This jurisdiction pack has no configured file-size limit.",
+    });
+  }
+
+  if (recommendedMaxFileBytes === undefined) {
+    const hardMaxFileBytes = maxFileBytes;
+
+    if (hardMaxFileBytes === undefined) {
+      return buildCheck(pack, "file-size", {
+        status: "unknown",
+        detail: "This jurisdiction pack has no configured file-size limit.",
+      });
+    }
+
+    return buildCheck(pack, "file-size", {
+      status: "pass",
+      detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(hardMaxFileBytes)} portal cap.`,
     });
   }
 
   return buildCheck(pack, "file-size", {
     status: "pass",
-    detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(pack.recommendedMaxFileBytes)} safety margin.`,
+    detail: `The document is ${formatBytes(document.fileBytes)}, within the ${formatBytes(recommendedMaxFileBytes)} recommended limit.`,
   });
 }
 
@@ -360,10 +404,9 @@ function checkFilenameCollisions(selection: SelectionFacts, pack: JurisdictionPa
 
 function findFilenameIssues(filename: string, pack: JurisdictionPack): string[] {
   const issues: string[] = [];
-  const portalFilename = filename.replace(/\.pdf$/i, "");
 
-  if (pack.filenameMaxChars && [...portalFilename].length > pack.filenameMaxChars) {
-    issues.push(`The portal filename is ${[...portalFilename].length} characters, exceeding the ${pack.filenameMaxChars}-character portal limit.`);
+  if (pack.filenameMaxChars && [...filename].length > pack.filenameMaxChars) {
+    issues.push(`The portal filename is ${[...filename].length} characters, exceeding the ${pack.filenameMaxChars}-character portal limit.`);
   }
 
   if (pack.filenameCharset) {
@@ -377,7 +420,7 @@ function findFilenameIssues(filename: string, pack: JurisdictionPack): string[] 
       return issues;
     }
 
-    if (!charset.test(portalFilename)) {
+    if (!charset.test(filename)) {
       issues.push("The filename contains characters outside the configured portal character set.");
     }
   }
@@ -438,6 +481,10 @@ function findConstraint(
     lastVerified: "1970-01-01",
     applicability: { scope: "statewide" },
   };
+}
+
+function hasConstraint(pack: JurisdictionPack, checkId: string): boolean {
+  return pack.constraints.some((entry) => entry.id === checkId);
 }
 
 function formatPageNumbers(pages: readonly PageFacts[]): string {

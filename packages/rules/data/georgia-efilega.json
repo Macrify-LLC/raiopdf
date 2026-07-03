@@ -1,0 +1,151 @@
+{
+  "id": "georgia-efilega",
+  "schemaVersion": 2,
+  "name": "Georgia — eFileGA",
+  "packVersion": "1.0.0",
+  "jurisdiction": "Georgia",
+  "courtSystem": "State and superior courts using eFileGA",
+  "portal": "eFileGA (Tyler Odyssey File & Serve)",
+  "scopeNote": "Georgia trial-court e-filing is split between eFileGA and PeachCourt. Use this pack only for courts that file through Tyler Odyssey eFileGA; appellate systems were not covered by this research pass.",
+  "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
+  "constraints": [
+    {
+      "id": "file-format",
+      "label": "PDF or PDF/A filing format",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    },
+    {
+      "id": "file-size",
+      "label": "Recommended document size",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "The FAQ frames 5 MB per document as a court recommendation for manageability, not as a documented hard technical cap.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    },
+    {
+      "id": "envelope-size",
+      "label": "Recommended envelope size",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "The FAQ frames 25 MB per envelope as a court recommendation for manageability, not as a documented hard technical cap.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    },
+    {
+      "id": "pdfa",
+      "label": "PDF/A accepted with conversion risk",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "Tyler's FAQ accepts PDF/A but also identifies embedded font resources, including JBIG/JBig, as a Format Error risk.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    },
+    {
+      "id": "searchable-text",
+      "label": "OCR/searchable text",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "The FAQ lists OCR-associated documents among typical Format Error causes, cutting against automatic OCR.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    },
+    {
+      "id": "encryption",
+      "label": "Encrypted or secured PDFs",
+      "kind": "portal",
+      "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using eFileGA."
+      }
+    }
+  ],
+  "pageSize": {
+    "w": 8.5,
+    "h": 11,
+    "in": true
+  },
+  "orientation": "portrait",
+  "clerkStampSpace": {
+    "firstPage": {
+      "x": 0,
+      "y": 0,
+      "w": 0.01,
+      "h": 0.01
+    },
+    "laterPages": null
+  },
+  "recommendedMaxFileBytes": 5242880,
+  "maxEnvelopeBytes": 26214400,
+  "pdfa": {
+    "stance": "accepted",
+    "prepDefault": "off",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "PDF/A is accepted, but automatic conversion is off because Tyler identifies PDF/A embedded-font behavior, including JBIG/JBig resources, as a Format Error risk.",
+    "flavor": "pdfa-2b"
+  },
+  "activeContent": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The reviewed eFileGA FAQ did not state a separate JavaScript or active-content rule."
+  },
+  "encryption": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The FAQ says PDF security settings, including password protection and other security options, prevent document processing."
+  },
+  "embeddedFiles": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The reviewed eFileGA FAQ did not state a separate embedded-file rule."
+  },
+  "metadataScrub": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The reviewed eFileGA FAQ is silent on descriptive metadata."
+  },
+  "ocr": {
+    "stance": "accepted",
+    "prepDefault": "off",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "OCR is not required; Tyler lists OCR-associated files among typical Format Error causes, so automatic OCR is off."
+  },
+  "flattenForms": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Tyler Odyssey File & Serve eFileGA FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The reviewed eFileGA FAQ did not state a fillable-form flattening rule."
+  },
+  "splitNaming": "{name} — Part {n} of {total}"
+}

@@ -1,0 +1,177 @@
+{
+  "id": "indiana-iefs",
+  "schemaVersion": 2,
+  "name": "Indiana IEFS",
+  "packVersion": "1.0.0",
+  "jurisdiction": "Indiana",
+  "courtSystem": "Trial, appellate, and tax courts",
+  "portal": "Indiana E-Filing System (IEFS)",
+  "scopeNote": "Statewide IEFS baseline for Indiana trial, appellate, and tax courts. Appellate appendix volume/TOC rules are noted in research but deferred from this general filing-prep pack.",
+  "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
+  "constraints": [
+    {
+      "id": "file-format",
+      "label": "PDF-only filing format",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "file-size",
+      "label": "Document size cap",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "envelope-size",
+      "label": "Envelope size cap",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "filename",
+      "label": "Filename length",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "note": "The 100-character limit includes spaces and the .pdf extension.",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "encryption",
+      "label": "Encryption, passwords, and access limits",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "embedded-files",
+      "label": "Embedded files",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "searchable-text",
+      "label": "OCR for scanned documents",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "metadata-scrub",
+      "label": "Metadata removal for confidential filings",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "statewide"
+      }
+    },
+    {
+      "id": "pdfa",
+      "label": "PDF/A stance",
+      "kind": "portal",
+      "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+      "lastVerified": "2026-07-02",
+      "note": "The guide's formatting section is silent on PDF/A.",
+      "applicability": {
+        "scope": "statewide"
+      }
+    }
+  ],
+  "pageSize": {
+    "w": 8.5,
+    "h": 11,
+    "in": true
+  },
+  "orientation": "portrait",
+  "clerkStampSpace": {
+    "firstPage": {
+      "x": 0,
+      "y": 0,
+      "w": 0.01,
+      "h": 0.01
+    },
+    "laterPages": null
+  },
+  "maxFileBytes": 52428800,
+  "recommendedMaxFileBytes": 52428800,
+  "maxEnvelopeBytes": 78643200,
+  "filenameMaxChars": 100,
+  "pdfa": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide's document-formatting section does not mention PDF/A, ISO 19005, or archival PDF.",
+    "flavor": "pdfa-2b"
+  },
+  "activeContent": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide prohibits information that cannot be readily viewed in PDF software, but it does not state a separate JavaScript or active-content rule."
+  },
+  "encryption": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide's prohibited-items list bars encryption, password protection, and other features that limit access."
+  },
+  "embeddedFiles": {
+    "stance": "prohibited",
+    "prepDefault": "on",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide's prohibited-items list bars embedded files."
+  },
+  "metadataScrub": {
+    "stance": "required",
+    "prepDefault": "on",
+    "condition": "when the filing contains confidential/redacted information",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide requires filers to ensure confidential information cannot be recovered and says confidential information must not remain in document properties/metadata."
+  },
+  "ocr": {
+    "stance": "required",
+    "prepDefault": "on",
+    "condition": "for scanned documents",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide instructs filers to always apply OCR when scanning documents."
+  },
+  "flattenForms": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Indiana Office of Judicial Administration, E-filing User Guide, updated May 15, 2026",
+    "lastVerified": "2026-07-02",
+    "note": "The guide does not state a fillable-form flattening rule in the general filing constraints researched for this pack."
+  },
+  "splitNaming": "{name} — Volume {n} of {total}"
+}

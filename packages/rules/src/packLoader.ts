@@ -44,14 +44,18 @@ export function validateJurisdictionPack(raw: unknown, sourceName: string): Juri
   const portal = readString(pack, "portal", sourceName);
   const scopeNote = readString(pack, "scopeNote", sourceName);
   const guidanceNote = readString(pack, "guidanceNote", sourceName);
-  const maxFileBytes = readPositiveInteger(pack, "maxFileBytes", sourceName);
-  const recommendedMaxFileBytes = readPositiveInteger(pack, "recommendedMaxFileBytes", sourceName);
+  const maxFileBytes = readOptionalPositiveInteger(pack, "maxFileBytes", sourceName);
+  const recommendedMaxFileBytes = readOptionalPositiveInteger(pack, "recommendedMaxFileBytes", sourceName);
   const maxEnvelopeBytes = readOptionalPositiveInteger(pack, "maxEnvelopeBytes", sourceName);
   const filenameMaxChars = readOptionalPositiveInteger(pack, "filenameMaxChars", sourceName);
   const filenameCharset = readOptionalString(pack, "filenameCharset", sourceName);
   const userConfigurable = readUserConfigurable(pack, sourceName);
 
-  if (recommendedMaxFileBytes > maxFileBytes) {
+  if (
+    maxFileBytes !== undefined &&
+    recommendedMaxFileBytes !== undefined &&
+    recommendedMaxFileBytes > maxFileBytes
+  ) {
     throw new Error(`${sourceName}.recommendedMaxFileBytes must be less than or equal to maxFileBytes`);
   }
 
@@ -69,8 +73,8 @@ export function validateJurisdictionPack(raw: unknown, sourceName: string): Juri
     pageSize: readPageSize(pack, "pageSize", sourceName),
     orientation: readOrientation(pack, "orientation", sourceName),
     clerkStampSpace: readClerkStampSpace(pack, sourceName),
-    maxFileBytes,
-    recommendedMaxFileBytes,
+    ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
+    ...(recommendedMaxFileBytes === undefined ? {} : { recommendedMaxFileBytes }),
     ...(maxEnvelopeBytes === undefined ? {} : { maxEnvelopeBytes }),
     ...(filenameMaxChars === undefined ? {} : { filenameMaxChars }),
     ...(filenameCharset === undefined ? {} : { filenameCharset }),

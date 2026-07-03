@@ -1,0 +1,117 @@
+{
+  "id": "georgia-peachcourt",
+  "schemaVersion": 2,
+  "name": "Georgia — PeachCourt",
+  "packVersion": "1.0.0",
+  "jurisdiction": "Georgia",
+  "courtSystem": "State and superior courts using PeachCourt",
+  "portal": "PeachCourt",
+  "scopeNote": "Georgia trial-court e-filing is split between eFileGA and PeachCourt. The published PeachCourt-facing spec found in this pass is thin: PDF-only and an approximately 25 MB total-size recommendation are verified; PDF/A, OCR, metadata, filename, and attachment-count rules are unverified.",
+  "guidanceNote": "These checks are guidance only — not legal advice…tell us at support@macrify.me",
+  "constraints": [
+    {
+      "id": "file-format",
+      "label": "PDF-only filing format",
+      "kind": "portal",
+      "authority": "Georgia Statewide Business Court FAQ",
+      "lastVerified": "2026-07-02",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using PeachCourt."
+      }
+    },
+    {
+      "id": "file-size",
+      "label": "Recommended total upload size",
+      "kind": "portal",
+      "authority": "Georgia Statewide Business Court FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "The source recommends limiting total document size to 25 MB and does not break the figure into per-document versus per-envelope limits.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using PeachCourt."
+      }
+    },
+    {
+      "id": "envelope-size",
+      "label": "Recommended total upload size",
+      "kind": "portal",
+      "authority": "Georgia Statewide Business Court FAQ",
+      "lastVerified": "2026-07-02",
+      "note": "The source recommends limiting total document size to 25 MB and does not break the figure into per-document versus per-envelope limits.",
+      "applicability": {
+        "scope": "varies",
+        "note": "Applies to Georgia courts using PeachCourt."
+      }
+    }
+  ],
+  "pageSize": {
+    "w": 8.5,
+    "h": 11,
+    "in": true
+  },
+  "orientation": "portrait",
+  "clerkStampSpace": {
+    "firstPage": {
+      "x": 0,
+      "y": 0,
+      "w": 0.01,
+      "h": 0.01
+    },
+    "laterPages": null
+  },
+  "maxFileBytes": 26214400,
+  "recommendedMaxFileBytes": 26214400,
+  "maxEnvelopeBytes": 26214400,
+  "pdfa": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The PeachCourt source found in this pass says documents must be PDFs but does not mention PDF/A.",
+    "flavor": "pdfa-2b"
+  },
+  "activeContent": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address active content."
+  },
+  "encryption": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address encryption."
+  },
+  "embeddedFiles": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address embedded files."
+  },
+  "metadataScrub": {
+    "stance": "unknown",
+    "prepDefault": "on",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address descriptive metadata."
+  },
+  "ocr": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address OCR or searchable text."
+  },
+  "flattenForms": {
+    "stance": "unknown",
+    "prepDefault": "off",
+    "authority": "Georgia Statewide Business Court FAQ",
+    "lastVerified": "2026-07-02",
+    "note": "The published PeachCourt-facing source found in this pass does not address fillable-form flattening."
+  },
+  "splitNaming": "{name} — Part {n} of {total}"
+}

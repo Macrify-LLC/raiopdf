@@ -342,6 +342,17 @@ label.batch-workspace__checkbox-row {
   font-variant-numeric: tabular-nums;
 }
 
+.batch-workspace__signature-summary {
+  margin: 0;
+  padding: var(--space-2);
+  border: 1px solid #f1d28a;
+  border-radius: var(--radius-control);
+  background: #fff7e0;
+  color: #4a3500;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 @keyframes batch-panel-in {
   from {
     opacity: 0;

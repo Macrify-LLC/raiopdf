@@ -21,10 +21,18 @@ import type {
   FormFieldFacts,
   PageFacts,
   PossibleUnappliedRedactions,
+  SignatureDetectionFacts,
 } from "./types.js";
 
 const POINTS_PER_INCH = 72;
 const TEXT_DECODER = new TextDecoder("latin1");
+const SIGNATURE_SUBFILTERS = new Set([
+  "adbe.pkcs7.detached",
+  "adbe.pkcs7.sha1",
+  "adbe.x509.rsa_sha1",
+  "ETSI.CAdES.detached",
+  "ETSI.RFC3161",
+]);
 
 /**
  * Build local document facts used by legal-workflow preflight checks. Detector
@@ -59,6 +67,7 @@ export async function buildDocumentFacts(
       detectorError("formFields", "Encrypted PDFs are not parsed for form-field facts here."),
       detectorError("annotationCount", "Encrypted PDFs are not parsed for annotation facts here."),
       detectorError("signatureFieldCount", "Encrypted PDFs are not parsed for signature-field facts here."),
+      detectorError("signatureDetection", "Encrypted PDFs are not parsed for signature facts here."),
       detectorError("possibleUnappliedRedactions", "Encrypted PDFs are not parsed for redaction-annotation facts here."),
       detectorError("textLayerCoverage", "Encrypted PDFs are not parsed for text-layer coverage here."),
     ]);
@@ -76,6 +85,7 @@ export async function buildDocumentFacts(
       detectorError("formFields", `PDF parsing failed: ${errorMessage(error)}`),
       detectorError("annotationCount", `PDF parsing failed: ${errorMessage(error)}`),
       detectorError("signatureFieldCount", `PDF parsing failed: ${errorMessage(error)}`),
+      detectorError("signatureDetection", `PDF parsing failed: ${errorMessage(error)}`),
       detectorError("possibleUnappliedRedactions", `PDF parsing failed: ${errorMessage(error)}`),
       detectorError("textLayerCoverage", `PDF parsing failed: ${errorMessage(error)}`),
     ]);
@@ -100,10 +110,17 @@ export async function buildDocumentFacts(
 
   try {
     facts.formFields = readFormFields(pdf);
-    facts.signatureFieldCount = countSignatureFields(pdf);
   } catch (error) {
     errors.push(detectorError("formFields", errorMessage(error)));
+  }
+
+  try {
+    const signature = readSignatureDetectionFacts(pdf, bytes);
+    facts.signatureFieldCount = signature.standardAcroFormSignatureCount;
+    facts.signatureDetection = signature;
+  } catch (error) {
     errors.push(detectorError("signatureFieldCount", errorMessage(error)));
+    errors.push(detectorError("signatureDetection", errorMessage(error)));
   }
 
   try {
@@ -175,6 +192,18 @@ export function detectEncryptionState(bytes: Uint8Array): EncryptionState {
   }
 }
 
+export async function detectSignatureFacts(bytes: Uint8Array): Promise<SignatureDetectionFacts> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+
+  return readSignatureDetectionFacts(pdf, bytes);
+}
+
+export function hasEmbeddedSignatureMarkers(facts: SignatureDetectionFacts): boolean {
+  return facts.standardAcroFormSignatureCount > 0 ||
+    facts.hasByteRangeOrContentsMarkers ||
+    facts.hasCertificationDictionary;
+}
+
 function readPageFacts(pdf: PDFDocument): PageFacts[] {
   return pdf.getPages().map((page, pageIndex) => {
     const rawWidthIn = page.getWidth() / POINTS_PER_INCH;
@@ -190,6 +219,57 @@ function readPageFacts(pdf: PDFDocument): PageFacts[] {
       orientation: heightIn >= widthIn ? "portrait" : "landscape",
     };
   });
+}
+
+function readSignatureDetectionFacts(
+  pdf: PDFDocument,
+  bytes: Uint8Array,
+): SignatureDetectionFacts {
+  return {
+    standardAcroFormSignatureCount: countSignatureFields(pdf),
+    hasByteRangeOrContentsMarkers: hasSignatureDictionaryMarkers(pdf, bytes),
+    hasCertificationDictionary: hasCatalogCertificationDictionary(pdf),
+  };
+}
+
+function hasSignatureDictionaryMarkers(pdf: PDFDocument, bytes: Uint8Array): boolean {
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    const dict = asDict(object);
+    if (!dict) {
+      continue;
+    }
+
+    const type = nameValue(dict.lookupMaybe(PDFName.of("Type"), PDFName));
+    const subFilter = nameValue(dict.lookupMaybe(PDFName.of("SubFilter"), PDFName));
+    const hasKnownSubFilter = subFilter ? SIGNATURE_SUBFILTERS.has(subFilter) : false;
+    const hasByteRange = dict.has(PDFName.of("ByteRange"));
+    const hasContents = dict.has(PDFName.of("Contents"));
+
+    if (
+      hasByteRange ||
+      hasKnownSubFilter ||
+      (hasContents && (type === "Sig" || hasKnownSubFilter))
+    ) {
+      return true;
+    }
+  }
+
+  const source = TEXT_DECODER.decode(bytes);
+  return /\/ByteRange\b/.test(source) ||
+    /\/SubFilter\s*\/(?:adbe\.pkcs7\.detached|adbe\.pkcs7\.sha1|adbe\.x509\.rsa_sha1|ETSI\.CAdES\.detached|ETSI\.RFC3161)\b/.test(source);
+}
+
+function hasCatalogCertificationDictionary(pdf: PDFDocument): boolean {
+  const perms = pdf.catalog.lookupMaybe(PDFName.of("Perms"), PDFDict);
+
+  return Boolean(
+    perms &&
+    (
+      perms.has(PDFName.of("DocMDP")) ||
+      perms.has(PDFName.of("UR")) ||
+      perms.has(PDFName.of("UR3"))
+    ),
+  );
 }
 
 function readActiveContentSignals(pdf: PDFDocument, bytes: Uint8Array): ActiveContentSignals {

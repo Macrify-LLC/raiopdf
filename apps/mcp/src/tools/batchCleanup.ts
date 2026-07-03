@@ -42,6 +42,7 @@ export const batchCleanupOutputSchema = {
     sourceFilename: z.string(),
     status: z.string(),
     reason: z.string().nullable(),
+    signatureInvalidated: z.boolean().optional(),
     outputs: z.array(z.string()),
   })).optional(),
 };
@@ -90,12 +91,18 @@ export async function handleBatchCleanup(
   });
   const failed = result.files.filter((file) => file.status === "failed").length;
   const skipped = result.files.filter((file) => file.status === "skipped").length;
+  const signatureInvalidated = result.files.filter((file) => file.signatureInvalidated);
   const summarySuffix = failed || skipped
     ? ` (${failed} failed, ${skipped} skipped)`
     : "";
+  const signatureSuffix = signatureInvalidated.length
+    ? ` ${signatureInvalidated.length} unlocked file(s) had digital signatures invalidated: ${
+        signatureInvalidated.map((file) => file.sourceFilename).join(", ")
+      }.`
+    : "";
 
   return successResult(
-    `Batch cleanup finished ${result.files.length} file(s) at ${result.packageRoot}${summarySuffix}.`,
+    `Batch cleanup finished ${result.files.length} file(s) at ${result.packageRoot}${summarySuffix}.${signatureSuffix}`,
     {
       packageRoot: result.packageRoot,
       reportPdf: result.reportPdf,
@@ -104,6 +111,7 @@ export async function handleBatchCleanup(
         sourceFilename: file.sourceFilename,
         status: file.status,
         reason: file.reason,
+        signatureInvalidated: file.signatureInvalidated,
         outputs: file.outputs.map((entry) => entry.packageRelativePath),
       })),
     },

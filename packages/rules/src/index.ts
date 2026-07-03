@@ -17,6 +17,8 @@ export { preflight, shouldConvertToPdfA } from "./preflight.js";
 export {
   buildDocumentFacts,
   detectEncryptionState,
+  detectSignatureFacts,
+  hasEmbeddedSignatureMarkers,
 } from "./documentFacts.js";
 export { resolvePrepPlan } from "./prepPlan.js";
 export {
@@ -62,6 +64,7 @@ export type {
   RequiredPhraseConstraint,
   SelectionFacts,
   SelectionFileFacts,
+  SignatureDetectionFacts,
   TextLayerCoverage,
   TextLayerQuality,
 } from "./types.js";

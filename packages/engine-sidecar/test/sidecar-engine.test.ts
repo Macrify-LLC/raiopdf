@@ -67,9 +67,38 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[0], "password", "secret");
   });
 
+  it("tries an empty remove-encryption password for owner-restricted PDFs", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1, 2, 3), "")).resolves.toEqual(bytes(9, 8, 7));
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/security/remove-password");
+    await expectFormFile(calls[0], [1, 2, 3]);
+    expectFormField(calls[0], "password", "");
+  });
+
+  it("maps empty remove-encryption E004 responses to PASSWORD_REQUIRED", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({
+        message: "The PDF Document is passworded and either the password was not provided or was incorrect",
+        errorCode: "E004",
+      }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1), "")).rejects.toMatchObject({
+      code: "PASSWORD_REQUIRED",
+      message: "A PDF password is required to remove encryption.",
+    });
+  });
+
   it("maps wrong remove-encryption passwords to ENCRYPTED_DOCUMENT", async () => {
     const { fetchImpl } = createFetch(
-      jsonResponse({ message: "The PDF Document is passworded and either the password was not provided or was incorrect" }, 400),
+      jsonResponse({
+        message: "The PDF Document is passworded and either the password was not provided or was incorrect",
+        errorCode: "E004",
+      }, 400),
     );
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 

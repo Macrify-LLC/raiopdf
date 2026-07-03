@@ -172,19 +172,28 @@ export class SidecarPdfEngine implements PdfEngine {
   }
 
   async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
-    if (password.length === 0) {
-      throw new PdfEngineError(
-        "ENCRYPTED_DOCUMENT",
-        "A PDF password is required to remove encryption.",
-      );
-    }
-
     const formData = createFormData(normalizeBytes(bytes));
     formData.append("password", password);
 
     try {
       return await readBytes(await this.request("/api/v1/security/remove-password", formData));
     } catch (error) {
+      if (error instanceof PdfEngineError && error.code === "PASSWORD_REQUIRED") {
+        if (password.length === 0) {
+          throw new PdfEngineError(
+            "PASSWORD_REQUIRED",
+            "A PDF password is required to remove encryption.",
+            { cause: error },
+          );
+        }
+
+        throw new PdfEngineError(
+          "ENCRYPTED_DOCUMENT",
+          "The PDF password was not accepted.",
+          { cause: error },
+        );
+      }
+
       if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
         throw new PdfEngineError(
           "ENCRYPTED_DOCUMENT",
@@ -1163,6 +1172,10 @@ function mapHttpStatusToErrorCode(
 ): PdfEngineErrorCode {
   const normalizedMessage = message.toLowerCase();
   const normalizedErrorCode = errorCode?.toLowerCase() ?? "";
+
+  if (normalizedErrorCode === "e004") {
+    return "PASSWORD_REQUIRED";
+  }
 
   if (
     normalizedMessage.includes("unsupported encryption") ||

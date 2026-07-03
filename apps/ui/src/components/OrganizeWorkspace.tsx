@@ -20,12 +20,14 @@ import {
   CropIcon,
   DeleteIcon,
   ExtractIcon,
+  HelpIcon,
   ImageIcon,
   InsertIcon,
   PlusIcon,
   RotateIcon,
   SplitIcon,
 } from "../icons";
+import { IconButton } from "./IconButton";
 import "./OrganizeWorkspace.css";
 
 export type OrganizeFlowId = "pages" | "merge" | "insert" | "crop";
@@ -51,6 +53,7 @@ export interface OrganizeWorkspaceProps {
     pageIndexes: readonly number[],
     options: { cropMarginIn: number; resizePreset: ResizePreset },
   ) => Promise<boolean>;
+  onHelpRequested?: (() => void) | undefined;
 }
 
 export function OrganizeWorkspace({
@@ -71,6 +74,7 @@ export function OrganizeWorkspace({
   onInsert,
   onExportPageAsImage,
   onCropResize,
+  onHelpRequested,
 }: OrganizeWorkspaceProps) {
   const title = getFlowTitle(flow);
 
@@ -102,6 +106,7 @@ export function OrganizeWorkspace({
         onSplit={onSplit}
         onInsert={onInsert}
         onExportPageAsImage={onExportPageAsImage}
+        onHelpRequested={onHelpRequested}
       />
     );
   }
@@ -142,6 +147,7 @@ function OrganizePagesGrid({
   onSplit,
   onInsert,
   onExportPageAsImage,
+  onHelpRequested,
 }: {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
@@ -157,6 +163,7 @@ function OrganizePagesGrid({
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
   onExportPageAsImage?: ((pageIndex: number) => Promise<boolean>) | undefined;
+  onHelpRequested?: (() => void) | undefined;
 }) {
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
@@ -259,9 +266,18 @@ function OrganizePagesGrid({
             {document.pageCount} {document.pageCount === 1 ? "page" : "pages"} · {selectedCount} selected
           </p>
         </div>
-        <button type="button" className="organize-card__ghost" onClick={onCancel}>
-          Back to document
-        </button>
+        <div className="organize-pages__header-actions">
+          {onHelpRequested ? (
+            <IconButton
+              icon={<HelpIcon size={14} />}
+              label="Help: Organize Pages"
+              onClick={onHelpRequested}
+            />
+          ) : null}
+          <button type="button" className="organize-card__ghost" onClick={onCancel}>
+            Back to document
+          </button>
+        </div>
       </header>
 
       <div className="organize-pages__toolbar" aria-label="Selection actions">

@@ -48,6 +48,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+- `pnpm install` wires a pre-push hook that runs `pnpm --filter @raiopdf/ui run typecheck`,
+  ensures Playwright Chromium is installed, then runs `pnpm --filter @raiopdf/ui test:smoke`.
+  For emergencies, bypass it with `git push --no-verify`.
 - Keep PRs focused — one logical change per PR is easier to review and easier to revert if something's wrong.
 - Write a clear PR description: what changed and why, not just what.
 - CI (`Web` + `Shell` jobs) must pass before merge — required checks are enforced on `main`.

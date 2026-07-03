@@ -25,6 +25,7 @@ type RpIconName =
   | "drag-handle"
   | "edit"
   | "extract"
+  | "help"
   | "highlight"
   | "insert"
   | "minus"

@@ -125,6 +125,26 @@
   outline-offset: 2px;
 }
 
+.canvas-well__help-link {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  cursor: default;
+}
+
+.canvas-well__help-link:hover {
+  text-decoration: underline;
+}
+
+.canvas-well__help-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .canvas-well__stage {
   width: 100%;
   min-height: 100%;

@@ -12,6 +12,7 @@
       "@raiopdf/rules": ["packages/rules/src/index.ts"],
       "@raiopdf/rules/node": ["packages/rules/src/node.ts"],
       "@raiopdf/engine-sidecar": ["packages/engine-sidecar/src/index.ts"],
+      "@raiopdf/help-content": ["packages/help-content/dist/index.ts"],
       "@raiopdf/engine-local": ["packages/engine-local/src/index.ts"],
       "@raiopdf/engine-pdf-lib": ["packages/engine-pdf-lib/src/index.ts"],
       "@raiopdf/package-writer": ["packages/package-writer/src/index.ts"],

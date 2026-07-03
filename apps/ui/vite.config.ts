@@ -24,6 +24,9 @@ export default defineConfig({
       "@raiopdf/engine-sidecar": fileURLToPath(
         new URL("../../packages/engine-sidecar/src/index.ts", import.meta.url),
       ),
+      "@raiopdf/help-content": fileURLToPath(
+        new URL("../../packages/help-content/dist/index.ts", import.meta.url),
+      ),
     },
   },
 });

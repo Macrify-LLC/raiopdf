@@ -1,0 +1,220 @@
+.help-panel {
+  display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  min-height: 430px;
+  max-height: min(620px, calc(100vh - 260px));
+  overflow: hidden;
+}
+
+.help-panel__index {
+  min-width: 0;
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--border-soft);
+  overflow: auto;
+}
+
+.help-panel__search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--muted);
+  padding: 7px 9px;
+}
+
+.help-panel__search:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.help-panel__search input {
+  min-width: 0;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+}
+
+.help-panel__count {
+  margin: var(--space-2) 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.help-panel__groups {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.help-panel__group h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.help-panel__group ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-panel__article-button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--body);
+  font-family: var(--font-ui);
+  text-align: left;
+  padding: 7px 8px;
+  cursor: default;
+}
+
+.help-panel__article-button:hover,
+.help-panel__article-button[data-selected="true"] {
+  border-color: var(--border-soft);
+  background: var(--hover-ground);
+}
+
+.help-panel__article-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.help-panel__article-button span {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.help-panel__article-button small {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+}
+
+.help-panel__empty-group {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.help-panel__article {
+  min-width: 0;
+  overflow: auto;
+  padding-left: var(--space-4);
+}
+
+.help-panel__region-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.help-panel__article-body {
+  color: var(--body);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.help-panel__article-body h1,
+.help-panel__article-body h2,
+.help-panel__article-body h3,
+.help-panel__article-body h4 {
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.help-panel__article-body h1 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+}
+
+.help-panel__article-body h2 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.help-panel__article-body h3,
+.help-panel__article-body h4 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-base);
+}
+
+.help-panel__article-body p,
+.help-panel__article-body ul,
+.help-panel__article-body ol {
+  margin: 0 0 var(--space-3);
+}
+
+.help-panel__article-body ul,
+.help-panel__article-body ol {
+  padding-left: var(--space-5);
+}
+
+.help-panel__article-body a {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.help-panel__article-body a:hover {
+  text-decoration: underline;
+}
+
+.help-panel__article-body code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: var(--text-xs);
+}
+
+.help-panel__external-note {
+  margin: var(--space-4) 0 0;
+  border-radius: var(--radius-control);
+  background: var(--accent-pale);
+  color: var(--body);
+  font-size: var(--text-xs);
+  padding: var(--space-2) var(--space-3);
+}
+
+@media (max-width: 760px) {
+  .help-panel {
+    grid-template-columns: 1fr;
+    max-height: min(620px, calc(100vh - 220px));
+  }
+
+  .help-panel__index {
+    max-height: 210px;
+    padding-right: 0;
+    padding-bottom: var(--space-4);
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .help-panel__article {
+    padding-top: var(--space-4);
+    padding-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .help-panel * {
+    scroll-behavior: auto;
+  }
+}

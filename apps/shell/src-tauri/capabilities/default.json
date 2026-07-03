@@ -18,6 +18,7 @@
       ]
     },
     "process:default",
+    "shell:allow-open",
     "updater:default"
   ]
 }

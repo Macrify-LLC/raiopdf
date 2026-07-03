@@ -1,11 +1,25 @@
 .tool-row {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 4px;
   width: 100%;
-  padding: 8.5px 16px 8.5px 20px;
   border: 1px solid transparent;
   border-left: 2px solid transparent;
+  background: transparent;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.tool-row__select {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  flex: 1;
+  padding: 8.5px 6px 8.5px 18px;
+  border: 0;
   background: transparent;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
@@ -13,33 +27,30 @@
   text-align: left;
   cursor: default;
   transition:
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 
-.tool-row:hover:not(:disabled) {
+.tool-row:hover:has(.tool-row__select:not(:disabled)),
+.tool-row:has(.tool-row__select:focus-visible) {
   background: var(--chrome);
   border-color: var(--border-soft);
   box-shadow: var(--shadow-control);
 }
 
-.tool-row:active:not(:disabled) {
+.tool-row__select:active:not(:disabled) {
   transform: translateY(1px);
-  box-shadow: var(--shadow-control-active);
 }
 
-.tool-row:disabled {
+.tool-row__select:disabled {
   color: var(--muted);
   cursor: not-allowed;
 }
 
-.tool-row:disabled:hover {
+.tool-row:has(.tool-row__select:disabled):hover {
   background: transparent;
 }
 
-.tool-row:focus-visible {
+.tool-row__select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -56,6 +67,24 @@
   box-shadow: inset 2px 0 0 var(--identity-amber);
 }
 
+.tool-row .icon-button {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.tool-row .icon-button:hover:not(:disabled),
+.tool-row .icon-button:focus-visible {
+  background: var(--panel);
+  border-color: var(--border-soft);
+  color: var(--body);
+}
+
 .tool-row__icon {
   display: flex;
   width: 20px;
@@ -64,4 +93,10 @@
   justify-content: center;
   flex-shrink: 0;
   color: inherit;
+}
+
+.tool-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

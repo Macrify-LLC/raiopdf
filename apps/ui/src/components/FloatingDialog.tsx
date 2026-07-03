@@ -6,6 +6,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { HelpIcon } from "../icons";
+import { IconButton } from "./IconButton";
 import "./FloatingDialog.css";
 
 const dialogStack: string[] = [];
@@ -15,6 +17,7 @@ export interface FloatingDialogProps {
   eyebrow?: string | undefined;
   children: ReactNode;
   onClose: () => void;
+  onHelp?: (() => void) | undefined;
   width?: "sm" | "md" | "lg" | undefined;
   draggable?: boolean | undefined;
   scrim?: boolean | undefined;
@@ -25,6 +28,7 @@ export function FloatingDialog({
   eyebrow,
   children,
   onClose,
+  onHelp,
   width = "md",
   draggable = true,
   scrim = false,
@@ -158,14 +162,24 @@ export function FloatingDialog({
             {eyebrow ? <p className="floating-dialog__eyebrow">{eyebrow}</p> : null}
             <h2 id={titleId}>{title}</h2>
           </div>
-          <button
-            type="button"
-            className="floating-dialog__close"
-            aria-label={`Close ${title}`}
-            onClick={onClose}
-          >
-            x
-          </button>
+          <div className="floating-dialog__actions">
+            {onHelp ? (
+              <IconButton
+                icon={<HelpIcon size={15} />}
+                label={`Help: ${title}`}
+                tooltip={`Help: ${title}`}
+                onClick={onHelp}
+              />
+            ) : null}
+            <button
+              type="button"
+              className="floating-dialog__close"
+              aria-label={`Close ${title}`}
+              onClick={onClose}
+            >
+              x
+            </button>
+          </div>
         </header>
         <div className="floating-dialog__body">{children}</div>
       </div>
@@ -187,6 +201,10 @@ export function registerDialogStackEntry(dialogId: string): () => void {
 
 export function isTopDialogStackEntry(dialogId: string): boolean {
   return dialogStack[dialogStack.length - 1] === dialogId;
+}
+
+export function hasOpenDialogStackEntry(): boolean {
+  return dialogStack.length > 0;
 }
 
 export function resetDialogStackForTests(): void {

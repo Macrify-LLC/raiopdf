@@ -5,7 +5,8 @@ import {
   productionHintMessage,
   readProductionLastUsed,
 } from "../lib/productionHints";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, PlusIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, HelpIcon, PlusIcon } from "../icons";
+import { IconButton } from "./IconButton";
 import "./ProductionSetWorkspace.css";
 
 export interface ProductionSetFile {
@@ -48,6 +49,7 @@ export interface ProductionSetWorkspaceProps {
   progress: ProductionSetProgress;
   onAddFile: () => Promise<OpenedFile | null>;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
+  onHelpRequested?: (() => void) | undefined;
 }
 
 const DESIGNATION_OPTIONS = [
@@ -63,6 +65,7 @@ export function ProductionSetWorkspace({
   progress,
   onAddFile,
   onRun,
+  onHelpRequested,
 }: ProductionSetWorkspaceProps) {
   const mountedRef = useRef(true);
   const addFilePendingRef = useRef(false);
@@ -198,15 +201,24 @@ export function ProductionSetWorkspace({
               {files.length} document{files.length === 1 ? "" : "s"}
             </p>
           </div>
-          <button
-            type="button"
-            className="production-workspace__secondary-button"
-            onClick={addFile}
-            disabled={addFileBusy || progress.running}
-            title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
-          >
-            <PlusIcon size={14} /> Add PDF
-          </button>
+          <div className="production-workspace__header-actions">
+            {onHelpRequested ? (
+              <IconButton
+                icon={<HelpIcon size={14} />}
+                label="Help: Production Set"
+                onClick={onHelpRequested}
+              />
+            ) : null}
+            <button
+              type="button"
+              className="production-workspace__secondary-button"
+              onClick={addFile}
+              disabled={addFileBusy || progress.running}
+              title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
+            >
+              <PlusIcon size={14} /> Add PDF
+            </button>
+          </div>
         </div>
         <div className="production-workspace__file-list" role="list">
           {files.length === 0 ? (

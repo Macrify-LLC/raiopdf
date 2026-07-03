@@ -1,0 +1,48 @@
+<evaluation>
+  <!--
+    Each question is answerable by an AI client driving the RaioPDF MCP over the
+    fixtures in eval/fixtures/ (regenerate with `node eval/make-fixtures.mjs`).
+    Answers are stable and string-comparable. The harness should supply the
+    fixtures as absolute paths and a writable temp directory for outputs.
+  -->
+  <qa_pair>
+    <question>How many pages are in three-pages.pdf?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many pages are in five-pages.pdf?</question>
+    <answer>5</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>If you merge three-pages.pdf and five-pages.pdf, in that order, into a new file, how many pages does the merged result have?</question>
+    <answer>8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Extract the pages at zero-based indexes 0 and 2 from five-pages.pdf into a new file. How many pages does that file have?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Merge five-pages.pdf followed by three-pages.pdf, then from that merged file extract only its first two pages. How many pages does the final file have?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Rotate every page of five-pages.pdf by 90 degrees into a new file. How many pages does the rotated file have?</question>
+    <answer>5</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Build an exhibit binder using three-pages.pdf as the main document and five-pages.pdf as a single exhibit labeled "Exhibit A", with no slip sheets. How many pages does the binder have?</question>
+    <answer>8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Run the e-filing preflight for the florida jurisdiction pack on letter-portrait.pdf. What is the value of the confirmedReady field?</question>
+    <answer>false</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Run the e-filing preflight for the florida jurisdiction pack on letter-portrait.pdf. Does the report list at least one unverified check? Answer yes or no.</question>
+    <answer>yes</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Run the e-filing preflight for the florida jurisdiction pack on legal-size.pdf. Does the letter-portrait page-size check have a status of "pass"? Answer yes or no.</question>
+    <answer>no</answer>
+  </qa_pair>
+</evaluation>

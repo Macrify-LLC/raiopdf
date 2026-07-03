@@ -117,6 +117,8 @@ A [Tauri](https://tauri.app) desktop shell with a custom UI built to feel famili
 
 Everything in that diagram runs on your machine. Nothing in it talks to the internet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown, including how the Stirling-PDF engine is vendored and scrubbed to its MIT-licensed core only ([`docs/ENGINE-VENDORING.md`](docs/ENGINE-VENDORING.md)).
 
+Optionally, an off-by-default "bring your own AI" connector lets your own AI assistant (Claude Desktop / Claude Code) operate RaioPDF's local tools over [MCP](https://modelcontextprotocol.io) — still entirely on-device, no AI inside RaioPDF itself. See [`docs/MCP.md`](docs/MCP.md).
+
 ## Status
 
 **Pre-alpha.** Built in the open — every feature above is being implemented against the architecture in [`docs/`](docs/). Windows ships first; macOS is planned with no committed date.

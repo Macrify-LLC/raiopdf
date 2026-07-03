@@ -727,6 +727,14 @@ function requiredPhraseApplies(
 }
 
 function hasSearchableTextForPhraseCheck(document: DocumentFacts): boolean {
+  if ((document.textLayerCoverage?.garbledPages.length ?? 0) > 0) {
+    return false;
+  }
+
+  if (document.searchableText === false && document.textLayerCoverage?.garbledPages.length) {
+    return false;
+  }
+
   const hasExtractedText = document.pageTextByPage?.some((page) => page.text.trim().length > 0) ?? false;
   if (!hasExtractedText) {
     return false;

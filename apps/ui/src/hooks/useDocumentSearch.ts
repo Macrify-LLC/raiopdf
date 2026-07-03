@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
+import type { TextLayerCoverage } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
   extractPageText,
@@ -31,6 +32,7 @@ export interface DocumentSearchState {
   activeMatch: DocumentSearchMatch | null;
   status: "idle" | "searching" | "error";
   resultLabel: string;
+  warning: string | null;
   canNavigate: boolean;
   setQuery: (query: string) => void;
   clear: () => void;
@@ -41,10 +43,12 @@ export interface DocumentSearchState {
 export function useDocumentSearch({
   pdfDocumentState,
   documentBytes,
+  textLayerCoverage,
   setCurrentPage,
 }: {
   pdfDocumentState: DocumentSearchSource | null;
   documentBytes: Uint8Array | null;
+  textLayerCoverage: TextLayerCoverage | null;
   setCurrentPage: (page: number) => void;
 }): DocumentSearchState {
   const [query, setQueryState] = useState("");
@@ -192,25 +196,30 @@ export function useDocumentSearch({
     goToResult(activeIndex === null ? results.length - 1 : activeIndex - 1);
   }, [activeIndex, goToResult, results.length]);
 
+  const warning = useMemo(() => documentSearchWarning(textLayerCoverage), [textLayerCoverage]);
+
   const resultLabel = useMemo(() => {
+    const warningLabel = warning ? "Unreliable" : "";
+
     if (!query.trim()) {
-      return "";
+      return warningLabel;
     }
 
     if (status === "searching") {
-      return "Searching";
+      return warningLabel ? `Searching - ${warningLabel}` : "Searching";
     }
 
     if (status === "error") {
-      return "Search failed";
+      return warningLabel ? `Search failed - ${warningLabel}` : "Search failed";
     }
 
     if (results.length === 0 || activeIndex === null) {
-      return "0 of 0";
+      return warningLabel ? `0 of 0 - ${warningLabel}` : "0 of 0";
     }
 
-    return `${activeIndex + 1} of ${results.length}`;
-  }, [activeIndex, query, results.length, status]);
+    const countLabel = `${activeIndex + 1} of ${results.length}`;
+    return warningLabel ? `${countLabel} - ${warningLabel}` : countLabel;
+  }, [activeIndex, query, results.length, status, warning]);
 
   return {
     query,
@@ -219,10 +228,20 @@ export function useDocumentSearch({
     activeMatch: activeIndex === null ? null : results[activeIndex] ?? null,
     status,
     resultLabel,
+    warning,
     canNavigate: results.length > 0,
     setQuery,
     clear,
     goToNext,
     goToPrevious,
   };
+}
+
+export function documentSearchWarning(textLayerCoverage: TextLayerCoverage | null): string | null {
+  const garbledPageCount = textLayerCoverage?.garbledPages.length ?? 0;
+  if (garbledPageCount === 0) {
+    return null;
+  }
+
+  return `Search may be incomplete - the text layer looks garbled on ${garbledPageCount} page${garbledPageCount === 1 ? "" : "s"}.`;
 }

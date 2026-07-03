@@ -253,6 +253,7 @@ export function App() {
   const documentSearch = useDocumentSearch({
     pdfDocumentState: currentPdfDocumentState,
     documentBytes: document.bytes,
+    textLayerCoverage: document.textLayerCoverage,
     setCurrentPage,
   });
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(

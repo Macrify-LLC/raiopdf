@@ -15,6 +15,7 @@ import {
   type ExtractedPageText,
   type PageTextInput,
 } from "./pageTextCache";
+import { scoreGarbledPage } from "@raiopdf/rules";
 
 export { extractPageText } from "./pageTextCache";
 export type { ExtractedPageText } from "./pageTextCache";
@@ -63,6 +64,7 @@ export interface RedactionVerificationResult {
 }
 
 const TEXT_OPERATOR_BOUNDARY = String.raw`[\s[\]()<>/]`;
+const GARBLED_REDACTION_TERM_PREFIX = "__RAIOPDF_GARBLED_REDACTION_PAGE__:";
 const TEXT_OPERATOR_PATTERN = new RegExp(
   String.raw`(?:^|${TEXT_OPERATOR_BOUNDARY})` +
   String.raw`(?:BT|ET|Tc|Tw|Tz|TL|Tf|Tr|Ts|Td|TD|Tm|T\*|Tj|TJ|'|")` +
@@ -276,13 +278,27 @@ export async function collectRedactionAreaTexts(
     return [];
   }
 
-  const boxes = await extractTextBoxes(input);
+  const pages = await extractPageText(input);
+  const redactedPageIndexes = new Set(areas.map((area) => area.pageIndex));
+  const garbledMarkers = pages
+    .filter((page) => redactedPageIndexes.has(page.pageIndex))
+    .filter((page) => scoreGarbledPage(page.text, page.pageIndex) !== null)
+    .map((page) => garbledRedactionTerm(page.pageIndex));
 
   return uniqueRedactionTerms(
-    boxes
-      .filter((box) => box.text.trim().length > 0)
-      .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
-      .map((box) => box.text),
+    [
+      ...pages.flatMap((page) =>
+        page.spans.map((span) => ({
+          pageIndex: page.pageIndex,
+          text: page.text.slice(span.start, span.end),
+          area: span.area,
+        }))
+      )
+        .filter((box) => box.text.trim().length > 0)
+        .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
+        .map((box) => box.text),
+      ...garbledMarkers,
+    ],
   );
 }
 
@@ -389,6 +405,13 @@ async function verifyFullDocumentTextLayer(
   bytes: Uint8Array,
   terms: readonly string[],
 ): Promise<RedactionVerificationCheck> {
+  const garbledRedactionPages = garbledRedactionPagesFromTerms(terms);
+  if (garbledRedactionPages.length > 0) {
+    return fail(
+      `Text layer garbled on redacted page(s) ${formatPageNumbers(garbledRedactionPages)}; redaction cannot be verified from extracted text. Verify manually.`,
+    );
+  }
+
   if (terms.length === 0) {
     return skipped("No source text was extractable from the marked redaction areas.");
   }
@@ -584,6 +607,18 @@ function fail(detail: string): RedactionVerificationCheck {
 
 function skipped(detail: string): RedactionVerificationCheck {
   return { status: "skipped", detail };
+}
+
+function garbledRedactionTerm(pageIndex: number): string {
+  return `${GARBLED_REDACTION_TERM_PREFIX}${pageIndex}`;
+}
+
+function garbledRedactionPagesFromTerms(terms: readonly string[]): readonly number[] {
+  return terms
+    .filter((term) => term.startsWith(GARBLED_REDACTION_TERM_PREFIX))
+    .map((term) => Number(term.slice(GARBLED_REDACTION_TERM_PREFIX.length)))
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
 }
 
 function normalizeDisplayText(text: string): string {

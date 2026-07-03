@@ -96,6 +96,7 @@ All of the above are planned/in-progress for the first release — see [Status](
 - **Not released yet.** Pre-alpha, no promised date. But if you want it I'll give it to you.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
 - **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
+- **Not phoning home.** No telemetry, no background analytics — RaioPDF makes no network requests of its own, and the content-security policy only lets it reach its own bundled engine. If it ever crashes, it can offer to open a pre-filled GitHub issue in your browser for you to review and submit yourself — that's opt-in, off by default, and the only thing that ever leaves your machine, only if you choose it.
 
 ## How it's built
 

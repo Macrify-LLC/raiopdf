@@ -11,7 +11,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export type { PDFDocumentProxy, PDFPageProxy };
-export { OPS };
+export { OPS, PasswordException };
 
 const pdfjsAssetBaseUrl = `${import.meta.env.BASE_URL}pdfjs/`;
 

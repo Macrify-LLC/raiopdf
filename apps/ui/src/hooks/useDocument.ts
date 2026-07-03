@@ -80,6 +80,34 @@ interface ReplaceBytesOptions {
 
 export type ReplaceBytesResult = "replaced" | "stale" | "failed";
 
+/**
+ * Discriminated result of `openFile` (B3, 2026-07-03 live-test fix plan).
+ * Replaces the old `Promise<boolean>` shape so a caller can branch
+ * explicitly on *why* an open didn't succeed instead of inferring it from a
+ * bare `false` -- a password-protected PDF and a genuinely corrupt one need
+ * very different UI (a password prompt vs. routing to Repair).
+ */
+export type OpenFileResult =
+  | { status: "opened" }
+  | {
+      status: "password-required";
+      /** The still-encrypted source bytes, for feeding into removeEncryption. */
+      bytes: Uint8Array;
+      fileName: string;
+      filePath: string | null;
+    }
+  | { status: "failed"; error: string };
+
+export interface OpenFileOptions {
+  /**
+   * Marks the newly opened document dirty immediately instead of clean.
+   * Used for the decrypted-bytes-from-a-password-prompt path: those bytes
+   * never had an on-disk representation of their own (they're a fresh
+   * unlocked working copy), so Save As is the natural next step.
+   */
+  markDirty?: boolean;
+}
+
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
@@ -258,7 +286,7 @@ export function useDocument() {
   );
 
   const openFile = useCallback(
-    async (file: DocumentFileInput) => {
+    async (file: DocumentFileInput, options: OpenFileOptions = {}): Promise<OpenFileResult> => {
       const token = openTokenRef.current + 1;
       openTokenRef.current = token;
       const previousHandle = activeHandleRef.current;
@@ -275,7 +303,7 @@ export function useDocument() {
 
         if (openTokenRef.current !== token) {
           await closeHandle(engineHandle);
-          return false;
+          return { status: "failed", error: "This document was replaced before it finished opening." };
         }
 
         activeHandleRef.current = engineHandle;
@@ -287,7 +315,7 @@ export function useDocument() {
           currentPage: 1,
           zoom: 1,
           fitWidth: true,
-          dirty: false,
+          dirty: options.markDirty ?? false,
           fileName: file.name,
           filePath: file.path ?? null,
           fileSizeBytes: file.bytes.byteLength,
@@ -296,32 +324,37 @@ export function useDocument() {
           pageSizeInches: null,
           error: null,
         });
-        return true;
+        return { status: "opened" };
       } catch (error) {
         await closeHandle(openedHandle);
 
-        if (openTokenRef.current === token) {
-          activeHandleRef.current = null;
-          activeBytesRef.current = null;
-          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-            activeBytesRef.current = file.bytes;
-            setDocument({
-              ...INITIAL_DOCUMENT,
-              bytes: file.bytes,
-              fileName: file.name,
-              filePath: file.path ?? null,
-              fileSizeBytes: file.bytes.byteLength,
-              error: getEngineErrorMessage(error),
-            });
-          } else {
-            setDocument({
-              ...INITIAL_DOCUMENT,
-              error: getEngineErrorMessage(error),
-            });
-          }
+        if (openTokenRef.current !== token) {
+          return { status: "failed", error: getEngineErrorMessage(error) };
         }
 
-        return false;
+        activeHandleRef.current = null;
+        activeBytesRef.current = null;
+
+        if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+          // No active bytes/handle -- the document stays in a clean, empty
+          // state while the caller shows a password prompt. The still-
+          // encrypted bytes travel in the result itself (not `document`),
+          // since they're not this hook's concern until they're unlocked.
+          setDocument(INITIAL_DOCUMENT);
+          return {
+            status: "password-required",
+            bytes: file.bytes,
+            fileName: file.name,
+            filePath: file.path ?? null,
+          };
+        }
+
+        const message = getEngineErrorMessage(error);
+        setDocument({
+          ...INITIAL_DOCUMENT,
+          error: message,
+        });
+        return { status: "failed", error: message };
       }
     },
     [closeHandle, engine],
@@ -1035,7 +1068,7 @@ function resolveCurrentPage(
 
 function getEngineErrorMessage(error: unknown): string {
   if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-    return "This PDF is encrypted. Use Legal > Prepare for Filing to remove encryption with the open password.";
+    return "This PDF is password-protected.";
   }
 
   if (error instanceof PdfEngineError && error.code === "EMPTY_RESULT") {

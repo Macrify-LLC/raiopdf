@@ -2,22 +2,27 @@
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import { useEngineBridge } from "./useEngineBridge";
 import type { EngineBridge } from "./useEngineBridge";
 
 const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
     ocrCalls: unknown[];
+    removeEncryptionCalls: Array<{ password: string }>;
   }>,
   // Queued outcomes for the NEXT ocr() call, consumed across all instances
   // in call order (not per-instance) -- lets a test simulate "the first
   // attempt fails, a fresh engine's attempt succeeds."
   ocrBehaviors: [] as Array<Error | undefined>,
+  // Same shape, for removeEncryption().
+  removeEncryptionBehaviors: [] as Array<Error | undefined>,
 }));
 
 vi.mock("@raiopdf/engine-sidecar", () => {
   class SidecarPdfEngine {
     readonly ocrCalls: unknown[] = [];
+    readonly removeEncryptionCalls: Array<{ password: string }> = [];
 
     constructor() {
       sidecarState.instances.push(this);
@@ -36,6 +41,17 @@ vi.mock("@raiopdf/engine-sidecar", () => {
       }
 
       return "output-handle";
+    }
+
+    async removeEncryption(_bytes: Uint8Array, password: string) {
+      this.removeEncryptionCalls.push({ password });
+      const behavior = sidecarState.removeEncryptionBehaviors.shift();
+
+      if (behavior) {
+        throw behavior;
+      }
+
+      return new Uint8Array([7]);
     }
 
     async saveToBytes() {
@@ -173,6 +189,109 @@ describe("useEngineBridge runOcr", () => {
     // No retry -- only the one engine, one failed attempt.
     expect(sidecarState.instances).toHaveLength(1);
     expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);
+  });
+
+  function renderHookValue(): EngineBridge {
+    let bridge: EngineBridge | null = null;
+    render(<Harness onReady={(value) => { bridge = value; }} />);
+
+    if (!bridge) {
+      throw new Error("Engine bridge was not rendered.");
+    }
+
+    return bridge;
+  }
+
+  function render(element: ReactNode) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(element);
+    });
+  }
+});
+
+describe("useEngineBridge removeEncryption", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>() => ({
+      port: 1234,
+      token: "test-token",
+      ocrToolchain: { available: true, missing: [] },
+    }) as T;
+    sidecarState.instances.length = 0;
+    sidecarState.removeEncryptionBehaviors.length = 0;
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    delete window.__RAIOPDF_TEST_TAURI_INVOKE__;
+    delete window.__RAIOPDF_TEST_ENGINE_FETCH__;
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
+  it("passes the password through and resolves with the decrypted bytes", async () => {
+    const bridge = renderHookValue();
+    let bytes: Uint8Array | undefined;
+
+    await act(async () => {
+      bytes = await bridge.removeEncryption(new Uint8Array([1]), "correct horse battery staple");
+    });
+
+    expect(bytes).toEqual(new Uint8Array([7]));
+    expect(sidecarState.instances[0]?.removeEncryptionCalls).toEqual([
+      { password: "correct horse battery staple" },
+    ]);
+  });
+
+  it("fires onEngineReady once the engine is confirmed ready", async () => {
+    const bridge = renderHookValue();
+    const readyOrder: string[] = [];
+
+    await act(async () => {
+      await bridge.removeEncryption(new Uint8Array([1]), "secret", {
+        onEngineReady: () => readyOrder.push("ready"),
+      });
+    });
+
+    expect(readyOrder).toEqual(["ready"]);
+  });
+
+  it("propagates a wrong-password ENCRYPTED_DOCUMENT without retrying", async () => {
+    // Mirrors packages/engine-sidecar's real mapping: a wrong password comes
+    // back as PdfEngineError("ENCRYPTED_DOCUMENT", ...) with no .cause
+    // TypeError -- a content-level rejection, not a connection failure, so
+    // withEngineRetry must not spin up a second engine and retry it.
+    const wrongPassword = new PdfEngineError(
+      "ENCRYPTED_DOCUMENT",
+      "The PDF password was not accepted.",
+    );
+    sidecarState.removeEncryptionBehaviors.push(wrongPassword);
+
+    const bridge = renderHookValue();
+    let caught: unknown = null;
+
+    await act(async () => {
+      try {
+        await bridge.removeEncryption(new Uint8Array([1]), "wrong-guess");
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBe(wrongPassword);
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.removeEncryptionCalls).toHaveLength(1);
   });
 
   function renderHookValue(): EngineBridge {

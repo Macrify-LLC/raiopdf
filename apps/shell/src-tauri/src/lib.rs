@@ -15,8 +15,9 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_dialog::DialogExt;
+use uuid::Uuid;
 
-const HEADER_PATH: &str = "x-raio-path";
+const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
@@ -27,18 +28,24 @@ struct PendingPdfBytes {
     bytes: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+#[derive(Default)]
+struct FileGrants {
+    paths: Mutex<HashMap<String, PathBuf>>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenedPdf {
     name: String,
-    path: String,
+    file_grant: String,
     bytes_token: String,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SavedPdf {
     name: String,
-    path: String,
+    file_grant: String,
 }
 
 impl PendingPdfBytes {
@@ -57,10 +64,28 @@ impl PendingPdfBytes {
     }
 }
 
+impl FileGrants {
+    fn grant(&self, path: PathBuf) -> Result<String, String> {
+        let grant = Uuid::new_v4().to_string();
+        let mut paths = self.paths.lock().map_err(|_| "File grant lock poisoned")?;
+        paths.insert(grant.clone(), path);
+        Ok(grant)
+    }
+
+    fn resolve(&self, grant: &str) -> Result<PathBuf, String> {
+        let paths = self.paths.lock().map_err(|_| "File grant lock poisoned")?;
+        paths
+            .get(grant)
+            .cloned()
+            .ok_or_else(|| "File grant not found".to_string())
+    }
+}
+
 #[tauri::command]
 fn open_pdf_dialog(
     app: tauri::AppHandle,
     pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
+    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<OpenedPdf>, String> {
     let Some(path) = app
         .dialog()
@@ -77,10 +102,11 @@ fn open_pdf_dialog(
     let bytes = fs::read(&path)
         .map_err(|error| format!("Failed to read PDF at {}: {error}", path.to_string_lossy()))?;
     let bytes_token = pending_pdf_bytes.insert(bytes)?;
+    let file_grant = file_grants.grant(path.clone())?;
 
     Ok(Some(OpenedPdf {
         name: file_name(&path),
-        path: path.to_string_lossy().into_owned(),
+        file_grant,
         bytes_token,
     }))
 }
@@ -97,6 +123,7 @@ fn read_opened_pdf_bytes(
 fn save_pdf_dialog(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
+    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
     let suggested_name = required_header(&request, HEADER_SUGGESTED_NAME)?;
     let suggested_name = ensure_pdf_extension(&suggested_name);
@@ -113,15 +140,19 @@ fn save_pdf_dialog(
     let path = path.into_path().map_err(|error| error.to_string())?;
     write_pdf_bytes(&path, request.body())?;
 
-    Ok(Some(saved_pdf(&path)))
+    Ok(Some(saved_pdf(&path, file_grants.inner())?))
 }
 
 #[tauri::command]
-fn save_pdf_to_path(request: tauri::ipc::Request<'_>) -> Result<SavedPdf, String> {
-    let path = PathBuf::from(required_header(&request, HEADER_PATH)?);
+fn save_pdf_to_path(
+    request: tauri::ipc::Request<'_>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<SavedPdf, String> {
+    let grant = required_header(&request, HEADER_FILE_GRANT)?;
+    let path = file_grants.resolve(&grant)?;
     write_pdf_bytes(&path, request.body())?;
 
-    Ok(saved_pdf(&path))
+    saved_pdf(&path, file_grants.inner())
 }
 
 fn write_pdf_bytes(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<(), String> {
@@ -133,11 +164,11 @@ fn write_pdf_bytes(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<(), Str
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
 }
 
-fn saved_pdf(path: &Path) -> SavedPdf {
-    SavedPdf {
+fn saved_pdf(path: &Path, file_grants: &FileGrants) -> Result<SavedPdf, String> {
+    Ok(SavedPdf {
         name: file_name(path),
-        path: path.to_string_lossy().into_owned(),
-    }
+        file_grant: file_grants.grant(path.to_path_buf())?,
+    })
 }
 
 fn require_pdf_extension(path: &Path) -> Result<(), String> {
@@ -211,6 +242,23 @@ fn hex_value(byte: u8) -> Result<u8, String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_grants_resolve_only_shell_owned_paths() {
+        let grants = FileGrants::default();
+        let path = PathBuf::from("/tmp/case.pdf");
+
+        let grant = grants.grant(path.clone()).expect("grant should be issued");
+
+        assert_eq!(grants.resolve(&grant).expect("grant should resolve"), path);
+        assert!(!grant.contains("case.pdf"));
+        assert!(grants.resolve("/tmp/case.pdf").is_err());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -225,6 +273,7 @@ pub fn run() {
             ));
             app.manage(manager);
             app.manage(PendingPdfBytes::default());
+            app.manage(FileGrants::default());
             Ok(())
         })
         .on_menu_event(|app, event| {

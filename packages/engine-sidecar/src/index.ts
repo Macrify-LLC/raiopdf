@@ -113,6 +113,9 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  *   grayscale, and linearize=false.
  * - sanitize -> POST /api/v1/security/sanitize-pdf with removeJavaScript,
  *   removeEmbeddedFiles, removeLinks, and metadata/font removal disabled.
+ * - removeEncryption -> POST /api/v1/security/remove-password with fileInput
+ *   and password. Passwords are multipart-only and never stored in document
+ *   handles or response metadata.
  * - repair -> POST /api/v1/misc/repair.
  * - batesStamp -> sequential stampText calls, one page at a time.
  * - buildBinder is intentionally unsupported for this engine because Stirling
@@ -165,6 +168,32 @@ export class SidecarPdfEngine implements PdfEngine {
       };
     } catch {
       return null;
+    }
+  }
+
+  async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
+    if (password.length === 0) {
+      throw new PdfEngineError(
+        "ENCRYPTED_DOCUMENT",
+        "A PDF password is required to remove encryption.",
+      );
+    }
+
+    const formData = createFormData(normalizeBytes(bytes));
+    formData.append("password", password);
+
+    try {
+      return await readBytes(await this.request("/api/v1/security/remove-password", formData));
+    } catch (error) {
+      if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+        throw new PdfEngineError(
+          "ENCRYPTED_DOCUMENT",
+          "The PDF password was not accepted.",
+          { cause: error },
+        );
+      }
+
+      throw error;
     }
   }
 
@@ -1134,6 +1163,14 @@ function mapHttpStatusToErrorCode(
 ): PdfEngineErrorCode {
   const normalizedMessage = message.toLowerCase();
   const normalizedErrorCode = errorCode?.toLowerCase() ?? "";
+
+  if (
+    normalizedMessage.includes("unsupported encryption") ||
+    normalizedMessage.includes("unsupported security") ||
+    normalizedMessage.includes("unsupported protection")
+  ) {
+    return "UNSUPPORTED_ENCRYPTION";
+  }
 
   if (normalizedMessage.includes("encrypted") || normalizedMessage.includes("password")) {
     return "ENCRYPTED_DOCUMENT";

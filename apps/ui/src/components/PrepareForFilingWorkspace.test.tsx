@@ -33,6 +33,7 @@ describe("PrepareForFilingWorkspace", () => {
         prepPlan={resolvePrepPlan(pack, mockFacts)}
         courtProfiles={[]}
         selectedCourtProfile={null}
+        facts={mockFacts}
         report={null}
         loadingReport={false}
         progress={{ phase: "done", message: null }}
@@ -82,6 +83,7 @@ describe("PrepareForFilingWorkspace", () => {
         prepPlan={resolvePrepPlan(pack, mockFacts)}
         courtProfiles={[]}
         selectedCourtProfile={null}
+        facts={mockFacts}
         report={null}
         loadingReport={false}
         reportError="RaioPDF could not read the facts needed for filing checks."
@@ -101,6 +103,41 @@ describe("PrepareForFilingWorkspace", () => {
 
     expect(html).toContain("RaioPDF could not read the facts needed for filing checks.");
     expect(html).toContain("disabled=");
+  });
+
+  it("renders the remove-encryption prep step as available for encrypted facts", () => {
+    const pack = getPack("federal-cmecf");
+    const encryptedFacts = {
+      ...mockFacts,
+      encryptionState: "encrypted" as const,
+    };
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, encryptedFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={encryptedFacts}
+        report={null}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Remove encryption");
+    expect(html).toContain("Raio will ask for the password");
+    expect(html).not.toContain("not yet available in Raio");
   });
 });
 

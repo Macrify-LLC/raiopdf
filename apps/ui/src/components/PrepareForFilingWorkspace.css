@@ -580,7 +580,8 @@
   font-size: var(--text-2xs);
 }
 
-.filing-certificate {
+.filing-certificate,
+.filing-password {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--chrome);
@@ -590,20 +591,23 @@
 }
 
 .filing-certificate p,
+.filing-password p,
 .filing-court-profile p,
 .filing-prep p,
 .filing-prep-row p {
   margin: 0;
 }
 
-.filing-certificate__title {
+.filing-certificate__title,
+.filing-password__title {
   margin: 0;
   color: var(--ink);
   font-size: var(--text-sm);
   font-weight: 700;
 }
 
-.filing-certificate label {
+.filing-certificate label,
+.filing-password label {
   display: grid;
   gap: var(--space-1);
   color: var(--muted);
@@ -611,13 +615,15 @@
   font-weight: 700;
 }
 
-.filing-certificate input {
+.filing-certificate input,
+.filing-password input {
   height: 30px;
   padding: 0 var(--space-2);
 }
 
 .filing-certificate input,
-.filing-certificate textarea {
+.filing-certificate textarea,
+.filing-password input {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--panel);
@@ -630,6 +636,12 @@
   resize: vertical;
   min-height: 74px;
   padding: var(--space-2);
+}
+
+.filing-password__hint {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
 }
 
 /* ---- Preflight / compliance report -- warn-only, guidance-toned. ---- */

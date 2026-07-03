@@ -233,6 +233,39 @@ export function handleCompress(
   });
 }
 
+// ---- remove_encryption ----
+export const removeEncryptionInputSchema = {
+  input: absoluteInput,
+  output: absoluteOutput,
+  password: z.string().describe("Sensitive PDF open password. Never echoed in tool results."),
+};
+export const removeEncryptionOutputSchema = outputResultSchema;
+export interface RemoveEncryptionInput {
+  input: string;
+  output: string;
+  password: string;
+}
+export async function handleRemoveEncryption(
+  input: RemoveEncryptionInput,
+  engineHandle: EngineHandle,
+): Promise<StructuredToolResult> {
+  const source = await resolveInput(input.input);
+  const output = await prepareOutput(input.output);
+
+  try {
+    const engine = await engineHandle.getEngine();
+    const sourceBytes = await fs.readFile(source.realPath);
+    const unlockedBytes = await engine.removeEncryption(sourceBytes, input.password);
+    await output.write(unlockedBytes);
+    await output.commit();
+
+    return successResult("Removed encryption and wrote a new PDF.", { output: output.outputPath });
+  } catch (error) {
+    await output.abort();
+    throw error;
+  }
+}
+
 // ---- sanitize_pdf ----
 export const sanitizeInputSchema = {
   input: absoluteInput,

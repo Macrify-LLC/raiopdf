@@ -29,6 +29,7 @@ export const batchCleanupInputSchema = {
   inputs: z.array(absoluteInput).min(1).describe("PDFs to clean in queue order."),
   outputDir: z.string().describe("Absolute package root. The directory may not already contain files."),
   packId: z.string().optional().describe("Optional jurisdiction pack id for defaults and warning propagation."),
+  password: z.string().optional().describe("Sensitive per-run PDF open password reused for encrypted inputs. Never echoed in results."),
   operations: operationsSchema.optional(),
 };
 
@@ -49,6 +50,7 @@ export interface BatchCleanupInput {
   inputs: string[];
   outputDir: string;
   packId?: string | undefined;
+  password?: string | undefined;
   operations?: {
     ocrMode?: BatchCleanupOcrMode | undefined;
     compress?: boolean | undefined;
@@ -74,6 +76,7 @@ export async function handleBatchCleanup(
   const result = await runBatchCleanup({
     sources: resolvedSources,
     outputDir: output.outputPath,
+    ...(input.password === undefined ? {} : { password: input.password }),
     ...(input.packId === undefined ? {} : { packId: input.packId as JurisdictionPackId }),
     ...(input.operations === undefined ? {} : { operations: input.operations }),
     factsOptions: {

@@ -34,6 +34,7 @@ export interface EngineBridge {
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
   convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
   compress: (bytes: Uint8Array, options: PdfCompressOptions) => Promise<Uint8Array>;
+  removeEncryption: (bytes: Uint8Array, password: string) => Promise<Uint8Array>;
   sanitize: (bytes: Uint8Array, options?: PdfSanitizeOptions) => Promise<{
     bytes: Uint8Array;
     removed: PdfSanitizeResult["removed"];
@@ -214,6 +215,15 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const removeEncryption = useCallback(
+    async (bytes: Uint8Array, password: string) => {
+      const engine = await ensureEngine();
+
+      return engine.removeEncryption(bytes, password);
+    },
+    [ensureEngine],
+  );
+
   const sanitize = useCallback(
     async (bytes: Uint8Array, options: PdfSanitizeOptions = {}) => {
       const engine = await ensureEngine();
@@ -254,6 +264,7 @@ export function useEngineBridge(): EngineBridge {
     redactAreas,
     convertToPdfA,
     compress,
+    removeEncryption,
     sanitize,
     repair,
   };

@@ -56,6 +56,29 @@ describe("SidecarPdfEngine", () => {
     await expectFormFile(calls[0], [1, 2, 3]);
   });
 
+  it("removes encryption through Stirling remove-password without opening first", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1, 2, 3), "secret")).resolves.toEqual(bytes(9, 8, 7));
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/security/remove-password");
+    await expectFormFile(calls[0], [1, 2, 3]);
+    expectFormField(calls[0], "password", "secret");
+  });
+
+  it("maps wrong remove-encryption passwords to ENCRYPTED_DOCUMENT", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({ message: "The PDF Document is passworded and either the password was not provided or was incorrect" }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1), "wrong")).rejects.toMatchObject({
+      code: "ENCRYPTED_DOCUMENT",
+      message: "The PDF password was not accepted.",
+    });
+  });
+
   it("sends the sidecar auth token on every proxied request", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(9));
     const engine = new SidecarPdfEngine({
@@ -540,6 +563,17 @@ describe("SidecarPdfEngine", () => {
 
     await expect(engine.open(bytes(1))).rejects.toMatchObject({
       code: "ENCRYPTED_DOCUMENT",
+    });
+  });
+
+  it("maps unsupported encryption responses to UNSUPPORTED_ENCRYPTION", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({ message: "Unsupported encryption algorithm" }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.open(bytes(1))).rejects.toMatchObject({
+      code: "UNSUPPORTED_ENCRYPTION",
     });
   });
 

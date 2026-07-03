@@ -380,6 +380,7 @@ export type PdfEngineErrorCode =
   | "EMPTY_INPUT"
   | "INVALID_DOCUMENT"
   | "INVALID_PAGE_INDEX"
+  | "UNSUPPORTED_ENCRYPTION"
   | "UNSUPPORTED"
   | "UNSUPPORTED_ROTATION";
 
@@ -398,6 +399,16 @@ export class PdfEngineError extends Error {
 }
 
 export interface PdfEngine {
+  /**
+   * Removes PDF encryption/password protection from raw bytes.
+   *
+   * This operation accepts bytes instead of a document handle because encrypted
+   * PDFs often cannot be opened by the normal engine pipeline first. The
+   * password is caller-supplied for this invocation only; implementations must
+   * not persist it or include it in logs, manifests, or result metadata.
+   */
+  removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array>;
+
   /** Opens a PDF byte buffer and returns an opaque handle for later engine calls. */
   open(bytes: PdfBytes): Promise<PdfDocumentHandle>;
 

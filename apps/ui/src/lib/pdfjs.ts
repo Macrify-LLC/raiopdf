@@ -28,7 +28,7 @@ export async function loadPdfDocument(bytes: Uint8Array): Promise<PDFDocumentPro
 
 export function getPdfLoadErrorMessage(error: unknown): string {
   if (error instanceof PasswordException) {
-    return "This PDF is encrypted. Encrypted documents are not supported yet.";
+    return "This PDF is encrypted. Preview is available after removing encryption with the open password.";
   }
 
   return "This PDF opened, but the preview could not be rendered.";

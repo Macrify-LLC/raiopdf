@@ -45,7 +45,7 @@ const LEGAL_TOOLS = [
   { id: "bates-numbering", label: "Bates Numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width.", icon: <BatesIcon size={16} /> },
   { id: "scanner-2425", label: "2.425 Scanner", description: "Look for common Florida Rule 2.425 sensitive-information patterns.", icon: <ShieldCheckIcon size={16} /> },
   { id: "scrub-metadata", label: "Scrub Metadata", description: "Inspect and remove document metadata without changing page content.", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "passwords", label: "Passwords", description: "Review password controls; encryption changes are unavailable in this build.", icon: <ShieldCheckIcon size={16} /> },
+  { id: "passwords", label: "Passwords", description: "Review password controls; filing prep can remove encryption with the open password.", icon: <ShieldCheckIcon size={16} /> },
 ] as const;
 
 const ORGANIZE_TOOLS = [
@@ -720,7 +720,7 @@ export function PasswordsPanel() {
         Allow copying
       </label>
       <p className="tool-panel__note">
-        Never stored. Password changes are unavailable in this build: pdf-lib does not encrypt PDFs, and the verified sidecar notes list no password endpoints.
+        Never stored. Prepare for Filing can remove encryption with the open password. Setting or changing PDF passwords remains unavailable in this build.
       </p>
       <div className="tool-panel__button-row">
         <button type="button" className="tool-panel__primary-button" disabled>

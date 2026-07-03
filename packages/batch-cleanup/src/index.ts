@@ -45,6 +45,8 @@ export interface BatchCleanupOperations {
 export interface BatchCleanupInput {
   sources: readonly BatchCleanupSourceInput[];
   outputDir: string;
+  /** Optional per-run PDF open password reused for encrypted inputs. Never persisted. */
+  password?: string | undefined;
   packId?: JurisdictionPackId | undefined;
   operations?: BatchCleanupOperations | undefined;
   appVersion?: string | undefined;
@@ -115,6 +117,7 @@ export interface BatchCleanupResult {
 interface NormalizedOptions {
   sources: readonly BatchCleanupSourceInput[];
   outputDir: string;
+  password?: string | undefined;
   pack: JurisdictionPack | null;
   operations: NormalizedOperations;
   appVersion: string;
@@ -146,7 +149,7 @@ const DEFAULT_APP_VERSION = "0.0.0";
 const DEFAULT_OCR_MODE: BatchCleanupOcrMode = "auto-image-only";
 const DEFAULT_COMPRESSION_QUALITY = 5;
 const DEFAULT_SPLIT_SIZE_MB = 25;
-const SIDE_CAR_OPERATIONS = new Set(["repair", "sanitize", "ocr", "compress", "pdfa"]);
+const SIDE_CAR_OPERATIONS = new Set(["remove-encryption", "repair", "sanitize", "ocr", "compress", "pdfa"]);
 
 export async function runBatchCleanup(
   input: BatchCleanupInput,
@@ -266,6 +269,7 @@ function normalizeInput(
   return {
     sources: input.sources,
     outputDir: input.outputDir,
+    ...(input.password === undefined ? {} : { password: input.password }),
     pack,
     operations: normalizedOperations,
     appVersion: input.appVersion ?? DEFAULT_APP_VERSION,
@@ -285,20 +289,74 @@ async function processFile(
   const sourcePath = path.resolve(source.path);
   const sourceFilename = path.basename(sourcePath);
   const sourceBytes = await fs.readFile(sourcePath);
+  let workingSourceBytes: Uint8Array = sourceBytes;
   const sourceSha256 = sha256Hex(sourceBytes);
   const facts = source.facts ?? await buildDocumentFacts(sourceBytes, options.factsOptions);
-  const warnings = options.pack ? packWarnings(facts, options.pack) : [];
-  const reportFacts = summarizeFacts(facts, sourceBytes.byteLength);
-  const plan = planFileOperations(facts, options);
+  let workingFacts = facts;
 
-  if (facts.encryptionState === "encrypted" || facts.encryptionState === "usage_restricted") {
+  if (isEncrypted(facts)) {
+    const encryptedPlan = planFileOperations(facts, options);
+    const encryptedWarnings = options.pack ? packWarnings(facts, options.pack) : [];
+    const encryptedReportFacts = summarizeFacts(facts, sourceBytes.byteLength);
+    if (!options.password) {
+      return fileResult({
+        sourcePath,
+        sourceFilename,
+        sourceSha256,
+        status: "failed",
+        reason: "Encrypted input requires a password; no valid password was provided for this batch run.",
+        operations: [],
+        ocrDecision: encryptedPlan.ocrDecision,
+        warnings: encryptedWarnings,
+        facts: encryptedReportFacts,
+        outputs: [],
+      });
+    }
+    if (!sidecarEngine) {
+      return fileResult({
+        sourcePath,
+        sourceFilename,
+        sourceSha256,
+        status: "failed",
+        reason: "Encrypted input requires the desktop sidecar engine to remove encryption.",
+        operations: ["remove-encryption"],
+        ocrDecision: encryptedPlan.ocrDecision,
+        warnings: encryptedWarnings,
+        facts: encryptedReportFacts,
+        outputs: [],
+      });
+    }
+    try {
+      workingSourceBytes = await sidecarEngine.removeEncryption(sourceBytes, options.password);
+      workingFacts = await buildDocumentFacts(workingSourceBytes, options.factsOptions);
+    } catch (error) {
+      return fileResult({
+        sourcePath,
+        sourceFilename,
+        sourceSha256,
+        status: "failed",
+        reason: `Encrypted input could not be unlocked: ${errorMessage(error)}`,
+        operations: ["remove-encryption"],
+        ocrDecision: encryptedPlan.ocrDecision,
+        warnings: encryptedWarnings,
+        facts: encryptedReportFacts,
+        outputs: [],
+      });
+    }
+  }
+
+  const warnings = options.pack ? packWarnings(workingFacts, options.pack) : [];
+  const reportFacts = summarizeFacts(workingFacts, workingSourceBytes.byteLength);
+  const plan = planFileOperations(workingFacts, options, isEncrypted(facts));
+
+  if (isEncrypted(workingFacts)) {
     return fileResult({
       sourcePath,
       sourceFilename,
       sourceSha256,
       status: "failed",
-      reason: "Encrypted input requires a password; no valid password was provided for this batch run.",
-      operations: [],
+      reason: "Encrypted input could not be converted to an unencrypted filing copy.",
+      operations: ["remove-encryption"],
       ocrDecision: plan.ocrDecision,
       warnings,
       facts: reportFacts,
@@ -324,8 +382,8 @@ async function processFile(
   try {
     validateSidecarAvailability(plan.operations, sidecarEngine);
     const produced = await runOperationPipeline(
-      sourceBytes,
-      facts,
+      workingSourceBytes,
+      workingFacts,
       plan.operations,
       options,
       localEngine,
@@ -389,6 +447,7 @@ async function processFile(
 function planFileOperations(
   facts: DocumentFacts,
   options: NormalizedOptions,
+  removedEncryption = false,
 ): { operations: string[]; ocrDecision: string; skipReason: string | null } {
   const operations: string[] = [];
   const add = (enabled: boolean, name: string): void => {
@@ -399,6 +458,7 @@ function planFileOperations(
   const pdfaAllowed = options.pack !== null &&
     (options.pack.pdfa.stance === "required" || options.pack.pdfa.stance === "preferred");
 
+  add(removedEncryption, "remove-encryption");
   add(options.operations.repair, "repair");
   add(options.operations.normalizePages && options.pack !== null, "normalize-pages");
   add(options.operations.sanitize, "sanitize");
@@ -456,6 +516,10 @@ function isImageOnly(facts: DocumentFacts): boolean {
   );
 }
 
+function isEncrypted(facts: DocumentFacts): boolean {
+  return facts.encryptionState === "encrypted" || facts.encryptionState === "usage_restricted";
+}
+
 async function runOperationPipeline(
   sourceBytes: Uint8Array,
   facts: DocumentFacts,
@@ -467,6 +531,10 @@ async function runOperationPipeline(
   let bytes = sourceBytes;
 
   for (const operation of operations) {
+    if (operation === "remove-encryption") {
+      continue;
+    }
+
     if (operation === "split-by-size") {
       const document = await localEngine.open(bytes);
       let parts: readonly PdfSplitPart[] = [];
@@ -691,6 +759,8 @@ function operationLabel(operation: string): string {
       return "PDF/A conversion";
     case "ocr":
       return "OCR";
+    case "remove-encryption":
+      return "Remove encryption";
     case "scrub-metadata":
       return "Metadata scrubbing";
     case "split-by-size":

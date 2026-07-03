@@ -2,10 +2,10 @@ import { z } from "zod";
 import { runBatchCleanup } from "@raiopdf/batch-cleanup";
 import type { BatchCleanupOcrMode, BatchCleanupSidecarEngine } from "@raiopdf/batch-cleanup";
 import type { JurisdictionPackId } from "@raiopdf/rules";
-import { extractTextLayerCoverage } from "@raiopdf/rules/node";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, successResult, type StructuredToolResult } from "../format.js";
 import { preparePackageOutputDir, resolveInput } from "../paths.js";
+import { extractTextLayerCoverage } from "../pdfjs-node.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 

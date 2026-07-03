@@ -68,13 +68,7 @@
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-control);
-  background: var(--primary-deep);
   margin-bottom: var(--space-2);
-}
-
-.canvas-well__mark-icon {
-  color: var(--bolt);
 }
 
 .canvas-well__heading {

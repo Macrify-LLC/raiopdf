@@ -4,9 +4,8 @@ const BOLT_PATH = "M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z";
 
 export interface BoltIconProps extends IconProps {
   /**
-   * The product mark ships filled (brand mark, on its primary-deep square)
-   * and outlined (e.g. the "Prepare for Filing" tool row, which reuses the
-   * mark rather than a generic document icon).
+   * The bolt survives as the Prepare for Filing tool glyph. The filled variant
+   * is retained for legacy/icon-only call sites; brand surfaces use SunMarkIcon.
    */
   variant?: "filled" | "outline";
 }

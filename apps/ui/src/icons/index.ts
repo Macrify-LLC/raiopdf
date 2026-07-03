@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./BoltIcon";
+export * from "./SunMarkIcon";
 export * from "./OpenIcon";
 export * from "./SaveIcon";
 export * from "./PrintIcon";

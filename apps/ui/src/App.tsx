@@ -19,6 +19,7 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
@@ -81,6 +82,7 @@ import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDia
 import { HelpPanel } from "./components/HelpPanel";
 import { LoadingSun } from "./components/LoadingSun";
 import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
+import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -95,6 +97,7 @@ import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
   OPS,
+  PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
@@ -204,6 +207,17 @@ function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
 type OcrType = "skip-text" | "force-ocr";
 
 type ForceOcrConfirmationReason = "garbled" | "manual";
+
+/** B3 (2026-07-03 live-test fix plan): state for the password-prompt dialog
+ * shown when opening a password-protected PDF. `bytes` is the still-
+ * encrypted source; `error` is the inline "wrong password" retry message. */
+interface PasswordPromptState {
+  bytes: Uint8Array;
+  fileName: string;
+  filePath: string | null;
+  phase: PasswordDialogPhase;
+  error: string | null;
+}
 
 interface PendingRedaction {
   id: string;
@@ -378,6 +392,8 @@ export function App() {
     afterBytes: null,
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
+  const [passwordPrompt, setPasswordPrompt] = useState<PasswordPromptState | null>(null);
+  const passwordUnlockRunRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpArticleId, setHelpArticleId] = useState<string | undefined>(undefined);
@@ -825,15 +841,39 @@ export function App() {
         setPdfDocumentState({ bytes: sourceBytes, proxy: loaded });
       })
       .catch((error: unknown) => {
-        if (!disposed) {
-          setError(getPdfLoadErrorMessage(error));
+        if (disposed) {
+          return;
         }
+
+        if (error instanceof PasswordException) {
+          // Defense in depth: today `engine.open()` (pdf-lib) already
+          // rejects any encrypted PDF before this preview even runs, so
+          // this branch isn't reachable through the normal open path (see
+          // openOpenedFile's "password-required" branch above). Kept in
+          // case a future engine change lets a document open on the engine
+          // side while pdf.js still needs a password to render it --
+          // route that into the same unlock dialog instead of a dead-end
+          // preview error.
+          setPasswordPrompt({
+            bytes: sourceBytes,
+            fileName: document.fileName ?? "Document.pdf",
+            filePath: document.filePath,
+            phase: "prompt",
+            error: null,
+          });
+          return;
+        }
+
+        setError(getPdfLoadErrorMessage(error));
       });
 
     return () => {
       disposed = true;
       void loadedDocument?.loadingTask.destroy();
     };
+    // fileName/filePath intentionally excluded: this effect should only
+    // reload the preview when the bytes themselves change, not on a rename
+    // (e.g. a Save that only updates the display name).
   }, [document.bytes, setError]);
 
   useEffect(() => {
@@ -1222,10 +1262,24 @@ export function App() {
       setOcrState({ phase: "idle", message: null });
       resetLegalState();
       setSelectedPageIndexes(new Set());
-      void openDocumentFile(file).then((opened) => {
-        if (opened) {
+      setPasswordPrompt(null);
+      void openDocumentFile(file).then((result) => {
+        if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
+        } else if (result.status === "password-required") {
+          // A password-protected PDF is not a corrupt/unsupported one --
+          // prompt to unlock it instead of routing to the Repair tool,
+          // which is a dead end for encryption (issue #2, 2026-07-03
+          // live-test fix plan).
+          setRepairCandidate(null);
+          setPasswordPrompt({
+            bytes: result.bytes,
+            fileName: result.fileName,
+            filePath: result.filePath,
+            phase: "prompt",
+            error: null,
+          });
         } else {
           setRepairCandidate(file);
           setActiveEditDialogTool(null);
@@ -1235,6 +1289,122 @@ export function App() {
       });
     },
     [openDocumentFile, resetLegalState],
+  );
+
+  const cancelPasswordPrompt = useCallback(() => {
+    // Invalidate any in-flight unlock so a wrong/right-password result that
+    // resolves after Cancel was clicked doesn't reopen a document (or flash
+    // a retry state) the user already dismissed.
+    passwordUnlockRunRef.current += 1;
+
+    // This dialog can also be triggered by pdf.js failing to preview an
+    // already-open document (see the PasswordException branch in the
+    // preview-loading effect below) rather than the initial open failing
+    // outright. In that case the document is still technically "open" but
+    // unrenderable -- restore the informative message instead of leaving a
+    // silent, unexplained blank canvas behind the closed dialog.
+    if (passwordPrompt && document.bytes === passwordPrompt.bytes) {
+      setError(
+        "This PDF is encrypted. Preview is available after removing encryption with the open password.",
+      );
+    }
+
+    setPasswordPrompt(null);
+  }, [document.bytes, passwordPrompt, setError]);
+
+  const submitPassword = useCallback(
+    (password: string) => {
+      if (!passwordPrompt || passwordPrompt.phase !== "prompt") {
+        return;
+      }
+
+      const prompt = passwordPrompt;
+      const runId = passwordUnlockRunRef.current + 1;
+      passwordUnlockRunRef.current = runId;
+      const isCurrentUnlock = () => passwordUnlockRunRef.current === runId;
+
+      setPasswordPrompt({ ...prompt, phase: "starting-engine", error: null });
+
+      void engineBridge
+        .removeEncryption(prompt.bytes, password, {
+          onEngineReady: () => {
+            if (isCurrentUnlock()) {
+              setPasswordPrompt((current) => (current ? { ...current, phase: "unlocking" } : current));
+            }
+          },
+        })
+        .then(async (decryptedBytes) => {
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          // Fresh open, marked dirty: the decrypted bytes never had an
+          // on-disk representation of their own (the original file on disk
+          // is still the encrypted one), so Save As is the natural next
+          // step. Keep the original display name -- "Repaired X.pdf"-style
+          // renaming doesn't apply here, this is the same document.
+          const result = await openDocumentFile(
+            { bytes: decryptedBytes, name: prompt.fileName, path: null },
+            { markDirty: true },
+          );
+
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          if (result.status === "opened") {
+            setPasswordPrompt(null);
+            setRepairCandidate(null);
+            setSelectedPageIndexes(new Set([0]));
+            return;
+          }
+
+          // The server accepted the password and handed back decrypted
+          // bytes, but RaioPDF still couldn't finish opening them -- an
+          // unusual or partially-supported encryption scheme, most likely.
+          // That's not a wrong-password situation, so close the dialog
+          // rather than inviting another password attempt that can't help.
+          setPasswordPrompt(null);
+          setError(
+            "The password was accepted, but RaioPDF could not finish opening this PDF. It may use an unusual encryption scheme.",
+          );
+          void recordDiagnosticEvent(
+            "password.unlock-reopen-failed",
+            "Decrypted PDF bytes failed to reopen",
+            [result.status === "failed" ? result.error : null],
+          );
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+            setPasswordPrompt((current) => (
+              current
+                ? { ...current, phase: "prompt", error: "That password wasn't accepted. Try again." }
+                : current
+            ));
+            return;
+          }
+
+          setPasswordPrompt(null);
+          setError(
+            isEngineBridgeUnavailableError(error)
+              ? error.message
+              : "This PDF could not be unlocked. Try again in a moment.",
+          );
+          void recordDiagnosticEvent(
+            "password.unlock-failed",
+            "Removing PDF encryption failed",
+            [
+              error instanceof Error ? error.message : String(error),
+              error instanceof Error && error.stack ? error.stack : null,
+            ],
+          );
+        });
+    },
+    [engineBridge, openDocumentFile, passwordPrompt, setError],
   );
 
   const openFile = useCallback(() => {
@@ -2180,11 +2350,12 @@ export function App() {
 
       try {
         const repairedBytes = await engineBridge.repair(source.bytes);
-        const opened = await openDocumentFile({
+        const openResult = await openDocumentFile({
           bytes: repairedBytes,
           name: `Repaired ${source.name}`,
           path: null,
         });
+        const opened = openResult.status === "opened";
 
         setSidecarStatus({
           running: false,
@@ -3354,6 +3525,15 @@ export function App() {
           pageCount={pageDeleteConfirmation.length}
           onConfirm={confirmDeletePagesRequest}
           onCancel={cancelDeletePagesRequest}
+        />
+      ) : null}
+      {passwordPrompt ? (
+        <PasswordDialog
+          fileName={passwordPrompt.fileName}
+          phase={passwordPrompt.phase}
+          error={passwordPrompt.error}
+          onSubmit={submitPassword}
+          onCancel={cancelPasswordPrompt}
         />
       ) : null}
       {helpOpen ? (

@@ -26,6 +26,16 @@ export interface RunOcrOptions {
   onEngineReady?: () => void;
 }
 
+export interface RemoveEncryptionOptions {
+  /**
+   * Fired once the sidecar engine is confirmed ready (started fresh or
+   * already warm) and the request is about to go out -- lets a caller show
+   * a "starting the PDF engine" state only while that's actually happening,
+   * same as `RunOcrOptions.onEngineReady`.
+   */
+  onEngineReady?: () => void;
+}
+
 export interface EngineBridge {
   available: boolean;
   ocrAvailable: boolean;
@@ -42,7 +52,11 @@ export interface EngineBridge {
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
   convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
   compress: (bytes: Uint8Array, options: PdfCompressOptions) => Promise<Uint8Array>;
-  removeEncryption: (bytes: Uint8Array, password: string) => Promise<Uint8Array>;
+  removeEncryption: (
+    bytes: Uint8Array,
+    password: string,
+    options?: RemoveEncryptionOptions,
+  ) => Promise<Uint8Array>;
   sanitize: (bytes: Uint8Array, options?: PdfSanitizeOptions) => Promise<{
     bytes: Uint8Array;
     removed: PdfSanitizeResult["removed"];
@@ -255,8 +269,12 @@ export function useEngineBridge(): EngineBridge {
   );
 
   const removeEncryption = useCallback(
-    (bytes: Uint8Array, password: string) =>
-      withEngineRetry(ensureEngine, engineRef, (engine) => engine.removeEncryption(bytes, password)),
+    (bytes: Uint8Array, password: string, options: RemoveEncryptionOptions = {}) =>
+      withEngineRetry(ensureEngine, engineRef, (engine) => {
+        options.onEngineReady?.();
+
+        return engine.removeEncryption(bytes, password);
+      }),
     [ensureEngine],
   );
 

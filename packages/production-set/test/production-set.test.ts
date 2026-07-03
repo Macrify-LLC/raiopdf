@@ -144,6 +144,40 @@ describe("buildProductionSet", () => {
     const combined = await PDFDocument.load(await fs.readFile(path.join(outputDir, result.combinedPdf!)));
     expect(combined.getPageCount()).toBe(3);
   });
+
+  it("includes combined production PDFs in volume summaries", async () => {
+    const first = await makePdf("first.pdf", 1);
+    const second = await makePdf("second.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "CVOL",
+      combinedPdf: true,
+      volumeSizeMb: 0.0001,
+    });
+
+    expect(result.combinedPdf).toMatch(/^upload\/VOL003\//);
+    expect(result.volumes.map((volume) => volume.name)).toEqual(["VOL001", "VOL002", "VOL003"]);
+    expect(result.volumes[2]!.files).toEqual(["CVOL000001 - CVOL000002 - combined-production.pdf"]);
+    expect(result.volumes[2]!.oversizedFiles).toEqual([
+      "CVOL000001 - CVOL000002 - combined-production.pdf",
+    ]);
+
+    const productionReport = JSON.parse(
+      await fs.readFile(path.join(outputDir, "raio-manifest", "production.json"), "utf8"),
+    ) as { volumes: Array<{ name: string; files: string[]; oversizedFiles: string[] }> };
+
+    expect(productionReport.volumes.map((volume) => volume.name)).toEqual([
+      "VOL001",
+      "VOL002",
+      "VOL003",
+    ]);
+    expect(productionReport.volumes[2]!.files).toEqual([
+      "CVOL000001 - CVOL000002 - combined-production.pdf",
+    ]);
+  });
 });
 
 async function makePdf(name: string, pages: number): Promise<string> {

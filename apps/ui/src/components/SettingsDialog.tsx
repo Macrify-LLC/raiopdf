@@ -1,10 +1,28 @@
+import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import "./SettingsDialog.css";
+
+export type SettingsFocusSection = "open-raio-to-ai";
 
 export interface SettingsDialogProps {
   onClose: () => void;
+  /** "Open Raio to AI" access gate. Off by default; the shell owns persistence. */
+  mcpEnabled: boolean;
+  onToggleMcpEnabled: (next: boolean) => void;
+  /** Resolved absolute path to raiopdf-mcp, once the shell has it. */
+  mcpPath?: string | null | undefined;
+  /** Set when Preferences was opened via "Open Raio to AI..." specifically. */
+  focusSection?: SettingsFocusSection | null | undefined;
+  onFocusSectionHandled?: (() => void) | undefined;
 }
 
-export function SettingsDialog({ onClose }: SettingsDialogProps) {
+export function SettingsDialog({
+  onClose,
+  mcpEnabled,
+  onToggleMcpEnabled,
+  mcpPath,
+  focusSection,
+  onFocusSectionHandled,
+}: SettingsDialogProps) {
   return (
     <div className="settings-dialog" role="presentation" onMouseDown={onClose}>
       <section
@@ -22,7 +40,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             aria-label="Close preferences"
             onClick={onClose}
           >
-            {"\u00d7"}
+            {"×"}
           </button>
         </header>
         <div className="settings-dialog__body">
@@ -42,6 +60,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
               <option value="florida">Florida</option>
             </select>
           </label>
+
+          <OpenRaioToAiSection
+            enabled={mcpEnabled}
+            onToggle={onToggleMcpEnabled}
+            mcpPath={mcpPath}
+            focused={focusSection === "open-raio-to-ai"}
+            onFocusHandled={onFocusSectionHandled}
+          />
         </div>
       </section>
     </div>

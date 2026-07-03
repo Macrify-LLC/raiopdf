@@ -1,0 +1,258 @@
+.open-raio-to-ai {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  padding: var(--space-4);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.open-raio-to-ai[data-focused="true"] {
+  box-shadow: 0 0 0 3px var(--accent-pale);
+}
+
+.open-raio-to-ai__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.open-raio-to-ai__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--primary);
+}
+
+.open-raio-to-ai__heading-group {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.open-raio-to-ai__eyebrow {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.open-raio-to-ai__header h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+
+.open-raio-to-ai__status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid var(--ok-bg);
+  border-radius: var(--radius-chip);
+  background: var(--ok-bg);
+  color: var(--ok);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+  padding: 3px var(--space-2);
+}
+
+.open-raio-to-ai__lede {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--body);
+}
+
+.open-raio-to-ai__toggle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-3) 0;
+}
+
+.open-raio-to-ai__toggle-row span {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.open-raio-to-ai__toggle-row strong {
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.open-raio-to-ai__toggle-row small {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.open-raio-to-ai__trust-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+
+.open-raio-to-ai__trust-chip svg {
+  flex: 0 0 auto;
+  color: var(--primary-deep);
+}
+
+.open-raio-to-ai__connect {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+.open-raio-to-ai__connect h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.open-raio-to-ai__connect-lede {
+  margin: 0;
+  margin-top: -6px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.open-raio-to-ai__block {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  padding: var(--space-3);
+}
+
+.open-raio-to-ai__block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.open-raio-to-ai__block-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.open-raio-to-ai__copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: 4px var(--space-2);
+  transition:
+    background-color var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.open-raio-to-ai__copy-button:hover:not([aria-disabled="true"]) {
+  background: var(--hover-ground);
+}
+
+.open-raio-to-ai__copy-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.open-raio-to-ai__copy-button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.open-raio-to-ai__copy-button[data-copied="true"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.open-raio-to-ai__code {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  border: 1px solid var(--border-soft);
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  /* No --font-mono token exists yet; falls back to a system monospace
+     stack until one is added to tokens.css (see integration-notes.md). */
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, "Liberation Mono", monospace);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.open-raio-to-ai__block-caption {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.open-raio-to-ai__block-caption code,
+.open-raio-to-ai__how code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, "Liberation Mono", monospace);
+  font-size: inherit;
+  color: var(--body);
+}
+
+.open-raio-to-ai__resolving {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+
+.open-raio-to-ai__how {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.open-raio-to-ai__doc-link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.open-raio-to-ai__doc-link:hover {
+  color: var(--primary-deep);
+  text-decoration: underline;
+}
+
+.open-raio-to-ai__doc-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

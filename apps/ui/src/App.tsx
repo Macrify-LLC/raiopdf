@@ -88,6 +88,10 @@ import {
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
+import {
+  looksLikeAbsolutePath,
+  resolveDesktopFileGrantPaths,
+} from "./lib/localPaths";
 import { writeProductionLastUsed } from "./lib/productionHints";
 import { formatWorkflowError } from "./lib/userMessages";
 import {
@@ -455,10 +459,10 @@ export function App() {
     });
 
     try {
-      const sourcePaths = input.files.map((file) => file.path);
-      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
-        throw new Error("Production package output needs PDFs opened from local desktop paths.");
-      }
+      const sourcePaths = requireAbsoluteSourcePaths(
+        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+        "Production package output needs PDFs opened from local desktop paths.",
+      );
 
       const { invoke } = await import("@tauri-apps/api/core");
       const result = await invoke<{
@@ -467,10 +471,17 @@ export function App() {
         nextNumber: number;
         fileCount: number;
       }>("build_production_set", {
-        sources: input.files.map((file) => ({
-          path: file.path,
-          designation: file.designation || undefined,
-        })),
+        sources: input.files.map((file, index) => {
+          const sourcePath = sourcePaths[index];
+          if (!sourcePath) {
+            throw new Error("Production package output needs PDFs opened from local desktop paths.");
+          }
+
+          return {
+            path: sourcePath,
+            designation: file.designation || undefined,
+          };
+        }),
         outputDir: input.outputDir,
         prefix: input.prefix,
         start: input.start,
@@ -505,10 +516,10 @@ export function App() {
     });
 
     try {
-      const sourcePaths = input.files.map((file) => file.path);
-      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
-        throw new Error("Batch cleanup needs PDFs opened from local desktop paths.");
-      }
+      const sourcePaths = requireAbsoluteSourcePaths(
+        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+        "Batch cleanup needs PDFs opened from local desktop paths.",
+      );
 
       const { invoke } = await import("@tauri-apps/api/core");
       const result = await invoke<{
@@ -522,7 +533,7 @@ export function App() {
           outputs: string[];
         }[];
       }>("batch_cleanup", {
-        inputs: input.files.map((file) => file.path),
+        inputs: sourcePaths,
         outputDir: input.outputDir,
         packId: input.packId ?? undefined,
         operations: input.operations,
@@ -550,10 +561,10 @@ export function App() {
     });
 
     try {
-      const sourcePaths = input.files.map((file) => file.path);
-      if (sourcePaths.some((filePath) => !filePath || !looksLikeAbsolutePath(filePath))) {
-        throw new Error("Filing packet needs PDFs opened from local desktop paths.");
-      }
+      const sourcePaths = requireAbsoluteSourcePaths(
+        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+        "Filing packet needs PDFs opened from local desktop paths.",
+      );
 
       const { invoke } = await import("@tauri-apps/api/core");
       const result = await invoke<{
@@ -563,10 +574,17 @@ export function App() {
         packetJson: string;
         combinedPdf: string | null;
       }>("build_filing_packet", {
-        sources: input.files.map((file) => ({
-          path: file.path,
-          displayName: file.name,
-        })),
+        sources: input.files.map((file, index) => {
+          const sourcePath = sourcePaths[index];
+          if (!sourcePath) {
+            throw new Error("Filing packet needs PDFs opened from local desktop paths.");
+          }
+
+          return {
+            path: sourcePath,
+            displayName: file.name,
+          };
+        }),
         outputDir: input.outputDir,
         pack: filingPack.id,
         layoutMode: input.layoutMode,
@@ -3968,8 +3986,17 @@ function waitForTestDelay(delayMs: number): Promise<void> {
   });
 }
 
-function looksLikeAbsolutePath(value: string | null): value is string {
-  return Boolean(value && (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)));
+function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMessage: string): string[] {
+  const absolutePaths: string[] = [];
+
+  for (const filePath of paths) {
+    if (!looksLikeAbsolutePath(filePath)) {
+      throw new Error(errorMessage);
+    }
+    absolutePaths.push(filePath);
+  }
+
+  return absolutePaths;
 }
 
 function isTauriRuntime(): boolean {

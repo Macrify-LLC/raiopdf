@@ -684,14 +684,16 @@ function aggregateChecks(reports: readonly PreflightReport[]): readonly Prefligh
     const matches = reports
       .map((report) => report.checks.find((candidate) => candidate.checkId === check.checkId))
       .filter((candidate): candidate is PreflightCheck => candidate !== undefined);
-    const nonPass = matches.filter((candidate) => candidate.status !== "pass");
+    const nonPass = matches
+      .map((candidate, index) => ({ candidate, partNumber: index + 1 }))
+      .filter((match) => match.candidate.status !== "pass");
 
     return {
       ...check,
       status: aggregateStatus(matches),
       detail: nonPass.length === 0
         ? `All ${reports.length} output part(s) pass.`
-        : nonPass.map((candidate, index) => `Part ${index + 1}: ${candidate.detail}`).join(" "),
+        : nonPass.map((match) => `Part ${match.partNumber}: ${match.candidate.detail}`).join(" "),
     };
   });
 }

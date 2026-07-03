@@ -123,6 +123,23 @@ fn read_opened_pdf_bytes(
 }
 
 #[tauri::command]
+fn resolve_file_grants(
+    grants: Vec<String>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Vec<String>, String> {
+    grants
+        .into_iter()
+        .map(|grant| {
+            file_grants
+                .resolve(&grant)?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "File grant path is not valid UTF-8".to_string())
+        })
+        .collect()
+}
+
+#[tauri::command]
 fn save_pdf_dialog(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
@@ -279,6 +296,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_pdf_dialog,
             read_opened_pdf_bytes,
+            resolve_file_grants,
             save_pdf_dialog,
             save_pdf_to_path,
             sidecar::engine_start,

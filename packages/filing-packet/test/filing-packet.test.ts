@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractAllText, extractPageTextByPage, extractTextLayerCoverage } from "@raiopdf/rules/node";
+import type { DocumentFacts, TextLayerCoverage } from "@raiopdf/rules";
 import { buildFilingPacket } from "../src/index";
 
 let dir: string;
@@ -105,7 +106,77 @@ describe("buildFilingPacket", () => {
     });
     expect(await exists(path.join(outputDir, "upload", "filing-packet.pdf"))).toBe(true);
   });
+
+  it("reports aggregate output warnings against the original split part number", async () => {
+    const motion = await writePdf("Motion to Compel.pdf", ["page one", "page two", "page three"]);
+    const outputDir = path.join(dir, "packet-part-numbering");
+    const coverageByPart: TextLayerCoverage[] = [
+      { imageOnlyPages: [], mixedPages: [], textPages: [0] },
+      { imageOnlyPages: [], mixedPages: [], textPages: [0] },
+      { imageOnlyPages: [0], mixedPages: [], textPages: [] },
+    ];
+    const extractTextLayerCoverageForPart = vi.fn(async () => {
+      const coverage = coverageByPart.shift();
+      if (!coverage) {
+        throw new Error("unexpected text-layer extraction call");
+      }
+      return coverage;
+    });
+
+    const result = await buildFilingPacket({
+      sources: [{
+        path: motion,
+        facts: sourceFacts(3),
+      }],
+      outputDir,
+      packId: "florida",
+      checklist: {
+        selectedStepIds: ["split-by-size"],
+        splitSizeMb: 0.001,
+      },
+      factsOptions: {
+        textExtractor: {
+          extractTextLayerCoverage: extractTextLayerCoverageForPart,
+        },
+      },
+    });
+
+    const searchableText = result.documents[0]?.checks.find((check) => check.checkId === "searchable-text");
+
+    expect(result.files.map((file) => file.outputName)).toContain("01 - Motion to Compel - Part 3 of 3.pdf");
+    expect(searchableText).toMatchObject({
+      status: "warn",
+      detail: "Part 3: The document facts report no searchable text.",
+    });
+    expect(searchableText?.detail).not.toContain("Part 1: The document facts report no searchable text.");
+    expect(extractTextLayerCoverageForPart).toHaveBeenCalledTimes(3);
+  });
 });
+
+function sourceFacts(pageCount: number): DocumentFacts {
+  return {
+    pages: Array.from({ length: pageCount }, (_value, pageIndex) => ({
+      pageIndex,
+      size: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    })),
+    fileBytes: 1,
+    searchableText: true,
+    pdfaCompliant: true,
+    encryptionState: "none",
+    activeContentSignals: { possiblyPresent: false, signals: [] },
+    embeddedFileCount: 0,
+    formFields: { count: 0, anyFilled: false },
+    annotationCount: 0,
+    signatureFieldCount: 0,
+    possibleUnappliedRedactions: {
+      redactAnnotationCount: 0,
+      blackRectangleAnnotationCount: 0,
+      possiblyPresent: false,
+    },
+    clerkStampSpaceBlank: true,
+  };
+}
 
 async function writePdf(name: string, lines: readonly string[]): Promise<string> {
   const pdf = await PDFDocument.create();

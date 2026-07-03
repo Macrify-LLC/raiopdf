@@ -46,6 +46,33 @@ import {
   type ScrubMetadataInput,
 } from "./tools/core.js";
 
+import {
+  batesFolderInputSchema,
+  batesFolderOutputSchema,
+  batesInputSchema,
+  batesOutputSchema,
+  binderInputSchema,
+  binderOutputSchema,
+  extractInputSchema,
+  extractOutputSchema,
+  handleBates,
+  handleBatesFolder,
+  handleBinder,
+  handleExtract,
+  handlePageNumbers,
+  handleSplit,
+  pageNumbersInputSchema,
+  pageNumbersOutputSchema,
+  splitInputSchema,
+  splitOutputSchema,
+  type BatesFolderInput,
+  type BatesInput,
+  type BinderInput,
+  type ExtractInput,
+  type PageNumbersInput,
+  type SplitInput,
+} from "./tools/legal.js";
+
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -195,6 +222,101 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
       dependencies,
       async (input: ScrubMetadataInput) =>
         await handleScrubMetadata(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "build_exhibit_binder",
+    {
+      title: "Build exhibit binder",
+      description:
+        "Assembles a main document with ordered, labeled exhibits into one bookmarked binder (optional slip sheets + exhibit stamps). Writes a new file.",
+      inputSchema: binderInputSchema,
+      outputSchema: binderOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: BinderInput) => await handleBinder(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "bates_stamp",
+    {
+      title: "Bates stamp",
+      description: "Stamps sequential Bates numbers across a single PDF. Writes a new file.",
+      inputSchema: batesInputSchema,
+      outputSchema: batesOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: BatesInput) => await handleBates(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "bates_stamp_folder",
+    {
+      title: "Bates stamp a document set",
+      description:
+        "Stamps one continuous Bates sequence across an ordered set of files, writing one stamped copy per input into an output directory.",
+      inputSchema: batesFolderInputSchema,
+      outputSchema: batesFolderOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: BatesFolderInput) =>
+        await handleBatesFolder(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "page_numbers",
+    {
+      title: "Add page numbers",
+      description: "Stamps page numbers on selected pages (or all). Writes a new file.",
+      inputSchema: pageNumbersInputSchema,
+      outputSchema: pageNumbersOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: PageNumbersInput) =>
+        await handlePageNumbers(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "split_pdf",
+    {
+      title: "Split PDF by size",
+      description:
+        "Splits a PDF at page boundaries into parts under a byte cap, writing the parts into an output directory.",
+      inputSchema: splitInputSchema,
+      outputSchema: splitOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: SplitInput) => await handleSplit(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "extract_pages",
+    {
+      title: "Extract pages",
+      description: "Keeps only the selected pages (in document order). Writes a new file.",
+      inputSchema: extractInputSchema,
+      outputSchema: extractOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: ExtractInput) => await handleExtract(input, dependencies.engineHandle),
     ),
   );
 }

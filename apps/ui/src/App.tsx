@@ -239,10 +239,12 @@ interface FilingFactsOptions {
 export function App() {
   const {
     document,
+    pageScrollIntent,
     openFile: openDocumentFile,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
+    syncVisiblePage,
     setZoom,
     setFitZoom,
     setHasTextLayer,
@@ -3461,6 +3463,8 @@ export function App() {
         document={document}
         pdfDocument={pdfDocument}
         documentSearch={documentSearch}
+        pageScrollIntent={pageScrollIntent}
+        onVisiblePageChange={syncVisiblePage}
         selectedPageIndexes={selectedPageIndexes}
         onOpenRequested={openFile}
         onFileDropped={openDroppedFile}

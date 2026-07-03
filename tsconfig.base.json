@@ -4,6 +4,8 @@
     "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // TypeScript 6 deprecates baseUrl, but this workspace still uses it for package path aliases.
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "@raiopdf/engine-api": ["packages/engine-api/src/index.ts"],

@@ -1,7 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022"]
+    "lib": ["ES2022"],
+    // Tests run in Node and use Node-provided web globals such as atob and TextEncoder.
+    "types": ["node"]
   },
   "include": ["src", "test"]
 }

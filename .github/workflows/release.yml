@@ -79,45 +79,26 @@ jobs:
       - name: Build Tauri shell
         run: pnpm build:shell
 
-      - name: Enforce bundled payload resources
+      - name: Verify bundled payload manifest
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import sys
+          set -Eeuo pipefail
 
-          target = Path("apps/shell/src-tauri/target/release")
-          required = [
-              Path("jre/bin/java.exe"),
-              Path("engine/stirling.jar"),
-              Path("ocr/ocrmypdf.cmd"),
-              Path("ocr/tesseract/tesseract.exe"),
-              Path("ocr/tesseract/tessdata/eng.traineddata"),
-              Path("ocr/gs/bin/gswin64c.exe"),
-          ]
-          candidates = []
-          for java in target.rglob("payload/jre/bin/java.exe"):
-              payload = java.parents[2]
-              missing = [path for path in required if not (payload / path).is_file()]
-              if not missing:
-                  candidates.append(payload)
-                  continue
+          target="apps/shell/src-tauri/target/release"
+          mapfile -t manifests < <(find "$target" -type f -path '*/payload/RAIOPDF-PAYLOAD-MANIFEST.tsv' | sort)
 
-              print(f"Rejected incomplete bundled payload: {payload}", file=sys.stderr)
-              for path in missing:
-                  print(f"  missing {path}", file=sys.stderr)
+          if [[ "${#manifests[@]}" -lt 1 ]]; then
+            echo "No bundled payload manifest was found under $target." >&2
+            find "$target" -path '*/payload/*' -print | sort | sed -n '1,80p' >&2
+            exit 1
+          fi
 
-          if not candidates:
-              print("No built bundle resource payload contained the required Java, Stirling, and OCR resources.", file=sys.stderr)
-              print(f"Searched under {target}", file=sys.stderr)
-              for path in sorted(target.rglob("payload/*"))[:80]:
-                  print(path, file=sys.stderr)
-              sys.exit(1)
-
-          print("Verified bundled payload resources:")
-          for payload in candidates:
-              print(f"  {payload}")
-          PY
+          echo "Verifying bundled payload manifests:"
+          for manifest in "${manifests[@]}"; do
+            payload_dir=$(dirname "$manifest")
+            echo "  $payload_dir"
+            RAIOPDF_PAYLOAD_DIR="$payload_dir" bash installer/assemble-payload.sh --verify
+          done
 
       - name: Smoke offline OCR engine
         shell: bash

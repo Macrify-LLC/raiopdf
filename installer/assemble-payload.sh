@@ -13,11 +13,22 @@ if [[ "$TARGET_PLATFORM" != "windows-x64" ]]; then
   exit 1
 fi
 
-PAYLOAD_DIR="$REPO_ROOT/apps/shell/src-tauri/payload"
+PAYLOAD_DIR=${RAIOPDF_PAYLOAD_DIR:-"$REPO_ROOT/apps/shell/src-tauri/payload"}
+PAYLOAD_MANIFEST="RAIOPDF-PAYLOAD-MANIFEST.tsv"
 CACHE_DIR=${RAIOPDF_PAYLOAD_CACHE:-"$SCRIPT_DIR/.payload-cache"}
 DOWNLOAD_DIR="$CACHE_DIR/downloads"
 WORK_DIR="$CACHE_DIR/work"
 REQ_FILE="$REPO_ROOT/$OCRMYPDF_REQUIREMENTS"
+REQUIRED_PAYLOAD_FILES=(
+  "jre/bin/java.exe"
+  "engine/stirling.jar"
+  "ocr/THIRD-PARTY-PYTHON.md"
+  "ocr/ocrmypdf.cmd"
+  "ocr/python/python.exe"
+  "ocr/tesseract/tesseract.exe"
+  "ocr/tesseract/tessdata/eng.traineddata"
+  "ocr/gs/bin/gswin64c.exe"
+)
 
 MODE=assemble
 case "${1:-}" in
@@ -337,27 +348,118 @@ install_ghostscript() {
   cp -R "$extract_dir"/. "$gs_dir"/
 }
 
-verify_payload() {
-  local missing=0
-  local path
-  for path in \
-    "$PAYLOAD_DIR/jre/bin/java.exe" \
-    "$PAYLOAD_DIR/engine/stirling.jar" \
-    "$PAYLOAD_DIR/ocr/THIRD-PARTY-PYTHON.md" \
-    "$PAYLOAD_DIR/ocr/ocrmypdf.cmd" \
-    "$PAYLOAD_DIR/ocr/python/python.exe" \
-    "$PAYLOAD_DIR/ocr/tesseract/tesseract.exe" \
-    "$PAYLOAD_DIR/ocr/tesseract/tessdata/eng.traineddata" \
-    "$PAYLOAD_DIR/ocr/gs/bin/gswin64c.exe"; do
-    if [[ ! -f "$path" ]]; then
-      echo "Missing expected payload file: $path" >&2
-      missing=1
-    fi
-  done
+generate_payload_manifest() {
+  python3 - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
 
-  if [[ "$missing" != 0 ]]; then
-    exit 1
-  fi
+payload_dir = Path(sys.argv[1]).resolve()
+manifest_name = sys.argv[2]
+manifest_path = payload_dir / manifest_name
+
+rows = []
+for path in sorted(payload_dir.rglob("*")):
+    if not path.is_file() or path.name == manifest_name:
+        continue
+
+    relative_path = path.relative_to(payload_dir).as_posix()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    rows.append((relative_path, path.stat().st_size, digest))
+
+with manifest_path.open("w", encoding="utf-8", newline="\n") as handle:
+    handle.write("sha256\tsize\tpath\n")
+    for relative_path, size, digest in rows:
+        handle.write(f"{digest}\t{size}\t{relative_path}\n")
+PY
+}
+
+verify_payload_manifest() {
+  python3 - "$PAYLOAD_DIR" "$PAYLOAD_MANIFEST" "${REQUIRED_PAYLOAD_FILES[@]}" <<'PY'
+from pathlib import Path, PurePosixPath
+import hashlib
+import sys
+
+payload_dir = Path(sys.argv[1]).resolve()
+manifest_name = sys.argv[2]
+required_paths = set(sys.argv[3:])
+manifest_path = payload_dir / manifest_name
+
+if not manifest_path.is_file():
+    raise SystemExit(f"Missing payload manifest: {manifest_path}")
+
+lines = manifest_path.read_text(encoding="utf-8").splitlines()
+if not lines or lines[0] != "sha256\tsize\tpath":
+    raise SystemExit(f"Invalid payload manifest header: {manifest_path}")
+
+manifest = {}
+errors = []
+for line_number, line in enumerate(lines[1:], start=2):
+    parts = line.split("\t")
+    if len(parts) != 3:
+        errors.append(f"{manifest_path}:{line_number}: expected sha256, size, path")
+        continue
+
+    expected_sha, expected_size_text, relative_path = parts
+    if relative_path in manifest:
+        errors.append(f"{manifest_path}:{line_number}: duplicate path {relative_path}")
+        continue
+    relative = PurePosixPath(relative_path)
+    if (
+        relative_path == manifest_name
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        errors.append(f"{manifest_path}:{line_number}: invalid path {relative_path}")
+        continue
+    try:
+        expected_size = int(expected_size_text)
+    except ValueError:
+        errors.append(f"{manifest_path}:{line_number}: invalid size for {relative_path}")
+        continue
+    manifest[relative_path] = (expected_sha, expected_size)
+
+actual_paths = {
+    path.relative_to(payload_dir).as_posix()
+    for path in payload_dir.rglob("*")
+    if path.is_file() and path.name != manifest_name
+}
+
+for relative_path, (expected_sha, expected_size) in sorted(manifest.items()):
+    path = payload_dir / relative_path
+    if not path.is_file():
+        errors.append(f"Missing payload file from manifest: {relative_path}")
+        continue
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        errors.append(
+            f"Size mismatch for {relative_path}: expected {expected_size}, actual {actual_size}"
+        )
+    actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual_sha != expected_sha:
+        errors.append(
+            f"SHA256 mismatch for {relative_path}: expected {expected_sha}, actual {actual_sha}"
+        )
+
+missing_required = sorted(required_paths - set(manifest))
+for relative_path in missing_required:
+    errors.append(f"Required payload file missing from manifest: {relative_path}")
+
+extra_paths = sorted(actual_paths - set(manifest))
+for relative_path in extra_paths:
+    errors.append(f"Payload file missing from manifest: {relative_path}")
+
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"Verified {len(manifest)} payload files against {manifest_path}")
+PY
+}
+
+verify_payload() {
+  verify_payload_manifest
 
   printf 'Payload assembled at %s\n' "$PAYLOAD_DIR"
   printf 'Payload size: %s\n' "$(du -sh "$PAYLOAD_DIR" | awk '{print $1}')"
@@ -397,4 +499,5 @@ copy_engine_jar
 install_python_ocrmypdf "$python_zip"
 install_tesseract "$tesseract_installer" "$tessdata_eng" "$seven_zip"
 install_ghostscript "$ghostscript_installer" "$seven_zip"
+generate_payload_manifest
 verify_payload

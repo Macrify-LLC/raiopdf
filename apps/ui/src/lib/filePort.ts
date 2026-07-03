@@ -18,7 +18,7 @@ export interface FilePort {
   ) => Promise<SavedFile | null>;
 }
 
-const HEADER_PATH = "x-raio-path";
+const HEADER_FILE_GRANT = "x-raio-file-grant";
 const HEADER_SUGGESTED_NAME = "x-raio-suggested-name";
 
 export const filePort: FilePort = isTauriRuntime()
@@ -74,36 +74,50 @@ function createTauriFilePort(): FilePort {
       return {
         bytes: toUint8Array(bytes),
         name: selected.name,
-        path: selected.path,
+        path: selected.fileGrant,
       };
     },
     async saveFile(bytes, suggestedName, currentPath) {
       const { invoke } = await import("@tauri-apps/api/core");
 
       if (currentPath) {
-        return invoke<SavedFile>("save_pdf_to_path", bytes, {
+        const saved = await invoke<TauriSavedPdf>("save_pdf_to_path", bytes, {
           headers: {
-            [HEADER_PATH]: encodeURIComponent(currentPath),
+            [HEADER_FILE_GRANT]: encodeURIComponent(currentPath),
           },
         });
+        return savedFromTauri(saved);
       }
 
-      return invoke<SavedFile | null>("save_pdf_dialog", bytes, {
+      const saved = await invoke<TauriSavedPdf | null>("save_pdf_dialog", bytes, {
         headers: {
           [HEADER_SUGGESTED_NAME]: encodeURIComponent(suggestedName),
         },
       });
+      return saved ? savedFromTauri(saved) : null;
     },
   };
 }
 
 interface TauriOpenedPdf {
   bytesToken: string;
+  fileGrant: string;
   name: string;
-  path: string;
+}
+
+interface TauriSavedPdf {
+  fileGrant: string;
+  name: string;
 }
 
 type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
+
+function savedFromTauri(saved: TauriSavedPdf): SavedFile {
+  return {
+    name: saved.name,
+    path: saved.fileGrant,
+  };
+}
 
 function toUint8Array(bytes: BinaryInvokeResponse): Uint8Array {
   if (bytes instanceof Uint8Array) {

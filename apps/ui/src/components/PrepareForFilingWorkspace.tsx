@@ -4,7 +4,7 @@ import type {
   JurisdictionPack,
   PreflightCheck,
   PreflightReport,
-} from "../../../../packages/rules/src/types";
+} from "@raiopdf/rules";
 import type { DocumentState } from "../hooks/useDocument";
 import { BoltIcon, CheckIcon, ChevronDownIcon } from "../icons";
 import "./PrepareForFilingWorkspace.css";

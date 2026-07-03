@@ -12,8 +12,7 @@ import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import floridaPackJson from "../../../packages/rules/data/florida.json";
-import { preflight } from "../../../packages/rules/src/preflight";
+import { floridaPack, preflight } from "@raiopdf/rules";
 import type {
   DocumentFacts,
   JurisdictionPack,
@@ -21,7 +20,7 @@ import type {
   PreflightCheck,
   PreflightReport,
   RectInches,
-} from "../../../packages/rules/src/types";
+} from "@raiopdf/rules";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
 import {
@@ -70,7 +69,7 @@ import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
-const FLORIDA_PACK = floridaPackJson as JurisdictionPack;
+const FLORIDA_PACK: JurisdictionPack = floridaPack;
 const POINTS_PER_INCH = 72;
 
 declare global {

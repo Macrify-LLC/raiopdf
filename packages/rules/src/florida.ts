@@ -1,3 +1,7 @@
-import { loadPackFromSource } from "./packLoader";
+import floridaJson from "../data/florida.json";
+import { validateJurisdictionPack } from "./packLoader";
 
-export const floridaPack = loadPackFromSource("florida");
+export const floridaPack = validateJurisdictionPack(
+  floridaJson,
+  "florida jurisdiction pack",
+);

@@ -33,6 +33,29 @@
   gap: var(--space-3);
 }
 
+.filing-card__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.filing-card__header-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.filing-card__header-actions .icon-button:hover:not(:disabled),
+.filing-card__header-actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 /* ---- Document identity line (replaces the old icon+eyebrow+h2 block --
    the dialog chrome already renders "Legal / Prepare for Filing", so this
    line only needs to say which document is loaded). ---- */

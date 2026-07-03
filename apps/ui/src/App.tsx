@@ -70,7 +70,8 @@ import {
 } from "./components/ProductionSetWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
-import { FloatingDialog } from "./components/FloatingDialog";
+import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
+import { HelpPanel } from "./components/HelpPanel";
 import { LoadingSun } from "./components/LoadingSun";
 import {
   isEngineBridgeUnavailableError,
@@ -344,6 +345,8 @@ export function App() {
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpArticleId, setHelpArticleId] = useState<string | undefined>(undefined);
   const [settingsFocusSection, setSettingsFocusSection] = useState<
     "open-raio-to-ai" | "about-macrify" | null
   >(null);
@@ -1271,7 +1274,7 @@ export function App() {
     [reorderPages, selectedIndexes],
   );
 
-  const saveToFile = useCallback((currentPath: string | null) => {
+  const saveToFile = useCallback((forceSaveAs: boolean) => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
     if (savingRef.current) {
@@ -1297,6 +1300,11 @@ export function App() {
         editing.clearPending();
       }
 
+      // saveDocument() awaits the mutation queue before reading the current
+      // filePath, so a redaction (or any other operation) that clears the
+      // path while this save was in flight is reflected here. Reading
+      // document.filePath at click time instead would race an in-flight
+      // path-clearing commit and could overwrite the original file.
       const saved = await saveDocument();
 
       if (!saved) {
@@ -1306,7 +1314,7 @@ export function App() {
       const written = await filePort.saveFile(
         saved.bytes,
         saved.fileName,
-        currentPath,
+        forceSaveAs ? null : saved.filePath,
       );
 
       if (written) {
@@ -1325,11 +1333,11 @@ export function App() {
   }, [applyEdits, editing, markSaved, saveDocument, setError]);
 
   const save = useCallback(() => {
-    saveToFile(document.filePath);
-  }, [document.filePath, saveToFile]);
+    saveToFile(false);
+  }, [saveToFile]);
 
   const saveAs = useCallback(() => {
-    saveToFile(null);
+    saveToFile(true);
   }, [saveToFile]);
 
   const printDocument = useCallback(() => {
@@ -1563,6 +1571,8 @@ export function App() {
         hasTextLayer: null,
         expectedOpenToken: sourceOpenToken,
         expectedSourceBytes: sourceBytes,
+        fileName: `${stripPdfExtension(document.fileName ?? "Untitled")}_redacted.pdf`,
+        filePath: null,
       });
 
       if (replaced !== "replaced") {
@@ -1586,7 +1596,16 @@ export function App() {
       setRedactionPhase("error");
       setRedactionMessage(message);
     }
-  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, pdfDocument, pendingRedactions, replaceBytes]);
+  }, [
+    document.bytes,
+    document.fileName,
+    engineBridge,
+    getOpenToken,
+    isCurrentDocument,
+    pdfDocument,
+    pendingRedactions,
+    replaceBytes,
+  ]);
 
   const applyBates = useCallback(
     async (options: PdfBatesStampOptions) => {
@@ -2582,6 +2601,25 @@ export function App() {
     setSettingsFocusSection("about-macrify");
     setSettingsOpen(true);
   }, []);
+  const openHelp = useCallback((articleId?: string) => {
+    setHelpArticleId(articleId);
+    setHelpOpen(true);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "F1" || event.defaultPrevented || settingsOpen || hasOpenDialogStackEntry()) {
+        return;
+      }
+
+      event.preventDefault();
+      openHelp();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [settingsOpen]);
 
   const handleNativeMenuCommand = useCallback(
     (command: string) => {
@@ -2620,6 +2658,9 @@ export function App() {
           setSettingsFocusSection("open-raio-to-ai");
           setSettingsOpen(true);
           break;
+        case "help:open":
+          openHelp();
+          break;
         case "file:about-macrify":
           openAboutMacrify();
           break;
@@ -2644,6 +2685,7 @@ export function App() {
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,
+      openHelp,
       openAboutMacrify,
       openFile,
       printDocument,
@@ -2725,6 +2767,7 @@ export function App() {
       onBuildBinder={buildBinder}
       onOpenRequested={openFile}
       onCancel={closeWorkspace}
+      onHelpRequested={() => openHelp("combine-exhibits")}
     />
   ) : activeOrganizeTool === "pages" ? (
     <OrganizeWorkspace
@@ -2745,6 +2788,7 @@ export function App() {
       onInsert={insertFile}
       onExportPageAsImage={exportPageAsImage}
       onCropResize={cropResize}
+      onHelpRequested={() => openHelp("pages")}
     />
   ) : null;
 
@@ -2758,6 +2802,7 @@ export function App() {
           eyebrow="Legal"
           width="lg"
           onClose={closeWorkspace}
+          onHelp={() => openHelp("prepare-for-filing")}
         >
           <PrepareForFilingWorkspace
             document={document}
@@ -2787,6 +2832,7 @@ export function App() {
             onPacketPreferencesChange={handlePacketPreferencesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
+            onHelpRequested={() => openHelp("prepare-for-filing")}
           />
         </FloatingDialog>
       );
@@ -2799,6 +2845,7 @@ export function App() {
           eyebrow="Legal"
           width="lg"
           onClose={closeWorkspace}
+          onHelp={() => openHelp("batch-cleanup")}
         >
           <BatchCleanupWorkspace
             currentFile={document.bytes ? {
@@ -2810,6 +2857,7 @@ export function App() {
             progress={batchCleanupProgress}
             onAddFile={openBatchCleanupFile}
             onRun={buildBatchCleanupFromUi}
+            onHelpRequested={() => openHelp("batch-cleanup")}
           />
         </FloatingDialog>
       );
@@ -2822,6 +2870,7 @@ export function App() {
           eyebrow="Legal"
           width="lg"
           onClose={closeWorkspace}
+          onHelp={() => openHelp("production-set")}
         >
           <ProductionSetWorkspace
             currentFile={document.bytes ? {
@@ -2833,6 +2882,7 @@ export function App() {
             progress={productionProgress}
             onAddFile={openProductionFile}
             onRun={buildProductionSetFromUi}
+            onHelpRequested={() => openHelp("production-set")}
           />
         </FloatingDialog>
       );
@@ -2840,7 +2890,7 @@ export function App() {
 
     if (activeLegalTool === "bates-numbering") {
       return (
-        <FloatingDialog title="Bates Numbering" eyebrow="Legal" onClose={closeWorkspace}>
+        <FloatingDialog title="Bates Numbering" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("bates-numbering")}>
           <BatesPanel
             state={batesState}
             hasDocument={Boolean(document.bytes)}
@@ -2853,7 +2903,7 @@ export function App() {
 
     if (activeLegalTool === "scrub-metadata") {
       return (
-        <FloatingDialog title="Scrub Metadata" eyebrow="Legal" onClose={closeWorkspace}>
+        <FloatingDialog title="Scrub Metadata" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("scrub-metadata")}>
           <ScrubMetadataPanel
             state={scrubMetadataPanel}
             hasDocument={Boolean(document.bytes)}
@@ -2865,7 +2915,7 @@ export function App() {
 
     if (activeLegalTool === "sanitize") {
       return (
-        <FloatingDialog title="Sanitize" eyebrow="Legal" onClose={closeWorkspace}>
+        <FloatingDialog title="Sanitize" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("sanitize")}>
           <SanitizePanel
             hasDocument={Boolean(document.bytes)}
             available={engineBridge.available}
@@ -2878,7 +2928,7 @@ export function App() {
 
     if (activeLegalTool === "passwords") {
       return (
-        <FloatingDialog title="Passwords" eyebrow="Legal" onClose={closeWorkspace}>
+        <FloatingDialog title="Passwords" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("passwords")}>
           <PasswordsPanel />
         </FloatingDialog>
       );
@@ -2886,7 +2936,7 @@ export function App() {
 
     if (activeEditDialogTool === "page-numbers") {
       return (
-        <FloatingDialog title="Page Numbers" eyebrow="Edit" onClose={closeWorkspace}>
+        <FloatingDialog title="Page Numbers" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("page-numbers")}>
           <PageNumbersPanel
             hasDocument={Boolean(document.bytes)}
             pageCount={document.pageCount}
@@ -2899,7 +2949,7 @@ export function App() {
 
     if (activeEditDialogTool === "watermark") {
       return (
-        <FloatingDialog title="Watermark" eyebrow="Edit" onClose={closeWorkspace}>
+        <FloatingDialog title="Watermark" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("watermark")}>
           <WatermarkPanel
             hasDocument={Boolean(document.bytes)}
             pageCount={document.pageCount}
@@ -2912,7 +2962,7 @@ export function App() {
 
     if (activeOrganizeTool === "compress") {
       return (
-        <FloatingDialog title="Compress" eyebrow="Organize" onClose={closeWorkspace}>
+        <FloatingDialog title="Compress" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("compress")}>
           <CompressPanel
             hasDocument={Boolean(document.bytes)}
             available={engineBridge.available}
@@ -2925,7 +2975,7 @@ export function App() {
 
     if (activeOrganizeTool === "repair") {
       return (
-        <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace}>
+        <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("repair")}>
           <RepairPanel
             hasSource={Boolean(repairCandidate || document.bytes)}
             available={engineBridge.available}
@@ -2939,7 +2989,7 @@ export function App() {
 
     if (activeOrganizeTool === "insert-images") {
       return (
-        <FloatingDialog title="Insert Images as Pages" eyebrow="Organize" onClose={closeWorkspace}>
+        <FloatingDialog title="Insert Images as Pages" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("insert-images")}>
           <InsertImagesPanel
             hasDocument={Boolean(document.bytes)}
             status={sidecarStatus}
@@ -2951,7 +3001,7 @@ export function App() {
 
     if (activeOrganizeTool === "properties") {
       return (
-        <FloatingDialog title="Document Properties" eyebrow="Organize" onClose={closeWorkspace}>
+        <FloatingDialog title="Document Properties" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("properties")}>
           <DocumentPropertiesPanel
             document={document}
             metadata={metadataSummary}
@@ -2966,6 +3016,7 @@ export function App() {
           title={getOrganizeDialogTitle(activeOrganizeTool)}
           eyebrow="Organize"
           onClose={closeWorkspace}
+          onHelp={() => openHelp(activeOrganizeTool)}
         >
           <OrganizeWorkspace
             flow={activeOrganizeTool as OrganizeFlowId}
@@ -2976,6 +3027,7 @@ export function App() {
             onSplit={splitAndSavePages}
             onInsert={insertFile}
             onCropResize={cropResize}
+            onHelpRequested={() => openHelp(activeOrganizeTool)}
           />
         </FloatingDialog>
       );
@@ -3036,7 +3088,14 @@ export function App() {
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
         onOpenAbout={openAboutMacrify}
+        onHelpRequested={openHelp}
       />
+      {helpOpen ? (
+        <HelpPanel
+          initialArticleId={helpArticleId}
+          onClose={() => setHelpOpen(false)}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsDialog
           onClose={() => {
@@ -3841,12 +3900,15 @@ function formatRedactionVerificationSuccess(result: RedactionVerificationResult)
     ? "text layer verified clean"
     : "no source text was extractable from marked areas";
 
-  return [
-    `Redacted and verified: ${textLayer}`,
-    "redacted page images replaced",
-    "annotations cleaned",
-    "metadata scrubbed",
-  ].join("; ") + ".";
+  return (
+    [
+      `Redacted and verified: ${textLayer}`,
+      "redacted page images replaced",
+      "annotations cleaned",
+      "metadata scrubbed",
+    ].join("; ") +
+    ". Your original file is untouched — Save will prompt you for a new file name."
+  );
 }
 
 function formatRedactionVerificationFailure(result: RedactionVerificationResult): string {

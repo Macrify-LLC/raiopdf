@@ -70,6 +70,9 @@
     }
   },
   "plugins": {
+    "shell": {
+      "open": "https://.+"
+    },
     "updater": {
       "endpoints": [
         "https://github.com/Macrify-LLC/raiopdf/releases/latest/download/latest.json"

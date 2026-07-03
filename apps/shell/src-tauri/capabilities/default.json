@@ -10,6 +10,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "process:default",
+    "shell:allow-open",
     "updater:default"
   ]
 }

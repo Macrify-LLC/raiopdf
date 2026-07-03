@@ -4,6 +4,16 @@ import type { OcrUiState } from "../App";
 import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import {
+  EDIT_DIALOG_TOOLS,
+  HELP_ONLY_TOOL_ENTRIES,
+  LEGAL_TOOLS,
+  ORGANIZE_TOOLS,
+  TOOL_PANEL_EDIT_TOOLS,
+  type EditDialogToolId,
+  type LegalToolId,
+  type OrganizeToolId,
+} from "../lib/toolRegistry";
+import {
   BatesIcon,
   BoltIcon,
   CombineExhibitsIcon,
@@ -11,6 +21,7 @@ import {
   CropIcon,
   DrawIcon,
   EditIcon,
+  HelpIcon,
   HighlightIcon,
   ImageIcon,
   InsertIcon,
@@ -26,57 +37,44 @@ import {
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
+import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
 type GroupId = "edit" | "organize" | "comment" | "legal";
-export type LegalToolId = typeof LEGAL_TOOLS[number]["id"];
-export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
-export type EditDialogToolId = typeof EDIT_DIALOG_TOOLS[number]["id"];
+export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 
-const LEGAL_TOOLS = [
-  { id: "prepare-for-filing", label: "Prepare for Filing", description: "Check filing limits, normalize pages, split if needed, and verify the output.", icon: <BoltIcon variant="outline" size={16} /> },
-  { id: "batch-cleanup", label: "Batch Cleanup", description: "Run OCR, cleanup, metadata removal, and filing splits across local PDFs.", icon: <OcrSearchIcon size={16} /> },
-  { id: "production-set", label: "Production Set", description: "Build a Bates-numbered production package with index files and optional volumes.", icon: <BatesIcon size={16} /> },
-  { id: "combine-exhibits", label: "Combine with Exhibits", description: "Append exhibits, stamp exhibit labels, add bookmarks, and optionally add an index.", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "sanitize", label: "Sanitize...", description: "Remove active content such as JavaScript, links, and embedded files.", icon: <ShieldCheckIcon size={16} /> },
-  { id: "redact", label: "Redact", description: "Mark areas for permanent removal, then verify redacted content is gone.", icon: <RedactIcon size={16} /> },
-  { id: "bates-numbering", label: "Bates Numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width.", icon: <BatesIcon size={16} /> },
-  { id: "scanner-2425", label: "2.425 Scanner", description: "Look for common Florida Rule 2.425 sensitive-information patterns.", icon: <ShieldCheckIcon size={16} /> },
-  { id: "scrub-metadata", label: "Scrub Metadata", description: "Inspect and remove document metadata without changing page content.", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "passwords", label: "Passwords", description: "Review password controls; filing prep can remove encryption with the open password.", icon: <ShieldCheckIcon size={16} /> },
-] as const;
+const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
+  "prepare-for-filing": <BoltIcon variant="outline" size={16} />,
+  "batch-cleanup": <OcrSearchIcon size={16} />,
+  "production-set": <BatesIcon size={16} />,
+  "combine-exhibits": <CombineExhibitsIcon size={16} />,
+  sanitize: <ShieldCheckIcon size={16} />,
+  redact: <RedactIcon size={16} />,
+  "bates-numbering": <BatesIcon size={16} />,
+  "scanner-2425": <ShieldCheckIcon size={16} />,
+  "scrub-metadata": <ScrubMetadataIcon size={16} />,
+  passwords: <ShieldCheckIcon size={16} />,
+  pages: <OrganizeIcon size={16} />,
+  compress: <CropIcon size={16} />,
+  repair: <ShieldCheckIcon size={16} />,
+  merge: <CombineExhibitsIcon size={16} />,
+  insert: <InsertIcon size={16} />,
+  "insert-images": <ImageIcon size={16} />,
+  crop: <CropIcon size={16} />,
+  properties: <ScrubMetadataIcon size={16} />,
+  rotate: <RotateIcon size={16} />,
+  textBox: <TextBoxIcon size={16} />,
+  image: <ImageIcon size={16} />,
+  highlight: <HighlightIcon size={16} />,
+  draw: <DrawIcon size={16} />,
+  sign: <SignIcon size={16} />,
+  "page-numbers": <BatesIcon size={16} />,
+  watermark: <ScrubMetadataIcon size={16} />,
+};
 
-const ORGANIZE_TOOLS = [
-  { id: "pages", label: "Organize Pages", description: "Select, reorder, rotate, delete, extract, or split pages.", icon: <OrganizeIcon size={16} /> },
-  { id: "compress", label: "Compress...", description: "Reduce file size through the desktop engine while preserving a PDF output.", icon: <CropIcon size={16} /> },
-  { id: "repair", label: "Repair...", description: "Ask the desktop engine to rebuild a PDF that will not open cleanly.", icon: <ShieldCheckIcon size={16} /> },
-  { id: "merge", label: "Merge PDFs...", description: "Append other PDFs after the current document.", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "insert", label: "Insert from File...", description: "Insert pages from another PDF at the selected position.", icon: <InsertIcon size={16} /> },
-  { id: "insert-images", label: "Insert images as pages...", description: "Convert image files into PDF pages and insert them.", icon: <ImageIcon size={16} /> },
-  { id: "crop", label: "Crop / Resize...", description: "Crop margins or resize selected pages to a standard page size.", icon: <CropIcon size={16} /> },
-  { id: "properties", label: "Document Properties", description: "View document metadata, size, page count, and text-layer status.", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "rotate", label: "Rotate Pages", description: "Rotate the selected pages clockwise.", icon: <RotateIcon size={16} /> },
-] as const;
-
-const EDIT_TOOLS: ReadonlyArray<{
-  id: Exclude<EditToolId, "select" | "comment">;
-  label: string;
-  description: string;
-  icon: ReactNode;
-}> = [
-  { id: "textBox", label: "Text Box", description: "Place editable text on the current page before saving.", icon: <TextBoxIcon size={16} /> },
-  { id: "image", label: "Image", description: "Place an image on the current page before saving.", icon: <ImageIcon size={16} /> },
-  { id: "highlight", label: "Highlight", description: "Drag over text to create a saved highlight annotation.", icon: <HighlightIcon size={16} /> },
-  { id: "draw", label: "Draw", description: "Draw freehand ink that will be saved with the PDF.", icon: <DrawIcon size={16} /> },
-  { id: "sign", label: "Sign", description: "Place a signature image as a visible page edit.", icon: <SignIcon size={16} /> },
-];
-
-const EDIT_DIALOG_TOOLS = [
-  { id: "page-numbers", label: "Page Numbers...", description: "Stamp generated page numbers into selected page positions.", icon: <BatesIcon size={16} /> },
-  { id: "watermark", label: "Watermark...", description: "Add repeated visible text across document pages.", icon: <ScrubMetadataIcon size={16} /> },
-] as const;
+const MAKE_SEARCHABLE_TOOL = HELP_ONLY_TOOL_ENTRIES[0];
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -127,6 +125,7 @@ export interface ToolPanelProps {
   onCancelRedactions: () => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
+  onHelpRequested: (articleId: string) => void;
 }
 
 export function ToolPanel({
@@ -151,6 +150,7 @@ export function ToolPanel({
   onCancelRedactions,
   onRunScanner,
   onMarkScannerHit,
+  onHelpRequested,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -173,24 +173,26 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        {EDIT_TOOLS.map((tool) => (
+        {TOOL_PANEL_EDIT_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {EDIT_DIALOG_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             description={tool.description}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
         {pendingContentEdits.length > 0 ? (
@@ -208,11 +210,12 @@ export function ToolPanel({
         {ORGANIZE_TOOLS.map((tool) => (
           <ToolRow
             key={tool.id}
-            icon={tool.icon}
+            icon={TOOL_PANEL_ICONS[tool.id]}
             label={tool.label}
             description={tool.description}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
+            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
       </AccordionGroup>
@@ -236,10 +239,11 @@ export function ToolPanel({
       <div className="tool-panel__top-row">
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
-          label="Make Searchable (OCR)"
-          description="Run OCR through the desktop engine and verify the output has searchable text."
+          label={MAKE_SEARCHABLE_TOOL.label}
+          description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
+          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         {ocrState.phase !== "idle" || ocrStarting ? (
           <OcrStatusPanel
@@ -265,11 +269,12 @@ export function ToolPanel({
           return (
             <div key={tool.id}>
               <ToolRow
-                icon={tool.icon}
+                icon={TOOL_PANEL_ICONS[tool.id]}
                 label={tool.label}
                 description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
+                onHelp={() => onHelpRequested(tool.helpArticleId)}
               />
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel
@@ -277,6 +282,7 @@ export function ToolPanel({
                   hasDocument={hasDocument}
                   onConfirm={onConfirmRedactions}
                   onCancel={onCancelRedactions}
+                  onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
               {tool.id === "bates-numbering" && selected ? (
@@ -288,6 +294,7 @@ export function ToolPanel({
                   hasDocument={hasDocument}
                   onRunScanner={onRunScanner}
                   onMarkHit={onMarkScannerHit}
+                  onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
               {tool.id === "scrub-metadata" && selected ? (
@@ -354,11 +361,13 @@ function RedactionStatusPanel({
   hasDocument,
   onConfirm,
   onCancel,
+  onHelp,
 }: {
   state: RedactionPanelState;
   hasDocument: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  onHelp: () => void;
 }) {
   if (!hasDocument) {
     return <InlineMessage tone="neutral" message="Open a PDF before marking redactions." />;
@@ -371,11 +380,15 @@ function RedactionStatusPanel({
   if (state.phase === "confirming") {
     return (
       <div className="tool-panel__inline-card">
-        <p className="tool-panel__card-title">
-          {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
-        </p>
+        <div className="tool-panel__card-header">
+          <p className="tool-panel__card-title">
+            {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
+          </p>
+          <IconButton icon={<HelpIcon size={14} />} label="Help: Redact" onClick={onHelp} />
+        </div>
         <p className="tool-panel__card-copy">
           RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
+          Your open file on disk is left untouched — Save will prompt you for a new file name.
         </p>
         <div className="tool-panel__button-row">
           <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>
@@ -528,17 +541,22 @@ function ScannerPanel({
   hasDocument,
   onRunScanner,
   onMarkHit,
+  onHelp,
 }: {
   state: ScannerPanelState;
   hasDocument: boolean;
   onRunScanner: () => void;
   onMarkHit: (hit: SensitiveHit) => void;
+  onHelp: () => void;
 }) {
   return (
     <div className="tool-panel__inline-card">
-      <p className="tool-panel__note">
-        Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
-      </p>
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__note">
+          Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
+        </p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: 2.425 Scanner" onClick={onHelp} />
+      </div>
       <button
         type="button"
         className="tool-panel__primary-button"

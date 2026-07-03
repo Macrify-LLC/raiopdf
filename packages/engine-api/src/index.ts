@@ -118,6 +118,195 @@ export type PdfAConversionOptions = {
   strict?: boolean;
 };
 
+/** A single point in PDF user-space points (origin bottom-left of the page box). */
+export type PdfEditPoint = {
+  /** Horizontal offset from the page's left edge in PDF points. */
+  x: number;
+  /** Vertical offset from the page's bottom edge in PDF points. */
+  y: number;
+};
+
+/**
+ * An axis-aligned rectangle in PDF user-space points.
+ *
+ * `x`/`y` are the rectangle's bottom-left corner, matching `PdfRedactionArea`.
+ * Callers convert canvas/viewport coordinates (including any page `/Rotate`)
+ * into user-space points before building edits — the same coordinate contract
+ * used by `redactAreas`.
+ */
+export type PdfEditRect = {
+  /** Left edge in PDF user-space points. */
+  x: number;
+  /** Bottom edge in PDF user-space points. */
+  y: number;
+  /** Width in PDF points. Must be positive. */
+  w: number;
+  /** Height in PDF points. Must be positive. */
+  h: number;
+};
+
+/** An RGB color with each component in the 0–1 range. */
+export type PdfEditColor = {
+  r: number;
+  g: number;
+  b: number;
+};
+
+/** Raster image formats accepted by image-bearing edits. */
+export type PdfEditImageFormat = "png" | "jpeg";
+
+/**
+ * Translucent text highlight covering one rectangle per highlighted line.
+ *
+ * Highlights are baked into page content on apply (not stored as annotations),
+ * so they survive in every viewer and cannot be toggled off afterward.
+ */
+export type PdfHighlightEdit = {
+  type: "highlight";
+  /** Zero-based page index receiving the highlight. */
+  pageIndex: number;
+  /** One rectangle per highlighted text line, in PDF user-space points. */
+  rects: readonly PdfEditRect[];
+  /** Highlight fill color. Defaults to marker yellow. */
+  color?: PdfEditColor;
+  /** Fill opacity in the 0–1 range. Defaults to 0.4. */
+  opacity?: number;
+};
+
+/**
+ * A block of caller-authored text drawn inside a rectangle.
+ *
+ * Text starts at the visual top-left of `rect` and supports `\n` line breaks.
+ * On pages with `/Rotate` 90/180/270 the text is drawn so it reads upright to
+ * the viewer; `rect` remains the user-space bounding box of the visual box.
+ */
+export type PdfTextBoxEdit = {
+  type: "textBox";
+  /** Zero-based page index receiving the text box. */
+  pageIndex: number;
+  /** User-space bounding box of the text box. */
+  rect: PdfEditRect;
+  /** Text content. `\n` produces additional lines. Must not be empty. */
+  text: string;
+  /** Font size in points. Defaults to 12. */
+  fontSizePt?: number;
+  /** Ink color. Defaults to near-black (#111111). */
+  color?: PdfEditColor;
+};
+
+/**
+ * A raster image drawn inside a rectangle.
+ *
+ * On rotated pages the image is drawn upright to the viewer; `rect` is the
+ * user-space bounding box of the visual placement (its `w`/`h` are user-space
+ * extents, so they appear swapped relative to the visual box on 90/270 pages).
+ */
+export type PdfImageEdit = {
+  type: "image";
+  /** Zero-based page index receiving the image. */
+  pageIndex: number;
+  /** User-space bounding box the image is scaled into. */
+  rect: PdfEditRect;
+  /** Encoded image bytes. */
+  bytes: PdfBytes;
+  /** Encoding of `bytes`. */
+  format: PdfEditImageFormat;
+};
+
+/**
+ * Freehand ink strokes baked into page content.
+ *
+ * Each stroke is a polyline of user-space points (already rotation-mapped by
+ * the caller, like redaction rectangles), so engines draw them verbatim.
+ */
+export type PdfInkEdit = {
+  type: "ink";
+  /** Zero-based page index receiving the strokes. */
+  pageIndex: number;
+  /** Polylines in PDF user-space points. Each stroke needs at least two points. */
+  strokes: ReadonlyArray<readonly PdfEditPoint[]>;
+  /** Stroke thickness in points. Defaults to 1.5. */
+  strokeWidthPt?: number;
+  /** Stroke color. Defaults to near-black (#111111). */
+  color?: PdfEditColor;
+};
+
+/**
+ * A sticky-note comment stored as a real PDF `/Text` annotation.
+ *
+ * Unlike the drawn edit types, comments survive as annotations: they stay
+ * deletable and editable in other PDF viewers and are not baked into content.
+ * Viewers render their own upright note icon at the anchor point, so no
+ * rotation compensation is required.
+ */
+export type PdfCommentEdit = {
+  type: "comment";
+  /** Zero-based page index receiving the annotation. */
+  pageIndex: number;
+  /** Bottom-left anchor of the note icon in PDF user-space points. */
+  at: PdfEditPoint;
+  /** Note body shown in the comment popup. Must not be empty. */
+  text: string;
+  /** Optional author recorded on the annotation's `/T` entry. */
+  author?: string;
+};
+
+/** Value accepted for a single AcroForm field write. */
+export type PdfFormFieldValue = string | boolean | readonly string[];
+
+/**
+ * Writes values into the document's AcroForm fields.
+ *
+ * Form fields are document-scoped in PDF, so this is the one edit variant
+ * without `pageIndex`/geometry. Strings fill text fields and select radio
+ * group or dropdown options; booleans check/uncheck checkboxes; string arrays
+ * select option-list (and multi-select dropdown) entries. Unknown field names
+ * and mismatched value types reject with `INVALID_DOCUMENT`.
+ */
+export type PdfFormValuesEdit = {
+  type: "formValues";
+  /** Field values keyed by fully-qualified AcroForm field name. */
+  values: Readonly<Record<string, PdfFormFieldValue>>;
+};
+
+/**
+ * A signature image placed like `PdfImageEdit`.
+ *
+ * Kept as a distinct variant so callers can carry signature provenance and
+ * apply signature-specific policy (e.g. the flatten-on-save default); engines
+ * render it exactly like an image edit. This is a drawn signature picture,
+ * not a cryptographic digital signature.
+ */
+export type PdfSignatureEdit = {
+  type: "signature";
+  /** Zero-based page index receiving the signature. */
+  pageIndex: number;
+  /** User-space bounding box the signature is scaled into. */
+  rect: PdfEditRect;
+  /** Encoded signature image bytes. */
+  bytes: PdfBytes;
+  /** Encoding of `bytes`. */
+  format: PdfEditImageFormat;
+};
+
+/**
+ * One pending add-content edit to apply to a document.
+ *
+ * Geometry is always in PDF user-space points with a bottom-left origin —
+ * identical to the redaction coordinate contract. Callers perform the
+ * canvas→PDF-point mapping (including page `/Rotate` handling); engines must
+ * additionally render orientation-sensitive content (text, images,
+ * signatures) upright to the viewer on rotated pages.
+ */
+export type PdfEdit =
+  | PdfHighlightEdit
+  | PdfTextBoxEdit
+  | PdfImageEdit
+  | PdfInkEdit
+  | PdfCommentEdit
+  | PdfFormValuesEdit
+  | PdfSignatureEdit;
+
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "ENCRYPTED_DOCUMENT"
@@ -320,6 +509,34 @@ export interface PdfEngine {
     exhibits: readonly PdfBinderExhibit[],
     options: PdfBinderOptions,
   ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with the provided add-content edits applied.
+   *
+   * Edits are applied in array order against the source document. An empty
+   * `edits` array is valid and returns a new handle with unchanged content.
+   * Geometry follows the redaction coordinate contract (PDF user-space
+   * points, bottom-left origin, caller-mapped from canvas coordinates);
+   * engines must render text, image, and signature edits upright to the
+   * viewer on pages rotated 90/180/270 degrees. Comments must be written as
+   * real `/Annots` entries so they remain live annotations; the other edit
+   * types are baked into page content. Engines without an add-content
+   * pipeline must reject with `PdfEngineError("UNSUPPORTED", ...)`.
+   */
+  applyEdits(
+    document: PdfDocumentHandle,
+    edits: readonly PdfEdit[],
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with all AcroForm fields flattened.
+   *
+   * Field appearances (current values) are drawn into page content and the
+   * interactive fields are removed, so values stay visible but are no longer
+   * editable. A document without form fields round-trips unchanged. Engines
+   * without form support must reject with `PdfEngineError("UNSUPPORTED", ...)`.
+   */
+  flattenForm(document: PdfDocumentHandle): Promise<PdfDocumentHandle>;
 
   /** Serializes an opened document handle to PDF bytes. */
   saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array>;

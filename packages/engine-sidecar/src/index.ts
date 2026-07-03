@@ -5,6 +5,7 @@ import type {
   PdfBytes,
   PdfAConversionOptions,
   PdfDocumentHandle,
+  PdfEdit,
   PdfEngine,
   PdfEngineErrorCode,
   PdfNormalizePagesOptions,
@@ -505,6 +506,37 @@ export class SidecarPdfEngine implements PdfEngine {
     const response = await this.request("/api/v1/misc/ocr-pdf", formData);
 
     return this.store(await readBytes(response), pageCount);
+  }
+
+  /**
+   * Add-content editing is intentionally unsupported on the sidecar engine.
+   *
+   * The client-side pdf-lib engine (`@raiopdf/engine-local`) is the canonical
+   * `applyEdits` implementation: edits are composed from in-app overlay state,
+   * and a Stirling PDF round-trip would add network latency and multipart
+   * plumbing without adding any capability pdf-lib lacks.
+   */
+  async applyEdits(
+    _document: PdfDocumentHandle,
+    _edits: readonly PdfEdit[],
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Add-content edits are applied by the local pdf-lib engine; the sidecar round-trip adds nothing.",
+    );
+  }
+
+  /**
+   * Form flattening is intentionally unsupported on the sidecar engine for the
+   * same reason as `applyEdits`: pdf-lib's `form.flatten()` in the local
+   * engine is the canonical implementation, and the server round-trip adds
+   * nothing.
+   */
+  async flattenForm(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Form flattening is handled by the local pdf-lib engine; the sidecar round-trip adds nothing.",
+    );
   }
 
   async saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array> {

@@ -31,6 +31,7 @@
       "nsis",
       "msi"
     ],
+    "createUpdaterArtifacts": true,
     "publisher": "Macrify LLC",
     "homepage": "https://raio.macrify.me",
     "copyright": "Copyright (c) 2026 Macrify LLC",
@@ -47,6 +48,7 @@
       "payload/**/*"
     ],
     "windows": {
+      "allowDowngrades": false,
       "nsis": {
         "headerImage": "../../../installer/artwork/nsis-header.bmp",
         "sidebarImage": "../../../installer/artwork/nsis-sidebar.bmp",

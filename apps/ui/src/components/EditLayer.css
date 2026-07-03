@@ -84,11 +84,16 @@
 
 .edit-layer__text-content {
   display: block;
-  font-family: Helvetica, Arial, sans-serif;
   color: var(--edit-ink);
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
+  white-space: pre;
+  overflow-wrap: normal;
   user-select: none;
+}
+
+.edit-layer__text-line {
+  display: block;
+  min-height: 1.2em;
+  white-space: pre;
 }
 
 .edit-layer__stamp {
@@ -120,7 +125,8 @@
   white-space: nowrap;
 }
 
-.edit-layer__font-size {
+.edit-layer__font-size,
+.edit-layer__font-family {
   font-family: var(--font-ui);
   font-size: var(--text-2xs);
   color: var(--body);
@@ -128,6 +134,41 @@
   border-radius: var(--radius-control);
   background: var(--panel);
   padding: 1px 2px;
+}
+
+.edit-layer__font-family {
+  max-width: 84px;
+}
+
+.edit-layer__text-toggle-group,
+.edit-layer__align-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.edit-layer__text-toggle,
+.edit-layer__align-button {
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+
+.edit-layer__text-toggle[aria-pressed="true"],
+.edit-layer__align-button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
 }
 
 .edit-layer__chrome-hint {
@@ -209,7 +250,6 @@
   padding: 0;
   margin: 0;
   background: transparent;
-  font-family: Helvetica, Arial, sans-serif;
   color: var(--edit-ink);
 }
 

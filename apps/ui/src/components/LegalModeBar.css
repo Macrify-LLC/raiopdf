@@ -107,6 +107,19 @@
   cursor: default;
 }
 
+.legal-mode-bar__select {
+  height: 24px;
+  max-width: 92px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  box-shadow: var(--shadow-control);
+}
+
 .legal-mode-bar__width-button[aria-pressed="true"] {
   border-color: var(--primary);
   background: var(--accent-pale);

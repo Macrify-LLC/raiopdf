@@ -29,11 +29,13 @@ import type {
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTextBoxAlign,
   PdfTextBoxEdit,
+  PdfTextBoxFontFamily,
   PdfTextRegion,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, wrapTextBoxLines } from "@raiopdf/engine-api";
 import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
 import {
   degrees as pdfDegrees,
@@ -63,6 +65,10 @@ type OutlineEntry = {
 };
 
 type PageRotation = 0 | 90 | 180 | 270;
+
+type TextBoxFontKey = `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
+
+type TextBoxFontResolver = (edit: PdfTextBoxEdit) => Promise<PDFFont>;
 
 export type ExhibitBinderIndexExhibit = {
   label: string;
@@ -116,6 +122,20 @@ const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 const COMMENT_ICON_SIZE_PT = 20;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
+const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
+  "helvetica:regular": StandardFonts.Helvetica,
+  "helvetica:bold": StandardFonts.HelveticaBold,
+  "helvetica:italic": StandardFonts.HelveticaOblique,
+  "helvetica:boldItalic": StandardFonts.HelveticaBoldOblique,
+  "times:regular": StandardFonts.TimesRoman,
+  "times:bold": StandardFonts.TimesRomanBold,
+  "times:italic": StandardFonts.TimesRomanItalic,
+  "times:boldItalic": StandardFonts.TimesRomanBoldItalic,
+  "courier:regular": StandardFonts.Courier,
+  "courier:bold": StandardFonts.CourierBold,
+  "courier:italic": StandardFonts.CourierOblique,
+  "courier:boldItalic": StandardFonts.CourierBoldOblique,
+};
 
 export class LocalPdfEngine implements PdfEngine {
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
@@ -720,15 +740,21 @@ export class LocalPdfEngine implements PdfEngine {
       assertValidEdit(edit, pageCount);
     }
 
-    let helvetica: PDFFont | null = null;
-    const getHelvetica = async (): Promise<PDFFont> => {
-      helvetica ??= await output.embedFont(StandardFonts.Helvetica);
+    const textBoxFonts = new Map<TextBoxFontKey, PDFFont>();
+    const resolveTextBoxFont: TextBoxFontResolver = async (edit) => {
+      const key = textBoxFontKey(edit);
+      let font = textBoxFonts.get(key);
 
-      return helvetica;
+      if (!font) {
+        font = await output.embedFont(TEXT_BOX_STANDARD_FONTS[key]);
+        textBoxFonts.set(key, font);
+      }
+
+      return font;
     };
 
     for (const edit of edits) {
-      await applyEditInPlace(output, edit, getHelvetica);
+      await applyEditInPlace(output, edit, resolveTextBoxFont);
     }
 
     return this.store(await output.save());
@@ -1227,14 +1253,14 @@ function mapPageRectToVisualRect(
 async function applyEditInPlace(
   pdf: PDFDocument,
   edit: PdfEdit,
-  getHelvetica: () => Promise<PDFFont>,
+  resolveTextBoxFont: TextBoxFontResolver,
 ): Promise<void> {
   switch (edit.type) {
     case "highlight":
       applyHighlightEdit(pdf, edit);
       return;
     case "textBox":
-      applyTextBoxEdit(pdf, edit, await getHelvetica());
+      applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
       return;
     case "image":
     case "signature":
@@ -1282,6 +1308,8 @@ function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
 function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
   const page = pdf.getPage(edit.pageIndex);
   const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
+  const lineHeight = fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR;
+  const align = edit.align ?? "left";
   const pageRotation = normalizePageRotation(page.getRotation().angle);
   const visualRect = mapPageRectToVisualRect(
     edit.rect,
@@ -1289,22 +1317,31 @@ function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont)
     page.getHeight(),
     pageRotation,
   );
-  const anchor = mapVisualPointToPagePoint({
-    visualX: visualRect.x,
-    visualY: visualRect.y + visualRect.h - fontSize,
-    pageWidth: page.getWidth(),
-    pageHeight: page.getHeight(),
-    pageRotation,
+  const lines = wrapTextBoxLines({
+    text: edit.text,
+    boxWidthPt: visualRect.w,
+    fontSizePt: fontSize,
+    font,
   });
 
-  page.drawText(edit.text, {
-    x: anchor.x,
-    y: anchor.y,
-    size: fontSize,
-    font,
-    color: toEditColor(edit.color, EDIT_INK_COLOR),
-    lineHeight: fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR,
-    rotate: pdfDegrees(pageRotation),
+  lines.forEach((line, lineIndex) => {
+    const lineWidth = font.widthOfTextAtSize(line, fontSize);
+    const anchor = mapVisualPointToPagePoint({
+      visualX: visualRect.x + computeTextBoxAlignOffset(visualRect.w, lineWidth, align),
+      visualY: visualRect.y + visualRect.h - fontSize - lineIndex * lineHeight,
+      pageWidth: page.getWidth(),
+      pageHeight: page.getHeight(),
+      pageRotation,
+    });
+
+    page.drawText(line, {
+      x: anchor.x,
+      y: anchor.y,
+      size: fontSize,
+      font,
+      color: toEditColor(edit.color, EDIT_INK_COLOR),
+      rotate: pdfDegrees(pageRotation),
+    });
   });
 }
 
@@ -1554,6 +1591,21 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       if (edit.fontSizePt !== undefined) {
         assertPositiveNumber(edit.fontSizePt, "fontSizePt");
       }
+      if (
+        edit.fontFamily !== undefined &&
+        !["helvetica", "times", "courier"].includes(edit.fontFamily)
+      ) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Text box fontFamily must be helvetica, times, or courier.",
+        );
+      }
+      if (edit.align !== undefined && !["left", "center", "right"].includes(edit.align)) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Text box align must be left, center, or right.",
+        );
+      }
       return;
     case "image":
     case "signature":
@@ -1603,6 +1655,40 @@ function toEditColor(
   fallback: ReturnType<typeof rgb>,
 ): ReturnType<typeof rgb> {
   return color ? rgb(color.r, color.g, color.b) : fallback;
+}
+
+function textBoxFontKey(edit: PdfTextBoxEdit): TextBoxFontKey {
+  const family = edit.fontFamily ?? "helvetica";
+
+  if (edit.bold && edit.italic) {
+    return `${family}:boldItalic`;
+  }
+
+  if (edit.bold) {
+    return `${family}:bold`;
+  }
+
+  if (edit.italic) {
+    return `${family}:italic`;
+  }
+
+  return `${family}:regular`;
+}
+
+function computeTextBoxAlignOffset(
+  boxWidth: number,
+  lineWidth: number,
+  align: PdfTextBoxAlign,
+): number {
+  if (align === "center") {
+    return (boxWidth - lineWidth) / 2;
+  }
+
+  if (align === "right") {
+    return boxWidth - lineWidth;
+  }
+
+  return 0;
 }
 
 function computeStampX(

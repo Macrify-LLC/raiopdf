@@ -217,6 +217,119 @@ export type PdfEditColor = {
   b: number;
 };
 
+export type PdfTextBoxFontFamily = "helvetica" | "times" | "courier";
+
+export type PdfTextBoxAlign = "left" | "center" | "right";
+
+export type PdfTextMeasureFont = {
+  widthOfTextAtSize: (text: string, size: number) => number;
+};
+
+export type PdfTextBoxWrapOptions = {
+  text: string;
+  boxWidthPt: number;
+  fontSizePt: number;
+  font: PdfTextMeasureFont;
+};
+
+/**
+ * Computes the exact lines a text-box edit should draw for a given font and
+ * width. Explicit newlines are hard breaks; long words are split greedily.
+ */
+export function wrapTextBoxLines(options: PdfTextBoxWrapOptions): string[] {
+  const hardLines = options.text.replace(/\r\n/g, "\n").split("\n");
+  const lines = hardLines.flatMap((line) => wrapHardLine(line, options));
+
+  return lines.length > 0 ? lines : [""];
+}
+
+function wrapHardLine(
+  text: string,
+  options: Pick<PdfTextBoxWrapOptions, "boxWidthPt" | "fontSizePt" | "font">,
+): string[] {
+  if (text.length === 0) {
+    return [""];
+  }
+
+  const maxWidth = Math.max(0, options.boxWidthPt);
+  const words = [...text.matchAll(/\S+/g)].map((match) => match[0]);
+
+  if (words.length === 0) {
+    return [""];
+  }
+
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+
+    if (fitsText(candidate, maxWidth, options)) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      lines.push(current);
+    }
+
+    if (fitsText(word, maxWidth, options)) {
+      current = word;
+      continue;
+    }
+
+    const pieces = breakLongWord(word, maxWidth, options);
+    lines.push(...pieces.slice(0, -1));
+    current = pieces.at(-1) ?? "";
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
+
+function breakLongWord(
+  word: string,
+  maxWidth: number,
+  options: Pick<PdfTextBoxWrapOptions, "fontSizePt" | "font">,
+): string[] {
+  const pieces: string[] = [];
+  let current = "";
+
+  for (const char of word) {
+    const candidate = `${current}${char}`;
+
+    if (current && fitsText(candidate, maxWidth, options)) {
+      current = candidate;
+      continue;
+    }
+
+    if (!current) {
+      current = char;
+      continue;
+    }
+
+    pieces.push(current);
+    current = char;
+  }
+
+  if (current) {
+    pieces.push(current);
+  }
+
+  return pieces.length > 0 ? pieces : [word];
+}
+
+function fitsText(
+  text: string,
+  maxWidth: number,
+  options: Pick<PdfTextBoxWrapOptions, "fontSizePt" | "font">,
+): boolean {
+  return options.font.widthOfTextAtSize(text, options.fontSizePt) <= maxWidth;
+}
+
 /** Raster image formats accepted by image-bearing edits. */
 export type PdfEditImageFormat = "png" | "jpeg";
 
@@ -257,6 +370,14 @@ export type PdfTextBoxEdit = {
   fontSizePt?: number;
   /** Ink color. Defaults to near-black (#111111). */
   color?: PdfEditColor;
+  /** Standard PDF font family. Defaults to Helvetica. */
+  fontFamily?: PdfTextBoxFontFamily;
+  /** Use the bold face of the selected standard font family. Defaults to false. */
+  bold?: boolean;
+  /** Use the italic/oblique face of the selected standard font family. Defaults to false. */
+  italic?: boolean;
+  /** Horizontal alignment for each rendered line. Defaults to left. */
+  align?: PdfTextBoxAlign;
 };
 
 /**

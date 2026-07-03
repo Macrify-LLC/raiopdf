@@ -154,6 +154,53 @@ describe("toPdfEdits", () => {
     });
   });
 
+  it("emits non-default text box font and alignment options", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "textBox",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Styled text",
+        fontSizePt: 12,
+        fontFamily: "times",
+        bold: true,
+        italic: true,
+        align: "center",
+      },
+    ]);
+
+    expect(edits[0]).toMatchObject({
+      type: "textBox",
+      fontFamily: "times",
+      bold: true,
+      italic: true,
+      align: "center",
+    });
+  });
+
+  it("omits default text box font and alignment options", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "textBox",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Default text",
+        fontSizePt: 12,
+        fontFamily: "helvetica",
+        bold: false,
+        italic: false,
+        align: "left",
+      },
+    ]);
+
+    expect(edits[0]).not.toHaveProperty("fontFamily");
+    expect(edits[0]).not.toHaveProperty("bold");
+    expect(edits[0]).not.toHaveProperty("italic");
+    expect(edits[0]).not.toHaveProperty("align");
+  });
+
   it("appends changed form values as one trailing document-scoped edit", () => {
     const edits = toPdfEdits([], { name: "Ada", agreed: true });
 

@@ -87,15 +87,28 @@ jobs:
           import sys
 
           target = Path("apps/shell/src-tauri/target/release")
+          required = [
+              Path("jre/bin/java.exe"),
+              Path("engine/stirling.jar"),
+              Path("ocr/ocrmypdf.cmd"),
+              Path("ocr/tesseract/tesseract.exe"),
+              Path("ocr/tesseract/tessdata/eng.traineddata"),
+              Path("ocr/gs/bin/gswin64c.exe"),
+          ]
           candidates = []
           for java in target.rglob("payload/jre/bin/java.exe"):
               payload = java.parents[2]
-              jar = payload / "engine" / "stirling.jar"
-              if jar.is_file():
+              missing = [path for path in required if not (payload / path).is_file()]
+              if not missing:
                   candidates.append(payload)
+                  continue
+
+              print(f"Rejected incomplete bundled payload: {payload}", file=sys.stderr)
+              for path in missing:
+                  print(f"  missing {path}", file=sys.stderr)
 
           if not candidates:
-              print("No built bundle resource payload contained both jre/bin/java.exe and engine/stirling.jar.", file=sys.stderr)
+              print("No built bundle resource payload contained the required Java, Stirling, and OCR resources.", file=sys.stderr)
               print(f"Searched under {target}", file=sys.stderr)
               for path in sorted(target.rglob("payload/*"))[:80]:
                   print(path, file=sys.stderr)

@@ -34,6 +34,7 @@ import {
   type FilingProgressState,
   type FilingResultState,
 } from "./components/PrepareForFilingWorkspace";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import {
   isEngineBridgeUnavailableError,
@@ -174,6 +175,7 @@ export function App() {
     message: null,
     removedFields: [],
   });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
@@ -181,6 +183,7 @@ export function App() {
   const documentBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
+  const nativeMenuCommandRef = useRef<(command: string) => void>(() => {});
   const filingEngine = useMemo(() => new LocalPdfEngine(), []);
 
   useLayoutEffect(() => {
@@ -408,10 +411,12 @@ export function App() {
       return;
     }
 
-    if (!engineBridge.available) {
+    if (!engineBridge.ocrAvailable) {
       setOcrState({
         phase: "error",
-        message: "OCR runs in the desktop app.",
+        message: engineBridge.available
+          ? "OCR toolchain missing from this installation."
+          : "OCR runs in the desktop app.",
       });
       return;
     }
@@ -709,7 +714,7 @@ export function App() {
     [document.currentPage, document.pageCount, reorderPages, selectedIndexes],
   );
 
-  const save = useCallback(() => {
+  const saveToFile = useCallback((currentPath: string | null) => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
     if (savingRef.current) {
@@ -744,7 +749,7 @@ export function App() {
       const written = await filePort.saveFile(
         saved.bytes,
         saved.fileName,
-        saved.filePath,
+        currentPath,
       );
 
       if (written) {
@@ -761,6 +766,23 @@ export function App() {
         savingRef.current = false;
       });
   }, [applyEdits, editing, markSaved, saveDocument, setError]);
+
+  const save = useCallback(() => {
+    saveToFile(document.filePath);
+  }, [document.filePath, saveToFile]);
+
+  const saveAs = useCallback(() => {
+    saveToFile(null);
+  }, [saveToFile]);
+
+  const printDocument = useCallback(() => {
+    if (!document.bytes) {
+      setError("Open a PDF before printing.");
+      return;
+    }
+
+    window.print();
+  }, [document.bytes, setError]);
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
@@ -1301,6 +1323,121 @@ export function App() {
     isCurrentDocument,
   ]);
 
+  const undoLastPendingEdit = useCallback(() => {
+    const lastEdit = editing.pendingEdits[editing.pendingEdits.length - 1];
+
+    if (lastEdit) {
+      editing.removeEdit(lastEdit.id);
+    }
+  }, [editing]);
+
+  const exportPdfA = useCallback(() => {
+    if (!document.bytes) {
+      setError("Open a PDF before exporting PDF/A.");
+      return;
+    }
+
+    prepareFilingCopy(null);
+  }, [document.bytes, prepareFilingCopy, setError]);
+
+  const showPasswordProtection = useCallback(() => {
+    setActiveLegalTool(null);
+    setActiveOrganizeTool("passwords");
+  }, []);
+
+  const fitToPageWidth = useCallback(() => {
+    if (!document.bytes) {
+      return;
+    }
+
+    setFitZoom(document.zoom);
+  }, [document.bytes, document.zoom, setFitZoom]);
+
+  const handleNativeMenuCommand = useCallback(
+    (command: string) => {
+      switch (command) {
+        case "file:open":
+          openFile();
+          break;
+        case "file:save":
+          save();
+          break;
+        case "file:save-as":
+          saveAs();
+          break;
+        case "file:export-pdfa":
+          exportPdfA();
+          break;
+        case "file:print":
+          printDocument();
+          break;
+        case "file:protect":
+          showPasswordProtection();
+          break;
+        case "file:preferences":
+          setSettingsOpen(true);
+          break;
+        case "edit:undo":
+          undoLastPendingEdit();
+          break;
+        case "view:zoom-in":
+          setZoom(document.zoom + ZOOM_STEP);
+          break;
+        case "view:zoom-out":
+          setZoom(document.zoom - ZOOM_STEP);
+          break;
+        case "view:fit":
+          fitToPageWidth();
+          break;
+        default:
+          break;
+      }
+    },
+    [
+      document.zoom,
+      exportPdfA,
+      fitToPageWidth,
+      openFile,
+      printDocument,
+      save,
+      saveAs,
+      setZoom,
+      showPasswordProtection,
+      undoLastPendingEdit,
+    ],
+  );
+
+  useEffect(() => {
+    nativeMenuCommandRef.current = handleNativeMenuCommand;
+  }, [handleNativeMenuCommand]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen<string>("raiopdf-menu", (event) => {
+        nativeMenuCommandRef.current(event.payload);
+      }))
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+
+        unlisten = nextUnlisten;
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,
     message: redactionMessage,
@@ -1366,50 +1503,56 @@ export function App() {
   ) : null;
 
   return (
-    <AppShell
-      document={document}
-      pdfDocument={pdfDocument}
-      selectedPageIndexes={selectedPageIndexes}
-      onOpenRequested={openFile}
-      onFileDropped={openDroppedFile}
-      onSave={save}
-      onPreviousPage={() => setCurrentPage(document.currentPage - 1)}
-      onNextPage={() => setCurrentPage(document.currentPage + 1)}
-      onZoomOut={() => setZoom(document.zoom - ZOOM_STEP)}
-      onZoomIn={() => setZoom(document.zoom + ZOOM_STEP)}
-      onFitZoomResolved={setFitZoom}
-      onPageSizeChange={setPageSizeInches}
-      onRenderError={setError}
-      onThumbnailClick={handleThumbnailClick}
-      onRotateSelected={rotateSelected}
-      onDeleteSelected={deleteSelected}
-      onMoveSelectedUp={() => moveSelected(-1)}
-      onMoveSelectedDown={() => moveSelected(1)}
-      ocrState={ocrState}
-      ocrAvailable={engineBridge.available}
-      ocrStarting={engineBridge.starting}
-      workspace={workspace}
-      activeLegalTool={activeLegalTool}
-      activeOrganizeTool={activeOrganizeTool}
-      onLegalToolSelected={selectLegalTool}
-      onOrganizeToolSelected={selectOrganizeTool}
-      onMakeSearchable={makeSearchable}
-      redaction={redactionPanel}
-      bates={batesState}
-      scanner={scannerState}
-      scrubMetadata={scrubMetadataPanel}
-      pendingRedactions={pendingRedactions}
-      modeBar={modeBar}
-      editing={editingForShell}
-      onRedactionAreaCreated={addPendingRedaction}
-      onRedactionAreaRemoved={removePendingRedaction}
-      onConfirmRedactions={confirmRedactions}
-      onCancelRedactions={cancelRedactions}
-      onApplyBates={applyBates}
-      onRunScanner={runScanner}
-      onMarkScannerHit={markScannerHit}
-      onScrubMetadata={scrubDocumentMetadata}
-    />
+    <>
+      <AppShell
+        document={document}
+        pdfDocument={pdfDocument}
+        selectedPageIndexes={selectedPageIndexes}
+        onOpenRequested={openFile}
+        onFileDropped={openDroppedFile}
+        onSave={save}
+        onPrint={printDocument}
+        onPreviousPage={() => setCurrentPage(document.currentPage - 1)}
+        onNextPage={() => setCurrentPage(document.currentPage + 1)}
+        onZoomOut={() => setZoom(document.zoom - ZOOM_STEP)}
+        onZoomIn={() => setZoom(document.zoom + ZOOM_STEP)}
+        onFitZoomResolved={setFitZoom}
+        onPageSizeChange={setPageSizeInches}
+        onRenderError={setError}
+        onThumbnailClick={handleThumbnailClick}
+        onRotateSelected={rotateSelected}
+        onDeleteSelected={deleteSelected}
+        onMoveSelectedUp={() => moveSelected(-1)}
+        onMoveSelectedDown={() => moveSelected(1)}
+        ocrState={ocrState}
+        ocrAvailable={engineBridge.ocrAvailable}
+        ocrStarting={engineBridge.starting}
+        workspace={workspace}
+        activeLegalTool={activeLegalTool}
+        activeOrganizeTool={activeOrganizeTool}
+        onLegalToolSelected={selectLegalTool}
+        onOrganizeToolSelected={selectOrganizeTool}
+        onMakeSearchable={makeSearchable}
+        redaction={redactionPanel}
+        bates={batesState}
+        scanner={scannerState}
+        scrubMetadata={scrubMetadataPanel}
+        pendingRedactions={pendingRedactions}
+        modeBar={modeBar}
+        editing={editingForShell}
+        onRedactionAreaCreated={addPendingRedaction}
+        onRedactionAreaRemoved={removePendingRedaction}
+        onConfirmRedactions={confirmRedactions}
+        onCancelRedactions={cancelRedactions}
+        onApplyBates={applyBates}
+        onRunScanner={runScanner}
+        onMarkScannerHit={markScannerHit}
+        onScrubMetadata={scrubDocumentMetadata}
+      />
+      {settingsOpen ? (
+        <SettingsDialog onClose={() => setSettingsOpen(false)} />
+      ) : null}
+    </>
   );
 }
 
@@ -1717,4 +1860,8 @@ function roundInches(value: number): number {
 
 function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
+}
+
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
 }

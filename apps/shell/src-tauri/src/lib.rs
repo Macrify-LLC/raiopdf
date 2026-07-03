@@ -10,11 +10,16 @@ use std::{
         Mutex,
     },
 };
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuBuilder, SubmenuBuilder},
+    Emitter, Manager,
+};
 use tauri_plugin_dialog::DialogExt;
 
 const HEADER_PATH: &str = "x-raio-path";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
+const MENU_EVENT: &str = "raiopdf-menu";
+const MENU_EXIT: &str = "file:exit";
 
 #[derive(Default)]
 struct PendingPdfBytes {
@@ -211,6 +216,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();
             let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
@@ -220,6 +226,16 @@ pub fn run() {
             app.manage(manager);
             app.manage(PendingPdfBytes::default());
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+
+            if id == MENU_EXIT {
+                app.exit(0);
+                return;
+            }
+
+            let _ = app.emit(MENU_EVENT, id);
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf_dialog,
@@ -244,4 +260,34 @@ pub fn run() {
                 }
             }
         });
+}
+
+fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let file = SubmenuBuilder::new(app, "File")
+        .text("file:open", "Open...")
+        .text("file:save", "Save")
+        .text("file:save-as", "Save As...")
+        .separator()
+        .text("file:export-pdfa", "Export PDF/A...")
+        .text("file:print", "Print...")
+        .text("file:protect", "Protect (passwords)...")
+        .separator()
+        .text("file:preferences", "Preferences...")
+        .separator()
+        .text(MENU_EXIT, "Exit")
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .text("edit:undo", "Undo")
+        .build()?;
+    let view = SubmenuBuilder::new(app, "View")
+        .text("view:zoom-in", "Zoom In")
+        .text("view:zoom-out", "Zoom Out")
+        .text("view:fit", "Fit")
+        .build()?;
+
+    MenuBuilder::new(app)
+        .item(&file)
+        .item(&edit)
+        .item(&view)
+        .build()
 }

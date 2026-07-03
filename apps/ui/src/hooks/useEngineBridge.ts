@@ -5,6 +5,12 @@ import type { PdfAFlavor, PdfDocumentHandle, PdfRedactionArea } from "@raiopdf/e
 interface EngineStartResponse {
   disabled?: boolean;
   port?: number;
+  ocrToolchain?: EngineOcrToolchainStatus;
+}
+
+interface EngineOcrToolchainStatus {
+  available: boolean;
+  missing: string[];
 }
 
 export interface RunOcrOptions {
@@ -13,6 +19,7 @@ export interface RunOcrOptions {
 
 export interface EngineBridge {
   available: boolean;
+  ocrAvailable: boolean;
   starting: boolean;
   error: string | null;
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<Uint8Array>;
@@ -45,9 +52,16 @@ export function isEngineBridgeUnavailableError(
 export function useEngineBridge(): EngineBridge {
   const runtimeAvailable = useMemo(() => isTauriRuntime() || hasTestInvoke(), []);
   const [disabled, setDisabled] = useState(false);
+  const [ocrToolchainMissing, setOcrToolchainMissing] = useState<readonly string[]>([]);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<SidecarPdfEngine | null>(null);
+  const ocrToolchainMissingRef = useRef<readonly string[]>([]);
+
+  const setMissingOcrToolchain = useCallback((missing: readonly string[]) => {
+    ocrToolchainMissingRef.current = missing;
+    setOcrToolchainMissing(missing);
+  }, []);
 
   const ensureEngine = useCallback(async () => {
     if (!runtimeAvailable || disabled) {
@@ -72,6 +86,10 @@ export function useEngineBridge(): EngineBridge {
         throw new EngineBridgeUnavailableError();
       }
 
+      setMissingOcrToolchain(response.ocrToolchain?.available === false
+        ? response.ocrToolchain.missing
+        : []);
+
       const engine = new SidecarPdfEngine({
         baseUrl: `http://127.0.0.1:${response.port}`,
         ...(window.__RAIOPDF_TEST_ENGINE_FETCH__
@@ -92,11 +110,17 @@ export function useEngineBridge(): EngineBridge {
     } finally {
       setStarting(false);
     }
-  }, [disabled, runtimeAvailable]);
+  }, [disabled, runtimeAvailable, setMissingOcrToolchain]);
 
   const runOcr = useCallback(
     async (bytes: Uint8Array, options: RunOcrOptions = {}) => {
       const engine = await ensureEngine();
+      if (ocrToolchainMissingRef.current.length > 0) {
+        throw new EngineBridgeUnavailableError(
+          "OCR toolchain missing from this installation.",
+        );
+      }
+
       options.onEngineReady?.();
 
       const sourceHandle = await engine.open(bytes);
@@ -159,6 +183,7 @@ export function useEngineBridge(): EngineBridge {
 
   return {
     available: runtimeAvailable && !disabled,
+    ocrAvailable: runtimeAvailable && !disabled && ocrToolchainMissing.length === 0,
     starting,
     error,
     runOcr,

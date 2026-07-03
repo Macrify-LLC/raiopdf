@@ -1,0 +1,87 @@
+.settings-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: var(--modal-scrim);
+}
+
+.settings-dialog__panel {
+  width: min(420px, calc(100vw - 32px));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-popover);
+}
+
+.settings-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.settings-dialog__header h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+
+.settings-dialog__close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-dialog__close:hover {
+  background: var(--hover-ground);
+  color: var(--ink);
+}
+
+.settings-dialog__body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.settings-dialog__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.settings-dialog__row span {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.settings-dialog__row strong {
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.settings-dialog__row small {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.settings-dialog__row select {
+  min-width: 120px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 5px 8px;
+  color: var(--body);
+  background: var(--chrome);
+  font: inherit;
+}

@@ -2,33 +2,48 @@ use serde::Serialize;
 use std::{
     env,
     ffi::OsString,
-    fs,
-    io::{Read, Write},
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 5;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 const PAYLOAD_DIR_NAME: &str = "payload";
+const ENGINE_LOG_FILE_NAME: &str = "engine.log";
+const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const ENGINE_LOG_GENERATIONS: usize = 2;
 const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
 const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
 const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
+const TESSERACT_RELATIVE: &[&str] = &["ocr", "tesseract", "tesseract.exe"];
+const TESSDATA_ENG_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata", "eng.traineddata"];
+const GHOSTSCRIPT_RELATIVE: &[&str] = &["ocr", "gs", "bin", "gswin64c.exe"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidecarConfig {
     jar_path: Option<PathBuf>,
     java_path: PathBuf,
+    engine_log_path: PathBuf,
     stirling_base_path: Option<PathBuf>,
     ocrmypdf_path: Option<PathBuf>,
     tessdata_dir: Option<PathBuf>,
+    tesseract_path: Option<PathBuf>,
+    tessdata_eng_path: Option<PathBuf>,
+    ghostscript_path: Option<PathBuf>,
     path_entries: Vec<PathBuf>,
     path_env_key: OsString,
     inherited_path: Option<OsString>,
@@ -78,6 +93,9 @@ impl SidecarConfig {
         let mut stirling_base_path = None;
         let mut ocrmypdf_path = None;
         let mut tessdata_dir = None;
+        let mut tesseract_path = None;
+        let mut tessdata_eng_path = None;
+        let mut ghostscript_path = None;
         let mut health_path = DEFAULT_HEALTH_PATH.to_string();
         let mut startup_timeout = DEFAULT_STARTUP_TIMEOUT;
         let mut initial_backoff = DEFAULT_INITIAL_BACKOFF;
@@ -167,6 +185,12 @@ impl SidecarConfig {
             java_path = java_path.or_else(|| payload_java_path(payload_dir));
             ocrmypdf_path = ocrmypdf_path.or_else(|| existing_join(payload_dir, OCRMYPDF_RELATIVE));
             tessdata_dir = tessdata_dir.or_else(|| existing_join(payload_dir, TESSDATA_RELATIVE));
+            tesseract_path =
+                tesseract_path.or_else(|| existing_join(payload_dir, TESSERACT_RELATIVE));
+            tessdata_eng_path =
+                tessdata_eng_path.or_else(|| existing_join(payload_dir, TESSDATA_ENG_RELATIVE));
+            ghostscript_path =
+                ghostscript_path.or_else(|| existing_join(payload_dir, GHOSTSCRIPT_RELATIVE));
         }
 
         let path_entries = payload_dir
@@ -174,6 +198,7 @@ impl SidecarConfig {
             .map(payload_path_entries)
             .unwrap_or_default();
         let java_path = java_path.unwrap_or_else(|| PathBuf::from("java"));
+        let engine_log_path = default_app_data_dir.join(ENGINE_LOG_FILE_NAME);
         let stirling_base_path = if jar_path.is_some() {
             Some(stirling_base_path.unwrap_or(default_app_data_dir))
         } else {
@@ -187,9 +212,13 @@ impl SidecarConfig {
         Self {
             jar_path,
             java_path,
+            engine_log_path,
             stirling_base_path,
             ocrmypdf_path,
             tessdata_dir,
+            tesseract_path,
+            tessdata_eng_path,
+            ghostscript_path,
             path_entries,
             path_env_key,
             inherited_path,
@@ -223,6 +252,28 @@ impl SidecarConfig {
             stirling_settings_yaml(ocrmypdf_path, tessdata_dir),
         )
     }
+
+    fn ocr_toolchain(&self) -> OcrToolchainStatus {
+        let mut missing = Vec::new();
+
+        if self.ocrmypdf_path.is_none() {
+            missing.push("ocr/ocrmypdf.cmd".to_string());
+        }
+        if self.tesseract_path.is_none() {
+            missing.push("ocr/tesseract/tesseract.exe".to_string());
+        }
+        if self.tessdata_eng_path.is_none() {
+            missing.push("ocr/tesseract/tessdata/eng.traineddata".to_string());
+        }
+        if self.ghostscript_path.is_none() {
+            missing.push("ocr/gs/bin/gswin64c.exe".to_string());
+        }
+
+        OcrToolchainStatus {
+            available: missing.is_empty(),
+            missing,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -236,35 +287,48 @@ enum EngineStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EngineStartResponse {
     #[serde(skip_serializing_if = "is_false")]
     disabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
+    ocr_toolchain: OcrToolchainStatus,
 }
 
 impl EngineStartResponse {
-    fn disabled() -> Self {
+    fn disabled(ocr_toolchain: OcrToolchainStatus) -> Self {
         Self {
             disabled: true,
             port: None,
+            ocr_toolchain,
         }
     }
 
-    fn ready(port: u16) -> Self {
+    fn ready(port: u16, ocr_toolchain: OcrToolchainStatus) -> Self {
         Self {
             disabled: false,
             port: Some(port),
+            ocr_toolchain,
         }
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrToolchainStatus {
+    available: bool,
+    missing: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EngineStatusResponse {
     engine: EngineStatus,
     disabled: bool,
     port: Option<u16>,
     error: Option<String>,
+    ocr_toolchain: OcrToolchainStatus,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -419,7 +483,7 @@ impl SidecarManager {
 
         if self.config.disabled() {
             set_state(&self.state, EngineState::disabled());
-            return Ok(EngineStartResponse::disabled());
+            return Ok(EngineStartResponse::disabled(self.config.ocr_toolchain()));
         }
 
         let _guard = self
@@ -428,12 +492,20 @@ impl SidecarManager {
             .expect("sidecar lifecycle lock poisoned");
 
         if let Some(port) = self.reap_and_get_ready_port()? {
-            return Ok(EngineStartResponse::ready(port));
+            return Ok(EngineStartResponse::ready(
+                port,
+                self.config.ocr_toolchain(),
+            ));
         }
 
         for attempt_index in 0..2 {
             match self.start_once() {
-                Ok(port) => return Ok(EngineStartResponse::ready(port)),
+                Ok(port) => {
+                    return Ok(EngineStartResponse::ready(
+                        port,
+                        self.config.ocr_toolchain(),
+                    ))
+                }
                 Err(StartAttemptError::TimedOut(_port)) if attempt_index == 0 => {
                     kill_child(&self.child);
                     set_state(&self.state, EngineState::stopped());
@@ -468,6 +540,7 @@ impl SidecarManager {
             disabled: self.config.disabled(),
             port: state.port,
             error: state.error.clone(),
+            ocr_toolchain: self.config.ocr_toolchain(),
         })
     }
 
@@ -628,10 +701,16 @@ struct EngineSpawnSpec {
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     envs: Vec<(OsString, OsString)>,
+    log_path: PathBuf,
 }
 
 fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child> {
     let spec = engine_spawn_spec(config, port)?;
+    let log_writer = Arc::new(Mutex::new(RotatingLogWriter::new(
+        &spec.log_path,
+        ENGINE_LOG_MAX_BYTES,
+        ENGINE_LOG_GENERATIONS,
+    )?));
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
     if let Some(current_dir) = spec.current_dir {
@@ -640,7 +719,19 @@ fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child> {
     for (key, value) in spec.envs {
         command.env(key, value);
     }
-    command.spawn()
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    apply_platform_spawn_flags(&mut command);
+    let mut child = command.spawn()?;
+
+    if let Some(stdout) = child.stdout.take() {
+        copy_pipe_to_log(stdout, Arc::clone(&log_writer));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        copy_pipe_to_log(stderr, log_writer);
+    }
+
+    Ok(child)
 }
 
 fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<EngineSpawnSpec> {
@@ -681,8 +772,156 @@ fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<Engin
         ],
         current_dir: jar_path.parent().map(Path::to_path_buf),
         envs,
+        log_path: config.engine_log_path.clone(),
     })
 }
+
+fn open_rotated_engine_log(path: &Path) -> io::Result<File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    rotate_engine_log(path, ENGINE_LOG_GENERATIONS)?;
+    open_truncated_engine_log(path)
+}
+
+fn open_truncated_engine_log(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+}
+
+struct RotatingLogWriter {
+    path: PathBuf,
+    max_bytes: u64,
+    generations: usize,
+    bytes_written: u64,
+    file: Option<File>,
+}
+
+impl RotatingLogWriter {
+    fn new(path: &Path, max_bytes: u64, generations: usize) -> io::Result<Self> {
+        let file = open_rotated_engine_log(path)?;
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            max_bytes,
+            generations,
+            bytes_written: 0,
+            file: Some(file),
+        })
+    }
+
+    fn write_all(&mut self, mut buffer: &[u8]) -> io::Result<()> {
+        while !buffer.is_empty() {
+            if self.max_bytes > 0 && self.bytes_written >= self.max_bytes {
+                self.rotate()?;
+            }
+
+            let bytes_available = if self.max_bytes == 0 {
+                buffer.len()
+            } else {
+                self.max_bytes.saturating_sub(self.bytes_written) as usize
+            };
+            let write_len = bytes_available.min(buffer.len());
+
+            if write_len == 0 {
+                self.rotate()?;
+                continue;
+            }
+
+            let file = self.file.as_mut().expect("log file is open");
+            file.write_all(&buffer[..write_len])?;
+            self.bytes_written += write_len as u64;
+            buffer = &buffer[write_len..];
+        }
+
+        if let Some(file) = self.file.as_mut() {
+            file.flush()?;
+        }
+
+        Ok(())
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        if let Some(mut file) = self.file.take() {
+            file.flush()?;
+        }
+
+        rotate_engine_log(&self.path, self.generations)?;
+        self.file = Some(open_truncated_engine_log(&self.path)?);
+        self.bytes_written = 0;
+
+        Ok(())
+    }
+}
+
+fn copy_pipe_to_log<R>(mut pipe: R, log_writer: Arc<Mutex<RotatingLogWriter>>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = [0; 16 * 1024];
+
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let Ok(mut writer) = log_writer.lock() else {
+                        break;
+                    };
+
+                    if writer.write_all(&buffer[..bytes_read]).is_err() {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn rotate_engine_log(path: &Path, generations: usize) -> io::Result<()> {
+    for index in (1..=generations).rev() {
+        let from = if index == 1 {
+            path.to_path_buf()
+        } else {
+            rotated_log_path(path, index - 1)
+        };
+        let to = rotated_log_path(path, index);
+
+        if !from.exists() {
+            continue;
+        }
+
+        if to.exists() {
+            fs::remove_file(&to)?;
+        }
+        fs::rename(from, to)?;
+    }
+
+    Ok(())
+}
+
+fn rotated_log_path(path: &Path, generation: usize) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(ENGINE_LOG_FILE_NAME);
+
+    path.with_file_name(format!("{file_name}.{generation}"))
+}
+
+#[cfg(windows)]
+fn apply_platform_spawn_flags(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn apply_platform_spawn_flags(_command: &mut Command) {}
 
 fn wait_until_ready(
     config: &SidecarConfig,
@@ -1177,6 +1416,7 @@ mod tests {
             config.java_path,
             payload.join("jre").join("bin").join("java.exe")
         );
+        assert_eq!(config.engine_log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
             config.jar_path,
             Some(payload.join("engine").join("stirling.jar"))
@@ -1189,12 +1429,15 @@ mod tests {
             config.tessdata_dir,
             Some(payload.join("ocr").join("tesseract").join("tessdata"))
         );
+        assert_eq!(config.ocr_toolchain().missing, Vec::<String>::new());
+        assert!(config.ocr_toolchain().available);
 
         let spec = engine_spawn_spec(&config, 49152).expect("spawn spec should build");
         assert_eq!(
             spec.program,
             payload.join("jre").join("bin").join("java.exe")
         );
+        assert_eq!(spec.log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
             spec.args,
             vec![
@@ -1276,6 +1519,102 @@ mod tests {
         assert_eq!(
             config.tessdata_dir,
             Some(PathBuf::from("/override/tessdata"))
+        );
+    }
+
+    #[test]
+    fn payload_resolution_reports_missing_ocr_toolchain_parts() {
+        let root = test_temp_dir("payload-missing-ocr");
+        let exe_dir = root.join("bin");
+        let payload = exe_dir.join(PAYLOAD_DIR_NAME);
+        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload.join("engine").join("stirling.jar"));
+        fs::create_dir_all(payload.join("ocr").join("tesseract").join("tessdata"))
+            .expect("tessdata directory should be created");
+
+        let config = SidecarConfig::from_env_vars_with_roots(
+            Vec::<(OsString, OsString)>::new(),
+            root.join("app-data"),
+            Some(exe_dir),
+            None,
+            None,
+        );
+
+        assert!(!config.disabled());
+        assert_eq!(
+            config.ocr_toolchain(),
+            OcrToolchainStatus {
+                available: false,
+                missing: vec![
+                    "ocr/ocrmypdf.cmd".to_string(),
+                    "ocr/tesseract/tesseract.exe".to_string(),
+                    "ocr/tesseract/tessdata/eng.traineddata".to_string(),
+                    "ocr/gs/bin/gswin64c.exe".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn opening_engine_log_rotates_existing_logs() {
+        let root = test_temp_dir("engine-log-rotation");
+        let log = root.join("app-data").join(ENGINE_LOG_FILE_NAME);
+        touch(&log);
+        fs::write(&log, b"current").expect("current log should be writable");
+        fs::write(rotated_log_path(&log, 1), b"previous").expect("previous log should be writable");
+
+        let _file = open_rotated_engine_log(&log).expect("log should open");
+
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 1)).expect("rotated current log"),
+            "current"
+        );
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 2)).expect("rotated previous log"),
+            "previous"
+        );
+        assert_eq!(
+            fs::read_to_string(&log).expect("fresh log should exist"),
+            ""
+        );
+    }
+
+    #[test]
+    fn rotating_log_writer_caps_active_log_during_writes() {
+        let root = test_temp_dir("engine-log-size-cap");
+        let log = root.join("app-data").join(ENGINE_LOG_FILE_NAME);
+        let mut writer = RotatingLogWriter::new(&log, 10, 2).expect("log writer should open");
+
+        writer
+            .write_all(b"1234567890abc")
+            .expect("first write should rotate");
+        writer
+            .write_all(b"defghijklmn")
+            .expect("second write should rotate");
+        writer
+            .write_all(b"opqrstuvwxyz")
+            .expect("third write should rotate");
+        drop(writer);
+
+        assert_eq!(
+            fs::read_to_string(&log).expect("active log should exist"),
+            "uvwxyz"
+        );
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 1)).expect("newer rotated log"),
+            "klmnopqrst"
+        );
+        assert_eq!(
+            fs::read_to_string(rotated_log_path(&log, 2)).expect("older rotated log"),
+            "abcdefghij"
+        );
+        assert!(
+            !rotated_log_path(&log, 3).exists(),
+            "only configured generations should be kept"
+        );
+        assert!(
+            fs::metadata(&log).expect("active log metadata").len() <= 10,
+            "active log should stay within the size cap"
         );
     }
 

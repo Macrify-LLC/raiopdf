@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckIcon, OcrSearchIcon, ShieldCheckIcon } from "../icons";
+import { CheckIcon, ChevronRightIcon, OcrSearchIcon, ShieldCheckIcon } from "../icons";
 import type { TextLayerStatus } from "../lib/textLayerStatus";
 import { TextLayerDetailPanel } from "./TextLayerDetailPanel";
 import "./StatusBar.css";
@@ -57,7 +57,7 @@ function SearchabilityChip({
     return (
       <span className="status-bar__search-chip" data-status="clean">
         <CheckIcon size={12} />
-        Searchable — verified
+        <span className="status-bar__search-chip-label">Searchable — verified</span>
       </span>
     );
   }
@@ -65,16 +65,20 @@ function SearchabilityChip({
   if (status.state === "garbled") {
     const garbledPageCount = status.garbledPages.length;
     const totalPages = status.quality.totalPages;
+    const garbledLabel = `Text layer looks garbled on ${garbledPageCount} of ${totalPages} pages — re-OCR recommended`;
 
     return (
       <button
         type="button"
         className="status-bar__search-chip status-bar__search-chip--button"
         data-status="garbled"
+        title={garbledLabel}
+        aria-haspopup="dialog"
         onClick={onOpenDetail}
       >
         <OcrSearchIcon size={12} />
-        Text layer looks garbled on {garbledPageCount} of {totalPages} pages — re-OCR recommended
+        <span className="status-bar__search-chip-label">{garbledLabel}</span>
+        <ChevronRightIcon size={10} className="status-bar__search-chip-chevron" />
       </button>
     );
   }
@@ -83,7 +87,7 @@ function SearchabilityChip({
     return (
       <span className="status-bar__search-chip" data-status="image_only">
         <OcrSearchIcon size={12} />
-        No searchable text — run Make Searchable
+        <span className="status-bar__search-chip-label">No searchable text — run Make Searchable</span>
       </span>
     );
   }
@@ -91,7 +95,7 @@ function SearchabilityChip({
   return (
     <span className="status-bar__search-chip" data-status="unknown">
       <OcrSearchIcon size={12} />
-      Searchability not checked
+      <span className="status-bar__search-chip-label">Searchability not checked</span>
     </span>
   );
 }

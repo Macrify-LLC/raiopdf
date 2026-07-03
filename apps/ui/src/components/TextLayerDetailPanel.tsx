@@ -1,4 +1,5 @@
 import type { GarbleReason, GarbledPageInfo } from "@raiopdf/rules";
+import { OcrSearchIcon } from "../icons";
 import { FloatingDialog } from "./FloatingDialog";
 import "./TextLayerDetailPanel.css";
 
@@ -28,22 +29,38 @@ export function TextLayerDetailPanel({
       onClose={onClose}
     >
       <div className="text-layer-detail">
-        <p>
-          RaioPDF found a hidden text layer, but parts of it look poisoned or garbled. The visible PDF pages are unchanged; the problem is the invisible text used for search, copy, paste, and screen readers.
-        </p>
-        <div className="text-layer-detail__reasons" role="list">
-          {reasonGroups.map((group) => (
-            <p key={group.reason} role="listitem">
-              <strong>Pages {formatPageList(group.pageIndexes)}:</strong> {REASON_COPY[group.reason]}
-            </p>
-          ))}
+        <div className="text-layer-detail__lede">
+          <span className="text-layer-detail__lede-icon" aria-hidden="true">
+            <OcrSearchIcon size={15} />
+          </span>
+          <p className="text-layer-detail__intro">
+            RaioPDF found a hidden text layer, but parts of it look poisoned or garbled. The visible PDF pages are unchanged; the problem is the invisible text used for search, copy, paste, and screen readers.
+          </p>
         </div>
-        <p>
-          The fix is to rebuild the text layer with OCR. That can run offline on this device and should leave the visible page images unchanged.
-        </p>
-        <button type="button" className="text-layer-detail__disabled-action" disabled>
-          Fix garbled text (coming in a later update)
-        </button>
+
+        <section className="text-layer-detail__section" aria-label="Affected pages">
+          <p className="text-layer-detail__label text-layer-detail__label--warn">Affected pages</p>
+          <div className="text-layer-detail__reasons" role="list">
+            {reasonGroups.map((group) => (
+              <div key={group.reason} className="text-layer-detail__reason" role="listitem">
+                <p className="text-layer-detail__reason-pages">Pages {formatPageList(group.pageIndexes)}</p>
+                <p className="text-layer-detail__reason-copy">{REASON_COPY[group.reason]}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="text-layer-detail__fix">
+          <p className="text-layer-detail__label">The fix</p>
+          <p className="text-layer-detail__fix-copy">
+            The fix is to rebuild the text layer with OCR. That can run offline on this device and should leave the visible page images unchanged.
+          </p>
+          <button type="button" className="text-layer-detail__disabled-action" disabled>
+            <OcrSearchIcon size={13} />
+            <span>Fix garbled text</span>
+            <span className="text-layer-detail__disabled-note">(coming in a later update)</span>
+          </button>
+        </section>
       </div>
     </FloatingDialog>
   );

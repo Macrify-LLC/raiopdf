@@ -12,48 +12,99 @@
 }
 
 .status-bar__search-chip {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   min-height: 18px;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
   background: transparent;
   color: var(--muted);
   font: inherit;
+  font-size: var(--text-2xs);
   font-weight: 600;
+  line-height: 1.2;
 }
 
+.status-bar__search-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* clean -- reassurance only. Quietest state: no fill, no border, just a
+   confident tick and colored label. It should never compete for attention. */
 .status-bar__search-chip[data-status="clean"] {
   color: var(--ok);
 }
 
-.status-bar__search-chip[data-status="garbled"] {
-  color: var(--warn);
-}
-
+/* image_only -- worth noticing, not worth alarming. A neutral outlined pill
+   gives it more presence than plain text without borrowing the amber
+   vocabulary reserved for "garbled." */
 .status-bar__search-chip[data-status="image_only"] {
+  padding: 2px var(--space-2);
+  border-color: var(--border);
+  background: var(--panel);
   color: var(--muted);
+  box-shadow: var(--shadow-control);
 }
 
+/* unknown -- the quietest possible read: nothing has been verified yet, so
+   nothing should look like a verdict. */
 .status-bar__search-chip[data-status="unknown"] {
   color: var(--muted);
   font-weight: 500;
 }
 
+/* garbled -- the one state that has to read as a genuine attention signal.
+   Filled amber chip (not just colored text) using the app's semantic warn
+   tokens -- --identity-amber is reserved for brand/loading accents, not
+   status semantics, so this deliberately does not reach for it. */
 .status-bar__search-chip--button {
-  padding: 0;
+  padding: 3px var(--space-2) 3px 7px;
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 700;
   cursor: pointer;
+  box-shadow: var(--shadow-control);
+  transition:
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+  animation: status-bar-chip-alert-in 220ms ease;
 }
 
-.status-bar__search-chip--button:hover,
-.status-bar__search-chip--button:focus-visible {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+.status-bar__search-chip-chevron {
+  flex: none;
+  opacity: 0.7;
+}
+
+.status-bar__search-chip--button:hover {
+  box-shadow: var(--shadow-control-hover);
+}
+
+.status-bar__search-chip--button:active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .status-bar__search-chip--button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+@keyframes status-bar-chip-alert-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .status-bar__local {

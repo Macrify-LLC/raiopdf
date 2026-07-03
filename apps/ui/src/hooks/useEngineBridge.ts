@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
-import type { PdfDocumentHandle, PdfRedactionArea } from "@raiopdf/engine-api";
+import type { PdfAFlavor, PdfDocumentHandle, PdfRedactionArea } from "@raiopdf/engine-api";
 
 interface EngineStartResponse {
   disabled?: boolean;
@@ -17,6 +17,7 @@ export interface EngineBridge {
   error: string | null;
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<Uint8Array>;
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
+  convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
 }
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -135,12 +136,34 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const convertToPdfA = useCallback(
+    async (bytes: Uint8Array, flavor: PdfAFlavor) => {
+      const engine = await ensureEngine();
+      const sourceHandle = await engine.open(bytes);
+      let outputHandle: PdfDocumentHandle | null = null;
+
+      try {
+        outputHandle = await engine.convertToPdfA(sourceHandle, {
+          flavor,
+          strict: false,
+        });
+
+        return await engine.saveToBytes(outputHandle);
+      } finally {
+        await closeHandle(engine, outputHandle);
+        await closeHandle(engine, sourceHandle);
+      }
+    },
+    [ensureEngine],
+  );
+
   return {
     available: runtimeAvailable && !disabled,
     starting,
     error,
     runOcr,
     redactAreas,
+    convertToPdfA,
   };
 }
 

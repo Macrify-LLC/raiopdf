@@ -502,6 +502,36 @@ describe("SidecarPdfEngine", () => {
     await expect(result).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 
+  it("reads Stirling RFC-7807 detail and errorCode fields", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({
+        detail: "PDF is encrypted or password protected",
+        status: 400,
+        errorCode: "E001",
+      }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const result = engine.open(bytes(1));
+
+    await expect(result).rejects.toMatchObject({ code: "ENCRYPTED_DOCUMENT" });
+    await expect(result).rejects.toThrow("PDF is encrypted or password protected (E001)");
+  });
+
+  it("maps Stirling disabled endpoint responses to UNSUPPORTED", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({
+        detail: "Endpoint /api/v1/general/remove-pages is disabled",
+        status: 403,
+        errorCode: "ENDPOINT_DISABLED",
+      }, 403),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.open(bytes(1))).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("maps Stirling encrypted-document errors to ENCRYPTED_DOCUMENT", async () => {
     const { fetchImpl } = createFetch(
       jsonResponse({ message: "PDF is encrypted or password protected" }, 400),

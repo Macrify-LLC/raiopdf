@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
 import type { TextLayerCoverage } from "./types.js";
@@ -8,7 +9,7 @@ const require = createRequire(import.meta.url);
 
 function assetDir(name: string): string {
   const packageDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
-  return path.join(packageDir, name) + path.sep;
+  return pathToFileURL(path.join(packageDir, name) + path.sep).href;
 }
 
 function openDocumentTask(bytes: Uint8Array): ReturnType<typeof getDocument> {

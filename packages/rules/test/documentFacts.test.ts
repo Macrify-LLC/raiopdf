@@ -115,11 +115,36 @@ describe("document fact extractors", () => {
       },
     });
 
-    expect(facts.searchableText).toBe(true);
+    // One image-only page must not make the whole document look searchable.
+    expect(facts.searchableText).toBe(false);
     expect(facts.textLayerCoverage).toEqual({
       textPages: [0],
       imageOnlyPages: [1],
       mixedPages: [2],
+    });
+  });
+
+  it("marks a document searchable only when every page has a text layer", async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+    const first = pdf.addPage([612, 792]);
+    first.drawText("page one", { x: 72, y: 720, font, size: 12 });
+    const second = pdf.addPage([612, 792]);
+    second.drawText("page two", { x: 72, y: 720, font, size: 12 });
+
+    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }), {
+      textExtractor: {
+        extractTextLayerCoverage,
+        extractPageTextByPage,
+      },
+    });
+
+    expect(facts.searchableText).toBe(true);
+    expect(facts.textLayerCoverage).toEqual({
+      textPages: [0, 1],
+      imageOnlyPages: [],
+      mixedPages: [],
     });
   });
 

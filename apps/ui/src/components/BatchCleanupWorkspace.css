@@ -36,6 +36,28 @@
   font-size: var(--text-2xs);
 }
 
+.batch-workspace__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.batch-workspace__header-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.batch-workspace__header-actions .icon-button:hover:not(:disabled),
+.batch-workspace__header-actions .icon-button:focus-visible {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
 .batch-workspace__file-list {
   display: grid;
   gap: var(--space-2);

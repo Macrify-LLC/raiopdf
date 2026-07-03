@@ -9,12 +9,14 @@ import {
   CombineExhibitsIcon,
   DeleteIcon,
   DragHandleIcon,
+  HelpIcon,
   OpenIcon,
   PlusIcon,
   SaveIcon,
   SlipSheetIcon,
 } from "../icons";
 import { PdfMiniThumb } from "./PdfMiniThumb";
+import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import "./BinderWorkspace.css";
 
@@ -57,6 +59,7 @@ export interface BinderWorkspaceProps {
   ) => Promise<boolean>;
   onOpenRequested: () => void;
   onCancel: () => void;
+  onHelpRequested?: (() => void) | undefined;
 }
 
 export function BinderWorkspace({
@@ -64,6 +67,7 @@ export function BinderWorkspace({
   onBuildBinder,
   onOpenRequested,
   onCancel,
+  onHelpRequested,
 }: BinderWorkspaceProps) {
   const addInputRef = useRef<HTMLInputElement>(null);
   const [exhibits, setExhibits] = useState<ExhibitFile[]>([]);
@@ -246,9 +250,18 @@ export function BinderWorkspace({
           <p className="binder-workspace__eyebrow">Legal</p>
           <h2>Combine with Exhibits</h2>
         </div>
-        <button type="button" className="binder-workspace__ghost" onClick={onCancel}>
-          Back to document
-        </button>
+        <div className="binder-workspace__header-actions">
+          {onHelpRequested ? (
+            <IconButton
+              icon={<HelpIcon size={14} />}
+              label="Help: Combine with Exhibits"
+              onClick={onHelpRequested}
+            />
+          ) : null}
+          <button type="button" className="binder-workspace__ghost" onClick={onCancel}>
+            Back to document
+          </button>
+        </div>
       </header>
 
       <div className="binder-workspace__grid">

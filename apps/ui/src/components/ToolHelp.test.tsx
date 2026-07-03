@@ -15,11 +15,18 @@ describe("tool help", () => {
 
   it("adds ToolRow descriptions as hover help without changing the visible label", () => {
     const html = renderToStaticMarkup(
-      <ToolRow icon={<span aria-hidden="true">x</span>} label="Batch Cleanup" description="Clean several local PDFs at once." selected />,
+      <ToolRow
+        icon={<span aria-hidden="true">x</span>}
+        label="Batch Cleanup"
+        description="Clean several local PDFs at once."
+        selected
+        onHelp={() => undefined}
+      />,
     );
 
-    expect(html).toContain(">Batch Cleanup</button>");
+    expect(html).toContain(">Batch Cleanup</span>");
     expect(html).toContain('title="Clean several local PDFs at once."');
     expect(html).toContain('aria-current="true"');
+    expect(html).toContain('aria-label="Help: Batch Cleanup"');
   });
 });

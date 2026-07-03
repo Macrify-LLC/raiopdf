@@ -58,6 +58,7 @@ export const ChevronLeftIcon = createKitIcon("chevron-left");
 export const ChevronRightIcon = createKitIcon("chevron-right");
 export const ChevronDownIcon = createKitIcon("chevron-down");
 export const SearchIcon = createKitIcon("search");
+export const HelpIcon = createKitIcon("help");
 export const MinusIcon = createKitIcon("minus");
 export const PlusIcon = createKitIcon("plus");
 export const CheckIcon = createKitIcon("check");

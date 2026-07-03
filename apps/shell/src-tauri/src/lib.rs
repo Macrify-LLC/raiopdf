@@ -268,6 +268,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
@@ -359,11 +360,15 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("view:zoom-out", "Zoom Out")
         .text("view:fit", "Fit")
         .build()?;
+    let help = SubmenuBuilder::new(app, "Help")
+        .text("help:open", "RaioPDF Help")
+        .build()?;
 
     MenuBuilder::new(app)
         .item(&file)
         .item(&edit)
         .item(&view)
+        .item(&help)
         .build()
 }
 

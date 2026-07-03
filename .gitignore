@@ -7,6 +7,8 @@ target/
 engine/upstream/
 engine/dist/
 installer/.payload-cache/
+apps/shell/src-tauri/binaries/*
+!apps/shell/src-tauri/binaries/.gitkeep
 apps/shell/src-tauri/payload/*
 !apps/shell/src-tauri/payload/.gitkeep
 src-tauri/gen/

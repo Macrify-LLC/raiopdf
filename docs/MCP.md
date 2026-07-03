@@ -118,26 +118,21 @@ app, resolved at runtime and shown to the user in the "Open Raio to AI" snippet:
 
 - **`raiopdf-engine-host`** — a Rust binary (workspace member `apps/engine-host`),
   built by `cargo build` and added to the Tauri bundle via `externalBin`.
-- **`raiopdf-mcp`** — the Node/TypeScript server (`apps/mcp`). It is bundled to a
-  single self-contained executable via **Node's Single Executable Applications
-  (SEA)**: `esbuild` bundles `src` to one entrypoint, then the SEA blob is
-  injected into the `node` binary.
+- **`raiopdf-mcp`** — a small Rust launcher (workspace member
+  `apps/mcp-launcher`) added to the Tauri bundle via `externalBin`. The launcher
+  starts the bundled Node runtime and the bundled `apps/mcp` entrypoint from the
+  installer payload.
 
-  One packaging detail to get right: the redaction/preflight verifier loads
-  **pdf.js**, which needs its `cmaps/`, `standard_fonts/`, and `wasm/` asset
-  directories at runtime. The current loader resolves them via
-  `require.resolve("pdfjs-dist/...")`, which works from source / the built `dist`
-  with `node_modules` present. Under SEA there is no `node_modules`, so that
-  resolution won't work — so the SEA packaging step must copy those asset
-  directories next to the `raiopdf-mcp` executable **and** add a loader fallback
-  that resolves them relative to `process.execPath`. That loader fallback is part
-  of the tracked packaging step below, not yet implemented.
+  This intentionally uses **bundled Node** instead of Node SEA. SEA would require
+  proving the full ESM dependency graph and pdf.js asset loading inside a blob;
+  the launcher/runtime split keeps the installed connector inspectable and keeps
+  pdf.js assets as ordinary files. `installer/assemble-payload.sh` pins and
+  copies `node.exe`, `installer/build-mcp-runtime.mjs` bundles the MCP JS
+  entrypoint with `esbuild`, and the MCP pdf.js loader resolves `cmaps/`,
+  `standard_fonts/`, and `wasm/` from the installed payload before falling back
+  to source `node_modules`.
 
 The UI reads the resolved binary path via the shell's `mcp_status` command
-(overridable with `RAIOPDF_MCP_BIN`). Until the installer bundles the exe, the
-UI shows a placeholder and disables the Copy buttons.
-
-> Status: the connector runs today from its built `apps/mcp/dist` with
-> `node_modules` present; the single-executable installer bundling (SEA + copied
-> pdf.js assets + `externalBin` wiring) is the remaining install-packaging step,
-> tracked on the `pdf-suite-mcp` blueprint.
+(overridable with `RAIOPDF_MCP_BIN`). In an installed build this resolves the
+bundled `raiopdf-mcp.exe`, so the copy buttons show an AI-client-ready command
+without requiring a development checkout.

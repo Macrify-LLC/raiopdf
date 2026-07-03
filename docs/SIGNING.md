@@ -82,10 +82,9 @@ can't silently ship unsigned. For an intentional unsigned build, run plain
   directory (`apps/shell/src-tauri`), which is why the overlay uses the relative path
   `scripts/sign-windows.ps1`. If a future Tauri version changes this, switch to an
   absolute path. Worth confirming on the first real signed build.
-- **Engine not yet bundled:** the installer currently contains the shell only — the
-  Stirling sidecar and OCR toolchain aren't wired into the Tauri bundle yet
-  (no `externalBin`/`resources` in `tauri.conf.json`). When they are, they'll be signed
-  by the same `signCommand`, but re-verify signing after that change.
+- **Bundled sidecars:** `pnpm build:shell:signed` prepares the payload and Tauri
+  `externalBin` files before signing. Re-verify the installed `mcp_status` path
+  and engine startup after signing changes.
 - **Publisher name:** the name shown in the Windows UAC / SmartScreen prompt comes from
   the certificate subject, not from this repo. Decide whether the cert is issued to your
   personal name or to "Macrify LLC" when ordering.

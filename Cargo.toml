@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "apps/engine-host",
+  "apps/mcp-launcher",
   "apps/shell/src-tauri",
   "crates/engine-sidecar-core",
 ]

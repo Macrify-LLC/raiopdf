@@ -123,7 +123,9 @@ describe("buildProductionSet", () => {
     );
 
     expect(manifest.uploadFiles).toHaveLength(1);
-    expect(JSON.stringify(manifest.details)).toContain(source);
+    expect(manifest.details).toMatchObject({
+      productionSources: [expect.objectContaining({ sourcePath: source })],
+    });
     expect(productionReport).not.toContain(source);
     expect(await fs.access(path.join(outputDir, "raio-manifest", "checksums.txt"))).toBeUndefined();
   });

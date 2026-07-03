@@ -1,7 +1,13 @@
-import { copyFile, mkdir, readdir, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+const args = new Set(process.argv.slice(2));
+const stubMode = args.delete("--stub");
+if (args.size > 0) {
+  throw new Error(`Unknown argument(s): ${[...args].join(", ")}`);
+}
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -13,19 +19,37 @@ const shellTargetDir = path.join(repoRoot, "apps", "shell", "src-tauri", "target
 
 await mkdir(binariesDir, { recursive: true });
 
-await copyExternalBin("raiopdf-engine-host");
-await copyExternalBin("raiopdf-mcp");
+await prepareExternalBin("raiopdf-engine-host");
+await prepareExternalBin("raiopdf-mcp");
 await removeStaleBundlerCopies();
 
-console.log(`Prepared Tauri externalBin files for ${targetTriple}`);
+console.log(`Prepared Tauri externalBin ${stubMode ? "stubs" : "files"} for ${targetTriple}`);
 
-async function copyExternalBin(name) {
+async function prepareExternalBin(name) {
   const source = path.join(targetDir, `${name}${extension}`);
   const destination = path.join(binariesDir, `${name}-${targetTriple}${extension}`);
 
-  await requireFile(source, `built ${name} binary`);
   await removeGeneratedCopies(name);
-  await copyFile(source, destination);
+
+  if (stubMode) {
+    await writeStub(destination, name);
+  } else {
+    await requireFile(source, `built ${name} binary`);
+    await copyFile(source, destination);
+  }
+}
+
+async function writeStub(destination, name) {
+  if (process.platform === "win32") {
+    await writeFile(destination, `Stub ${name} binary for Tauri compile-time checks.\r\n`);
+    return;
+  }
+
+  await writeFile(
+    destination,
+    `#!/bin/sh\nprintf '%s\\n' 'Stub ${name} binary for Tauri compile-time checks.' >&2\nexit 1\n`,
+  );
+  await chmod(destination, 0o755);
 }
 
 async function removeGeneratedCopies(name) {

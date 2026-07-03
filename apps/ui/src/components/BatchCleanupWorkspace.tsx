@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { JurisdictionPack } from "@raiopdf/rules";
 import type { OpenedFile } from "../lib/filePort";
 import { formatBatchFailureReason } from "../lib/userMessages";
-import { PlusIcon } from "../icons";
+import { CheckIcon, PlusIcon } from "../icons";
 import "./BatchCleanupWorkspace.css";
 
 export type BatchCleanupStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -163,59 +163,73 @@ export function BatchCleanupWorkspace({
 
   return (
     <section className="batch-workspace" aria-label="Batch Cleanup">
-      <header className="batch-workspace__header">
-        <div>
-          <p className="batch-workspace__eyebrow">Legal</p>
-          <h2>Batch Cleanup</h2>
-        </div>
-        <button type="button" className="batch-workspace__secondary-button" onClick={addFile}>
-          <PlusIcon size={14} /> Add PDF
-        </button>
-      </header>
-
-      <div className="batch-workspace__file-list">
-        {visibleFiles.map((file) => (
-          <div className="batch-workspace__file-row" key={file.id}>
-            <div>
-              <p className="batch-workspace__file-name">{file.name}</p>
-              <p className="batch-workspace__file-meta">
-                {file.path ? "Local file" : "Path unavailable"}
-                {file.reason ? ` · ${formatBatchFailureReason(file.reason)}` : ""}
-              </p>
-            </div>
-            <span
-              className={`batch-workspace__status-chip batch-workspace__status-chip--${file.status}`}
-              title={STATUS_HELP[file.status]}
-            >
-              {STATUS_LABELS[file.status]}
-            </span>
+      {/* The dialog chrome already shows "Legal / Batch Cleanup" -- repeating
+          that title here stacked a second heading on the first. This section
+          carries what the dialog title doesn't: the queue itself. */}
+      <section className="batch-workspace__section" aria-label="Cleanup queue">
+        <div className="batch-workspace__header">
+          <div>
+            <p className="batch-workspace__title">Cleanup queue</p>
+            <p className="batch-workspace__subtitle">
+              {visibleFiles.length} file{visibleFiles.length === 1 ? "" : "s"}
+            </p>
           </div>
-        ))}
-      </div>
+          <button type="button" className="batch-workspace__secondary-button" onClick={addFile}>
+            <PlusIcon size={14} /> Add PDF
+          </button>
+        </div>
+        <div className="batch-workspace__file-list" role="list">
+          {visibleFiles.length === 0 ? (
+            <p className="batch-workspace__empty">Add PDFs to build the cleanup queue.</p>
+          ) : null}
+          {visibleFiles.map((file) => (
+            <div className="batch-workspace__file-row" role="listitem" key={file.id}>
+              <div>
+                <p className="batch-workspace__file-name">{file.name}</p>
+                <p className="batch-workspace__file-meta">
+                  {file.path ? "Local file" : "Path unavailable"}
+                  {file.reason ? ` · ${formatBatchFailureReason(file.reason)}` : ""}
+                </p>
+              </div>
+              <span
+                className="batch-workspace__status-chip"
+                data-status={file.status}
+                title={STATUS_HELP[file.status]}
+              >
+                {STATUS_LABELS[file.status]}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
 
-      <div className="batch-workspace__grid">
-        <label title="Use a filing rules pack when cleanup needs filing-size split decisions.">
-          <span>Jurisdiction pack</span>
-          <select value={packId} onChange={(event) => setPackId(event.target.value)}>
-            <option value="">None</option>
-            {packs.map((pack) => (
-              <option key={pack.id} value={pack.id}>
-                {pack.jurisdiction} - {pack.portal}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label title="Choose an empty folder where RaioPDF can write the cleaned PDFs and reports.">
-          <span>Package root folder</span>
-          <input
-            value={outputDir}
-            onChange={(event) => setOutputDir(event.target.value)}
-            placeholder="/absolute/path/to/empty-folder"
-          />
-        </label>
-      </div>
+      <section className="batch-workspace__section" aria-label="Cleanup destination">
+        <p className="batch-workspace__title">Destination</p>
+        <div className="batch-workspace__grid">
+          <label title="Use a filing rules pack when cleanup needs filing-size split decisions.">
+            <span>Jurisdiction pack</span>
+            <select value={packId} onChange={(event) => setPackId(event.target.value)}>
+              <option value="">None</option>
+              {packs.map((pack) => (
+                <option key={pack.id} value={pack.id}>
+                  {pack.jurisdiction} - {pack.portal}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title="Choose an empty folder where RaioPDF can write the cleaned PDFs and reports.">
+            <span>Package root folder</span>
+            <input
+              value={outputDir}
+              onChange={(event) => setOutputDir(event.target.value)}
+              placeholder="/absolute/path/to/empty-folder"
+            />
+          </label>
+        </div>
+      </section>
 
-      <div className="batch-workspace__section">
+      <section className="batch-workspace__section" aria-label="Cleanup operations">
+        <p className="batch-workspace__title">Operations</p>
         <label title={OCR_MODE_HELP[ocrMode]}>
           <span>OCR mode</span>
           <select value={ocrMode} onChange={(event) => setOcrMode(event.target.value as BatchCleanupOcrMode)}>
@@ -245,30 +259,58 @@ export function BatchCleanupWorkspace({
             />
           </label>
         ) : null}
-      </div>
+      </section>
 
       <div className="batch-workspace__actions">
         <button type="button" className="batch-workspace__primary-button" disabled={!canRun} onClick={run}>
           {progress.running ? "Running..." : "Run Batch"}
         </button>
-        <button type="button" className="batch-workspace__secondary-button" disabled>
+        <button
+          type="button"
+          className="batch-workspace__secondary-button"
+          disabled
+          title="Cancel isn't available yet -- let the run finish."
+        >
           Cancel
         </button>
       </div>
 
       {localMessage || progress.message ? (
-        <p className="batch-workspace__status">{localMessage ?? progress.message}</p>
+        <p className="batch-workspace__status" role="status">{localMessage ?? progress.message}</p>
       ) : null}
       {progress.result ? (
-        <div className="batch-workspace__result">
-          <p className="batch-workspace__status">Package: {progress.result.packageRoot}</p>
-          <p className="batch-workspace__status">
-            Report: {progress.result.reportPdf} · JSON: {progress.result.reportJson}
-          </p>
-        </div>
+        <section className="batch-workspace__result" aria-label="Batch cleanup result">
+          <div className="batch-workspace__result-header">
+            <CheckIcon size={15} />
+            <div>
+              <p className="batch-workspace__result-title">Batch cleanup complete</p>
+              <p className="batch-workspace__result-subtitle">
+                {formatCount(progress.result.files.length, "file")} processed.
+              </p>
+            </div>
+          </div>
+          <div className="batch-workspace__result-parts">
+            <div className="batch-workspace__result-part">
+              <span className="batch-workspace__result-part-label">Package</span>
+              <span className="batch-workspace__result-part-value">{progress.result.packageRoot}</span>
+            </div>
+            <div className="batch-workspace__result-part">
+              <span className="batch-workspace__result-part-label">Report</span>
+              <span className="batch-workspace__result-part-value">{progress.result.reportPdf}</span>
+            </div>
+            <div className="batch-workspace__result-part">
+              <span className="batch-workspace__result-part-label">Report data</span>
+              <span className="batch-workspace__result-part-value">{progress.result.reportJson}</span>
+            </div>
+          </div>
+        </section>
       ) : null}
     </section>
   );
+}
+
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function Checkbox({

@@ -26,9 +26,11 @@ leave your computer.
 
 ## No tracking
 
-RaioPDF collects no analytics and sends no usage data. If you ever export a
-diagnostics file to troubleshoot a problem, it's saved to your computer and not
-sent anywhere.
+RaioPDF collects no analytics and sends no usage data. If a future version offers
+to send anonymous error reports — so crashes can be fixed — it will be strictly
+your choice: **off** unless you turn it on, never carrying your documents or
+anything that identifies you. And today, if you export a diagnostics file to
+troubleshoot a problem, it's saved to your computer and not sent anywhere.
 
 ## "Open Raio to AI" is off unless you turn it on
 
@@ -39,10 +41,11 @@ on-device channel, not the internet.
 
 ## The one thing that reaches out
 
-Your documents never leave your machine. The only reason RaioPDF connects to the
-internet at all is to check whether a newer version of the app has been released,
-from its official releases — and that's only ever about the app itself. Nothing
-about your files, or how you use them, is sent anywhere.
+Your documents never leave your machine. By default, the only reason RaioPDF
+connects to the internet at all is to check whether a newer version of the app
+has been released, from its official releases — and that's only ever about the
+app itself. Nothing about your files, or how you use them, is sent anywhere
+unless you specifically ask it to (see error reports above).
 
 ## Related
 

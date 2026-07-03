@@ -29,11 +29,13 @@ RaioPDF's **Redact** tool removes it, then double-checks its own work.
 3. Drag a box over each thing you want removed. Add as many boxes as you need.
 4. Click **Apply Redactions**. RaioPDF tells you how many areas will be
    permanently removed — confirm, and it removes them and checks its work.
-5. **Save** the file — or use **Save As** to write the redacted version to a new
-   file and keep your original untouched.
+5. **Save.** RaioPDF leaves your original file untouched and asks for a new file
+   name, suggesting *<name>_redacted.pdf* — so you keep both the original and the
+   redacted copy.
 
-Applying redactions changes the document you have open. Nothing is written to
-disk until you save, so you decide whether to replace the original or keep both.
+Applying redactions changes the document open in RaioPDF; the file on your disk
+isn't touched until you save, and even then RaioPDF steers you to a new file
+rather than over the original.
 
 ## What "verified" means
 
@@ -47,9 +49,11 @@ When you see **Verified**, the content is actually gone.
 
 ## What to know
 
-- **Your original is safe until you save.** Applying redactions changes the
-  document you have open, not the file on your disk. To keep the unredacted original, use
-  **Save As** and give the redacted version a new name — then you have both.
+- **Your original is protected for you.** Applying redactions changes only the
+  document open in RaioPDF — the file on your disk is left untouched. When you
+  save, RaioPDF asks for a new file name (suggesting *<name>_redacted.pdf*), so
+  you end up with both the original and the redacted copy without having to
+  remember to.
 - **The removed text is gone for good.** Once you save the redacted version,
   the words are deleted from that file, not hidden. There's no recovering them
   from it later — which is exactly what you want in a document you're producing.

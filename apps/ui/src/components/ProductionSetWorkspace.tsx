@@ -65,6 +65,7 @@ export function ProductionSetWorkspace({
   onRun,
 }: ProductionSetWorkspaceProps) {
   const mountedRef = useRef(true);
+  const addFilePendingRef = useRef(false);
   const [files, setFiles] = useState<ProductionSetFile[]>(() =>
     currentFile ? [fromOpenedFile(currentFile, currentPageCount)] : [],
   );
@@ -77,17 +78,18 @@ export function ProductionSetWorkspace({
   const [combinedPdf, setCombinedPdf] = useState(false);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
+  const [addingFile, setAddingFile] = useState(false);
   const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
   const totalPages = files.reduce((sum, file) => sum + file.pages, 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
-  const countingPages = pendingPageCountReads > 0;
+  const addFileBusy = addingFile || pendingPageCountReads > 0;
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
     !overflows &&
-    !countingPages &&
+    !addFileBusy &&
     !progress.running;
 
   useEffect(() => {
@@ -104,34 +106,44 @@ export function ProductionSetWorkspace({
   }, [prefix]);
 
   async function addFile() {
-    const opened = await onAddFile();
-    if (!opened) {
+    if (addFilePendingRef.current) {
       return;
     }
 
-    if (!mountedRef.current) {
-      return;
-    }
-
-    setPendingPageCountReads((current) => current + 1);
-    setLocalMessage("Reading page count...");
+    addFilePendingRef.current = true;
+    setAddingFile(true);
 
     try {
-      const pages = await readProductionSetPageCount(opened.bytes);
-      if (!mountedRef.current) {
+      const opened = await onAddFile();
+      if (!opened || !mountedRef.current) {
         return;
       }
-      setFiles((current) => [...current, fromOpenedFile(opened, pages)]);
-      setLocalMessage(null);
-    } catch {
-      if (!mountedRef.current) {
-        return;
+
+      setPendingPageCountReads((current) => current + 1);
+      setLocalMessage("Reading page count...");
+
+      try {
+        const pages = await readProductionSetPageCount(opened.bytes);
+        if (!mountedRef.current) {
+          return;
+        }
+        setFiles((current) => [...current, fromOpenedFile(opened, pages)]);
+        setLocalMessage(null);
+      } catch {
+        if (!mountedRef.current) {
+          return;
+        }
+        setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
+      } finally {
+        if (mountedRef.current) {
+          setPendingPageCountReads((current) => Math.max(0, current - 1));
+        }
       }
-      setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
     } finally {
       if (mountedRef.current) {
-        setPendingPageCountReads((current) => Math.max(0, current - 1));
+        setAddingFile(false);
       }
+      addFilePendingRef.current = false;
     }
   }
 
@@ -182,8 +194,8 @@ export function ProductionSetWorkspace({
           type="button"
           className="production-workspace__secondary-button"
           onClick={addFile}
-          disabled={countingPages || progress.running}
-          title={countingPages ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
+          disabled={addFileBusy || progress.running}
+          title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
         >
           <PlusIcon size={14} /> Add PDF
         </button>

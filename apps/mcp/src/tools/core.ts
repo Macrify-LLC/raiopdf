@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import { z } from "zod";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
-import { extractTextLayerCoverage } from "@raiopdf/rules/node";
 import type { EngineHandle } from "../engine.js";
 import {
   baseOutputSchema,
@@ -11,6 +10,7 @@ import {
 } from "../format.js";
 import { resolvePageIndexes, runOutputOp, runSingleOutputOp } from "../ops.js";
 import { prepareOutput, resolveInput } from "../paths.js";
+import { extractTextLayerCoverage } from "../pdfjs-node.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 const absoluteOutput = z

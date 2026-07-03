@@ -32,7 +32,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-          cache: gradle
+          # no gradle cache: gradle files only exist inside engine/upstream after vendoring
 
       - name: Vendor engine
         run: engine/vendor.sh

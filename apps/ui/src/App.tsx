@@ -5,10 +5,19 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type MouseEvent,
 } from "react";
-import type { PdfBatesStampOptions, PdfRedactionArea } from "@raiopdf/engine-api";
+import type {
+  PdfBatesStampOptions,
+  PdfCompressOptions,
+  PdfImagePageInput,
+  PdfPageNumbersOptions,
+  PdfRedactionArea,
+  PdfSanitizeRemovedItem,
+  PdfWatermarkOptions,
+} from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
@@ -41,9 +50,10 @@ import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
 } from "./hooks/useEngineBridge";
-import { useDocument } from "./hooks/useDocument";
+import { useDocument, type DocumentState } from "./hooks/useDocument";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
+import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
@@ -67,6 +77,7 @@ import {
   BatesPanel,
   PasswordsPanel,
   ScrubMetadataPanel,
+  type EditDialogToolId,
   type LegalToolId,
   type OrganizeToolId,
 } from "./components/ToolPanel";
@@ -86,6 +97,7 @@ const POINTS_PER_INCH = 72;
 declare global {
   interface Window {
     __RAIOPDF_TEST_FILING_PREFLIGHT_RUNS__?: number;
+    __RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__?: number;
     __RAIOPDF_TEST_REORDER_DELAY_MS__?: number;
   }
 }
@@ -132,11 +144,19 @@ export function App() {
     batesStamp,
     applyEdits,
     scrubMetadata,
+    pageNumbers,
+    watermark,
+    insertImagePages,
     save: saveDocument,
     markSaved,
   } = useDocument();
   const engineBridge = useEngineBridge();
-  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [pdfDocumentState, setPdfDocumentState] = useState<{
+    bytes: Uint8Array;
+    proxy: PDFDocumentProxy;
+  } | null>(null);
+  const pdfDocument = pdfDocumentState?.proxy ?? null;
+  const pdfDocumentBytes = pdfDocumentState?.bytes ?? null;
   const editing = useEditing(pdfDocument);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
@@ -146,6 +166,9 @@ export function App() {
     message: null,
   });
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
+    null,
+  );
+  const [activeEditDialogTool, setActiveEditDialogTool] = useState<EditDialogToolId | null>(
     null,
   );
   const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
@@ -183,6 +206,20 @@ export function App() {
     message: null,
     removedFields: [],
   });
+  const [sidecarStatus, setSidecarStatus] = useState<{
+    running: boolean;
+    message: string | null;
+    removed: readonly PdfSanitizeRemovedItem[];
+    beforeBytes: number | null;
+    afterBytes: number | null;
+  }>({
+    running: false,
+    message: null,
+    removed: [],
+    beforeBytes: null,
+    afterBytes: null,
+  });
+  const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
@@ -210,6 +247,13 @@ export function App() {
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
     setFilingProgress({ phase: "idle", message: null });
     setFilingResult(null);
+    setSidecarStatus({
+      running: false,
+      message: null,
+      removed: [],
+      beforeBytes: null,
+      afterBytes: null,
+    });
   }, []);
 
   const clearDocumentBoundLegalState = useCallback(() => {
@@ -231,15 +275,16 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let loadedDocument: PDFDocumentProxy | null = null;
+    const sourceBytes = document.bytes;
 
-    if (!document.bytes) {
-      setPdfDocument(null);
+    if (!sourceBytes) {
+      setPdfDocumentState(null);
       return;
     }
 
-    setPdfDocument(null);
+    setPdfDocumentState(null);
 
-    void loadPdfDocument(document.bytes)
+    void loadPdfDocument(sourceBytes)
       .then((loaded) => {
         loadedDocument = loaded;
 
@@ -248,7 +293,7 @@ export function App() {
           return;
         }
 
-        setPdfDocument(loaded);
+        setPdfDocumentState({ bytes: sourceBytes, proxy: loaded });
       })
       .catch((error: unknown) => {
         if (!disposed) {
@@ -305,6 +350,7 @@ export function App() {
         setActiveLegalTool(null);
       }
 
+      setActiveEditDialogTool(null);
       editing.setTool(toolId);
     },
     [activeLegalTool, editing],
@@ -373,7 +419,7 @@ export function App() {
     } = {
       fileBytes: document.fileSizeBytes ?? sourceBytes.byteLength,
       pdfaCompliant: false,
-      pdfDocument,
+      pdfDocument: pdfDocumentBytes === sourceBytes ? pdfDocument : null,
     };
 
     if (document.hasTextLayer !== null) {
@@ -402,7 +448,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument]);
+  }, [document.bytes, document.fileSizeBytes, document.hasTextLayer, pdfDocument, pdfDocumentBytes]);
 
   const makeSearchable = useCallback(() => {
     if (ocrActiveRef.current) {
@@ -554,7 +600,13 @@ export function App() {
       setSelectedPageIndexes(new Set());
       void openDocumentFile(file).then((opened) => {
         if (opened) {
+          setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
+        } else {
+          setRepairCandidate(file);
+          setActiveEditDialogTool(null);
+          setActiveLegalTool(null);
+          setActiveOrganizeTool("repair");
         }
       });
     },
@@ -818,6 +870,7 @@ export function App() {
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
       setActiveLegalTool(toolId);
+      setActiveEditDialogTool(null);
 
       if (toolId === "redact" && editing.tool !== "select") {
         editing.setTool("select");
@@ -840,11 +893,20 @@ export function App() {
 
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
+    setActiveEditDialogTool(null);
   }, [rotateSelected]);
+
+  const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
+    setActiveEditDialogTool(toolId);
+    setActiveLegalTool(null);
+    setActiveOrganizeTool(null);
+    editing.setTool("select");
+  }, [editing]);
 
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
     setActiveLegalTool(null);
+    setActiveEditDialogTool(null);
   }, []);
 
   const splitAndSavePages = useCallback(
@@ -1100,6 +1162,415 @@ export function App() {
       }
     },
     [batesStamp, document.bytes, getOpenToken, isCurrentDocument],
+  );
+
+  const applyPageNumbers = useCallback(
+    async (options: PdfPageNumbersOptions) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setSidecarStatus((current) => ({
+          ...current,
+          message: "Open a PDF before applying page numbers.",
+        }));
+        return false;
+      }
+
+      setSidecarStatus({
+        running: true,
+        message: "Applying page numbers...",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+
+      const applied = await pageNumbers(options, {
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
+
+      if (getOpenToken() === sourceOpenToken) {
+        setSidecarStatus({
+          running: false,
+          message: applied ? "Page numbers applied." : "Page numbers could not be applied.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+      }
+
+      return applied;
+    },
+    [document.bytes, getOpenToken, pageNumbers],
+  );
+
+  const applyWatermark = useCallback(
+    async (options: PdfWatermarkOptions) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setSidecarStatus((current) => ({
+          ...current,
+          message: "Open a PDF before applying a watermark.",
+        }));
+        return false;
+      }
+
+      setSidecarStatus({
+        running: true,
+        message: "Applying watermark...",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+
+      const applied = await watermark(options, {
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
+
+      if (getOpenToken() === sourceOpenToken) {
+        setSidecarStatus({
+          running: false,
+          message: applied ? "Watermark applied." : "Watermark could not be applied.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+      }
+
+      return applied;
+    },
+    [document.bytes, getOpenToken, watermark],
+  );
+
+  const compressDocument = useCallback(
+    async (options: PdfCompressOptions) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setSidecarStatus({
+          running: false,
+          message: "Open a PDF before compressing.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      if (!engineBridge.available) {
+        setSidecarStatus({
+          running: false,
+          message: "Compression runs in the desktop app.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      setSidecarStatus({
+        running: true,
+        message: "Compressing in the desktop engine...",
+        removed: [],
+        beforeBytes: sourceBytes.byteLength,
+        afterBytes: null,
+      });
+
+      try {
+        const compressedBytes = await engineBridge.compress(sourceBytes, options);
+
+        if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          return false;
+        }
+
+        const replaced = await replaceBytes(compressedBytes, {
+          dirty: true,
+          hasTextLayer: null,
+          expectedOpenToken: sourceOpenToken,
+          expectedSourceBytes: sourceBytes,
+        });
+        const applied = replaced === "replaced";
+
+        setSidecarStatus({
+          running: false,
+          message: applied ? "Compression complete." : "The document changed before compression finished.",
+          removed: [],
+          beforeBytes: sourceBytes.byteLength,
+          afterBytes: applied ? compressedBytes.byteLength : null,
+        });
+
+        return applied;
+      } catch (error) {
+        if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+          setSidecarStatus({
+            running: false,
+            message: isEngineBridgeUnavailableError(error)
+              ? error.message
+              : "Compression could not finish. The document was left unchanged.",
+            removed: [],
+            beforeBytes: sourceBytes.byteLength,
+            afterBytes: null,
+          });
+        }
+
+        return false;
+      }
+    },
+    [document.bytes, engineBridge, getOpenToken, isCurrentDocument, replaceBytes],
+  );
+
+  const sanitizeDocument = useCallback(async () => {
+    const sourceBytes = document.bytes;
+    const sourceOpenToken = getOpenToken();
+
+    if (!sourceBytes) {
+      setSidecarStatus({
+        running: false,
+        message: "Open a PDF before sanitizing.",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+      return false;
+    }
+
+    if (!engineBridge.available) {
+      setSidecarStatus({
+        running: false,
+        message: "Sanitize runs in the desktop app.",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+      return false;
+    }
+
+    setSidecarStatus({
+      running: true,
+      message: "Sanitizing in the desktop engine...",
+      removed: [],
+      beforeBytes: null,
+      afterBytes: null,
+    });
+
+    try {
+      const result = await engineBridge.sanitize(sourceBytes, {
+        removeJavaScript: true,
+        removeEmbeddedFiles: true,
+        removeLinks: true,
+      });
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        return false;
+      }
+
+      const replaced = await replaceBytes(result.bytes, {
+        dirty: true,
+        hasTextLayer: null,
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
+      const applied = replaced === "replaced";
+
+      setSidecarStatus({
+        running: false,
+        message: applied ? "Sanitize complete." : "The document changed before sanitize finished.",
+        removed: applied ? result.removed : [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+
+      return applied;
+    } catch (error) {
+      if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        setSidecarStatus({
+          running: false,
+          message: isEngineBridgeUnavailableError(error)
+            ? error.message
+            : "Sanitize could not finish. The document was left unchanged.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+      }
+
+      return false;
+    }
+  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, replaceBytes]);
+
+  const repairDocument = useCallback(
+    async () => {
+      const source = repairCandidate ?? (document.bytes
+        ? { bytes: document.bytes, name: document.fileName ?? "Repaired.pdf", path: null }
+        : null);
+
+      if (!source) {
+        setSidecarStatus({
+          running: false,
+          message: "Choose a PDF or open a document before repairing.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      if (!engineBridge.available) {
+        setSidecarStatus({
+          running: false,
+          message: "Repair runs in the desktop app.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      setSidecarStatus({
+        running: true,
+        message: "Repairing in the desktop engine...",
+        removed: [],
+        beforeBytes: source.bytes.byteLength,
+        afterBytes: null,
+      });
+
+      try {
+        const repairedBytes = await engineBridge.repair(source.bytes);
+        const opened = await openDocumentFile({
+          bytes: repairedBytes,
+          name: `Repaired ${source.name}`,
+          path: null,
+        });
+
+        setSidecarStatus({
+          running: false,
+          message: opened ? "Repair complete." : "Repair finished, but the PDF still could not be opened.",
+          removed: [],
+          beforeBytes: source.bytes.byteLength,
+          afterBytes: repairedBytes.byteLength,
+        });
+
+        if (opened) {
+          setRepairCandidate(null);
+          setSelectedPageIndexes(new Set([0]));
+        }
+
+        return opened;
+      } catch (error) {
+        setSidecarStatus({
+          running: false,
+          message: isEngineBridgeUnavailableError(error)
+            ? error.message
+            : "Repair could not finish.",
+          removed: [],
+          beforeBytes: source.bytes.byteLength,
+          afterBytes: null,
+        });
+        return false;
+      }
+    },
+    [document.bytes, document.fileName, engineBridge, openDocumentFile, repairCandidate],
+  );
+
+  const insertImageFilesAsPages = useCallback(
+    async (files: readonly File[]) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+
+      if (!sourceBytes) {
+        setSidecarStatus({
+          running: false,
+          message: "Open a PDF before inserting image pages.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      const insertAt = [...selectedPageIndexes].sort((left, right) => left - right)[0] ?? document.currentPage;
+      setSidecarStatus({
+        running: true,
+        message: "Inserting image pages...",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+      const images = await Promise.all(files.map(readImagePageInput));
+
+      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        setSidecarStatus({
+          running: false,
+          message: "The document changed before image pages finished loading.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+
+      const inserted = await insertImagePages(images, insertAt, {
+        expectedOpenToken: sourceOpenToken,
+        expectedSourceBytes: sourceBytes,
+      });
+      setSidecarStatus({
+        running: false,
+        message: inserted ? "Image pages inserted." : "Image pages could not be inserted.",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+      return inserted;
+    },
+    [document.bytes, document.currentPage, getOpenToken, insertImagePages, isCurrentDocument, selectedPageIndexes],
+  );
+
+  const exportPageAsImage = useCallback(
+    async (pageIndex: number) => {
+      if (!pdfDocument) {
+        setError("Open a PDF before exporting a page image.");
+        return false;
+      }
+
+      try {
+        const page = await pdfDocument.getPage(pageIndex + 1);
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = window.document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          return false;
+        }
+
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        const blob = await new Promise<Blob | null>((resolve) => {
+          canvas.toBlob(resolve, "image/png");
+        });
+
+        if (!blob) {
+          return false;
+        }
+
+        const url = URL.createObjectURL(blob);
+        const anchor = window.document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${stripPdfExtension(document.fileName ?? "page")} - page ${pageIndex + 1}.png`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        return true;
+      } catch {
+        setError("The page image could not be exported.");
+        return false;
+      }
+    },
+    [document.fileName, pdfDocument, setError],
   );
 
   const runScanner = useCallback(() => {
@@ -1399,6 +1870,22 @@ export function App() {
     isCurrentDocument,
   ]);
 
+  const compressBeforeFiling = useCallback(() => {
+    setFilingProgress({
+      phase: "normalizing",
+      message: "Compressing before the split check...",
+    });
+
+    void compressDocument({ quality: 5, grayscale: false }).then((compressed) => {
+      setFilingProgress({
+        phase: compressed ? "idle" : "error",
+        message: compressed
+          ? "Compression complete. Preflight will re-run on the compressed document."
+          : "Compression could not finish. The document was left unchanged.",
+      });
+    });
+  }, [compressDocument]);
+
   const undoLastPendingEdit = useCallback(() => {
     const lastEdit = editing.pendingEdits[editing.pendingEdits.length - 1];
 
@@ -1449,6 +1936,11 @@ export function App() {
           break;
         case "file:protect":
           showPasswordProtection();
+          break;
+        case "file:properties":
+          setActiveEditDialogTool(null);
+          setActiveLegalTool(null);
+          setActiveOrganizeTool("properties");
           break;
         case "file:preferences":
           setSettingsOpen(true);
@@ -1571,6 +2063,7 @@ export function App() {
       onExtract={extractPages}
       onSplit={splitAndSavePages}
       onInsert={insertFile}
+      onExportPageAsImage={exportPageAsImage}
       onCropResize={cropResize}
     />
   ) : null;
@@ -1594,7 +2087,9 @@ export function App() {
             progress={filingProgress}
             result={filingResult}
             pdfAAvailable={engineBridge.available}
+            compressAvailable={engineBridge.available}
             onPrepare={prepareFilingCopy}
+            onCompressFirst={compressBeforeFiling}
           />
         </FloatingDialog>
       );
@@ -1625,10 +2120,99 @@ export function App() {
       );
     }
 
+    if (activeLegalTool === "sanitize") {
+      return (
+        <FloatingDialog title="Sanitize" eyebrow="Legal" onClose={closeWorkspace}>
+          <SanitizePanel
+            hasDocument={Boolean(document.bytes)}
+            available={engineBridge.available}
+            status={sidecarStatus}
+            onSanitize={sanitizeDocument}
+          />
+        </FloatingDialog>
+      );
+    }
+
     if (activeLegalTool === "passwords") {
       return (
         <FloatingDialog title="Passwords" eyebrow="Legal" onClose={closeWorkspace}>
           <PasswordsPanel />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeEditDialogTool === "page-numbers") {
+      return (
+        <FloatingDialog title="Page Numbers" eyebrow="Edit" onClose={closeWorkspace}>
+          <PageNumbersPanel
+            hasDocument={Boolean(document.bytes)}
+            pageCount={document.pageCount}
+            status={sidecarStatus}
+            onApply={applyPageNumbers}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeEditDialogTool === "watermark") {
+      return (
+        <FloatingDialog title="Watermark" eyebrow="Edit" onClose={closeWorkspace}>
+          <WatermarkPanel
+            hasDocument={Boolean(document.bytes)}
+            pageCount={document.pageCount}
+            status={sidecarStatus}
+            onApply={applyWatermark}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "compress") {
+      return (
+        <FloatingDialog title="Compress" eyebrow="Organize" onClose={closeWorkspace}>
+          <CompressPanel
+            hasDocument={Boolean(document.bytes)}
+            available={engineBridge.available}
+            status={sidecarStatus}
+            onCompress={compressDocument}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "repair") {
+      return (
+        <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace}>
+          <RepairPanel
+            hasSource={Boolean(repairCandidate || document.bytes)}
+            available={engineBridge.available}
+            candidateName={repairCandidate?.name ?? document.fileName}
+            status={sidecarStatus}
+            onRepair={repairDocument}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "insert-images") {
+      return (
+        <FloatingDialog title="Insert Images as Pages" eyebrow="Organize" onClose={closeWorkspace}>
+          <InsertImagesPanel
+            hasDocument={Boolean(document.bytes)}
+            status={sidecarStatus}
+            onInsert={insertImageFilesAsPages}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "properties") {
+      return (
+        <FloatingDialog title="Document Properties" eyebrow="Organize" onClose={closeWorkspace}>
+          <DocumentPropertiesPanel
+            document={document}
+            metadata={metadataSummary}
+          />
         </FloatingDialog>
       );
     }
@@ -1685,7 +2269,9 @@ export function App() {
         workspace={workspace}
         overlay={overlay}
         activeLegalTool={activeLegalTool}
+        activeEditDialogTool={activeEditDialogTool}
         activeOrganizeTool={activeOrganizeTool}
+        onEditDialogToolSelected={selectEditDialogTool}
         onLegalToolSelected={selectLegalTool}
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
@@ -1761,6 +2347,330 @@ function RedactionModeBar({
       <button type="button" className="legal-mode-bar__button" onClick={onExit}>
         Exit
       </button>
+    </div>
+  );
+}
+
+type SidecarStatus = {
+  running: boolean;
+  message: string | null;
+  removed: readonly PdfSanitizeRemovedItem[];
+  beforeBytes: number | null;
+  afterBytes: number | null;
+};
+
+function PageNumbersPanel({
+  hasDocument,
+  pageCount,
+  status,
+  onApply,
+}: {
+  hasDocument: boolean;
+  pageCount: number;
+  status: SidecarStatus;
+  onApply: (options: PdfPageNumbersOptions) => Promise<boolean>;
+}) {
+  const [range, setRange] = useState(formatDefaultRange(pageCount));
+  const [format, setFormat] = useState<PdfPageNumbersOptions["format"]>("number");
+  const [startAt, setStartAt] = useState(1);
+  const [fontSizePt, setFontSizePt] = useState(11);
+  const [placement, setPlacement] = useState<PdfPageNumbersOptions["placement"]>({
+    edge: "footer",
+    align: "center",
+  });
+  const [touched, setTouched] = useState(false);
+  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTouched(true);
+
+    if (parsed.error) {
+      return;
+    }
+
+    await onApply({
+      startAt,
+      pageIndexes: parsed.pageIndexes,
+      format,
+      placement,
+      fontSizePt,
+    });
+  }
+
+  return (
+    <form className="tool-panel__inline-card" onSubmit={submit}>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-range">Pages</label>
+        <input id="page-number-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
+        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
+      </div>
+      <div className="tool-panel__field-grid">
+        <div className="tool-panel__field">
+          <label htmlFor="page-number-start">Start at</label>
+          <input id="page-number-start" type="number" min="0" value={startAt} onChange={(event) => setStartAt(Number(event.target.value))} />
+        </div>
+        <div className="tool-panel__field">
+          <label htmlFor="page-number-size">Font size</label>
+          <input id="page-number-size" type="number" min="1" value={fontSizePt} onChange={(event) => setFontSizePt(Number(event.target.value))} />
+        </div>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-format">Format</label>
+        <select id="page-number-format" value={format} onChange={(event) => setFormat(event.target.value as PdfPageNumbersOptions["format"])}>
+          <option value="number">1, 2, 3</option>
+          <option value="page-of-total">Page N of M</option>
+        </select>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-position">Position</label>
+        <select id="page-number-position" value={`${placement.edge}-${placement.align}`} onChange={(event) => setPlacement(parsePlacementValue(event.target.value))}>
+          <option value="footer-left">Footer left</option>
+          <option value="footer-center">Footer center</option>
+          <option value="footer-right">Footer right</option>
+          <option value="header-left">Header left</option>
+          <option value="header-center">Header center</option>
+          <option value="header-right">Header right</option>
+        </select>
+      </div>
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
+        Apply Page Numbers
+      </button>
+    </form>
+  );
+}
+
+function WatermarkPanel({
+  hasDocument,
+  pageCount,
+  status,
+  onApply,
+}: {
+  hasDocument: boolean;
+  pageCount: number;
+  status: SidecarStatus;
+  onApply: (options: PdfWatermarkOptions) => Promise<boolean>;
+}) {
+  const [text, setText] = useState("DRAFT");
+  const [range, setRange] = useState(formatDefaultRange(pageCount));
+  const [orientation, setOrientation] = useState<PdfWatermarkOptions["orientation"]>("diagonal");
+  const [opacity, setOpacity] = useState(0.18);
+  const [touched, setTouched] = useState(false);
+  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTouched(true);
+
+    if (parsed.error || !text.trim()) {
+      return;
+    }
+
+    await onApply({
+      text: text.trim(),
+      pageIndexes: parsed.pageIndexes,
+      orientation,
+      opacity,
+    });
+  }
+
+  return (
+    <form className="tool-panel__inline-card" onSubmit={submit}>
+      <div className="tool-panel__button-row">
+        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("DRAFT")}>DRAFT</button>
+        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("CONFIDENTIAL")}>CONFIDENTIAL</button>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="watermark-text">Text</label>
+        <input id="watermark-text" value={text} onChange={(event) => setText(event.target.value)} />
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="watermark-range">Pages</label>
+        <input id="watermark-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
+        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
+      </div>
+      <div className="tool-panel__field-grid">
+        <div className="tool-panel__field">
+          <label htmlFor="watermark-orientation">Direction</label>
+          <select id="watermark-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as PdfWatermarkOptions["orientation"])}>
+            <option value="diagonal">Diagonal</option>
+            <option value="horizontal">Horizontal</option>
+          </select>
+        </div>
+        <div className="tool-panel__field">
+          <label htmlFor="watermark-opacity">Opacity</label>
+          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.05" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
+        </div>
+      </div>
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
+        Apply Watermark
+      </button>
+    </form>
+  );
+}
+
+function CompressPanel({
+  hasDocument,
+  available,
+  status,
+  onCompress,
+}: {
+  hasDocument: boolean;
+  available: boolean;
+  status: SidecarStatus;
+  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
+}) {
+  const [quality, setQuality] = useState(5);
+  const [grayscale, setGrayscale] = useState(false);
+
+  return (
+    <div className="tool-panel__inline-card">
+      {!available ? <p className="tool-panel__status-line">Compression runs in the desktop app.</p> : null}
+      <div className="tool-panel__field">
+        <label htmlFor="compress-quality">Quality</label>
+        <input id="compress-quality" type="number" min="1" max="9" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
+      </div>
+      <label className="tool-panel__check-row">
+        <input type="checkbox" checked={grayscale} onChange={(event) => setGrayscale(event.target.checked)} />
+        Grayscale
+      </label>
+      {status.beforeBytes !== null && status.afterBytes !== null ? (
+        <p className="tool-panel__status-line">
+          {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
+        </p>
+      ) : null}
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onCompress({ quality, grayscale })}>
+        Compress PDF
+      </button>
+    </div>
+  );
+}
+
+function SanitizePanel({
+  hasDocument,
+  available,
+  status,
+  onSanitize,
+}: {
+  hasDocument: boolean;
+  available: boolean;
+  status: SidecarStatus;
+  onSanitize: () => Promise<boolean>;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      {!available ? <p className="tool-panel__status-line">Sanitize runs in the desktop app.</p> : null}
+      <p className="tool-panel__note">Removes JavaScript, embedded files, and external links.</p>
+      {status.removed.length ? (
+        <p className="tool-panel__status-line" data-tone="ok">
+          Removed {status.removed.map(formatSanitizeItem).join(", ")}.
+        </p>
+      ) : null}
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onSanitize()}>
+        Sanitize PDF
+      </button>
+    </div>
+  );
+}
+
+function RepairPanel({
+  hasSource,
+  available,
+  candidateName,
+  status,
+  onRepair,
+}: {
+  hasSource: boolean;
+  available: boolean;
+  candidateName: string | null | undefined;
+  status: SidecarStatus;
+  onRepair: () => Promise<boolean>;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      {!available ? <p className="tool-panel__status-line">Repair runs in the desktop app.</p> : null}
+      <p className="tool-panel__note">{candidateName ?? "No PDF selected"}</p>
+      {status.beforeBytes !== null && status.afterBytes !== null ? (
+        <p className="tool-panel__status-line">
+          {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
+        </p>
+      ) : null}
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="button" className="tool-panel__primary-button" disabled={!hasSource || !available || status.running} onClick={() => void onRepair()}>
+        Repair PDF
+      </button>
+    </div>
+  );
+}
+
+function InsertImagesPanel({
+  hasDocument,
+  status,
+  onInsert,
+}: {
+  hasDocument: boolean;
+  status: SidecarStatus;
+  onInsert: (files: readonly File[]) => Promise<boolean>;
+}) {
+  const [selected, setSelected] = useState<readonly File[]>([]);
+
+  async function submit() {
+    await onInsert(selected);
+  }
+
+  return (
+    <div className="tool-panel__inline-card">
+      <div className="tool-panel__field">
+        <label htmlFor="insert-image-pages">Images</label>
+        <input
+          id="insert-image-pages"
+          type="file"
+          accept="image/png,image/jpeg"
+          multiple
+          onChange={(event: ChangeEvent<HTMLInputElement>) => setSelected(Array.from(event.target.files ?? []))}
+        />
+      </div>
+      {selected.length ? <p className="tool-panel__status-line">{selected.length} selected.</p> : null}
+      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || selected.length === 0 || status.running} onClick={() => void submit()}>
+        Insert Images
+      </button>
+    </div>
+  );
+}
+
+function DocumentPropertiesPanel({
+  document,
+  metadata,
+}: {
+  document: DocumentState;
+  metadata: PdfMetadataSummary | null;
+}) {
+  const rows = [
+    ...(metadata?.rows ?? []),
+    { label: "Pages", value: String(document.pageCount || "Not set") },
+    { label: "Page size", value: document.pageSizeInches ? `${document.pageSizeInches.width} x ${document.pageSizeInches.height} in` : "Not set" },
+    { label: "File size", value: document.fileSizeBytes ? formatBytes(document.fileSizeBytes) : "Not set" },
+    { label: "Encryption", value: document.bytes ? "Not encrypted" : "Not set" },
+    { label: "Searchable", value: document.hasTextLayer === null ? "Not checked" : document.hasTextLayer ? "Yes" : "No" },
+  ];
+
+  return (
+    <div className="tool-panel__inline-card">
+      <table className="tool-panel__metadata-table">
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <th scope="row">{row.label}</th>
+              <td>{row.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2023,6 +2933,49 @@ function getOrganizeDialogTitle(flow: Exclude<OrganizeFlowId, "pages">): string 
 
 function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
+}
+
+function parsePlacementValue(value: string): PdfPageNumbersOptions["placement"] {
+  const [edge, align] = value.split("-");
+
+  return {
+    edge: edge === "header" ? "header" : "footer",
+    align: align === "left" || align === "right" ? align : "center",
+  };
+}
+
+function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
+  if (item === "javascript") {
+    return "JavaScript";
+  }
+
+  if (item === "embedded-files") {
+    return "embedded files";
+  }
+
+  return "external links";
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function readImagePageInput(file: File): Promise<PdfImagePageInput> {
+  const lowerName = file.name.toLowerCase();
+  const format = file.type === "image/jpeg" || lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+    ? "jpeg"
+    : "png";
+
+  await waitForTestDelay(window.__RAIOPDF_TEST_INSERT_IMAGE_READ_DELAY_MS__ ?? 0);
+
+  return {
+    bytes: new Uint8Array(await file.arrayBuffer()),
+    format,
+  };
 }
 
 function waitForTestDelay(delayMs: number): Promise<void> {

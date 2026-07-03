@@ -1,6 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
-import type { PdfAFlavor, PdfDocumentHandle, PdfRedactionArea } from "@raiopdf/engine-api";
+import type {
+  PdfAFlavor,
+  PdfCompressOptions,
+  PdfDocumentHandle,
+  PdfRedactionArea,
+  PdfSanitizeOptions,
+  PdfSanitizeResult,
+} from "@raiopdf/engine-api";
 
 interface EngineStartResponse {
   disabled?: boolean;
@@ -25,6 +32,12 @@ export interface EngineBridge {
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<Uint8Array>;
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
   convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
+  compress: (bytes: Uint8Array, options: PdfCompressOptions) => Promise<Uint8Array>;
+  sanitize: (bytes: Uint8Array, options?: PdfSanitizeOptions) => Promise<{
+    bytes: Uint8Array;
+    removed: PdfSanitizeResult["removed"];
+  }>;
+  repair: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -181,6 +194,55 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const compress = useCallback(
+    async (bytes: Uint8Array, options: PdfCompressOptions) => {
+      const engine = await ensureEngine();
+      const sourceHandle = await engine.open(bytes);
+      let outputHandle: PdfDocumentHandle | null = null;
+
+      try {
+        outputHandle = await engine.compress(sourceHandle, options);
+
+        return await engine.saveToBytes(outputHandle);
+      } finally {
+        await closeHandle(engine, outputHandle);
+        await closeHandle(engine, sourceHandle);
+      }
+    },
+    [ensureEngine],
+  );
+
+  const sanitize = useCallback(
+    async (bytes: Uint8Array, options: PdfSanitizeOptions = {}) => {
+      const engine = await ensureEngine();
+      const sourceHandle = await engine.open(bytes);
+      let outputHandle: PdfDocumentHandle | null = null;
+
+      try {
+        const result = await engine.sanitize(sourceHandle, options);
+        outputHandle = result.document;
+
+        return {
+          bytes: await engine.saveToBytes(outputHandle),
+          removed: result.removed,
+        };
+      } finally {
+        await closeHandle(engine, outputHandle);
+        await closeHandle(engine, sourceHandle);
+      }
+    },
+    [ensureEngine],
+  );
+
+  const repair = useCallback(
+    async (bytes: Uint8Array) => {
+      const engine = await ensureEngine();
+
+      return engine.repairBytes(bytes);
+    },
+    [ensureEngine],
+  );
+
   return {
     available: runtimeAvailable && !disabled,
     ocrAvailable: runtimeAvailable && !disabled && ocrToolchainMissing.length === 0,
@@ -189,6 +251,9 @@ export function useEngineBridge(): EngineBridge {
     runOcr,
     redactAreas,
     convertToPdfA,
+    compress,
+    sanitize,
+    repair,
   };
 }
 

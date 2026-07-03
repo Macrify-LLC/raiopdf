@@ -32,10 +32,12 @@ import "./ToolPanel.css";
 type GroupId = "edit" | "organize" | "comment" | "legal";
 export type LegalToolId = typeof LEGAL_TOOLS[number]["id"];
 export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
+export type EditDialogToolId = typeof EDIT_DIALOG_TOOLS[number]["id"];
 
 const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
   { id: "combine-exhibits", label: "Combine with Exhibits", icon: <CombineExhibitsIcon size={16} /> },
+  { id: "sanitize", label: "Sanitize...", icon: <ShieldCheckIcon size={16} /> },
   { id: "redact", label: "Redact", icon: <RedactIcon size={16} /> },
   { id: "bates-numbering", label: "Bates Numbering", icon: <BatesIcon size={16} /> },
   { id: "scanner-2425", label: "2.425 Scanner", icon: <ShieldCheckIcon size={16} /> },
@@ -45,9 +47,13 @@ const LEGAL_TOOLS = [
 
 const ORGANIZE_TOOLS = [
   { id: "pages", label: "Organize Pages", icon: <OrganizeIcon size={16} /> },
+  { id: "compress", label: "Compress...", icon: <CropIcon size={16} /> },
+  { id: "repair", label: "Repair...", icon: <ShieldCheckIcon size={16} /> },
   { id: "merge", label: "Merge PDFs...", icon: <CombineExhibitsIcon size={16} /> },
   { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
+  { id: "insert-images", label: "Insert images as pages...", icon: <ImageIcon size={16} /> },
   { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
+  { id: "properties", label: "Document Properties", icon: <ScrubMetadataIcon size={16} /> },
   { id: "rotate", label: "Rotate Pages", icon: <RotateIcon size={16} /> },
 ] as const;
 
@@ -62,6 +68,11 @@ const EDIT_TOOLS: ReadonlyArray<{
   { id: "draw", label: "Draw", icon: <DrawIcon size={16} /> },
   { id: "sign", label: "Sign", icon: <SignIcon size={16} /> },
 ];
+
+const EDIT_DIALOG_TOOLS = [
+  { id: "page-numbers", label: "Page Numbers...", icon: <BatesIcon size={16} /> },
+  { id: "watermark", label: "Watermark...", icon: <ScrubMetadataIcon size={16} /> },
+] as const;
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -96,9 +107,11 @@ export interface ToolPanelProps {
   ocrAvailable: boolean;
   ocrStarting: boolean;
   activeEditTool: EditToolId;
+  activeEditDialogTool: EditDialogToolId | null;
   activeLegalTool: string | null;
   activeOrganizeTool: string | null;
   onEditToolSelected: (toolId: EditToolId) => void;
+  onEditDialogToolSelected: (toolId: EditDialogToolId) => void;
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
@@ -118,9 +131,11 @@ export function ToolPanel({
   ocrAvailable,
   ocrStarting,
   activeEditTool,
+  activeEditDialogTool,
   activeLegalTool,
   activeOrganizeTool,
   onEditToolSelected,
+  onEditDialogToolSelected,
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
@@ -161,6 +176,15 @@ export function ToolPanel({
             label={tool.label}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
+          />
+        ))}
+        {EDIT_DIALOG_TOOLS.map((tool) => (
+          <ToolRow
+            key={tool.id}
+            icon={tool.icon}
+            label={tool.label}
+            selected={activeEditDialogTool === tool.id}
+            onSelect={() => onEditDialogToolSelected(tool.id)}
           />
         ))}
         {pendingContentEdits.length > 0 ? (

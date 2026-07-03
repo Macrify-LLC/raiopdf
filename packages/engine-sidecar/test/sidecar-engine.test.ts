@@ -372,6 +372,55 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[1], "strict", "true");
   });
 
+  it("compresses through compress-pdf with quality and grayscale fields", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(92));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const compressed = await engine.compress(document, {
+      quality: 5,
+      grayscale: true,
+    });
+
+    expect(await engine.saveToBytes(compressed)).toEqual(bytes(92));
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/compress-pdf");
+    expectFormField(calls[1], "optimizeLevel", "5");
+    expectFormField(calls[1], "grayscale", "true");
+    expectFormField(calls[1], "linearize", "false");
+  });
+
+  it("sanitizes through sanitize-pdf and reports requested removal categories", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(93));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    const sanitized = await engine.sanitize(document, {
+      removeJavaScript: true,
+      removeEmbeddedFiles: true,
+      removeLinks: true,
+    });
+
+    expect(await engine.saveToBytes(sanitized.document)).toEqual(bytes(93));
+    expect(sanitized.removed).toEqual(["javascript", "embedded-files", "external-links"]);
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/sanitize-pdf");
+    expectFormField(calls[1], "removeJavaScript", "true");
+    expectFormField(calls[1], "removeEmbeddedFiles", "true");
+    expectFormField(calls[1], "removeLinks", "true");
+    expectFormField(calls[1], "removeMetadata", "false");
+    expectFormField(calls[1], "removeXMPMetadata", "false");
+    expectFormField(calls[1], "removeFonts", "false");
+  });
+
+  it("repairs raw bytes through repair without a prior page-count call", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(94));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.repairBytes(bytes(1, 2, 3))).resolves.toEqual(bytes(94));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/repair");
+    await expectFormFile(calls[0], [1, 2, 3]);
+  });
+
   it("runs OCR through ocr-pdf with searchable sandwich defaults", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(42));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

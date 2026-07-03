@@ -272,6 +272,91 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 2, "RAIO-0009");
   });
 
+  it("stamps simple page numbers on selected pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [210, 300]]));
+
+    const numbered = await engine.pageNumbers(document, {
+      startAt: 3,
+      pageIndexes: "all",
+      format: "page-of-total",
+      placement: { edge: "footer", align: "center" },
+    });
+    const bytes = await engine.saveToBytes(numbered);
+
+    await expectPageContentToContainLabel(bytes, 0, "Page 3 of 2");
+    await expectPageContentToContainLabel(bytes, 1, "Page 4 of 2");
+  });
+
+  it("shrinks page numbers that would exceed the visual page width", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[80, 300]]));
+
+    const numbered = await engine.pageNumbers(document, {
+      startAt: 1,
+      pageIndexes: "all",
+      format: "page-of-total",
+      placement: { edge: "footer", align: "right" },
+      fontSizePt: 12,
+      marginIn: 0.5,
+    });
+    const bytes = await engine.saveToBytes(numbered);
+    const [matrix] = await readPageTextMatrices(bytes, 0);
+    const [fontSize] = await readPageTextFontSizes(bytes, 0);
+
+    if (!matrix || !fontSize) {
+      throw new Error("Expected page number text matrix and font size.");
+    }
+
+    const textWidth = await measureHelveticaText("Page 1 of 1", fontSize);
+
+    expect(matrix.e).toBeGreaterThanOrEqual(35.99);
+    expect(matrix.e + textWidth).toBeLessThanOrEqual(44.01);
+    expect(fontSize).toBeLessThan(12);
+  });
+
+  it("keeps a long diagonal watermark within the visual page bounds", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+    const text = "CONFIDENTIAL SETTLEMENT COMMUNICATION";
+
+    const watermarked = await engine.watermark(document, {
+      text,
+      pageIndexes: "all",
+      orientation: "diagonal",
+      opacity: 0.2,
+      fontSizePt: 48,
+    });
+    const bytes = await engine.saveToBytes(watermarked);
+    const [matrix] = await readPageTextMatrices(bytes, 0);
+    const [fontSize] = await readPageTextFontSizes(bytes, 0);
+
+    if (!matrix || !fontSize) {
+      throw new Error("Expected watermark text matrix and font size.");
+    }
+
+    const textWidth = await measureHelveticaText(text, fontSize);
+    const bounds = boundsForTransformedRect(matrix, textWidth, fontSize);
+
+    expect(bounds.minX).toBeGreaterThanOrEqual(-0.001);
+    expect(bounds.minY).toBeGreaterThanOrEqual(-0.001);
+    expect(bounds.maxX).toBeLessThanOrEqual(200.001);
+    expect(bounds.maxY).toBeLessThanOrEqual(300.001);
+    expect(fontSize).toBeLessThan(48);
+  });
+
+  it("inserts PNG images as full pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300], [220, 300]]));
+
+    const inserted = await engine.insertImagePages(document, 1, [
+      { bytes: onePixelPng(), format: "png" },
+    ]);
+    const bytes = await engine.saveToBytes(inserted);
+
+    await expectPageWidths(bytes, [200, 1, 220]);
+  });
+
   it("rejects Bates numbers that overflow the configured digit width", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
@@ -386,6 +471,13 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+function onePixelPng(): Uint8Array {
+  return new Uint8Array(Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "base64",
+  ));
 }
 
 async function createPdfWithRotatedLandscapePage(): Promise<Uint8Array> {
@@ -550,6 +642,14 @@ async function readPageTextMatrices(
       f: values[5]!,
     };
   });
+}
+
+async function readPageTextFontSizes(bytes: Uint8Array, pageIndex: number): Promise<number[]> {
+  const content = await readDecodedPageContent(bytes, pageIndex);
+  const numberPattern = String.raw`-?(?:\d+\.?\d*|\.\d+)`;
+  const fontSizePattern = new RegExp(`/[^\\s]+ (${numberPattern}) Tf`, "g");
+
+  return [...content.matchAll(fontSizePattern)].map((match) => Number(match[1]));
 }
 
 async function readPageDrawMatrices(bytes: Uint8Array, pageIndex: number): Promise<TransformMatrix[]> {

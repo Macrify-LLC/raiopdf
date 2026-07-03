@@ -50,7 +50,9 @@ export interface PrepareForFilingWorkspaceProps {
   progress: FilingProgressState;
   result: FilingResultState | null;
   pdfAAvailable: boolean;
+  compressAvailable: boolean;
   onPrepare: (certificate: CertificateOfServiceDraft | null) => void;
+  onCompressFirst: () => void;
 }
 
 export function PrepareForFilingWorkspace({
@@ -61,7 +63,9 @@ export function PrepareForFilingWorkspace({
   progress,
   result,
   pdfAAvailable,
+  compressAvailable,
   onPrepare,
+  onCompressFirst,
 }: PrepareForFilingWorkspaceProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [packSelectOpen, setPackSelectOpen] = useState(false);
@@ -77,6 +81,9 @@ export function PrepareForFilingWorkspace({
   const hasFixes = Boolean(report?.checks.some((check) => check.kind === "portal" && check.status === "fix"));
   const needsPdfA = Boolean(report?.checks.some((check) => check.checkId === "pdfa" && check.status !== "pass"));
   const needsMechanicalWork = Boolean(report?.checks.some((check) => check.status !== "pass"));
+  const overPortalSize = Boolean(
+    document.fileSizeBytes && document.fileSizeBytes > pack.recommendedMaxFileBytes,
+  );
   const primaryLabel = hasFixes || needsMechanicalWork
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
@@ -221,6 +228,21 @@ export function PrepareForFilingWorkspace({
           <p className="filing-card__unavailable" role="status">
             PDF/A export runs in the desktop app. Normalize and split remain available here.
           </p>
+        ) : null}
+
+        {overPortalSize ? (
+          <div className="filing-progress" data-phase="idle" role="status">
+            <p className="filing-progress__label">Size cap</p>
+            <p>Compress first, then re-run preflight before splitting.</p>
+            <button
+              type="button"
+              className="filing-card__secondary-button"
+              disabled={!compressAvailable || progress.phase !== "idle"}
+              onClick={onCompressFirst}
+            >
+              Compress first
+            </button>
+          </div>
         ) : null}
 
         <GuidanceNote note={pack.guidanceNote} />

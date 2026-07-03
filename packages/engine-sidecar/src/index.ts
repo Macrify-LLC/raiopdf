@@ -4,19 +4,26 @@ import type {
   PdfBinderOptions,
   PdfBytes,
   PdfAConversionOptions,
+  PdfCompressOptions,
   PdfDocumentHandle,
   PdfEdit,
   PdfEngine,
   PdfEngineErrorCode,
+  PdfImagePageInput,
   PdfNormalizePagesOptions,
   PdfPageSizePoints,
+  PdfPageNumbersOptions,
   PdfPageSelection,
   PdfRedactTextOptions,
   PdfRedactionArea,
+  PdfSanitizeOptions,
+  PdfSanitizeRemovedItem,
+  PdfSanitizeResult,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextRegion,
+  PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { scrubPdfMetadataBytes } from "@raiopdf/engine-pdf-lib";
@@ -93,6 +100,11 @@ const DEFAULT_MARGIN_IN = 0.5;
  * - scrubMetadata -> POST /api/v1/misc/update-metadata with deleteAll=true,
  *   followed by engine-local's low-level Info dictionary and XMP metadata
  *   removal on the returned bytes.
+ * - compress -> POST /api/v1/misc/compress-pdf with optimizeLevel,
+ *   grayscale, and linearize=false.
+ * - sanitize -> POST /api/v1/security/sanitize-pdf with removeJavaScript,
+ *   removeEmbeddedFiles, removeLinks, and metadata/font removal disabled.
+ * - repair -> POST /api/v1/misc/repair.
  * - batesStamp -> sequential stampText calls, one page at a time.
  * - buildBinder is intentionally unsupported for this engine because Stirling
  *   exposes generated merge TOCs but not caller-defined exhibit outline titles
@@ -306,6 +318,61 @@ export class SidecarPdfEngine implements PdfEngine {
     return this.store(await readBytes(response), pageCount);
   }
 
+  async compress(
+    document: PdfDocumentHandle,
+    options: PdfCompressOptions,
+  ): Promise<PdfDocumentHandle> {
+    assertCompressOptions(options);
+
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("optimizeLevel", String(options.quality));
+    formData.append("grayscale", String(options.grayscale ?? false));
+    formData.append("linearize", "false");
+
+    const response = await this.request("/api/v1/misc/compress-pdf", formData);
+
+    return this.store(await readBytes(response), pageCount);
+  }
+
+  async sanitize(
+    document: PdfDocumentHandle,
+    options: PdfSanitizeOptions = {},
+  ): Promise<PdfSanitizeResult> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const normalizedOptions = normalizeSanitizeOptions(options);
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("removeJavaScript", String(normalizedOptions.removeJavaScript));
+    formData.append("removeEmbeddedFiles", String(normalizedOptions.removeEmbeddedFiles));
+    formData.append("removeLinks", String(normalizedOptions.removeLinks));
+    formData.append("removeMetadata", "false");
+    formData.append("removeXMPMetadata", "false");
+    formData.append("removeFonts", "false");
+
+    const response = await this.request("/api/v1/security/sanitize-pdf", formData);
+
+    return {
+      document: this.store(await readBytes(response), pageCount),
+      removed: getSanitizeRemovedItems(normalizedOptions),
+    };
+  }
+
+  async repair(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const bytes = await this.repairBytes(storedDocument.bytes);
+
+    return this.store(bytes, pageCount);
+  }
+
+  async repairBytes(bytes: PdfBytes): Promise<Uint8Array> {
+    const response = await this.request("/api/v1/misc/repair", createFormData(normalizeBytes(bytes)));
+
+    return readBytes(response);
+  }
+
   async insertPages(
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
@@ -482,6 +549,37 @@ export class SidecarPdfEngine implements PdfEngine {
     throw new PdfEngineError(
       "UNSUPPORTED",
       "Sidecar binder creation is unsupported because Stirling PDF cannot create caller-defined exhibit outline entries.",
+    );
+  }
+
+  async pageNumbers(
+    _document: PdfDocumentHandle,
+    _options: PdfPageNumbersOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Simple page numbering is handled by the local pdf-lib engine for deterministic page-by-page stamping.",
+    );
+  }
+
+  async watermark(
+    _document: PdfDocumentHandle,
+    _options: PdfWatermarkOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Watermarking is handled by the local pdf-lib engine so text placement stays rotation-aware.",
+    );
+  }
+
+  async insertImagePages(
+    _document: PdfDocumentHandle,
+    _insertAtPageIndex: number,
+    _images: readonly PdfImagePageInput[],
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Image-page insertion is handled by the local pdf-lib engine.",
     );
   }
 
@@ -689,6 +787,45 @@ function normalizeStampOptions(options: PdfStampTextOptions): Required<PdfStampT
     fontSizePt,
     marginIn,
   };
+}
+
+function assertCompressOptions(options: PdfCompressOptions): void {
+  if (!Number.isInteger(options.quality) || options.quality < 1 || options.quality > 9) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Compression quality must be an integer from 1 through 9.",
+    );
+  }
+}
+
+function normalizeSanitizeOptions(
+  options: PdfSanitizeOptions,
+): Required<PdfSanitizeOptions> {
+  return {
+    removeJavaScript: options.removeJavaScript ?? true,
+    removeEmbeddedFiles: options.removeEmbeddedFiles ?? true,
+    removeLinks: options.removeLinks ?? true,
+  };
+}
+
+function getSanitizeRemovedItems(
+  options: Required<PdfSanitizeOptions>,
+): PdfSanitizeRemovedItem[] {
+  const removed: PdfSanitizeRemovedItem[] = [];
+
+  if (options.removeJavaScript) {
+    removed.push("javascript");
+  }
+
+  if (options.removeEmbeddedFiles) {
+    removed.push("embedded-files");
+  }
+
+  if (options.removeLinks) {
+    removed.push("external-links");
+  }
+
+  return removed;
 }
 
 function normalizeBatesOptions(options: PdfBatesStampOptions): PdfBatesStampOptions {

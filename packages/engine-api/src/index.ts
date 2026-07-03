@@ -67,6 +67,61 @@ export type PdfBatesStampOptions = {
   marginIn?: number;
 };
 
+export type PdfCompressOptions = {
+  /** Stirling optimize level, 1–9. Higher values may reduce visual quality. */
+  quality: number;
+  /** Converts color content to grayscale when the backing engine supports it. */
+  grayscale?: boolean;
+};
+
+export type PdfSanitizeOptions = {
+  /** Remove document-level JavaScript actions. Defaults to true. */
+  removeJavaScript?: boolean;
+  /** Remove embedded file attachments. Defaults to true. */
+  removeEmbeddedFiles?: boolean;
+  /** Remove external link annotations and URI actions. Defaults to true. */
+  removeLinks?: boolean;
+};
+
+export type PdfSanitizeRemovedItem = "javascript" | "embedded-files" | "external-links";
+
+export type PdfSanitizeResult = {
+  document: PdfDocumentHandle;
+  removed: readonly PdfSanitizeRemovedItem[];
+};
+
+export type PdfPageNumberFormat = "number" | "page-of-total";
+
+export type PdfPageNumbersOptions = {
+  /** Number stamped on the first selected page. */
+  startAt: number;
+  /** Selected zero-based pages receiving numbers, or all pages. */
+  pageIndexes: PdfPageSelection;
+  /** `number` renders `1`; `page-of-total` renders `Page 1 of 10`. */
+  format: PdfPageNumberFormat;
+  placement: PdfStampPlacement;
+  fontSizePt?: number;
+  marginIn?: number;
+};
+
+export type PdfWatermarkOrientation = "diagonal" | "horizontal";
+
+export type PdfWatermarkOptions = {
+  text: string;
+  pageIndexes: PdfPageSelection;
+  orientation: PdfWatermarkOrientation;
+  /** Opacity in the 0–1 range. Defaults to 0.18. */
+  opacity?: number;
+  fontSizePt?: number;
+};
+
+export type PdfImagePageFormat = "png" | "jpeg";
+
+export type PdfImagePageInput = {
+  bytes: PdfBytes;
+  format: PdfImagePageFormat;
+};
+
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
@@ -408,6 +463,34 @@ export interface PdfEngine {
     options: PdfAConversionOptions,
   ): Promise<PdfDocumentHandle>;
 
+  /**
+   * Creates a compressed copy of the document when the backing engine has a
+   * verified optimizer. Local pdf-lib implementations should reject with
+   * `PdfEngineError("UNSUPPORTED", ...)` because pdf-lib cannot safely
+   * downsample or recompress arbitrary page content.
+   */
+  compress(
+    document: PdfDocumentHandle,
+    options: PdfCompressOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a sanitized copy of the document by removing active or embedded
+   * content such as JavaScript, attachments, and external links. Engines return
+   * the removal categories requested and handled by the backend.
+   */
+  sanitize(
+    document: PdfDocumentHandle,
+    options?: PdfSanitizeOptions,
+  ): Promise<PdfSanitizeResult>;
+
+  /**
+   * Attempts to repair a structurally damaged PDF. Sidecar engines may use
+   * Ghostscript/qpdf/PDFBox; local engines should reject with UNSUPPORTED
+   * because opening the document already requires valid bytes.
+   */
+  repair(document: PdfDocumentHandle): Promise<PdfDocumentHandle>;
+
   /** Creates a new document by inserting all pages from another document at a zero-based page position. */
   insertPages(
     document: PdfDocumentHandle,
@@ -489,6 +572,38 @@ export interface PdfEngine {
   batesStamp(
     document: PdfDocumentHandle,
     options: PdfBatesStampOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with simple page numbers stamped on selected pages.
+   * This is intentionally distinct from Bates numbering: numbering can start at
+   * any integer and optionally includes the total page count, but has no prefix
+   * or fixed digit width.
+   */
+  pageNumbers(
+    document: PdfDocumentHandle,
+    options: PdfPageNumbersOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document with a text watermark drawn into selected pages.
+   * Local implementations should render the text with page-rotation awareness
+   * so diagonal and horizontal marks read upright to the viewer.
+   */
+  watermark(
+    document: PdfDocumentHandle,
+    options: PdfWatermarkOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document by inserting raster images as full pages at the
+   * provided zero-based page position. Images are embedded as page content, not
+   * annotations.
+   */
+  insertImagePages(
+    document: PdfDocumentHandle,
+    insertAtPageIndex: number,
+    images: readonly PdfImagePageInput[],
   ): Promise<PdfDocumentHandle>;
 
   /**

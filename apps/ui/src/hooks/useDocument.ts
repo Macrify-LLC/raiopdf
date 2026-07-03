@@ -5,6 +5,9 @@ import type {
   PdfDocumentHandle,
   PdfEdit,
   PdfEngine,
+  PdfImagePageInput,
+  PdfPageNumbersOptions,
+  PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
@@ -75,6 +78,11 @@ export type ReplaceBytesResult = "replaced" | "stale" | "failed";
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
+}
+
+interface MutationGuards {
+  expectedOpenToken?: number;
+  expectedSourceBytes?: Uint8Array | null;
 }
 
 export interface DocumentFileInput {
@@ -741,6 +749,105 @@ export function useDocument() {
     }));
   }, [engine, enqueueMutation]);
 
+  const pageNumbers = useCallback(
+    async (
+      options: PdfPageNumbersOptions,
+      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+    ) => {
+      const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
+
+      return enqueueMutation("page numbers", async ({ handle }) => {
+        if (
+          guards.expectedOpenToken !== undefined &&
+          openTokenRef.current !== guards.expectedOpenToken
+        ) {
+          return null;
+        }
+
+        if (
+          guards.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== guards.expectedSourceBytes
+        ) {
+          return null;
+        }
+
+        return {
+          engineHandle: await engine.pageNumbers(handle, options),
+          options: { dirty: true },
+        };
+      }, requestedToken);
+    },
+    [engine, enqueueMutation],
+  );
+
+  const watermark = useCallback(
+    async (
+      options: PdfWatermarkOptions,
+      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+    ) => {
+      const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
+
+      return enqueueMutation("watermark", async ({ handle }) => {
+        if (
+          guards.expectedOpenToken !== undefined &&
+          openTokenRef.current !== guards.expectedOpenToken
+        ) {
+          return null;
+        }
+
+        if (
+          guards.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== guards.expectedSourceBytes
+        ) {
+          return null;
+        }
+
+        return {
+          engineHandle: await engine.watermark(handle, options),
+          options: { dirty: true },
+        };
+      }, requestedToken);
+    },
+    [engine, enqueueMutation],
+  );
+
+  const insertImagePages = useCallback(
+    async (
+      images: readonly PdfImagePageInput[],
+      insertAtPageIndex: number,
+      guards: MutationGuards = {},
+    ) => {
+      const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
+
+      return enqueueMutation("insert image pages", async ({ handle }) => {
+        if (
+          guards.expectedOpenToken !== undefined &&
+          openTokenRef.current !== guards.expectedOpenToken
+        ) {
+          return null;
+        }
+
+        if (
+          guards.expectedSourceBytes !== undefined &&
+          activeBytesRef.current !== guards.expectedSourceBytes
+        ) {
+          return null;
+        }
+
+        return {
+          engineHandle: await engine.insertImagePages(handle, insertAtPageIndex, images),
+          options: {
+            dirty: true,
+            currentPage: insertAtPageIndex + 1,
+            fileName: "Inserted Images.pdf",
+            filePath: null,
+          },
+        };
+      }, requestedToken);
+    },
+    [engine, enqueueMutation],
+  );
+
   const save = useCallback(async (): Promise<SaveDocumentResult | null> => {
     await mutationQueueRef.current;
 
@@ -819,6 +926,9 @@ export function useDocument() {
     batesStamp,
     applyEdits,
     scrubMetadata,
+    pageNumbers,
+    watermark,
+    insertImagePages,
     save,
     markSaved,
   };

@@ -2,6 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OcrUiState } from "../App";
 import { ForceOcrConfirmationDialog } from "./ForceOcrConfirmationDialog";
 import { resetDialogStackForTests } from "./FloatingDialog";
 import { TextLayerDetailPanel } from "./TextLayerDetailPanel";
@@ -88,6 +89,46 @@ describe("force OCR controls", () => {
     expect(onForceOcr).toHaveBeenCalledTimes(1);
   });
 
+  it("disables Make Searchable while the confirm dialog is up, with no inline status box", () => {
+    render(<ToolPanelHarness ocrState={{ phase: "confirm", message: null }} />);
+
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
+    expect(getButton("Force re-OCR text layer").disabled).toBe(true);
+    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+  });
+
+  it("disables Make Searchable while OCR is running, with no inline status box", () => {
+    render(<ToolPanelHarness ocrState={{ phase: "processing", message: "Making searchable…" }} />);
+
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
+    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+  });
+
+  it("shows a result notice once OCR finishes, replacing the old always-on status box", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{ phase: "done", message: "Rebuilt the text layer on 3 pages." }}
+      />,
+    );
+
+    const notice = document.querySelector(".tool-panel__inline-card");
+    expect(notice?.getAttribute("data-tone")).toBe("ok");
+    expect(notice?.textContent).toContain("Rebuilt the text layer on 3 pages.");
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(false);
+  });
+
+  it("shows OCR errors as a neutral note when the desktop engine is unavailable, not an alarming one", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{ phase: "error", message: "This action is available in the desktop app." }}
+        ocrAvailable={false}
+      />,
+    );
+
+    const notice = document.querySelector(".tool-panel__inline-card");
+    expect(notice?.getAttribute("data-tone")).toBe("neutral");
+  });
+
   it("shows the whole-document force OCR interstitial before running", () => {
     const onConfirm = vi.fn();
 
@@ -121,6 +162,42 @@ describe("force OCR controls", () => {
     });
   }
 });
+
+function ToolPanelHarness({
+  ocrState,
+  ocrAvailable = true,
+}: {
+  ocrState: OcrUiState;
+  ocrAvailable?: boolean;
+}) {
+  return (
+    <ToolPanel
+      hasDocument
+      ocrState={ocrState}
+      ocrAvailable={ocrAvailable}
+      ocrStarting={false}
+      activeEditTool="select"
+      activeEditDialogTool={null}
+      activeLegalTool={null}
+      activeOrganizeTool={null}
+      onEditToolSelected={() => undefined}
+      onEditDialogToolSelected={() => undefined}
+      onLegalToolSelected={() => undefined}
+      onOrganizeToolSelected={() => undefined}
+      onMakeSearchable={() => undefined}
+      onForceOcr={() => undefined}
+      redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
+      scanner={{ scanning: false, message: null, hits: [] }}
+      pendingEdits={[]}
+      onRemovePendingEdit={() => undefined}
+      onConfirmRedactions={() => undefined}
+      onCancelRedactions={() => undefined}
+      onRunScanner={() => undefined}
+      onMarkScannerHit={() => undefined}
+      onHelpRequested={() => undefined}
+    />
+  );
+}
 
 function getButton(name: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(

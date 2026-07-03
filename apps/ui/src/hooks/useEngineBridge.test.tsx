@@ -9,6 +9,10 @@ const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
     ocrCalls: unknown[];
   }>,
+  // Queued outcomes for the NEXT ocr() call, consumed across all instances
+  // in call order (not per-instance) -- lets a test simulate "the first
+  // attempt fails, a fresh engine's attempt succeeds."
+  ocrBehaviors: [] as Array<Error | undefined>,
 }));
 
 vi.mock("@raiopdf/engine-sidecar", () => {
@@ -25,6 +29,12 @@ vi.mock("@raiopdf/engine-sidecar", () => {
 
     async ocr(_handle: string, options: unknown) {
       this.ocrCalls.push(options);
+      const behavior = sidecarState.ocrBehaviors.shift();
+
+      if (behavior) {
+        throw behavior;
+      }
+
       return "output-handle";
     }
 
@@ -51,6 +61,7 @@ describe("useEngineBridge runOcr", () => {
       ocrToolchain: { available: true, missing: [] },
     }) as T;
     sidecarState.instances.length = 0;
+    sidecarState.ocrBehaviors.length = 0;
   });
 
   afterEach(() => {
@@ -84,6 +95,84 @@ describe("useEngineBridge runOcr", () => {
     });
 
     expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({ ocrType: "force-ocr" });
+  });
+
+  it("self-heals after an idle-killed engine: retries once against a fresh engine and succeeds", async () => {
+    // Simulates the idle-shutdown bug (issue #1): the cached engine's port
+    // is dead, so the first request fails with a fetch-style connection
+    // error -- a TypeError somewhere in the .cause chain, wrapped the same
+    // way packages/engine-sidecar/src/index.ts:773-793 wraps a real fetch
+    // failure.
+    const connectionError = new Error("Stirling PDF request failed.", {
+      cause: new TypeError("Failed to fetch"),
+    });
+    sidecarState.ocrBehaviors.push(connectionError);
+
+    const bridge = renderHookValue();
+    let bytes: Uint8Array | undefined;
+
+    await act(async () => {
+      bytes = await bridge.runOcr(new Uint8Array([1]));
+    });
+
+    expect(bytes).toEqual(new Uint8Array([9]));
+    // One dead engine, one fresh replacement -- exactly one retry.
+    expect(sidecarState.instances).toHaveLength(2);
+    expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);
+    expect(sidecarState.instances[1]?.ocrCalls).toHaveLength(1);
+  });
+
+  it("dedupes two concurrent ops against a dead engine into a single engine_start", async () => {
+    let engineStartCalls = 0;
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command === "engine_start") {
+        engineStartCalls += 1;
+      }
+
+      return {
+        port: 1234,
+        token: "test-token",
+        ocrToolchain: { available: true, missing: [] },
+      } as T;
+    };
+
+    const bridge = renderHookValue();
+
+    await act(async () => {
+      await Promise.all([
+        bridge.runOcr(new Uint8Array([1])),
+        bridge.runOcr(new Uint8Array([2])),
+      ]);
+    });
+
+    expect(engineStartCalls).toBe(1);
+    expect(sidecarState.instances).toHaveLength(1);
+  });
+
+  it("does not retry a non-connection failure (e.g. a genuinely bad PDF)", async () => {
+    // No .cause chain -- this is what a real Stirling HTTP error response
+    // looks like (throwResponseError never sets `cause`), distinct from a
+    // network-level failure.
+    const invalidDocumentError = new Error(
+      "Stirling PDF request failed: bad file (INVALID_DOCUMENT)",
+    );
+    sidecarState.ocrBehaviors.push(invalidDocumentError);
+
+    const bridge = renderHookValue();
+    let caught: unknown = null;
+
+    await act(async () => {
+      try {
+        await bridge.runOcr(new Uint8Array([1]));
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBe(invalidDocumentError);
+    // No retry -- only the one engine, one failed attempt.
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);
   });
 
   function renderHookValue(): EngineBridge {

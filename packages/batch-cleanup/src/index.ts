@@ -170,9 +170,10 @@ export async function runBatchCleanup(
       : "Confirm current cleanup requirements before sharing or uploading cleaned PDFs.",
   });
   const files: BatchCleanupFileResult[] = [];
+  const outputNames = new Set<string>();
 
   for (const source of options.sources) {
-    files.push(await processFile(source, options, localEngine, sidecarEngine, session));
+    files.push(await processFile(source, options, localEngine, sidecarEngine, session, outputNames));
   }
 
   const reportJson = toMachineReport(options, files);
@@ -188,6 +189,13 @@ export async function runBatchCleanup(
     sourceSha256: file.sourceSha256,
     status: file.status,
     reason: file.reason,
+    outputs: file.outputs.map((output) => ({
+      outputName: output.outputName,
+      packageRelativePath: output.packageRelativePath,
+      pages: output.pages,
+      bytes: output.bytes,
+      sha256: output.sha256,
+    })),
   })));
   session.recordDetail("batchOptions", {
     packId: options.pack?.id ?? null,
@@ -268,6 +276,7 @@ async function processFile(
   localEngine: PdfEngine,
   sidecarEngine: BatchCleanupSidecarEngine,
   session: ReturnType<typeof createPackage>,
+  outputNames: Set<string>,
 ): Promise<BatchCleanupFileResult> {
   const sourcePath = path.resolve(source.path);
   const sourceFilename = path.basename(sourcePath);
@@ -324,7 +333,7 @@ async function processFile(
       if (!item) {
         continue;
       }
-      const outputName = outputNameFor(sourceFilename, produced.length, index);
+      const outputName = reserveOutputName(outputNameFor(sourceFilename, produced.length, index), outputNames);
       const entry = await session.addUploadFile(item.bytes, outputName, {
         pages: item.pages,
         sourceFilename,
@@ -770,6 +779,23 @@ function outputNameFor(sourceFilename: string, total: number, index: number): st
     return `${safeBase} - cleaned.pdf`;
   }
   return `${safeBase} - cleaned - part ${String(index + 1).padStart(2, "0")}.pdf`;
+}
+
+function reserveOutputName(outputName: string, outputNames: Set<string>): string {
+  if (!outputNames.has(outputName)) {
+    outputNames.add(outputName);
+    return outputName;
+  }
+
+  const extension = path.extname(outputName);
+  const stem = extension ? outputName.slice(0, -extension.length) : outputName;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${stem} (${suffix})${extension}`;
+    if (!outputNames.has(candidate)) {
+      outputNames.add(candidate);
+      return candidate;
+    }
+  }
 }
 
 function safePdfName(value: string): string {

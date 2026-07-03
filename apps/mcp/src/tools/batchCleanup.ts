@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { runBatchCleanup } from "@raiopdf/batch-cleanup";
-import type { BatchCleanupOcrMode } from "@raiopdf/batch-cleanup";
+import type { BatchCleanupOcrMode, BatchCleanupSidecarEngine } from "@raiopdf/batch-cleanup";
 import type { JurisdictionPackId } from "@raiopdf/rules";
 import { extractTextLayerCoverage } from "@raiopdf/rules/node";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import { baseOutputSchema, successResult, type StructuredToolResult } from "../format.js";
-import { prepareOutput, resolveInput } from "../paths.js";
+import { preparePackageOutputDir, resolveInput } from "../paths.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 
@@ -70,51 +70,65 @@ export async function handleBatchCleanup(
   const resolvedSources = await Promise.all(
     input.inputs.map(async (sourcePath) => ({ path: (await resolveInput(sourcePath)).realPath })),
   );
-  const output = await prepareOutput(input.outputDir);
-  let outputReserved = true;
-
-  try {
-    await output.abort();
-    outputReserved = false;
-
-    const sidecar = await engineHandle.getEngine();
-    const result = await runBatchCleanup({
-      sources: resolvedSources,
-      outputDir: output.outputPath,
-      ...(input.packId === undefined ? {} : { packId: input.packId as JurisdictionPackId }),
-      ...(input.operations === undefined ? {} : { operations: input.operations }),
-      factsOptions: {
-        textExtractor: {
-          extractTextLayerCoverage,
-        },
+  const output = await preparePackageOutputDir(input.outputDir);
+  const result = await runBatchCleanup({
+    sources: resolvedSources,
+    outputDir: output.outputPath,
+    ...(input.packId === undefined ? {} : { packId: input.packId as JurisdictionPackId }),
+    ...(input.operations === undefined ? {} : { operations: input.operations }),
+    factsOptions: {
+      textExtractor: {
+        extractTextLayerCoverage,
       },
-    }, {
-      local: getLocalEngine(),
-      sidecar,
-    });
-    const failed = result.files.filter((file) => file.status === "failed").length;
-    const skipped = result.files.filter((file) => file.status === "skipped").length;
-    const summarySuffix = failed || skipped
-      ? ` (${failed} failed, ${skipped} skipped)`
-      : "";
+    },
+  }, {
+    local: getLocalEngine(),
+    sidecar: lazySidecarEngine(engineHandle),
+  });
+  const failed = result.files.filter((file) => file.status === "failed").length;
+  const skipped = result.files.filter((file) => file.status === "skipped").length;
+  const summarySuffix = failed || skipped
+    ? ` (${failed} failed, ${skipped} skipped)`
+    : "";
 
-    return successResult(
-      `Batch cleanup finished ${result.files.length} file(s) at ${result.packageRoot}${summarySuffix}.`,
-      {
-        packageRoot: result.packageRoot,
-        reportPdf: result.reportPdf,
-        reportJson: result.reportJson,
-        files: result.files.map((file) => ({
-          sourceFilename: file.sourceFilename,
-          status: file.status,
-          reason: file.reason,
-          outputs: file.outputs.map((entry) => entry.packageRelativePath),
-        })),
-      },
-    );
-  } finally {
-    if (outputReserved) {
-      await output.abort().catch(() => undefined);
-    }
-  }
+  return successResult(
+    `Batch cleanup finished ${result.files.length} file(s) at ${result.packageRoot}${summarySuffix}.`,
+    {
+      packageRoot: result.packageRoot,
+      reportPdf: result.reportPdf,
+      reportJson: result.reportJson,
+      files: result.files.map((file) => ({
+        sourceFilename: file.sourceFilename,
+        status: file.status,
+        reason: file.reason,
+        outputs: file.outputs.map((entry) => entry.packageRelativePath),
+      })),
+    },
+  );
+}
+
+function lazySidecarEngine(engineHandle: EngineHandle): BatchCleanupSidecarEngine {
+  let enginePromise: Promise<BatchCleanupSidecarEngine> | undefined;
+  const getEngine = async (): Promise<BatchCleanupSidecarEngine> => {
+    enginePromise ??= engineHandle.getEngine();
+    return await enginePromise;
+  };
+
+  return new Proxy({}, {
+    get(_target, property) {
+      if (typeof property !== "string") {
+        return undefined;
+      }
+
+      return async (...args: unknown[]) => {
+        const engine = await getEngine();
+        const method = engine[property as keyof BatchCleanupSidecarEngine];
+        if (typeof method !== "function") {
+          throw new Error(`Desktop sidecar engine method is unavailable: ${property}`);
+        }
+
+        return await (method as (...methodArgs: unknown[]) => unknown).apply(engine, args);
+      };
+    },
+  }) as BatchCleanupSidecarEngine;
 }

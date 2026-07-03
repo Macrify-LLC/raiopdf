@@ -145,6 +145,38 @@ describe("runBatchCleanup", () => {
     );
   });
 
+  it("disambiguates duplicate source basenames and records the output mapping", async () => {
+    const first = await makePdf("alpha/motion.pdf", 1);
+    const second = await makePdf("beta/motion.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await runBatchCleanup({
+      sources: [
+        { path: first, facts: facts({ pages: 1 }) },
+        { path: second, facts: facts({ pages: 1 }) },
+      ],
+      outputDir,
+      operations: {
+        sanitize: false,
+        scrubMetadata: true,
+        ocrMode: "off",
+      },
+    }, { local: new RecordingEngine() });
+
+    expect(result.files.map((file) => file.status)).toEqual(["done", "done"]);
+    expect(result.files.flatMap((file) => file.outputs.map((output) => output.outputName))).toEqual([
+      "motion - cleaned.pdf",
+      "motion - cleaned (2).pdf",
+    ]);
+    expect(result.manifest.uploadFiles.map((file) => file.outputName)).toEqual([
+      "motion - cleaned.pdf",
+      "motion - cleaned (2).pdf",
+    ]);
+    expect(JSON.stringify(result.manifest.details.batchSources)).toContain("motion - cleaned (2).pdf");
+    await expect(fs.access(path.join(outputDir, "upload", "motion - cleaned.pdf"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "upload", "motion - cleaned (2).pdf"))).resolves.toBeUndefined();
+  });
+
   it("propagates pack-aware warnings into the report without source paths", async () => {
     const source = await makePdf("scripted.pdf", 1);
     const outputDir = path.join(dir, "package");
@@ -268,6 +300,7 @@ async function makePdf(name: string, pages: number): Promise<string> {
     page.drawText(`Source ${name} page ${index + 1}`, { x: 12, y: 120, size: 10, font });
   }
   const filePath = path.join(dir, name);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, await pdf.save());
   return filePath;
 }

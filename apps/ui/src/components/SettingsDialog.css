@@ -8,7 +8,7 @@
 }
 
 .settings-dialog__panel {
-  width: min(420px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -52,6 +52,8 @@
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
+  max-height: min(600px, calc(100vh - 64px));
+  overflow-y: auto;
 }
 
 .settings-dialog__row {

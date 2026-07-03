@@ -1,3 +1,4 @@
+mod mcp;
 mod sidecar;
 
 use serde::Serialize;
@@ -276,7 +277,9 @@ pub fn run() {
             save_pdf_to_path,
             sidecar::engine_start,
             sidecar::engine_status,
-            sidecar::engine_stop
+            sidecar::engine_stop,
+            mcp::mcp_status,
+            mcp::mcp_set_enabled
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")
@@ -306,6 +309,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:properties", "Document Properties")
         .separator()
         .text("file:preferences", "Preferences...")
+        .text("file:open-raio-to-ai", "Open Raio to AI...")
         .separator()
         .text(MENU_EXIT, "Exit")
         .build()?;

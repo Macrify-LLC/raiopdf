@@ -246,6 +246,57 @@ export function App() {
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFocusSection, setSettingsFocusSection] = useState<
+    "open-raio-to-ai" | null
+  >(null);
+  const [mcpEnabled, setMcpEnabled] = useState(false);
+  const [mcpPath, setMcpPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const status = await invoke<{ enabled: boolean; path: string | null }>(
+          "mcp_status",
+        );
+        if (!cancelled) {
+          setMcpEnabled(status.enabled);
+          setMcpPath(status.path);
+        }
+      } catch {
+        // Non-Tauri/dev context or command unavailable -- keep the safe default (off).
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen]);
+  const mcpToggleChainRef = useRef<Promise<void>>(Promise.resolve());
+  const handleToggleMcpEnabled = useCallback((next: boolean) => {
+    setMcpEnabled(next);
+    // Serialize gate writes so rapid toggles persist in click order (the last
+    // click wins) instead of racing a create against a remove.
+    mcpToggleChainRef.current = mcpToggleChainRef.current.then(async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("mcp_set_enabled", { enabled: next });
+      } catch {
+        // Best-effort resync to the persisted truth on failure.
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const status = await invoke<{ enabled: boolean; path: string | null }>(
+            "mcp_status",
+          );
+          setMcpEnabled(status.enabled);
+        } catch {
+          setMcpEnabled(!next);
+        }
+      }
+    });
+  }, []);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
   const savingRef = useRef(false);
@@ -2045,6 +2096,11 @@ export function App() {
           setActiveOrganizeTool("properties");
           break;
         case "file:preferences":
+          setSettingsFocusSection(null);
+          setSettingsOpen(true);
+          break;
+        case "file:open-raio-to-ai":
+          setSettingsFocusSection("open-raio-to-ai");
           setSettingsOpen(true);
           break;
         case "edit:undo":
@@ -2396,7 +2452,17 @@ export function App() {
         onMarkScannerHit={markScannerHit}
       />
       {settingsOpen ? (
-        <SettingsDialog onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog
+          onClose={() => {
+            setSettingsOpen(false);
+            setSettingsFocusSection(null);
+          }}
+          mcpEnabled={mcpEnabled}
+          onToggleMcpEnabled={handleToggleMcpEnabled}
+          mcpPath={mcpPath}
+          focusSection={settingsFocusSection}
+          onFocusSectionHandled={() => setSettingsFocusSection(null)}
+        />
       ) : null}
     </>
   );

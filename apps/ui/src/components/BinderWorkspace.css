@@ -115,6 +115,12 @@
   line-height: 1.35;
 }
 
+.binder-workspace__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .binder-exhibits {
   min-height: 0;
   display: flex;
@@ -178,6 +184,12 @@
   color: var(--body);
   font-family: var(--font-ui);
   font-size: var(--text-xs);
+  box-shadow: var(--shadow-control);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
 .binder-exhibit__actions button {
@@ -203,22 +215,34 @@
   color: var(--on-primary);
   font-weight: 600;
   flex: 0 0 auto;
+  box-shadow: var(--shadow-primary);
 }
 
-.binder-workspace__secondary:hover,
-.binder-workspace__ghost:hover,
-.binder-exhibit__actions button:hover {
+.binder-workspace__secondary:hover:not(:disabled),
+.binder-workspace__ghost:hover:not(:disabled),
+.binder-exhibit__actions button:hover:not(:disabled) {
   background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
 }
 
-.binder-workspace__primary:hover {
+.binder-workspace__primary:hover:not(:disabled) {
   background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.binder-workspace__primary:active:not(:disabled),
+.binder-workspace__secondary:active:not(:disabled),
+.binder-workspace__ghost:active:not(:disabled),
+.binder-exhibit__actions button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .binder-workspace__primary:disabled,
 .binder-workspace__secondary:disabled,
 .binder-exhibit__actions button:disabled {
   opacity: 0.45;
+  box-shadow: none;
 }
 
 .binder-workspace__add {

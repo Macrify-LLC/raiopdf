@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -32,8 +40,10 @@ export function ThumbnailRail({
   onMoveSelectedUp,
   onMoveSelectedDown,
 }: ThumbnailRailProps) {
+  const railRef = useRef<HTMLElement>(null);
+  const scrollTopRef = useRef(0);
   const selectedCount = selectedPageIndexes.size;
-  const pages = Array.from({ length: pageCount }, (_, index) => index);
+  const pages = useMemo(() => Array.from({ length: pageCount }, (_, index) => index), [pageCount]);
   const canMoveUp = pages.some((pageIndex) => {
     return selectedPageIndexes.has(pageIndex) && pageIndex > 0 && !selectedPageIndexes.has(pageIndex - 1);
   });
@@ -45,8 +55,23 @@ export function ThumbnailRail({
     );
   });
 
+  useLayoutEffect(() => {
+    if (railRef.current) {
+      railRef.current.scrollTop = scrollTopRef.current;
+    }
+  }, [pageCount, pdfDocument]);
+
+  function rememberScroll() {
+    scrollTopRef.current = railRef.current?.scrollTop ?? 0;
+  }
+
   return (
-    <nav className="thumbnail-rail" aria-label="Page thumbnails">
+    <nav
+      ref={railRef}
+      className="thumbnail-rail"
+      aria-label="Page thumbnails"
+      onScroll={rememberScroll}
+    >
       {pdfDocument ? (
         <div className="thumbnail-rail__actions" aria-label="Selected page actions">
           <IconButton
@@ -111,7 +136,7 @@ interface ThumbnailCanvasProps {
   pageNumber: number;
 }
 
-function ThumbnailCanvas({ pdfDocument, pageNumber }: ThumbnailCanvasProps) {
+const ThumbnailCanvas = memo(function ThumbnailCanvas({ pdfDocument, pageNumber }: ThumbnailCanvasProps) {
   const frameRef = useRef<HTMLSpanElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -176,4 +201,4 @@ function ThumbnailCanvas({ pdfDocument, pageNumber }: ThumbnailCanvasProps) {
       <canvas ref={canvasRef} className="thumbnail__canvas" aria-hidden="true" />
     </span>
   );
-}
+});

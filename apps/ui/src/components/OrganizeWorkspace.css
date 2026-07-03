@@ -127,6 +127,12 @@
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-xs);
+  box-shadow: var(--shadow-control);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
 .organize-primary {
@@ -134,6 +140,7 @@
   border-color: var(--primary);
   color: var(--on-primary);
   font-weight: 600;
+  box-shadow: var(--shadow-primary);
 }
 
 .organize-secondary,
@@ -142,17 +149,28 @@
   color: var(--body);
 }
 
-.organize-primary:hover {
+.organize-primary:hover:not(:disabled) {
   background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
 }
 
-.organize-secondary:hover,
-.organize-card__ghost:hover {
+.organize-secondary:hover:not(:disabled),
+.organize-card__ghost:hover:not(:disabled) {
   background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
 }
 
-.organize-primary:disabled {
+.organize-primary:active:not(:disabled),
+.organize-secondary:active:not(:disabled),
+.organize-card__ghost:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
+}
+
+.organize-primary:disabled,
+.organize-secondary:disabled {
   opacity: 0.45;
+  box-shadow: none;
 }
 
 .organize-file-input {

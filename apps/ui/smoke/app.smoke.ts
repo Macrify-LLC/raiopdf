@@ -15,6 +15,24 @@ import {
   StandardFonts,
 } from "pdf-lib";
 
+test("disables doc-dependent chrome and hover echoes for reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Print" })).toBeDisabled();
+
+  const openIcon = page
+    .locator(".command-bar")
+    .getByRole("button", { name: "Open", exact: true })
+    .locator(".rp-icon");
+  await openIcon.hover();
+  await expect.poll(async () => {
+    return openIcon.locator(".rp-echo").first().evaluate((element) => {
+      return getComputedStyle(element).animationName;
+    });
+  }).toBe("none");
+});
+
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "round-trip.pdf", await createPdf([200, 210, 220, 230]));

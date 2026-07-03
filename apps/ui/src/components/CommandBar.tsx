@@ -122,7 +122,12 @@ export function CommandBar({
           onClick={onSave}
           disabled={!hasDocument}
         />
-        <IconButton icon={<PrintIcon size={17} />} label="Print" onClick={onPrint} />
+        <IconButton
+          icon={<PrintIcon size={17} />}
+          label="Print"
+          onClick={onPrint}
+          disabled={!hasDocument}
+        />
       </div>
 
       <span className="command-bar__divider" aria-hidden="true" />

@@ -23,6 +23,9 @@
   --primary-deep: #1b3a5c; /* app icon ground, emphasized headers */
   --accent: #4fb8e0; /* focus rings, live indicators */
   --accent-pale: #eaf5fc; /* selected-row / Legal-header wash */
+  --identity-amber: #d97706; /* scarce identity accent: loading sun + active hints only */
+  --identity-amber-bright: #f59e0b; /* second sun-ray value */
+  --identity-amber-soft: #fff7df; /* non-semantic amber wash */
 
   --on-primary: #ffffff; /* text/icon color on top of --primary / --primary-deep fills */
 
@@ -81,6 +84,12 @@
   /* ---- Elevation -- one shadow per elevated surface, max two on screen ---- */
   --shadow-page: 0 3px 14px rgba(11, 26, 46, 0.22);
   --shadow-popover: 0 14px 34px rgba(11, 26, 46, 0.28);
+  --shadow-control: 0 1px 2px rgba(11, 26, 46, 0.16);
+  --shadow-control-hover: 0 2px 5px rgba(11, 26, 46, 0.18);
+  --shadow-control-active: 0 1px 1px rgba(11, 26, 46, 0.12);
+  --shadow-primary: 0 2px 5px rgba(27, 58, 92, 0.28);
+  --shadow-primary-hover: 0 3px 8px rgba(27, 58, 92, 0.32);
+  --shadow-primary-active: 0 1px 2px rgba(27, 58, 92, 0.22);
 
   /* ---- Motion ---- */
   --duration-fast: 120ms;

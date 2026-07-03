@@ -46,6 +46,7 @@ import {
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog } from "./components/FloatingDialog";
+import { LoadingSun } from "./components/LoadingSun";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -494,7 +495,7 @@ export function App() {
         phase: "error",
         message: engineBridge.available
           ? "OCR toolchain missing from this installation."
-          : "OCR runs in the desktop app.",
+          : "This action is available in the desktop app.",
       });
       return;
     }
@@ -1048,7 +1049,7 @@ export function App() {
 
     if (!engineBridge.available) {
       setRedactionPhase("error");
-      setRedactionMessage("True redaction runs in the desktop app.");
+      setRedactionMessage("This action is available in the desktop app.");
       return;
     }
 
@@ -1296,7 +1297,7 @@ export function App() {
       if (!engineBridge.available) {
         setSidecarStatus({
           running: false,
-          message: "Compression runs in the desktop app.",
+          message: "This action is available in the desktop app.",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -1373,7 +1374,7 @@ export function App() {
     if (!engineBridge.available) {
       setSidecarStatus({
         running: false,
-        message: "Sanitize runs in the desktop app.",
+        message: "This action is available in the desktop app.",
         removed: [],
         beforeBytes: null,
         afterBytes: null,
@@ -1454,7 +1455,7 @@ export function App() {
       if (!engineBridge.available) {
         setSidecarStatus({
           running: false,
-          message: "Repair runs in the desktop app.",
+          message: "This action is available in the desktop app.",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -1723,7 +1724,7 @@ export function App() {
     if (!engineBridge.available) {
       setFilingProgress({
         phase: "error",
-        message: "PDF/A export runs in the desktop app.",
+        message: "PDF/A export is available in the desktop app.",
       });
       return;
     }
@@ -2322,16 +2323,7 @@ export function App() {
   return (
     <>
       {PACK_INTEGRITY_BANNER ? (
-        <div
-          role="alert"
-          style={{
-            background: "#fff4ce",
-            borderBottom: "1px solid #d9a441",
-            color: "#3b2a00",
-            fontSize: 13,
-            padding: "8px 16px",
-          }}
-        >
+        <div role="alert" className="pack-integrity-banner">
           {PACK_INTEGRITY_BANNER}
         </div>
       ) : null}
@@ -2526,7 +2518,7 @@ function PageNumbersPanel({
           <option value="header-right">Header right</option>
         </select>
       </div>
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Applying page numbers" />
       <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
         Apply Page Numbers
       </button>
@@ -2596,7 +2588,7 @@ function WatermarkPanel({
           <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.05" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
         </div>
       </div>
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Applying watermark" />
       <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
         Apply Watermark
       </button>
@@ -2620,7 +2612,7 @@ function CompressPanel({
 
   return (
     <div className="tool-panel__inline-card">
-      {!available ? <p className="tool-panel__status-line">Compression runs in the desktop app.</p> : null}
+      {!available ? <DesktopCapabilityMessage /> : null}
       <div className="tool-panel__field">
         <label htmlFor="compress-quality">Quality</label>
         <input id="compress-quality" type="number" min="1" max="9" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
@@ -2634,7 +2626,7 @@ function CompressPanel({
           {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
         </p>
       ) : null}
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Compressing PDF" />
       <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onCompress({ quality, grayscale })}>
         Compress PDF
       </button>
@@ -2655,14 +2647,14 @@ function SanitizePanel({
 }) {
   return (
     <div className="tool-panel__inline-card">
-      {!available ? <p className="tool-panel__status-line">Sanitize runs in the desktop app.</p> : null}
+      {!available ? <DesktopCapabilityMessage /> : null}
       <p className="tool-panel__note">Removes JavaScript, embedded files, and external links.</p>
       {status.removed.length ? (
         <p className="tool-panel__status-line" data-tone="ok">
           Removed {status.removed.map(formatSanitizeItem).join(", ")}.
         </p>
       ) : null}
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Sanitizing PDF" />
       <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onSanitize()}>
         Sanitize PDF
       </button>
@@ -2685,14 +2677,14 @@ function RepairPanel({
 }) {
   return (
     <div className="tool-panel__inline-card">
-      {!available ? <p className="tool-panel__status-line">Repair runs in the desktop app.</p> : null}
+      {!available ? <DesktopCapabilityMessage /> : null}
       <p className="tool-panel__note">{candidateName ?? "No PDF selected"}</p>
       {status.beforeBytes !== null && status.afterBytes !== null ? (
         <p className="tool-panel__status-line">
           {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
         </p>
       ) : null}
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Repairing PDF" />
       <button type="button" className="tool-panel__primary-button" disabled={!hasSource || !available || status.running} onClick={() => void onRepair()}>
         Repair PDF
       </button>
@@ -2728,7 +2720,7 @@ function InsertImagesPanel({
         />
       </div>
       {selected.length ? <p className="tool-panel__status-line">{selected.length} selected.</p> : null}
-      {status.message ? <p className="tool-panel__status-line">{status.message}</p> : null}
+      <SidecarStatusLine status={status} label="Inserting images" />
       <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || selected.length === 0 || status.running} onClick={() => void submit()}>
         Insert Images
       </button>
@@ -2765,6 +2757,33 @@ function DocumentPropertiesPanel({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DesktopCapabilityMessage() {
+  return (
+    <p className="tool-panel__status-line">
+      This action is available in the desktop app.
+    </p>
+  );
+}
+
+function SidecarStatusLine({
+  status,
+  label,
+}: {
+  status: SidecarStatus;
+  label: string;
+}) {
+  if (!status.message) {
+    return null;
+  }
+
+  return (
+    <p className="tool-panel__status-line tool-panel__status-line--inline">
+      {status.running ? <LoadingSun size={13} label={label} /> : null}
+      {status.message}
+    </p>
   );
 }
 

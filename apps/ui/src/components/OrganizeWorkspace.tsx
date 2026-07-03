@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -380,7 +381,7 @@ function OrganizePagesGrid({
   );
 }
 
-function OrganizePageCanvas({
+const OrganizePageCanvas = memo(function OrganizePageCanvas({
   pdfDocument,
   pageNumber,
 }: {
@@ -451,7 +452,7 @@ function OrganizePageCanvas({
       <canvas ref={canvasRef} className="organize-page__canvas" aria-hidden="true" />
     </span>
   );
-}
+});
 
 function MergeFlow({
   document,

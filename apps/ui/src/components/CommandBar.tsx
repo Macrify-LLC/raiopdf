@@ -24,15 +24,16 @@ import "./CommandBar.css";
 const EDIT_TOOLS: ReadonlyArray<{
   id: EditToolId;
   label: string;
+  tooltip: string;
   icon: (size: number) => ReactNode;
 }> = [
-  { id: "select", label: "Select", icon: (size) => <SelectTextIcon size={size} /> },
-  { id: "highlight", label: "Highlight", icon: (size) => <HighlightIcon size={size} /> },
-  { id: "textBox", label: "Text box", icon: (size) => <TextBoxIcon size={size} /> },
-  { id: "image", label: "Image", icon: (size) => <ImageIcon size={size} /> },
-  { id: "comment", label: "Comment", icon: (size) => <CommentIcon size={size} /> },
-  { id: "draw", label: "Draw", icon: (size) => <DrawIcon size={size} /> },
-  { id: "sign", label: "Sign", icon: (size) => <SignIcon size={size} /> },
+  { id: "select", label: "Select", tooltip: "Select text or return to the normal pointer.", icon: (size) => <SelectTextIcon size={size} /> },
+  { id: "highlight", label: "Highlight", tooltip: "Drag over text to create a saved highlight annotation.", icon: (size) => <HighlightIcon size={size} /> },
+  { id: "textBox", label: "Text box", tooltip: "Place editable text on the current page before saving.", icon: (size) => <TextBoxIcon size={size} /> },
+  { id: "image", label: "Image", tooltip: "Place an image on the current page before saving.", icon: (size) => <ImageIcon size={size} /> },
+  { id: "comment", label: "Comment", tooltip: "Add a PDF note annotation on the current page.", icon: (size) => <CommentIcon size={size} /> },
+  { id: "draw", label: "Draw", tooltip: "Draw freehand ink that will be saved with the PDF.", icon: (size) => <DrawIcon size={size} /> },
+  { id: "sign", label: "Sign", tooltip: "Place a signature image as a visible page edit.", icon: (size) => <SignIcon size={size} /> },
 ];
 
 export interface CommandBarProps {
@@ -139,6 +140,7 @@ export function CommandBar({
             key={tool.id}
             icon={tool.icon(17)}
             label={tool.label}
+            tooltip={tool.tooltip}
             active={editTool === tool.id}
             disabled={!hasDocument && tool.id !== "select"}
             onClick={() => toggleTool(tool.id)}

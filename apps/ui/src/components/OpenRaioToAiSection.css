@@ -60,6 +60,13 @@
   color: var(--primary-deep);
 }
 
+.open-raio-to-ai__status-line {
+  margin: calc(var(--space-2) * -1) 0 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
 .open-raio-to-ai__connect {
   display: grid;
   gap: var(--space-3);

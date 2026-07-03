@@ -72,6 +72,30 @@ describe("PrepareForFilingWorkspace", () => {
     expect(html).toContain("exceeding");
     expect(html).toContain("warning");
   });
+
+  it("shows a filing-check read failure near the preflight checks", () => {
+    const pack = getPack();
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        report={null}
+        loadingReport={false}
+        reportError="RaioPDF could not read the facts needed for filing checks."
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("RaioPDF could not read the facts needed for filing checks.");
+    expect(html).toContain("disabled=");
+  });
 });
 
 const mockDocument: DocumentState = {

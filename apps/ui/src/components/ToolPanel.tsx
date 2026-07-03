@@ -36,45 +36,46 @@ export type OrganizeToolId = typeof ORGANIZE_TOOLS[number]["id"];
 export type EditDialogToolId = typeof EDIT_DIALOG_TOOLS[number]["id"];
 
 const LEGAL_TOOLS = [
-  { id: "prepare-for-filing", label: "Prepare for Filing", icon: <BoltIcon variant="outline" size={16} /> },
-  { id: "batch-cleanup", label: "Batch Cleanup", icon: <OcrSearchIcon size={16} /> },
-  { id: "production-set", label: "Production Set", icon: <BatesIcon size={16} /> },
-  { id: "combine-exhibits", label: "Combine with Exhibits", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "sanitize", label: "Sanitize...", icon: <ShieldCheckIcon size={16} /> },
-  { id: "redact", label: "Redact", icon: <RedactIcon size={16} /> },
-  { id: "bates-numbering", label: "Bates Numbering", icon: <BatesIcon size={16} /> },
-  { id: "scanner-2425", label: "2.425 Scanner", icon: <ShieldCheckIcon size={16} /> },
-  { id: "scrub-metadata", label: "Scrub Metadata", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "passwords", label: "Passwords", icon: <ShieldCheckIcon size={16} /> },
+  { id: "prepare-for-filing", label: "Prepare for Filing", description: "Check filing limits, normalize pages, split if needed, and verify the output.", icon: <BoltIcon variant="outline" size={16} /> },
+  { id: "batch-cleanup", label: "Batch Cleanup", description: "Run OCR, cleanup, metadata removal, and filing splits across local PDFs.", icon: <OcrSearchIcon size={16} /> },
+  { id: "production-set", label: "Production Set", description: "Build a Bates-numbered production package with index files and optional volumes.", icon: <BatesIcon size={16} /> },
+  { id: "combine-exhibits", label: "Combine with Exhibits", description: "Append exhibits, stamp exhibit labels, add bookmarks, and optionally add an index.", icon: <CombineExhibitsIcon size={16} /> },
+  { id: "sanitize", label: "Sanitize...", description: "Remove active content such as JavaScript, links, and embedded files.", icon: <ShieldCheckIcon size={16} /> },
+  { id: "redact", label: "Redact", description: "Mark areas for permanent removal, then verify redacted content is gone.", icon: <RedactIcon size={16} /> },
+  { id: "bates-numbering", label: "Bates Numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width.", icon: <BatesIcon size={16} /> },
+  { id: "scanner-2425", label: "2.425 Scanner", description: "Look for common Florida Rule 2.425 sensitive-information patterns.", icon: <ShieldCheckIcon size={16} /> },
+  { id: "scrub-metadata", label: "Scrub Metadata", description: "Inspect and remove document metadata without changing page content.", icon: <ScrubMetadataIcon size={16} /> },
+  { id: "passwords", label: "Passwords", description: "Review password controls; encryption changes are unavailable in this build.", icon: <ShieldCheckIcon size={16} /> },
 ] as const;
 
 const ORGANIZE_TOOLS = [
-  { id: "pages", label: "Organize Pages", icon: <OrganizeIcon size={16} /> },
-  { id: "compress", label: "Compress...", icon: <CropIcon size={16} /> },
-  { id: "repair", label: "Repair...", icon: <ShieldCheckIcon size={16} /> },
-  { id: "merge", label: "Merge PDFs...", icon: <CombineExhibitsIcon size={16} /> },
-  { id: "insert", label: "Insert from File...", icon: <InsertIcon size={16} /> },
-  { id: "insert-images", label: "Insert images as pages...", icon: <ImageIcon size={16} /> },
-  { id: "crop", label: "Crop / Resize...", icon: <CropIcon size={16} /> },
-  { id: "properties", label: "Document Properties", icon: <ScrubMetadataIcon size={16} /> },
-  { id: "rotate", label: "Rotate Pages", icon: <RotateIcon size={16} /> },
+  { id: "pages", label: "Organize Pages", description: "Select, reorder, rotate, delete, extract, or split pages.", icon: <OrganizeIcon size={16} /> },
+  { id: "compress", label: "Compress...", description: "Reduce file size through the desktop engine while preserving a PDF output.", icon: <CropIcon size={16} /> },
+  { id: "repair", label: "Repair...", description: "Ask the desktop engine to rebuild a PDF that will not open cleanly.", icon: <ShieldCheckIcon size={16} /> },
+  { id: "merge", label: "Merge PDFs...", description: "Append other PDFs after the current document.", icon: <CombineExhibitsIcon size={16} /> },
+  { id: "insert", label: "Insert from File...", description: "Insert pages from another PDF at the selected position.", icon: <InsertIcon size={16} /> },
+  { id: "insert-images", label: "Insert images as pages...", description: "Convert image files into PDF pages and insert them.", icon: <ImageIcon size={16} /> },
+  { id: "crop", label: "Crop / Resize...", description: "Crop margins or resize selected pages to a standard page size.", icon: <CropIcon size={16} /> },
+  { id: "properties", label: "Document Properties", description: "View document metadata, size, page count, and text-layer status.", icon: <ScrubMetadataIcon size={16} /> },
+  { id: "rotate", label: "Rotate Pages", description: "Rotate the selected pages clockwise.", icon: <RotateIcon size={16} /> },
 ] as const;
 
 const EDIT_TOOLS: ReadonlyArray<{
   id: Exclude<EditToolId, "select" | "comment">;
   label: string;
+  description: string;
   icon: ReactNode;
 }> = [
-  { id: "textBox", label: "Text Box", icon: <TextBoxIcon size={16} /> },
-  { id: "image", label: "Image", icon: <ImageIcon size={16} /> },
-  { id: "highlight", label: "Highlight", icon: <HighlightIcon size={16} /> },
-  { id: "draw", label: "Draw", icon: <DrawIcon size={16} /> },
-  { id: "sign", label: "Sign", icon: <SignIcon size={16} /> },
+  { id: "textBox", label: "Text Box", description: "Place editable text on the current page before saving.", icon: <TextBoxIcon size={16} /> },
+  { id: "image", label: "Image", description: "Place an image on the current page before saving.", icon: <ImageIcon size={16} /> },
+  { id: "highlight", label: "Highlight", description: "Drag over text to create a saved highlight annotation.", icon: <HighlightIcon size={16} /> },
+  { id: "draw", label: "Draw", description: "Draw freehand ink that will be saved with the PDF.", icon: <DrawIcon size={16} /> },
+  { id: "sign", label: "Sign", description: "Place a signature image as a visible page edit.", icon: <SignIcon size={16} /> },
 ];
 
 const EDIT_DIALOG_TOOLS = [
-  { id: "page-numbers", label: "Page Numbers...", icon: <BatesIcon size={16} /> },
-  { id: "watermark", label: "Watermark...", icon: <ScrubMetadataIcon size={16} /> },
+  { id: "page-numbers", label: "Page Numbers...", description: "Stamp generated page numbers into selected page positions.", icon: <BatesIcon size={16} /> },
+  { id: "watermark", label: "Watermark...", description: "Add repeated visible text across document pages.", icon: <ScrubMetadataIcon size={16} /> },
 ] as const;
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
@@ -177,6 +178,7 @@ export function ToolPanel({
             key={tool.id}
             icon={tool.icon}
             label={tool.label}
+            description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
           />
@@ -186,6 +188,7 @@ export function ToolPanel({
             key={tool.id}
             icon={tool.icon}
             label={tool.label}
+            description={tool.description}
             selected={activeEditDialogTool === tool.id}
             onSelect={() => onEditDialogToolSelected(tool.id)}
           />
@@ -207,6 +210,7 @@ export function ToolPanel({
             key={tool.id}
             icon={tool.icon}
             label={tool.label}
+            description={tool.description}
             selected={activeOrganizeTool === tool.id}
             onSelect={() => onOrganizeToolSelected(tool.id)}
           />
@@ -233,6 +237,7 @@ export function ToolPanel({
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
           label="Make Searchable (OCR)"
+          description="Run OCR through the desktop engine and verify the output has searchable text."
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
         />
@@ -262,6 +267,7 @@ export function ToolPanel({
               <ToolRow
                 icon={tool.icon}
                 label={tool.label}
+                description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
               />

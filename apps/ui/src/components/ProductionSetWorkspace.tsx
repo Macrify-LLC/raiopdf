@@ -156,11 +156,14 @@ export function ProductionSetWorkspace({
             <div className="production-workspace__file-row" key={file.id}>
               <div>
                 <p className="production-workspace__file-name">{file.name}</p>
-                <p className="production-workspace__file-meta">
+                <p
+                  className="production-workspace__file-meta"
+                  title={file.pages > 0 ? "Pages counted from the opened PDF." : "Additional file page counts are not available in this view yet."}
+                >
                   {file.pages > 0 ? `${file.pages} page${file.pages === 1 ? "" : "s"}` : "Page count pending"}
                 </p>
               </div>
-              <label>
+              <label title="Optional confidentiality text to include for this source in the production package.">
                 <span>Designation</span>
                 <select
                   value={designationSelectValue(file.designation)}
@@ -202,11 +205,11 @@ export function ProductionSetWorkspace({
       </div>
 
       <div className="production-workspace__grid">
-        <label>
+        <label title="Letters before the Bates number, for example SMITH000001.">
           <span>Prefix</span>
           <input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
         </label>
-        <label>
+        <label title="First Bates number to use for the first selected page.">
           <span>Start</span>
           <input
             type="number"
@@ -215,7 +218,7 @@ export function ProductionSetWorkspace({
             onChange={(event) => setStart(Number(event.target.value))}
           />
         </label>
-        <label>
+        <label title="Minimum number of digits to pad after the prefix.">
           <span>Digits</span>
           <input
             type="number"
@@ -225,7 +228,7 @@ export function ProductionSetWorkspace({
             onChange={(event) => setDigits(Number(event.target.value))}
           />
         </label>
-        <label>
+        <label title="Choose an empty folder where RaioPDF can write the production package.">
           <span>Package root folder</span>
           <input
             value={outputDir}
@@ -241,7 +244,7 @@ export function ProductionSetWorkspace({
       ) : null}
 
       <div className="production-workspace__section">
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Write PDF and CSV indexes listing produced files and Bates ranges.">
           <input
             type="checkbox"
             checked={includeIndex}
@@ -249,7 +252,7 @@ export function ProductionSetWorkspace({
           />
           <span>Production index PDF and CSV</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Include each source filename as a column in the production index.">
           <input
             type="checkbox"
             checked={includeFilenameInIndex}
@@ -257,7 +260,7 @@ export function ProductionSetWorkspace({
           />
           <span>Filename column in index</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Also write one combined produced PDF alongside individual outputs.">
           <input
             type="checkbox"
             checked={combinedPdf}
@@ -265,7 +268,7 @@ export function ProductionSetWorkspace({
           />
           <span>Combined production PDF</span>
         </label>
-        <label className="production-workspace__checkbox-row">
+        <label className="production-workspace__checkbox-row" title="Group production outputs into volume folders by size.">
           <input
             type="checkbox"
             checked={useVolumeCap}
@@ -274,7 +277,7 @@ export function ProductionSetWorkspace({
           <span>Volume folders</span>
         </label>
         {useVolumeCap ? (
-          <label>
+          <label title="Maximum size for each volume folder before starting the next volume.">
             <span>Volume cap MB</span>
             <input
               type="number"

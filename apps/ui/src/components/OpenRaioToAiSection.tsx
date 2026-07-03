@@ -29,6 +29,8 @@ export interface OpenRaioToAiSectionProps {
    * than let someone copy a config that can't work.
    */
   mcpPath?: string | null | undefined;
+  /** Persistence/status message for the access gate. */
+  status?: string | null | undefined;
   /**
    * True for the render right after Preferences was opened via the
    * dedicated "Open Raio to AI..." menu item (as opposed to general
@@ -44,6 +46,7 @@ export function OpenRaioToAiSection({
   enabled,
   onToggle,
   mcpPath,
+  status,
   focused = false,
   onFocusHandled,
 }: OpenRaioToAiSectionProps) {
@@ -119,6 +122,11 @@ export function OpenRaioToAiSection({
           aria-describedby="open-raio-to-ai-toggle-hint"
         />
       </div>
+      {status ? (
+        <p className="open-raio-to-ai__status-line" role="status">
+          {status}
+        </p>
+      ) : null}
 
       <p className="open-raio-to-ai__trust-chip">
         <ShieldCheckIcon size={13} checked={false} />

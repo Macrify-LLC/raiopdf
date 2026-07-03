@@ -4,8 +4,10 @@ import "./IconButton.css";
 export interface IconButtonProps {
   /** Icon element, e.g. `<OpenIcon />`. IconButton owns sizing via CSS. */
   icon: ReactNode;
-  /** Accessible name. Also shown as a native tooltip via `title`. */
+  /** Accessible name. */
   label: string;
+  /** Optional hover help. The accessible name remains `label`. */
+  tooltip?: string;
   onClick?: (() => void) | undefined;
   disabled?: boolean;
   /**
@@ -19,6 +21,7 @@ export interface IconButtonProps {
 export function IconButton({
   icon,
   label,
+  tooltip,
   onClick,
   disabled = false,
   active,
@@ -30,7 +33,7 @@ export function IconButton({
       data-active={active ? "true" : undefined}
       aria-label={label}
       aria-pressed={active}
-      title={label}
+      title={tooltip ?? label}
       disabled={disabled}
       onClick={onClick}
     >

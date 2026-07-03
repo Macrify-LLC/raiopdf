@@ -266,6 +266,7 @@ export function BinderWorkspace({
             className="binder-workspace__secondary"
             onClick={onOpenRequested}
             disabled={building}
+            title="Replace the main document that appears before the exhibits."
           >
             <OpenIcon size={15} />
             Replace via Open
@@ -348,6 +349,7 @@ export function BinderWorkspace({
             className="binder-workspace__secondary binder-workspace__add"
             onClick={() => addInputRef.current?.click()}
             disabled={building}
+            title="Add one or more exhibit PDFs after the main document."
           >
             <PlusIcon size={15} />
             Add exhibits...
@@ -356,45 +358,45 @@ export function BinderWorkspace({
 
         <section className="binder-card binder-card--settings" aria-label="Binder settings">
           <p className="binder-card__label">Settings</p>
-          <fieldset className="binder-fieldset">
+          <fieldset className="binder-fieldset" title="Choose whether exhibits are labeled A, B, C or 1, 2, 3.">
             <legend>Identifier style</legend>
             <label><input type="radio" name="identifier" checked={identifierStyle === "letters"} onChange={() => setIdentifierStyle("letters")} disabled={building} /> Letters</label>
             <label><input type="radio" name="identifier" checked={identifierStyle === "numbers"} onChange={() => setIdentifierStyle("numbers")} disabled={building} /> Numbers</label>
           </fieldset>
 
-          <label className="binder-field">
+          <label className="binder-field" title="Text before each exhibit identifier, for example Exhibit A.">
             <span>Prefix</span>
             <input value={prefix} placeholder="Plaintiff's Exhibit" onChange={(event) => setPrefix(event.currentTarget.value)} disabled={building} />
           </label>
 
-          <fieldset className="binder-fieldset">
+          <fieldset className="binder-fieldset" title="Choose whether exhibit labels are stamped in the page header or footer.">
             <legend>Placement</legend>
             <label><input type="radio" name="placement-edge" checked={placementEdge === "header"} onChange={() => setPlacementEdge("header")} disabled={building} /> Header</label>
             <label><input type="radio" name="placement-edge" checked={placementEdge === "footer"} onChange={() => setPlacementEdge("footer")} disabled={building} /> Footer</label>
           </fieldset>
 
-          <fieldset className="binder-fieldset">
+          <fieldset className="binder-fieldset" title="Choose where the exhibit label sits across the page width.">
             <legend>Position</legend>
             <label><input type="radio" name="placement-align" checked={placementAlign === "left"} onChange={() => setPlacementAlign("left")} disabled={building} /> Left</label>
             <label><input type="radio" name="placement-align" checked={placementAlign === "center"} onChange={() => setPlacementAlign("center")} disabled={building} /> Center</label>
             <label><input type="radio" name="placement-align" checked={placementAlign === "right"} onChange={() => setPlacementAlign("right")} disabled={building} /> Right</label>
           </fieldset>
 
-          <fieldset className="binder-fieldset">
+          <fieldset className="binder-fieldset" title="Choose whether exhibit labels appear on the first page of each exhibit or every exhibit page.">
             <legend>Stamp pages</legend>
             <label><input type="radio" name="stamp-pages" checked={stampPages === "first"} onChange={() => setStampPages("first")} disabled={building} /> First page only</label>
             <label><input type="radio" name="stamp-pages" checked={stampPages === "all"} onChange={() => setStampPages("all")} disabled={building} /> Every page</label>
           </fieldset>
 
-          <label className="binder-toggle">
+          <label className="binder-toggle" title="Insert a separator page before each exhibit.">
             <input type="checkbox" checked={slipSheets} onChange={(event) => setSlipSheets(event.currentTarget.checked)} disabled={building} />
             <span><SlipSheetIcon size={15} /> Slip sheets</span>
           </label>
-          <label className="binder-toggle">
+          <label className="binder-toggle" title="Add a generated exhibit index near the front of the binder.">
             <input type="checkbox" checked={indexEnabled} onChange={(event) => setIndexEnabled(event.currentTarget.checked)} disabled={building} />
             <span>Exhibit Index</span>
           </label>
-          <label className="binder-toggle">
+          <label className="binder-toggle" title="Include the original exhibit filename in the generated index.">
             <input
               type="checkbox"
               checked={indexIncludeSourceFileName}
@@ -404,11 +406,11 @@ export function BinderWorkspace({
             <span>Source filename column</span>
           </label>
           <div className="binder-preset-actions">
-            <button type="button" className="binder-workspace__secondary" onClick={savePreset} disabled={building}>
+            <button type="button" className="binder-workspace__secondary" onClick={savePreset} disabled={building} title="Save these binder settings on this computer.">
               <SaveIcon size={15} />
               Save preset
             </button>
-            <button type="button" className="binder-workspace__secondary" onClick={applySavedPreset} disabled={building}>
+            <button type="button" className="binder-workspace__secondary" onClick={applySavedPreset} disabled={building} title="Restore the last saved binder settings.">
               <OpenIcon size={15} />
               Apply preset
             </button>

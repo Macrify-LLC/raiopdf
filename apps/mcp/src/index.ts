@@ -19,6 +19,39 @@ import {
   pageCountOutputSchema,
   type PageCountInput,
 } from "./tools/pageCount.js";
+import {
+  compressInputSchema,
+  compressOutputSchema,
+  handleCompress,
+  handleMerge,
+  handleOcr,
+  handleRotate,
+  handleSanitize,
+  handleScrubMetadata,
+  mergeInputSchema,
+  mergeOutputSchema,
+  ocrInputSchema,
+  ocrOutputSchema,
+  rotateInputSchema,
+  rotateOutputSchema,
+  sanitizeInputSchema,
+  sanitizeOutputSchema,
+  scrubMetadataInputSchema,
+  scrubMetadataOutputSchema,
+  type CompressInput,
+  type MergeInput,
+  type OcrInput,
+  type RotateInput,
+  type SanitizeInput,
+  type ScrubMetadataInput,
+} from "./tools/core.js";
+
+const WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
 
 const SERVER_NAME = "raiopdf-mcp";
 const SERVER_VERSION = "0.0.0-p1b";
@@ -70,6 +103,98 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: PageCountInput) => await handlePageCount(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "ocr_pdf",
+    {
+      title: "OCR PDF",
+      description: "Makes a scanned PDF searchable via on-device OCR. Writes a new file.",
+      inputSchema: ocrInputSchema,
+      outputSchema: ocrOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: OcrInput) => await handleOcr(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "merge_pdfs",
+    {
+      title: "Merge PDFs",
+      description: "Concatenates two or more PDFs, in order, into one new file.",
+      inputSchema: mergeInputSchema,
+      outputSchema: mergeOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: MergeInput) => await handleMerge(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "rotate_pages",
+    {
+      title: "Rotate pages",
+      description: "Rotates selected pages (or all) by a multiple of 90°. Writes a new file.",
+      inputSchema: rotateInputSchema,
+      outputSchema: rotateOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: RotateInput) => await handleRotate(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "compress_pdf",
+    {
+      title: "Compress PDF",
+      description: "Creates a smaller copy of a PDF. Writes a new file.",
+      inputSchema: compressInputSchema,
+      outputSchema: compressOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: CompressInput) => await handleCompress(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "sanitize_pdf",
+    {
+      title: "Sanitize PDF",
+      description:
+        "Removes active/embedded content (JavaScript, attachments, external links). Writes a new file.",
+      inputSchema: sanitizeInputSchema,
+      outputSchema: sanitizeOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: SanitizeInput) => await handleSanitize(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "scrub_metadata",
+    {
+      title: "Scrub metadata",
+      description: "Removes document metadata (author, title, producer, etc.). Writes a new file.",
+      inputSchema: scrubMetadataInputSchema,
+      outputSchema: scrubMetadataOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: ScrubMetadataInput) =>
+        await handleScrubMetadata(input, dependencies.engineHandle),
     ),
   );
 }

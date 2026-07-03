@@ -122,6 +122,11 @@ describe("document fact extractors", () => {
       imageOnlyPages: [1],
       mixedPages: [2],
     });
+    expect(facts.pageTextByPage?.map((page) => page.text.trim())).toEqual([
+      "searchable text",
+      "",
+      "text and image",
+    ]);
   });
 
   it("marks a document searchable only when every page has a text layer", async () => {

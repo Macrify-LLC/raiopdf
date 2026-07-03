@@ -198,6 +198,17 @@ describe("Florida jurisdiction pack", () => {
         },
         embeddedFileCount: 0,
         formFields: { count: 0, anyFilled: false },
+        textLayerCoverage: {
+          imageOnlyPages: [],
+          mixedPages: [],
+          textPages: [0],
+        },
+        pageTextByPage: [
+          {
+            pageIndex: 0,
+            text: "Motion to Compel\nI certify that prior to filing this motion, I discussed the relief requested.",
+          },
+        ],
         pages: [
           {
             pageIndex: 0,
@@ -222,6 +233,7 @@ describe("Florida jurisdiction pack", () => {
       "embedded-files": "pass",
       "metadata-scrub": "unknown",
       "flatten-forms": "pass",
+      "conferral-certificate": "pass",
     });
   });
 
@@ -239,6 +251,17 @@ describe("Florida jurisdiction pack", () => {
         },
         embeddedFileCount: 1,
         formFields: { count: 1, anyFilled: true },
+        textLayerCoverage: {
+          imageOnlyPages: [],
+          mixedPages: [],
+          textPages: [0],
+        },
+        pageTextByPage: [
+          {
+            pageIndex: 0,
+            text: "MOTION FOR RELIEF\nNo certificate appears here.",
+          },
+        ],
         pages: [
           {
             pageIndex: 0,
@@ -263,7 +286,47 @@ describe("Florida jurisdiction pack", () => {
       "embedded-files": "warn",
       "metadata-scrub": "unknown",
       "flatten-forms": "warn",
+      "conferral-certificate": "warn",
     });
+  });
+
+  it("checks Fla. R. Civ. P. 1.202 certificate language only for apparent motions", () => {
+    const status = (facts: Partial<Parameters<typeof preflight>[0]>) =>
+      preflight({ ...basePhraseFacts(), ...facts }, floridaPack)
+        .checks.find((check) => check.checkId === "conferral-certificate")?.status;
+
+    expect(status({
+      filename: "Motion to Compel.pdf",
+      pageTextByPage: [{
+        pageIndex: 0,
+        text: "Motion to Compel\nI certify that prior to filing this motion, counsel conferred.",
+      }],
+    })).toBe("pass");
+
+    expect(status({
+      filename: "Relief.pdf",
+      pageTextByPage: [{ pageIndex: 0, text: "MOTION TO COMPEL\nNo certificate language." }],
+    })).toBe("warn");
+
+    expect(status({
+      filename: "Notice of Filing.pdf",
+      pageTextByPage: [{ pageIndex: 0, text: "NOTICE OF FILING\nNo certificate language." }],
+    })).toBeUndefined();
+
+    expect(status({
+      filename: "Motion to Compel.pdf",
+      textLayerCoverage: {
+        imageOnlyPages: [0],
+        mixedPages: [],
+        textPages: [],
+      },
+      pageTextByPage: [],
+    })).toBe("unknown");
+
+    expect(status({
+      filename: "Motion to Compel.pdf",
+      pageTextByPage: [{ pageIndex: 0, text: "Motion to Compel\nSee Fla. R. Civ. P. 1.202." }],
+    })).toBe("pass");
   });
 
   it("reports unknown when required facts are missing", () => {
@@ -577,3 +640,25 @@ describe("Florida jurisdiction pack", () => {
     });
   });
 });
+
+function basePhraseFacts(): Parameters<typeof preflight>[0] {
+  return {
+    filename: "Motion.pdf",
+    fileBytes: 1 * 1024 * 1024,
+    searchableText: true,
+    pdfaCompliant: true,
+    textLayerCoverage: {
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0],
+    },
+    pages: [
+      {
+        pageIndex: 0,
+        size: { w: 8.5, h: 11, in: true },
+        orientation: "portrait",
+        occupiedRegions: [],
+      },
+    ],
+  };
+}

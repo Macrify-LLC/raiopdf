@@ -134,6 +134,16 @@ export async function buildDocumentFacts(
         // searchableText is derived from the same pdf.js detector family; leave it unknown.
       }
     }
+
+    try {
+      const pageText = await options.textExtractor.extractPageTextByPage?.(bytes);
+      if (pageText) {
+        facts.pageTextByPage = pageText;
+      }
+    } catch {
+      // Text-body extraction is advisory for pack-declared phrase checks. Keep
+      // text-layer coverage facts intact so preflight can report unknown.
+    }
   }
 
   return withErrors(facts, errors);

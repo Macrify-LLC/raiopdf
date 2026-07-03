@@ -983,6 +983,126 @@
   flex-wrap: wrap;
 }
 
+.filing-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel-muted);
+  padding: 2px;
+}
+
+.filing-mode-toggle__button {
+  min-height: 30px;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.filing-mode-toggle__button[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--body);
+  box-shadow: var(--shadow-control);
+}
+
+.filing-packet {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+}
+
+.filing-packet__header,
+.filing-packet__file,
+.filing-packet__file-actions {
+  display: flex;
+  align-items: center;
+}
+
+.filing-packet__header,
+.filing-packet__file {
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.filing-packet__title,
+.filing-packet__subtitle,
+.filing-packet__file-name,
+.filing-packet__file-meta {
+  margin: 0;
+}
+
+.filing-packet__title,
+.filing-packet__file-name {
+  color: var(--body);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-packet__subtitle,
+.filing-packet__file-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.filing-packet__files {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.filing-packet__file {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-2);
+}
+
+.filing-packet__file-actions {
+  gap: var(--space-1);
+}
+
+.filing-packet__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(150px, 0.6fr);
+  gap: var(--space-2);
+}
+
+.filing-packet__grid label,
+.filing-packet__toggle {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.filing-packet__grid input,
+.filing-packet__grid select {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+}
+
+.filing-packet__toggle {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.filing-packet__result {
+  display: grid;
+  gap: 2px;
+}
+
 .filing-card__primary-button,
 .filing-card__secondary-button {
   min-height: 32px;
@@ -1078,6 +1198,17 @@
   }
 
   .filing-court-profile__form {
+    grid-template-columns: 1fr;
+  }
+
+  .filing-packet__header,
+  .filing-packet__file,
+  .filing-packet__file-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filing-packet__grid {
     grid-template-columns: 1fr;
   }
 }

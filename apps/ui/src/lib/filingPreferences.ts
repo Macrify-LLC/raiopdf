@@ -11,6 +11,8 @@ export interface CourtProfile {
 
 export interface FilingPreferences {
   defaultPackId?: JurisdictionPackId;
+  packetLayoutMode?: "separate-files" | "combined-pdf";
+  packetPrefixFilenames?: boolean;
   courtProfiles: readonly CourtProfile[];
   lastCourtProfileByPack: Record<string, string>;
 }
@@ -36,9 +38,18 @@ export function readFilingPreferences(): FilingPreferences {
     const defaultPackId = typeof object.defaultPackId === "string"
       ? object.defaultPackId as JurisdictionPackId
       : undefined;
+    const packetLayoutMode = object.packetLayoutMode === "combined-pdf" ||
+      object.packetLayoutMode === "separate-files"
+      ? object.packetLayoutMode
+      : undefined;
+    const packetPrefixFilenames = typeof object.packetPrefixFilenames === "boolean"
+      ? object.packetPrefixFilenames
+      : undefined;
 
     return {
       ...(defaultPackId ? { defaultPackId } : {}),
+      ...(packetLayoutMode ? { packetLayoutMode } : {}),
+      ...(packetPrefixFilenames === undefined ? {} : { packetPrefixFilenames }),
       courtProfiles,
       lastCourtProfileByPack,
     };
@@ -97,6 +108,17 @@ export function selectCourtProfile(
       ...preferences.lastCourtProfileByPack,
       [packId]: profileId,
     },
+  };
+}
+
+export function setPacketPreferences(
+  preferences: FilingPreferences,
+  packet: { layoutMode: "separate-files" | "combined-pdf"; prefixFilenames: boolean },
+): FilingPreferences {
+  return {
+    ...preferences,
+    packetLayoutMode: packet.layoutMode,
+    packetPrefixFilenames: packet.prefixFilenames,
   };
 }
 

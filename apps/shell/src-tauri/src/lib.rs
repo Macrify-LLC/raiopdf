@@ -266,6 +266,7 @@ fn hex_value(byte: u8) -> Result<u8, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
@@ -274,6 +275,8 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();
             let diagnostics = AppDiagnostics::new(app_data_dir.clone());
+            let _ = diagnostics.capture_pending_crash_for_startup();
+            let _ = diagnostics.mark_session_running();
             diagnostics.install_panic_hook();
             let _ = diagnostics.record_shell_event("startup", "RaioPDF shell started");
             let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
@@ -290,6 +293,10 @@ pub fn run() {
             let id = event.id().as_ref();
 
             if id == MENU_EXIT {
+                let _ = app
+                    .state::<AppDiagnostics>()
+                    .record_shell_event("shutdown", "menu exit requested");
+                let _ = app.state::<AppDiagnostics>().mark_session_clean();
                 app.exit(0);
                 return;
             }
@@ -307,6 +314,10 @@ pub fn run() {
             sidecar::engine_stop,
             diagnostics::diagnostics_record_event,
             diagnostics::diagnostics_export_dialog,
+            diagnostics::crash_report_take_pending,
+            diagnostics::crash_report_never_ask,
+            diagnostics::crash_report_is_opted_out,
+            diagnostics::crash_report_set_opted_out,
             mcp::mcp_status,
             mcp::mcp_set_enabled,
             mcp::build_production_set,
@@ -326,6 +337,7 @@ pub fn run() {
                     let _ = app_handle
                         .state::<AppDiagnostics>()
                         .record_shell_event("shutdown", "main window destroyed");
+                    let _ = app_handle.state::<AppDiagnostics>().mark_session_clean();
                     app_handle.state::<sidecar::SidecarManager>().shutdown();
                 }
             }

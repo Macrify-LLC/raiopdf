@@ -8,6 +8,10 @@
   pointer-events: none;
 }
 
+.floating-dialog-layer[data-scrim="true"] {
+  background: var(--modal-scrim);
+}
+
 .floating-dialog {
   width: min(100%, 520px);
   max-height: calc(100vh - 194px);

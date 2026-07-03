@@ -70,6 +70,10 @@ import {
   type ProductionSetRunInput,
 } from "./components/ProductionSetWorkspace";
 import { SettingsDialog } from "./components/SettingsDialog";
+import {
+  CrashReportDialog,
+  type CrashReportPayload,
+} from "./components/CrashReportDialog";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { HelpPanel } from "./components/HelpPanel";
@@ -111,6 +115,10 @@ import {
   type CourtProfile,
   type FilingPreferences,
 } from "./lib/filingPreferences";
+import {
+  buildCrashReportIssueUrl,
+  fitCrashReportPayloadToIssueUrl,
+} from "./lib/crashReportIssue";
 import {
   hasExtractableTextLayer,
   pdfDocumentHasTextLayer,
@@ -355,6 +363,10 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
+  const [crashReportPayload, setCrashReportPayload] =
+    useState<CrashReportPayload | null>(null);
+  const [crashReportOpenStatus, setCrashReportOpenStatus] = useState<string | null>(null);
+  const [isOpeningCrashReportIssue, setIsOpeningCrashReportIssue] = useState(false);
   useEffect(() => {
     if (!settingsOpen) {
       return;
@@ -451,6 +463,68 @@ export function App() {
         setDiagnosticsStatus(result ? `Saved to ${result.path}` : "Export canceled.");
       } catch {
         setDiagnosticsStatus("Diagnostics could not be exported.");
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const payload = await invoke<CrashReportPayload | null>(
+          "crash_report_take_pending",
+        );
+        if (!disposed && payload) {
+          setCrashReportOpenStatus(null);
+          setCrashReportPayload(fitCrashReportPayloadToIssueUrl(payload));
+        }
+      } catch {
+        // Non-Tauri/dev context or command unavailable -- default is no prompt.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  const handleOpenCrashReportIssue = useCallback(() => {
+    const payload = crashReportPayload;
+
+    if (!payload || isOpeningCrashReportIssue) {
+      return;
+    }
+
+    void (async () => {
+      setCrashReportOpenStatus(null);
+      setIsOpeningCrashReportIssue(true);
+      try {
+        const { openUrl } = await import("@tauri-apps/plugin-opener");
+        await openUrl(buildCrashReportIssueUrl(payload));
+        setCrashReportPayload(null);
+        setCrashReportOpenStatus(null);
+      } catch {
+        setCrashReportOpenStatus(
+          "Couldn't open your browser — try again, or use File → Export Diagnostics.",
+        );
+      } finally {
+        setIsOpeningCrashReportIssue(false);
+      }
+    })();
+  }, [crashReportPayload, isOpeningCrashReportIssue]);
+  const handleNeverAskCrashReport = useCallback(() => {
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("crash_report_never_ask");
+        setCrashReportPayload(null);
+        setCrashReportOpenStatus(null);
+      } catch {
+        // If the preference cannot be saved, keep the prompt visible.
       }
     })();
   }, []);
@@ -3079,6 +3153,17 @@ export function App() {
           onExportDiagnostics={handleExportDiagnostics}
         />
       ) : null}
+      <CrashReportDialog
+        payload={crashReportPayload}
+        onOpenGitHubIssue={handleOpenCrashReportIssue}
+        isOpening={isOpeningCrashReportIssue}
+        openStatus={crashReportOpenStatus}
+        onNotNow={() => {
+          setCrashReportPayload(null);
+          setCrashReportOpenStatus(null);
+        }}
+        onNeverAsk={handleNeverAskCrashReport}
+      />
     </>
   );
 }

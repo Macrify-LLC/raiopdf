@@ -20,6 +20,7 @@
     "@raiopdf/help-content": "workspace:*",
     "@raiopdf/rules": "workspace:*",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-updater": "^2.10.1",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "jsdom": "^29.1.1",
     "pdf-lib": "^1.17.1"
   }
 }

@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { AboutMacrifySection } from "./AboutMacrifySection";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
+import { Switch } from "./Switch";
 import "./SettingsDialog.css";
 
 export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify";
@@ -30,6 +32,66 @@ export function SettingsDialog({
   diagnosticsStatus,
   onExportDiagnostics,
 }: SettingsDialogProps) {
+  const [offerCrashReports, setOfferCrashReports] = useState(true);
+  const [crashReportsLoading, setCrashReportsLoading] = useState(isTauriRuntime());
+  const [crashReportsStatus, setCrashReportsStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const optedOut = await invoke<boolean>("crash_report_is_opted_out");
+        if (!disposed) {
+          setOfferCrashReports(!optedOut);
+          setCrashReportsStatus(null);
+        }
+      } catch {
+        if (!disposed) {
+          setCrashReportsStatus("Crash report preference could not be loaded.");
+        }
+      } finally {
+        if (!disposed) {
+          setCrashReportsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  function handleToggleCrashReports(next: boolean) {
+    if (!isTauriRuntime()) {
+      setOfferCrashReports(next);
+      return;
+    }
+
+    const previous = offerCrashReports;
+    setOfferCrashReports(next);
+    setCrashReportsStatus(null);
+    setCrashReportsLoading(true);
+
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("crash_report_set_opted_out", { value: !next });
+        setCrashReportsStatus(null);
+      } catch {
+        setOfferCrashReports(previous);
+        setCrashReportsStatus("Crash report preference could not be saved.");
+      } finally {
+        setCrashReportsLoading(false);
+      }
+    })();
+  }
+
   return (
     <div className="settings-dialog" role="presentation" onMouseDown={onClose}>
       <section
@@ -85,6 +147,27 @@ export function SettingsDialog({
               </small>
             ) : null}
           </section>
+          <div className="settings-dialog__row">
+            <span>
+              <strong id="crash-reports-toggle-label">Offer to report crashes</strong>
+              <small id="crash-reports-toggle-hint">
+                Off means RaioPDF does not ask. When on, RaioPDF asks after an unclean exit;
+                you always review before anything is sent.
+              </small>
+            </span>
+            <Switch
+              checked={offerCrashReports}
+              onChange={handleToggleCrashReports}
+              disabled={crashReportsLoading}
+              aria-labelledby="crash-reports-toggle-label"
+              aria-describedby="crash-reports-toggle-hint"
+            />
+            {crashReportsStatus ? (
+              <small className="settings-dialog__status" role="status">
+                {crashReportsStatus}
+              </small>
+            ) : null}
+          </div>
 
           <OpenRaioToAiSection
             enabled={mcpEnabled}
@@ -103,4 +186,8 @@ export function SettingsDialog({
       </section>
     </div>
   );
+}
+
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
 }

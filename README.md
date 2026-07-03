@@ -34,9 +34,9 @@
 
 ## The philosophy
 
-Nothing makes me feel more like a crotchety old man than how software works. I remember when you got software by someone handing you a floppy disk and that was that. But as software companies realized that their best way of making money was to stop selling their software and rent it out instead and sell you upcharges.
+Nothing makes me feel more like a crotchety old man than how software works today. I remember when you got software by someone handing you a floppy disk and that was that. But at some point, software companies realized that they could make unlimited money by renting the software out to users rather than selling it, and that became the only way productivity software was sold. And because software was so technically complicated and expensive to make, customers didn't have much of a choice in the matter.
 
-The idea of making this came from talking to my staff. Nobody likes Acrobat. Its bloat stresses computers, its licensing quirks will sometimes bring work to a standstill, it constantly pushes features nobody wants to use, and we're all paying for the privilege. Editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a cavalcade of minor annoyances. So in this age of agentic coding, I asked how hard it would be to build a fully featured PDF program the old fashioned way.
+Nobody at my firm likes dealing with Acrobat. Its bloat stresses computers, its licensing quirks can bring work to a standstill, it constantly pushes features nobody wants to use, and we're paying thousands for the privilege. Editing a file that's already sitting on your own computer shouldn't require an account, a cloud upload, and a cavalcade of minor annoyances. So in this age of agentic coding, I asked how hard it would be to build a fully featured PDF program the old fashioned way. Turns out its not that hard.
 
 RaioPDF is the other way of doing it: **a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.**
 

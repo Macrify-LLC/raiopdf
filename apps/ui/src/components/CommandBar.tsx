@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -49,6 +49,14 @@ export interface CommandBarProps {
   hasDocument?: boolean;
   editTool?: EditToolId;
   onEditToolChange?: ((tool: EditToolId) => void) | undefined;
+  searchValue?: string;
+  searchResultLabel?: string;
+  searchBusy?: boolean;
+  searchCanNavigate?: boolean;
+  onSearchChange?: ((value: string) => void) | undefined;
+  onSearchPrevious?: (() => void) | undefined;
+  onSearchNext?: (() => void) | undefined;
+  onSearchClear?: (() => void) | undefined;
 }
 
 export function CommandBar({
@@ -65,11 +73,43 @@ export function CommandBar({
   hasDocument = false,
   editTool = "select",
   onEditToolChange,
+  searchValue = "",
+  searchResultLabel = "",
+  searchBusy = false,
+  searchCanNavigate = false,
+  onSearchChange,
+  onSearchPrevious,
+  onSearchNext,
+  onSearchClear,
 }: CommandBarProps) {
   function toggleTool(toolId: EditToolId) {
     // Tools are mutually exclusive toggles; re-clicking the active tool
     // returns to Select, like every other mode toggle in the app.
     onEditToolChange?.(editTool === toolId && toolId !== "select" ? "select" : toolId);
+  }
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+
+      if (event.shiftKey) {
+        onSearchPrevious?.();
+      } else {
+        onSearchNext?.();
+      }
+
+      return;
+    }
+
+    if (event.key === "Escape") {
+      if (!searchValue.trim()) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      onSearchClear?.();
+    }
   }
 
   return (
@@ -143,14 +183,47 @@ export function CommandBar({
         </div>
       </div>
 
-      <label className="command-bar__search">
-        <SearchIcon size={13} />
-        <input
-          type="search"
-          placeholder="Search document"
-          aria-label="Search document"
-        />
-      </label>
+      <div className="command-bar__search" role="search">
+        <label className="command-bar__search-field">
+          <SearchIcon size={13} />
+          <input
+            type="search"
+            placeholder="Search document"
+            aria-label="Search document"
+            value={searchValue}
+            disabled={!hasDocument}
+            onChange={(event) => onSearchChange?.(event.currentTarget.value)}
+            onKeyDown={handleSearchKeyDown}
+          />
+        </label>
+        {searchResultLabel ? (
+          <span className="command-bar__search-count" aria-live="polite">
+            {searchResultLabel}
+          </span>
+        ) : null}
+        <div className="command-bar__search-nav" aria-hidden={!searchValue.trim()}>
+          <button
+            type="button"
+            className="command-bar__search-button"
+            aria-label="Previous search result"
+            title="Previous search result"
+            disabled={!hasDocument || !searchCanNavigate || searchBusy}
+            onClick={onSearchPrevious}
+          >
+            <ChevronLeftIcon size={13} />
+          </button>
+          <button
+            type="button"
+            className="command-bar__search-button"
+            aria-label="Next search result"
+            title="Next search result"
+            disabled={!hasDocument || !searchCanNavigate || searchBusy}
+            onClick={onSearchNext}
+          >
+            <ChevronRightIcon size={13} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

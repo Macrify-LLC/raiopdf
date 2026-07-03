@@ -53,6 +53,20 @@ describe("legalTools", () => {
     expect(areas[0]?.x).toBeLessThanOrEqual(8);
     expect(areas[0]?.w).toBeGreaterThan(90);
   });
+
+  it("finds two-word search matches split across text items without literal spaces", async () => {
+    const pdf = mockPdf([
+      textItem("two", 10, 18),
+      textItem("word", 40, 24),
+    ]);
+
+    const areas = await findTextRedactionAreas(pdf, "two word");
+
+    expect(areas).toHaveLength(1);
+    expect(areas[0]).toMatchObject({ pageIndex: 0 });
+    expect(areas[0]?.x).toBeLessThanOrEqual(8);
+    expect(areas[0]?.w).toBeGreaterThan(55);
+  });
 });
 
 function mockPdf(items: unknown[]): PDFDocumentProxy {

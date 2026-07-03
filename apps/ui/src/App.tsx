@@ -51,6 +51,7 @@ import {
   useEngineBridge,
 } from "./hooks/useEngineBridge";
 import { useDocument, type DocumentState } from "./hooks/useDocument";
+import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
 import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
@@ -155,9 +156,17 @@ export function App() {
     bytes: Uint8Array;
     proxy: PDFDocumentProxy;
   } | null>(null);
-  const pdfDocument = pdfDocumentState?.proxy ?? null;
-  const pdfDocumentBytes = pdfDocumentState?.bytes ?? null;
+  const currentPdfDocumentState = pdfDocumentState?.bytes === document.bytes
+    ? pdfDocumentState
+    : null;
+  const pdfDocument = currentPdfDocumentState?.proxy ?? null;
+  const pdfDocumentBytes = currentPdfDocumentState?.bytes ?? null;
   const editing = useEditing(pdfDocument);
+  const documentSearch = useDocumentSearch({
+    pdfDocumentState: currentPdfDocumentState,
+    documentBytes: document.bytes,
+    setCurrentPage,
+  });
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
@@ -227,6 +236,8 @@ export function App() {
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
   const documentBytesRef = useRef<Uint8Array | null>(null);
+  const legalStateDocumentBytesRef = useRef<Uint8Array | null>(document.bytes);
+  const preserveFilingProgressForBytesRef = useRef<Uint8Array | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
   const nativeMenuCommandRef = useRef<(command: string) => void>(() => {});
@@ -237,6 +248,7 @@ export function App() {
   }, [document.bytes]);
 
   const resetLegalState = useCallback(() => {
+    preserveFilingProgressForBytesRef.current = null;
     setPendingRedactions([]);
     setRedactionPhase("idle");
     setRedactionMessage(null);
@@ -256,13 +268,19 @@ export function App() {
     });
   }, []);
 
-  const clearDocumentBoundLegalState = useCallback(() => {
+  const clearDocumentBoundLegalState = useCallback((previousBytes: Uint8Array | null) => {
+    const preserveFilingProgress = Boolean(
+      previousBytes && preserveFilingProgressForBytesRef.current === previousBytes,
+    );
+    preserveFilingProgressForBytesRef.current = null;
     scannerRunRef.current += 1;
     filingRunRef.current += 1;
     setPendingRedactions([]);
     setScannerState({ scanning: false, message: null, hits: [] });
     setFilingResult(null);
-    setFilingProgress({ phase: "idle", message: null });
+    if (!preserveFilingProgress) {
+      setFilingProgress({ phase: "idle", message: null });
+    }
   }, []);
 
   const isCurrentDocument = useCallback(
@@ -334,7 +352,9 @@ export function App() {
   }, [pdfDocument, setHasTextLayer]);
 
   useEffect(() => {
-    clearDocumentBoundLegalState();
+    const previousBytes = legalStateDocumentBytesRef.current;
+    legalStateDocumentBytesRef.current = document.bytes;
+    clearDocumentBoundLegalState(previousBytes);
   }, [clearDocumentBoundLegalState, document.bytes]);
 
   // Pending edits and form values are geometry- and page-bound, so any change
@@ -1871,12 +1891,17 @@ export function App() {
   ]);
 
   const compressBeforeFiling = useCallback(() => {
+    preserveFilingProgressForBytesRef.current = document.bytes;
     setFilingProgress({
       phase: "normalizing",
       message: "Compressing before the split check...",
     });
 
     void compressDocument({ quality: 5, grayscale: false }).then((compressed) => {
+      if (!compressed) {
+        preserveFilingProgressForBytesRef.current = null;
+      }
+
       setFilingProgress({
         phase: compressed ? "idle" : "error",
         message: compressed
@@ -1884,7 +1909,7 @@ export function App() {
           : "Compression could not finish. The document was left unchanged.",
       });
     });
-  }, [compressDocument]);
+  }, [compressDocument, document.bytes]);
 
   const undoLastPendingEdit = useCallback(() => {
     const lastEdit = editing.pendingEdits[editing.pendingEdits.length - 1];
@@ -2246,6 +2271,7 @@ export function App() {
       <AppShell
         document={document}
         pdfDocument={pdfDocument}
+        documentSearch={documentSearch}
         selectedPageIndexes={selectedPageIndexes}
         onOpenRequested={openFile}
         onFileDropped={openDroppedFile}

@@ -35,6 +35,7 @@ type TextItemLike = {
   transform?: unknown;
   width?: unknown;
   height?: unknown;
+  hasEOL?: unknown;
 };
 
 const REDACTION_PADDING_PT = 2;
@@ -87,27 +88,45 @@ export async function findTextRedactionAreas(
   pdfDocument: PDFDocumentProxy,
   query: string,
 ): Promise<PdfRedactionArea[]> {
+  const pages = await extractPageText(pdfDocument);
+
+  return findTextRedactionAreasInPages(pages, query);
+}
+
+export function findTextRedactionAreasInPages(
+  pages: readonly ExtractedPageText[],
+  query: string,
+): PdfRedactionArea[] {
   const normalizedQuery = query.trim().toLowerCase();
 
   if (!normalizedQuery) {
     return [];
   }
 
-  const pages = await extractPageText(pdfDocument);
+  const queryPattern = new RegExp(
+    escapeRegExp(normalizedQuery).replace(/\s+/g, "\\s+"),
+    "g",
+  );
   const areas: PdfRedactionArea[] = [];
 
   for (const page of pages) {
     const normalizedPageText = page.text.toLowerCase();
-    let start = normalizedPageText.indexOf(normalizedQuery);
+    queryPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-    while (start !== -1) {
-      const area = areaForTextRange(page, start, start + normalizedQuery.length);
+    while ((match = queryPattern.exec(normalizedPageText)) !== null) {
+      const matchedText = match[0] ?? "";
+
+      if (!matchedText) {
+        queryPattern.lastIndex += 1;
+        continue;
+      }
+
+      const area = areaForTextRange(page, match.index, match.index + matchedText.length);
 
       if (area) {
         areas.push(area);
       }
-
-      start = normalizedPageText.indexOf(normalizedQuery, start + normalizedQuery.length);
     }
   }
 
@@ -161,13 +180,13 @@ interface TextSpan {
   area: PdfRedactionArea;
 }
 
-interface ExtractedPageText {
+export interface ExtractedPageText {
   pageIndex: number;
   text: string;
   spans: TextSpan[];
 }
 
-async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<ExtractedPageText[]> {
+export async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<ExtractedPageText[]> {
   const pages: ExtractedPageText[] = [];
 
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
@@ -175,23 +194,37 @@ async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<Extracted
     const textContent = await page.getTextContent();
     const spans: TextSpan[] = [];
     let text = "";
+    let previousTextItem: TextItemLike | null = null;
 
     for (const rawItem of textContent.items) {
       const item = rawItem as TextItemLike;
       const itemText = typeof item.str === "string" ? item.str : "";
+
+      if (previousTextItem && itemText) {
+        text += inferTextSeparator(previousTextItem, item);
+      }
+
       const start = text.length;
       text += itemText;
       const end = text.length;
 
-      if (!itemText.trim()) {
+      if (itemText.trim()) {
+        const area = textItemToRedactionArea(item, pageNumber - 1);
+
+        if (area) {
+          spans.push({ start, end, area });
+        }
+      }
+
+      if (item.hasEOL === true && text && !text.endsWith("\n")) {
+        text += "\n";
+      }
+
+      if (!itemText) {
         continue;
       }
 
-      const area = textItemToRedactionArea(item, pageNumber - 1);
-
-      if (area) {
-        spans.push({ start, end, area });
-      }
+      previousTextItem = item;
     }
 
     pages.push({
@@ -202,6 +235,74 @@ async function extractPageText(pdfDocument: PDFDocumentProxy): Promise<Extracted
   }
 
   return pages;
+}
+
+function inferTextSeparator(previous: TextItemLike, current: TextItemLike): "" | " " | "\n" {
+  const previousText = typeof previous.str === "string" ? previous.str : "";
+  const currentText = typeof current.str === "string" ? current.str : "";
+
+  if (
+    !previousText ||
+    !currentText ||
+    /\s$/.test(previousText) ||
+    /^\s/.test(currentText) ||
+    previous.hasEOL === true
+  ) {
+    return "";
+  }
+
+  const previousMetrics = getTextItemMetrics(previous);
+  const currentMetrics = getTextItemMetrics(current);
+
+  if (!previousMetrics || !currentMetrics) {
+    return "";
+  }
+
+  const lineThreshold = Math.max(previousMetrics.height, currentMetrics.height, 8) * 0.5;
+
+  if (Math.abs(previousMetrics.y - currentMetrics.y) > lineThreshold) {
+    return "\n";
+  }
+
+  const gap = currentMetrics.x - (previousMetrics.x + previousMetrics.width);
+  const spaceThreshold = Math.max(1, Math.max(previousMetrics.height, currentMetrics.height, 8) * 0.15);
+
+  return gap > spaceThreshold ? " " : "";
+}
+
+function getTextItemMetrics(
+  item: TextItemLike,
+): { x: number; y: number; width: number; height: number } | null {
+  if (!Array.isArray(item.transform) || item.transform.length < 6) {
+    return null;
+  }
+
+  const transform = item.transform;
+  const x = Number(transform[4]);
+  const y = Number(transform[5]);
+  const width = Number(item.width);
+  const transformHeight = Math.abs(Number(transform[3]));
+  const itemHeight = Number(item.height);
+  const height = Math.max(
+    Number.isFinite(itemHeight) ? Math.abs(itemHeight) : 0,
+    Number.isFinite(transformHeight) ? transformHeight : 0,
+    8,
+  );
+
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height)
+  ) {
+    return null;
+  }
+
+  return { x, y, width, height };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function areaForTextRange(

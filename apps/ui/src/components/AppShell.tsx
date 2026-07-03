@@ -1,6 +1,7 @@
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 import type { OcrUiState } from "../App";
 import type { DocumentState } from "../hooks/useDocument";
+import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
 import { CommandBar } from "./CommandBar";
@@ -26,6 +27,7 @@ import "./AppShell.css";
 export interface AppShellProps {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
+  documentSearch: DocumentSearchState;
   selectedPageIndexes: ReadonlySet<number>;
   onOpenRequested: () => void;
   onFileDropped: (file: File) => void;
@@ -71,6 +73,7 @@ export interface AppShellProps {
 export function AppShell({
   document,
   pdfDocument,
+  documentSearch,
   selectedPageIndexes,
   onOpenRequested,
   onFileDropped,
@@ -164,6 +167,14 @@ export function AppShell({
         hasDocument={hasDocument}
         editTool={editing.tool}
         onEditToolChange={editing.setTool}
+        searchValue={documentSearch.query}
+        searchResultLabel={documentSearch.resultLabel}
+        searchBusy={documentSearch.status === "searching"}
+        searchCanNavigate={documentSearch.canNavigate}
+        onSearchChange={documentSearch.setQuery}
+        onSearchPrevious={documentSearch.goToPrevious}
+        onSearchNext={documentSearch.goToNext}
+        onSearchClear={documentSearch.clear}
       />
       <div className="app-shell__body">
         <ThumbnailRail
@@ -196,6 +207,8 @@ export function AppShell({
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}
           onRedactionAreaRemoved={onRedactionAreaRemoved}
+          searchResults={documentSearch.results}
+          activeSearchResultId={documentSearch.activeMatch?.id ?? null}
         />
         <ToolPanel
           hasDocument={hasDocument}

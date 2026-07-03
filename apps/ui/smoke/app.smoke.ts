@@ -198,7 +198,7 @@ test("makes an image-only PDF searchable through the mocked desktop OCR bridge",
   await page.goto("/");
   await openPdf(page, "scan.pdf", sourcePdf);
 
-  const makeSearchable = page.getByRole("button", { name: "Make Searchable (OCR)" });
+  const makeSearchable = page.getByRole("button", { name: "Make Searchable (OCR)", exact: true });
   await makeSearchable.evaluate((element) => {
     const button = element as HTMLButtonElement;
     button.click();
@@ -222,7 +222,7 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   await page.goto("/");
   await openPdf(page, "scan.pdf", sourcePdf);
 
-  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+  await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
 
   await expect(page.getByText("OCR produced no text layer. The document was left unchanged.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
@@ -241,7 +241,7 @@ test("keeps a rotate queued during mocked OCR and rejects the stale OCR result",
   await page.goto("/");
   await openPdf(page, "scan.pdf", sourcePdf);
 
-  await page.getByRole("button", { name: "Make Searchable (OCR)" }).click();
+  await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
   await expect(page.getByText("Making searchable — page-by-page work happens in the engine.")).toBeVisible();
 
   await page.getByRole("button", { name: "Rotate selected pages" }).click();
@@ -260,7 +260,7 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   await page.goto("/");
   await openPdf(page, "motion.pdf", await createPdf([200, 210]));
 
-  const combine = page.getByRole("button", { name: "Combine with Exhibits" });
+  const combine = page.getByRole("button", { name: "Combine with Exhibits", exact: true });
   await combine.focus();
   await page.keyboard.press("Enter");
 
@@ -318,7 +318,7 @@ test("2.425 scanner finds and masks a planted SSN", async ({ page }) => {
     await createTextPdf("Client SSN 123-45-6789 Account 987654321"),
   );
 
-  await page.getByRole("button", { name: "2.425 Scanner" }).click();
+  await page.getByRole("button", { name: "2.425 Scanner", exact: true }).click();
   await page.getByRole("button", { name: "Scan Document" }).click();
 
   await expect(page.getByText("•••-••-6789")).toBeVisible();
@@ -332,7 +332,7 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await page.goto("/");
   await openPdf(page, "redact.pdf", sourcePdf);
 
-  await page.getByRole("button", { name: "Redact" }).click();
+  await page.getByRole("button", { name: "Redact", exact: true }).click();
   await page.getByRole("button", { name: "Search text..." }).click();
   await page.getByLabel("Search text to redact").fill("123-45-6789");
   await page.getByLabel("Search text to redact").press("Enter");
@@ -351,7 +351,7 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await page.goto("/");
   await openPdf(page, "bates.pdf", await createPdf([200, 210]));
 
-  await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
   await expect(page.locator('[data-testid="pdf-page-canvas"]')).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
   await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
@@ -368,7 +368,7 @@ test("compresses through the mocked desktop engine from the floating dialog", as
   await openPdf(page, "compress.pdf", await createPdf([200]));
 
   await page.getByRole("button", { name: "Organize" }).click();
-  await page.getByRole("button", { name: "Compress..." }).click();
+  await page.getByRole("button", { name: "Compress...", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Compress" })).toBeVisible();
   await page.getByLabel("Quality").fill("6");
   await page.getByLabel("Grayscale").check();
@@ -390,7 +390,7 @@ test("page numbers apply as stamped bytes", async ({ page }) => {
   await openPdf(page, "page-numbers.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByRole("button", { name: "Page Numbers..." }).click();
+  await page.getByRole("button", { name: "Page Numbers...", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Page Numbers" })).toBeVisible();
   await page.getByLabel("Format").selectOption("page-of-total");
   await page.getByRole("button", { name: "Apply Page Numbers" }).click();
@@ -406,7 +406,7 @@ test("inserts an image as a full PDF page", async ({ page }) => {
   await openPdf(page, "insert-image-pages.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Organize" }).click();
-  await page.getByRole("button", { name: "Insert images as pages..." }).click();
+  await page.getByRole("button", { name: "Insert images as pages...", exact: true }).click();
   await page.locator("#insert-image-pages").setInputFiles({
     name: "pixel.png",
     mimeType: "image/png",
@@ -427,7 +427,7 @@ test("drops insert-image results if another PDF opens while images are read", as
   await openPdf(page, "insert-image-race.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Organize" }).click();
-  await page.getByRole("button", { name: "Insert images as pages..." }).click();
+  await page.getByRole("button", { name: "Insert images as pages...", exact: true }).click();
   await page.locator("#insert-image-pages").setInputFiles({
     name: "pixel.png",
     mimeType: "image/png",
@@ -454,11 +454,11 @@ test("stacked floating dialogs let Escape close only the top dialog", async ({ p
   await page.goto("/");
   await openPdf(page, "stacked-dialogs.pdf", await createPdf([200, 210]));
 
-  await page.getByRole("button", { name: "Bates Numbering" }).click();
+  await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
 
   await page.getByRole("button", { name: "Edit" }).click();
-  await page.locator(".tool-panel").getByRole("button", { name: "Sign" }).click();
+  await page.locator(".tool-panel").getByRole("button", { name: "Sign", exact: true }).click();
   const signatureDialog = page.getByRole("dialog", { name: "Signature", exact: true });
   await expect(signatureDialog).toBeVisible();
 
@@ -477,7 +477,7 @@ test("organize page grid multi-select extracts selected pages round trip", async
   await openPdf(page, "organize-extract.pdf", await createPdf([200, 210, 220, 230]));
 
   await page.getByRole("button", { name: "Organize" }).click();
-  await page.getByRole("button", { name: "Organize Pages" }).click();
+  await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Organize Pages" })).toBeVisible();
 
   await page.getByRole("button", { name: "Organize page 2" }).click();
@@ -506,7 +506,7 @@ test("organize page grid ignores rapid second drag while a reorder is pending", 
   await openPdf(page, "organize-rapid-drag.pdf", await createPdf([200, 210, 220, 230]));
 
   await page.getByRole("button", { name: "Organize" }).click();
-  await page.getByRole("button", { name: "Organize Pages" }).click();
+  await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
 
   const grid = page.getByRole("list", { name: "Page grid" });
   await page.getByRole("button", { name: "Organize page 1" })
@@ -539,7 +539,7 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await installFilingBridgeMock(page, convertedPdf);
   await page.goto("/");
   await openPdf(page, "landscape-oversize.pdf", sourcePdf);
-  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
 
   const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
   await expect(filingDialog).toBeVisible();
@@ -580,7 +580,7 @@ test("compressing an oversize filing under the cap clears the split prompt", asy
   });
   await page.goto("/");
   await openPdf(page, "oversize-compressed.pdf", sourcePdf);
-  await page.getByRole("button", { name: "Prepare for Filing" }).click();
+  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
 
   await expect(page.getByRole("button", { name: "Compress first" })).toBeVisible();
   await page.getByRole("button", { name: "Compress first" }).click();

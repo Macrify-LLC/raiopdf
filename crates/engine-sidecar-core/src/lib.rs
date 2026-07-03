@@ -22,7 +22,7 @@ pub const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 pub const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
-pub const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 5;
+pub const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 15;
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub const PAYLOAD_DIR_NAME: &str = "payload";
@@ -39,7 +39,7 @@ pub const PYTHON_RELATIVE: &[&str] = &["ocr", "python", "python.exe"];
 pub const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
 pub const TESSERACT_RELATIVE: &[&str] = &["ocr", "tesseract", "tesseract.exe"];
 pub const TESSDATA_ENG_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata", "eng.traineddata"];
-pub const GHOSTSCRIPT_RELATIVE: &[&str] = &["ocr", "gs", "bin", "gswin64c.exe"];
+pub const GHOSTSCRIPT_RELATIVE: &[&str] = &["ocr", "gs", "bin", "gs.exe"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidecarConfig {
@@ -286,7 +286,7 @@ impl SidecarConfig {
             missing.push("ocr/tesseract/tessdata/eng.traineddata".to_string());
         }
         if self.ghostscript_path.is_none() {
-            missing.push("ocr/gs/bin/gswin64c.exe".to_string());
+            missing.push("ocr/gs/bin/gs.exe".to_string());
         }
 
         OcrToolchainStatus {
@@ -2010,6 +2010,11 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(&payload.join("ocr").to_string_lossy().to_string())
         }));
+        assert!(spec.envs.iter().any(|key_value| {
+            key_value.0.to_string_lossy() == "PATH"
+                && env::split_paths(&key_value.1)
+                    .any(|path| path == payload.join("ocr").join("gs").join("bin"))
+        }));
 
         assert!(!app_data.join("configs").join("settings.yml").exists());
         let settings = fs::read_to_string(app_data.join("configs").join("custom_settings.yml"))
@@ -2098,7 +2103,7 @@ mod tests {
                     "ocr/python/python.exe".to_string(),
                     "ocr/tesseract/tesseract.exe".to_string(),
                     "ocr/tesseract/tessdata/eng.traineddata".to_string(),
-                    "ocr/gs/bin/gswin64c.exe".to_string(),
+                    "ocr/gs/bin/gs.exe".to_string(),
                 ],
             }
         );
@@ -2226,13 +2231,7 @@ mod tests {
                 .join("eng.traineddata"),
         );
         touch(&payload.join("ocr").join("tesseract").join("tesseract.exe"));
-        touch(
-            &payload
-                .join("ocr")
-                .join("gs")
-                .join("bin")
-                .join("gswin64c.exe"),
-        );
+        touch(&payload.join("ocr").join("gs").join("bin").join("gs.exe"));
     }
 
     fn touch(path: &Path) {

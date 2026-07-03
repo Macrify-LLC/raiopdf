@@ -32,6 +32,7 @@ REQUIRED_PAYLOAD_FILES=(
   "ocr/python/python.exe"
   "ocr/tesseract/tesseract.exe"
   "ocr/tesseract/tessdata/eng.traineddata"
+  "ocr/gs/bin/gs.exe"
   "ocr/gs/bin/gswin64c.exe"
 )
 REQUIRED_PAYLOAD_DIRS=(
@@ -480,6 +481,11 @@ install_ghostscript() {
   rm -rf -- "$gs_dir"
   mkdir -p -- "$gs_dir"
   cp -R "$extract_dir"/. "$gs_dir"/
+  if [[ ! -f "$gs_dir/bin/gswin64c.exe" ]]; then
+    echo "Ghostscript payload is missing bin/gswin64c.exe" >&2
+    exit 1
+  fi
+  cp -- "$gs_dir/bin/gswin64c.exe" "$gs_dir/bin/gs.exe"
 }
 
 generate_payload_manifest() {

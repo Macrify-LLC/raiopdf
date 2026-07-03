@@ -7,6 +7,8 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -15,6 +17,8 @@ use serde::{Deserialize, Serialize};
 const FLAG_DIR: &str = "me.macrify.raiopdf";
 const FLAG_FILE: &str = "mcp-enabled";
 const ENABLED_MARKERS: [&str; 6] = ["1", "true", "enabled", "enable", "on", "yes"];
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -385,19 +389,21 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
         "RaioPDF MCP binary is not configured; set RAIOPDF_MCP_BIN or install the bundled MCP executable."
             .to_string()
     })?;
-    let mut child = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .arg("--one-shot")
         .arg(tool_name)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "failed to launch RaioPDF MCP at {}: {error}",
-                binary.to_string_lossy()
-            )
-        })?;
+        .stderr(Stdio::piped());
+    apply_platform_spawn_flags(&mut command);
+
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to launch RaioPDF MCP at {}: {error}",
+            binary.to_string_lossy()
+        )
+    })?;
 
     let payload = serde_json::to_vec(input)
         .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
@@ -426,6 +432,14 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
 
     Ok(output.stdout)
 }
+
+#[cfg(windows)]
+fn apply_platform_spawn_flags(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn apply_platform_spawn_flags(_command: &mut Command) {}
 
 fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
     match error {

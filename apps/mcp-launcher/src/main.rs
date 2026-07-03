@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     env,
     path::{Path, PathBuf},
@@ -8,6 +10,8 @@ const ENGINE_HOST_BIN_ENV: &str = "RAIOPDF_ENGINE_HOST_BIN";
 const ENGINE_RESOURCE_DIR_ENV: &str = "RAIOPDF_ENGINE_RESOURCE_DIR";
 const PDFJS_ASSET_DIR_ENV: &str = "RAIOPDF_PDFJS_ASSET_DIR";
 const RESOURCE_DIR_ENV: &str = "RAIOPDF_RESOURCE_DIR";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn main() {
     match run() {
@@ -54,6 +58,7 @@ fn run() -> Result<i32, String> {
             command.env(ENGINE_HOST_BIN_ENV, engine_host);
         }
     }
+    apply_platform_spawn_flags(&mut command);
 
     let status = command
         .status()
@@ -126,6 +131,14 @@ fn set_node_path(command: &mut Command, node_modules_dir: &Path) {
         command.env("NODE_PATH", value);
     }
 }
+
+#[cfg(windows)]
+fn apply_platform_spawn_flags(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn apply_platform_spawn_flags(_command: &mut Command) {}
 
 fn require_file(path: &Path, label: &str) -> Result<(), String> {
     if path.is_file() {

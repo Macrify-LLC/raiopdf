@@ -287,7 +287,7 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await expect(page.getByText("1 area will be permanently removed")).toBeVisible();
   await page.locator(".tool-panel__danger-button", { hasText: "Apply Redactions" }).click();
 
-  await expect(page.getByText("Redacted and verified — the removed text no longer exists in the file.")).toBeVisible();
+  await expect(page.getByText("Redacted and verified: text layer verified clean; redacted page images replaced; annotations cleaned; metadata scrubbed.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
   await expect.poll(() => getRedactionCallCount(page)).toBe(1);
 });
@@ -872,7 +872,7 @@ async function installOcrBridgeMock(
         window.setTimeout(resolve, engineStartDelayMs);
       });
 
-      return { port: 39393 } as T;
+      return { port: 39393, token: "smoke-token" } as T;
     };
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
@@ -924,7 +924,7 @@ async function installRedactionBridgeMock(
         throw new Error(`Unexpected Tauri command: ${command}`);
       }
 
-      return { port: 39393 } as T;
+      return { port: 39393, token: "smoke-token" } as T;
     };
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
@@ -973,7 +973,7 @@ async function installFilingBridgeMock(
         throw new Error(`Unexpected Tauri command: ${command}`);
       }
 
-      return { port: 39393 } as T;
+      return { port: 39393, token: "smoke-token" } as T;
     };
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
@@ -1027,7 +1027,7 @@ async function installFilingAndCompressBridgeMock(
         throw new Error(`Unexpected Tauri command: ${command}`);
       }
 
-      return { port: 39393 } as T;
+      return { port: 39393, token: "smoke-token" } as T;
     };
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
@@ -1085,7 +1085,7 @@ async function installCompressBridgeMock(
         throw new Error(`Unexpected Tauri command: ${command}`);
       }
 
-      return { port: 39393 } as T;
+      return { port: 39393, token: "smoke-token" } as T;
     };
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {

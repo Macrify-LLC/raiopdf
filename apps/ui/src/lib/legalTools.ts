@@ -1,4 +1,12 @@
-import { PDFDocument } from "pdf-lib";
+import {
+  decodePDFRawStream,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFRawStream,
+  PDFStream,
+} from "pdf-lib";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { PDFDocumentProxy } from "./pdfjs";
 
@@ -28,6 +36,21 @@ export interface SensitiveHit {
 export interface PdfMetadataSummary {
   rows: ReadonlyArray<{ label: string; value: string }>;
   removedFields: readonly string[];
+}
+
+export type RedactionVerificationStatus = "pass" | "fail" | "skipped";
+
+export interface RedactionVerificationCheck {
+  status: RedactionVerificationStatus;
+  detail: string;
+}
+
+export interface RedactionVerificationResult {
+  ok: boolean;
+  textLayer: RedactionVerificationCheck;
+  rasterizedPages: RedactionVerificationCheck;
+  annotations: RedactionVerificationCheck;
+  metadata: RedactionVerificationCheck;
 }
 
 type TextItemLike = {
@@ -339,25 +362,46 @@ function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedacti
 export async function verifyRedactionAreasClear(
   bytes: Uint8Array,
   areas: readonly PdfRedactionArea[],
-): Promise<boolean> {
+  redactedTerms: readonly string[] = [],
+): Promise<RedactionVerificationResult> {
   if (areas.length === 0) {
-    return true;
-  }
-
-  const { loadPdfDocument } = await import("./pdfjs");
-  const pdfDocument = await loadPdfDocument(bytes);
-
-  try {
-    const boxes = await extractTextBoxes(pdfDocument);
-
-    return !boxes.some((box) => {
-      return areas.some((area) => {
-        return box.text.trim().length > 0 && areasIntersect(box.area, area);
-      });
+    return redactionVerificationResult({
+      textLayer: pass("No redaction areas were marked."),
+      rasterizedPages: pass("No redaction pages were marked."),
+      annotations: pass("No redaction pages were marked."),
+      metadata: pass("Document metadata is scrubbed."),
     });
-  } finally {
-    await pdfDocument.loadingTask.destroy();
   }
+
+  const uniqueTerms = uniqueRedactionTerms(redactedTerms);
+  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms);
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const redactedPageIndexes = uniquePageIndexes(areas);
+
+  return redactionVerificationResult({
+    textLayer,
+    rasterizedPages: verifyRasterizedPages(pdf, redactedPageIndexes),
+    annotations: verifyRedactedPageAnnotations(pdf, redactedPageIndexes),
+    metadata: verifyDocumentMetadataScrubbed(pdf),
+  });
+}
+
+export async function collectRedactionAreaTexts(
+  pdfDocument: PDFDocumentProxy,
+  areas: readonly PdfRedactionArea[],
+): Promise<readonly string[]> {
+  if (areas.length === 0) {
+    return [];
+  }
+
+  const boxes = await extractTextBoxes(pdfDocument);
+
+  return uniqueRedactionTerms(
+    boxes
+      .filter((box) => box.text.trim().length > 0)
+      .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
+      .map((box) => box.text),
+  );
 }
 
 export async function readMetadataSummary(
@@ -490,6 +534,150 @@ function areasIntersect(left: PdfRedactionArea, right: PdfRedactionArea): boolea
     left.y + left.h <= right.y ||
     right.y + right.h <= left.y
   );
+}
+
+async function verifyFullDocumentTextLayer(
+  bytes: Uint8Array,
+  terms: readonly string[],
+): Promise<RedactionVerificationCheck> {
+  if (terms.length === 0) {
+    return skipped("No source text was extractable from the marked redaction areas.");
+  }
+
+  try {
+    const { loadPdfDocument } = await import("./pdfjs");
+    const pdfDocument = await loadPdfDocument(bytes);
+
+    try {
+      const pages = await extractPageText(pdfDocument);
+      const documentText = normalizeSearchText(pages.map((page) => page.text).join("\n"));
+      const remainingTerm = terms.find((term) => documentText.includes(normalizeSearchText(term)));
+
+      if (remainingTerm) {
+        return fail(`Text layer still contains "${remainingTerm}".`);
+      }
+
+      return pass("Text layer verified clean across the full document.");
+    } finally {
+      await pdfDocument.loadingTask.destroy();
+    }
+  } catch (error) {
+    return fail(`Text layer verification could not run: ${errorMessage(error)}`);
+  }
+}
+
+function verifyRasterizedPages(
+  pdf: PDFDocument,
+  pageIndexes: readonly number[],
+): RedactionVerificationCheck {
+  const pagesWithTextOperators = pageIndexes.filter((pageIndex) => {
+    return hasTextShowingOperator(readDecodedPageContent(pdf, pageIndex));
+  });
+
+  if (pagesWithTextOperators.length > 0) {
+    return fail(`Redacted pages still contain text operators: ${formatPageNumbers(pagesWithTextOperators)}.`);
+  }
+
+  return pass("Redacted page images replaced; no text operators remain on redacted pages.");
+}
+
+function verifyRedactedPageAnnotations(
+  pdf: PDFDocument,
+  pageIndexes: readonly number[],
+): RedactionVerificationCheck {
+  const pagesWithAnnotations = pageIndexes.filter((pageIndex) => {
+    const annotations = pdf.getPage(pageIndex).node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+    return annotations !== undefined && annotations.size() > 0;
+  });
+
+  if (pagesWithAnnotations.length > 0) {
+    return fail(`Annotations remain on redacted pages: ${formatPageNumbers(pagesWithAnnotations)}.`);
+  }
+
+  return pass("Annotations cleaned on redacted pages.");
+}
+
+function verifyDocumentMetadataScrubbed(pdf: PDFDocument): RedactionVerificationCheck {
+  if (pdf.context.trailerInfo.Info !== undefined || pdf.catalog.has(PDFName.of("Metadata"))) {
+    return fail("Document metadata remains after redaction.");
+  }
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFDict && object.has(PDFName.of("Metadata"))) {
+      return fail("Nested metadata remains after redaction.");
+    }
+  }
+
+  return pass("Document metadata scrubbed after redaction.");
+}
+
+function readDecodedPageContent(pdf: PDFDocument, pageIndex: number): string {
+  const contents = pdf.getPage(pageIndex).node.Contents();
+  const contentObjects =
+    contents instanceof PDFArray ? contents.asArray() : contents ? [contents] : [];
+
+  return contentObjects
+    .map((object) => (object instanceof PDFStream ? object : pdf.context.lookup(object)))
+    .filter((object): object is PDFStream => object instanceof PDFStream)
+    .map((stream) => decodePdfStream(stream))
+    .join("\n");
+}
+
+function decodePdfStream(stream: PDFStream): string {
+  if (stream instanceof PDFRawStream) {
+    return new TextDecoder().decode(decodePDFRawStream(stream).decode());
+  }
+
+  return new TextDecoder().decode(stream.getContents());
+}
+
+function hasTextShowingOperator(content: string): boolean {
+  return /(?:^|\s)(?:Tj|TJ|'|")(?=\s|$)/.test(content);
+}
+
+function uniqueRedactionTerms(terms: readonly string[]): readonly string[] {
+  return [...new Set(terms.map(normalizeDisplayText).filter(Boolean))];
+}
+
+function uniquePageIndexes(areas: readonly PdfRedactionArea[]): readonly number[] {
+  return [...new Set(areas.map((area) => area.pageIndex))].sort((a, b) => a - b);
+}
+
+function redactionVerificationResult(
+  checks: Omit<RedactionVerificationResult, "ok">,
+): RedactionVerificationResult {
+  return {
+    ...checks,
+    ok: Object.values(checks).every((check) => check.status !== "fail"),
+  };
+}
+
+function pass(detail: string): RedactionVerificationCheck {
+  return { status: "pass", detail };
+}
+
+function fail(detail: string): RedactionVerificationCheck {
+  return { status: "fail", detail };
+}
+
+function skipped(detail: string): RedactionVerificationCheck {
+  return { status: "skipped", detail };
+}
+
+function normalizeDisplayText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeSearchText(text: string): string {
+  return normalizeDisplayText(text).toLocaleLowerCase();
+}
+
+function formatPageNumbers(pageIndexes: readonly number[]): string {
+  return pageIndexes.map((pageIndex) => pageIndex + 1).join(", ");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatPdfDate(date: Date | undefined): string {

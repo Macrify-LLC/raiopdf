@@ -4,10 +4,13 @@ use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -26,6 +29,8 @@ const PAYLOAD_DIR_NAME: &str = "payload";
 const ENGINE_LOG_FILE_NAME: &str = "engine.log";
 const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const ENGINE_LOG_GENERATIONS: usize = 2;
+const AUTH_HEADER_NAME: &str = "x-raiopdf-auth";
+const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
 const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
 const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
@@ -293,6 +298,8 @@ pub struct EngineStartResponse {
     disabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
     ocr_toolchain: OcrToolchainStatus,
 }
 
@@ -301,14 +308,16 @@ impl EngineStartResponse {
         Self {
             disabled: true,
             port: None,
+            token: None,
             ocr_toolchain,
         }
     }
 
-    fn ready(port: u16, ocr_toolchain: OcrToolchainStatus) -> Self {
+    fn ready(port: u16, token: &str, ocr_toolchain: OcrToolchainStatus) -> Self {
         Self {
             disabled: false,
             port: Some(port),
+            token: Some(token.to_string()),
             ocr_toolchain,
         }
     }
@@ -424,8 +433,10 @@ pub struct SidecarManager {
     config: SidecarConfig,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
+    proxy: Arc<Mutex<Option<ProxyHandle>>>,
     lifecycle_lock: Arc<Mutex<()>>,
     idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
+    auth_token: String,
 }
 
 pub struct PortReservation {
@@ -436,6 +447,12 @@ enum StartupOutcome {
     Ready,
     TimedOut,
     Stopped,
+}
+
+#[derive(Clone, Debug)]
+struct ProxyHandle {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl PortReservation {
@@ -452,6 +469,7 @@ impl SidecarManager {
             EngineState::stopped()
         }));
         let child = Arc::new(Mutex::new(None));
+        let proxy = Arc::new(Mutex::new(None));
         let lifecycle_lock = Arc::new(Mutex::new(()));
         let idle = Arc::new((
             Mutex::new(IdleShutdownState {
@@ -465,6 +483,7 @@ impl SidecarManager {
             Arc::clone(&idle),
             Arc::clone(&state),
             Arc::clone(&child),
+            Arc::clone(&proxy),
             Arc::clone(&lifecycle_lock),
             config.disabled(),
         );
@@ -473,8 +492,10 @@ impl SidecarManager {
             config,
             state,
             child,
+            proxy,
             lifecycle_lock,
             idle,
+            auth_token: generate_auth_token(),
         }
     }
 
@@ -494,6 +515,7 @@ impl SidecarManager {
         if let Some(port) = self.reap_and_get_ready_port()? {
             return Ok(EngineStartResponse::ready(
                 port,
+                &self.auth_token,
                 self.config.ocr_toolchain(),
             ));
         }
@@ -503,16 +525,19 @@ impl SidecarManager {
                 Ok(port) => {
                     return Ok(EngineStartResponse::ready(
                         port,
+                        &self.auth_token,
                         self.config.ocr_toolchain(),
                     ))
                 }
                 Err(StartAttemptError::TimedOut(_port)) if attempt_index == 0 => {
                     kill_child(&self.child);
+                    stop_proxy(&self.proxy);
                     set_state(&self.state, EngineState::stopped());
                     continue;
                 }
                 Err(StartAttemptError::TimedOut(port)) => {
                     kill_child(&self.child);
+                    stop_proxy(&self.proxy);
                     let message = "engine health check timed out".to_string();
                     set_state(&self.state, EngineState::error(Some(port), &message));
                     return Err(message);
@@ -560,35 +585,61 @@ impl SidecarManager {
     }
 
     fn start_once(&self) -> Result<u16, StartAttemptError> {
-        let reservation =
+        let engine_reservation =
             pick_free_port().map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
-        let port = reservation
+        let engine_port = engine_reservation
             .port()
             .map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
+        let proxy_port = proxy_listener
+            .local_addr()
+            .map_err(|error| StartAttemptError::Stopped(error.to_string()))?
+            .port();
 
-        set_state(&self.state, EngineState::starting(port));
+        set_state(&self.state, EngineState::starting(proxy_port));
         // Holding the listener until immediately before spawning narrows the
         // TOCTOU window, but cannot eliminate it without server-side port-0
         // support that reports the bound port back to the shell.
-        drop(reservation);
+        drop(engine_reservation);
 
-        match spawn_engine(&self.config, port) {
+        match spawn_engine(&self.config, engine_port) {
             Ok(spawned_child) => {
                 *self.child.lock().expect("sidecar child lock poisoned") = Some(spawned_child);
             }
             Err(error) => {
                 let message = format!("failed to spawn engine: {error}");
-                set_state(&self.state, EngineState::error(Some(port), &message));
+                set_state(&self.state, EngineState::error(Some(proxy_port), &message));
                 return Err(StartAttemptError::Stopped(message));
             }
         }
 
-        match wait_until_ready(&self.config, port, &self.state, &self.child) {
+        match wait_until_ready(
+            &self.config,
+            engine_port,
+            proxy_port,
+            &self.state,
+            &self.child,
+        ) {
             StartupOutcome::Ready => {
-                spawn_child_supervisor(port, Arc::clone(&self.state), Arc::clone(&self.child));
-                Ok(port)
+                let proxy = start_auth_proxy(proxy_listener, engine_port, self.auth_token.clone())
+                    .map_err(|error| {
+                        let message =
+                            format!("failed to start authenticated engine proxy: {error}");
+                        set_state(&self.state, EngineState::error(Some(proxy_port), &message));
+                        StartAttemptError::Stopped(message)
+                    })?;
+                *self.proxy.lock().expect("sidecar proxy lock poisoned") = Some(proxy);
+                set_state(&self.state, EngineState::ready(proxy_port));
+                spawn_child_supervisor(
+                    proxy_port,
+                    Arc::clone(&self.state),
+                    Arc::clone(&self.child),
+                    Arc::clone(&self.proxy),
+                );
+                Ok(proxy_port)
             }
-            StartupOutcome::TimedOut => Err(StartAttemptError::TimedOut(port)),
+            StartupOutcome::TimedOut => Err(StartAttemptError::TimedOut(proxy_port)),
             StartupOutcome::Stopped => {
                 let message = current_error(&self.state)
                     .unwrap_or_else(|| "engine stopped before becoming ready".to_string());
@@ -607,6 +658,15 @@ impl SidecarManager {
             .is_some();
 
         if child_running && matches!(state.status, EngineStatus::Ready) {
+            let proxy_running = self
+                .proxy
+                .lock()
+                .expect("sidecar proxy lock poisoned")
+                .as_ref()
+                .is_some_and(|proxy| Some(proxy.port) == state.port);
+            if !proxy_running {
+                return Err("authenticated engine proxy is not running".to_string());
+            }
             return Ok(state.port);
         }
 
@@ -617,6 +677,7 @@ impl SidecarManager {
         match take_child_exit_status(&self.child) {
             Ok(Some(exit_status)) => {
                 let port = self.state.lock().expect("sidecar state lock poisoned").port;
+                stop_proxy(&self.proxy);
                 set_state(
                     &self.state,
                     EngineState::error(
@@ -634,6 +695,7 @@ impl SidecarManager {
 
     fn stop_child(&self) -> bool {
         let stopped = kill_child(&self.child);
+        stop_proxy(&self.proxy);
         set_state(
             &self.state,
             if self.config.disabled() {
@@ -925,7 +987,8 @@ fn apply_platform_spawn_flags(_command: &mut Command) {}
 
 fn wait_until_ready(
     config: &SidecarConfig,
-    port: u16,
+    engine_port: u16,
+    proxy_port: u16,
     state: &Arc<Mutex<EngineState>>,
     child: &Arc<Mutex<Option<Child>>>,
 ) -> StartupOutcome {
@@ -938,7 +1001,7 @@ fn wait_until_ready(
                 set_state(
                     state,
                     EngineState::error(
-                        Some(port),
+                        Some(proxy_port),
                         format!("engine exited before becoming ready: {exit_status}"),
                     ),
                 );
@@ -949,7 +1012,7 @@ fn wait_until_ready(
                 set_state(
                     state,
                     EngineState::error(
-                        Some(port),
+                        Some(proxy_port),
                         format!("failed to check engine process: {error}"),
                     ),
                 );
@@ -960,8 +1023,7 @@ fn wait_until_ready(
             return StartupOutcome::Stopped;
         }
 
-        if health_check(port, &config.health_path).unwrap_or(false) {
-            set_state(state, EngineState::ready(port));
+        if health_check(engine_port, &config.health_path).unwrap_or(false) {
             return StartupOutcome::Ready;
         }
 
@@ -978,14 +1040,21 @@ fn spawn_child_supervisor(
     port: u16,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
+    proxy: Arc<Mutex<Option<ProxyHandle>>>,
 ) {
-    thread::spawn(move || supervise_child(port, state, child));
+    thread::spawn(move || supervise_child(port, state, child, proxy));
 }
 
-fn supervise_child(port: u16, state: Arc<Mutex<EngineState>>, child: Arc<Mutex<Option<Child>>>) {
+fn supervise_child(
+    port: u16,
+    state: Arc<Mutex<EngineState>>,
+    child: Arc<Mutex<Option<Child>>>,
+    proxy: Arc<Mutex<Option<ProxyHandle>>>,
+) {
     loop {
         match take_child_exit_status(&child) {
             Ok(Some(exit_status)) => {
+                stop_proxy(&proxy);
                 set_state(
                     &state,
                     EngineState::error(
@@ -997,6 +1066,7 @@ fn supervise_child(port: u16, state: Arc<Mutex<EngineState>>, child: Arc<Mutex<O
             }
             Ok(None) => {}
             Err(error) => {
+                stop_proxy(&proxy);
                 set_state(
                     &state,
                     EngineState::error(
@@ -1020,6 +1090,7 @@ fn start_idle_supervisor(
     idle: Arc<(Mutex<IdleShutdownState>, Condvar)>,
     state: Arc<Mutex<EngineState>>,
     child: Arc<Mutex<Option<Child>>>,
+    proxy: Arc<Mutex<Option<ProxyHandle>>>,
     lifecycle_lock: Arc<Mutex<()>>,
     disabled: bool,
 ) {
@@ -1067,6 +1138,7 @@ fn start_idle_supervisor(
         drop(idle_state);
 
         if kill_child(&child) {
+            stop_proxy(&proxy);
             set_state(
                 &state,
                 if disabled {
@@ -1107,6 +1179,144 @@ fn kill_child(child: &Arc<Mutex<Option<Child>>>) -> bool {
     let _ = child.kill();
     let _ = child.wait();
     true
+}
+
+fn start_auth_proxy(
+    listener: TcpListener,
+    engine_port: u16,
+    token: String,
+) -> io::Result<ProxyHandle> {
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_for_thread = Arc::clone(&shutdown);
+
+    thread::spawn(move || run_auth_proxy(listener, engine_port, token, shutdown_for_thread));
+
+    Ok(ProxyHandle { port, shutdown })
+}
+
+fn run_auth_proxy(
+    listener: TcpListener,
+    engine_port: u16,
+    token: String,
+    shutdown: Arc<AtomicBool>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((client, _)) => {
+                let request_token = token.clone();
+                thread::spawn(move || {
+                    let _ = proxy_client(client, engine_port, &request_token);
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+fn stop_proxy(proxy: &Arc<Mutex<Option<ProxyHandle>>>) {
+    let Some(proxy) = proxy.lock().expect("sidecar proxy lock poisoned").take() else {
+        return;
+    };
+
+    proxy.shutdown.store(true, Ordering::Relaxed);
+    let _ = TcpStream::connect(("127.0.0.1", proxy.port));
+}
+
+fn proxy_client(mut client: TcpStream, engine_port: u16, token: &str) -> io::Result<()> {
+    client.set_read_timeout(Some(Duration::from_secs(30)))?;
+    client.set_write_timeout(Some(Duration::from_secs(30)))?;
+
+    let (request_head, buffered_body) = read_request_head(&mut client)?;
+
+    if !request_has_valid_auth(&request_head, token) {
+        client.write_all(
+            b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        )?;
+        let _ = client.shutdown(Shutdown::Both);
+        return Ok(());
+    }
+
+    let mut upstream = TcpStream::connect(("127.0.0.1", engine_port))?;
+    upstream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    upstream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    upstream.write_all(&request_head)?;
+    if !buffered_body.is_empty() {
+        upstream.write_all(&buffered_body)?;
+    }
+
+    let mut upstream_writer = upstream.try_clone()?;
+    let mut client_reader = client.try_clone()?;
+    let copy_request = thread::spawn(move || {
+        let _ = io::copy(&mut client_reader, &mut upstream_writer);
+        let _ = upstream_writer.shutdown(Shutdown::Write);
+    });
+
+    let _ = io::copy(&mut upstream, &mut client);
+    let _ = client.shutdown(Shutdown::Write);
+    let _ = copy_request.join();
+
+    Ok(())
+}
+
+fn read_request_head(stream: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut chunk)?;
+        if bytes_read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed before request head",
+            ));
+        }
+
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+
+        if let Some(head_end) = request_head_end(&buffer) {
+            let body = buffer.split_off(head_end);
+            return Ok((buffer, body));
+        }
+
+        if buffer.len() > MAX_REQUEST_HEAD_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request head exceeds maximum size",
+            ));
+        }
+    }
+}
+
+fn request_head_end(buffer: &[u8]) -> Option<usize> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+}
+
+fn request_has_valid_auth(request_head: &[u8], token: &str) -> bool {
+    let Ok(request_head) = std::str::from_utf8(request_head) else {
+        return false;
+    };
+
+    request_head.lines().skip(1).any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+
+        name.trim().eq_ignore_ascii_case(AUTH_HEADER_NAME) && value.trim() == token
+    })
+}
+
+fn generate_auth_token() -> String {
+    let mut token = [0; 32];
+    getrandom::fill(&mut token).expect("OS random token generation should succeed");
+    token.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn health_check(port: u16, path: &str) -> std::io::Result<bool> {
@@ -1288,6 +1498,61 @@ mod tests {
         assert!(port > 0);
         drop(reservation);
         TcpListener::bind(("127.0.0.1", port)).expect("picked port should be bindable");
+    }
+
+    #[test]
+    fn auth_proxy_requires_exact_token_header() {
+        assert!(request_has_valid_auth(
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: abc123\r\n\r\n",
+            "abc123"
+        ));
+        assert!(!request_has_valid_auth(
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            "abc123"
+        ));
+        assert!(!request_has_valid_auth(
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: wrong\r\n\r\n",
+            "abc123"
+        ));
+    }
+
+    #[test]
+    fn auth_proxy_returns_401_without_token() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"GET /api/v1/info/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert_eq!(stub.received_request(), None);
+    }
+
+    #[test]
+    fn auth_proxy_tunnels_authorized_requests() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"));
+        assert!(stub
+            .received_request()
+            .expect("stub should receive authorized request")
+            .starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
     }
 
     #[test]
@@ -1654,5 +1919,97 @@ mod tests {
         fs::create_dir_all(path.parent().expect("test file should have parent"))
             .expect("parent should be created");
         fs::write(path, []).expect("test file should be written");
+    }
+
+    struct StubHttpServer {
+        port: u16,
+        received: Arc<Mutex<Option<String>>>,
+    }
+
+    impl StubHttpServer {
+        fn received_request(&self) -> Option<String> {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let request = self
+                    .received
+                    .lock()
+                    .expect("stub request lock poisoned")
+                    .clone();
+                if request.is_some() || Instant::now() >= deadline {
+                    return request;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    fn start_stub_http_server(response: &'static [u8]) -> StubHttpServer {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("stub should bind");
+        let port = listener.local_addr().expect("stub addr").port();
+        let received = Arc::new(Mutex::new(None));
+        let received_for_thread = Arc::clone(&received);
+
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .expect("stub read timeout");
+            let (head, body) = read_request_head(&mut stream).expect("stub request head");
+            let content_length = content_length(&head);
+            let mut request = head;
+            let mut remaining = content_length.saturating_sub(body.len());
+            request.extend_from_slice(&body);
+
+            while remaining > 0 {
+                let mut buffer = vec![0; remaining.min(1024)];
+                let bytes_read = stream.read(&mut buffer).expect("stub body read");
+                if bytes_read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..bytes_read]);
+                remaining -= bytes_read;
+            }
+
+            *received_for_thread
+                .lock()
+                .expect("stub request lock poisoned") =
+                Some(String::from_utf8_lossy(&request).into_owned());
+            stream.write_all(response).expect("stub response write");
+        });
+
+        StubHttpServer { port, received }
+    }
+
+    fn send_proxy_request(port: u16, request: &[u8]) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("proxy connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("proxy read timeout");
+        stream.write_all(request).expect("proxy request write");
+        let _ = stream.shutdown(Shutdown::Write);
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("proxy response read");
+        response
+    }
+
+    fn content_length(head: &[u8]) -> usize {
+        let Ok(head) = std::str::from_utf8(head) else {
+            return 0;
+        };
+
+        head.lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.trim().eq_ignore_ascii_case("content-length") {
+                    value.trim().parse().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
     }
 }

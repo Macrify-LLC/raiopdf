@@ -12,6 +12,7 @@ import type {
 interface EngineStartResponse {
   disabled?: boolean;
   port?: number;
+  token?: string;
   ocrToolchain?: EngineOcrToolchainStatus;
 }
 
@@ -93,7 +94,7 @@ export function useEngineBridge(): EngineBridge {
       const invoke = await getTauriInvoke();
       const response = await invoke<EngineStartResponse>("engine_start");
 
-      if (response.disabled || typeof response.port !== "number") {
+      if (response.disabled || typeof response.port !== "number" || typeof response.token !== "string") {
         engineRef.current = null;
         setDisabled(true);
         throw new EngineBridgeUnavailableError();
@@ -104,6 +105,7 @@ export function useEngineBridge(): EngineBridge {
         : []);
 
       const engine = new SidecarPdfEngine({
+        authToken: response.token,
         baseUrl: `http://127.0.0.1:${response.port}`,
         ...(window.__RAIOPDF_TEST_ENGINE_FETCH__
           ? { fetch: window.__RAIOPDF_TEST_ENGINE_FETCH__ }

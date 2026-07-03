@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "packs": {
+    "florida": {
+      "file": "florida.json",
+      "sha256": "82252bf9f7d9310782e7dda3d400deff5126a808d184597c55b143a6751d3812"
+    }
+  }
+}

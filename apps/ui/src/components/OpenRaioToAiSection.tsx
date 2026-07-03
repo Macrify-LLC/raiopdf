@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { CheckIcon, CopyIcon, PlugIcon, ShieldCheckIcon } from "../icons";
+import { useSectionFocus } from "../hooks/useSectionFocus";
 import { Switch } from "./Switch";
+import "./SettingsSectionCard.css";
 import "./OpenRaioToAiSection.css";
 
 const PLACEHOLDER_PATH = "<RAIOPDF_MCP_PATH>";
@@ -10,7 +12,6 @@ const PLACEHOLDER_PATH = "<RAIOPDF_MCP_PATH>";
 // docs/MCP.md gets a hosted page of its own on raio.macrify.me.
 const MCP_DOCS_URL = "https://github.com/Macrify-LLC/raiopdf/blob/main/docs/MCP.md";
 
-const FOCUS_RING_MS = 1600;
 const COPIED_LABEL_MS = 1600;
 
 export interface OpenRaioToAiSectionProps {
@@ -46,25 +47,8 @@ export function OpenRaioToAiSection({
   focused = false,
   onFocusHandled,
 }: OpenRaioToAiSectionProps) {
-  const sectionRef = useRef<HTMLElement | null>(null);
-  const [showFocusRing, setShowFocusRing] = useState(false);
+  const { sectionRef, showFocusRing } = useSectionFocus(focused, onFocusHandled);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!focused) {
-      return;
-    }
-
-    sectionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    setShowFocusRing(true);
-
-    const timeoutId = window.setTimeout(() => {
-      setShowFocusRing(false);
-      onFocusHandled?.();
-    }, FOCUS_RING_MS);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [focused, onFocusHandled]);
 
   useEffect(() => {
     if (!copiedKey) {
@@ -94,16 +78,16 @@ export function OpenRaioToAiSection({
     <section
       ref={sectionRef}
       id="open-raio-to-ai"
-      className="open-raio-to-ai"
+      className="settings-section open-raio-to-ai"
       aria-labelledby="open-raio-to-ai-heading"
       data-focused={showFocusRing ? "true" : undefined}
     >
-      <header className="open-raio-to-ai__header">
-        <span className="open-raio-to-ai__icon" aria-hidden="true">
+      <header className="settings-section__header">
+        <span className="settings-section__icon open-raio-to-ai__icon" aria-hidden="true">
           <PlugIcon size={18} />
         </span>
-        <div className="open-raio-to-ai__heading-group">
-          <p className="open-raio-to-ai__eyebrow">Bring your own AI</p>
+        <div className="settings-section__heading-group">
+          <p className="settings-section__eyebrow">Bring your own AI</p>
           <h3 id="open-raio-to-ai-heading">Open Raio to AI</h3>
         </div>
         {enabled ? (
@@ -114,7 +98,7 @@ export function OpenRaioToAiSection({
         ) : null}
       </header>
 
-      <p className="open-raio-to-ai__lede">
+      <p className="settings-section__lede">
         Raio still has no AI of its own. Turn this on and whatever assistant you already use
         — Claude Desktop, Claude Code, anything that speaks MCP — can drive Raio&rsquo;s tools
         directly: split a file, run OCR, redact a term, stamp Bates numbers. Every operation

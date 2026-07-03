@@ -266,7 +266,7 @@ export function App() {
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFocusSection, setSettingsFocusSection] = useState<
-    "open-raio-to-ai" | null
+    "open-raio-to-ai" | "about-macrify" | null
   >(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [mcpPath, setMcpPath] = useState<string | null>(null);
@@ -2119,6 +2119,11 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [document.bytes, document.zoom, fitToPageWidth, setZoom]);
 
+  const openAboutMacrify = useCallback(() => {
+    setSettingsFocusSection("about-macrify");
+    setSettingsOpen(true);
+  }, []);
+
   const handleNativeMenuCommand = useCallback(
     (command: string) => {
       switch (command) {
@@ -2156,6 +2161,9 @@ export function App() {
           setSettingsFocusSection("open-raio-to-ai");
           setSettingsOpen(true);
           break;
+        case "file:about-macrify":
+          openAboutMacrify();
+          break;
         case "edit:undo":
           undoLastPendingEdit();
           break;
@@ -2177,6 +2185,7 @@ export function App() {
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,
+      openAboutMacrify,
       openFile,
       printDocument,
       save,
@@ -2506,6 +2515,7 @@ export function App() {
         onCancelRedactions={cancelRedactions}
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
+        onOpenAbout={openAboutMacrify}
       />
       {settingsOpen ? (
         <SettingsDialog

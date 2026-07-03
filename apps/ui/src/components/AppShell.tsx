@@ -68,6 +68,7 @@ export interface AppShellProps {
   onCancelRedactions: () => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
+  onOpenAbout: () => void;
 }
 
 export function AppShell({
@@ -114,6 +115,7 @@ export function AppShell({
   onCancelRedactions,
   onRunScanner,
   onMarkScannerHit,
+  onOpenAbout,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
@@ -152,7 +154,7 @@ export function AppShell({
         aria-label="Open PDF file"
         onChange={handleFileInputChange}
       />
-      <TitleBar tabs={tabs} />
+      <TitleBar tabs={tabs} onOpenAbout={onOpenAbout} />
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}

@@ -504,9 +504,14 @@ install_qpdf() {
   fi
   source_bin=$(dirname -- "$qpdf_exe")
 
+  # The msvc64 zip ships no top-level LICENSE.txt; the license text lives in
+  # the bundled manual sources. Accept either, newest layout first.
   license_file=$(find "$extract_dir" -type f -iname "LICENSE.txt" -print -quit)
   if [[ -z "$license_file" ]]; then
-    echo "QPDF payload is missing LICENSE.txt" >&2
+    license_file=$(find "$extract_dir" -type f -name "license.rst.txt" -path "*_sources*" -print -quit)
+  fi
+  if [[ -z "$license_file" ]]; then
+    echo "QPDF payload is missing a license file (LICENSE.txt or license.rst.txt)" >&2
     exit 1
   fi
 

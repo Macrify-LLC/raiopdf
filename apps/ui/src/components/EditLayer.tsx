@@ -693,6 +693,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                 )
               }
               onRemove={() => removeEdit(edit.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedId(edit.id);
+                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
+              }}
             />
           );
         }
@@ -890,6 +896,7 @@ function TextBoxOverlay({
   onEditRequested,
   onFontSizeChange,
   onRemove,
+  onContextMenu,
 }: {
   edit: PendingTextBox;
   viewport: PageViewport;
@@ -903,6 +910,7 @@ function TextBoxOverlay({
   onEditRequested: () => void;
   onFontSizeChange: (fontSizePt: number) => void;
   onRemove: () => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
 
@@ -914,6 +922,7 @@ function TextBoxOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={onContextMenu}
       onDoubleClick={(event) => {
         event.stopPropagation();
         onEditRequested();

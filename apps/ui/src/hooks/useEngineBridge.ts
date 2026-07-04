@@ -113,10 +113,19 @@ export function useEngineBridge(): EngineBridge {
       const invoke = await getTauriInvoke();
       const response = await invoke<EngineStartResponse>("engine_start");
 
-      if (response.disabled || typeof response.port !== "number" || typeof response.token !== "string") {
+      if (response.disabled) {
+        // Genuine "no engine in this installation" — the only case that
+        // permanently disables engine features for the session.
         engineRef.current = null;
         setDisabled(true);
         throw new EngineBridgeUnavailableError();
+      }
+
+      if (typeof response.port !== "number" || typeof response.token !== "string") {
+        // Malformed start response: fail this attempt but do NOT latch
+        // disabled — a later attempt may succeed.
+        engineRef.current = null;
+        throw new Error("engine_start returned an incomplete response");
       }
 
       setMissingOcrToolchain(response.ocrToolchain?.available === false

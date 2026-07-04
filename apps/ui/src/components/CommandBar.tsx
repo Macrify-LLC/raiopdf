@@ -35,6 +35,7 @@ const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   underline: (size) => <UnderlineIcon size={size} />,
   strikethrough: (size) => <StrikethroughIcon size={size} />,
   textBox: (size) => <TextBoxIcon size={size} />,
+  callout: (size) => <ArrowLineIcon size={size} />,
   image: (size) => <ImageIcon size={size} />,
   comment: (size) => <CommentIcon size={size} />,
   draw: (size) => <DrawIcon size={size} />,

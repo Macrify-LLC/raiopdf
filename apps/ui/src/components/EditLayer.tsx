@@ -17,6 +17,7 @@ import {
   TEXT_BOX_LINE_HEIGHT,
   COMMENT_ICON_SIZE_PT,
   type PageTextBox,
+  type PendingCallout,
   type PendingComment,
   type PendingEdit,
   type PendingShape,
@@ -37,6 +38,8 @@ import {
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
   DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_CALLOUT_STROKE_COLOR,
+  DEFAULT_CALLOUT_STROKE_WIDTH_PT,
   DEFAULT_SHAPE_STROKE_COLOR,
   DEFAULT_SHAPE_STROKE_WIDTH_PT,
   DEFAULT_TEXT_MARKUP_COLOR,
@@ -75,9 +78,11 @@ const DEFAULT_TEXT_BOX_WIDTH_PT = 180;
 const TEXT_BOX_PADDING_PT = 4;
 
 interface TextDraft {
+  kind: "textBox" | "callout";
   /** Pending-edit id when re-editing an existing box; null for a new draft. */
   editId: string | null;
   rect: ViewportRect;
+  tip?: ViewportPoint;
   text: string;
   fontSizePt: number;
   color?: PdfEditColor;
@@ -85,6 +90,11 @@ interface TextDraft {
   bold?: boolean;
   italic?: boolean;
   align?: PdfTextBoxAlign;
+  strokeColor?: PdfEditColor;
+  strokeWidthPt?: number;
+  arrowhead?: boolean;
+  boxBorder?: boolean;
+  boxFill?: PdfEditColor | null;
 }
 
 interface CommentDraft {
@@ -97,6 +107,11 @@ interface ShapeDraft {
   tool: ShapeToolId;
   start: ViewportPoint;
   end: ViewportPoint;
+}
+
+interface CalloutPlacementDraft {
+  box: ViewportRect;
+  tipPreview: ViewportPoint | null;
 }
 
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
@@ -135,6 +150,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const [textLayerError, setTextLayerError] = useState<string | null>(null);
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
   const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null);
+  const [calloutPlacementDraft, setCalloutPlacementDraft] =
+    useState<CalloutPlacementDraft | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -184,6 +201,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setTextMarkupDraft(null);
     setDrawDraft(null);
     setShapeDraft(null);
+    setCalloutPlacementDraft(null);
     setTextDraft(null);
     setCommentDraft(null);
     setSelectedId(null);
@@ -252,7 +270,31 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       };
       const rect = viewportRectToPdfRect(fitted, viewport);
 
-      if (draft.editId) {
+      if (draft.kind === "callout") {
+        if (!draft.tip) {
+          return null;
+        }
+
+        addEdit({
+          kind: "callout",
+          id: newEditId(),
+          pageIndex,
+          rect,
+          tip: viewportPointToPdfPoint(draft.tip, viewport),
+          text,
+          fontSizePt: draft.fontSizePt,
+          ...(draft.color ? { color: draft.color } : {}),
+          fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+          bold: Boolean(draft.bold),
+          italic: Boolean(draft.italic),
+          align: draft.align ?? DEFAULT_TEXT_ALIGN,
+          strokeWidthPt: draft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+          ...(draft.strokeColor ? { strokeColor: draft.strokeColor } : {}),
+          arrowhead: draft.arrowhead ?? true,
+          boxBorder: draft.boxBorder ?? true,
+          ...(draft.boxFill ? { boxFill: draft.boxFill } : {}),
+        });
+      } else if (draft.editId) {
         updateEdit(draft.editId, (edit) =>
           edit.kind === "textBox"
             ? {
@@ -347,7 +389,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
-    if ((tool === "textBox" || tool === "comment") && placementSuppressed()) {
+    if ((tool === "textBox" || tool === "callout" || tool === "comment") && placementSuppressed()) {
       return;
     }
 
@@ -357,6 +399,35 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     }
 
     setSelectedId(null);
+
+    if (tool === "callout" && calloutPlacementDraft) {
+      if (!guardPlacement()) {
+        return;
+      }
+
+      setTextDraft({
+        kind: "callout",
+        editId: null,
+        rect: calloutPlacementDraft.box,
+        tip: point,
+        text: "",
+        fontSizePt: DEFAULT_TEXT_BOX_FONT_SIZE,
+        ...(editing.calloutStyle.color ? { color: editing.calloutStyle.color } : {}),
+        fontFamily: editing.calloutStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+        bold: Boolean(editing.calloutStyle.bold),
+        italic: Boolean(editing.calloutStyle.italic),
+        align: editing.calloutStyle.align ?? DEFAULT_TEXT_ALIGN,
+        strokeWidthPt: editing.calloutStyle.strokeWidthPt,
+        ...(editing.calloutStyle.strokeColor
+          ? { strokeColor: editing.calloutStyle.strokeColor }
+          : {}),
+        arrowhead: true,
+        boxBorder: true,
+      });
+      setCalloutPlacementDraft(null);
+      editing.setMessage(null);
+      return;
+    }
 
     if (isTextMarkupTool(tool)) {
       dragStartRef.current = point;
@@ -379,6 +450,16 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
+    if (tool === "callout") {
+      dragStartRef.current = point;
+      setCalloutPlacementDraft({
+        box: { left: point.x, top: point.y, width: 0, height: 0 },
+        tipPreview: null,
+      });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
     if (tool === "textBox") {
       if (!guardPlacement()) {
         return;
@@ -388,6 +469,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       const height =
         (DEFAULT_TEXT_BOX_FONT_SIZE * TEXT_BOX_LINE_HEIGHT + TEXT_BOX_PADDING_PT) * scale;
       setTextDraft({
+        kind: "textBox",
         editId: null,
         rect: {
           left: clamp(point.x, 0, Math.max(0, viewport.width - width)),
@@ -490,6 +572,21 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
     if (isShapeTool(tool) && dragStartRef.current) {
       setShapeDraft({ tool, start: dragStartRef.current, end: point });
+      return;
+    }
+
+    if (tool === "callout") {
+      if (dragStartRef.current) {
+        setCalloutPlacementDraft({
+          box: pointsToViewportRect(dragStartRef.current, point),
+          tipPreview: null,
+        });
+        return;
+      }
+
+      setCalloutPlacementDraft((current) =>
+        current ? { ...current, tipPreview: point } : current,
+      );
     }
   }
 
@@ -616,6 +713,27 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         from,
         to,
       });
+      return;
+    }
+
+    if (tool === "callout" && dragStartRef.current) {
+      const start = dragStartRef.current;
+      dragStartRef.current = null;
+
+      if (!point) {
+        setCalloutPlacementDraft(null);
+        return;
+      }
+
+      const box = pointsToViewportRect(start, point);
+
+      if (box.width < MIN_ITEM_SIZE_PX || box.height < MIN_ITEM_SIZE_PX) {
+        setCalloutPlacementDraft(null);
+        return;
+      }
+
+      setCalloutPlacementDraft({ box, tipPreview: null });
+      editing.setMessage("Click the page point this callout should point to.");
     }
   }
 
@@ -625,6 +743,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setTextMarkupDraft(null);
     setDrawDraft(null);
     setShapeDraft(null);
+    setCalloutPlacementDraft(null);
   }
 
   function removeTextMarkupAtPoint(point: ViewportPoint, kind: TextMarkupToolId) {
@@ -749,6 +868,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   function openTextBoxForEditing(edit: PendingTextBox) {
     setSelectedId(null);
     setTextDraft({
+      kind: "textBox",
       editId: edit.id,
       rect: pdfRectToViewportRect(edit.rect, viewport),
       text: edit.text,
@@ -823,6 +943,19 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                   current.kind === "textBox" ? { ...current, ...style } : current,
                 )
               }
+              onRemove={() => removeEdit(edit.id)}
+            />
+          );
+        }
+
+        if (edit.kind === "callout") {
+          return (
+            <CalloutOverlay
+              key={edit.id}
+              edit={edit}
+              viewport={viewport}
+              scale={scale}
+              removable={tool === "callout"}
               onRemove={() => removeEdit(edit.id)}
             />
           );
@@ -915,6 +1048,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         />
       ) : null}
 
+      {calloutPlacementDraft ? (
+        <CalloutPlacementPreview
+          draft={calloutPlacementDraft}
+          scale={scale}
+          editing={editing}
+        />
+      ) : null}
+
       {textMarkupDraft ? (
         <span
           className="edit-layer__highlight-draft"
@@ -933,22 +1074,36 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       ) : null}
 
       {textDraft ? (
-        <TextBoxDraftEditor
-          draft={textDraft}
-          scale={scale}
-          onTextChange={(text) => setTextDraft((current) => (current ? { ...current, text } : null))}
-          onFontSizeChange={(fontSizePt) =>
-            setTextDraft((current) => (current ? { ...current, fontSizePt } : null))
-          }
-          onTextStyleChange={(style) =>
-            setTextDraft((current) => (current ? { ...current, ...style } : null))
-          }
-          onCommit={commitTextDraft}
-          onCancel={() => {
-            setTextDraft(null);
-            suppressPlacement();
-          }}
-        />
+        <>
+          {textDraft.kind === "callout" && textDraft.tip ? (
+            <CalloutLeaderSvg
+              rect={textDraft.rect}
+              tip={textDraft.tip}
+              strokeColor={textDraft.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR}
+              strokeWidthPt={textDraft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT}
+              scale={scale}
+              arrowhead={textDraft.arrowhead ?? true}
+              width={viewport.width}
+              height={viewport.height}
+            />
+          ) : null}
+          <TextBoxDraftEditor
+            draft={textDraft}
+            scale={scale}
+            onTextChange={(text) => setTextDraft((current) => (current ? { ...current, text } : null))}
+            onFontSizeChange={(fontSizePt) =>
+              setTextDraft((current) => (current ? { ...current, fontSizePt } : null))
+            }
+            onTextStyleChange={(style) =>
+              setTextDraft((current) => (current ? { ...current, ...style } : null))
+            }
+            onCommit={commitTextDraft}
+            onCancel={() => {
+              setTextDraft(null);
+              suppressPlacement();
+            }}
+          />
+        </>
       ) : null}
 
       {commentDraft ? (
@@ -1388,6 +1543,227 @@ function textMarkupPlural(tool: TextMarkupToolId): string {
   return tool === "highlight" ? "highlights" : `${textMarkupLabel(tool).toLowerCase()}s`;
 }
 
+function CalloutOverlay({
+  edit,
+  viewport,
+  scale,
+  removable,
+  onRemove,
+}: {
+  edit: PendingCallout;
+  viewport: PageViewport;
+  scale: number;
+  removable: boolean;
+  onRemove: () => void;
+}) {
+  const rect = pdfRectToViewportRect(edit.rect, viewport);
+  const tip = pdfPointToViewport(edit.tip, viewport);
+  const strokeColor = edit.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR;
+  const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+  const font = useTextBoxPreviewFont(
+    edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(edit.bold),
+    Boolean(edit.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: edit.text,
+        boxWidthPt: rect.width / scale,
+        fontSizePt: edit.fontSizePt,
+        font,
+      }),
+    [edit.fontSizePt, edit.text, font, rect.width, scale],
+  );
+
+  return (
+    <>
+      <CalloutLeaderSvg
+        rect={rect}
+        tip={tip}
+        strokeColor={strokeColor}
+        strokeWidthPt={strokeWidthPt}
+        scale={scale}
+        arrowhead={edit.arrowhead ?? true}
+        width={viewport.width}
+        height={viewport.height}
+        removable={removable}
+        onRemove={onRemove}
+      />
+      <div
+        className="edit-layer__item edit-layer__callout-box"
+        data-removable={removable ? "true" : undefined}
+        style={{
+          ...toOverlayStyle(rect),
+          ...(edit.boxFill ? { backgroundColor: pdfEditColorToHex(edit.boxFill) } : {}),
+          borderColor: pdfEditColorToHex(strokeColor),
+        }}
+        title={removable ? "Click to remove this callout" : undefined}
+        onPointerDown={removable ? (event) => event.stopPropagation() : undefined}
+        onClick={
+          removable
+            ? (event) => {
+                event.stopPropagation();
+                onRemove();
+              }
+            : undefined
+        }
+      >
+        <span
+          className="edit-layer__text-content"
+          style={textContentStyle(edit, scale, edit.color ?? DEFAULT_TEXT_COLOR)}
+        >
+          {lines.map((line, lineIndex) => (
+            <span key={lineIndex} className="edit-layer__text-line">
+              {line}
+            </span>
+          ))}
+        </span>
+      </div>
+    </>
+  );
+}
+
+function CalloutPlacementPreview({
+  draft,
+  scale,
+  editing,
+}: {
+  draft: CalloutPlacementDraft;
+  scale: number;
+  editing: EditingState;
+}) {
+  const strokeColor = editing.calloutStyle.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR;
+  const strokeWidthPt = editing.calloutStyle.strokeWidthPt;
+
+  return (
+    <>
+      {draft.tipPreview ? (
+        <CalloutLeaderSvg
+          rect={draft.box}
+          tip={draft.tipPreview}
+          strokeColor={strokeColor}
+          strokeWidthPt={strokeWidthPt}
+          scale={scale}
+          arrowhead
+          width={Math.max(draft.box.left + draft.box.width, draft.tipPreview.x)}
+          height={Math.max(draft.box.top + draft.box.height, draft.tipPreview.y)}
+        />
+      ) : null}
+      <span
+        className="edit-layer__callout-placement"
+        style={{
+          ...toOverlayStyle(draft.box),
+          borderColor: pdfEditColorToHex(strokeColor),
+        }}
+      />
+    </>
+  );
+}
+
+function CalloutLeaderSvg({
+  rect,
+  tip,
+  strokeColor,
+  strokeWidthPt,
+  scale,
+  arrowhead,
+  width,
+  height,
+  removable = false,
+  onRemove,
+}: {
+  rect: ViewportRect;
+  tip: ViewportPoint;
+  strokeColor: PdfEditColor;
+  strokeWidthPt: number;
+  scale: number;
+  arrowhead: boolean;
+  width: number;
+  height: number;
+  removable?: boolean;
+  onRemove?: () => void;
+}) {
+  const anchor = computeCalloutLeaderAnchor(rect, tip);
+  const stroke = pdfEditColorToHex(strokeColor);
+  const strokeWidth = strokeWidthPt * scale;
+
+  return (
+    <svg
+      className="edit-layer__callout-leader"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      aria-hidden="true"
+    >
+      <line
+        x1={anchor.x}
+        y1={anchor.y}
+        x2={tip.x}
+        y2={tip.y}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
+      {arrowhead ? (
+        <polygon
+          points={arrowHeadPoints(anchor, tip, strokeWidthPt, scale)}
+          fill={stroke}
+          stroke={stroke}
+          strokeWidth={0}
+        />
+      ) : null}
+      {removable ? (
+        <line
+          className="edit-layer__callout-hit-line"
+          x1={anchor.x}
+          y1={anchor.y}
+          x2={tip.x}
+          y2={tip.y}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove?.();
+          }}
+        />
+      ) : null}
+    </svg>
+  );
+}
+
+function computeCalloutLeaderAnchor(rect: ViewportRect, tip: ViewportPoint): ViewportPoint {
+  const minX = rect.left;
+  const maxX = rect.left + rect.width;
+  const minY = rect.top;
+  const maxY = rect.top + rect.height;
+  const clampedX = clamp(tip.x, minX, maxX);
+  const clampedY = clamp(tip.y, minY, maxY);
+
+  if (tip.x < minX || tip.x > maxX || tip.y < minY || tip.y > maxY) {
+    return { x: clampedX, y: clampedY };
+  }
+
+  const distances = [
+    { edge: "left", value: tip.x - minX },
+    { edge: "right", value: maxX - tip.x },
+    { edge: "top", value: tip.y - minY },
+    { edge: "bottom", value: maxY - tip.y },
+  ] as const;
+  const nearest = distances.reduce((best, candidate) =>
+    candidate.value < best.value ? candidate : best,
+  );
+
+  switch (nearest.edge) {
+    case "left":
+      return { x: minX, y: tip.y };
+    case "right":
+      return { x: maxX, y: tip.y };
+    case "top":
+      return { x: tip.x, y: minY };
+    case "bottom":
+      return { x: tip.x, y: maxY };
+  }
+}
+
 function TextBoxOverlay({
   edit,
   viewport,
@@ -1755,8 +2131,18 @@ export function TextBoxDraftEditor({
 
   return (
     <div
-      className="edit-layer__item edit-layer__text-draft"
-      style={toOverlayStyle(draft.rect)}
+      className={`edit-layer__item edit-layer__text-draft${
+        draft.kind === "callout" ? " edit-layer__callout-box" : ""
+      }`}
+      style={{
+        ...toOverlayStyle(draft.rect),
+        ...(draft.kind === "callout" && draft.boxFill
+          ? { backgroundColor: pdfEditColorToHex(draft.boxFill) }
+          : {}),
+        ...(draft.kind === "callout"
+          ? { borderColor: pdfEditColorToHex(draft.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR) }
+          : {}),
+      }}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <span className="edit-layer__item-chrome" data-draft="true">

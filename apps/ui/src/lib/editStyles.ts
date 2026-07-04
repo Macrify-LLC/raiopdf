@@ -28,6 +28,11 @@ export interface TextBoxEditStyle {
   align?: PdfTextBoxAlign;
 }
 
+export interface CalloutEditStyle extends TextBoxEditStyle {
+  strokeColor?: PdfEditColor;
+  strokeWidthPt: number;
+}
+
 export interface InkEditStyle {
   color?: PdfEditColor;
   strokeWidthPt: number;
@@ -50,6 +55,8 @@ export const DEFAULT_INK_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 export const DEFAULT_SHAPE_STROKE_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
+export const DEFAULT_CALLOUT_STROKE_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
+export const DEFAULT_CALLOUT_STROKE_WIDTH_PT = DEFAULT_SHAPE_STROKE_WIDTH_PT;
 export const INK_STROKE_WIDTH_OPTIONS = [1, 1.5, 3, 5] as const;
 
 export const HIGHLIGHT_COLOR_OPTIONS: readonly EditColorOption[] = [

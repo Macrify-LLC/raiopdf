@@ -6,6 +6,7 @@ import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
+  DEFAULT_CALLOUT_STROKE_COLOR,
   DEFAULT_SHAPE_STROKE_COLOR,
   DEFAULT_TEXT_MARKUP_COLOR,
   DEFAULT_TEXT_ALIGN,
@@ -25,6 +26,7 @@ const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
   underline: "Underline mode",
   strikethrough: "Strikethrough mode",
   textBox: "Text box mode",
+  callout: "Callout mode",
   image: "Image mode",
   comment: "Comment mode",
   draw: "Draw mode",
@@ -234,6 +236,89 @@ function ToolOptions({ editing }: { editing: EditingState }) {
     );
   }
 
+  if (editing.tool === "callout") {
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label="Callout options">
+        <ColorSwatches
+          labelPrefix="Callout text color"
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={editing.calloutStyle.color ?? DEFAULT_TEXT_COLOR}
+          onSelect={(color) => editing.updateCalloutStyle({ color })}
+        />
+        <ColorSwatches
+          labelPrefix="Callout leader color"
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={editing.calloutStyle.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR}
+          onSelect={(strokeColor) => editing.updateCalloutStyle({ strokeColor })}
+        />
+        <span className="legal-mode-bar__width-group" aria-label="Leader width">
+          {INK_STROKE_WIDTH_OPTIONS.map((width) => (
+            <button
+              key={width}
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label={`Set callout leader width to ${formatStrokeWidth(width)} points`}
+              aria-pressed={editing.calloutStyle.strokeWidthPt === width}
+              onClick={() => editing.updateCalloutStyle({ strokeWidthPt: width })}
+            >
+              {formatStrokeWidth(width)}
+            </button>
+          ))}
+        </span>
+        <select
+          className="legal-mode-bar__select"
+          aria-label="Callout font family"
+          value={editing.calloutStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          onChange={(event) =>
+            editing.updateCalloutStyle({
+              fontFamily: event.currentTarget.value as PdfTextBoxFontFamily,
+            })
+          }
+        >
+          <option value="helvetica">Helvetica</option>
+          <option value="times">Times</option>
+          <option value="courier">Courier</option>
+        </select>
+        <span className="legal-mode-bar__width-group" aria-label="Callout text style">
+          <button
+            type="button"
+            className="legal-mode-bar__width-button"
+            aria-label="Bold callout text"
+            aria-pressed={Boolean(editing.calloutStyle.bold)}
+            onClick={() => editing.updateCalloutStyle({ bold: !editing.calloutStyle.bold })}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className="legal-mode-bar__width-button"
+            aria-label="Italic callout text"
+            aria-pressed={Boolean(editing.calloutStyle.italic)}
+            onClick={() =>
+              editing.updateCalloutStyle({ italic: !editing.calloutStyle.italic })
+            }
+          >
+            I
+          </button>
+        </span>
+        <span className="legal-mode-bar__width-group" aria-label="Callout text alignment">
+          {(["left", "center", "right"] as const).map((align) => (
+            <button
+              key={align}
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label={`Align callout text ${align}`}
+              aria-pressed={(editing.calloutStyle.align ?? DEFAULT_TEXT_ALIGN) === align}
+              onClick={() => editing.updateCalloutStyle({ align })}
+            >
+              {formatAlignLabel(align)}
+            </button>
+          ))}
+        </span>
+      </span>
+    );
+  }
+
   if (editing.tool === "draw") {
     return (
       <span className="legal-mode-bar__tool-options" aria-label="Draw options">
@@ -378,6 +463,8 @@ function getToolHint(editing: EditingState): string {
       return "Drag over text to strike through. Click a pending strikethrough to remove it.";
     case "textBox":
       return "Click the page to place a text box. Enter commits, Esc cancels.";
+    case "callout":
+      return "Drag a text box, click the target point, then type. Click a pending callout to remove it.";
     case "image":
       return editing.armedImage
         ? "Click the page to place the image."

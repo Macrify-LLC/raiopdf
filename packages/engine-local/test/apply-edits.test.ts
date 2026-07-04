@@ -346,6 +346,110 @@ describe("LocalPdfEngine.applyEdits", () => {
     expect(bakedLines).toEqual(expectedLines);
   });
 
+  it("draws callouts as a box-edge leader, arrowhead, box, and wrapped text", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 240]]));
+    const measurePdf = await PDFDocument.create();
+    const font = await measurePdf.embedFont(StandardFonts.CourierBold);
+    const rect = { x: 40, y: 120, w: 80, h: 50 };
+    const tip = { x: 180, y: 145 };
+    const text = "Alpha beta gamma";
+    const fontSizePt = 12;
+    const expectedLines = wrapTextBoxLines({
+      text,
+      boxWidthPt: rect.w,
+      fontSizePt,
+      font,
+    });
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "callout",
+        pageIndex: 0,
+        rect,
+        tip,
+        text,
+        fontSizePt,
+        fontFamily: "courier",
+        bold: true,
+        align: "center",
+        color: { r: 0.8, g: 0.1, b: 0.2 },
+        strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
+        strokeWidthPt: 3,
+        boxFill: { r: 1, g: 0.95, b: 0.65 },
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    const moves = readOperandPairs(content, "m").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+    const lines = readOperandPairs(content, "l").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+    const matrices = readOperandPairs(content, "Tm");
+    const firstLineWidth = font.widthOfTextAtSize(expectedLines[0]!, fontSizePt);
+
+    expect(content).toMatch(/\b3 w\b/);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.1, 0.2, 0.9]);
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [1, 0.95, 0.65]);
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [0.8, 0.1, 0.2]);
+    expectSomePointWithin1Pt(moves, { x: 120, y: 145 });
+    expectSomePointWithin1Pt(lines, tip);
+    expectSomePointWithin1Pt(moves, tip);
+    expect(readTextDraws(content)).toEqual(expectedLines);
+    expectWithin1Pt(matrices[0]![4]!, rect.x + (rect.w - firstLineWidth) / 2);
+    expectWithin1Pt(matrices[0]![5]!, rect.y + rect.h - fontSizePt);
+  });
+
+  it("anchors callout leaders at the nearest box boundary point", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 240]]));
+    const rect = { x: 40, y: 120, w: 80, h: 50 };
+    const cases = [
+      {
+        tip: { x: 180, y: 150 },
+        expectedAnchor: { x: 120, y: 150 },
+      },
+      {
+        tip: { x: 180, y: 200 },
+        expectedAnchor: { x: 120, y: 170 },
+      },
+      {
+        tip: { x: 60, y: 135 },
+        expectedAnchor: { x: 60, y: 120 },
+      },
+    ];
+
+    const edited = await engine.applyEdits(
+      document,
+      cases.map(({ tip }) => ({
+        type: "callout" as const,
+        pageIndex: 0,
+        rect,
+        tip,
+        text: "X",
+        arrowhead: false,
+        boxBorder: false,
+      })),
+    );
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    const moves = readOperandPairs(content, "m").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+    const lines = readOperandPairs(content, "l").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+
+    for (const { tip, expectedAnchor } of cases) {
+      expectSomePointWithin1Pt(moves, expectedAnchor);
+      expectSomePointWithin1Pt(lines, tip);
+    }
+  });
+
   it("draws image edits scaled into the target rect", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -913,6 +1017,39 @@ describe("LocalPdfEngine.applyEdits", () => {
           fillColor: { r: 0, g: 2, b: 0 },
         },
       ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  });
+
+  it("rejects invalid callout edits", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+    const valid = {
+      type: "callout" as const,
+      pageIndex: 0,
+      rect: { x: 10, y: 10, w: 80, h: 40 },
+      tip: { x: 140, y: 50 },
+      text: "Callout",
+    };
+
+    await expect(
+      engine.applyEdits(document, [{ ...valid, rect: { x: 10, y: 10, w: 0, h: 40 } }]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(engine.applyEdits(document, [{ ...valid, text: "" }])).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+    await expect(
+      engine.applyEdits(document, [{ ...valid, tip: { x: Number.NaN, y: 50 } }]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [{ ...valid, strokeWidthPt: 0 }]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        { ...valid, strokeColor: { r: 0, g: 0, b: Number.POSITIVE_INFINITY } },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [{ ...valid, boxFill: { r: 0, g: -1, b: 0 } }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 });

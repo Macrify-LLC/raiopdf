@@ -6,6 +6,7 @@ import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
+  DEFAULT_TEXT_MARKUP_COLOR,
   DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
   DEFAULT_TEXT_FONT_FAMILY,
@@ -19,6 +20,8 @@ import "./LegalModeBar.css";
 
 const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
   highlight: "Highlight mode",
+  underline: "Underline mode",
+  strikethrough: "Strikethrough mode",
   textBox: "Text box mode",
   image: "Image mode",
   comment: "Comment mode",
@@ -140,6 +143,24 @@ function ToolOptions({ editing }: { editing: EditingState }) {
           />
           <span className="legal-mode-bar__range-value">{Math.round(opacity * 100)}%</span>
         </label>
+      </span>
+    );
+  }
+
+  if (editing.tool === "underline" || editing.tool === "strikethrough") {
+    const markupTool = editing.tool;
+    const selectedColor =
+      editing.textMarkupStyles[markupTool].color ?? DEFAULT_TEXT_MARKUP_COLOR;
+    const label = markupTool === "underline" ? "Underline" : "Strikethrough";
+
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label={`${label} options`}>
+        <ColorSwatches
+          labelPrefix={`${label} color`}
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={selectedColor}
+          onSelect={(color) => editing.updateTextMarkupStyle(markupTool, { color })}
+        />
       </span>
     );
   }
@@ -292,6 +313,10 @@ function getToolHint(editing: EditingState): string {
   switch (editing.tool) {
     case "highlight":
       return "Drag over text to highlight. Click a pending highlight to remove it.";
+    case "underline":
+      return "Drag over text to underline. Click a pending underline to remove it.";
+    case "strikethrough":
+      return "Drag over text to strike through. Click a pending strikethrough to remove it.";
     case "textBox":
       return "Click the page to place a text box. Enter commits, Esc cancels.";
     case "image":

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeHighlightLineRects,
+  computeTextMarkupLineRects,
   excerpt,
   toPdfEdits,
   type PageTextBox,
@@ -16,6 +17,18 @@ describe("toPdfEdits", () => {
         id: "a",
         pageIndex: 0,
         rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+      },
+      {
+        kind: "underline",
+        id: "u",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 30, w: 80, h: 10 }],
+      },
+      {
+        kind: "strikethrough",
+        id: "s",
+        pageIndex: 0,
+        rects: [{ x: 25, y: 35, w: 75, h: 10 }],
       },
       {
         kind: "textBox",
@@ -63,14 +76,16 @@ describe("toPdfEdits", () => {
 
     expect(edits.map((edit) => edit.type)).toEqual([
       "highlight",
+      "underline",
+      "strikethrough",
       "textBox",
       "image",
       "signature",
       "comment",
       "ink",
     ]);
-    expect(edits[1]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
-    expect(edits[5]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[3]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
+    expect(edits[7]).toMatchObject({ strokeWidthPt: 1.5 });
   });
 
   it("omits optional edit colors and opacity when they were not set", () => {
@@ -100,6 +115,19 @@ describe("toPdfEdits", () => {
           ],
         ],
       },
+      {
+        kind: "underline",
+        id: "d",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 30, w: 100, h: 12 }],
+        color: { r: 0x11 / 0xff, g: 0x11 / 0xff, b: 0x11 / 0xff },
+      },
+      {
+        kind: "strikethrough",
+        id: "e",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 50, w: 100, h: 12 }],
+      },
     ]);
 
     expect(edits[0]).not.toHaveProperty("color");
@@ -107,6 +135,8 @@ describe("toPdfEdits", () => {
     expect(edits[1]).not.toHaveProperty("color");
     expect(edits[2]).not.toHaveProperty("color");
     expect(edits[2]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[3]).not.toHaveProperty("color");
+    expect(edits[4]).not.toHaveProperty("color");
   });
 
   it("emits chosen edit colors, highlight opacity, and ink stroke width", () => {
@@ -141,6 +171,21 @@ describe("toPdfEdits", () => {
         strokeWidthPt: 5,
         color: { r: 0.1, g: 0.2, b: 0.9 },
       },
+      {
+        kind: "underline",
+        id: "d",
+        pageIndex: 0,
+        rects: [{ x: 30, y: 40, w: 100, h: 12 }],
+        color: { r: 0.7, g: 0.1, b: 0.2 },
+      },
+      {
+        kind: "strikethrough",
+        id: "e",
+        pageIndex: 0,
+        rects: [{ x: 30, y: 60, w: 100, h: 12 }],
+        color: { r: 0.1, g: 0.6, b: 0.3 },
+        thicknessPt: 2,
+      },
     ]);
 
     expect(edits[0]).toMatchObject({
@@ -151,6 +196,16 @@ describe("toPdfEdits", () => {
     expect(edits[2]).toMatchObject({
       color: { r: 0.1, g: 0.2, b: 0.9 },
       strokeWidthPt: 5,
+    });
+    expect(edits[3]).toMatchObject({
+      type: "underline",
+      rects: [{ x: 30, y: 40, w: 100, h: 12 }],
+      color: { r: 0.7, g: 0.1, b: 0.2 },
+    });
+    expect(edits[4]).toMatchObject({
+      type: "strikethrough",
+      color: { r: 0.1, g: 0.6, b: 0.3 },
+      thicknessPt: 2,
     });
   });
 
@@ -214,7 +269,7 @@ describe("toPdfEdits", () => {
   });
 });
 
-describe("computeHighlightLineRects", () => {
+describe("computeTextMarkupLineRects", () => {
   const line = (y: number, x = 50, w = 200, h = 12): PageTextBox => ({ x, y, w, h });
 
   it("produces one union rect per intersected text line", () => {
@@ -226,7 +281,7 @@ describe("computeHighlightLineRects", () => {
     ];
     const band = { x: 40, y: 675, w: 300, h: 45 };
 
-    const rects = computeHighlightLineRects(band, textBoxes);
+    const rects = computeTextMarkupLineRects(band, textBoxes);
 
     expect(rects).toHaveLength(2);
     // Top-to-bottom reading order: the y=700 line first.
@@ -239,7 +294,7 @@ describe("computeHighlightLineRects", () => {
     const textBoxes = [verticalLine(300), verticalLine(340)];
     const band = { x: 290, y: 90, w: 70, h: 220 };
 
-    const rects = computeHighlightLineRects(band, textBoxes, true);
+    const rects = computeTextMarkupLineRects(band, textBoxes, true);
 
     expect(rects).toHaveLength(2);
   });

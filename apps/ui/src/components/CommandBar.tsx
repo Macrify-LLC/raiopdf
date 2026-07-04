@@ -15,7 +15,9 @@ import {
   SearchIcon,
   SelectTextIcon,
   SignIcon,
+  StrikethroughIcon,
   TextBoxIcon,
+  UnderlineIcon,
   UndoIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
@@ -26,6 +28,8 @@ import "./CommandBar.css";
 const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   select: (size) => <SelectTextIcon size={size} />,
   highlight: (size) => <HighlightIcon size={size} />,
+  underline: (size) => <UnderlineIcon size={size} />,
+  strikethrough: (size) => <StrikethroughIcon size={size} />,
   textBox: (size) => <TextBoxIcon size={size} />,
   image: (size) => <ImageIcon size={size} />,
   comment: (size) => <CommentIcon size={size} />,

@@ -357,6 +357,24 @@ export type PdfHighlightEdit = {
 };
 
 /**
+ * Text markup drawn from text-line rectangles.
+ *
+ * Underline and strikethrough are baked into page content on apply (not stored
+ * as annotations), matching highlight's save behavior.
+ */
+export type PdfTextMarkupEdit = {
+  type: "underline" | "strikethrough";
+  /** Zero-based page index receiving the markup. */
+  pageIndex: number;
+  /** One rectangle per marked text line, in PDF user-space points. */
+  rects: readonly PdfEditRect[];
+  /** Markup line color. Defaults to near-black ink. */
+  color?: PdfEditColor;
+  /** Markup line thickness in points. Defaults to 1. */
+  thicknessPt?: number;
+};
+
+/**
  * A block of caller-authored text drawn inside a rectangle.
  *
  * Text starts at the visual top-left of `rect` and supports `\n` line breaks.
@@ -491,6 +509,7 @@ export type PdfSignatureEdit = {
  */
 export type PdfEdit =
   | PdfHighlightEdit
+  | PdfTextMarkupEdit
   | PdfTextBoxEdit
   | PdfImageEdit
   | PdfInkEdit

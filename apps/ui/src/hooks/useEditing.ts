@@ -5,11 +5,13 @@ import {
   toPdfEdits,
   type EditToolId,
   type PendingEdit,
+  type TextMarkupToolId,
 } from "../lib/edits";
 import {
   DEFAULT_INK_STROKE_WIDTH_PT,
   type HighlightEditStyle,
   type InkEditStyle,
+  type TextMarkupEditStyle,
   type TextBoxEditStyle,
 } from "../lib/editStyles";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
@@ -64,6 +66,11 @@ export interface EditingState {
   setFormValue: (fieldName: string, value: PdfFormFieldValue) => void;
   highlightStyle: HighlightEditStyle;
   updateHighlightStyle: (style: Partial<HighlightEditStyle>) => void;
+  textMarkupStyles: Readonly<Record<Exclude<TextMarkupToolId, "highlight">, TextMarkupEditStyle>>;
+  updateTextMarkupStyle: (
+    tool: Exclude<TextMarkupToolId, "highlight">,
+    style: Partial<TextMarkupEditStyle>,
+  ) => void;
   textBoxStyle: TextBoxEditStyle;
   updateTextBoxStyle: (style: Partial<TextBoxEditStyle>) => void;
   inkStyle: InkEditStyle;
@@ -101,6 +108,12 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [hasFormFields, setHasFormFields] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, PdfFormFieldValue>>({});
   const [highlightStyle, setHighlightStyle] = useState<HighlightEditStyle>({});
+  const [textMarkupStyles, setTextMarkupStyles] = useState<
+    Record<Exclude<TextMarkupToolId, "highlight">, TextMarkupEditStyle>
+  >({
+    underline: {},
+    strikethrough: {},
+  });
   const [textBoxStyle, setTextBoxStyle] = useState<TextBoxEditStyle>({});
   const [inkStyle, setInkStyle] = useState<InkEditStyle>({
     strokeWidthPt: DEFAULT_INK_STROKE_WIDTH_PT,
@@ -249,6 +262,19 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setHighlightStyle((current) => ({ ...current, ...style }));
   }, []);
 
+  const updateTextMarkupStyle = useCallback(
+    (
+      tool: Exclude<TextMarkupToolId, "highlight">,
+      style: Partial<TextMarkupEditStyle>,
+    ) => {
+      setTextMarkupStyles((current) => ({
+        ...current,
+        [tool]: { ...current[tool], ...style },
+      }));
+    },
+    [],
+  );
+
   const updateTextBoxStyle = useCallback((style: Partial<TextBoxEditStyle>) => {
     setTextBoxStyle((current) => ({ ...current, ...style }));
   }, []);
@@ -306,6 +332,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       setFormValue,
       highlightStyle,
       updateHighlightStyle,
+      textMarkupStyles,
+      updateTextMarkupStyle,
       textBoxStyle,
       updateTextBoxStyle,
       inkStyle,
@@ -339,6 +367,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       setFormValue,
       highlightStyle,
       updateHighlightStyle,
+      textMarkupStyles,
+      updateTextMarkupStyle,
       textBoxStyle,
       updateTextBoxStyle,
       inkStyle,

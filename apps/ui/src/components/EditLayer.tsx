@@ -10,7 +10,7 @@ import {
 } from "react";
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
-  computeHighlightLineRects,
+  computeTextMarkupLineRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
@@ -20,6 +20,7 @@ import {
   type PendingEdit,
   type PendingStamp,
   type PendingTextBox,
+  type TextMarkupToolId,
 } from "../lib/edits";
 import {
   type PdfEditColor,
@@ -31,6 +32,8 @@ import {
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
   DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_TEXT_MARKUP_COLOR,
+  DEFAULT_TEXT_MARKUP_THICKNESS_PT,
   DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
   DEFAULT_TEXT_FONT_FAMILY,
@@ -112,7 +115,7 @@ export interface EditLayerProps {
 export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const [textBoxes, setTextBoxes] = useState<readonly PageTextBox[]>([]);
-  const [highlightDraft, setHighlightDraft] = useState<ViewportRect | null>(null);
+  const [textMarkupDraft, setTextMarkupDraft] = useState<ViewportRect | null>(null);
   const [textLayerError, setTextLayerError] = useState<string | null>(null);
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
@@ -133,8 +136,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     [pageIndex, pendingEdits],
   );
 
-  // Loaded eagerly per page (not on highlight activation) so the first
-  // highlight drag never races the async text-layer read.
+  // Loaded eagerly per page so the first text-markup drag never races the
+  // async text-layer read.
   useEffect(() => {
     let disposed = false;
 
@@ -151,7 +154,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       .catch(() => {
         if (!disposed) {
           setTextBoxes([]);
-          setTextLayerError("Text could not be read on this page, so highlight drag is unavailable here.");
+          setTextLayerError("Text could not be read on this page, so text markup is unavailable here.");
         }
       });
 
@@ -161,7 +164,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   }, [page]);
 
   useEffect(() => {
-    setHighlightDraft(null);
+    setTextMarkupDraft(null);
     setDrawDraft(null);
     setTextDraft(null);
     setCommentDraft(null);
@@ -331,9 +334,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
     setSelectedId(null);
 
-    if (tool === "highlight") {
+    if (isTextMarkupTool(tool)) {
       dragStartRef.current = point;
-      setHighlightDraft({ left: point.x, top: point.y, width: 0, height: 0 });
+      setTextMarkupDraft({ left: point.x, top: point.y, width: 0, height: 0 });
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
@@ -439,8 +442,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
-    if (tool === "highlight" && dragStartRef.current) {
-      setHighlightDraft(pointsToViewportRect(dragStartRef.current, point));
+    if (isTextMarkupTool(tool) && dragStartRef.current) {
+      setTextMarkupDraft(pointsToViewportRect(dragStartRef.current, point));
       return;
     }
 
@@ -457,10 +460,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   function handleLayerPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const point = getLayerPoint(event);
 
-    if (tool === "highlight" && dragStartRef.current) {
+    if (isTextMarkupTool(tool) && dragStartRef.current) {
+      const textMarkupTool = tool;
       const start = dragStartRef.current;
       dragStartRef.current = null;
-      setHighlightDraft(null);
+      setTextMarkupDraft(null);
 
       if (!point) {
         return;
@@ -469,29 +473,41 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       const band = pointsToViewportRect(start, point);
 
       if (band.width < 3 && band.height < 3) {
-        removeHighlightAtPoint(point);
+        removeTextMarkupAtPoint(point, textMarkupTool);
         return;
       }
 
-      const rects = computeHighlightLineRects(
+      const rects = computeTextMarkupLineRects(
         viewportRectToPdfRect(band, viewport),
         textBoxes,
         sideways,
       );
 
       if (rects.length === 0) {
-        editing.setMessage("No text under that drag — highlights attach to text lines.");
+        editing.setMessage(
+          `No text under that drag — ${textMarkupPlural(textMarkupTool)} attach to text lines.`,
+        );
         return;
       }
 
       editing.setMessage(null);
-      addEdit({
-        kind: "highlight",
-        id: newEditId(),
-        pageIndex,
-        rects,
-        ...editing.highlightStyle,
-      });
+      if (textMarkupTool === "highlight") {
+        addEdit({
+          kind: "highlight",
+          id: newEditId(),
+          pageIndex,
+          rects,
+          ...editing.highlightStyle,
+        });
+      } else {
+        addEdit({
+          kind: textMarkupTool,
+          id: newEditId(),
+          pageIndex,
+          rects,
+          ...editing.textMarkupStyles[textMarkupTool],
+        });
+      }
       return;
     }
 
@@ -518,15 +534,15 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   function handleLayerPointerCancel() {
     dragStartRef.current = null;
     drawPointsRef.current = [];
-    setHighlightDraft(null);
+    setTextMarkupDraft(null);
     setDrawDraft(null);
   }
 
-  function removeHighlightAtPoint(point: ViewportPoint) {
+  function removeTextMarkupAtPoint(point: ViewportPoint, kind: TextMarkupToolId) {
     const pdfPoint = viewportPointToPdfPoint(point, viewport);
     const hit = pageEdits.find(
       (edit) =>
-        edit.kind === "highlight" &&
+        edit.kind === kind &&
         edit.rects.some((rect) => pdfRectContainsPoint(rect, pdfPoint)),
     );
 
@@ -664,13 +680,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       onPointerCancel={interactive ? handleLayerPointerCancel : undefined}
     >
       {pageEdits.map((edit) => {
-        if (edit.kind === "highlight") {
+        if (isPendingTextMarkup(edit)) {
           return (
-            <HighlightOverlay
+            <TextMarkupOverlay
               key={edit.id}
               edit={edit}
               viewport={viewport}
-              removable={tool === "highlight"}
+              scale={scale}
+              removable={tool === edit.kind}
             />
           );
         }
@@ -783,18 +800,18 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         </svg>
       ) : null}
 
-      {highlightDraft ? (
+      {textMarkupDraft ? (
         <span
           className="edit-layer__highlight-draft"
           style={highlightStyle(
-            highlightDraft,
-            editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR,
-            editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY,
+            textMarkupDraft,
+            activeTextMarkupDraftColor(tool, editing),
+            activeTextMarkupDraftOpacity(tool, editing),
           )}
         />
       ) : null}
 
-      {tool === "highlight" && textLayerError ? (
+      {isTextMarkupTool(tool) && textLayerError ? (
         <p className="edit-layer__message" role="status">
           {textLayerError}
         </p>
@@ -846,15 +863,64 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   );
 }
 
-function HighlightOverlay({
+function TextMarkupOverlay({
   edit,
   viewport,
+  scale,
   removable,
 }: {
-  edit: Extract<PendingEdit, { kind: "highlight" }>;
+  edit: Extract<PendingEdit, { kind: TextMarkupToolId }>;
   viewport: PageViewport;
+  scale: number;
   removable: boolean;
 }) {
+  if (edit.kind !== "highlight") {
+    const color = pdfEditColorToHex(edit.color ?? DEFAULT_TEXT_MARKUP_COLOR);
+    const strokeWidth = (edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT) * scale;
+
+    return (
+      <>
+        <svg
+          className="edit-layer__text-markup-lines"
+          width={viewport.width}
+          height={viewport.height}
+          viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+          aria-hidden="true"
+        >
+          {edit.rects.map((rect, rectIndex) => {
+            const lineY = edit.kind === "underline" ? rect.y : rect.y + rect.h * 0.5;
+            const [startX, startY] = viewport.convertToViewportPoint(rect.x, lineY);
+            const [endX, endY] = viewport.convertToViewportPoint(rect.x + rect.w, lineY);
+
+            return (
+              <line
+                key={`${edit.id}-${rectIndex}`}
+                x1={startX}
+                y1={startY}
+                x2={endX}
+                y2={endY}
+                stroke={color}
+                strokeWidth={strokeWidth}
+                strokeLinecap="butt"
+              />
+            );
+          })}
+        </svg>
+        {removable
+          ? edit.rects.map((rect, rectIndex) => (
+              <span
+                key={`${edit.id}-hit-${rectIndex}`}
+                className="edit-layer__text-markup-hit"
+                data-removable="true"
+                style={toOverlayStyle(pdfRectToViewportRect(rect, viewport))}
+                title={`Click to remove this ${textMarkupLabel(edit.kind).toLowerCase()}`}
+              />
+            ))
+          : null}
+      </>
+    );
+  }
+
   return (
     <>
       {edit.rects.map((rect, rectIndex) => (
@@ -872,6 +938,49 @@ function HighlightOverlay({
       ))}
     </>
   );
+}
+
+function isPendingTextMarkup(
+  edit: PendingEdit,
+): edit is Extract<PendingEdit, { kind: TextMarkupToolId }> {
+  return isTextMarkupTool(edit.kind);
+}
+
+function isTextMarkupTool(tool: string): tool is TextMarkupToolId {
+  return tool === "highlight" || tool === "underline" || tool === "strikethrough";
+}
+
+function activeTextMarkupDraftColor(tool: string, editing: EditingState): PdfEditColor {
+  if (tool === "highlight") {
+    return editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR;
+  }
+
+  if (tool === "underline" || tool === "strikethrough") {
+    return editing.textMarkupStyles[tool].color ?? DEFAULT_TEXT_MARKUP_COLOR;
+  }
+
+  return DEFAULT_HIGHLIGHT_COLOR;
+}
+
+function activeTextMarkupDraftOpacity(tool: string, editing: EditingState): number {
+  return tool === "highlight"
+    ? editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY
+    : 0.2;
+}
+
+function textMarkupLabel(tool: TextMarkupToolId): string {
+  switch (tool) {
+    case "highlight":
+      return "Highlight";
+    case "underline":
+      return "Underline";
+    case "strikethrough":
+      return "Strikethrough";
+  }
+}
+
+function textMarkupPlural(tool: TextMarkupToolId): string {
+  return tool === "highlight" ? "highlights" : `${textMarkupLabel(tool).toLowerCase()}s`;
 }
 
 function TextBoxOverlay({

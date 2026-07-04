@@ -112,6 +112,10 @@ export function drawAnnotationAppearanceOnPage(
   }
 
   const appearance = page.doc.context.lookupMaybe(appearanceRef, PDFStream);
+  if (!appearance) {
+    return false;
+  }
+
   const bbox = appearance?.dict.lookupMaybe(PDFName.of("BBox"), PDFArray)?.asRectangle();
   const width = bbox?.width && bbox.width !== 0 ? bbox.width : rect.w;
   const height = bbox?.height && bbox.height !== 0 ? bbox.height : rect.h;

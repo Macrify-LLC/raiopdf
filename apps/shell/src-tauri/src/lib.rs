@@ -1068,21 +1068,24 @@ mod tests {
             fn umask(mask: u32) -> u32;
         }
 
-        let previous = unsafe { umask(0o077) };
-        let result = (|| {
-            let dir = tempfile::tempdir().expect("temp dir");
-            let path = dir.path().join("new.pdf");
+        struct UmaskGuard(u32);
 
-            atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
-
-            let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        })();
-        unsafe {
-            umask(previous);
+        impl Drop for UmaskGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    umask(self.0);
+                }
+            }
         }
 
-        result
+        let _guard = UmaskGuard(unsafe { umask(0o077) });
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("new.pdf");
+
+        atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[cfg(unix)]

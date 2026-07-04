@@ -14,6 +14,8 @@ const THRESHOLD = 64;
 
 const documentState = {
   bytes: new Uint8Array([1, 2, 3]),
+  source: { kind: "memory", bytes: new Uint8Array([1, 2, 3]) },
+  generation: 1,
   engineHandle: null,
   pageCount: 2,
   currentPage: 1,

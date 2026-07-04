@@ -229,6 +229,107 @@ describe("PageList virtualization", () => {
   });
 });
 
+describe("PageList lazy measurement (streamed mode)", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    textLayerState.instances.length = 0;
+    renderTasks.length = 0;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
+  function createCountingFakePdfDocument(
+    pageCount: number,
+    heightFor: (pageNumber: number) => number,
+  ): { pdfDocument: PDFDocumentProxy; getPageNumbers: number[] } {
+    const getPageNumbers: number[] = [];
+    const pdfDocument = {
+      numPages: pageCount,
+      async getPage(pageNumber: number) {
+        getPageNumbers.push(pageNumber);
+        return {
+          rotate: 0,
+          getViewport({ scale }: { scale: number }) {
+            return {
+              width: PAGE_WIDTH * scale,
+              height: heightFor(pageNumber) * scale,
+              scale,
+              rotation: 0,
+            };
+          },
+          render() {
+            return { promise: Promise.resolve(), cancel() {} };
+          },
+          streamTextContent() {
+            return {};
+          },
+        };
+      },
+    } as unknown as PDFDocumentProxy;
+
+    return { pdfDocument, getPageNumbers };
+  }
+
+  async function renderLazyList(pdfDocument: PDFDocumentProxy) {
+    await act(async () => {
+      root!.render(
+        <PageList pdfDocument={pdfDocument} currentPage={1} zoom={1} lazyPageMeasurement />,
+      );
+    });
+    await flush();
+    const element = container!.querySelector('[data-testid="page-list"]') as HTMLDivElement;
+    Object.defineProperty(element, "clientHeight", { configurable: true, value: 900 });
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 1000 });
+    await act(async () => {
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await flush();
+  }
+
+  it("never runs the full getPage sweep — only the estimate page and mounted views load", async () => {
+    const { pdfDocument, getPageNumbers } = createCountingFakePdfDocument(40, () => PAGE_HEIGHT);
+
+    await renderLazyList(pdfDocument);
+
+    // Every page still gets a placeholder laid out from the estimate...
+    expect(container!.querySelectorAll(".page-list__page")).toHaveLength(40);
+
+    // ...but getPage ran only for the first-page estimate plus the mounted
+    // window — nowhere near all 40 pages the eager sweep would touch [R2-1].
+    expect(getPageNumbers.length).toBeLessThanOrEqual(8);
+    expect(Math.max(...getPageNumbers)).toBeLessThanOrEqual(8);
+  });
+
+  it("refines a mounted page's dims from its rendered viewport", async () => {
+    // Page 1 is the estimate (800pt tall); every other page is really 400pt.
+    const { pdfDocument } = createCountingFakePdfDocument(10, (pageNumber) => (
+      pageNumber === 1 ? PAGE_HEIGHT : 400
+    ));
+
+    await renderLazyList(pdfDocument);
+
+    const pages = container!.querySelectorAll<HTMLDivElement>(".page-list__page");
+    // Page 2 mounted, rendered, and reported its real height back into the
+    // size cache; unvisited deep pages still carry the estimate.
+    expect(pages[1]!.style.height).toBe("400px");
+    expect(pages[9]!.style.height).toBe(`${PAGE_HEIGHT}px`);
+  });
+});
+
 describe("PageView text layer lifecycle", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;

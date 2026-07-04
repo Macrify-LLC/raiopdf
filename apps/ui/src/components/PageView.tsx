@@ -44,6 +44,13 @@ export interface PageViewProps {
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
   onRenderError?: ((message: string) => void) | undefined;
+  /**
+   * Reports this page's base (scale-1, rotation-aware) dimensions once the
+   * page proxy loads. Streamed mode uses this to refine the first-page size
+   * estimate opportunistically as pages actually render, instead of running
+   * the full `getPage` measurement sweep [R2-1].
+   */
+  onBaseDimsMeasured?: ((pageIndex: number, dims: { width: number; height: number }) => void) | undefined;
 }
 
 /**
@@ -69,6 +76,7 @@ export function PageView({
   searchResults = [],
   activeSearchResultId = null,
   onRenderError,
+  onBaseDimsMeasured,
 }: PageViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -115,6 +123,12 @@ export function PageView({
           previousRotationRef.current = loadedPage.rotate;
           setPage(loadedPage);
           setPagePending(false);
+
+          const baseViewport = loadedPage.getViewport({ scale: 1 });
+          onBaseDimsMeasured?.(pageIndex, {
+            width: baseViewport.width,
+            height: baseViewport.height,
+          });
         }
       })
       .catch((pageError: unknown) => {
@@ -127,7 +141,7 @@ export function PageView({
     return () => {
       cancelled = true;
     };
-  }, [onRenderError, pageIndex, pdfDocument]);
+  }, [onBaseDimsMeasured, onRenderError, pageIndex, pdfDocument]);
 
   // Canvas raster lifecycle. Guardrails: (1) the canvas is never reused for
   // a new render until the previous render task is canceled or settled;

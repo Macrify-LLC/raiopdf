@@ -6,7 +6,7 @@ import {
   readFileForAdd,
   tooLargeToAddMessage,
 } from "./readFileForAdd";
-import { setLargeDocThresholdBytes } from "./largeDocThreshold";
+import { getLargeDocThresholdBytes, setLargeDocThresholdBytes } from "./largeDocThreshold";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -87,8 +87,8 @@ describe("readFileForAdd", () => {
 
   it("returns a descriptor with page count for an above-threshold Tauri pick", async () => {
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === "page_count") {
-        return 12;
+      if (command === "path_op_page_count") {
+        return { pageCount: 12 };
       }
       throw new Error(`unexpected command ${command}`);
     });
@@ -103,8 +103,8 @@ describe("readFileForAdd", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("read_pdf_range", expect.anything());
   });
 
-  it("defers the page count (null) when page_count is unavailable", async () => {
-    invokeMock.mockRejectedValue(missingCommandError("page_count"));
+  it("defers the page count (null) when path_op_page_count is unavailable", async () => {
+    invokeMock.mockRejectedValue(missingCommandError("path_op_page_count"));
 
     const result = await readFileForAdd({ grant: "grant-3", name: "big.pdf", sizeBytes: THRESHOLD + 1 });
 
@@ -127,7 +127,7 @@ describe("pickPdfsForAdd", () => {
   });
 
   it("returns null in the browser runtime so callers use their DOM input", async () => {
-    await expect(pickPdfsForAdd({ multiple: true })).resolves.toBeNull();
+    await expect(pickPdfsForAdd()).resolves.toBeNull();
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
@@ -138,13 +138,15 @@ describe("pickPdfsForAdd", () => {
     await expect(pickPdfsForAdd()).resolves.toBeNull();
   });
 
-  it("returns picked descriptors from pick_pdfs_for_add", async () => {
+  it("returns picked descriptors and adopts the shell threshold", async () => {
     (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const picks = [{ grant: "g", name: "a.pdf", sizeBytes: 10 }];
-    invokeMock.mockResolvedValue(picks);
+    invokeMock.mockResolvedValue({ files: picks, thresholdBytes: 1024 });
 
-    await expect(pickPdfsForAdd({ multiple: true })).resolves.toEqual(picks);
-    expect(invokeMock).toHaveBeenCalledWith("pick_pdfs_for_add", { multiple: true });
+    await expect(pickPdfsForAdd()).resolves.toEqual(picks);
+    expect(invokeMock).toHaveBeenCalledWith("pick_pdfs_for_add");
+    expect(getLargeDocThresholdBytes()).toBe(1024);
+    setLargeDocThresholdBytes(null);
   });
 
   it("treats a null pick result as a cancel (empty array)", async () => {
@@ -170,7 +172,10 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
   it("picks then reads a below-threshold file in one ranged call", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "pick_pdfs_for_add") {
-        return [{ grant: "g-small", name: "small.pdf", sizeBytes: 16 }];
+        return {
+          files: [{ grant: "g-small", name: "small.pdf", sizeBytes: 16 }],
+          thresholdBytes: THRESHOLD,
+        };
       }
       if (command === "read_pdf_range") {
         return new Uint8Array(16).buffer;
@@ -191,7 +196,8 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
   it("returns null when the user cancels the pick", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "pick_pdfs_for_add") {
-        return [];
+        // Shell returns null when the dialog is cancelled.
+        return null;
       }
       throw new Error(`unexpected command ${command}`);
     });
@@ -202,10 +208,13 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
   it("returns a descriptor for an above-threshold pick", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "pick_pdfs_for_add") {
-        return [{ grant: "g-big", name: "big.pdf", sizeBytes: THRESHOLD * 10 }];
+        return {
+          files: [{ grant: "g-big", name: "big.pdf", sizeBytes: THRESHOLD * 10 }],
+          thresholdBytes: THRESHOLD,
+        };
       }
-      if (command === "page_count") {
-        return 250;
+      if (command === "path_op_page_count") {
+        return { pageCount: 250 };
       }
       throw new Error(`unexpected command ${command}`);
     });

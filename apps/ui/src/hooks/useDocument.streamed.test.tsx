@@ -1,0 +1,229 @@
+// @vitest-environment jsdom
+import { act, useEffect, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import type { FileGrant } from "../lib/filePort";
+import { STREAMED_DOCUMENT_GATE_MESSAGE, useDocument } from "./useDocument";
+
+type UseDocumentValue = ReturnType<typeof useDocument>;
+
+const engineState = vi.hoisted(() => ({
+  openCalls: [] as Uint8Array[],
+}));
+
+vi.mock("@raiopdf/engine-local", () => {
+  class LocalPdfEngine {
+    async open(bytes: Uint8Array) {
+      engineState.openCalls.push(bytes);
+      return `handle-${engineState.openCalls.length}` as PdfDocumentHandle;
+    }
+
+    async pageCount() {
+      return 3;
+    }
+
+    async saveToBytes(handle: PdfDocumentHandle) {
+      return new Uint8Array([String(handle).length]);
+    }
+
+    async close() {
+      return undefined;
+    }
+
+    async rotatePages(handle: PdfDocumentHandle) {
+      return `${handle}-rotated` as PdfDocumentHandle;
+    }
+  }
+
+  return { LocalPdfEngine };
+});
+
+describe("useDocument streamed mode", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+  let latest: UseDocumentValue | null = null;
+
+  beforeEach(() => {
+    engineState.openCalls.length = 0;
+    latest = null;
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
+  it("opens a rangeGrant source with no engine handle, no bytes, and pdf-lib never loaded", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "grant-1" as FileGrant, sizeBytes: 283_000_000 },
+        name: "appendix.pdf",
+        path: "grant-1",
+      });
+    });
+
+    const state = getHook().document;
+    expect(state.source).toEqual({
+      kind: "rangeGrant",
+      grant: "grant-1",
+      sizeBytes: 283_000_000,
+      generation: state.generation,
+    });
+    expect(state.engineHandle).toBeNull();
+    expect(state.bytes).toBeNull();
+    expect(state.dirty).toBe(false);
+    expect(state.fileName).toBe("appendix.pdf");
+    expect(state.filePath).toBe("grant-1");
+    expect(state.fileSizeBytes).toBe(283_000_000);
+    // hasTextLayer null renders as "not checked" — the eager scan never ran.
+    expect(state.hasTextLayer).toBeNull();
+    // engine.open (pdf-lib) is skipped ENTIRELY in streamed mode.
+    expect(engineState.openCalls).toHaveLength(0);
+  });
+
+  it("commits the pdf.js page count only for the matching generation", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "grant-1" as FileGrant, sizeBytes: 100 },
+        name: "a.pdf",
+        path: "grant-1",
+      });
+    });
+
+    const generation = getHook().document.generation;
+
+    act(() => {
+      // A proxy that finished loading for a superseded document must not
+      // stamp its count onto the current one.
+      getHook().setStreamedPageCount(999, { generation: generation - 1 });
+    });
+    expect(getHook().document.pageCount).toBe(0);
+
+    act(() => {
+      getHook().setStreamedPageCount(2556, { generation });
+    });
+    expect(getHook().document.pageCount).toBe(2556);
+  });
+
+  it("gates every enqueueMutation op with the streamed-document message", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "grant-1" as FileGrant, sizeBytes: 100 },
+        name: "a.pdf",
+        path: "grant-1",
+      });
+    });
+
+    let rotated: boolean | undefined;
+    await act(async () => {
+      rotated = await getHook().rotatePages([0]);
+    });
+
+    expect(rotated).toBe(false);
+    expect(getHook().document.error).toBe(STREAMED_DOCUMENT_GATE_MESSAGE);
+  });
+
+  it("memory-mode commits bump generation, and replaceBytes goes stale on a generation mismatch", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1, 2, 3]), name: "brief.pdf" });
+    });
+
+    const openedGeneration = getHook().document.generation;
+    expect(getHook().document.source?.kind).toBe("memory");
+
+    await act(async () => {
+      await getHook().rotatePages([0]);
+    });
+    expect(getHook().document.generation).toBe(openedGeneration + 1);
+
+    // A workflow that captured the pre-rotate generation must not commit.
+    let result: Awaited<ReturnType<UseDocumentValue["replaceBytes"]>> | undefined;
+    await act(async () => {
+      result = await getHook().replaceBytes(new Uint8Array([9]), {
+        dirty: true,
+        expectedGeneration: openedGeneration,
+      });
+    });
+    expect(result).toBe("stale");
+
+    // The current generation commits fine (and bumps again).
+    const currentGeneration = getHook().document.generation;
+    await act(async () => {
+      result = await getHook().replaceBytes(new Uint8Array([9]), {
+        dirty: true,
+        expectedGeneration: currentGeneration,
+      });
+    });
+    expect(result).toBe("replaced");
+    expect(getHook().document.generation).toBe(currentGeneration + 1);
+  });
+
+  it("a streamed open supersedes an in-flight memory document identity", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "small.pdf" });
+    });
+    const memoryToken = getHook().getOpenToken();
+    const memoryGeneration = getHook().getGeneration();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeFile", file: new File([new Uint8Array(4)], "big.pdf"), sizeBytes: 4 },
+        name: "big.pdf",
+        path: null,
+      });
+    });
+
+    expect(getHook().getOpenToken()).toBe(memoryToken + 1);
+    expect(getHook().getGeneration()).toBe(memoryGeneration + 1);
+    expect(getHook().document.source?.kind).toBe("rangeFile");
+  });
+
+  function mount(): void {
+    render(<Harness onReady={(value) => { latest = value; }} />);
+  }
+
+  function getHook(): UseDocumentValue {
+    if (!latest) {
+      throw new Error("useDocument was not rendered.");
+    }
+
+    return latest;
+  }
+
+  function render(element: ReactNode) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(element);
+    });
+  }
+});
+
+function Harness({ onReady }: { onReady: (hook: UseDocumentValue) => void }) {
+  const hook = useDocument();
+
+  useEffect(() => {
+    onReady(hook);
+  });
+
+  return null;
+}

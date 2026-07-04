@@ -282,6 +282,8 @@ function click(button: HTMLButtonElement) {
 
 const mockDocument: DocumentState = {
   bytes: new Uint8Array([1]),
+  source: { kind: "memory", bytes: new Uint8Array([1]) },
+  generation: 1,
   engineHandle: null,
   pageCount: 2,
   currentPage: 1,

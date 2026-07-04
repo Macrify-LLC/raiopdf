@@ -688,7 +688,7 @@ function MergeFlow({
   async function addPdfs() {
     // Tauri: grant-returning picker (no eager byte read); browser or a shell
     // without pick_pdfs_for_add falls back to the DOM file input.
-    const picks = await pickPdfsForAdd({ multiple: true });
+    const picks = await pickPdfsForAdd();
 
     if (picks === null) {
       inputRef.current?.click();

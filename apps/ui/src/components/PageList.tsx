@@ -69,6 +69,14 @@ export interface PageListProps {
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
+  /**
+   * Streamed (range-transport) mode [R2-1]: skip the full `getPage`
+   * measurement sweep — on a range transport that alone pulls most of the
+   * file. Layout keeps the first-page estimate for every page and refines
+   * per-page dims opportunistically as PageViews actually render. Mixed-size
+   * docs may show minor scrollbar drift until visited; accepted for v1.
+   */
+  lazyPageMeasurement?: boolean;
 }
 
 /**
@@ -101,6 +109,7 @@ export function PageList({
   editing,
   searchResults = [],
   activeSearchResultId = null,
+  lazyPageMeasurement = false,
 }: PageListProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const pageElsRef = useRef(new Map<number, HTMLDivElement>());
@@ -148,6 +157,12 @@ export function PageList({
         measured: false,
       });
 
+      // Streamed mode never runs the full sweep [R2-1] — the estimate layout
+      // stands, refined per page by handleBaseDimsMeasured as pages render.
+      if (lazyPageMeasurement) {
+        return;
+      }
+
       const dims: PageDims[] = new Array<PageDims>(pageCount);
 
       for (let index = 0; index < pageCount; index += 1) {
@@ -170,7 +185,35 @@ export function PageList({
     return () => {
       disposed = true;
     };
-  }, [pdfDocument]);
+  }, [lazyPageMeasurement, pdfDocument]);
+
+  // Streamed-mode refinement: a rendered PageView reports its real base
+  // dims; commit them into the size cache when they differ from the current
+  // entry so the layout converges page-by-page without extra fetches.
+  const handleBaseDimsMeasured = useCallback(
+    (pageIndex: number, dims: PageDims) => {
+      setPageSizes((current) => {
+        if (!current || current.doc !== pdfDocument) {
+          return current;
+        }
+
+        const existing = current.dims[pageIndex];
+
+        if (
+          !existing ||
+          (Math.abs(existing.width - dims.width) < 0.5 &&
+            Math.abs(existing.height - dims.height) < 0.5)
+        ) {
+          return current;
+        }
+
+        const nextDims = [...current.dims];
+        nextDims[pageIndex] = dims;
+        return { ...current, dims: nextDims };
+      });
+    },
+    [pdfDocument],
+  );
 
   // Release pdf.js's shared text-layer caches when the document goes away.
   // (Static cleanup; safe no-op while any text layer is still rendering.)
@@ -492,6 +535,7 @@ export function PageList({
                   searchResults={searchResults}
                   activeSearchResultId={activeSearchResultId}
                   onRenderError={onRenderError}
+                  onBaseDimsMeasured={lazyPageMeasurement ? handleBaseDimsMeasured : undefined}
                 />
               ) : null}
             </div>

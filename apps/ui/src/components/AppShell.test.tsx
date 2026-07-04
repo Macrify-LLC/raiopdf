@@ -92,6 +92,8 @@ describe("AppShell", () => {
 
 const mockDocument: DocumentState = {
   bytes: null,
+  source: null,
+  generation: 0,
   engineHandle: null,
   pageCount: 0,
   currentPage: 1,
@@ -117,8 +119,10 @@ const mockDocumentSearch: DocumentSearchState = {
   resultLabel: "",
   warning: null,
   canNavigate: false,
+  progress: null,
   setQuery: vi.fn(),
   clear: vi.fn(),
+  cancel: vi.fn(),
   goToNext: vi.fn(),
   goToPrevious: vi.fn(),
 };

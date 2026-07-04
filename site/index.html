@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RaioPDF — Free, local, full-featured PDF suite for law firms</title>
-<meta name="description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta name="description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 <link rel="canonical" href="https://raio.macrify.me/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
 <meta property="og:url" content="https://raio.macrify.me/">
 <meta property="og:title" content="RaioPDF — Free, local, full-featured PDF suite for law firms">
-<meta property="og:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta property="og:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="RaioPDF — Free, local, full-featured PDF suite for law firms">
-<meta name="twitter:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta name="twitter:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 
 <link rel="stylesheet" href="./shared/reset.css">
 
@@ -353,71 +353,6 @@
   .input-card h3{ font-size:16px; font-weight:700; color:var(--text-primary); margin-bottom:6px; }
   .input-card p{ font-size:14.5px; color:var(--text-muted); line-height:1.6; }
 
-  /* ---------- showcase section (product in action) ---------- */
-  .showcase{ background:var(--surface); }
-
-  .showcase__stage{ position:relative; max-width:900px; margin:0 auto; }
-  .showcase__glow{
-    position:absolute; top:-70px; left:50%; translate:-50% 0; width:72%; height:220px;
-    background:radial-gradient(closest-side, hsla(38,96%,68%,.3), transparent 75%);
-    filter:blur(34px); z-index:0; pointer-events:none;
-  }
-
-  /* Shared framed-media treatment — the screenshot stage and the walkthrough
-     video use one .showcase__frame; the --video modifier swaps the backing
-     color and drops the gradient accent bar. */
-  .showcase__frame{
-    position:relative; z-index:1; border-radius:18px; overflow:hidden;
-    border:1px solid var(--border); background:#fff;
-    box-shadow:0 40px 80px -30px rgba(11,26,46,.28), 0 10px 30px rgba(11,26,46,.08);
-  }
-  .showcase__frame--video{ background:var(--navy-deep); }
-  .showcase__frame:not(.showcase__frame--video)::before{
-    content:""; position:absolute; top:0; left:0; right:0; height:4px; z-index:2;
-    background:linear-gradient(90deg, var(--navy), var(--gold-deep), var(--accent));
-  }
-  .showcase__img{ width:100%; height:auto; display:block; }
-
-  .showcase__caption-row{
-    position:relative; z-index:1;
-    display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:16px;
-    margin-top:20px;
-  }
-  .showcase__caption{ font-size:15px; color:var(--text-muted); max-width:52ch; }
-  .showcase__badge{
-    flex:none; width:100%; max-width:300px; border-radius:10px; overflow:hidden;
-    border:1px solid var(--border); box-shadow:0 6px 18px rgba(11,26,46,.08);
-  }
-  .showcase__badge img{ width:100%; height:auto; display:block; }
-
-  .showcase__tabs{
-    position:relative; z-index:1;
-    display:flex; flex-wrap:wrap; gap:10px; margin-top:26px; justify-content:center;
-  }
-  .showcase__tab{
-    font-family:var(--font-body); font-size:13.5px; font-weight:700;
-    padding:10px 18px; border-radius:999px; border:1.5px solid var(--border);
-    background:#fff; color:var(--text-muted); transition:background .15s ease, color .15s ease, border-color .15s ease;
-  }
-  .showcase__tab:hover{ border-color:var(--accent); color:var(--text-primary); }
-  .showcase__tab.is-active{ background:var(--navy-deep); border-color:var(--navy-deep); color:#fff; }
-
-  .showcase__video-block{ max-width:900px; margin:56px auto 0; text-align:center; }
-  .showcase__video-block > .eyebrow{ display:block; margin-bottom:16px; }
-  .showcase__video{ width:100%; height:auto; display:block; }
-  .showcase__play{
-    position:absolute; inset:0; margin:auto; width:60px; height:60px; border-radius:50%;
-    background:rgba(11,26,46,.55); border:1.5px solid rgba(255,255,255,.5);
-    display:flex; align-items:center; justify-content:center; color:#fff;
-    transition:background .15s ease, transform .15s ease;
-  }
-  .showcase__play:hover{ background:rgba(11,26,46,.75); transform:scale(1.06); }
-  .showcase__play svg{ width:24px; height:24px; }
-  .showcase__play .icon-pause{ display:none; }
-  .showcase__play.is-playing .icon-play{ display:none; }
-  .showcase__play.is-playing .icon-pause{ display:block; }
-  .showcase__video-caption{ margin-top:16px; font-size:14px; color:var(--text-muted); max-width:56ch; margin-left:auto; margin-right:auto; }
-
   /* ---------- outcomes section ---------- */
   .outcomes{ background:var(--bg-alt); }
   .outcomes-cluster + .outcomes-cluster{ margin-top:40px; }
@@ -436,13 +371,8 @@
   .outcome-card p{ font-size:14.5px; color:var(--text-body); line-height:1.6; }
   .outcome-card p strong{ color:var(--text-primary); font-weight:700; }
   .outcome-card--wide p{ font-size:15.5px; }
-  .outcome-card--compact{
-    padding:16px 20px; background:var(--bg-alt); border-color:var(--border);
-    box-shadow:none;
-  }
-  .outcome-card--compact p{ font-size:13.5px; }
-  .outcome-card--compact p a{ text-decoration:underline; text-underline-offset:2px; color:var(--primary); }
-  .outcome-card--compact p a:hover{ color:var(--secondary); }
+  .outcome-card p a{ text-decoration:underline; text-underline-offset:2px; color:var(--primary); }
+  .outcome-card p a:hover{ color:var(--secondary); }
 
   /* ---------- pull quote ---------- */
   .pullquote{
@@ -512,8 +442,6 @@
     .spotlight-group--strong .spotlight-beam--primary,
     .spotlight-group--strong .spotlight-beam--core-a{ width:60vw; }
     .philosophy__glow{ width:340px; height:340px; }
-    .showcase__caption-row{ flex-direction:column; align-items:flex-start; }
-    .showcase__badge{ max-width:100%; }
   }
 
   @media (max-width:560px){
@@ -522,11 +450,6 @@
     .download-panel{ padding:22px; }
     .footer__bottom{ flex-direction:column; }
     .philosophy__letter{ padding-left:18px; }
-    .showcase__glow{ width:90%; height:160px; top:-40px; }
-    .showcase__tabs{ gap:8px; }
-    .showcase__tab{ padding:9px 14px; font-size:12.5px; }
-    .showcase__play{ width:52px; height:52px; }
-    .showcase__play svg{ width:20px; height:20px; }
   }
 </style>
 </head>
@@ -546,7 +469,6 @@
     <nav class="nav__links" aria-label="Primary">
       <a href="#philosophy">Why</a>
       <a href="#inputs">How it works</a>
-      <a href="#showcase">In action</a>
       <a href="#outcomes">Features</a>
       <a href="#honest">What it isn't</a>
       <a href="/help/">Help</a>
@@ -583,7 +505,7 @@
       </span>
 
       <h1>Everything you use Acrobat for, day to day — <span class="accent-word">free</span>, full-featured, and it never leaves your computer.</h1>
-      <p class="hero__subhead">Plus the legal workflows Adobe never bothered building.</p>
+      <p class="hero__subhead">Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.</p>
 
       <p class="hero__positioning">
         I built this because editing a file that's already on your machine shouldn't need an
@@ -730,96 +652,11 @@
     </div>
   </section>
 
-  <section class="showcase" id="showcase">
-    <div class="container">
-      <div class="section-head">
-        <span class="eyebrow">Product in action</span>
-        <h2>Real screens from the real app</h2>
-        <p>No mockups. Every screen below is RaioPDF itself, editing a (fictional) case file — tab through the tools, or just watch it move.</p>
-      </div>
-
-      <div class="showcase__stage">
-        <div class="showcase__glow" aria-hidden="true"></div>
-        <div class="showcase__frame">
-          <img
-            class="showcase__img"
-            id="showcaseImg"
-            src="./assets/shots/viewer-annotate.webp"
-            alt="RaioPDF's viewer open on a Case Management Order, a clause highlighted in yellow, and the Legal tools panel showing Prepare for Filing, Batch Cleanup, Production Set, Combine with Exhibits, Redact, Bates Numbering, and the 2.425 Scanner."
-            width="1600" height="1000" loading="lazy" decoding="async">
-        </div>
-
-        <div class="showcase__caption-row">
-          <p class="showcase__caption" id="showcaseCaption" aria-live="polite">Highlight, underline, redact, draw — and a status bar that tells you the truth about the text layer underneath.</p>
-          <div class="showcase__badge">
-            <img src="./assets/shots/status-bar.webp" alt="Status bar reading &quot;Searchable — verified&quot; and &quot;All processing local — no files leave this computer&quot;" width="1600" height="30" loading="lazy" decoding="async">
-          </div>
-        </div>
-
-        <div class="showcase__tabs" role="group" aria-label="Choose a screenshot">
-          <button type="button" class="showcase__tab is-active" aria-pressed="true"
-            data-img="./assets/shots/viewer-annotate.webp"
-            data-alt="RaioPDF's viewer open on a Case Management Order, a clause highlighted in yellow, and the Legal tools panel showing Prepare for Filing, Batch Cleanup, Production Set, Combine with Exhibits, Redact, Bates Numbering, and the 2.425 Scanner."
-            data-caption="Highlight, underline, redact, draw — and a status bar that tells you the truth about the text layer underneath.">
-            Annotate &amp; search
-          </button>
-          <button type="button" class="showcase__tab" aria-pressed="false"
-            data-img="./assets/shots/prepare-for-filing.webp"
-            data-alt="The Prepare for Filing dialog, jurisdiction set to the Florida Courts E-Filing Portal, with a prep checklist citing Florida's e-filing rules, each one dated to when it was last verified."
-            data-caption="Pick a jurisdiction pack, get a prep checklist with the rule cited and the date it was last verified.">
-            Prepare for Filing
-          </button>
-          <button type="button" class="showcase__tab" aria-pressed="false"
-            data-img="./assets/shots/combine-exhibits.webp"
-            data-alt="The Combine with Exhibits workspace: a main document plus three exhibits labeled A, B, and C, with identifier, placement, and index settings, and a Build Binder button."
-            data-caption="Three exhibits, auto-labeled A through C, auto-bookmarked, built into one binder.">
-            Combine with Exhibits
-          </button>
-          <button type="button" class="showcase__tab" aria-pressed="false"
-            data-img="./assets/shots/production-set.webp"
-            data-alt="The Production Set dialog: four documents queued, a Bates prefix of SMITH starting at 1 with 6 digits, and output options for a production index and a filename column."
-            data-caption="A Bates-numbered production set — prefix, designations, and an index — out of four documents.">
-            Production Set
-          </button>
-          <button type="button" class="showcase__tab" aria-pressed="false"
-            data-img="./assets/shots/batch-cleanup.webp"
-            data-alt="The Batch Cleanup dialog: four PDFs queued, sanitize and scrub-metadata checked, running against a selected jurisdiction pack."
-            data-caption="Queue a whole folder — OCR, compression, sanitizing, metadata scrubbing — against one jurisdiction pack.">
-            Batch Cleanup
-          </button>
-        </div>
-      </div>
-
-      <div class="showcase__video-block">
-        <span class="eyebrow">Or watch it move</span>
-        <div class="showcase__frame showcase__frame--video" id="showcaseVideoFrame">
-          <video
-            class="showcase__video"
-            id="showcaseVideo"
-            muted
-            playsinline
-            loop
-            preload="none"
-            poster="./assets/shots/poster.webp"
-            width="1600" height="1000"
-            data-src="./assets/shots/walkthrough.mp4"
-            aria-label="Silent 18-second walkthrough: opening a court order, highlighting a clause, running Prepare for Filing, switching jurisdiction packs, and building an exhibit binder.">
-          </video>
-          <button type="button" class="showcase__play" id="showcasePlayBtn" aria-label="Play walkthrough video">
-            <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-            <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
-          </button>
-        </div>
-        <p class="showcase__video-caption">18 seconds, no narration: a court order opens, a clause gets highlighted, Prepare for Filing runs, jurisdiction packs switch, and an exhibit binder gets built.</p>
-      </div>
-    </div>
-  </section>
-
   <section class="outcomes" id="outcomes">
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">What it replaces, and what it adds</span>
-        <h2>A full day-to-day Acrobat replacement, plus the legal workflow Acrobat skipped</h2>
+        <h2>A full day-to-day Acrobat replacement, plus the legal workflows built in</h2>
       </div>
 
       <div class="outcomes-cluster">
@@ -841,14 +678,15 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
             <p><strong>Native MCP integration</strong> — still no AI built into RaioPDF itself, but the installer bundles an off-by-default connector exposing twenty local tools so your own AI agents can drive the toolbox.</p>
           </div>
-          <div class="outcome-card outcome-card--compact">
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
             <p><strong>In-app help</strong> for every tool, offline — the same articles are published at the <a href="/help/">Help</a> link above.</p>
           </div>
         </div>
       </div>
 
       <div class="outcomes-cluster">
-        <h3 class="outcomes-cluster__head">The legal workflows Adobe never bothered building</h3>
+        <h3 class="outcomes-cluster__head">The legal workflows, built in</h3>
         <div class="outcomes-grid">
           <div class="outcome-card outcome-card--wide">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>
@@ -860,7 +698,7 @@
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>
-            <p><strong>Filing packet builder</strong> — assemble a multi-document filing as one packet with a manifest, including checks like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202).</p>
+            <p><strong>Filing packet builder</strong> — assemble a multi-document filing as one packet with a manifest, including document-level checks your court expects before a filing goes out.</p>
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2.6 12.09a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.91a1 1 0 0 0 0-1.83"/><path d="M2.6 17.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83"/></svg>
@@ -872,17 +710,19 @@
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-            <p><strong>e-filing preflight report</strong> with the actual rule citations (Fla. R. Gen. Prac. &amp; Jud. Admin. 2.520/2.525) attached.</p>
+            <p><strong>e-filing preflight report</strong> with the rule citation for each requirement attached, so you can verify the source yourself.</p>
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
-            <p><strong>Sensitive-info scanner</strong> — assistive detection of SSNs and account numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out. One honest flag: never trust AI with legal reasoning — verify before you rely on it.</p>
+            <p><strong>Sensitive-info scanner</strong> — assistive detection of SSNs and account numbers before a filing goes out. One honest flag: never trust AI with legal reasoning — verify before you rely on it.</p>
           </div>
-          <div class="outcome-card outcome-card--compact">
-            <p><strong>Bates numbering</strong> across an entire document set in one pass.</p>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>Bates numbering</strong> across an entire document set in one pass — one continuous sequence across a whole folder.</p>
           </div>
-          <div class="outcome-card outcome-card--compact">
-            <p><strong>Metadata scrubbing</strong> before production or filing.</p>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>Metadata scrubbing</strong> before production or filing — inspect what a document carries, then strip it without touching the pages.</p>
           </div>
         </div>
       </div>
@@ -1146,124 +986,6 @@
     hero.addEventListener("pointerleave", onPointerLeave, { passive: true });
   })();
 
-  // Media paths read back out of data-* attributes are constrained to the
-  // page's own ./assets/shots/ files before ever being assigned to a .src —
-  // nothing scheme-like or path-traversing can flow through (CodeQL: DOM text
-  // reinterpreted as HTML).
-  function safeShotPath(value) {
-    return value && /^\.\/assets\/shots\/[A-Za-z0-9._-]+$/.test(value) ? value : null;
-  }
-
-  // Product-in-action showcase — tab buttons swap the framed screenshot, its
-  // alt text, and the caption. Each tab's ~200KB webp is fetched on first use;
-  // hovering or focusing a tab prefetches it so the swap doesn't flash.
-  (function () {
-    "use strict";
-
-    var img = document.getElementById("showcaseImg");
-    var caption = document.getElementById("showcaseCaption");
-    var tabs = document.querySelectorAll(".showcase__tab");
-    if (!img || !tabs.length) return;
-
-    function select(tab) {
-      var src = safeShotPath(tab.getAttribute("data-img"));
-      if (!src) return;
-      tabs.forEach(function (t) {
-        var active = t === tab;
-        t.classList.toggle("is-active", active);
-        t.setAttribute("aria-pressed", active ? "true" : "false");
-      });
-      img.src = src;
-      img.alt = tab.getAttribute("data-alt") || "";
-      if (caption) caption.textContent = tab.getAttribute("data-caption") || "";
-    }
-
-    var prefetched = {};
-    function prefetch(tab) {
-      var src = safeShotPath(tab.getAttribute("data-img"));
-      if (!src || prefetched[src]) return;
-      prefetched[src] = true;
-      new Image().src = src;
-    }
-
-    tabs.forEach(function (tab) {
-      tab.addEventListener("click", function () { select(tab); });
-      tab.addEventListener("pointerenter", function () { prefetch(tab); }, { passive: true });
-      tab.addEventListener("focus", function () { prefetch(tab); });
-    });
-
-    // Sync from the active tab's data-* once at load, so the button data is
-    // authoritative for JS users and the static <img>/<p> copies remain only
-    // as the no-JS fallback (they can't silently drift).
-    var initial = document.querySelector(".showcase__tab.is-active");
-    if (initial) select(initial);
-  })();
-
-  // Walkthrough video — genuinely lazy: the .mp4 source isn't attached to the
-  // <video> element at all until the frame first scrolls into view (or the
-  // visible play button is used directly), so the ~1.1MB file never loads for
-  // a visitor who doesn't scroll this far. Once loaded, autoplay (muted,
-  // looped) only kicks in while the frame is in view AND the visitor hasn't
-  // asked for reduced motion — otherwise the poster frame just sits still
-  // until someone taps play themselves, which is always allowed either way.
-  (function () {
-    "use strict";
-
-    var frame = document.getElementById("showcaseVideoFrame");
-    var video = document.getElementById("showcaseVideo");
-    var playBtn = document.getElementById("showcasePlayBtn");
-    if (!frame || !video || !playBtn) return;
-
-    var prefersReduced =
-      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var userPaused = false;
-
-    function ensureLoaded() {
-      var src = safeShotPath(video.getAttribute("data-src"));
-      if (!src) return; // already attached — removing the attribute makes this idempotent
-      video.removeAttribute("data-src");
-      video.src = src;
-    }
-
-    function updatePlayBtn() {
-      var playing = !video.paused && !video.ended;
-      playBtn.classList.toggle("is-playing", playing);
-      playBtn.setAttribute("aria-label", playing ? "Pause walkthrough video" : "Play walkthrough video");
-    }
-
-    playBtn.addEventListener("click", function () {
-      ensureLoaded();
-      if (video.paused) {
-        userPaused = false;
-        video.play().catch(function () {});
-      } else {
-        userPaused = true;
-        video.pause();
-      }
-    });
-
-    video.addEventListener("play", updatePlayBtn);
-    video.addEventListener("pause", updatePlayBtn);
-
-    if (window.IntersectionObserver) {
-      var observer = new window.IntersectionObserver(
-        function (entries) {
-          entries.forEach(function (entry) {
-            if (entry.isIntersecting) {
-              ensureLoaded();
-              if (!prefersReduced && !userPaused) {
-                video.play().catch(function () {});
-              }
-            } else if (!video.paused) {
-              video.pause();
-            }
-          });
-        },
-        { threshold: 0.5 }
-      );
-      observer.observe(frame);
-    }
-  })();
 </script>
 </body>
 </html>

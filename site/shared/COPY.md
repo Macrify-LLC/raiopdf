@@ -6,6 +6,15 @@ this copy with a different visual treatment, but the words themselves don't
 change between options. Derived from `sales-positioning.md` (RaioPDF section)
 and `business-lines.md` (product line 12). Do not add claims not listed here.
 
+## Product media (screenshots / walkthrough video) — DEFERRED 2026-07-04
+
+The "Real screens from the real app" section (tabbed screenshots + walkthrough
+video) is pulled from the landing page while the app's visual style is still
+changing. The full working section — markup, CSS, JS, and all assets — is
+preserved on the `macro/stash-product-media` branch. Re-capture fresh
+screenshots (see the capture flow in that branch's assets) before restoring;
+don't re-add the old media as-is once the app restyle lands.
+
 ## Product name
 
 Always the full "RaioPDF" — never shortened to "Raio" in body copy. (The nav
@@ -24,7 +33,15 @@ This is not hidden or soft-pedaled. It sits near the top on every option.
 Everything you use Acrobat for, day to day — free, full-featured, and it
 never leaves your computer.
 
-Sub-headline: Plus the legal workflows Adobe never bothered building.
+Sub-headline (revised 2026-07-04, Jacob's direction): Plus the legal
+workflows built in: verified redaction, Bates numbering, exhibit binders,
+and e-filing prep.
+
+(The older sub-headline — "Plus the legal workflows Adobe never bothered
+building" — is retired from the landing page and other marketing surfaces:
+Jacob doesn't want marketing copy claiming Adobe never shipped these
+features. The README keeps his first-person voice and is his to edit;
+don't propagate the old line back onto marketing surfaces.)
 
 ## Positioning frame (short paragraph, upper page) — updated 2026-07-03 (rev. 3)
 
@@ -145,11 +162,15 @@ don't isolate it into its own callout box if you're using the full text.
   Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS). Every
   constraint cites its authority and the date it was last verified. Always
   pair with: guidance, not legal advice. Florida is the default pack.
-- **e-filing preflight report** with the actual rule citations for your court
-  attached (e.g. Fla. R. Gen. Prac. & Jud. Admin. 2.520/2.525).
+- **e-filing preflight report** with the rule citation for each requirement
+  attached, so the user can verify the source themselves. (Revised
+  2026-07-04: marketing surfaces describe the citation FEATURE but don't
+  quote specific rule numbers — no "Fla. R. ..." strings in landing/site
+  copy. Same rule applies to the sensitive-info scanner and filing-packet
+  bullets below.)
 - **Filing packet builder** — a multi-document filing assembled as one packet
-  with a manifest, including checks like Florida's certificate-of-conferral
-  requirement on motions (Fla. R. Civ. P. 1.202).
+  with a manifest, including document-level checks the court expects before
+  a filing goes out.
 - **Production sets** — Bates-numbered discovery productions from a document
   set: confidentiality designations, index files, volume splits.
 - **Bates numbering** across an entire document set in one pass.
@@ -160,8 +181,8 @@ don't isolate it into its own callout box if you're using the full text.
   untouched. Do NOT claim password *protection* — adding encryption is not in
   this build yet.
 - **Sensitive-info scanner** — assistive detection of SSNs and account
-  numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out. Always
-  pair with the honest caveat: this is assistive only — never trust AI with
+  numbers before a filing goes out (no rule-number citation in marketing
+  copy per the 2026-07-04 note above). Always pair with the honest caveat: this is assistive only — never trust AI with
   legal reasoning, verify before relying on it. Don't feature this one
   without the caveat attached.
 - **Metadata scrubbing** before production or filing.

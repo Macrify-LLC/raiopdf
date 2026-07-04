@@ -1,0 +1,131 @@
+<!doctype html>
+<!-- ocr-scanline-v2 (bare) — chrome-stripped primitive for direct landing-page embedding.
+     Core element only: the invoice page resolving from blurred/muted (raw scan) to crisp,
+     dark, selectable-looking text exactly as the gold scanline passes each line. No card
+     shell, header, or footer. Transparent background, uniform 360x300 canvas to match the
+     other bare primitives. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · make searchable (bare)</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --text-muted:#5A6F8A;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --border:#D4DFEE;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:grid;place-items:center;
+  background:transparent;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+.frame{position:relative;width:360px;height:300px;display:grid;place-items:center}
+.stage{position:relative;width:320px;height:216px;display:grid;place-items:center}
+
+.page{position:relative;width:212px;height:198px;background:#fff;border-radius:4px;
+  box-shadow:0 16px 34px -16px rgba(11,26,46,.4);padding:17px 19px;overflow:hidden}
+
+.scanline{position:absolute;left:0;right:0;height:14px;top:-14px;opacity:0;
+  background:linear-gradient(180deg,transparent,rgba(245,185,66,.9),transparent);
+  animation:scanMove 9.6s var(--ease-out) infinite;z-index:5;pointer-events:none}
+@keyframes scanMove{
+  0%,5%{top:-14px;opacity:0}
+  8%{opacity:1}
+  68%{top:100%;opacity:1}
+  72%,100%{top:100%;opacity:0}
+}
+
+.line{position:relative;filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7;
+  font-family:ui-monospace,monospace;white-space:nowrap}
+.line.head{font:700 10.5px/1.3 ui-monospace,monospace;letter-spacing:.4px;margin:0 0 8px}
+.line.sub{font:500 8.5px/1.3 ui-monospace,monospace;margin:0 0 11px;color:var(--text-muted)}
+.line.item{display:flex;justify-content:space-between;gap:14px;font:500 8.5px/1.3 ui-monospace,monospace;
+  margin:6px 0;padding:2px 4px;border-radius:3px}
+.line.total{display:flex;justify-content:space-between;gap:14px;font:700 8.5px/1.3 ui-monospace,monospace;
+  margin:9px 0 6px;padding:5px 4px 2px;border-top:1px dashed var(--border)}
+.line.note{font:500 7.8px/1.3 ui-monospace,monospace;margin-top:9px;color:var(--text-muted)}
+
+.hl{position:absolute;inset:-1px -4px;background:rgba(74,173,224,.22);border-radius:4px;z-index:-1;opacity:0}
+.line span{position:relative;z-index:1}
+
+.line.r1{animation:reveal1 9.6s var(--ease-out) infinite}
+.line.r2{animation:reveal2 9.6s var(--ease-out) infinite}
+.line.r3{animation:reveal3 9.6s var(--ease-out) infinite}
+.line.r4{animation:reveal4 9.6s var(--ease-out) infinite}
+.line.r5{animation:reveal5 9.6s var(--ease-out) infinite}
+.line.r6{animation:reveal6 9.6s var(--ease-out) infinite}
+.line.r7{animation:reveal7 9.6s var(--ease-out) infinite}
+.r3 .hl{animation:hl3 9.6s var(--ease-out) infinite}
+.r5 .hl{animation:hl5 9.6s var(--ease-out) infinite}
+.r6 .hl{animation:hl6 9.6s var(--ease-out) infinite}
+
+@keyframes reveal1{
+  0%,10%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  14%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal2{
+  0%,18%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  22%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal3{
+  0%,26%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  30%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal4{
+  0%,34%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  38%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal5{
+  0%,42%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  46%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal6{
+  0%,50%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  54%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal7{
+  0%,58%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  62%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes hl3{0%,26%{opacity:0}30%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+@keyframes hl5{0%,42%{opacity:0}46%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+@keyframes hl6{0%,50%{opacity:0}54%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .scanline{opacity:0}
+  .line{filter:blur(0) contrast(1)!important;color:var(--navy-deep)!important;opacity:1!important}
+  .r3 .hl,.r5 .hl,.r6 .hl{opacity:1!important}
+}
+</style></head>
+<body>
+  <div class="frame">
+    <div class="stage">
+      <div class="page">
+        <span class="scanline"></span>
+        <div class="line head r1">GRANITE REPORTING CO.</div>
+        <div class="line sub r2">Invoice #1042 &middot; Due Jul 15</div>
+        <div class="line item r3"><span class="hl"></span><span>Deposition transcript</span><span>$420.00</span></div>
+        <div class="line item r4"><span>Expedited delivery</span><span>$75.00</span></div>
+        <div class="line item r5"><span class="hl"></span><span>Exhibit binder prep</span><span>$60.00</span></div>
+        <div class="line total r6"><span class="hl"></span><span>Balance due</span><span>$555.00</span></div>
+        <div class="line note r7">Thank you for your business.</div>
+      </div>
+    </div>
+  </div>
+</body></html>

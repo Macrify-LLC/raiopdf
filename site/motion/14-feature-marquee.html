@@ -1,10 +1,11 @@
 <!doctype html>
 <!-- feature-marquee — infinite horizontal ribbon of RaioPDF feature chips, separated by
      tiny rotating sun glyphs. Placement: full-width strip between page sections (e.g.
-     under the hero, above pricing/FAQ). Background: light surface (#F7FAFE), navy chip
-     text, gold sun separators. Seamless loop (duplicated track), pauses on hover, soft
-     edge-fade mask on both sides. The scrolling row is decorative (aria-hidden); a
-     visually-hidden list carries the real content for screen readers. -->
+     under the hero, above pricing/FAQ). Bare embed: transparent body, band is edge-to-edge
+     at any viewport width (no boxed/capped look). Seamless loop (duplicated track, each
+     copy padded wide enough to outrun any viewport so the wrap never runs out of content),
+     pauses on hover, soft edge-fade mask on both sides. The scrolling row is decorative
+     (aria-hidden); a visually-hidden list carries the real content for screen readers. -->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Raio · feature-marquee</title>
 <style>
@@ -33,14 +34,9 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
-/* Plain block flow on purpose (no flex/grid centering): body's width is the viewport's
-   resolved content width top-down. .marquee's inner .track is width:max-content (very
-   wide, for the scroll illusion) and overflow:hidden only clips paint, not intrinsic-size
-   contribution — inside a grid/flex centering context that "auto" width would leak up
-   and blow the page out to the track's full content width. Block flow sidesteps that. */
 body{
   min-height:100%;display:flex;flex-direction:column;justify-content:center;
-  background:var(--bg-alt);
+  background:transparent;
   font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
 
@@ -49,7 +45,8 @@ body{
   clip:rect(0,0,0,0);white-space:nowrap;border:0;
 }
 
-.wrap{width:100%;max-width:1400px;}
+/* No max-width wrapper on purpose — the band must reach both viewport edges at any
+   width. A capped inner width used to leave a static, un-scrolled gap on wide screens. */
 .accent-top{height:3px;background:linear-gradient(90deg,var(--navy),var(--primary),var(--accent));}
 
 .marquee{
@@ -65,6 +62,11 @@ body{
 }
 .marquee:hover .track{animation-play-state:paused;}
 @keyframes scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* Each "copy" is one of exactly two identical halves of .track — translateX(-50%) always
+   shifts by exactly one copy's width, so the loop wraps invisibly regardless of how many
+   times the chip list got repeated inside each copy (see script). */
+.copy{display:flex;align-items:center;flex:0 0 auto;}
 
 .chip{
   display:inline-flex;align-items:center;white-space:nowrap;
@@ -83,41 +85,39 @@ body{
 }
 </style></head>
 <body>
-  <div class="wrap">
-    <div class="accent-top"></div>
+  <div class="accent-top"></div>
 
-    <ul class="sr-only">
-      <li>True redaction</li><li>Bates numbering</li><li>OCR — fully offline</li>
-      <li>Prepare for filing</li><li>Exhibit binders</li><li>Metadata scrub</li>
-      <li>Sensitive-info scanner</li><li>$0 forever</li><li>No account</li><li>No cloud</li>
-    </ul>
+  <ul class="sr-only">
+    <li>True redaction</li><li>Bates numbering</li><li>OCR — fully offline</li>
+    <li>Prepare for filing</li><li>Exhibit binders</li><li>Metadata scrub</li>
+    <li>Sensitive-info scanner</li><li>$0 forever</li><li>No account</li><li>No cloud</li>
+  </ul>
 
-    <div class="marquee" aria-hidden="true">
-      <div class="track" id="track">
-        <div class="group">
-          <span class="chip">True redaction</span><span class="sep"></span>
-          <span class="chip">Bates numbering</span><span class="sep"></span>
-          <span class="chip">OCR — fully offline</span><span class="sep"></span>
-          <span class="chip">Prepare for filing</span><span class="sep"></span>
-          <span class="chip">Exhibit binders</span><span class="sep"></span>
-          <span class="chip">Metadata scrub</span><span class="sep"></span>
-          <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
-          <span class="chip">$0 forever</span><span class="sep"></span>
-          <span class="chip">No account</span><span class="sep"></span>
-          <span class="chip">No cloud</span><span class="sep"></span>
-        </div>
-        <div class="group">
-          <span class="chip">True redaction</span><span class="sep"></span>
-          <span class="chip">Bates numbering</span><span class="sep"></span>
-          <span class="chip">OCR — fully offline</span><span class="sep"></span>
-          <span class="chip">Prepare for filing</span><span class="sep"></span>
-          <span class="chip">Exhibit binders</span><span class="sep"></span>
-          <span class="chip">Metadata scrub</span><span class="sep"></span>
-          <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
-          <span class="chip">$0 forever</span><span class="sep"></span>
-          <span class="chip">No account</span><span class="sep"></span>
-          <span class="chip">No cloud</span><span class="sep"></span>
-        </div>
+  <div class="marquee" aria-hidden="true">
+    <div class="track" id="track">
+      <div class="copy">
+        <span class="chip">True redaction</span><span class="sep"></span>
+        <span class="chip">Bates numbering</span><span class="sep"></span>
+        <span class="chip">OCR — fully offline</span><span class="sep"></span>
+        <span class="chip">Prepare for filing</span><span class="sep"></span>
+        <span class="chip">Exhibit binders</span><span class="sep"></span>
+        <span class="chip">Metadata scrub</span><span class="sep"></span>
+        <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
+        <span class="chip">$0 forever</span><span class="sep"></span>
+        <span class="chip">No account</span><span class="sep"></span>
+        <span class="chip">No cloud</span><span class="sep"></span>
+      </div>
+      <div class="copy">
+        <span class="chip">True redaction</span><span class="sep"></span>
+        <span class="chip">Bates numbering</span><span class="sep"></span>
+        <span class="chip">OCR — fully offline</span><span class="sep"></span>
+        <span class="chip">Prepare for filing</span><span class="sep"></span>
+        <span class="chip">Exhibit binders</span><span class="sep"></span>
+        <span class="chip">Metadata scrub</span><span class="sep"></span>
+        <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
+        <span class="chip">$0 forever</span><span class="sep"></span>
+        <span class="chip">No account</span><span class="sep"></span>
+        <span class="chip">No cloud</span><span class="sep"></span>
       </div>
     </div>
   </div>
@@ -158,11 +158,53 @@ body{
 
 <script>
 (function(){
+  // Constant apparent scroll speed (px/s), derived from the original single-copy
+  // width (~2273px) travelling in 34s — kept so the fix doesn't change the feel on
+  // the viewport sizes that already worked.
+  var SPEED = 67;
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var track = document.getElementById('track');
+  if(!track) return;
+  var copies = [].slice.call(track.children);
+  var originalUnits = copies.length === 2 ? [].slice.call(copies[0].children) : [];
+
+  // Guarantee each of the two copies is at least as wide as the viewport (plus a
+  // safety margin). translateX(-50%) only wraps invisibly if the track is exactly
+  // two IDENTICAL copies — so any padding gets appended to both copies in lockstep,
+  // never breaking that equality. Without this, a single copy shorter than the
+  // viewport runs out of chips before the loop point, showing a blank gap and a
+  // visible jump when it resets.
+  function ensureWidth(){
+    if(copies.length !== 2 || !originalUnits.length) return;
+    var target = Math.max(innerWidth, document.documentElement.clientWidth) * 1.2;
+    var guard = 0;
+    while(copies[0].getBoundingClientRect().width < target && guard < 24){
+      copies.forEach(function(copy){
+        originalUnits.forEach(function(node){ copy.appendChild(node.cloneNode(true)); });
+      });
+      guard++;
+    }
+    if(!reduce){
+      var copyWidth = copies[0].getBoundingClientRect().width;
+      var dur = Math.max(8, copyWidth / SPEED);
+      track.style.animationDuration = dur + 's';
+    }
+  }
+
+  ensureWidth();
+
   var tpl = document.getElementById('sun-tpl');
-  if(!tpl) return;
-  document.querySelectorAll('.sep').forEach(function(el){
-    el.appendChild(tpl.content.cloneNode(true));
-  });
+  if(tpl){
+    document.querySelectorAll('.sep').forEach(function(el){
+      if(!el.firstChild) el.appendChild(tpl.content.cloneNode(true));
+    });
+  }
+
+  var resizeTimer;
+  addEventListener('resize', function(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(ensureWidth, 200);
+  }, {passive:true});
 })();
 </script>
 </body></html>

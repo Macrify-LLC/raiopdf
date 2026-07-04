@@ -15,6 +15,11 @@ export interface HighlightEditStyle {
   opacity?: number;
 }
 
+export interface TextMarkupEditStyle {
+  color?: PdfEditColor;
+  thicknessPt?: number;
+}
+
 export interface TextBoxEditStyle {
   color?: PdfEditColor;
   fontFamily?: PdfTextBoxFontFamily;
@@ -31,6 +36,8 @@ export interface InkEditStyle {
 export const DEFAULT_HIGHLIGHT_COLOR: PdfEditColor = { r: 1, g: 0.9, b: 0.3 };
 export const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
 export const DEFAULT_TEXT_COLOR: PdfEditColor = hexToPdfEditColor("#111111");
+export const DEFAULT_TEXT_MARKUP_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
+export const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
 export const DEFAULT_TEXT_FONT_FAMILY: PdfTextBoxFontFamily = "helvetica";
 export const DEFAULT_TEXT_ALIGN: PdfTextBoxAlign = "left";
 export const DEFAULT_INK_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;

@@ -32,6 +32,7 @@ import type {
   PdfTextBoxAlign,
   PdfTextBoxEdit,
   PdfTextBoxFontFamily,
+  PdfTextMarkupEdit,
   PdfTextRegion,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -114,6 +115,7 @@ const STAMP_COLOR = rgb(0.08, 0.08, 0.08);
 const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
 const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
 const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
+const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
 const DEFAULT_TEXT_BOX_FONT_SIZE_PT = 12;
 const DEFAULT_WATERMARK_FONT_SIZE_PT = 48;
 const DEFAULT_WATERMARK_OPACITY = 0.18;
@@ -1259,6 +1261,10 @@ async function applyEditInPlace(
     case "highlight":
       applyHighlightEdit(pdf, edit);
       return;
+    case "underline":
+    case "strikethrough":
+      applyTextMarkupEdit(pdf, edit);
+      return;
     case "textBox":
       applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
       return;
@@ -1296,6 +1302,27 @@ function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
       height: rect.h,
       color,
       opacity,
+    });
+  }
+}
+
+/**
+ * Draws text markup using the same line rectangles highlight receives. Rects
+ * are orientation-agnostic user-space coordinates and are drawn verbatim.
+ */
+function applyTextMarkupEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const color = toEditColor(edit.color, EDIT_INK_COLOR);
+  const thickness = edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT;
+
+  for (const rect of edit.rects) {
+    const y = edit.type === "underline" ? rect.y : rect.y + rect.h * 0.5;
+
+    page.drawLine({
+      start: { x: rect.x, y },
+      end: { x: rect.x + rect.w, y },
+      thickness,
+      color,
     });
   }
 }
@@ -1584,6 +1611,10 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
         );
       }
       return;
+    case "underline":
+    case "strikethrough":
+      assertValidTextMarkupEdit(edit);
+      return;
     case "textBox":
       assertEditRect(edit.rect);
       assertNonEmptyEditText(edit.text, "Text box");
@@ -1635,6 +1666,31 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
   }
 }
 
+function assertValidTextMarkupEdit(edit: PdfTextMarkupEdit): void {
+  if (edit.rects.length === 0) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `${formatTextMarkupLabel(edit.type)} edits require at least one rectangle.`,
+    );
+  }
+
+  for (const rect of edit.rects) {
+    assertEditRect(rect);
+  }
+
+  if (edit.thicknessPt !== undefined) {
+    assertPositiveNumber(edit.thicknessPt, "thicknessPt");
+  }
+
+  if (edit.color !== undefined) {
+    assertEditColor(edit.color, "Text markup color");
+  }
+}
+
+function formatTextMarkupLabel(type: PdfTextMarkupEdit["type"]): string {
+  return type === "underline" ? "Underline" : "Strikethrough";
+}
+
 function assertEditRect(rect: PdfEditRect): void {
   if (!Number.isFinite(rect.x) || !Number.isFinite(rect.y)) {
     throw new PdfEngineError("INVALID_DOCUMENT", "Edit rectangles require finite coordinates.");
@@ -1647,6 +1703,17 @@ function assertEditRect(rect: PdfEditRect): void {
 function assertNonEmptyEditText(text: string, editLabel: string): void {
   if (text.length === 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${editLabel} text must not be empty.`);
+  }
+}
+
+function assertEditColor(color: PdfEditColor, label: string): void {
+  for (const [channel, value] of Object.entries(color)) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `${label} ${channel} channel must be between 0 and 1.`,
+      );
+    }
   }
 }
 

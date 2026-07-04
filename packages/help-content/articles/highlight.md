@@ -30,5 +30,7 @@ so anyone who opens the file sees it.
 
 ## Related
 
+- [Underline](tool:underline) — draw a line under text instead
+- [Strikethrough](tool:strikethrough) — draw a line through text instead
 - [Comment](tool:comment) — leave a note instead of a highlight
 - [Make Searchable (OCR)](tool:make-searchable) — add text to a scan first

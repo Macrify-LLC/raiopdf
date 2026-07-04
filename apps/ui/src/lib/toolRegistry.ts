@@ -40,6 +40,8 @@ export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", description: "Place an image on the current page before saving." },
   { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight", description: "Drag over text to create a saved highlight mark." },
+  { id: "underline", label: "Underline", group: "edit", helpArticleId: "underline", description: "Drag over text to create a saved underline mark." },
+  { id: "strikethrough", label: "Strikethrough", group: "edit", helpArticleId: "strikethrough", description: "Drag over text to create a saved strikethrough mark." },
   { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw", description: "Draw freehand ink that will be saved with the PDF." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
 ] as const satisfies readonly (ToolRegistryEntry & {
@@ -54,6 +56,8 @@ export const EDIT_DIALOG_TOOLS = [
 export const COMMAND_BAR_EDIT_TOOLS = [
   { id: "select", label: "Select", group: "edit", helpArticleId: "getting-started", tooltip: "Select text or return to the normal pointer." },
   { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight", tooltip: "Drag over text to create a saved highlight mark." },
+  { id: "underline", label: "Underline", group: "edit", helpArticleId: "underline", tooltip: "Drag over text to create a saved underline mark." },
+  { id: "strikethrough", label: "Strikethrough", group: "edit", helpArticleId: "strikethrough", tooltip: "Drag over text to create a saved strikethrough mark." },
   { id: "textBox", label: "Text box", group: "edit", helpArticleId: "textBox", tooltip: "Place editable text on the current page before saving." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", tooltip: "Place an image on the current page before saving." },
   { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment", tooltip: "Add a PDF note annotation on the current page." },

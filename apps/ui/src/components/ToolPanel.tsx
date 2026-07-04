@@ -33,7 +33,9 @@ import {
   ScrubMetadataIcon,
   ShieldCheckIcon,
   SignIcon,
+  StrikethroughIcon,
   TextBoxIcon,
+  UnderlineIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
@@ -68,6 +70,8 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   textBox: <TextBoxIcon size={16} />,
   image: <ImageIcon size={16} />,
   highlight: <HighlightIcon size={16} />,
+  underline: <UnderlineIcon size={16} />,
+  strikethrough: <StrikethroughIcon size={16} />,
   draw: <DrawIcon size={16} />,
   sign: <SignIcon size={16} />,
   "page-numbers": <BatesIcon size={16} />,

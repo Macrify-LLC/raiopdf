@@ -8,6 +8,7 @@ import type {
   PdfTextBoxAlign,
   PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
+import { DEFAULT_TEXT_COLOR } from "./editStyles";
 import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
 
 /**
@@ -20,11 +21,15 @@ import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
 export type EditToolId =
   | "select"
   | "highlight"
+  | "underline"
+  | "strikethrough"
   | "textBox"
   | "image"
   | "comment"
   | "draw"
   | "sign";
+
+export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
 
 export interface PendingHighlight {
   kind: "highlight";
@@ -33,6 +38,15 @@ export interface PendingHighlight {
   rects: readonly PdfEditRect[];
   color?: PdfEditColor;
   opacity?: number;
+}
+
+export interface PendingTextMarkup {
+  kind: "underline" | "strikethrough";
+  id: string;
+  pageIndex: number;
+  rects: readonly PdfEditRect[];
+  color?: PdfEditColor;
+  thicknessPt?: number;
 }
 
 export interface PendingTextBox {
@@ -81,6 +95,7 @@ export interface PendingInk {
 
 export type PendingEdit =
   | PendingHighlight
+  | PendingTextMarkup
   | PendingTextBox
   | PendingStamp
   | PendingComment
@@ -110,6 +125,17 @@ export function toPdfEdits(
           rects: edit.rects,
           ...(edit.color ? { color: edit.color } : {}),
           ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
+        };
+      case "underline":
+      case "strikethrough":
+        return {
+          type: edit.kind,
+          pageIndex: edit.pageIndex,
+          rects: edit.rects,
+          ...(edit.color && !editColorsEqual(edit.color, DEFAULT_TEXT_COLOR)
+            ? { color: edit.color }
+            : {}),
+          ...(edit.thicknessPt !== undefined ? { thicknessPt: edit.thicknessPt } : {}),
         };
       case "textBox":
         return {
@@ -170,6 +196,16 @@ export function describePendingEdit(edit: PendingEdit): {
         label: "Highlight",
         detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
       };
+    case "underline":
+      return {
+        label: "Underline",
+        detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
+      };
+    case "strikethrough":
+      return {
+        label: "Strikethrough",
+        detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
+      };
     case "textBox":
       return { label: "Text box", detail: excerpt(edit.text) };
     case "image":
@@ -208,7 +244,7 @@ export interface PageTextBox {
  * axis (`y` for upright pages, `x` for sideways pages); each cluster unions
  * into a single line rect. Returns rects in top-to-bottom reading order.
  */
-export function computeHighlightLineRects(
+export function computeTextMarkupLineRects(
   band: PdfSpaceRect,
   textBoxes: readonly PageTextBox[],
   sideways = false,
@@ -241,6 +277,12 @@ export function computeHighlightLineRects(
   return clusters
     .map((cluster) => unionBoxes(cluster))
     .sort((left, right) => right.y + right.h - (left.y + left.h));
+}
+
+export const computeHighlightLineRects = computeTextMarkupLineRects;
+
+function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {
+  return left.r === right.r && left.g === right.g && left.b === right.b;
 }
 
 function unionBoxes(boxes: readonly PageTextBox[]): PdfEditRect {

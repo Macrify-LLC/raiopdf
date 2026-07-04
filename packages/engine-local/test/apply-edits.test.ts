@@ -58,6 +58,81 @@ describe("LocalPdfEngine.applyEdits", () => {
     expect(content).toContain("f");
   });
 
+  it("draws underline edits as one baseline line per rect", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "underline",
+        pageIndex: 0,
+        rects: [
+          { x: 40, y: 100, w: 120, h: 14 },
+          { x: 40, y: 84, w: 90, h: 14 },
+        ],
+        color: { r: 0.7, g: 0.1, b: 0.2 },
+        thicknessPt: 2,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(content).toMatch(/\b2 w\b/);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.7, 0.1, 0.2]);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 100 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 160, y: 100 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 84 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 130, y: 84 },
+    );
+  });
+
+  it("draws strikethrough edits through each rect midpoint", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "strikethrough",
+        pageIndex: 0,
+        rects: [
+          { x: 40, y: 100, w: 120, h: 14 },
+          { x: 40, y: 84, w: 90, h: 10 },
+        ],
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(content).toMatch(/\b1 w\b/);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 107 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 160, y: 107 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 89 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 130, y: 89 },
+    );
+  });
+
   it("draws text box edits with the first baseline below the rect's top edge", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -588,6 +663,35 @@ describe("LocalPdfEngine.applyEdits", () => {
         { type: "comment", pageIndex: 0, at: { x: 10, y: 10 }, text: "" },
       ]),
     ).rejects.toBeInstanceOf(PdfEngineError);
+  });
+
+  it("rejects invalid text markup edits", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(
+      engine.applyEdits(document, [{ type: "underline", pageIndex: 0, rects: [] }]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "strikethrough",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 20, h: 10 }],
+          thicknessPt: 0,
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "underline",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 20, h: 10 }],
+          color: { r: 1.2, g: 0, b: 0 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 });
 

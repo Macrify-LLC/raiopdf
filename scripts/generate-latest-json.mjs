@@ -51,6 +51,20 @@ function normalizePubDate(pubDate) {
   return pubDate;
 }
 
+function extractInstallerVersion(exeFilename) {
+  const match = /(?:^|_)([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)(?:_|-)/.exec(
+    exeFilename,
+  );
+  if (!match) {
+    throw new Error(
+      `generate-latest-json: could not read a version from installer filename ${JSON.stringify(
+        exeFilename,
+      )}. Expected a filename like RaioPDF_1.2.3_x64-setup.exe.`,
+    );
+  }
+  return match[1];
+}
+
 export function buildLatestJsonManifest({ tag, exeFilename, signature, pubDate }) {
   const resolved = normalizeTag(tag);
   requireNonEmptyString("exeFilename", exeFilename);
@@ -60,6 +74,16 @@ export function buildLatestJsonManifest({ tag, exeFilename, signature, pubDate }
       `generate-latest-json: exeFilename must be the installer filename, not a path (got ${JSON.stringify(
         exeFilename,
       )}).`,
+    );
+  }
+  const installerVersion = extractInstallerVersion(exeFilename);
+  if (installerVersion !== resolved.version) {
+    throw new Error(
+      `generate-latest-json: installer version ${JSON.stringify(
+        installerVersion,
+      )} does not match release tag version ${JSON.stringify(
+        resolved.version,
+      )} for ${exeFilename}. Rebuild the signed installer for ${resolved.tag}.`,
     );
   }
 

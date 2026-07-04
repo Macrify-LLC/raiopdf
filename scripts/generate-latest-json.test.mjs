@@ -47,4 +47,17 @@ describe("buildLatestJsonManifest", () => {
       );
     }
   });
+
+  it("rejects an installer filename whose version does not match the tag", () => {
+    assert.throws(
+      () =>
+        buildLatestJsonManifest({
+          tag: "v0.2.0",
+          exeFilename: "RaioPDF_0.1.0_x64-setup.exe",
+          signature: "trusted-signature",
+          pubDate: new Date("2026-07-03T12:34:56.000Z"),
+        }),
+      /installer version "0\.1\.0" does not match release tag version "0\.2\.0"/,
+    );
+  });
 });

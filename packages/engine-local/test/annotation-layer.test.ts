@@ -248,13 +248,13 @@ describe("annotation-layer foundation", () => {
     expect(readNumberArray(ink!.lookup(PDFName.of("C"), PDFArray))).toEqual([0.2, 0.3, 0.4]);
 
     expect(readNumberArray(square!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
-      78.5, 118.5, 221.5, 181.5,
+      78.25, 118.25, 221.75, 181.75,
     ]);
     expect(readNumberArray(square!.lookup(PDFName.of("C"), PDFArray))).toEqual([0.1, 0.2, 0.3]);
     expect(readNumberArray(square!.lookup(PDFName.of("IC"), PDFArray))).toEqual([0.8, 0.7, 0.2]);
 
     expect(readNumberArray(circle!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
-      99.25, 149.25, 180.75, 190.75,
+      99, 149, 181, 191,
     ]);
     expect(readNumberArray(line!.lookup(PDFName.of("L"), PDFArray))).toEqual([
       30, 40, 200, 220,
@@ -335,7 +335,7 @@ describe("annotation-layer foundation", () => {
     expect(readNumberArray(highlight!.lookup(PDFName.of("C"), PDFArray))).toEqual([1, 0.9, 0.3]);
 
     expect(readNumberArray(underline!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
-      210, 622, 320, 652,
+      209, 621, 321, 653,
     ]);
     expect(readNumberArray(underline!.lookup(PDFName.of("QuadPoints"), PDFArray))).toEqual([
       210, 652, 320, 652, 210, 640, 320, 640,
@@ -346,7 +346,7 @@ describe("annotation-layer foundation", () => {
     ]);
 
     expect(readNumberArray(strikeout!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
-      80, 580, 210, 596,
+      79.25, 579.25, 210.75, 596.75,
     ]);
     expect(readNumberArray(strikeout!.lookup(PDFName.of("QuadPoints"), PDFArray))).toEqual([
       80, 596, 210, 596, 80, 580, 210, 580,
@@ -401,10 +401,33 @@ describe("annotation-layer foundation", () => {
         ).toEqual(expectedQuadPoints);
       }
       expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
-      expectNumbersClose(equivalence.placementMatrix, [1, 0, 0, 1, expectedRect[0]!, expectedRect[1]!]);
+      expectTransformedBBoxMatchesAnnotationRect(equivalence);
+      expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
       expectPaintedPathsEquivalent(equivalence.bakedPaths, equivalence.apPaths, equivalence.placementMatrix);
     },
   );
+
+  it("preserves full underline stroke thickness after annotation flattening", async () => {
+    const equivalence = await renderBakedAndFlattenedMark(
+      {
+        type: "underline",
+        pageIndex: 0,
+        color: { r: 0.2, g: 0.3, b: 0.4 },
+        thicknessPt: 2,
+        rects: [{ x: 210, y: 622, w: 80, h: 12 }],
+      },
+      await createPdf([[612, 792]]),
+    );
+    const [bakedPath] = equivalence.bakedPaths;
+    const [apPath] = equivalence.apPaths;
+
+    expect(bakedPath).toBeDefined();
+    expect(apPath).toBeDefined();
+    expectBoundsClose(
+      transformBounds(intersectBounds(paintedPathExtent(apPath!)!, rectToBounds(equivalence.apBBox))!, equivalence.placementMatrix),
+      paintedPathExtent(bakedPath!)!,
+    );
+  });
 
   it.each([90, 180, 270] as const)(
     "emits and flattens annotation geometry on %i-degree rotated pages",
@@ -422,14 +445,8 @@ describe("annotation-layer foundation", () => {
           ).toEqual(expectedQuadPoints);
         }
         expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
-        expectNumbersClose(equivalence.placementMatrix, [
-          1,
-          0,
-          0,
-          1,
-          expectedRect[0]!,
-          expectedRect[1]!,
-        ]);
+        expectTransformedBBoxMatchesAnnotationRect(equivalence);
+        expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
         expectPaintedPathsEquivalent(
           equivalence.bakedPaths,
           equivalence.apPaths,
@@ -461,7 +478,7 @@ const markEquivalenceCases: ReadonlyArray<{
         ],
       ],
     },
-    expectedRect: [9, 9, 61, 41],
+    expectedRect: [8.75, 8.75, 61.25, 41.25],
   },
   {
     name: "rectangle",
@@ -474,7 +491,7 @@ const markEquivalenceCases: ReadonlyArray<{
       strokeColor: { r: 0.1, g: 0.2, b: 0.3 },
       fillColor: { r: 0.8, g: 0.7, b: 0.2 },
     },
-    expectedRect: [78.5, 118.5, 221.5, 181.5],
+    expectedRect: [78.25, 118.25, 221.75, 181.75],
   },
   {
     name: "ellipse",
@@ -487,7 +504,7 @@ const markEquivalenceCases: ReadonlyArray<{
       strokeColor: { r: 0.3, g: 0.1, b: 0.7 },
       fillColor: { r: 0.2, g: 0.8, b: 0.4 },
     },
-    expectedRect: [98.75, 148.75, 181.25, 191.25],
+    expectedRect: [98.5, 148.5, 181.5, 191.5],
   },
   {
     name: "line",
@@ -500,7 +517,7 @@ const markEquivalenceCases: ReadonlyArray<{
       strokeWidthPt: 4,
       strokeColor: { r: 0.9, g: 0.1, b: 0.1 },
     },
-    expectedRect: [28, 38, 202, 222],
+    expectedRect: [27.75, 37.75, 202.25, 222.25],
   },
   {
     name: "arrow",
@@ -513,7 +530,7 @@ const markEquivalenceCases: ReadonlyArray<{
       strokeWidthPt: 2,
       strokeColor: { r: 0.15, g: 0.25, b: 0.35 },
     },
-    expectedRect: [39, 32.7, 141, 47.3],
+    expectedRect: [38.75, 32.45, 141.25, 47.55],
   },
   {
     name: "highlight",
@@ -545,7 +562,7 @@ const markEquivalenceCases: ReadonlyArray<{
         { x: 210, y: 622, w: 80, h: 12 },
       ],
     },
-    expectedRect: [210, 622, 320, 652],
+    expectedRect: [209, 621, 321, 653],
     expectedQuadPoints: [
       210, 652, 320, 652, 210, 640, 320, 640,
       210, 634, 290, 634, 210, 622, 290, 622,
@@ -560,7 +577,7 @@ const markEquivalenceCases: ReadonlyArray<{
       thicknessPt: 2,
       rects: [{ x: 80, y: 580, w: 130, h: 16 }],
     },
-    expectedRect: [80, 580, 210, 596],
+    expectedRect: [78.75, 578.75, 211.25, 597.25],
     expectedQuadPoints: [80, 596, 210, 596, 80, 580, 210, 580],
   },
 ];
@@ -613,6 +630,16 @@ function readNumberArray(array: PDFArray): number[] {
   return array.asArray().map((value) => Number(value.toString()));
 }
 
+function readRectArray(array: PDFArray): Rect {
+  const [x1, y1, x2, y2] = readNumberArray(array);
+
+  if (x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) {
+    throw new Error("Expected four numeric rectangle values.");
+  }
+
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
 function readName(dict: PDFDict, key: string): string | undefined {
   return dict.lookupMaybe(PDFName.of(key), PDFName)?.toString().replace(/^\//, "");
 }
@@ -652,6 +679,20 @@ type Point = {
   y: number;
 };
 
+type Rect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type Bounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
 type GraphicsStateAlpha = {
   fillAlpha: number | undefined;
   strokeAlpha: number | undefined;
@@ -681,6 +722,7 @@ type PaintedPath = {
 type MarkEquivalence = {
   annotation: PDFDict;
   annotationPdf: PDFDocument;
+  apBBox: Rect;
   apMatrix: Matrix;
   apPaths: readonly PaintedPath[];
   bakedPaths: readonly PaintedPath[];
@@ -721,6 +763,7 @@ async function renderBakedAndFlattenedMark(
   }
 
   const apMatrix = readOptionalMatrix(appearanceStream.dict.lookupMaybe(PDFName.of("Matrix"), PDFArray));
+  const apBBox = readRectArray(appearanceStream.dict.lookup(PDFName.of("BBox"), PDFArray));
 
   expect(readRaioPdfMarkupAnnotations(flattenedPdf.getPage(0))).toHaveLength(0);
   expect(flattenedPdf.getPage(0).node.lookupMaybe(PDFName.of("Annots"), PDFArray)).toBeUndefined();
@@ -728,6 +771,7 @@ async function renderBakedAndFlattenedMark(
   return {
     annotation: annotation!,
     annotationPdf,
+    apBBox,
     apMatrix,
     apPaths: readPaintedPaths(decodePdfStream(appearanceStream), readStreamExtGStates(flattenedPdf, appearanceStream)),
     bakedPaths: readPaintedPaths(
@@ -1009,6 +1053,39 @@ function expectPaintedPathsEquivalent(
   }
 }
 
+function expectTransformedBBoxMatchesAnnotationRect(equivalence: MarkEquivalence): void {
+  const actual = transformBounds(rectToBounds(equivalence.apBBox), equivalence.placementMatrix);
+  const expected = rectToBounds(readRectArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray)));
+
+  expectBoundsClose(actual, expected);
+}
+
+function expectPaintedPathsInsideBBox(apPaths: readonly PaintedPath[], bbox: Rect): void {
+  const bboxBounds = rectToBounds(bbox);
+
+  for (const path of apPaths) {
+    const pathBounds = paintedPathExtent(path);
+
+    if (!pathBounds) {
+      continue;
+    }
+
+    if (paintsFill(path.paint)) {
+      expect(pathBounds.minX).toBeGreaterThanOrEqual(bboxBounds.minX);
+      expect(pathBounds.minY).toBeGreaterThanOrEqual(bboxBounds.minY);
+      expect(pathBounds.maxX).toBeLessThanOrEqual(bboxBounds.maxX);
+      expect(pathBounds.maxY).toBeLessThanOrEqual(bboxBounds.maxY);
+    }
+
+    if (paintsStroke(path.paint)) {
+      expect(pathBounds.minX).toBeGreaterThan(bboxBounds.minX + 0.001);
+      expect(pathBounds.minY).toBeGreaterThan(bboxBounds.minY + 0.001);
+      expect(pathBounds.maxX).toBeLessThan(bboxBounds.maxX - 0.001);
+      expect(pathBounds.maxY).toBeLessThan(bboxBounds.maxY - 0.001);
+    }
+  }
+}
+
 function expectPaintedPathClose(actual: PaintedPath, expected: PaintedPath): void {
   expect(actual.paint).toBe(expected.paint);
   expect(actual.segments).toHaveLength(expected.segments.length);
@@ -1086,6 +1163,13 @@ function expectNumbersClose(actual: readonly number[], expected: readonly number
   for (let index = 0; index < expected.length; index += 1) {
     expectNumberClose(actual[index]!, expected[index]!);
   }
+}
+
+function expectBoundsClose(actual: Bounds, expected: Bounds): void {
+  expectNumberClose(actual.minX, expected.minX);
+  expectNumberClose(actual.minY, expected.minY);
+  expectNumberClose(actual.maxX, expected.maxX);
+  expectNumberClose(actual.maxY, expected.maxY);
 }
 
 function expectNumberClose(actual: number, expected: number): void {
@@ -1267,6 +1351,93 @@ function transformRectCorners(
     transformPoint(matrix, { x: x + w, y: y + h }),
     transformPoint(matrix, { x, y: y + h }),
   ];
+}
+
+function rectToBounds(rect: Rect): Bounds {
+  return {
+    minX: rect.x,
+    minY: rect.y,
+    maxX: rect.x + rect.w,
+    maxY: rect.y + rect.h,
+  };
+}
+
+function paintedPathExtent(path: PaintedPath): Bounds | undefined {
+  const points = path.segments.flatMap(segmentPoints);
+
+  if (points.length === 0) {
+    return undefined;
+  }
+
+  const geometricBounds = boundsForPoints(points);
+
+  if (!paintsStroke(path.paint)) {
+    return geometricBounds;
+  }
+
+  const strokeOutset = (path.state.strokeWidth ?? 1) / 2;
+
+  return outsetBounds(geometricBounds, strokeOutset);
+}
+
+function segmentPoints(segment: PathSegment): Point[] {
+  switch (segment.op) {
+    case "m":
+    case "l":
+      return [segment.point];
+    case "c":
+      return [...segment.points];
+    case "re":
+      return [...segment.corners];
+    case "h":
+      return [];
+  }
+}
+
+function boundsForPoints(points: readonly Point[]): Bounds {
+  return {
+    minX: Math.min(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+    maxX: Math.max(...points.map((point) => point.x)),
+    maxY: Math.max(...points.map((point) => point.y)),
+  };
+}
+
+function outsetBounds(bounds: Bounds, amount: number): Bounds {
+  return {
+    minX: bounds.minX - amount,
+    minY: bounds.minY - amount,
+    maxX: bounds.maxX + amount,
+    maxY: bounds.maxY + amount,
+  };
+}
+
+function intersectBounds(a: Bounds, b: Bounds): Bounds | undefined {
+  const bounds = {
+    minX: Math.max(a.minX, b.minX),
+    minY: Math.max(a.minY, b.minY),
+    maxX: Math.min(a.maxX, b.maxX),
+    maxY: Math.min(a.maxY, b.maxY),
+  };
+
+  return bounds.minX <= bounds.maxX && bounds.minY <= bounds.maxY ? bounds : undefined;
+}
+
+function transformBounds(bounds: Bounds, matrix: Matrix): Bounds {
+  return boundsForPoints([
+    transformPoint(matrix, { x: bounds.minX, y: bounds.minY }),
+    transformPoint(matrix, { x: bounds.maxX, y: bounds.minY }),
+    transformPoint(matrix, { x: bounds.maxX, y: bounds.maxY }),
+    transformPoint(matrix, { x: bounds.minX, y: bounds.maxY }),
+  ]);
+}
+
+function paintsStroke(paint: string): boolean {
+  return ["S", "s", "B", "B*", "b", "b*"].includes(paint);
+}
+
+function paintsFill(paint: string): boolean {
+  return ["f", "f*", "B", "B*", "b", "b*"].includes(paint);
 }
 
 function defaultPaintState(): PaintState {

@@ -104,4 +104,8 @@ body{
       </div>
     </div>
   </div>
+<script>/* fit-to-width: scale the fixed 360px demo down so it never clips in a narrow (mobile) cell */
+(function(){var f=document.querySelector('.frame');if(!f)return;f.style.transformOrigin='center center';
+function fit(){var w=document.documentElement.clientWidth;f.style.transform='scale('+Math.min(1,(w/360)).toFixed(3)+')';}
+addEventListener('resize',fit,{passive:true});fit();})();</script>
 </body></html>

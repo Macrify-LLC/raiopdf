@@ -407,9 +407,10 @@ fn ensure_grant_file_unchanged(entry: &FileGrantEntry) -> Result<(), String> {
 
 fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    let permissions = replacement_permissions(path, None)?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())?;
     temp.write_all(bytes)?;
-    apply_replacement_permissions(&temp, replacement_permissions(path, None)?)?;
+    apply_replacement_permissions(&temp, permissions)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
     persist_atomic_file(temp, path)?;
@@ -421,9 +422,10 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 fn atomic_copy_file(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     let mut input = fs::File::open(source)?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    let permissions = replacement_permissions(destination, Some(source))?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())?;
     io::copy(&mut input, temp.as_file_mut())?;
-    apply_replacement_permissions(&temp, replacement_permissions(destination, Some(source))?)?;
+    apply_replacement_permissions(&temp, permissions)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
     persist_atomic_file(temp, destination)?;
@@ -432,27 +434,29 @@ fn atomic_copy_file(source: &Path, destination: &Path) -> Result<(), std::io::Er
 }
 
 fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Result<(), String> {
-    let path = &entry.path;
+    let path = fs::canonicalize(&entry.path).map_err(|error| {
+        format!(
+            "Failed to write PDF at {}: {error}",
+            entry.path.to_string_lossy()
+        )
+    })?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)
+    let permissions = replacement_permissions(&path, None)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
     temp.write_all(bytes)
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
-    apply_replacement_permissions(
-        &temp,
-        replacement_permissions(path, None).map_err(|error| {
-            format!("Failed to write PDF at {}: {error}", path.to_string_lossy())
-        })?,
-    )
-    .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    apply_replacement_permissions(&temp, permissions)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
     temp.flush()
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
     temp.as_file()
         .sync_all()
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
 
-    let backup = backup_path_for(path);
-    fs::rename(path, &backup)
+    let backup = backup_path_for(&path);
+    fs::rename(&path, &backup)
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
 
     let result = (|| {
@@ -461,7 +465,7 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
             snapshot: entry.snapshot,
         };
         ensure_grant_file_unchanged(&backup_entry)?;
-        persist_atomic_file_noclobber(temp, path)
+        persist_atomic_file_noclobber(temp, &path)
             .and_then(|_| sync_parent_dir(parent))
             .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
     })();
@@ -477,7 +481,7 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
             Ok(())
         }
         Err(error) => {
-            restore_staged_original(&backup, path).map_err(|restore_error| {
+            restore_staged_original(&backup, &path).map_err(|restore_error| {
                 format!(
                     "{error} Original file could not be restored from {}: {restore_error}",
                     backup.to_string_lossy()
@@ -499,7 +503,13 @@ fn atomic_copy_grant_if_unchanged(
             destination.to_string_lossy()
         )
     })?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
         format!(
             "Failed to save PDF copy at {}: {error}",
             destination.to_string_lossy()
@@ -511,16 +521,7 @@ fn atomic_copy_grant_if_unchanged(
             destination.to_string_lossy()
         )
     })?;
-    apply_replacement_permissions(
-        &temp,
-        replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
-            format!(
-                "Failed to save PDF copy at {}: {error}",
-                destination.to_string_lossy()
-            )
-        })?,
-    )
-    .map_err(|error| {
+    apply_replacement_permissions(&temp, permissions).map_err(|error| {
         format!(
             "Failed to save PDF copy at {}: {error}",
             destination.to_string_lossy()
@@ -604,33 +605,43 @@ fn replacement_permissions(
     }
 }
 
+fn replacement_temp_file(
+    parent: &Path,
+    permissions: Option<&fs::Permissions>,
+) -> Result<tempfile::NamedTempFile, std::io::Error> {
+    let mut builder = tempfile::Builder::new();
+    apply_default_create_permissions(&mut builder, permissions);
+    builder.tempfile_in(parent)
+}
+
 fn apply_replacement_permissions(
     temp: &tempfile::NamedTempFile,
     permissions: Option<fs::Permissions>,
 ) -> Result<(), std::io::Error> {
     if let Some(permissions) = permissions {
         temp.as_file().set_permissions(permissions)?;
-    } else {
-        apply_default_replacement_permissions(temp)?;
     }
 
     Ok(())
 }
 
 #[cfg(unix)]
-fn apply_default_replacement_permissions(
-    temp: &tempfile::NamedTempFile,
-) -> Result<(), std::io::Error> {
+fn apply_default_create_permissions(
+    builder: &mut tempfile::Builder,
+    permissions: Option<&fs::Permissions>,
+) {
     use std::os::unix::fs::PermissionsExt;
-    temp.as_file()
-        .set_permissions(fs::Permissions::from_mode(0o644))
+
+    if permissions.is_none() {
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
 }
 
 #[cfg(not(unix))]
-fn apply_default_replacement_permissions(
-    _temp: &tempfile::NamedTempFile,
-) -> Result<(), std::io::Error> {
-    Ok(())
+fn apply_default_create_permissions(
+    _builder: &mut tempfile::Builder,
+    _permissions: Option<&fs::Permissions>,
+) {
 }
 
 fn sync_parent_dir(parent: &Path) -> Result<(), std::io::Error> {
@@ -999,6 +1010,79 @@ mod tests {
             fs::read(&path).expect("read restored"),
             b"changed externally after open"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grant_write_through_symlink_preserves_link_and_updates_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("target.pdf");
+        let link = dir.path().join("link.pdf");
+        fs::write(&target, b"opened target bytes").expect("write target");
+        symlink(&target, &link).expect("symlink");
+        let grants = FileGrants::default();
+        let grant = grants.grant(link.clone()).expect("grant should be issued");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+
+        atomic_write_grant_if_unchanged(&entry, b"saved target bytes")
+            .expect("save through symlink");
+
+        assert_eq!(fs::read_link(&link).expect("link preserved"), target);
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"saved target bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_respects_restrictive_umask_for_new_files() {
+        if std::env::var("RAIOPDF_UMASK_CHILD").as_deref() == Ok("1") {
+            atomic_write_respects_restrictive_umask_child();
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .env("RAIOPDF_UMASK_CHILD", "1")
+            .arg("--exact")
+            .arg("tests::atomic_write_respects_restrictive_umask_for_new_files")
+            .arg("--nocapture")
+            .output()
+            .expect("spawn umask child");
+
+        assert!(
+            output.status.success(),
+            "child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn atomic_write_respects_restrictive_umask_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        unsafe extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+
+        let previous = unsafe { umask(0o077) };
+        let result = (|| {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("new.pdf");
+
+            atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
+
+            let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        })();
+        unsafe {
+            umask(previous);
+        }
+
+        result
     }
 
     #[cfg(unix)]

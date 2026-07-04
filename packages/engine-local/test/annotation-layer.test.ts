@@ -513,9 +513,9 @@ describe("annotation-layer foundation", () => {
     expect(readNumberArray(annotation!.lookup(PDFName.of("CL"), PDFArray))).toEqual([
       180, 145, 240, 145,
     ]);
-    expect(readNameArray(annotation!.lookup(PDFName.of("LE"), PDFArray))).toEqual([
-      "None",
-      "ClosedArrow",
+    expect(readName(annotation!, "LE")).toBe("ClosedArrow");
+    expect(readNumberArray(annotation!.lookup(PDFName.of("RD"), PDFArray))).toEqual([
+      1.75, 1.75, 61.75, 1.75,
     ]);
     expect(readNumberArray(appearance.dict.lookup(PDFName.of("BBox"), PDFArray))).toEqual([
       -1.75, -1.75, 161.75, 51.75,

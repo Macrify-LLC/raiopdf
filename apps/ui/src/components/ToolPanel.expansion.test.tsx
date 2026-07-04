@@ -72,12 +72,12 @@ describe("ToolPanel inline tool expansions", () => {
     expect(onOrganizeToolSelected).toHaveBeenCalledWith("rotate");
   });
 
-  it("still renders the outer help affordance for organize tools that stayed dialog-based", () => {
+  it("renders no collapsed-row help icons on organize tools (item 13 consolidation)", () => {
     render(<Harness />);
 
-    // Repair wasn't moved inline (item 18 keeps it a dialog), so its ToolRow
-    // help button is untouched.
-    expect(document.querySelector('[aria-label="Help: Repair..."]')).not.toBeNull();
+    // Item 13 removed per-row "?" icons everywhere -- even dialog-based tools
+    // like Repair carry contextual help inside their dialog, not on the row.
+    expect(document.querySelector('[aria-label="Help: Repair..."]')).toBeNull();
   });
 
   it("expands Page Numbers inline and submits the parsed defaults", async () => {
@@ -224,6 +224,7 @@ function Harness(overrides: Partial<ToolPanelProps>) {
     onRunScanner: () => undefined,
     onMarkScannerHit: () => undefined,
     onHelpRequested: () => undefined,
+    onConnectToAi: () => undefined,
     onRotateLeft: () => undefined,
     onRotateRight: () => undefined,
     sidecarStatus: idleSidecarStatus,

@@ -108,6 +108,14 @@ describe("ToolPanel", () => {
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
         onConnectToAi={onConnectToAi ?? (() => undefined)}
+        pageCount={1}
+        onRotateLeft={() => undefined}
+        onRotateRight={() => undefined}
+        sidecarStatus={{ running: false, message: null, removed: [], beforeBytes: null, afterBytes: null }}
+        onApplyPageNumbers={() => Promise.resolve(true)}
+        onApplyWatermark={() => Promise.resolve(true)}
+        compressAvailable
+        onCompress={() => Promise.resolve(true)}
       />
     );
   }

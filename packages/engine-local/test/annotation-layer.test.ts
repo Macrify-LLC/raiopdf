@@ -268,16 +268,105 @@ describe("annotation-layer foundation", () => {
     ]);
   });
 
-  it("keeps non-P1 edit types on their existing paths in annotation mode", async () => {
+  it("emits text markup edits as marked printable annotations with quadpoints and appearances", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edits: readonly PdfEdit[] = [
+      {
+        type: "highlight",
+        pageIndex: 0,
+        rects: [
+          { x: 40, y: 700, w: 120, h: 14 },
+          { x: 40, y: 680, w: 90, h: 14 },
+        ],
+      },
+      {
+        type: "underline",
+        pageIndex: 0,
+        color: { r: 0.2, g: 0.3, b: 0.4 },
+        thicknessPt: 1.5,
+        rects: [
+          { x: 210, y: 640, w: 110, h: 12 },
+          { x: 210, y: 622, w: 80, h: 12 },
+        ],
+      },
+      {
+        type: "strikethrough",
+        pageIndex: 0,
+        color: { r: 0.7, g: 0.1, b: 0.2 },
+        rects: [{ x: 80, y: 580, w: 130, h: 16 }],
+      },
+    ];
+
+    const edited = await engine.applyEdits(document, edits, { markupMode: "annotation" });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const annotations = readPageAnnotations(pdf, 0);
+
+    expect(readRaioPdfMarkupAnnotations(pdf.getPage(0)).map((entry) => entry.subtype)).toEqual([
+      "Highlight",
+      "Underline",
+      "StrikeOut",
+    ]);
+    expect(annotations.map((annotation) => readName(annotation, "Subtype"))).toEqual([
+      "Highlight",
+      "Underline",
+      "StrikeOut",
+    ]);
+
+    for (const annotation of annotations) {
+      expect(annotation.lookup(PDFName.of("F"), PDFNumber).asNumber()).toBe(4);
+      expect(annotation.lookupMaybe(PDFName.of("RaioPDF"), PDFDict)).toBeInstanceOf(PDFDict);
+      expect(annotation.get(PDFName.of("T"))).toBeUndefined();
+      expect(annotation.get(PDFName.of("M"))).toBeUndefined();
+      expect(decodePdfStream(readNormalAppearanceStream(pdf, annotation)).length).toBeGreaterThan(
+        0,
+      );
+    }
+
+    const [highlight, underline, strikeout] = annotations;
+
+    expect(readNumberArray(highlight!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
+      40, 680, 160, 714,
+    ]);
+    expect(readNumberArray(highlight!.lookup(PDFName.of("QuadPoints"), PDFArray))).toEqual([
+      40, 714, 160, 714, 40, 700, 160, 700,
+      40, 694, 130, 694, 40, 680, 130, 680,
+    ]);
+    expect(readNumberArray(highlight!.lookup(PDFName.of("C"), PDFArray))).toEqual([1, 0.9, 0.3]);
+
+    expect(readNumberArray(underline!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
+      210, 622, 320, 652,
+    ]);
+    expect(readNumberArray(underline!.lookup(PDFName.of("QuadPoints"), PDFArray))).toEqual([
+      210, 652, 320, 652, 210, 640, 320, 640,
+      210, 634, 290, 634, 210, 622, 290, 622,
+    ]);
+    expect(readNumberArray(underline!.lookup(PDFName.of("C"), PDFArray))).toEqual([
+      0.2, 0.3, 0.4,
+    ]);
+
+    expect(readNumberArray(strikeout!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
+      80, 580, 210, 596,
+    ]);
+    expect(readNumberArray(strikeout!.lookup(PDFName.of("QuadPoints"), PDFArray))).toEqual([
+      80, 596, 210, 596, 80, 580, 210, 580,
+    ]);
+    expect(readNumberArray(strikeout!.lookup(PDFName.of("C"), PDFArray))).toEqual([
+      0.7, 0.1, 0.2,
+    ]);
+  });
+
+  it("keeps non-markup edit types on their existing paths in annotation mode", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[240, 180]]));
     const edited = await engine.applyEdits(
       document,
       [
         {
-          type: "highlight",
+          type: "textBox",
           pageIndex: 0,
-          rects: [{ x: 20, y: 30, w: 70, h: 12 }],
+          rect: { x: 20, y: 30, w: 70, h: 24 },
+          text: "Baked",
         },
         {
           type: "comment",
@@ -291,7 +380,7 @@ describe("annotation-layer foundation", () => {
     const bytes = await engine.saveToBytes(edited);
     const pdf = await PDFDocument.load(bytes);
 
-    expect(await readDecodedPageContent(bytes, 0)).toContain("f");
+    expect(await readDecodedPageContent(bytes, 0)).toContain("Tj");
     expect(readRaioPdfMarkupAnnotations(pdf.getPage(0))).toHaveLength(0);
     expect(readPageAnnotations(pdf, 0).map((annotation) => readName(annotation, "Subtype"))).toEqual([
       "Text",
@@ -300,12 +389,17 @@ describe("annotation-layer foundation", () => {
 
   it.each(markEquivalenceCases)(
     "flattens annotation-mode $name with AP-local drawing equivalent to baked page drawing",
-    async ({ edit, expectedRect }) => {
+    async ({ edit, expectedRect, expectedQuadPoints }) => {
       const equivalence = await renderBakedAndFlattenedMark(edit, await createPdf([[612, 792]]));
 
       expect(readNumberArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
         expectedRect,
       );
+      if (expectedQuadPoints) {
+        expect(
+          readNumberArray(equivalence.annotation.lookup(PDFName.of("QuadPoints"), PDFArray)),
+        ).toEqual(expectedQuadPoints);
+      }
       expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
       expectNumbersClose(equivalence.placementMatrix, [1, 0, 0, 1, expectedRect[0]!, expectedRect[1]!]);
       expectPaintedPathsEquivalent(equivalence.bakedPaths, equivalence.apPaths, equivalence.placementMatrix);
@@ -315,13 +409,18 @@ describe("annotation-layer foundation", () => {
   it.each([90, 180, 270] as const)(
     "emits and flattens annotation geometry on %i-degree rotated pages",
     async (rotation) => {
-      for (const { edit, expectedRect } of markEquivalenceCases) {
+      for (const { edit, expectedRect, expectedQuadPoints } of markEquivalenceCases) {
         const equivalence = await renderBakedAndFlattenedMark(edit, await createRotatedPdf(rotation));
 
         expect(equivalence.annotationPdf.getPage(0).getRotation().angle).toBe(rotation);
         expect(readNumberArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
           expectedRect,
         );
+        if (expectedQuadPoints) {
+          expect(
+            readNumberArray(equivalence.annotation.lookup(PDFName.of("QuadPoints"), PDFArray)),
+          ).toEqual(expectedQuadPoints);
+        }
         expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
         expectNumbersClose(equivalence.placementMatrix, [
           1,
@@ -345,6 +444,7 @@ const markEquivalenceCases: ReadonlyArray<{
   name: string;
   edit: PdfEdit;
   expectedRect: number[];
+  expectedQuadPoints?: number[];
 }> = [
   {
     name: "ink",
@@ -414,6 +514,54 @@ const markEquivalenceCases: ReadonlyArray<{
       strokeColor: { r: 0.15, g: 0.25, b: 0.35 },
     },
     expectedRect: [39, 32.7, 141, 47.3],
+  },
+  {
+    name: "highlight",
+    edit: {
+      type: "highlight",
+      pageIndex: 0,
+      color: { r: 0.95, g: 0.8, b: 0.1 },
+      opacity: 0.35,
+      rects: [
+        { x: 40, y: 700, w: 120, h: 14 },
+        { x: 40, y: 680, w: 90, h: 14 },
+      ],
+    },
+    expectedRect: [40, 680, 160, 714],
+    expectedQuadPoints: [
+      40, 714, 160, 714, 40, 700, 160, 700,
+      40, 694, 130, 694, 40, 680, 130, 680,
+    ],
+  },
+  {
+    name: "underline",
+    edit: {
+      type: "underline",
+      pageIndex: 0,
+      color: { r: 0.2, g: 0.3, b: 0.4 },
+      thicknessPt: 1.5,
+      rects: [
+        { x: 210, y: 640, w: 110, h: 12 },
+        { x: 210, y: 622, w: 80, h: 12 },
+      ],
+    },
+    expectedRect: [210, 622, 320, 652],
+    expectedQuadPoints: [
+      210, 652, 320, 652, 210, 640, 320, 640,
+      210, 634, 290, 634, 210, 622, 290, 622,
+    ],
+  },
+  {
+    name: "strikethrough",
+    edit: {
+      type: "strikethrough",
+      pageIndex: 0,
+      color: { r: 0.7, g: 0.1, b: 0.2 },
+      thicknessPt: 2,
+      rects: [{ x: 80, y: 580, w: 130, h: 16 }],
+    },
+    expectedRect: [80, 580, 210, 596],
+    expectedQuadPoints: [80, 596, 210, 596, 80, 580, 210, 580],
   },
 ];
 

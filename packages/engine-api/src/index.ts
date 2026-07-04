@@ -341,8 +341,8 @@ export type PdfEditImageFormat = "png" | "jpeg";
 /**
  * Translucent text highlight covering one rectangle per highlighted line.
  *
- * Highlights are baked into page content on apply (not stored as annotations),
- * so they survive in every viewer and cannot be toggled off afterward.
+ * Highlights are baked into page content by default. Callers can opt into
+ * annotation-layer saving with `markupMode: "annotation"`.
  */
 export type PdfHighlightEdit = {
   type: "highlight";
@@ -359,8 +359,8 @@ export type PdfHighlightEdit = {
 /**
  * Text markup drawn from text-line rectangles.
  *
- * Underline and strikethrough are baked into page content on apply (not stored
- * as annotations), matching highlight's save behavior.
+ * Underline and strikethrough are baked into page content by default. Callers
+ * can opt into annotation-layer saving with `markupMode: "annotation"`.
  */
 export type PdfTextMarkupEdit = {
   type: "underline" | "strikethrough";
@@ -530,7 +530,8 @@ export type PdfApplyEditsOptions = {
    * emitted as live PDF annotations with generated appearances.
    *
    * Defaults to `"baked"` for the existing save behavior. Annotation mode is
-   * currently opt-in and only applies to ink and geometric shape edits.
+   * currently opt-in and applies to ink, geometric shape, highlight, underline,
+   * and strikethrough edits.
    */
   markupMode?: PdfMarkupMode;
 };
@@ -902,9 +903,10 @@ export interface PdfEngine {
    * real `/Annots` entries so they remain live annotations. By default, the
    * other edit types are baked into page content. Callers may opt into
    * `markupMode: "annotation"` to emit supported markup edits as real PDF
-   * annotations; Phase 1 supports ink and geometric shapes only, while all
-   * other edit types keep their existing path. Engines without an add-content
-   * pipeline must reject with `PdfEngineError("UNSUPPORTED", ...)`.
+   * annotations; currently supported markup edits are ink, geometric shapes,
+   * highlights, underlines, and strikethroughs. Other edit types keep their
+   * existing path. Engines without an add-content pipeline must reject with
+   * `PdfEngineError("UNSUPPORTED", ...)`.
    */
   applyEdits(
     document: PdfDocumentHandle,

@@ -739,13 +739,12 @@ fn os_version() -> String {
         .unwrap_or_else(|| "version unavailable".to_string())
 }
 
+// Windows-only on purpose: the sole caller is the Windows os_version(), so a
+// non-Windows stub would be dead code and fail the deny-warnings lint.
 #[cfg(windows)]
 fn apply_platform_spawn_flags(command: &mut std::process::Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
-
-#[cfg(not(windows))]
-fn apply_platform_spawn_flags(_command: &mut std::process::Command) {}
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn os_version() -> String {

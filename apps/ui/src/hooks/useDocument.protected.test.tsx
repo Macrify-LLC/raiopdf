@@ -25,6 +25,10 @@ vi.mock("@raiopdf/engine-local", async () => {
         throw new PdfEngineError("ENCRYPTED_DOCUMENT", "Encrypted.");
       }
 
+      if (bytes[0] === 9) {
+        throw new PdfEngineError("INVALID_DOCUMENT", "PDF bytes could not be read.");
+      }
+
       return `handle-${bytes[0] ?? 0}` as PdfDocumentHandle;
     }
 
@@ -114,6 +118,32 @@ describe("useDocument protected PDFs", () => {
     const saved = await act(async () => harness.current.save());
 
     expect(saved?.filePath).toBeNull();
+  });
+
+  it("keeps the previous document usable after a failed replacement open (Codex P1)", async () => {
+    const harness = renderUseDocument();
+
+    await act(async () => {
+      await harness.current.openFile({ bytes: new Uint8Array([2]), name: "brief.pdf" });
+    });
+
+    let result: Awaited<ReturnType<ReturnType<typeof useDocument>["openFile"]>> | undefined;
+    await act(async () => {
+      result = await harness.current.openFile({ bytes: new Uint8Array([9]), name: "corrupt.pdf" });
+    });
+
+    expect(result?.status).toBe("failed");
+    // The old document stays on screen with an error banner...
+    expect(harness.current.document.fileName).toBe("brief.pdf");
+    expect(harness.current.document.error).not.toBeNull();
+
+    // ...and stays OPERABLE: save must still find the active engine handle.
+    // (A null return is exactly the Codex P1 symptom — refs wiped while the
+    // document stayed visible. fileName isn't asserted: save() reads it via
+    // a deferred state pass that doesn't flush inside this act() timing.)
+    const saved = await act(async () => harness.current.save());
+    expect(saved).not.toBeNull();
+    expect(saved?.bytes).toEqual(engineState.saveBytes);
   });
 
   it("replaceBytes uses a known page count during commit instead of asking the engine again", async () => {

@@ -472,9 +472,6 @@ export function useDocument(options: UseDocumentOptions = {}) {
           return { status: "failed", error: getEngineErrorMessage(error) };
         }
 
-        activeHandleRef.current = null;
-        activeBytesRef.current = null;
-
         // ENCRYPTED_DOCUMENT: raw engine error when no protected-PDF resolver
         // is wired. PASSWORD_REQUIRED: the resolver ran, silently unlocked
         // owner-restricted PDFs if it could, and reports a genuine open
@@ -487,6 +484,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
           // state while the caller shows a password prompt. The still-
           // encrypted bytes travel in the result itself (not `document`),
           // since they're not this hook's concern until they're unlocked.
+          // Any previously open document is being replaced by the prompt
+          // flow, so release its handle rather than leaking it.
+          activeHandleRef.current = null;
+          activeBytesRef.current = null;
+          await closeHandle(previousHandle);
           setDocument(INITIAL_DOCUMENT);
           return {
             status: "password-required",
@@ -498,9 +500,14 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         const message = getEngineErrorMessage(error);
         if (previousHandle) {
-          // A failed replacement open keeps the current document on screen.
+          // A failed replacement open keeps the current document on screen --
+          // and USABLE: the refs must keep pointing at the still-open
+          // previous handle or save/rotate/delete on the visible document
+          // would find no engine handle (Codex Cloud P1 on #115).
           setDocument((current) => ({ ...current, error: message }));
         } else {
+          activeHandleRef.current = null;
+          activeBytesRef.current = null;
           setDocument({
             ...INITIAL_DOCUMENT,
             error: message,

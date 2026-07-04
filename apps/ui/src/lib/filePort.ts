@@ -25,6 +25,15 @@ export const filePort: FilePort = isTauriRuntime()
   ? createTauriFilePort()
   : createBrowserFilePort();
 
+/**
+ * Reads a DOM `File` fully into memory with NO size gate.
+ *
+ * Closed-form rule [R7-2]/[R5-1] (large-PDF-handling plan): outside this
+ * module's own main-document open path, `readBrowserFile` may only be called
+ * from `readFileForAdd` (`./readFileForAdd.ts`), which size-checks BEFORE
+ * reading. Do not import it anywhere else -- route every non-main-document
+ * file add through `readFileForAdd` instead.
+ */
 export async function readBrowserFile(file: File): Promise<OpenedFile> {
   return {
     bytes: new Uint8Array(await file.arrayBuffer()),
@@ -110,7 +119,7 @@ interface TauriSavedPdf {
   name: string;
 }
 
-type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
+export type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
 
 function savedFromTauri(saved: TauriSavedPdf): SavedFile {
   return {
@@ -119,7 +128,7 @@ function savedFromTauri(saved: TauriSavedPdf): SavedFile {
   };
 }
 
-function toUint8Array(bytes: BinaryInvokeResponse): Uint8Array {
+export function toUint8Array(bytes: BinaryInvokeResponse): Uint8Array {
   if (bytes instanceof Uint8Array) {
     return bytes;
   }
@@ -131,11 +140,13 @@ function toUint8Array(bytes: BinaryInvokeResponse): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+export function isTauriRuntime(): boolean {
+  // `typeof window` guard keeps this module importable from node-environment
+  // unit tests that pull in UI modules without a DOM.
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function pickBrowserFile(): Promise<File | null> {
+export function pickBrowserFile(): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";

@@ -10,7 +10,13 @@ import {
 import { PDFDocument } from "pdf-lib";
 import type { ResizePreset } from "../lib/cropResize";
 import { isTextEntryTarget } from "../lib/domGuards";
-import { readBrowserFile, type OpenedFile, type SavedFile } from "../lib/filePort";
+import type { OpenedFile, SavedFile } from "../lib/filePort";
+import {
+  pickPdfsForAdd,
+  readFileForAdd,
+  tooLargeToAddMessage,
+  type FileAddInput,
+} from "../lib/readFileForAdd";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import type { DocumentState } from "../hooks/useDocument";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
@@ -262,6 +268,27 @@ function OrganizePagesGrid({
     setStatus(extracted ? "Extracted pages opened as the working document." : "Selected pages could not be extracted.");
   }
 
+  async function insertFromInput(input: FileAddInput) {
+    try {
+      const result = await readFileForAdd(input);
+
+      if (result.kind !== "bytes") {
+        // Inserting runs through the in-memory pdf-lib engine, so
+        // above-threshold files stay gated here until the delegated
+        // path-based insert lands (large-PDF-handling plan, Phase 3).
+        const name = result.kind === "descriptor" ? result.descriptor.name : result.name;
+        setStatus(tooLargeToAddMessage(name));
+        return;
+      }
+
+      setStatus("Inserting pages...");
+      const inserted = await onInsert(result.file, insertAt);
+      setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted.");
+    } catch {
+      setStatus("This PDF could not be opened. Check the file and try again.");
+    }
+  }
+
   async function handleInsertFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
@@ -270,13 +297,23 @@ function OrganizePagesGrid({
       return;
     }
 
-    try {
-      const opened = await readBrowserFile(file);
-      setStatus("Inserting pages...");
-      const inserted = await onInsert(opened, insertAt);
-      setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted.");
-    } catch {
-      setStatus("This PDF could not be opened. Check the file and try again.");
+    await insertFromInput(file);
+  }
+
+  async function chooseInsertFile() {
+    // Tauri: grant-returning picker (no eager byte read); browser or a shell
+    // without pick_pdfs_for_add falls back to the DOM file input.
+    const picks = await pickPdfsForAdd();
+
+    if (picks === null) {
+      insertInputRef.current?.click();
+      return;
+    }
+
+    const pick = picks[0];
+
+    if (pick) {
+      await insertFromInput(pick);
     }
   }
 
@@ -382,7 +419,7 @@ function OrganizePagesGrid({
           aria-label="Insert PDF in Organize Pages"
           onChange={handleInsertFile}
         />
-        <button type="button" className="organize-secondary" onClick={() => insertInputRef.current?.click()}>
+        <button type="button" className="organize-secondary" onClick={() => void chooseInsertFile()}>
           <InsertIcon size={15} />
           Insert from File
         </button>
@@ -616,17 +653,49 @@ function MergeFlow({
   const [status, setStatus] = useState<string | null>(null);
   const totalFiles = files.length + (document.bytes ? 1 : 0);
 
-  async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
-    const selectedFiles = Array.from(event.currentTarget.files ?? []);
-    event.currentTarget.value = "";
+  async function addPdfInputs(inputs: readonly FileAddInput[]) {
+    if (inputs.length === 0) {
+      return;
+    }
 
     try {
-      const openedFiles = await Promise.all(selectedFiles.map(readOpenedPdfWithCount));
-      setFiles((current) => [...current, ...openedFiles]);
-      setStatus(null);
+      const outcomes = await Promise.all(inputs.map(readOpenedPdfWithCount));
+      const added = outcomes.flatMap((outcome) => (outcome.status === "ok" ? [outcome.file] : []));
+      const rejected = outcomes.flatMap((outcome) => (outcome.status === "tooLarge" ? [outcome.name] : []));
+
+      if (added.length > 0) {
+        setFiles((current) => [...current, ...added]);
+      }
+
+      setStatus(
+        rejected.length === 0
+          ? null
+          : rejected.length === 1 && rejected[0] !== undefined
+            ? tooLargeToAddMessage(rejected[0])
+            : `${rejected.length} PDFs are too large to add here.`,
+      );
     } catch {
       setStatus("One PDF could not be opened. Check the files and try again.");
     }
+  }
+
+  async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    await addPdfInputs(selectedFiles);
+  }
+
+  async function addPdfs() {
+    // Tauri: grant-returning picker (no eager byte read); browser or a shell
+    // without pick_pdfs_for_add falls back to the DOM file input.
+    const picks = await pickPdfsForAdd({ multiple: true });
+
+    if (picks === null) {
+      inputRef.current?.click();
+      return;
+    }
+
+    await addPdfInputs(picks);
   }
 
   async function merge() {
@@ -650,7 +719,7 @@ function MergeFlow({
         ))}
       </div>
       <input ref={inputRef} className="organize-file-input" type="file" accept="application/pdf" multiple aria-label="Add PDFs to merge" onChange={handleFiles} />
-      <button type="button" className="organize-secondary" onClick={() => inputRef.current?.click()}>
+      <button type="button" className="organize-secondary" onClick={() => void addPdfs()}>
         <PlusIcon size={15} />
         Add PDFs...
       </button>
@@ -718,6 +787,22 @@ function InsertFlow({
   const pageNumber = Number(insertAfter);
   const error = getInsertError(insertAfter, document.pageCount);
 
+  async function setFileFromInput(input: FileAddInput) {
+    try {
+      const outcome = await readOpenedPdfWithCount(input);
+
+      if (outcome.status === "tooLarge") {
+        setStatus(tooLargeToAddMessage(outcome.name));
+        return;
+      }
+
+      setFile(outcome.file);
+      setStatus(null);
+    } catch {
+      setStatus("This PDF could not be opened. Check the file and try again.");
+    }
+  }
+
   async function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const selectedFile = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
@@ -726,11 +811,23 @@ function InsertFlow({
       return;
     }
 
-    try {
-      setFile(await readOpenedPdfWithCount(selectedFile));
-      setStatus(null);
-    } catch {
-      setStatus("This PDF could not be opened. Check the file and try again.");
+    await setFileFromInput(selectedFile);
+  }
+
+  async function choosePdf() {
+    // Tauri: grant-returning picker (no eager byte read); browser or a shell
+    // without pick_pdfs_for_add falls back to the DOM file input.
+    const picks = await pickPdfsForAdd();
+
+    if (picks === null) {
+      inputRef.current?.click();
+      return;
+    }
+
+    const pick = picks[0];
+
+    if (pick) {
+      await setFileFromInput(pick);
     }
   }
 
@@ -754,7 +851,7 @@ function InsertFlow({
   return (
     <div className="organize-flow">
       <input ref={inputRef} className="organize-file-input" type="file" accept="application/pdf" aria-label="Choose PDF to insert" onChange={handleFile} />
-      <button type="button" className="organize-secondary" onClick={() => inputRef.current?.click()}>
+      <button type="button" className="organize-secondary" onClick={() => void choosePdf()}>
         <InsertIcon size={15} />
         Choose PDF...
       </button>
@@ -882,13 +979,28 @@ function ActionStatus({ message }: { message: string | null }) {
   return message ? <p className="organize-flow__status" role="status">{message}</p> : null;
 }
 
-async function readOpenedPdfWithCount(file: File): Promise<OpenedFile & { pageCount: number }> {
-  const opened = await readBrowserFile(file);
-  const pdf = await PDFDocument.load(opened.bytes);
+type AddPdfOutcome =
+  | { status: "ok"; file: OpenedFile & { pageCount: number } }
+  | { status: "tooLarge"; name: string };
+
+async function readOpenedPdfWithCount(input: FileAddInput): Promise<AddPdfOutcome> {
+  const result = await readFileForAdd(input);
+
+  if (result.kind !== "bytes") {
+    // Merge/insert consume full bytes in the in-memory pdf-lib engine, so
+    // above-threshold adds (browser gate or Tauri grant descriptor) stay
+    // gated until the delegated qpdf pipeline lands (large-PDF plan Phase 3).
+    return {
+      status: "tooLarge",
+      name: result.kind === "descriptor" ? result.descriptor.name : result.name,
+    };
+  }
+
+  const pdf = await PDFDocument.load(result.file.bytes);
 
   return {
-    ...opened,
-    pageCount: pdf.getPageCount(),
+    status: "ok",
+    file: { ...result.file, pageCount: pdf.getPageCount() },
   };
 }
 

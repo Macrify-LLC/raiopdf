@@ -15,7 +15,7 @@ import {
   rgb,
   StandardFonts,
 } from "pdf-lib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLocalPdfEngine, createStableExhibitIndex } from "../src/index";
 
 describe("LocalPdfEngine", () => {
@@ -175,6 +175,43 @@ describe("LocalPdfEngine", () => {
       byteLength: singlePageBytes.byteLength,
       oversized: true,
     });
+  });
+
+  it("splits by max bytes with O(parts) serializations, not one per page", async () => {
+    const engine = createLocalPdfEngine();
+    const pageCount = 60;
+    const sourceBytes = await createPdf(
+      Array.from({ length: pageCount }, () => [200, 300] as const),
+    );
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const capBytes = (
+      await createPdfFromSourcePages(sourcePdf, Array.from({ length: 20 }, (_, index) => index))
+    ).byteLength;
+    const document = await engine.open(sourceBytes);
+
+    // splitByMaxBytes serializes candidate parts exclusively through
+    // PDFDocument.create (one create per serialized probe document), so the
+    // spy's call count is the serialization count.
+    const createSpy = vi.spyOn(PDFDocument, "create");
+    const result = await engine.splitByMaxBytes(document, capBytes);
+    const serializations = createSpy.mock.calls.length;
+    createSpy.mockRestore();
+
+    // Contract unchanged: parts cover every page in order and respect the cap.
+    expect(result.parts.flatMap((part) => part.pageIndexes)).toEqual(
+      Array.from({ length: pageCount }, (_, index) => index),
+    );
+    for (const part of result.parts) {
+      expect(part.oversized).toBe(false);
+      expect(part.byteLength).toBeLessThanOrEqual(capBytes);
+    }
+
+    // The old implementation re-serialized the growing part once per page
+    // (>= 60 serializations here). The estimator + binary-search packing is
+    // bounded by O(parts * log(pages)), far below one per page.
+    const bound = result.parts.length * (3 + Math.ceil(Math.log2(pageCount)));
+    expect(serializations).toBeLessThanOrEqual(bound);
+    expect(serializations).toBeLessThan(pageCount);
   });
 
   it("merges documents in order", async () => {

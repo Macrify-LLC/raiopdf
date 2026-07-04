@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { PdfBinderOptions } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
-import { readBrowserFile } from "../lib/filePort";
+import {
+  pickPdfsForAdd,
+  readFileForAdd,
+  tooLargeToAddMessage,
+  type FileAddInput,
+} from "../lib/readFileForAdd";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -110,23 +115,51 @@ export function BinderWorkspace({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onCancel]);
 
-  async function handleAddFiles(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.currentTarget.files ?? []);
-    event.currentTarget.value = "";
-
-    if (files.length === 0 || building) {
+  async function addExhibitInputs(inputs: readonly FileAddInput[]) {
+    if (inputs.length === 0 || building) {
       return;
     }
 
     setStatus("Reading exhibit files...");
 
     try {
-      const nextExhibits = await Promise.all(files.map(readExhibitFile));
-      setExhibits((current) => [...current, ...nextExhibits]);
-      setStatus(null);
+      const outcomes = await Promise.all(inputs.map(readExhibitFile));
+      const added = outcomes.flatMap((outcome) => (outcome.status === "ok" ? [outcome.exhibit] : []));
+      const rejected = outcomes.flatMap((outcome) => (outcome.status === "tooLarge" ? [outcome.name] : []));
+
+      if (added.length > 0) {
+        setExhibits((current) => [...current, ...added]);
+      }
+
+      setStatus(
+        rejected.length === 0
+          ? null
+          : rejected.length === 1 && rejected[0] !== undefined
+            ? tooLargeToAddMessage(rejected[0])
+            : `${rejected.length} exhibit PDFs are too large to add here.`,
+      );
     } catch {
       setStatus("One of the exhibit PDFs could not be opened. Check the file and try again.");
     }
+  }
+
+  async function handleAddFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    await addExhibitInputs(files);
+  }
+
+  async function addExhibits() {
+    // Tauri: grant-returning picker (no eager byte read); browser or a shell
+    // without pick_pdfs_for_add falls back to the DOM file input.
+    const picks = await pickPdfsForAdd({ multiple: true });
+
+    if (picks === null) {
+      addInputRef.current?.click();
+      return;
+    }
+
+    await addExhibitInputs(picks);
   }
 
   function moveExhibit(index: number, direction: -1 | 1) {
@@ -360,7 +393,7 @@ export function BinderWorkspace({
           <button
             type="button"
             className="binder-workspace__secondary binder-workspace__add"
-            onClick={() => addInputRef.current?.click()}
+            onClick={() => void addExhibits()}
             disabled={building}
             title="Add one or more exhibit PDFs after the main document."
           >
@@ -459,16 +492,35 @@ export function BinderWorkspace({
   );
 }
 
-async function readExhibitFile(file: File): Promise<ExhibitFile> {
-  const opened = await readBrowserFile(file);
+type ExhibitAddOutcome =
+  | { status: "ok"; exhibit: ExhibitFile }
+  | { status: "tooLarge"; name: string };
+
+async function readExhibitFile(input: FileAddInput): Promise<ExhibitAddOutcome> {
+  const result = await readFileForAdd(input);
+
+  if (result.kind !== "bytes") {
+    // Binder assembly consumes full exhibit bytes in the in-memory engine, so
+    // above-threshold exhibits (browser gate or Tauri grant descriptor) stay
+    // gated until the delegated qpdf binder lands (large-PDF plan Phase 3).
+    return {
+      status: "tooLarge",
+      name: result.kind === "descriptor" ? result.descriptor.name : result.name,
+    };
+  }
+
+  const opened = result.file;
   const pdf = await PDFDocument.load(opened.bytes);
 
   return {
-    id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
-    name: opened.name,
-    description: stripPdfExtension(opened.name),
-    bytes: opened.bytes,
-    pageCount: pdf.getPageCount(),
+    status: "ok",
+    exhibit: {
+      id: `${opened.name}-${crypto.randomUUID()}`,
+      name: opened.name,
+      description: stripPdfExtension(opened.name),
+      bytes: opened.bytes,
+      pageCount: pdf.getPageCount(),
+    },
   };
 }
 

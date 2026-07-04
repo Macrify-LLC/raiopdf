@@ -1,32 +1,47 @@
 import { useEffect, useRef, useState } from "react";
-import { loadPdfDocument } from "../lib/pdfjs";
+import { loadPdfDocument, type PDFDocumentProxy } from "../lib/pdfjs";
 
 export interface PdfMiniThumbProps {
   bytes: Uint8Array | null;
   label: string;
+  /**
+   * Optional pdf.js proxy already loaded for THIS document (the shared
+   * document proxy from the large-PDF plan, Phase 2). When provided, the
+   * thumb renders page 1 from it without loading its own copy of the
+   * document, and never destroys it -- the caller owns its lifecycle.
+   * Without it, behavior is unchanged: load from `bytes`, destroy on cleanup.
+   */
+  pdfDocument?: PDFDocumentProxy | null;
 }
 
-export function PdfMiniThumb({ bytes, label }: PdfMiniThumbProps) {
+export function PdfMiniThumb({ bytes, label, pdfDocument = null }: PdfMiniThumbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [renderError, setRenderError] = useState(false);
+  const hasSource = Boolean(pdfDocument ?? bytes);
 
   useEffect(() => {
     const canvas = canvasRef.current;
 
-    if (!bytes || !canvas) {
+    if (!(pdfDocument ?? bytes) || !canvas) {
       setRenderError(false);
       return;
     }
 
     let disposed = false;
-    let renderTask: ReturnType<Awaited<ReturnType<Awaited<ReturnType<typeof loadPdfDocument>>["getPage"]>>["render"]> | null = null;
-    let loadedDocument: Awaited<ReturnType<typeof loadPdfDocument>> | null = null;
+    let renderTask: ReturnType<Awaited<ReturnType<PDFDocumentProxy["getPage"]>>["render"]> | null = null;
+    let selfLoadedDocument: PDFDocumentProxy | null = null;
 
     setRenderError(false);
 
-    void loadPdfDocument(bytes)
+    const documentPromise: Promise<PDFDocumentProxy> = pdfDocument
+      ? Promise.resolve(pdfDocument)
+      : loadPdfDocument(bytes as Uint8Array).then((loaded) => {
+        selfLoadedDocument = loaded;
+        return loaded;
+      });
+
+    void documentPromise
       .then(async (pdf) => {
-        loadedDocument = pdf;
         const page = await pdf.getPage(1);
 
         if (disposed) {
@@ -53,13 +68,15 @@ export function PdfMiniThumb({ bytes, label }: PdfMiniThumbProps) {
     return () => {
       disposed = true;
       renderTask?.cancel();
-      void loadedDocument?.loadingTask.destroy();
+      // Only a document this component loaded itself is destroyed here; an
+      // injected proxy belongs to the caller.
+      void selfLoadedDocument?.loadingTask.destroy();
     };
-  }, [bytes]);
+  }, [bytes, pdfDocument]);
 
   return (
     <span className="pdf-mini-thumb" aria-label={label}>
-      {bytes ? (
+      {hasSource ? (
         <>
           {renderError ? (
             <span className="pdf-mini-thumb__error" role="status">

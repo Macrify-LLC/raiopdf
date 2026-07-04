@@ -241,3 +241,48 @@
   font-size: var(--text-xs);
   pointer-events: none;
 }
+
+/*
+ * The engine-starting moment gets real room: a dim scrim over the whole
+ * well plus a centered card, instead of the 13px inline sun the OCR status
+ * panel uses for every other phase (page render / OCR processing /
+ * verifying -- those keep the small sun; see ToolPanel.tsx, untouched).
+ */
+.canvas-well__engine-starting {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--modal-scrim);
+}
+
+.canvas-well__engine-starting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 320px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-page);
+  padding: 26px 40px;
+  text-align: center;
+}
+
+/* `.loading-sun` sizes itself to 1em -- this is the ambient font-size that
+   makes LoadingSun's size={60} prop actually render at 60px here. */
+.canvas-well__engine-starting-sun {
+  display: inline-flex;
+  font-size: 60px;
+  line-height: 0;
+}
+
+.canvas-well__engine-starting-text {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--body);
+}

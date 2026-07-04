@@ -1,7 +1,6 @@
 .icon-button {
-  display: grid;
-  place-items: center;
-  width: 30px;
+  display: inline-flex;
+  align-items: center;
   height: 30px;
   padding: 0;
   border-radius: var(--radius-control);
@@ -10,12 +9,64 @@
   color: var(--body);
   box-shadow: var(--shadow-control);
   cursor: default;
+  overflow: hidden;
   transition:
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.icon-button__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+}
+
+/*
+ * The active-tool label reveal is COMPOSITOR-ONLY (opacity + transform) --
+ * deliberately not a width/max-width/padding transition. Animating layout
+ * here janks the main thread every frame, and because selecting a tool is
+ * immediately followed by a canvas click to place content, that jank was
+ * eating the first click for the length of the animation (the edit layer
+ * wasn't ready to place until the transition settled). The button's width
+ * therefore snaps to its final size instantly (via the label's own width,
+ * `flex: 0 0 auto`) while only the text fades + slides in on the GPU.
+ */
+.icon-button__expand-label {
+  flex: 0 0 auto;
+  width: 0;
+  padding-left: 0;
+  opacity: 0;
+  transform: translateX(-6px);
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition:
+    opacity var(--dur-tool-label-out) ease,
+    transform var(--dur-tool-collapse) var(--ease-emil);
+}
+
+.icon-button[data-active="true"] .icon-button__expand-label {
+  width: auto;
+  padding-left: 6px;
+  padding-right: 8px;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--dur-tool-label-in) ease 40ms,
+    transform var(--dur-tool-expand) var(--ease-emil);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-button__expand-label,
+  .icon-button[data-active="true"] .icon-button__expand-label {
+    transition: none;
+  }
 }
 
 .icon-button:hover:not(:disabled) {

@@ -1,0 +1,17 @@
+/*
+ * Shared sizing rules for wordmark SVGs inlined via `?raw` (RaioWordmarkIcon,
+ * MacrifyWordmarkIcon). The wrapper controls height via inline style; the
+ * injected <svg>'s own baked width/height attributes are overridden here so
+ * it scales proportionally instead of stretching to fill the span.
+ */
+.inline-brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.inline-brand-wordmark svg {
+  display: block;
+  height: 100%;
+  width: auto;
+}

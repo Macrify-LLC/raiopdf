@@ -3,6 +3,7 @@ import {
   computeHighlightLineRects,
   computeTextMarkupLineRects,
   excerpt,
+  normalizePdfRectFromPoints,
   toPdfEdits,
   type PageTextBox,
   type PendingEdit,
@@ -70,6 +71,21 @@ describe("toPdfEdits", () => {
           ],
         ],
       },
+      {
+        kind: "shape",
+        id: "g",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 10, y: 20, w: 80, h: 40 },
+      },
+      {
+        kind: "shape",
+        id: "h",
+        pageIndex: 0,
+        shape: "arrow",
+        from: { x: 10, y: 10 },
+        to: { x: 50, y: 30 },
+      },
     ];
 
     const edits = toPdfEdits(pending);
@@ -83,9 +99,20 @@ describe("toPdfEdits", () => {
       "signature",
       "comment",
       "ink",
+      "shape",
+      "shape",
     ]);
     expect(edits[3]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
     expect(edits[7]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[8]).toMatchObject({
+      shape: "rect",
+      rect: { x: 10, y: 20, w: 80, h: 40 },
+    });
+    expect(edits[9]).toMatchObject({
+      shape: "arrow",
+      from: { x: 10, y: 10 },
+      to: { x: 50, y: 30 },
+    });
   });
 
   it("omits optional edit colors and opacity when they were not set", () => {
@@ -128,6 +155,16 @@ describe("toPdfEdits", () => {
         pageIndex: 0,
         rects: [{ x: 20, y: 50, w: 100, h: 12 }],
       },
+      {
+        kind: "shape",
+        id: "f",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 10, y: 20, w: 80, h: 40 },
+        strokeColor: { r: 0x11 / 0xff, g: 0x11 / 0xff, b: 0x11 / 0xff },
+        strokeWidthPt: 1.5,
+        fillColor: null,
+      },
     ]);
 
     expect(edits[0]).not.toHaveProperty("color");
@@ -137,6 +174,9 @@ describe("toPdfEdits", () => {
     expect(edits[2]).toMatchObject({ strokeWidthPt: 1.5 });
     expect(edits[3]).not.toHaveProperty("color");
     expect(edits[4]).not.toHaveProperty("color");
+    expect(edits[5]).not.toHaveProperty("strokeColor");
+    expect(edits[5]).not.toHaveProperty("strokeWidthPt");
+    expect(edits[5]).not.toHaveProperty("fillColor");
   });
 
   it("emits chosen edit colors, highlight opacity, and ink stroke width", () => {
@@ -186,6 +226,16 @@ describe("toPdfEdits", () => {
         color: { r: 0.1, g: 0.6, b: 0.3 },
         thicknessPt: 2,
       },
+      {
+        kind: "shape",
+        id: "f",
+        pageIndex: 0,
+        shape: "ellipse",
+        rect: { x: 40, y: 50, w: 80, h: 40 },
+        strokeWidthPt: 5,
+        strokeColor: { r: 0.2, g: 0.3, b: 0.4 },
+        fillColor: { r: 0.8, g: 0.9, b: 0.1 },
+      },
     ]);
 
     expect(edits[0]).toMatchObject({
@@ -206,6 +256,13 @@ describe("toPdfEdits", () => {
       type: "strikethrough",
       color: { r: 0.1, g: 0.6, b: 0.3 },
       thicknessPt: 2,
+    });
+    expect(edits[5]).toMatchObject({
+      type: "shape",
+      shape: "ellipse",
+      strokeWidthPt: 5,
+      strokeColor: { r: 0.2, g: 0.3, b: 0.4 },
+      fillColor: { r: 0.8, g: 0.9, b: 0.1 },
     });
   });
 
@@ -266,6 +323,17 @@ describe("toPdfEdits", () => {
 
   it("returns an empty list when there is nothing to apply", () => {
     expect(toPdfEdits([], {})).toEqual([]);
+  });
+});
+
+describe("normalizePdfRectFromPoints", () => {
+  it("normalizes any drag direction to positive width and height", () => {
+    expect(normalizePdfRectFromPoints({ x: 100, y: 50 }, { x: 20, y: 130 })).toEqual({
+      x: 20,
+      y: 50,
+      w: 80,
+      h: 80,
+    });
   });
 });
 

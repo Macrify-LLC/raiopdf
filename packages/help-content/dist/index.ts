@@ -82,6 +82,15 @@ export const helpArticles = [
     "plainText": "# Draw\n\nDraw lets you make freehand marks — circle something, add an arrow, initial a\nspot — saved right into the PDF.\n\n## How to do it\n\n1. Choose **Draw**, from the toolbar or the **Edit** tools.\n2. Pick a color or line width if you want a different mark.\n3. Drag on the page to draw.\n\n## What to know\n\n- **It's held until you Save,** then written into the document.\n- **Reorganizing pages clears unsaved ink.** Rotate, delete, or reorder pages\n  before saving and it's cleared — save first.\n\n## Related\n\n- [Sign](tool:sign) — place a signature\n- [Highlight](tool:highlight) — mark text instead"
   },
   {
+    "id": "shapes",
+    "title": "Shapes",
+    "group": "edit",
+    "summary": "Draw rectangles, ellipses, lines, and arrows on a page.",
+    "order": 45,
+    "html": "<h1>Shapes</h1><p>Shapes let you mark a page with rectangles, ellipses, straight lines, and\narrows that save into the PDF.</p><h2>How to do it</h2><ol><li>Choose <strong>Rectangle</strong>, <strong>Ellipse</strong>, <strong>Line</strong>, or <strong>Arrow</strong> from the toolbar or\nthe <strong>Edit</strong> tools.</li><li>Pick a stroke color, stroke width, and fill color if the shape supports one.</li><li>Drag on the page to size and place the shape.</li></ol><h2>What to know</h2><ul><li><strong>It's held until you Save,</strong> then written into the document.</li><li><strong>Fill is optional.</strong> Rectangle and ellipse can stay stroke-only.</li><li><strong>Reorganizing pages clears unsaved shapes.</strong> Rotate, delete, or reorder pages\nbefore saving and they're cleared — save first.</li></ul><h2>Related</h2><ul><li><a href=\"tool:draw\">Draw</a> — make freehand marks</li><li><a href=\"tool:highlight\">Highlight</a> — mark text instead</li></ul>",
+    "plainText": "# Shapes\n\nShapes let you mark a page with rectangles, ellipses, straight lines, and\narrows that save into the PDF.\n\n## How to do it\n\n1. Choose **Rectangle**, **Ellipse**, **Line**, or **Arrow** from the toolbar or\n   the **Edit** tools.\n2. Pick a stroke color, stroke width, and fill color if the shape supports one.\n3. Drag on the page to size and place the shape.\n\n## What to know\n\n- **It's held until you Save,** then written into the document.\n- **Fill is optional.** Rectangle and ellipse can stay stroke-only.\n- **Reorganizing pages clears unsaved shapes.** Rotate, delete, or reorder pages\n  before saving and they're cleared — save first.\n\n## Related\n\n- [Draw](tool:draw) — make freehand marks\n- [Highlight](tool:highlight) — mark text instead"
+  },
+  {
     "id": "sign",
     "title": "Sign",
     "group": "edit",

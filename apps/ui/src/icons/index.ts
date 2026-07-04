@@ -3,6 +3,7 @@ export * from "./SunMarkIcon";
 export * from "./MacrifyMarkIcon";
 export * from "./ImageIcon";
 export * from "./DrawIcon";
+export * from "./ShapeIcons";
 export * from "./SignIcon";
 export * from "./KitIcons";
 export * from "./PlugIcon";

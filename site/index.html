@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RaioPDF — Free, local, full-featured PDF suite for law firms</title>
-<meta name="description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta name="description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 <link rel="canonical" href="https://raio.macrify.me/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
 <meta property="og:url" content="https://raio.macrify.me/">
 <meta property="og:title" content="RaioPDF — Free, local, full-featured PDF suite for law firms">
-<meta property="og:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta property="og:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="RaioPDF — Free, local, full-featured PDF suite for law firms">
-<meta name="twitter:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows Adobe never bothered building.">
+<meta name="twitter:description" content="Everything you use Acrobat for, day to day — free, full-featured, and it never leaves your computer. Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.">
 
 <link rel="stylesheet" href="./shared/reset.css">
 
@@ -355,6 +355,12 @@
 
   /* ---------- outcomes section ---------- */
   .outcomes{ background:var(--bg-alt); }
+  .outcomes-cluster + .outcomes-cluster{ margin-top:40px; }
+  .outcomes-cluster__head{
+    font-family:var(--font-display); font-weight:700; font-size:15px;
+    text-transform:uppercase; letter-spacing:.06em; color:var(--text-primary);
+    margin-bottom:16px;
+  }
   .outcomes-grid{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px; }
   .outcomes-grid .outcome-card--wide{ grid-column:span 3; }
   .outcome-card{
@@ -364,6 +370,9 @@
   .outcome-card svg{ width:20px; height:20px; flex:none; color:var(--gold-deep); margin-top:2px; }
   .outcome-card p{ font-size:14.5px; color:var(--text-body); line-height:1.6; }
   .outcome-card p strong{ color:var(--text-primary); font-weight:700; }
+  .outcome-card--wide p{ font-size:15.5px; }
+  .outcome-card p a{ text-decoration:underline; text-underline-offset:2px; color:var(--primary); }
+  .outcome-card p a:hover{ color:var(--secondary); }
 
   /* ---------- pull quote ---------- */
   .pullquote{
@@ -496,7 +505,7 @@
       </span>
 
       <h1>Everything you use Acrobat for, day to day — <span class="accent-word">free</span>, full-featured, and it never leaves your computer.</h1>
-      <p class="hero__subhead">Plus the legal workflows Adobe never bothered building.</p>
+      <p class="hero__subhead">Plus the legal workflows built in: verified redaction, Bates numbering, exhibit binders, and e-filing prep.</p>
 
       <p class="hero__positioning">
         I built this because editing a file that's already on your machine shouldn't need an
@@ -629,7 +638,7 @@
           <span class="input-card__num">03</span>
           <div>
             <h3>One click, "Prepare for Filing."</h3>
-            <p>Normalizes every page to letter-size portrait and splits an oversized file into properly labeled, sequential, portal-compliant parts.</p>
+            <p>Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, and RaioPDF normalizes every page and splits an oversized file into properly labeled, sequential, portal-compliant parts.</p>
           </div>
         </div>
         <div class="input-card">
@@ -647,36 +656,74 @@
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">What it replaces, and what it adds</span>
-        <h2>A full day-to-day Acrobat replacement, plus the legal workflow Acrobat skipped</h2>
+        <h2>A full day-to-day Acrobat replacement, plus the legal workflows built in</h2>
       </div>
-      <div class="outcomes-grid">
-        <div class="outcome-card outcome-card--wide">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
-          <p>View, organize (merge, split, reorder, extract, insert, rotate, crop), annotate, fill forms, sign — <strong>at $0, permanently</strong>, no watermarks or nag screens.</p>
+
+      <div class="outcomes-cluster">
+        <h3 class="outcomes-cluster__head">The everyday Acrobat replacement</h3>
+        <div class="outcomes-grid">
+          <div class="outcome-card outcome-card--wide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
+            <p>View, search, and organize (merge, split, reorder, extract, insert, rotate, crop, repair). Annotate with highlight, underline, strikethrough, freehand draw, shapes, callouts, text boxes, and comments. Fill forms, sign — <strong>at $0, permanently</strong>, no watermarks or nag screens.</p>
+          </div>
+          <div class="outcome-card outcome-card--wide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+            <p><strong>Honest text layers</strong> — the status bar says plainly whether a document's text is verified searchable, missing, or garbled. "Fix garbled text" rebuilds a bad layer offline, and refuses to claim success it can't verify. Not just a feature — it's the whole voice of this product: never claim more than it can check.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+            <p><strong>Unlock PDFs</strong> — save a decrypted copy of a password- or owner-restricted PDF, supplying the password yourself when one's required. The original stays untouched. (Adding password protection isn't in this build yet.)</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>Native MCP integration</strong> — still no AI built into RaioPDF itself, but the installer bundles an off-by-default connector exposing twenty local tools so your own AI agents can drive the toolbox.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>In-app help</strong> for every tool, offline — the same articles are published at the <a href="/help/">Help</a> link above.</p>
+          </div>
         </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>True redaction</strong> — content is actually removed and verified by re-extraction, not a black box drawn over text that's still there underneath.</p>
-        </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>Bates numbering</strong> across an entire document set in one pass.</p>
-        </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>Sensitive-info scanner</strong> — assistive detection of SSNs and account numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out. One honest flag: never trust AI with legal reasoning — verify before you rely on it.</p>
-        </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>Metadata scrubbing</strong> before production or filing.</p>
-        </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>e-filing preflight report</strong> with the actual rule citations (Fla. R. Jud. Admin. 2.520/2.525) attached.</p>
-        </div>
-        <div class="outcome-card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <p><strong>Native MCP integration</strong> — no AI built into RaioPDF itself, but it speaks natively to your AI agents and tools.</p>
+      </div>
+
+      <div class="outcomes-cluster">
+        <h3 class="outcomes-cluster__head">The legal workflows, built in</h3>
+        <div class="outcomes-grid">
+          <div class="outcome-card outcome-card--wide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>
+            <p><strong>Jurisdiction packs for e-filing</strong> — Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS). Every constraint cites its authority and the date it was last verified; Florida is the default pack. Guidance, not legal advice.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>True redaction</strong> — content is actually removed and verified by re-extraction, not a black box drawn over text that's still there underneath. The verifier is garble-aware: a broken text layer can't fake a clean result, and if verification fails, no output is written at all.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>
+            <p><strong>Filing packet builder</strong> — assemble a multi-document filing as one packet with a manifest, including document-level checks your court expects before a filing goes out.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2.6 12.09a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.91a1 1 0 0 0 0-1.83"/><path d="M2.6 17.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83"/></svg>
+            <p><strong>Production sets</strong> — Bates-numbered discovery productions from a document set: confidentiality designations, index files, volume splits.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+            <p><strong>Batch cleanup</strong> — queue OCR, compression, sanitizing, and metadata scrubbing across many PDFs at once, against a jurisdiction pack.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>e-filing preflight report</strong> with the rule citation for each requirement attached, so you can verify the source yourself.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+            <p><strong>Sensitive-info scanner</strong> — assistive detection of SSNs and account numbers before a filing goes out. One honest flag: never trust AI with legal reasoning — verify before you rely on it.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>Bates numbering</strong> across an entire document set in one pass — one continuous sequence across a whole folder.</p>
+          </div>
+          <div class="outcome-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+            <p><strong>Metadata scrubbing</strong> before production or filing — inspect what a document carries, then strip it without touching the pages.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -938,6 +985,7 @@
     hero.addEventListener("pointermove", onPointerMove, { passive: true });
     hero.addEventListener("pointerleave", onPointerLeave, { passive: true });
   })();
+
 </script>
 </body>
 </html>

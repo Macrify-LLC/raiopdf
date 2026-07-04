@@ -6,6 +6,15 @@ this copy with a different visual treatment, but the words themselves don't
 change between options. Derived from `sales-positioning.md` (RaioPDF section)
 and `business-lines.md` (product line 12). Do not add claims not listed here.
 
+## Product media (screenshots / walkthrough video) — DEFERRED 2026-07-04
+
+The "Real screens from the real app" section (tabbed screenshots + walkthrough
+video) is pulled from the landing page while the app's visual style is still
+changing. The full working section — markup, CSS, JS, and all assets — is
+preserved on the `macro/stash-product-media` branch. Re-capture fresh
+screenshots (see the capture flow in that branch's assets) before restoring;
+don't re-add the old media as-is once the app restyle lands.
+
 ## Product name
 
 Always the full "RaioPDF" — never shortened to "Raio" in body copy. (The nav
@@ -24,7 +33,15 @@ This is not hidden or soft-pedaled. It sits near the top on every option.
 Everything you use Acrobat for, day to day — free, full-featured, and it
 never leaves your computer.
 
-Sub-headline: Plus the legal workflows Adobe never bothered building.
+Sub-headline (revised 2026-07-04, Jacob's direction): Plus the legal
+workflows built in: verified redaction, Bates numbering, exhibit binders,
+and e-filing prep.
+
+(The older sub-headline — "Plus the legal workflows Adobe never bothered
+building" — is retired from the landing page and other marketing surfaces:
+Jacob doesn't want marketing copy claiming Adobe never shipped these
+features. The README keeps his first-person voice and is his to edit;
+don't propagate the old line back onto marketing surfaces.)
 
 ## Positioning frame (short paragraph, upper page) — updated 2026-07-03 (rev. 3)
 
@@ -119,34 +136,77 @@ don't isolate it into its own callout box if you're using the full text.
   no "create a free account to continue."
 - **Drop in a scanned PDF, hit Make Searchable.** OCR runs entirely offline —
   no upload, no wait on a server.
-- **One click, "Prepare for Filing."** Normalizes every page to letter-size
-  portrait and splits an oversized file into properly labeled, sequential,
+- **One click, "Prepare for Filing."** Pick your court's e-filing pack, get a
+  prep checklist and a rule-cited preflight report, and RaioPDF normalizes
+  every page and splits an oversized file into properly labeled, sequential,
   portal-compliant parts.
 - **"Combine with Exhibits."** Assemble a motion or brief with exhibit files
   in order, auto-stamped ("Exhibit A," configurable) and auto-bookmarked.
 
-## Outcomes (feature grid / list)
+## Outcomes (feature grid / list) — updated 2026-07-03 (evening pass)
 
-- Full day-to-day Acrobat replacement — view, organize (merge, split,
-  reorder, extract, insert, rotate, crop), annotate, fill forms, sign — at
-  $0, permanently, no watermarks or nag screens.
+- Full day-to-day Acrobat replacement — view, search, organize (merge, split,
+  reorder, extract, insert, rotate, crop, repair), annotate (highlight,
+  underline, strikethrough, draw, shapes, callouts, text boxes, comments),
+  fill forms, sign — at $0, permanently, no watermarks or nag screens.
 - **True redaction** — content is actually removed and verified by
   re-extraction, not a black box drawn over text that's still there
-  underneath.
+  underneath. The verifier is garble-aware: a broken text layer can't fake a
+  clean result, and if verification fails, no output is written at all.
+- **Honest text layers** — the status bar says whether a document's text is
+  verified searchable, missing, or garbled; "Fix garbled text" rebuilds a bad
+  text layer offline and refuses to claim success it can't verify. (This is a
+  brand beat, not just a feature — honesty about what the software can't
+  verify is the whole voice of the product.)
+- **Jurisdiction packs for e-filing** — Florida Courts E-Filing Portal,
+  Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS). Every
+  constraint cites its authority and the date it was last verified. Always
+  pair with: guidance, not legal advice. Florida is the default pack.
+- **e-filing preflight report** with the rule citation for each requirement
+  attached, so the user can verify the source themselves. (Revised
+  2026-07-04: marketing surfaces describe the citation FEATURE but don't
+  quote specific rule numbers — no "Fla. R. ..." strings in landing/site
+  copy. Same rule applies to the sensitive-info scanner and filing-packet
+  bullets below.)
+- **Filing packet builder** — a multi-document filing assembled as one packet
+  with a manifest, including document-level checks the court expects before
+  a filing goes out.
+- **Production sets** — Bates-numbered discovery productions from a document
+  set: confidentiality designations, index files, volume splits.
 - **Bates numbering** across an entire document set in one pass.
+- **Batch cleanup** — queue OCR, compression, sanitizing, metadata scrubbing,
+  and filing splits across many PDFs at once, against a jurisdiction pack.
+- **Unlock PDFs** — save a decrypted copy of a password- or owner-restricted
+  PDF (you supply the password when one is required); the original stays
+  untouched. Do NOT claim password *protection* — adding encryption is not in
+  this build yet.
 - **Sensitive-info scanner** — assistive detection of SSNs and account
-  numbers per Fla. R. Jud. Admin. 2.425, before a filing goes out. Always
-  pair with the honest caveat: this is assistive only — never trust AI with
+  numbers before a filing goes out (no rule-number citation in marketing
+  copy per the 2026-07-04 note above). Always pair with the honest caveat: this is assistive only — never trust AI with
   legal reasoning, verify before relying on it. Don't feature this one
   without the caveat attached.
 - **Metadata scrubbing** before production or filing.
-- **e-filing preflight report** with the actual rule citations (Fla. R. Jud.
-  Admin. 2.520/2.525) attached.
 - **Native MCP integration** (added 2026-07-03) — no AI built into RaioPDF
-  itself, but it speaks natively to a user's own AI agents and tools. Keep
-  the "no AI in the product" claim and the "MCP-native" claim next to each
-  other so it doesn't read as a contradiction — the product has no AI
-  features; it exposes an interface AI agents can call.
+  itself, but it speaks natively to a user's own AI agents and tools: the
+  installer bundles an off-by-default connector exposing twenty local tools
+  (OCR, verified redaction, Bates, binders, production sets, filing
+  preflight, and more). Keep the "no AI in the product" claim and the
+  "MCP-native" claim next to each other so it doesn't read as a
+  contradiction — the product has no AI features; it exposes an interface AI
+  agents can call.
+- **In-app help** — built-in offline help for every tool; the same articles
+  are published at raio.macrify.me/help (the site's Help nav link).
+
+(Consistency notes — quoted facts and every surface that repeats them, so a
+change propagates instead of drifting:
+— The MCP tool count ("twenty tools") is canonical in `docs/MCP.md` next to
+  its Tools table; quoted by `README.md`, this file, the landing page, and
+  nowhere else.
+— The jurisdiction-pack list (Florida / Federal CM/ECF / Georgia eFileGA +
+  PeachCourt / Indiana IEFS) is canonical in `packages/rules/data/`; quoted by
+  `README.md`, this file, and the landing page. The RaioPDF card on
+  macrify.me's homepage deliberately does NOT name jurisdictions or rule
+  citations (Jacob's call, 2026-07-03) — keep that card feature-focused.)
 
 ## Why now (short section, can double as a pull-quote) — updated 2026-07-03 (rev. 3)
 
@@ -171,8 +231,9 @@ paragraph.)
   **competitive** alternative can exist at all.
 - Not phoning home. No telemetry, no background analytics — RaioPDF makes no
   network requests of its own, and nothing is ever sent automatically. If it
-  ever crashes it can ask once whether to open a pre-filled GitHub issue you
-  review and submit yourself; you choose each time, and you can switch the
+  ever crashes it asks once whether to report it — a pre-filled GitHub issue
+  you review and submit yourself, or a report saved to a file you can email
+  in (no account needed); you choose each time, and you can switch the
   prompt off.
 
 (Consistency note — the "telemetry: none" claim stays exactly as-is; it is

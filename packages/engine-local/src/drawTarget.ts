@@ -94,9 +94,14 @@ export interface DrawTarget {
 }
 
 export type AnnotationAppearanceTarget = DrawTarget & {
+  readonly annotationRect: PdfEditRect;
   readonly bbox: PdfEditRect;
   readonly matrix: readonly [number, number, number, number, number, number];
   finish(): PDFRef;
+};
+
+export type AnnotationAppearanceOptions = {
+  marginPt?: number | undefined;
 };
 
 export function createPageDrawTarget(page: PDFPage): DrawTarget {
@@ -107,8 +112,9 @@ export function createAnnotationAppearanceTarget(
   pdf: PDFDocument,
   rect: PdfEditRect,
   _pageRotation: 0 | 90 | 180 | 270 = 0,
+  options: AnnotationAppearanceOptions = {},
 ): AnnotationAppearanceTarget {
-  return new AppearanceDrawTarget(pdf, rect);
+  return new AppearanceDrawTarget(pdf, rect, options);
 }
 
 export function drawAnnotationAppearanceOnPage(
@@ -239,6 +245,7 @@ class PageDrawTarget implements DrawTarget {
 }
 
 class AppearanceDrawTarget implements AnnotationAppearanceTarget {
+  readonly annotationRect: PdfEditRect;
   readonly bbox: PdfEditRect;
   readonly matrix = [1, 0, 0, 1, 0, 0] as const;
   private readonly operators: PDFOperator[] = [];
@@ -250,8 +257,11 @@ class AppearanceDrawTarget implements AnnotationAppearanceTarget {
   constructor(
     private readonly pdf: PDFDocument,
     private readonly pageRect: PdfEditRect,
+    options: AnnotationAppearanceOptions,
   ) {
-    this.bbox = { x: 0, y: 0, w: pageRect.w, h: pageRect.h };
+    const margin = Math.max(0, options.marginPt ?? 0);
+    this.annotationRect = padRect(pageRect, margin);
+    this.bbox = { x: -margin, y: -margin, w: pageRect.w + margin * 2, h: pageRect.h + margin * 2 };
     this.fontResources = pdf.context.obj({}) as PDFDict;
     this.extGStateResources = pdf.context.obj({}) as PDFDict;
   }
@@ -455,6 +465,15 @@ function drawFilledPolygonOperators(
     fill(),
     popGraphicsState(),
   ];
+}
+
+function padRect(rect: PdfEditRect, padding: number): PdfEditRect {
+  return {
+    x: rect.x - padding,
+    y: rect.y - padding,
+    w: rect.w + padding * 2,
+    h: rect.h + padding * 2,
+  };
 }
 
 function readAnnotationRect(annotation: PDFDict): PdfEditRect | undefined {

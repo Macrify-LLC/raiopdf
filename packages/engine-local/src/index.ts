@@ -145,6 +145,7 @@ const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
 const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
 const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
 const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
+const AP_STROKE_CLIP_SAFETY_MARGIN_PT = 0.25;
 const DEFAULT_TEXT_BOX_FONT_SIZE_PT = 12;
 const DEFAULT_WATERMARK_FONT_SIZE_PT = 48;
 const DEFAULT_WATERMARK_OPACITY = 0.18;
@@ -157,6 +158,7 @@ const ARROW_HEAD_MIN_PT = 8;
 const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
 const EDIT_INK_COLOR_COMPONENTS = [0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff] as const;
+const HIGHLIGHT_COLOR_COMPONENTS = [1, 0.9, 0.3] as const;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
 const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
@@ -1424,11 +1426,19 @@ async function applyEditInPlace(
 ): Promise<void> {
   switch (edit.type) {
     case "highlight":
-      applyHighlightEdit(pdf, edit);
+      if (markupMode === "annotation") {
+        applyHighlightAnnotationEdit(pdf, edit);
+      } else {
+        applyHighlightEdit(pdf, edit);
+      }
       return;
     case "underline":
     case "strikethrough":
-      applyTextMarkupEdit(pdf, edit);
+      if (markupMode === "annotation") {
+        applyTextMarkupAnnotationEdit(pdf, edit);
+      } else {
+        applyTextMarkupEdit(pdf, edit);
+      }
       return;
     case "textBox":
       applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
@@ -1769,12 +1779,13 @@ function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
   const strokeColor = toEditColor(edit.color, EDIT_INK_COLOR);
   const rect = boundingRectForPoints(
     edit.strokes.flatMap((stroke) => [...stroke]),
-    thickness / 2,
+    0,
   );
   const appearanceTarget = createAnnotationAppearanceTarget(
     pdf,
     rect,
     normalizePageRotation(page.getRotation().angle),
+    { marginPt: appearanceStrokeMargin(thickness) },
   );
 
   for (const stroke of edit.strokes) {
@@ -1787,7 +1798,7 @@ function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
 
   addMarkupAnnotation(page, {
     Subtype: "Ink",
-    Rect: rectToPdfArray(rect),
+    Rect: rectToPdfArray(appearanceTarget.annotationRect),
     InkList: edit.strokes.map((stroke) => stroke.flatMap((point) => [point.x, point.y])),
     C: colorToPdfArray(edit.color),
     BS: { W: thickness, S: "S" },
@@ -1803,8 +1814,9 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
 
   switch (edit.shape) {
     case "rect": {
-      const rect = padRect(edit.rect, thickness / 2);
-      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, edit.rect, pageRotation, {
+        marginPt: appearanceStrokeMargin(thickness),
+      });
 
       appearanceTarget.drawRectangle({
         rect: edit.rect,
@@ -1815,7 +1827,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
 
       addMarkupAnnotation(page, {
         Subtype: "Square",
-        Rect: rectToPdfArray(rect),
+        Rect: rectToPdfArray(appearanceTarget.annotationRect),
         C: colorToPdfArray(edit.strokeColor),
         ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
         BS: { W: thickness, S: "S" },
@@ -1824,8 +1836,9 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
       return;
     }
     case "ellipse": {
-      const rect = padRect(edit.rect, thickness / 2);
-      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, edit.rect, pageRotation, {
+        marginPt: appearanceStrokeMargin(thickness),
+      });
 
       appearanceTarget.drawEllipse({
         rect: edit.rect,
@@ -1836,7 +1849,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
 
       addMarkupAnnotation(page, {
         Subtype: "Circle",
-        Rect: rectToPdfArray(rect),
+        Rect: rectToPdfArray(appearanceTarget.annotationRect),
         C: colorToPdfArray(edit.strokeColor),
         ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
         BS: { W: thickness, S: "S" },
@@ -1850,8 +1863,10 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
         edit.shape === "arrow"
           ? [edit.from, ...computeArrowHeadPoints(edit.from, edit.to, thickness)]
           : [edit.from, edit.to];
-      const rect = boundingRectForPoints(boundsPoints, thickness / 2);
-      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+      const rect = boundingRectForPoints(boundsPoints, 0);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation, {
+        marginPt: appearanceStrokeMargin(thickness),
+      });
 
       appearanceTarget.drawLine({
         from: edit.from,
@@ -1866,7 +1881,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
 
       addMarkupAnnotation(page, {
         Subtype: "Line",
-        Rect: rectToPdfArray(rect),
+        Rect: rectToPdfArray(appearanceTarget.annotationRect),
         L: [edit.from.x, edit.from.y, edit.to.x, edit.to.y],
         C: colorToPdfArray(edit.strokeColor),
         BS: { W: thickness, S: "S" },
@@ -1876,6 +1891,62 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
       return;
     }
   }
+}
+
+function applyHighlightAnnotationEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const rect = unionRects(edit.rects);
+  const color = toEditColor(edit.color, HIGHLIGHT_COLOR);
+  const opacity = edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
+  const appearanceTarget = createAnnotationAppearanceTarget(
+    pdf,
+    rect,
+    normalizePageRotation(page.getRotation().angle),
+  );
+
+  for (const lineRect of edit.rects) {
+    appearanceTarget.drawRectangle({ rect: lineRect, fillColor: color, fillAlpha: opacity });
+  }
+
+  addMarkupAnnotation(page, {
+    Subtype: "Highlight",
+    Rect: rectToPdfArray(rect),
+    QuadPoints: rectsToQuadPoints(edit.rects),
+    C: colorToPdfArray(edit.color, HIGHLIGHT_COLOR_COMPONENTS),
+    AP: { N: appearanceTarget.finish() },
+  });
+}
+
+function applyTextMarkupAnnotationEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const rect = unionRects(edit.rects);
+  const color = toEditColor(edit.color, EDIT_INK_COLOR);
+  const thickness = edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT;
+  const appearanceTarget = createAnnotationAppearanceTarget(
+    pdf,
+    rect,
+    normalizePageRotation(page.getRotation().angle),
+    { marginPt: appearanceStrokeMargin(thickness) },
+  );
+
+  for (const lineRect of edit.rects) {
+    const y = edit.type === "underline" ? lineRect.y : lineRect.y + lineRect.h * 0.5;
+
+    appearanceTarget.drawLine({
+      from: { x: lineRect.x, y },
+      to: { x: lineRect.x + lineRect.w, y },
+      strokeWidthPt: thickness,
+      strokeColor: color,
+    });
+  }
+
+  addMarkupAnnotation(page, {
+    Subtype: edit.type === "underline" ? "Underline" : "StrikeOut",
+    Rect: rectToPdfArray(appearanceTarget.annotationRect),
+    QuadPoints: rectsToQuadPoints(edit.rects),
+    C: colorToPdfArray(edit.color, EDIT_INK_COLOR_COMPONENTS),
+    AP: { N: appearanceTarget.finish() },
+  });
 }
 
 function addMarkupAnnotation(
@@ -1908,19 +1979,30 @@ function rectToPdfArray(rect: PdfEditRect): number[] {
   return [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h];
 }
 
-function colorToPdfArray(color: PdfEditColor | undefined): number[] {
-  return color
-    ? [color.r, color.g, color.b]
-    : [...EDIT_INK_COLOR_COMPONENTS];
+function rectsToQuadPoints(rects: readonly PdfEditRect[]): number[] {
+  return rects.flatMap((rect) => [
+    // ISO 32000 describes text-markup quads counterclockwise, but Acrobat,
+    // Preview, iText, and common viewers use this Z-order for compatibility.
+    rect.x,
+    rect.y + rect.h,
+    rect.x + rect.w,
+    rect.y + rect.h,
+    rect.x,
+    rect.y,
+    rect.x + rect.w,
+    rect.y,
+  ]);
 }
 
-function padRect(rect: PdfEditRect, padding: number): PdfEditRect {
-  return {
-    x: rect.x - padding,
-    y: rect.y - padding,
-    w: rect.w + padding * 2,
-    h: rect.h + padding * 2,
-  };
+function colorToPdfArray(
+  color: PdfEditColor | undefined,
+  fallback: readonly [number, number, number] = EDIT_INK_COLOR_COMPONENTS,
+): number[] {
+  return color ? [color.r, color.g, color.b] : [...fallback];
+}
+
+function appearanceStrokeMargin(strokeWidthPt: number): number {
+  return strokeWidthPt / 2 + AP_STROKE_CLIP_SAFETY_MARGIN_PT;
 }
 
 function boundingRectForPoints(points: readonly PdfEditPoint[], padding: number): PdfEditRect {
@@ -1942,6 +2024,20 @@ function boundingRectForPoints(points: readonly PdfEditPoint[], padding: number)
     y: minY - padding,
     w: maxX - minX + padding * 2,
     h: maxY - minY + padding * 2,
+  };
+}
+
+function unionRects(rects: readonly PdfEditRect[]): PdfEditRect {
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.w));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.h));
+
+  return {
+    x: minX,
+    y: minY,
+    w: maxX - minX,
+    h: maxY - minY,
   };
 }
 

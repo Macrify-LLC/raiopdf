@@ -82,7 +82,7 @@ Claude app and Claude Code.)
 
 ## Tools
 
-**20 tools as of 2026-07-03** (the Bates row below covers two). This table is
+**25 tools as of 2026-07-04** (the Bates row below covers two). This table is
 the canonical list — the README, the landing page, and the macrify.me product
 card all quote the count from here; update them when it changes.
 
@@ -105,6 +105,11 @@ card all quote the count from here; update them when it changes.
 | `build_production_set` | Build a Bates-numbered discovery production from a document set: confidentiality designations, index files, volume splits. |
 | `batch_cleanup` | Run OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs in one queue. |
 | `redact_terms` | Redact terms with verified removal (see above). |
+| `locate_text` | Read-only text locator: returns page indexes, snippets, and PDF point rectangles for matching text. |
+| `highlight_text` | Add live editable highlight annotations from a quote or `locate_text` matches. |
+| `underline_text` | Add live editable underline annotations from a quote or `locate_text` matches. |
+| `strikethrough_text` | Add live editable strikeout annotations from a quote or `locate_text` matches. |
+| `add_comment` | Add a live sticky-note `/Text` comment anchored by text or by page/point. |
 | `prepare_for_filing` | Read-only e-filing preflight: page size, orientation, searchable text, file-size caps, PDF/A — each with its rule citation. |
 | `build_filing_packet` | Assemble a multi-document filing as one packet with a manifest and per-document rule checks. |
 
@@ -112,6 +117,40 @@ card all quote the count from here; update them when it changes.
 regular files; outputs are never overwritten (a name collision is an error); each
 output is written to a temp file and atomically renamed into place, and removed
 if the operation fails.
+
+## Annotation workflow
+
+Annotation tools write **real, editable PDF annotations** with appearance
+streams. Highlights are `/Highlight`, underlines are `/Underline`, strikeouts
+are `/StrikeOut`, and comments are `/Text` sticky notes. They are not permanent
+paint unless a later tool flattens annotations.
+
+For precise AI-driven markup, use `locate_text` first:
+
+1. Call `locate_text` with `input` and `query`. It returns `matchCount` plus
+   `matches[]` containing `pageIndex` (zero-based), `page` (one-based),
+   `snippet`, `rects` in PDF user-space points, and `score`.
+2. Pick the intended match or matches from the snippets.
+3. Pass those as `matches` to `highlight_text`, `underline_text`, or
+   `strikethrough_text` with `input` and a new `output` path.
+
+For straightforward cases, the write tools also accept a quote shortcut:
+`quote: "arbitration"` locates exact normalized matches and annotates them
+directly. `matchAll` defaults to true; set `matchAll: false` to mark only the
+first occurrence. Quote matching is case-insensitive by default, supports
+`wholeWord`, and accepts zero-based `pages` to limit the search. If a quote or
+comment `anchorText` has no match, the tool returns `NO_MATCH` and writes no
+output file.
+
+`locate_text` works from the PDF text layer. Image-only scans need `ocr_pdf`
+first; otherwise there is no text layer for an AI client to target. Fuzzy
+matching is opt-in on `locate_text` and is meant for review/confirmation before
+using explicit `matches` in a write tool.
+
+`add_comment` accepts either `anchorText` or `page`. With `anchorText`, the note
+is placed at the first match. With `page`, use one-based `page` and optional
+`at: { x, y }` in PDF user-space points; without `at`, the note is placed near
+the top-right corner.
 
 ## Notes
 

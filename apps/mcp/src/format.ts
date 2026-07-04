@@ -18,6 +18,7 @@ export type ToolErrorCode =
   | "PATH_POLICY"
   | "REDACTION_UNVERIFIED"
   | "OCR_UNVERIFIED"
+  | "NO_MATCH"
   | "INVALID_ARGUMENT";
 
 export type StructuredToolResult = CallToolResult & {

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
 import { scoreGarbledPage, type TextLayerCoverage } from "@raiopdf/rules";
+import type { PdfEditRect } from "@raiopdf/engine-api";
 
 const require = createRequire(import.meta.url);
 const PDFJS_ASSET_DIR_ENV = "RAIOPDF_PDFJS_ASSET_DIR";
@@ -94,6 +95,78 @@ export async function extractPageTextByPage(
   }
 }
 
+export type PdfTextBoxItem = {
+  str: string;
+  rect: PdfEditRect;
+  hasEOL: boolean;
+};
+
+export type PdfTextBoxPage = {
+  pageIndex: number;
+  width: number;
+  height: number;
+  items: PdfTextBoxItem[];
+};
+
+export async function extractTextBoxesByPage(bytes: Uint8Array): Promise<readonly PdfTextBoxPage[]> {
+  const task = openDocumentTask(bytes);
+  try {
+    const document = await task.promise;
+    const pages: PdfTextBoxPage[] = [];
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      const items: PdfTextBoxItem[] = [];
+
+      for (const item of content.items) {
+        if (!isTextItem(item) || item.str.length === 0) {
+          continue;
+        }
+
+        const textItem = item as TextItem & {
+          width?: number;
+          height?: number;
+          transform?: readonly number[];
+          hasEOL?: boolean;
+        };
+        const transform = textItem.transform;
+        if (!Array.isArray(transform) || transform.length < 6) {
+          continue;
+        }
+
+        const width = finitePositive(textItem.width) ?? Math.abs(transform[0] ?? 0);
+        const height = finitePositive(textItem.height) ?? Math.abs(transform[3] ?? 0);
+        if (width === undefined || height === undefined) {
+          continue;
+        }
+
+        const baselineY = transform[5] ?? 0;
+        items.push({
+          str: textItem.str,
+          rect: {
+            x: transform[4] ?? 0,
+            y: baselineY - 0.35 * height,
+            w: width,
+            h: 1.35 * height,
+          },
+          hasEOL: textItem.hasEOL ?? false,
+        });
+      }
+
+      pages.push({
+        pageIndex: pageNumber - 1,
+        width: viewport.width,
+        height: viewport.height,
+        items,
+      });
+    }
+    return pages;
+  } finally {
+    await task.destroy();
+  }
+}
+
 export async function extractTextLayerCoverage(bytes: Uint8Array): Promise<TextLayerCoverage> {
   const task = openDocumentTask(bytes);
   try {
@@ -175,6 +248,10 @@ export async function extractAllText(bytes: Uint8Array): Promise<string> {
 
 function isTextItem(item: unknown): item is TextItem {
   return typeof item === "object" && item !== null && "str" in item;
+}
+
+function finitePositive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function isImageOperator(fn: number): boolean {

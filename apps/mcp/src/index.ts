@@ -94,6 +94,28 @@ import {
   type RedactInput,
 } from "./tools/redact.js";
 import {
+  addCommentInputSchema,
+  addCommentOutputSchema,
+  handleAddComment,
+  handleHighlightText,
+  handleLocateText,
+  handleStrikethroughText,
+  handleUnderlineText,
+  highlightTextInputSchema,
+  highlightTextOutputSchema,
+  locateTextInputSchema,
+  locateTextOutputSchema,
+  strikethroughTextInputSchema,
+  strikethroughTextOutputSchema,
+  underlineTextInputSchema,
+  underlineTextOutputSchema,
+  type AddCommentInput,
+  type HighlightTextInput,
+  type LocateTextInput,
+  type StrikethroughTextInput,
+  type UnderlineTextInput,
+} from "./tools/annotate.js";
+import {
   filingPacketInputSchema,
   filingPacketOutputSchema,
   filingInputSchema,
@@ -415,6 +437,96 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: RedactInput) => await handleRedact(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "locate_text",
+    {
+      title: "Locate PDF text",
+      description:
+        "Finds text in a PDF text layer and returns page indexes, snippets, and PDF user-space rectangles for annotation.",
+      inputSchema: locateTextInputSchema,
+      outputSchema: locateTextOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    withGate(
+      dependencies,
+      async (input: LocateTextInput) =>
+        await handleLocateText(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "highlight_text",
+    {
+      title: "Highlight PDF text",
+      description:
+        "Adds live editable highlight annotations from a quote or rectangles returned by locate_text. Writes a new file.",
+      inputSchema: highlightTextInputSchema,
+      outputSchema: highlightTextOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: HighlightTextInput) =>
+        await handleHighlightText(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "underline_text",
+    {
+      title: "Underline PDF text",
+      description:
+        "Adds live editable underline annotations from a quote or rectangles returned by locate_text. Writes a new file.",
+      inputSchema: underlineTextInputSchema,
+      outputSchema: underlineTextOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: UnderlineTextInput) =>
+        await handleUnderlineText(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "strikethrough_text",
+    {
+      title: "Strikethrough PDF text",
+      description:
+        "Adds live editable strikethrough annotations from a quote or rectangles returned by locate_text. Writes a new file.",
+      inputSchema: strikethroughTextInputSchema,
+      outputSchema: strikethroughTextOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: StrikethroughTextInput) =>
+        await handleStrikethroughText(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "add_comment",
+    {
+      title: "Add PDF comment",
+      description:
+        "Adds a live editable sticky-note comment anchored by text or by a page/point. Writes a new file.",
+      inputSchema: addCommentInputSchema,
+      outputSchema: addCommentOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: AddCommentInput) =>
+        await handleAddComment(input, dependencies.engineHandle),
     ),
   );
 

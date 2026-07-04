@@ -123,9 +123,14 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  *   grayscale, and linearize=false.
  * - sanitize -> POST /api/v1/security/sanitize-pdf with removeJavaScript,
  *   removeEmbeddedFiles, removeLinks, and metadata/font removal disabled.
- * - removeEncryption -> POST /api/v1/security/remove-password with fileInput
- *   and password. Passwords are multipart-only and never stored in document
- *   handles or response metadata.
+ * - removeEncryption -> POST /local/decrypt (engine-local qpdf) with the raw PDF
+ *   body and the password hex-encoded in X-RaioPDF-Password-Hex. Stirling's
+ *   /remove-password is lossy (drops the text layer) so it is never used; the
+ *   password never touches a command line or document handle.
+ * - convertToPdfA -> POST /local/pdfa (engine-local Ghostscript) with the raw PDF
+ *   body, X-RaioPDF-PdfA-Level (1|2|3), and X-RaioPDF-PdfA-Strict. Stirling
+ *   2.14.0 gates /api/v1/convert/pdf/pdfa behind LibreOffice, which is not
+ *   bundled, so the conversion runs on the bundled Ghostscript instead.
  * - repair -> POST /api/v1/misc/repair.
  * - batesStamp -> sequential stampText calls, one page at a time.
  * - buildBinder is intentionally unsupported for this engine because Stirling
@@ -370,11 +375,19 @@ export class SidecarPdfEngine implements PdfEngine {
 
     const storedDocument = this.get(document);
     const pageCount = await this.pageCount(document);
-    const formData = createFormData(storedDocument.bytes);
-    formData.append("outputFormat", options.flavor);
-    formData.append("strict", String(options.strict ?? false));
-
-    const response = await this.request("/api/v1/convert/pdf/pdfa", formData);
+    // Stirling 2.14.0 gates /api/v1/convert/pdf/pdfa behind the LibreOffice
+    // (soffice) dependency group, which RaioPDF doesn't bundle — so that endpoint
+    // is always disabled in the payload. Convert with the bundled Ghostscript via
+    // the engine's local /local/pdfa interceptor instead: same underlying engine
+    // Stirling would use, fully on-device.
+    const response = await this.requestLocal(
+      "/local/pdfa",
+      normalizeBytes(storedDocument.bytes),
+      {
+        "X-RaioPDF-PdfA-Level": PDFA_LEVEL_BY_FLAVOR[options.flavor],
+        "X-RaioPDF-PdfA-Strict": String(options.strict ?? false),
+      },
+    );
 
     return this.store(await readBytes(response), pageCount);
   }
@@ -1340,6 +1353,13 @@ function assertSupportedPdfAFlavor(flavor: PdfAConversionOptions["flavor"]): voi
     throw new PdfEngineError("INVALID_DOCUMENT", "Unsupported PDF/A flavor.");
   }
 }
+
+/** PDF/A flavor -> Ghostscript `-dPDFA=` conformance level for `/local/pdfa`. */
+const PDFA_LEVEL_BY_FLAVOR: Record<PdfAConversionOptions["flavor"], string> = {
+  "pdfa-1": "1",
+  "pdfa-2b": "2",
+  "pdfa-3b": "3",
+};
 
 function normalizeRotation(degrees: number): number {
   return ((degrees % 360) + 360) % 360;

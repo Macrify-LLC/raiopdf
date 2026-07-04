@@ -410,3 +410,38 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* Inline tool expansion (Rotate, Page Numbers, Watermark, Compress) --
+   mounted only while its ToolRow is selected. The height/opacity grow-in
+   is the one motion exception item 18 calls out: an instant appearance
+   here reads as broken, unlike every other appear-on-demand card in this
+   panel. `max-height` is a generous ceiling, not a fixed height -- the box
+   still sizes to its actual (shorter) content once the animation ends. */
+.tool-row__expansion {
+  overflow: hidden;
+  animation: tool-row-expansion-in 170ms ease-out;
+}
+
+@keyframes tool-row-expansion-in {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 640px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row__expansion {
+    animation: none;
+  }
+}
+
+/* Cheap mirror of the single Rotate glyph for "Rotate Left" -- avoids
+   shipping a second nearly-identical icon asset. */
+.tool-panel__icon-mirror {
+  transform: scaleX(-1);
+}

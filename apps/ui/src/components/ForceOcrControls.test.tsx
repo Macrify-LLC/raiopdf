@@ -6,7 +6,7 @@ import type { OcrUiState } from "../App";
 import { ForceOcrConfirmationDialog } from "./ForceOcrConfirmationDialog";
 import { resetDialogStackForTests } from "./FloatingDialog";
 import { TextLayerDetailPanel } from "./TextLayerDetailPanel";
-import { ToolPanel } from "./ToolPanel";
+import { ToolPanel, type SidecarStatus } from "./ToolPanel";
 
 describe("force OCR controls", () => {
   let root: Root | null = null;
@@ -56,6 +56,7 @@ describe("force OCR controls", () => {
     render(
       <ToolPanel
         hasDocument
+        pageCount={2}
         ocrState={{ phase: "idle", message: null }}
         ocrAvailable
         ocrStarting={false}
@@ -69,6 +70,13 @@ describe("force OCR controls", () => {
         onOrganizeToolSelected={() => undefined}
         onMakeSearchable={() => undefined}
         onForceOcr={onForceOcr}
+        onRotateLeft={() => undefined}
+        onRotateRight={() => undefined}
+        sidecarStatus={idleSidecarStatus}
+        onApplyPageNumbers={async () => true}
+        onApplyWatermark={async () => true}
+        compressAvailable
+        onCompress={async () => true}
         redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
         scanner={{ scanning: false, message: null, hits: [] }}
         pendingEdits={[]}
@@ -174,6 +182,7 @@ function ToolPanelHarness({
   return (
     <ToolPanel
       hasDocument
+      pageCount={2}
       ocrState={ocrState}
       ocrAvailable={ocrAvailable}
       ocrStarting={false}
@@ -187,6 +196,13 @@ function ToolPanelHarness({
       onOrganizeToolSelected={() => undefined}
       onMakeSearchable={() => undefined}
       onForceOcr={() => undefined}
+      onRotateLeft={() => undefined}
+      onRotateRight={() => undefined}
+      sidecarStatus={idleSidecarStatus}
+      onApplyPageNumbers={async () => true}
+      onApplyWatermark={async () => true}
+      compressAvailable
+      onCompress={async () => true}
       redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
       scanner={{ scanning: false, message: null, hits: [] }}
       pendingEdits={[]}
@@ -200,6 +216,14 @@ function ToolPanelHarness({
     />
   );
 }
+
+const idleSidecarStatus: SidecarStatus = {
+  running: false,
+  message: null,
+  removed: [],
+  beforeBytes: null,
+  afterBytes: null,
+};
 
 function getButton(name: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(

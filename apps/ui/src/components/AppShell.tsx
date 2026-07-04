@@ -17,9 +17,15 @@ import {
 import type {
   RedactionPanelState,
   ScannerPanelState,
+  SidecarStatus,
 } from "./ToolPanel";
 import type { PendingRedactionOverlay } from "./CanvasWell";
-import type { PdfRedactionArea } from "@raiopdf/engine-api";
+import type {
+  PdfCompressOptions,
+  PdfPageNumbersOptions,
+  PdfRedactionArea,
+  PdfWatermarkOptions,
+} from "@raiopdf/engine-api";
 import type { EditingState } from "../hooks/useEditing";
 import type { SensitiveHit } from "../lib/legalTools";
 import { deriveTextLayerStatus } from "../lib/textLayerStatus";
@@ -45,6 +51,8 @@ export interface AppShellProps {
   onRenderError: (message: string) => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
+  onRotateLeft: () => void;
+  onRotateRight: () => void;
   onDeleteSelected: () => void;
   onMoveSelectedUp: () => void;
   onMoveSelectedDown: () => void;
@@ -61,6 +69,12 @@ export interface AppShellProps {
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
   onForceOcr: () => void;
+  pageCount: number;
+  sidecarStatus: SidecarStatus;
+  onApplyPageNumbers: (options: PdfPageNumbersOptions) => Promise<boolean>;
+  onApplyWatermark: (options: PdfWatermarkOptions) => Promise<boolean>;
+  compressAvailable: boolean;
+  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
   redaction: RedactionPanelState;
   scanner: ScannerPanelState;
   pendingRedactions: readonly PendingRedactionOverlay[];
@@ -98,6 +112,8 @@ export function AppShell({
   onRenderError,
   onThumbnailClick,
   onRotateSelected,
+  onRotateLeft,
+  onRotateRight,
   onDeleteSelected,
   onMoveSelectedUp,
   onMoveSelectedDown,
@@ -114,6 +130,12 @@ export function AppShell({
   onOrganizeToolSelected,
   onMakeSearchable,
   onForceOcr,
+  pageCount,
+  sidecarStatus,
+  onApplyPageNumbers,
+  onApplyWatermark,
+  compressAvailable,
+  onCompress,
   redaction,
   scanner,
   pendingRedactions,
@@ -240,6 +262,7 @@ export function AppShell({
         />
         <ToolPanel
           hasDocument={hasDocument}
+          pageCount={pageCount}
           ocrState={ocrState}
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
@@ -253,6 +276,13 @@ export function AppShell({
           onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}
           onForceOcr={onForceOcr}
+          onRotateLeft={onRotateLeft}
+          onRotateRight={onRotateRight}
+          sidecarStatus={sidecarStatus}
+          onApplyPageNumbers={onApplyPageNumbers}
+          onApplyWatermark={onApplyWatermark}
+          compressAvailable={compressAvailable}
+          onCompress={onCompress}
           redaction={redaction}
           scanner={scanner}
           pendingEdits={editing.pendingEdits}

@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Condvar, Mutex,
     },
     thread,
@@ -30,7 +30,7 @@ pub const ENGINE_LOG_FILE_NAME: &str = "engine.log";
 pub const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 pub const ENGINE_LOG_GENERATIONS: usize = 2;
 pub const AUTH_HEADER_NAME: &str = "x-raiopdf-auth";
-pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth";
+pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex";
 pub const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 pub const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 pub const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
@@ -1380,6 +1380,17 @@ fn proxy_client_with_activity(
     client.set_write_timeout(None)?;
     let _active_request = idle.map(ActiveProxyRequest::new);
 
+    // Local, engine-side handlers that must NOT proxy to Stirling. Decrypt runs
+    // the bundled, lossless qpdf: Stirling's /remove-password strips /Encrypt but
+    // drops the text layer (measured 1298 -> 0 words), so it must never be used.
+    if request_method(&request_head) == Some("POST")
+        && request_target(&request_head) == Some("/local/decrypt")
+    {
+        let result = handle_local_decrypt(&mut client, &request_head, &buffered_body);
+        let _ = client.shutdown(Shutdown::Both);
+        return result;
+    }
+
     let upstream_addr = SocketAddr::from(([127, 0, 0, 1], engine_port));
     let mut upstream = TcpStream::connect_timeout(&upstream_addr, Duration::from_secs(5))?;
     upstream.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -1427,6 +1438,156 @@ impl Drop for ActiveProxyRequest {
         idle_state.active_requests = idle_state.active_requests.saturating_sub(1);
         idle_state.timer.touch(Instant::now());
         wake_idle.notify_one();
+    }
+}
+
+/// The request-target (path) from the request line: `METHOD target VERSION`.
+fn request_target(request_head: &[u8]) -> Option<&str> {
+    let request_head = std::str::from_utf8(request_head).ok()?;
+    request_head.lines().next()?.split_whitespace().nth(1)
+}
+
+/// Handle `POST /local/decrypt`: raw PDF bytes in the body, the password
+/// hex-encoded in `X-RaioPDF-Password-Hex` (empty for owner-restricted files).
+/// Responds with the decrypted PDF (200) or a plain-text error (422).
+fn handle_local_decrypt(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let content_length = request_header(request_head, "content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let mut body = buffered_body.to_vec();
+    if content_length > body.len() {
+        client.set_read_timeout(Some(Duration::from_secs(60)))?;
+        let mut remaining = vec![0u8; content_length - body.len()];
+        client.read_exact(&mut remaining)?;
+        body.extend_from_slice(&remaining);
+    }
+
+    let password = request_header(request_head, "x-raiopdf-password-hex")
+        .map(decode_hex)
+        .unwrap_or_default();
+
+    match run_qpdf_decrypt(&body, &password) {
+        Ok(decrypted) => {
+            write_bytes_response(client, 200, "OK", "application/pdf", &decrypted)
+        }
+        Err(message) => {
+            write_bytes_response(client, 422, "Unprocessable Entity", "text/plain", message.as_bytes())
+        }
+    }
+}
+
+/// Losslessly strip encryption with the bundled qpdf. Input goes via a temp file
+/// (qpdf can't read stdin); the password via a temp file (never a process arg);
+/// output comes back on stdout, so no plaintext output temp file is left behind.
+fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
+    let qpdf = resolve_qpdf().ok_or_else(|| "qpdf binary not found in payload".to_string())?;
+
+    let work_dir = unique_temp_dir("raiopdf-decrypt");
+    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let _cleanup = TempDirGuard(work_dir.clone());
+
+    let in_path = work_dir.join("in.pdf");
+    let pw_path = work_dir.join("pw.txt");
+    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
+    // qpdf --password-file reads the first line; an empty file == empty password.
+    fs::write(&pw_path, password).map_err(|error| format!("write password: {error}"))?;
+
+    let mut command = Command::new(&qpdf);
+    command
+        .arg("--decrypt")
+        .arg(format!("--password-file={}", pw_path.display()))
+        .arg("--warning-exit-0")
+        .arg(&in_path)
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_platform_spawn_flags(&mut command);
+
+    let output = command
+        .output()
+        .map_err(|error| format!("qpdf spawn failed: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("qpdf --decrypt failed ({}): {}", output.status, stderr.trim()));
+    }
+    if output.stdout.is_empty() {
+        return Err("qpdf produced no output".to_string());
+    }
+    Ok(output.stdout)
+}
+
+fn resolve_qpdf() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("RAIOPDF_ENGINE_QPDF") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let payload = env::var_os("RAIOPDF_ENGINE_PAYLOAD_DIR")?;
+    let bin_dir = PathBuf::from(payload).join("ocr").join("qpdf").join("bin");
+    ["qpdf.exe", "qpdf"]
+        .into_iter()
+        .map(|name| bin_dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), sequence))
+}
+
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn write_bytes_response(
+    client: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &[u8],
+) -> io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    client.write_all(head.as_bytes())?;
+    client.write_all(body)?;
+    Ok(())
+}
+
+fn decode_hex(value: &str) -> Vec<u8> {
+    let bytes = value.trim().as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        match (hex_value(bytes[index]), hex_value(bytes[index + 1])) {
+            (Some(high), Some(low)) => out.push((high << 4) | low),
+            _ => break,
+        }
+        index += 2;
+    }
+    out
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 

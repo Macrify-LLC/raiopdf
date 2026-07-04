@@ -183,10 +183,9 @@ change propagates instead of drifting:
   nowhere else.
 — The jurisdiction-pack list (Florida / Federal CM/ECF / Georgia eFileGA +
   PeachCourt / Indiana IEFS) is canonical in `packages/rules/data/`; quoted by
-  `README.md`, this file, the landing page, AND the RaioPDF card on
-  macrify.me's homepage (`macrify-site` repo, `index.html`) — that last one is
-  in a different repo and is the one that will silently go stale when a new
-  pack lands.)
+  `README.md`, this file, and the landing page. The RaioPDF card on
+  macrify.me's homepage deliberately does NOT name jurisdictions or rule
+  citations (Jacob's call, 2026-07-03) — keep that card feature-focused.)
 
 ## Why now (short section, can double as a pull-quote) — updated 2026-07-03 (rev. 3)
 

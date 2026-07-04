@@ -1146,6 +1146,14 @@
     hero.addEventListener("pointerleave", onPointerLeave, { passive: true });
   })();
 
+  // Media paths read back out of data-* attributes are constrained to the
+  // page's own ./assets/shots/ files before ever being assigned to a .src —
+  // nothing scheme-like or path-traversing can flow through (CodeQL: DOM text
+  // reinterpreted as HTML).
+  function safeShotPath(value) {
+    return value && /^\.\/assets\/shots\/[A-Za-z0-9._-]+$/.test(value) ? value : null;
+  }
+
   // Product-in-action showcase — tab buttons swap the framed screenshot, its
   // alt text, and the caption. Each tab's ~200KB webp is fetched on first use;
   // hovering or focusing a tab prefetches it so the swap doesn't flash.
@@ -1158,19 +1166,21 @@
     if (!img || !tabs.length) return;
 
     function select(tab) {
+      var src = safeShotPath(tab.getAttribute("data-img"));
+      if (!src) return;
       tabs.forEach(function (t) {
         var active = t === tab;
         t.classList.toggle("is-active", active);
         t.setAttribute("aria-pressed", active ? "true" : "false");
       });
-      img.src = tab.getAttribute("data-img");
+      img.src = src;
       img.alt = tab.getAttribute("data-alt") || "";
       if (caption) caption.textContent = tab.getAttribute("data-caption") || "";
     }
 
     var prefetched = {};
     function prefetch(tab) {
-      var src = tab.getAttribute("data-img");
+      var src = safeShotPath(tab.getAttribute("data-img"));
       if (!src || prefetched[src]) return;
       prefetched[src] = true;
       new Image().src = src;
@@ -1209,7 +1219,7 @@
     var userPaused = false;
 
     function ensureLoaded() {
-      var src = video.getAttribute("data-src");
+      var src = safeShotPath(video.getAttribute("data-src"));
       if (!src) return; // already attached — removing the attribute makes this idempotent
       video.removeAttribute("data-src");
       video.src = src;

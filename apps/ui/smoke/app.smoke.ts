@@ -69,10 +69,8 @@ test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ p
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
   await page.getByRole("button", { name: "Page 2" }).click();
-  page.once("dialog", (dialog) => {
-    void dialog.accept();
-  });
   await page.getByRole("button", { name: "Delete selected pages" }).click();
+  await page.getByRole("button", { name: "Delete Page", exact: true }).click();
   await expect(page.getByRole("button", { name: "Page 4" })).toBeHidden();
 
   await page.getByRole("button", { name: "Move selected pages down" }).click();
@@ -114,7 +112,9 @@ test("zooms the canvas with Acrobat-style shortcuts", async ({ page }) => {
     throw new Error("Rendered canvas did not produce a bounding box.");
   }
 
-  await canvas.click({ position: { x: bounds.width / 2, y: bounds.height / 2 } });
+  // The selectable text layer intentionally sits above the canvas, so click
+  // through it — zoom shortcuts are window-level and only need focus in the app.
+  await canvas.click({ position: { x: bounds.width / 2, y: bounds.height / 2 }, force: true });
   await page.keyboard.press("Control+0");
   await expect(zoomLabel).toHaveText("100%");
 
@@ -206,14 +206,12 @@ test("queues rapid rotate and delete clicks without losing the delete", async ({
 
   const rotate = page.getByRole("button", { name: "Rotate selected pages" });
   const deleteSelected = page.getByRole("button", { name: "Delete selected pages" });
-  page.once("dialog", (dialog) => {
-    void dialog.accept();
-  });
 
   const firstRotate = rotate.click();
   const secondRotate = rotate.click();
   const deleteClick = deleteSelected.click();
   await Promise.all([firstRotate, secondRotate, deleteClick]);
+  await page.getByRole("button", { name: "Delete Page", exact: true }).click();
 
   await expect(page.getByText("Page 1 / 2")).toBeVisible();
   const saved = await savePdf(page);

@@ -34,7 +34,11 @@ export type PathOpErrorCode =
   | "OP_FAILED"
   | "VERIFICATION_FAILED"
   | "IO_ERROR"
-  | "FILE_CHANGED";
+  | "FILE_CHANGED"
+  // Native print pipeline (print.rs shares the PathOpError wire shape).
+  | "PRINT_NOT_SUPPORTED"
+  | "PRINT_CANCELLED"
+  | "PRINT_FALLBACK_SELF_HANDLER";
 
 /** Shape of the serialized Rust `PathOpError`. */
 export interface PathOpErrorPayload {
@@ -249,7 +253,8 @@ export function isPathOpsRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
-async function invokePathOp<T>(
+/** Shared invoke plumbing — also used by the print pipeline (`printPipeline.ts`). */
+export async function invokePathOp<T>(
   command: string,
   payload: Record<string, unknown>,
 ): Promise<T> {

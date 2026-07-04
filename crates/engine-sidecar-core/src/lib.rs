@@ -1,4 +1,5 @@
 pub mod path_ops;
+pub mod print_ops;
 
 use serde::Serialize;
 use std::{

@@ -356,7 +356,7 @@ pub fn registry(toolchain: &PathOpsToolchain) -> Vec<PathOpStatus> {
 // Process helpers
 // ---------------------------------------------------------------------------
 
-fn run_command(
+pub(crate) fn run_command(
     program: &Path,
     args: &[OsString],
     current_dir: Option<&Path>,
@@ -387,7 +387,7 @@ fn run_command(
     })
 }
 
-fn expect_success(tool: &str, output: &Output) -> OpResult<()> {
+pub(crate) fn expect_success(tool: &str, output: &Output) -> OpResult<()> {
     if output.status.success() {
         return Ok(());
     }
@@ -403,7 +403,7 @@ fn expect_success(tool: &str, output: &Output) -> OpResult<()> {
     )))
 }
 
-fn args(parts: &[&str]) -> Vec<OsString> {
+pub(crate) fn args(parts: &[&str]) -> Vec<OsString> {
     parts.iter().map(OsString::from).collect()
 }
 
@@ -414,7 +414,10 @@ fn run_qpdf(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<
     Ok(output)
 }
 
-fn run_ghostscript(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<Output> {
+pub(crate) fn run_ghostscript(
+    toolchain: &PathOpsToolchain,
+    arguments: Vec<OsString>,
+) -> OpResult<Output> {
     let ghostscript = toolchain.require_ghostscript()?;
     let output = run_command(ghostscript, &arguments, None, &[])?;
     expect_success("ghostscript", &output)?;
@@ -456,7 +459,7 @@ fn gs_permit_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
-fn require_input_file(input: &Path) -> OpResult<u64> {
+pub(crate) fn require_input_file(input: &Path) -> OpResult<u64> {
     let metadata = fs::metadata(input)
         .map_err(|error| PathOpError::io(&format!("input {}", input.display()), error))?;
     if !metadata.is_file() {
@@ -479,7 +482,7 @@ fn require_output(tool: &str, output_path: &Path) -> OpResult<u64> {
     Ok(metadata.len())
 }
 
-fn path_arg(path: &Path) -> OsString {
+pub(crate) fn path_arg(path: &Path) -> OsString {
     path.as_os_str().to_os_string()
 }
 
@@ -978,7 +981,7 @@ pub fn split_by_max_bytes(
     Ok(parts)
 }
 
-fn build_page_range(
+pub(crate) fn build_page_range(
     toolchain: &PathOpsToolchain,
     input: &Path,
     start: u32,

@@ -1,6 +1,7 @@
 mod diagnostics;
 mod mcp;
 mod path_ops;
+mod print;
 mod range_read;
 mod sidecar;
 
@@ -485,6 +486,7 @@ pub fn run() {
             app.manage(diagnostics);
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
+            app.manage(print::PrintJobs::default());
             // Grants are in-memory, so every path-op temp dir left behind by a
             // previous run is dead on a fresh start — sweep them all, off the
             // startup path.
@@ -549,7 +551,11 @@ pub fn run() {
             path_ops::path_op_bates_stamp,
             path_ops::path_op_page_numbers,
             path_ops::path_op_watermark,
-            path_ops::path_op_release_output
+            path_ops::path_op_release_output,
+            print::print_status,
+            print::print_list_printers,
+            print::print_pdf,
+            print::print_cancel
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

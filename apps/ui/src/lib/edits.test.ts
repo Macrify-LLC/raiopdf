@@ -40,6 +40,15 @@ describe("toPdfEdits", () => {
         fontSizePt: 11,
       },
       {
+        kind: "callout",
+        id: "callout",
+        pageIndex: 1,
+        rect: { x: 15, y: 16, w: 90, h: 32 },
+        tip: { x: 160, y: 70 },
+        text: "See this",
+        fontSizePt: 12,
+      },
+      {
         kind: "image",
         id: "c",
         pageIndex: 0,
@@ -95,6 +104,7 @@ describe("toPdfEdits", () => {
       "underline",
       "strikethrough",
       "textBox",
+      "callout",
       "image",
       "signature",
       "comment",
@@ -103,12 +113,18 @@ describe("toPdfEdits", () => {
       "shape",
     ]);
     expect(edits[3]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
-    expect(edits[7]).toMatchObject({ strokeWidthPt: 1.5 });
-    expect(edits[8]).toMatchObject({
+    expect(edits[4]).toMatchObject({
+      type: "callout",
+      rect: { x: 15, y: 16, w: 90, h: 32 },
+      tip: { x: 160, y: 70 },
+      text: "See this",
+    });
+    expect(edits[8]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[9]).toMatchObject({
       shape: "rect",
       rect: { x: 10, y: 20, w: 80, h: 40 },
     });
-    expect(edits[9]).toMatchObject({
+    expect(edits[10]).toMatchObject({
       shape: "arrow",
       from: { x: 10, y: 10 },
       to: { x: 50, y: 30 },
@@ -311,6 +327,76 @@ describe("toPdfEdits", () => {
     expect(edits[0]).not.toHaveProperty("bold");
     expect(edits[0]).not.toHaveProperty("italic");
     expect(edits[0]).not.toHaveProperty("align");
+  });
+
+  it("emits a callout as one atomic edit with default callout options omitted", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "callout",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 140, h: 50 },
+        tip: { x: 200, y: 90 },
+        text: "Look here",
+        fontSizePt: 12,
+        fontFamily: "helvetica",
+        bold: false,
+        italic: false,
+        align: "left",
+        strokeWidthPt: 1.5,
+        strokeColor: { r: 0x11 / 0xff, g: 0x11 / 0xff, b: 0x11 / 0xff },
+        arrowhead: true,
+        boxBorder: true,
+      },
+    ]);
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toEqual({
+      type: "callout",
+      pageIndex: 0,
+      rect: { x: 20, y: 30, w: 140, h: 50 },
+      tip: { x: 200, y: 90 },
+      text: "Look here",
+      fontSizePt: 12,
+    });
+  });
+
+  it("threads custom callout text and leader fields", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "callout",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 140, h: 50 },
+        tip: { x: 200, y: 90 },
+        text: "Styled callout",
+        fontSizePt: 11,
+        color: { r: 0.8, g: 0.1, b: 0.2 },
+        fontFamily: "times",
+        bold: true,
+        italic: true,
+        align: "right",
+        strokeWidthPt: 3,
+        strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
+        arrowhead: false,
+        boxBorder: false,
+        boxFill: { r: 1, g: 0.95, b: 0.65 },
+      },
+    ]);
+
+    expect(edits[0]).toMatchObject({
+      type: "callout",
+      color: { r: 0.8, g: 0.1, b: 0.2 },
+      fontFamily: "times",
+      bold: true,
+      italic: true,
+      align: "right",
+      strokeWidthPt: 3,
+      strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
+      arrowhead: false,
+      boxBorder: false,
+      boxFill: { r: 1, g: 0.95, b: 0.65 },
+    });
   });
 
   it("appends changed form values as one trailing document-scoped edit", () => {

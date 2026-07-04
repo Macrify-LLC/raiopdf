@@ -10,7 +10,9 @@ import {
 } from "../lib/edits";
 import {
   DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_CALLOUT_STROKE_WIDTH_PT,
   DEFAULT_SHAPE_STROKE_WIDTH_PT,
+  type CalloutEditStyle,
   type HighlightEditStyle,
   type InkEditStyle,
   type ShapeEditStyle,
@@ -76,6 +78,8 @@ export interface EditingState {
   ) => void;
   textBoxStyle: TextBoxEditStyle;
   updateTextBoxStyle: (style: Partial<TextBoxEditStyle>) => void;
+  calloutStyle: CalloutEditStyle;
+  updateCalloutStyle: (style: Partial<CalloutEditStyle>) => void;
   inkStyle: InkEditStyle;
   updateInkStyle: (style: Partial<InkEditStyle>) => void;
   shapeStyles: Readonly<Record<ShapeToolId, ShapeEditStyle>>;
@@ -120,6 +124,9 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     strikethrough: {},
   });
   const [textBoxStyle, setTextBoxStyle] = useState<TextBoxEditStyle>({});
+  const [calloutStyle, setCalloutStyle] = useState<CalloutEditStyle>({
+    strokeWidthPt: DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+  });
   const [inkStyle, setInkStyle] = useState<InkEditStyle>({
     strokeWidthPt: DEFAULT_INK_STROKE_WIDTH_PT,
   });
@@ -290,6 +297,10 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setTextBoxStyle((current) => ({ ...current, ...style }));
   }, []);
 
+  const updateCalloutStyle = useCallback((style: Partial<CalloutEditStyle>) => {
+    setCalloutStyle((current) => ({ ...current, ...style }));
+  }, []);
+
   const updateInkStyle = useCallback((style: Partial<InkEditStyle>) => {
     setInkStyle((current) => ({ ...current, ...style }));
   }, []);
@@ -357,6 +368,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateTextMarkupStyle,
       textBoxStyle,
       updateTextBoxStyle,
+      calloutStyle,
+      updateCalloutStyle,
       inkStyle,
       updateInkStyle,
       shapeStyles,
@@ -394,6 +407,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateTextMarkupStyle,
       textBoxStyle,
       updateTextBoxStyle,
+      calloutStyle,
+      updateCalloutStyle,
       inkStyle,
       updateInkStyle,
       shapeStyles,

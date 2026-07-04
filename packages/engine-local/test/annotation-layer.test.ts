@@ -298,100 +298,124 @@ describe("annotation-layer foundation", () => {
     ]);
   });
 
-  it("flattens annotation-mode ink and shapes back into painted page content", async () => {
-    const engine = createLocalPdfEngine();
-    const source = await engine.open(await createPdf([[612, 792]]));
-    const edits: readonly PdfEdit[] = [
-      {
-        type: "ink",
-        pageIndex: 0,
-        strokes: [
-          [
-            { x: 10, y: 10 },
-            { x: 30, y: 40 },
-            { x: 60, y: 20 },
-          ],
-        ],
-      },
-      {
-        type: "shape",
-        pageIndex: 0,
-        shape: "rect",
-        rect: { x: 80, y: 120, w: 140, h: 60 },
-        strokeWidthPt: 3,
-        fillColor: { r: 0.8, g: 0.7, b: 0.2 },
-      },
-      {
-        type: "shape",
-        pageIndex: 0,
-        shape: "arrow",
-        from: { x: 40, y: 40 },
-        to: { x: 140, y: 40 },
-        strokeWidthPt: 2,
-      },
-    ];
+  it.each(markEquivalenceCases)(
+    "flattens annotation-mode $name with AP-local drawing equivalent to baked page drawing",
+    async ({ edit, expectedRect }) => {
+      const equivalence = await renderBakedAndFlattenedMark(edit, await createPdf([[612, 792]]));
 
-    const baked = await engine.applyEdits(source, edits);
-    const annotationMode = await engine.applyEdits(source, edits, { markupMode: "annotation" });
-    const flattened = await engine.flattenMarkupAnnotations(annotationMode);
-    const bakedBytes = await engine.saveToBytes(baked);
-    const flattenedBytes = await engine.saveToBytes(flattened);
-    const flattenedPdf = await PDFDocument.load(flattenedBytes);
-    const flattenedContent = await readDecodedPageContent(flattenedBytes, 0);
-
-    expect(readRaioPdfMarkupAnnotations(flattenedPdf.getPage(0))).toHaveLength(0);
-    expect(flattenedPdf.getPage(0).node.lookupMaybe(PDFName.of("Annots"), PDFArray)).toBeUndefined();
-    expect(flattenedContent).toContain("/RaioPDFAnnot");
-    expect(flattenedContent).toContain(" Do");
-    await expectFlattenedContentCarriesBakedMarks(bakedBytes, flattenedContent);
-  });
+      expect(readNumberArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
+        expectedRect,
+      );
+      expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
+      expectNumbersClose(equivalence.placementMatrix, [1, 0, 0, 1, expectedRect[0]!, expectedRect[1]!]);
+      expectPaintedPathsEquivalent(equivalence.bakedPaths, equivalence.apPaths, equivalence.placementMatrix);
+    },
+  );
 
   it.each([90, 180, 270] as const)(
     "emits and flattens annotation geometry on %i-degree rotated pages",
     async (rotation) => {
-      const engine = createLocalPdfEngine();
-      const document = await engine.open(await createRotatedPdf(rotation));
-      const edited = await engine.applyEdits(
-        document,
-        [
-          {
-            type: "shape",
-            pageIndex: 0,
-            shape: "rect",
-            rect: { x: 80, y: 120, w: 140, h: 60 },
-            strokeWidthPt: 3,
-          },
-          {
-            type: "shape",
-            pageIndex: 0,
-            shape: "line",
-            from: { x: 30, y: 40 },
-            to: { x: 200, y: 220 },
-          },
-        ],
-        { markupMode: "annotation" },
-      );
-      const editedBytes = await engine.saveToBytes(edited);
-      const pdf = await PDFDocument.load(editedBytes);
-      const annotations = readPageAnnotations(pdf, 0);
-      const flattened = await engine.flattenMarkupAnnotations(edited);
-      const flattenedContent = await readDecodedPageContent(await engine.saveToBytes(flattened), 0);
+      for (const { edit, expectedRect } of markEquivalenceCases) {
+        const equivalence = await renderBakedAndFlattenedMark(edit, await createRotatedPdf(rotation));
 
-      expect(pdf.getPage(0).getRotation().angle).toBe(rotation);
-      expect(readNumberArray(annotations[0]!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
-        78.5, 118.5, 221.5, 181.5,
-      ]);
-      expect(readNumberArray(annotations[1]!.lookup(PDFName.of("L"), PDFArray))).toEqual([
-        30, 40, 200, 220,
-      ]);
-      expect(
-        decodePdfStream(readNormalAppearanceStream(pdf, annotations[0]!)).length,
-      ).toBeGreaterThan(0);
-      expect(flattenedContent).toContain("/RaioPDFAnnot");
-      expect(flattenedContent).toContain(" Do");
+        expect(equivalence.annotationPdf.getPage(0).getRotation().angle).toBe(rotation);
+        expect(readNumberArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
+          expectedRect,
+        );
+        expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
+        expectNumbersClose(equivalence.placementMatrix, [
+          1,
+          0,
+          0,
+          1,
+          expectedRect[0]!,
+          expectedRect[1]!,
+        ]);
+        expectPaintedPathsEquivalent(
+          equivalence.bakedPaths,
+          equivalence.apPaths,
+          equivalence.placementMatrix,
+        );
+      }
     },
   );
 });
+
+const markEquivalenceCases: ReadonlyArray<{
+  name: string;
+  edit: PdfEdit;
+  expectedRect: number[];
+}> = [
+  {
+    name: "ink",
+    edit: {
+      type: "ink",
+      pageIndex: 0,
+      strokeWidthPt: 2,
+      color: { r: 0.2, g: 0.3, b: 0.4 },
+      strokes: [
+        [
+          { x: 10, y: 10 },
+          { x: 30, y: 40 },
+          { x: 60, y: 20 },
+        ],
+      ],
+    },
+    expectedRect: [9, 9, 61, 41],
+  },
+  {
+    name: "rectangle",
+    edit: {
+      type: "shape",
+      pageIndex: 0,
+      shape: "rect",
+      rect: { x: 80, y: 120, w: 140, h: 60 },
+      strokeWidthPt: 3,
+      strokeColor: { r: 0.1, g: 0.2, b: 0.3 },
+      fillColor: { r: 0.8, g: 0.7, b: 0.2 },
+    },
+    expectedRect: [78.5, 118.5, 221.5, 181.5],
+  },
+  {
+    name: "ellipse",
+    edit: {
+      type: "shape",
+      pageIndex: 0,
+      shape: "ellipse",
+      rect: { x: 100, y: 150, w: 80, h: 40 },
+      strokeWidthPt: 2.5,
+      strokeColor: { r: 0.3, g: 0.1, b: 0.7 },
+      fillColor: { r: 0.2, g: 0.8, b: 0.4 },
+    },
+    expectedRect: [98.75, 148.75, 181.25, 191.25],
+  },
+  {
+    name: "line",
+    edit: {
+      type: "shape",
+      pageIndex: 0,
+      shape: "line",
+      from: { x: 30, y: 40 },
+      to: { x: 200, y: 220 },
+      strokeWidthPt: 4,
+      strokeColor: { r: 0.9, g: 0.1, b: 0.1 },
+    },
+    expectedRect: [28, 38, 202, 222],
+  },
+  {
+    name: "arrow",
+    edit: {
+      type: "shape",
+      pageIndex: 0,
+      shape: "arrow",
+      from: { x: 40, y: 40 },
+      to: { x: 140, y: 40 },
+      strokeWidthPt: 2,
+      strokeColor: { r: 0.15, g: 0.25, b: 0.35 },
+    },
+    expectedRect: [39, 32.7, 141, 47.3],
+  },
+];
 
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
@@ -473,23 +497,577 @@ function readNormalAppearanceStream(pdf: PDFDocument, annotation: PDFDict): PDFS
     : (normalAppearance as PDFStream);
 }
 
-async function expectFlattenedContentCarriesBakedMarks(
-  bakedBytes: Uint8Array,
-  flattenedContent: string,
-): Promise<void> {
-  const bakedContent = await readDecodedPageContent(bakedBytes, 0);
+type Matrix = readonly [number, number, number, number, number, number];
 
-  expect(bakedContent).toMatch(/\b1\.5 w\b/);
-  expect(bakedContent).toMatch(/\b2 w\b/);
-  expect(bakedContent).toMatch(/\b3 w\b/);
-  expect(bakedContent).toContain("f");
-  expect(readOperandPairs(flattenedContent, "cm")).toEqual(
-    expect.arrayContaining([
-      [1, 0, 0, 1, 9.25, 9.25],
-      [1, 0, 0, 1, 78.5, 118.5],
-      [1, 0, 0, 1, 39, 32.7],
-    ]),
+type Point = {
+  x: number;
+  y: number;
+};
+
+type GraphicsStateAlpha = {
+  fillAlpha: number | undefined;
+  strokeAlpha: number | undefined;
+};
+
+type PaintState = {
+  strokeColor: readonly [number, number, number] | undefined;
+  fillColor: readonly [number, number, number] | undefined;
+  strokeWidth: number | undefined;
+  lineCap: number | undefined;
+  fillAlpha: number;
+  strokeAlpha: number;
+};
+
+type PathSegment =
+  | { op: "m" | "l"; point: Point }
+  | { op: "c"; points: readonly [Point, Point, Point] }
+  | { op: "re"; corners: readonly [Point, Point, Point, Point] }
+  | { op: "h" };
+
+type PaintedPath = {
+  paint: string;
+  state: PaintState;
+  segments: readonly PathSegment[];
+};
+
+type MarkEquivalence = {
+  annotation: PDFDict;
+  annotationPdf: PDFDocument;
+  apMatrix: Matrix;
+  apPaths: readonly PaintedPath[];
+  bakedPaths: readonly PaintedPath[];
+  placementMatrix: Matrix;
+};
+
+async function renderBakedAndFlattenedMark(
+  edit: PdfEdit,
+  sourceBytes: Uint8Array,
+): Promise<MarkEquivalence> {
+  const engine = createLocalPdfEngine();
+  const bakedSource = await engine.open(sourceBytes);
+  const annotationSource = await engine.open(sourceBytes);
+  const baked = await engine.applyEdits(bakedSource, [edit]);
+  const annotationMode = await engine.applyEdits(annotationSource, [edit], { markupMode: "annotation" });
+  const bakedBytes = await engine.saveToBytes(baked);
+  const annotationBytes = await engine.saveToBytes(annotationMode);
+  const annotationPdf = await PDFDocument.load(annotationBytes);
+  const annotations = readPageAnnotations(annotationPdf, 0);
+  const [annotation] = annotations;
+
+  expect(annotations).toHaveLength(1);
+  expect(annotation).toBeDefined();
+
+  const flattened = await engine.flattenMarkupAnnotations(annotationMode);
+  const flattenedBytes = await engine.saveToBytes(flattened);
+  const flattenedPdf = await PDFDocument.load(flattenedBytes);
+  const flattenedContent = await readDecodedPageContent(flattenedBytes, 0);
+  const appearancePlacement = readSingleFlattenedAppearance(flattenedPdf, flattenedContent);
+  const appearanceStream = readPageXObjectStream(
+    flattenedPdf,
+    0,
+    appearancePlacement.name.replace(/^\//, ""),
   );
+
+  if (!appearanceStream) {
+    throw new Error(`Expected flattened appearance ${appearancePlacement.name} to be present.`);
+  }
+
+  const apMatrix = readOptionalMatrix(appearanceStream.dict.lookupMaybe(PDFName.of("Matrix"), PDFArray));
+
+  expect(readRaioPdfMarkupAnnotations(flattenedPdf.getPage(0))).toHaveLength(0);
+  expect(flattenedPdf.getPage(0).node.lookupMaybe(PDFName.of("Annots"), PDFArray)).toBeUndefined();
+
+  return {
+    annotation: annotation!,
+    annotationPdf,
+    apMatrix,
+    apPaths: readPaintedPaths(decodePdfStream(appearanceStream), readStreamExtGStates(flattenedPdf, appearanceStream)),
+    bakedPaths: readPaintedPaths(
+      await readDecodedPageContent(bakedBytes, 0),
+      readPageExtGStates(await PDFDocument.load(bakedBytes), 0),
+    ),
+    placementMatrix: multiplyMatrices(appearancePlacement.matrix, apMatrix),
+  };
+}
+
+function readSingleFlattenedAppearance(
+  pdf: PDFDocument,
+  content: string,
+): { name: string; matrix: Matrix } {
+  const appearances = readFlattenedAppearances(content).filter(({ name }) =>
+    Boolean(readPageXObjectStream(pdf, 0, name.replace(/^\//, ""), false)),
+  );
+
+  expect(appearances).toHaveLength(1);
+
+  return appearances[0]!;
+}
+
+function readFlattenedAppearances(content: string): Array<{ name: string; matrix: Matrix }> {
+  const tokens = tokenizePdfContent(content);
+  const stack: Array<number | string> = [];
+  const ctmStack: Matrix[] = [];
+  let ctm: Matrix = identityMatrix();
+  const appearances: Array<{ name: string; matrix: Matrix }> = [];
+
+  for (const token of tokens) {
+    if (isNumberToken(token)) {
+      stack.push(Number(token));
+      continue;
+    }
+
+    if (token.startsWith("/")) {
+      stack.push(token);
+      continue;
+    }
+
+    if (token === "q") {
+      ctmStack.push(ctm);
+      stack.length = 0;
+      continue;
+    }
+
+    if (token === "Q") {
+      ctm = ctmStack.pop() ?? identityMatrix();
+      stack.length = 0;
+      continue;
+    }
+
+    if (token === "cm") {
+      ctm = multiplyMatrices(ctm, popMatrix(stack));
+      stack.length = 0;
+      continue;
+    }
+
+    if (token === "Do") {
+      const name = popName(stack);
+      appearances.push({ name, matrix: ctm });
+      stack.length = 0;
+      continue;
+    }
+
+    if (isPdfOperator(token)) {
+      stack.length = 0;
+    }
+  }
+
+  return appearances;
+}
+
+function readPageXObjectStream(
+  pdf: PDFDocument,
+  pageIndex: number,
+  name: string,
+  required = true,
+): PDFStream | undefined {
+  const resources = pdf.getPage(pageIndex).node.Resources();
+  const xObjects = resources?.lookupMaybe(PDFName.of("XObject"), PDFDict);
+  const entry = xObjects?.get(PDFName.of(name));
+  const stream = entry instanceof PDFRef ? pdf.context.lookup(entry, PDFStream) : entry;
+
+  if (stream instanceof PDFStream) {
+    return stream;
+  }
+
+  if (required) {
+    throw new Error(`Expected page XObject /${name} to be a stream.`);
+  }
+
+  return undefined;
+}
+
+function readPaintedPaths(
+  content: string,
+  extGStates: ReadonlyMap<string, GraphicsStateAlpha>,
+): PaintedPath[] {
+  const tokens = tokenizePdfContent(content);
+  const stack: Array<number | string> = [];
+  const stateStack: PaintState[] = [];
+  const ctmStack: Matrix[] = [];
+  let state = defaultPaintState();
+  let ctm: Matrix = identityMatrix();
+  let path: PathSegment[] = [];
+  const paintedPaths: PaintedPath[] = [];
+
+  for (const token of tokens) {
+    if (isNumberToken(token)) {
+      stack.push(Number(token));
+      continue;
+    }
+
+    if (token.startsWith("/")) {
+      stack.push(token);
+      continue;
+    }
+
+    switch (token) {
+      case "q":
+        stateStack.push(clonePaintState(state));
+        ctmStack.push(ctm);
+        stack.length = 0;
+        break;
+      case "Q":
+        state = stateStack.pop() ?? defaultPaintState();
+        ctm = ctmStack.pop() ?? identityMatrix();
+        stack.length = 0;
+        break;
+      case "cm":
+        ctm = multiplyMatrices(ctm, popMatrix(stack));
+        stack.length = 0;
+        break;
+      case "w":
+        state = { ...state, strokeWidth: popNumber(stack) };
+        stack.length = 0;
+        break;
+      case "J":
+        state = { ...state, lineCap: popNumber(stack) };
+        stack.length = 0;
+        break;
+      case "RG":
+        state = { ...state, strokeColor: popColor(stack) };
+        stack.length = 0;
+        break;
+      case "rg":
+        state = { ...state, fillColor: popColor(stack) };
+        stack.length = 0;
+        break;
+      case "G": {
+        const gray = popNumber(stack);
+        state = { ...state, strokeColor: [gray, gray, gray] };
+        stack.length = 0;
+        break;
+      }
+      case "g": {
+        const gray = popNumber(stack);
+        state = { ...state, fillColor: [gray, gray, gray] };
+        stack.length = 0;
+        break;
+      }
+      case "gs": {
+        const graphicsState = extGStates.get(popName(stack).replace(/^\//, ""));
+        state = {
+          ...state,
+          fillAlpha: graphicsState?.fillAlpha ?? state.fillAlpha,
+          strokeAlpha: graphicsState?.strokeAlpha ?? state.strokeAlpha,
+        };
+        stack.length = 0;
+        break;
+      }
+      case "m":
+        path.push({ op: "m", point: transformPoint(ctm, popPoint(stack)) });
+        stack.length = 0;
+        break;
+      case "l":
+        path.push({ op: "l", point: transformPoint(ctm, popPoint(stack)) });
+        stack.length = 0;
+        break;
+      case "c": {
+        const points = popCubicPoints(stack).map((point) => transformPoint(ctm, point)) as [
+          Point,
+          Point,
+          Point,
+        ];
+        path.push({ op: "c", points });
+        stack.length = 0;
+        break;
+      }
+      case "re":
+        path.push({ op: "re", corners: transformRectCorners(ctm, popRect(stack)) });
+        stack.length = 0;
+        break;
+      case "h":
+        path.push({ op: "h" });
+        stack.length = 0;
+        break;
+      case "n":
+        path = [];
+        stack.length = 0;
+        break;
+      case "S":
+      case "s":
+      case "f":
+      case "f*":
+      case "B":
+      case "B*":
+      case "b":
+      case "b*":
+        paintedPaths.push({ paint: token, state: clonePaintState(state), segments: [...path] });
+        path = [];
+        stack.length = 0;
+        break;
+      default:
+        if (isPdfOperator(token)) {
+          stack.length = 0;
+        }
+        break;
+    }
+  }
+
+  return paintedPaths;
+}
+
+function readPageExtGStates(
+  pdf: PDFDocument,
+  pageIndex: number,
+): ReadonlyMap<string, GraphicsStateAlpha> {
+  return readExtGStates(pdf, pdf.getPage(pageIndex).node.Resources());
+}
+
+function readStreamExtGStates(
+  pdf: PDFDocument,
+  stream: PDFStream,
+): ReadonlyMap<string, GraphicsStateAlpha> {
+  return readExtGStates(pdf, stream.dict.lookupMaybe(PDFName.of("Resources"), PDFDict));
+}
+
+function readExtGStates(
+  pdf: PDFDocument,
+  resources: PDFDict | undefined,
+): ReadonlyMap<string, GraphicsStateAlpha> {
+  const extGState = resources?.lookupMaybe(PDFName.of("ExtGState"), PDFDict);
+  const states = new Map<string, GraphicsStateAlpha>();
+
+  if (!extGState) {
+    return states;
+  }
+
+  for (const [name, entry] of extGState.entries()) {
+    const dict = entry instanceof PDFRef ? pdf.context.lookup(entry, PDFDict) : entry;
+
+    if (!(dict instanceof PDFDict)) {
+      continue;
+    }
+
+    states.set(name.toString().replace(/^\//, ""), {
+      fillAlpha: dict.lookupMaybe(PDFName.of("ca"), PDFNumber)?.asNumber(),
+      strokeAlpha: dict.lookupMaybe(PDFName.of("CA"), PDFNumber)?.asNumber(),
+    });
+  }
+
+  return states;
+}
+
+function expectPaintedPathsEquivalent(
+  bakedPaths: readonly PaintedPath[],
+  apPaths: readonly PaintedPath[],
+  placementMatrix: Matrix,
+): void {
+  expect(apPaths).toHaveLength(bakedPaths.length);
+
+  const mappedApPaths = apPaths.map((path) => transformPaintedPath(path, placementMatrix));
+
+  for (let index = 0; index < bakedPaths.length; index += 1) {
+    expectPaintedPathClose(mappedApPaths[index]!, bakedPaths[index]!);
+  }
+}
+
+function expectPaintedPathClose(actual: PaintedPath, expected: PaintedPath): void {
+  expect(actual.paint).toBe(expected.paint);
+  expect(actual.segments).toHaveLength(expected.segments.length);
+  expectPaintStateClose(actual.state, expected.state);
+
+  for (let index = 0; index < expected.segments.length; index += 1) {
+    expectPathSegmentClose(actual.segments[index]!, expected.segments[index]!);
+  }
+}
+
+function expectPaintStateClose(actual: PaintState, expected: PaintState): void {
+  expectColorClose(actual.strokeColor, expected.strokeColor);
+  expectColorClose(actual.fillColor, expected.fillColor);
+  expectOptionalNumberClose(actual.strokeWidth, expected.strokeWidth);
+  expectOptionalNumberClose(actual.lineCap, expected.lineCap);
+  expectNumbersClose([actual.fillAlpha, actual.strokeAlpha], [expected.fillAlpha, expected.strokeAlpha]);
+}
+
+function expectPathSegmentClose(actual: PathSegment, expected: PathSegment): void {
+  expect(actual.op).toBe(expected.op);
+
+  switch (expected.op) {
+    case "m":
+    case "l":
+      expectPointClose((actual as Extract<PathSegment, { op: "m" | "l" }>).point, expected.point);
+      break;
+    case "c": {
+      const actualCubic = actual as Extract<PathSegment, { op: "c" }>;
+      for (let index = 0; index < expected.points.length; index += 1) {
+        expectPointClose(actualCubic.points[index]!, expected.points[index]!);
+      }
+      break;
+    }
+    case "re": {
+      const actualRect = actual as Extract<PathSegment, { op: "re" }>;
+      for (let index = 0; index < expected.corners.length; index += 1) {
+        expectPointClose(actualRect.corners[index]!, expected.corners[index]!);
+      }
+      break;
+    }
+    case "h":
+      break;
+  }
+}
+
+function expectColorClose(
+  actual: readonly [number, number, number] | undefined,
+  expected: readonly [number, number, number] | undefined,
+): void {
+  if (!expected || !actual) {
+    expect(actual).toBe(expected);
+    return;
+  }
+
+  expectNumbersClose(actual, expected);
+}
+
+function expectOptionalNumberClose(actual: number | undefined, expected: number | undefined): void {
+  if (expected === undefined || actual === undefined) {
+    expect(actual).toBe(expected);
+    return;
+  }
+
+  expectNumberClose(actual, expected);
+}
+
+function expectPointClose(actual: Point, expected: Point): void {
+  expectNumberClose(actual.x, expected.x);
+  expectNumberClose(actual.y, expected.y);
+}
+
+function expectNumbersClose(actual: readonly number[], expected: readonly number[]): void {
+  expect(actual).toHaveLength(expected.length);
+
+  for (let index = 0; index < expected.length; index += 1) {
+    expectNumberClose(actual[index]!, expected[index]!);
+  }
+}
+
+function expectNumberClose(actual: number, expected: number): void {
+  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(0.001);
+}
+
+function transformPaintedPath(path: PaintedPath, matrix: Matrix): PaintedPath {
+  return {
+    ...path,
+    segments: path.segments.map((segment) => transformPathSegment(segment, matrix)),
+  };
+}
+
+function transformPathSegment(segment: PathSegment, matrix: Matrix): PathSegment {
+  switch (segment.op) {
+    case "m":
+    case "l":
+      return { ...segment, point: transformPoint(matrix, segment.point) };
+    case "c":
+      return {
+        ...segment,
+        points: segment.points.map((point) => transformPoint(matrix, point)) as [Point, Point, Point],
+      };
+    case "re":
+      return {
+        ...segment,
+        corners: segment.corners.map((point) => transformPoint(matrix, point)) as [
+          Point,
+          Point,
+          Point,
+          Point,
+        ],
+      };
+    case "h":
+      return segment;
+  }
+}
+
+function tokenizePdfContent(content: string): string[] {
+  return content.match(/\/[^\s[\]<>/()]+|[+-]?(?:\d+\.?\d*|\.\d+)|\S+/g) ?? [];
+}
+
+function isNumberToken(token: string): boolean {
+  return /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(token);
+}
+
+function isPdfOperator(token: string): boolean {
+  return /^[A-Za-z*'"]+$/.test(token);
+}
+
+function popNumber(stack: Array<number | string>): number {
+  const value = stack.pop();
+
+  if (typeof value !== "number") {
+    throw new Error(`Expected numeric PDF operand, saw ${String(value)}.`);
+  }
+
+  return value;
+}
+
+function popName(stack: Array<number | string>): string {
+  const value = stack.pop();
+
+  if (typeof value !== "string" || !value.startsWith("/")) {
+    throw new Error(`Expected PDF name operand, saw ${String(value)}.`);
+  }
+
+  return value;
+}
+
+function popColor(stack: Array<number | string>): [number, number, number] {
+  const b = popNumber(stack);
+  const g = popNumber(stack);
+  const r = popNumber(stack);
+
+  return [r, g, b];
+}
+
+function popPoint(stack: Array<number | string>): Point {
+  const y = popNumber(stack);
+  const x = popNumber(stack);
+
+  return { x, y };
+}
+
+function popCubicPoints(stack: Array<number | string>): [Point, Point, Point] {
+  const y3 = popNumber(stack);
+  const x3 = popNumber(stack);
+  const y2 = popNumber(stack);
+  const x2 = popNumber(stack);
+  const y1 = popNumber(stack);
+  const x1 = popNumber(stack);
+
+  return [
+    { x: x1, y: y1 },
+    { x: x2, y: y2 },
+    { x: x3, y: y3 },
+  ];
+}
+
+function popRect(stack: Array<number | string>): readonly [number, number, number, number] {
+  const h = popNumber(stack);
+  const w = popNumber(stack);
+  const y = popNumber(stack);
+  const x = popNumber(stack);
+
+  return [x, y, w, h];
+}
+
+function popMatrix(stack: Array<number | string>): Matrix {
+  const f = popNumber(stack);
+  const e = popNumber(stack);
+  const d = popNumber(stack);
+  const c = popNumber(stack);
+  const b = popNumber(stack);
+  const a = popNumber(stack);
+
+  return [a, b, c, d, e, f];
+}
+
+function readOptionalMatrix(array: PDFArray | undefined): Matrix {
+  if (!array) {
+    return identityMatrix();
+  }
+
+  const values = readNumberArray(array);
+
+  expect(values).toHaveLength(6);
+
+  return values as [number, number, number, number, number, number];
 }
 
 function readOperandPairs(content: string, operator: string): number[][] {
@@ -502,4 +1080,65 @@ function readOperandPairs(content: string, operator: string): number[][] {
   return [...content.matchAll(operandsPattern)].map((match) =>
     match[1]!.trim().split(" ").map((value) => Number(value)),
   );
+}
+
+function identityMatrix(): Matrix {
+  return [1, 0, 0, 1, 0, 0];
+}
+
+function multiplyMatrices(outer: Matrix, inner: Matrix): Matrix {
+  const [a1, b1, c1, d1, e1, f1] = outer;
+  const [a2, b2, c2, d2, e2, f2] = inner;
+
+  return [
+    a1 * a2 + c1 * b2,
+    b1 * a2 + d1 * b2,
+    a1 * c2 + c1 * d2,
+    b1 * c2 + d1 * d2,
+    a1 * e2 + c1 * f2 + e1,
+    b1 * e2 + d1 * f2 + f1,
+  ];
+}
+
+function transformPoint(matrix: Matrix, point: Point): Point {
+  const [a, b, c, d, e, f] = matrix;
+
+  return {
+    x: a * point.x + c * point.y + e,
+    y: b * point.x + d * point.y + f,
+  };
+}
+
+function transformRectCorners(
+  matrix: Matrix,
+  [x, y, w, h]: readonly [number, number, number, number],
+): [Point, Point, Point, Point] {
+  return [
+    transformPoint(matrix, { x, y }),
+    transformPoint(matrix, { x: x + w, y }),
+    transformPoint(matrix, { x: x + w, y: y + h }),
+    transformPoint(matrix, { x, y: y + h }),
+  ];
+}
+
+function defaultPaintState(): PaintState {
+  return {
+    strokeColor: undefined,
+    fillColor: undefined,
+    strokeWidth: undefined,
+    lineCap: undefined,
+    fillAlpha: 1,
+    strokeAlpha: 1,
+  };
+}
+
+function clonePaintState(state: PaintState): PaintState {
+  return {
+    strokeColor: state.strokeColor ? [...state.strokeColor] : undefined,
+    fillColor: state.fillColor ? [...state.fillColor] : undefined,
+    strokeWidth: state.strokeWidth,
+    lineCap: state.lineCap,
+    fillAlpha: state.fillAlpha,
+    strokeAlpha: state.strokeAlpha,
+  };
 }

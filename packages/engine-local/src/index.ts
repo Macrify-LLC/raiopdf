@@ -1947,14 +1947,8 @@ function drawArrowHead(
   color: DrawColor,
 ): void {
   const [tip, left, right] = computeArrowHeadPoints(from, to, thickness);
-  const targetTo = target.mapPoint(tip);
-  const targetLeft = target.mapPoint(left);
-  const targetRight = target.mapPoint(right);
-  const path =
-    `M ${targetTo.x} ${targetTo.y} L ${targetLeft.x} ${targetLeft.y} ` +
-    `L ${targetRight.x} ${targetRight.y} Z`;
 
-  target.drawSvgPath({ path, fillColor: color, strokeColor: color, strokeWidthPt: 0 });
+  target.drawFilledPolygon({ points: [tip, left, right], fillColor: color });
 }
 
 function computeArrowHeadPoints(

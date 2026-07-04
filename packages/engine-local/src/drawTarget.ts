@@ -1,6 +1,7 @@
 import type { PdfEditPoint, PdfEditRect } from "@raiopdf/engine-api";
 import {
   concatTransformationMatrix,
+  closePath,
   degrees as pdfDegrees,
   drawEllipse as drawEllipseOperators,
   drawLine as drawLineOperators,
@@ -8,7 +9,10 @@ import {
   drawRectangle as drawRectangleOperators,
   drawSvgPath as drawSvgPathOperators,
   drawText as drawTextOperators,
+  fill,
   LineCapStyle,
+  lineTo,
+  moveTo,
   PDFArray,
   PDFDict,
   PDFName,
@@ -17,6 +21,7 @@ import {
   popGraphicsState,
   pushGraphicsState,
   rgb,
+  setFillingColor,
   type Color,
   type PDFDocument,
   type PDFFont,
@@ -72,12 +77,18 @@ export type DrawSvgPathOptions = {
   strokeAlpha?: number | undefined;
 };
 
+export type DrawFilledPolygonOptions = {
+  points: readonly PdfEditPoint[];
+  fillColor: DrawColor;
+};
+
 export interface DrawTarget {
   mapPoint(point: PdfEditPoint): PdfEditPoint;
   drawRectangle(options: DrawRectangleOptions): void;
   drawEllipse(options: DrawEllipseOptions): void;
   drawLine(options: DrawLineOptions): void;
   drawPolyline(points: readonly PdfEditPoint[], options: Omit<DrawLineOptions, "from" | "to">): void;
+  drawFilledPolygon(options: DrawFilledPolygonOptions): void;
   drawText(options: DrawTextOptions): void;
   drawSvgPath(options: DrawSvgPathOptions): void;
 }
@@ -200,6 +211,10 @@ class PageDrawTarget implements DrawTarget {
     }
   }
 
+  drawFilledPolygon(options: DrawFilledPolygonOptions): void {
+    this.page.pushOperators(...drawFilledPolygonOperators(options.points, options.fillColor));
+  }
+
   drawText(options: DrawTextOptions): void {
     this.page.drawText(options.text, {
       x: options.at.x,
@@ -315,6 +330,15 @@ class AppearanceDrawTarget implements AnnotationAppearanceTarget {
     }
   }
 
+  drawFilledPolygon(options: DrawFilledPolygonOptions): void {
+    this.operators.push(
+      ...drawFilledPolygonOperators(
+        options.points.map((point) => this.mapPoint(point)),
+        options.fillColor,
+      ),
+    );
+  }
+
   drawText(options: DrawTextOptions): void {
     const at = this.mapPoint(options.at);
 
@@ -410,6 +434,27 @@ class AppearanceDrawTarget implements AnnotationAppearanceTarget {
 
     return name;
   }
+}
+
+function drawFilledPolygonOperators(
+  points: readonly PdfEditPoint[],
+  fillColor: DrawColor,
+): PDFOperator[] {
+  const [firstPoint, ...restPoints] = points;
+
+  if (!firstPoint) {
+    return [];
+  }
+
+  return [
+    pushGraphicsState(),
+    setFillingColor(fillColor),
+    moveTo(firstPoint.x, firstPoint.y),
+    ...restPoints.map((point) => lineTo(point.x, point.y)),
+    closePath(),
+    fill(),
+    popGraphicsState(),
+  ];
 }
 
 function readAnnotationRect(annotation: PDFDict): PdfEditRect | undefined {

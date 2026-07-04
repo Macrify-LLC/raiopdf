@@ -59,6 +59,7 @@ export interface AppShellProps {
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
+  documentBanner: ReactNode;
   workspace: ReactNode;
   overlay: ReactNode;
   activeLegalTool: string | null;
@@ -120,6 +121,7 @@ export function AppShell({
   ocrState,
   ocrAvailable,
   ocrStarting,
+  documentBanner,
   workspace,
   overlay,
   activeLegalTool,
@@ -221,6 +223,7 @@ export function AppShell({
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
       />
+      <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">
         <ThumbnailRail
           pdfDocument={pdfDocument}

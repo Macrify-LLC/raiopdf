@@ -76,17 +76,20 @@ import {
   type CrashReportPayload,
 } from "./components/CrashReportDialog";
 import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
+import { DocumentBanner } from "./components/DocumentBanner";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
+import { LoadingSun } from "./components/LoadingSun";
 import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
 import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
+import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
 } from "./hooks/useEngineBridge";
-import { useDocument, type DocumentState } from "./hooks/useDocument";
+import { useDocument, type DocumentState, type SignatureUnlockPrompt } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
@@ -104,6 +107,7 @@ import {
   resolveDesktopFileGrantPaths,
 } from "./lib/localPaths";
 import { writeProductionLastUsed } from "./lib/productionHints";
+import { resolveProtectedPdfBytes } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
 import { recordDiagnosticEvent } from "./lib/diagnostics";
 import {
@@ -239,6 +243,31 @@ interface FilingFactsOptions {
 }
 
 export function App() {
+  const engineBridge = useEngineBridge();
+  const [signatureUnlockPrompt, setSignatureUnlockPrompt] = useState<
+    (SignatureUnlockPrompt & { resolve: (confirmed: boolean) => void }) | null
+  >(null);
+  const confirmSignatureInvalidation = useCallback(
+    (prompt: SignatureUnlockPrompt) =>
+      new Promise<boolean>((resolve) => {
+        setSignatureUnlockPrompt((current) => {
+          current?.resolve(false);
+          return { ...prompt, resolve };
+        });
+      }),
+    [],
+  );
+  const protectedPdf = useMemo(
+    () => ({
+      confirmSignatureInvalidation,
+      resolve: (bytes: Uint8Array) =>
+        resolveProtectedPdfBytes(bytes, {
+          isUnavailableError: isEngineBridgeUnavailableError,
+          removeEncryption: engineBridge.removeEncryption,
+        }),
+    }),
+    [confirmSignatureInvalidation, engineBridge.removeEncryption],
+  );
   const {
     document,
     pageScrollIntent,
@@ -270,8 +299,13 @@ export function App() {
     insertImagePages,
     save: saveDocument,
     markSaved,
-  } = useDocument();
-  const engineBridge = useEngineBridge();
+  } = useDocument({ protectedPdf });
+  const answerSignatureUnlockPrompt = useCallback((confirmed: boolean) => {
+    setSignatureUnlockPrompt((current) => {
+      current?.resolve(confirmed);
+      return null;
+    });
+  }, []);
   const [pdfDocumentState, setPdfDocumentState] = useState<{
     bytes: Uint8Array;
     proxy: PDFDocumentProxy;
@@ -663,6 +697,7 @@ export function App() {
           sourceFilename: string;
           status: "pending" | "running" | "done" | "failed" | "skipped";
           reason: string | null;
+          signatureInvalidated?: boolean;
           outputs: string[];
         }[];
       }>("batch_cleanup", {
@@ -674,7 +709,7 @@ export function App() {
 
       setBatchCleanupProgress({
         running: false,
-        message: `Batch cleanup finished for ${result.files.length} file(s).`,
+        message: batchCleanupCompletionMessage(result.files),
         result,
       });
     } catch (error) {
@@ -3481,6 +3516,7 @@ export function App() {
         ocrState={ocrState}
         ocrAvailable={engineBridge.ocrAvailable}
         ocrStarting={engineBridge.starting}
+        documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
         workspace={workspace}
         overlay={overlay}
         activeLegalTool={activeLegalTool}
@@ -3578,6 +3614,11 @@ export function App() {
         }}
         onNeverAsk={handleNeverAskCrashReport}
       />
+      <SignatureUnlockModal
+        prompt={signatureUnlockPrompt}
+        onCancel={() => answerSignatureUnlockPrompt(false)}
+        onContinue={() => answerSignatureUnlockPrompt(true)}
+      />
     </>
   );
 }
@@ -3637,6 +3678,18 @@ function RedactionModeBar({
       </button>
     </div>
   );
+}
+
+function batchCleanupCompletionMessage(files: readonly {
+  signatureInvalidated?: boolean | undefined;
+}[]): string {
+  const invalidatedCount = files.filter((file) => file.signatureInvalidated).length;
+
+  if (invalidatedCount === 0) {
+    return `Batch cleanup finished for ${files.length} file(s).`;
+  }
+
+  return `Batch cleanup finished for ${files.length} file(s). ${invalidatedCount} had digital signatures invalidated.`;
 }
 
 function SanitizePanel({

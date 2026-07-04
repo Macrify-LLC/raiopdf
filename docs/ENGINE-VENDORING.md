@@ -95,6 +95,7 @@ pinned tag as the contract fixture.
 | PDF/A | `/api/v1/convert/pdf/pdfa` | `outputFormat` (`pdfa-1`\|`pdfa-2b`\|`pdfa-3b`), `strict` | 403 w/o Ghostscript (gs required) |
 | Metadata | `/api/v1/misc/update-metadata` | `deleteAll`, `title`, `author`, …, custom via `allRequestParams` | 200 |
 | Stamp | `/api/v1/misc/add-stamp` | `pageNumbers`, `stampType` (`text`\|`image`), `stampText`/`stampImage`, `fontSize`, `rotation`, `opacity`, `position` 1–9, **`customMargin` (de-facto REQUIRED — NPE→500 if omitted, upstream bug v2.14.0)**, `customColor` | 200 |
+| Remove password | `/api/v1/security/remove-password` | `fileInput`, `password` (empty string works for owner-restricted PDFs; password-required failures return `errorCode: "E004"`) | 200 / E004 |
 | Redaction | `/api/v1/security/auto-redact` (`listOfText`, `useRegex`, `wholeWordSearch`, `redactColor`, `convertPDFToImage`); `.../redact` (manual boxes); `.../redact-execute` | Auto-redact only guarantees unrecoverable text when `convertPDFToImage=true`, which rasterizes pages and loses searchable/selectable text. `redact-execute` supports `strategy=IMAGE_FINALIZE`/`convertToImage=true`; its `ImageBox` model names `y1` as top and `y2` as bottom. | 200 (auto-redact) |
 
 ## OCR invocation & config

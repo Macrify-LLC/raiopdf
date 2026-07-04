@@ -1,0 +1,24 @@
+.document-banner {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fff7e0;
+  color: #332400;
+}
+
+.document-banner__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.document-banner__copy {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #5a4100;
+}

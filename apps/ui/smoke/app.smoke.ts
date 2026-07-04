@@ -711,6 +711,11 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
     "edit-round-trip.pdf",
     await createMultiPageTextPdf(["The parties stipulate to the facts set forth herein."]),
   );
+  await expect.poll(() => mainCanvasStats(page)).toMatchObject({
+    widthReady: true,
+    heightReady: true,
+    hasTextPixels: true,
+  });
 
   const commandBar = page.locator(".command-bar");
   const canvas = page.locator('[data-testid="pdf-page-canvas"]').first();
@@ -724,10 +729,9 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
       await dragOnCanvas(page, canvas, 0.08, 0.06, 0.92, 0.13);
     }
 
-    await expect(page.locator(".edit-layer__highlight").first()).toBeVisible({
-      timeout: 1_000,
-    });
+    expect(await page.locator(".edit-layer__highlight").count()).toBeGreaterThan(0);
   }).toPass({ timeout: 15_000 });
+  await expect(page.locator(".edit-layer__highlight").first()).toBeVisible();
 
   // Text box: click to place, type, Enter commits.
   await commandBar.getByRole("button", { name: "Text box", exact: true }).click();

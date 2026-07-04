@@ -165,6 +165,8 @@ pub struct BatchCleanupFileOutput {
     source_filename: String,
     status: String,
     reason: Option<String>,
+    #[serde(default)]
+    signature_invalidated: bool,
     outputs: Vec<String>,
 }
 

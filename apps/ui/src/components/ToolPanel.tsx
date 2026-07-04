@@ -81,6 +81,7 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   properties: <ScrubMetadataIcon size={16} />,
   rotate: <RotateIcon size={16} />,
   textBox: <TextBoxIcon size={16} />,
+  callout: <ArrowLineIcon size={16} />,
   image: <ImageIcon size={16} />,
   highlight: <HighlightIcon size={16} />,
   underline: <UnderlineIcon size={16} />,

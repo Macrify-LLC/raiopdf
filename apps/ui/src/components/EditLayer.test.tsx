@@ -39,6 +39,7 @@ describe("TextBoxDraftEditor", () => {
     const widthPt = 86;
 
     await renderDraftEditor({
+      kind: "textBox",
       editId: null,
       rect: { left: 0, top: 0, width: widthPt, height: 100 },
       text,
@@ -198,24 +199,109 @@ describe("EditLayer shape removal", () => {
     expect(rects[0]?.getAttribute("x")).toBe("10");
   });
 
-  async function renderEditLayer(initialEdits: readonly PendingEdit[]): Promise<void> {
+  it("removes a pending callout as one box-and-leader unit", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-1",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Review this",
+          fontSizePt: 12,
+        },
+      ],
+      "callout",
+    );
+
+    expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(1);
+    expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(1);
+
+    const box = container?.querySelector<HTMLElement>(".edit-layer__callout-box");
+    expect(box).not.toBeNull();
+
+    await act(async () => {
+      box!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(0);
+    expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(0);
+  });
+
+  it("previews callout leaders from the nearest box boundary point", async () => {
+    const cases = [
+      {
+        id: "callout-side",
+        tip: { x: 180, y: 150 },
+        expectedAnchor: { x: 120, y: 150 },
+      },
+      {
+        id: "callout-corner",
+        tip: { x: 180, y: 200 },
+        expectedAnchor: { x: 120, y: 170 },
+      },
+      {
+        id: "callout-inside",
+        tip: { x: 60, y: 135 },
+        expectedAnchor: { x: 60, y: 120 },
+      },
+    ];
+
+    await renderEditLayer(
+      cases.map(({ id, tip }) => ({
+        kind: "callout",
+        id,
+        pageIndex: 0,
+        rect: { x: 40, y: 120, w: 80, h: 50 },
+        tip,
+        text: "Review this",
+        fontSizePt: 12,
+      })),
+      "callout",
+    );
+
+    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])]
+      .filter((line) => !line.classList.contains("edit-layer__callout-hit-line"));
+
+    expect(leaders).toHaveLength(cases.length);
+
+    for (const [index, { tip, expectedAnchor }] of cases.entries()) {
+      expect(leaders[index]?.getAttribute("x1")).toBe(String(expectedAnchor.x));
+      expect(leaders[index]?.getAttribute("y1")).toBe(String(expectedAnchor.y));
+      expect(leaders[index]?.getAttribute("x2")).toBe(String(tip.x));
+      expect(leaders[index]?.getAttribute("y2")).toBe(String(tip.y));
+    }
+  });
+
+  async function renderEditLayer(
+    initialEdits: readonly PendingEdit[],
+    tool: EditingState["tool"] = "shapeRect",
+  ): Promise<void> {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
 
     await act(async () => {
-      root?.render(<EditLayerHarness initialEdits={initialEdits} />);
+      root?.render(<EditLayerHarness initialEdits={initialEdits} tool={tool} />);
       await Promise.resolve();
     });
   }
 });
 
-function EditLayerHarness({ initialEdits }: { initialEdits: readonly PendingEdit[] }) {
+function EditLayerHarness({
+  initialEdits,
+  tool,
+}: {
+  initialEdits: readonly PendingEdit[];
+  tool: EditingState["tool"];
+}) {
   const [pendingEdits, setPendingEdits] = useState(initialEdits);
   const editing = useMemo<EditingState>(
     () =>
       ({
-        tool: "shapeRect",
+        tool,
         pendingEdits,
         // Shared selection lives on EditingState since the continuous-scroll
         // viewer mounts one EditLayer per page; the layer destructures these
@@ -230,8 +316,9 @@ function EditLayerHarness({ initialEdits }: { initialEdits: readonly PendingEdit
           shapeLine: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
           shapeArrow: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
         },
+        calloutStyle: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
       }) as unknown as EditingState,
-    [pendingEdits],
+    [pendingEdits, tool],
   );
 
   return <EditLayer page={testPage} viewport={testViewport} pageIndex={0} editing={editing} />;

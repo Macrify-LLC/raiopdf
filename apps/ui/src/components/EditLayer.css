@@ -12,6 +12,7 @@
 .edit-layer[data-tool="underline"],
 .edit-layer[data-tool="strikethrough"],
 .edit-layer[data-tool="textBox"],
+.edit-layer[data-tool="callout"],
 .edit-layer[data-tool="comment"],
 .edit-layer[data-tool="shapeRect"],
 .edit-layer[data-tool="shapeEllipse"],
@@ -103,6 +104,37 @@
 .edit-layer__text-box[data-selected="true"],
 .edit-layer__stamp[data-selected="true"] {
   border: 1px solid var(--primary);
+}
+
+.edit-layer__callout-box {
+  border: 1px solid var(--edit-ink);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  overflow: hidden;
+}
+
+.edit-layer__callout-box[data-removable="true"] {
+  cursor: pointer;
+}
+
+.edit-layer__callout-placement {
+  position: absolute;
+  border: 1px dashed var(--edit-ink);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  pointer-events: none;
+}
+
+.edit-layer__callout-leader {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.edit-layer__callout-hit-line {
+  stroke: transparent;
+  stroke-width: 14px;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .edit-layer__text-content {

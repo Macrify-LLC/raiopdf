@@ -32,7 +32,10 @@ REQUIRED_PAYLOAD_FILES=(
   "ocr/python/python.exe"
   "ocr/tesseract/tesseract.exe"
   "ocr/tesseract/tessdata/eng.traineddata"
+  "ocr/gs/bin/gs.exe"
   "ocr/gs/bin/gswin64c.exe"
+  "ocr/qpdf/LICENSE.txt"
+  "ocr/qpdf/bin/qpdf.exe"
 )
 REQUIRED_PAYLOAD_DIRS=(
   "mcp/pdfjs/cmaps"
@@ -480,6 +483,43 @@ install_ghostscript() {
   rm -rf -- "$gs_dir"
   mkdir -p -- "$gs_dir"
   cp -R "$extract_dir"/. "$gs_dir"/
+  if [[ ! -f "$gs_dir/bin/gswin64c.exe" ]]; then
+    echo "Ghostscript payload is missing bin/gswin64c.exe" >&2
+    exit 1
+  fi
+  cp -- "$gs_dir/bin/gswin64c.exe" "$gs_dir/bin/gs.exe"
+}
+
+install_qpdf() {
+  local archive=$1
+  local extract_dir="$WORK_DIR/qpdf"
+  local qpdf_dir="$PAYLOAD_DIR/ocr/qpdf"
+  local qpdf_exe source_bin license_file
+
+  extract_zip "$archive" "$extract_dir"
+  qpdf_exe=$(find "$extract_dir" -type f -name "qpdf.exe" -print -quit)
+  if [[ -z "$qpdf_exe" ]]; then
+    echo "QPDF payload is missing bin/qpdf.exe" >&2
+    exit 1
+  fi
+  source_bin=$(dirname -- "$qpdf_exe")
+
+  # The msvc64 zip ships no top-level LICENSE.txt; the license text lives in
+  # the bundled manual sources. Accept either, newest layout first.
+  license_file=$(find "$extract_dir" -type f -iname "LICENSE.txt" -print -quit)
+  if [[ -z "$license_file" ]]; then
+    license_file=$(find "$extract_dir" -type f -name "license.rst.txt" -path "*_sources*" -print -quit)
+  fi
+  if [[ -z "$license_file" ]]; then
+    echo "QPDF payload is missing a license file (LICENSE.txt or license.rst.txt)" >&2
+    exit 1
+  fi
+
+  rm -rf -- "$qpdf_dir"
+  mkdir -p -- "$qpdf_dir/bin"
+  cp -- "$qpdf_exe" "$qpdf_dir/bin/qpdf.exe"
+  find "$source_bin" -maxdepth 1 -type f -iname "*.dll" -exec cp -- {} "$qpdf_dir/bin/" \;
+  cp -- "$license_file" "$qpdf_dir/LICENSE.txt"
 }
 
 generate_payload_manifest() {
@@ -647,6 +687,7 @@ python_zip=$(download_verified "python-$PYTHON_EMBED_VERSION-embed-amd64.zip" "$
 tesseract_installer=$(download_verified "tesseract-$TESSERACT_VERSION-w64-setup.exe" "$TESSERACT_URL" "$TESSERACT_SHA256")
 tessdata_eng=$(download_verified "tessdata-fast-$TESSDATA_FAST_VERSION-eng.traineddata" "$TESSDATA_ENG_URL" "$TESSDATA_ENG_SHA256")
 ghostscript_installer=$(download_verified "ghostscript-$GHOSTSCRIPT_VERSION-w64.exe" "$GHOSTSCRIPT_URL" "$GHOSTSCRIPT_SHA256")
+qpdf_zip=$(download_verified "qpdf-$QPDF_VERSION-msvc64.zip" "$QPDF_URL" "$QPDF_SHA256")
 
 seven_zip=$(find_7z)
 
@@ -659,6 +700,7 @@ install_node_runtime "$node_zip"
 install_python_ocrmypdf "$python_zip"
 install_tesseract "$tesseract_installer" "$tessdata_eng" "$seven_zip"
 install_ghostscript "$ghostscript_installer" "$seven_zip"
+install_qpdf "$qpdf_zip"
 node "$SCRIPT_DIR/build-mcp-runtime.mjs"
 generate_payload_manifest
 verify_payload

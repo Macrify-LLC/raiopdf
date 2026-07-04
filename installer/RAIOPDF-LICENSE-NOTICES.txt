@@ -35,6 +35,7 @@ RaioPDF bundles third-party components under their own licenses, including:
 - Stirling-PDF core flavor: MIT for the bundled core build.
 - Tesseract OCR and tessdata_fast: Apache-2.0.
 - Ghostscript Windows x64: AGPL-3.0-only or Artifex commercial license.
+- qpdf Windows x64: Apache-2.0.
 - Python embeddable package: Python Software Foundation License.
 - OCRmyPDF: MPL-2.0, with transitive Python dependencies under their
   respective upstream licenses.

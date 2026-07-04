@@ -1,8 +1,16 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
-import type { PdfBatesStampOptions, PdfStampPlacement } from "@raiopdf/engine-api";
+import type {
+  PdfBatesStampOptions,
+  PdfCompressOptions,
+  PdfPageNumbersOptions,
+  PdfSanitizeRemovedItem,
+  PdfStampPlacement,
+  PdfWatermarkOptions,
+} from "@raiopdf/engine-api";
 import type { OcrUiState } from "../App";
 import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
+import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import {
   EDIT_DIALOG_TOOLS,
   HELP_ONLY_TOOL_ENTRIES,
@@ -30,6 +38,7 @@ import {
   OcrSearchIcon,
   OrganizeIcon,
   ArrowLineIcon,
+  PlugIcon,
   RedactIcon,
   RectangleIcon,
   RotateIcon,
@@ -116,8 +125,20 @@ export interface ScrubMetadataPanelState {
   removedFields: readonly string[];
 }
 
+// Shared status shape for every sidecar-engine action (Sanitize, Repair,
+// Insert Images, Page Numbers, Watermark, Compress) -- one running/message
+// pair since only one of these can ever be the visible expansion at a time.
+export type SidecarStatus = {
+  running: boolean;
+  message: string | null;
+  removed: readonly PdfSanitizeRemovedItem[];
+  beforeBytes: number | null;
+  afterBytes: number | null;
+};
+
 export interface ToolPanelProps {
   hasDocument: boolean;
+  pageCount: number;
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
@@ -140,10 +161,25 @@ export interface ToolPanelProps {
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onHelpRequested: (articleId: string) => void;
+  /**
+   * Top-level entry point for "Connect to AI Agent" -- opens the same
+   * settings surface as the File menu's "Open Raio to AI..." item. Not
+   * routed through the ToolRow help-icon plumbing: this is a doorway to a
+   * whole settings section, not a tool with its own help article.
+   */
+  onConnectToAi: () => void;
+  onRotateLeft: () => void;
+  onRotateRight: () => void;
+  sidecarStatus: SidecarStatus;
+  onApplyPageNumbers: (options: PdfPageNumbersOptions) => Promise<boolean>;
+  onApplyWatermark: (options: PdfWatermarkOptions) => Promise<boolean>;
+  compressAvailable: boolean;
+  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
 }
 
 export function ToolPanel({
   hasDocument,
+  pageCount,
   ocrState,
   ocrAvailable,
   ocrStarting,
@@ -166,6 +202,14 @@ export function ToolPanel({
   onRunScanner,
   onMarkScannerHit,
   onHelpRequested,
+  onConnectToAi,
+  onRotateLeft,
+  onRotateRight,
+  sidecarStatus,
+  onApplyPageNumbers,
+  onApplyWatermark,
+  compressAvailable,
+  onCompress,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -196,20 +240,45 @@ export function ToolPanel({
             description={tool.description}
             selected={activeEditTool === tool.id}
             onSelect={() => onEditToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
           />
         ))}
-        {EDIT_DIALOG_TOOLS.map((tool) => (
-          <ToolRow
-            key={tool.id}
-            icon={TOOL_PANEL_ICONS[tool.id]}
-            label={tool.label}
-            description={tool.description}
-            selected={activeEditDialogTool === tool.id}
-            onSelect={() => onEditDialogToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
-          />
-        ))}
+        {EDIT_DIALOG_TOOLS.map((tool) => {
+          const selected = activeEditDialogTool === tool.id;
+
+          return (
+            <div key={tool.id}>
+              <ToolRow
+                icon={TOOL_PANEL_ICONS[tool.id]}
+                label={tool.label}
+                description={tool.description}
+                selected={selected}
+                onSelect={() => onEditDialogToolSelected(tool.id)}
+              />
+              {tool.id === "page-numbers" && selected ? (
+                <ToolExpansion onEscape={() => onEditDialogToolSelected("page-numbers")}>
+                  <PageNumbersPanel
+                    hasDocument={hasDocument}
+                    pageCount={pageCount}
+                    status={sidecarStatus}
+                    onApply={onApplyPageNumbers}
+                    onHelp={() => onHelpRequested(tool.helpArticleId)}
+                  />
+                </ToolExpansion>
+              ) : null}
+              {tool.id === "watermark" && selected ? (
+                <ToolExpansion onEscape={() => onEditDialogToolSelected("watermark")}>
+                  <WatermarkPanel
+                    hasDocument={hasDocument}
+                    pageCount={pageCount}
+                    status={sidecarStatus}
+                    onApply={onApplyWatermark}
+                    onHelp={() => onHelpRequested(tool.helpArticleId)}
+                  />
+                </ToolExpansion>
+              ) : null}
+            </div>
+          );
+        })}
         {pendingContentEdits.length > 0 ? (
           <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
         ) : null}
@@ -222,17 +291,42 @@ export function ToolPanel({
         isOpen={openGroup === "organize"}
         onToggle={() => toggleGroup("organize")}
       >
-        {ORGANIZE_TOOLS.map((tool) => (
-          <ToolRow
-            key={tool.id}
-            icon={TOOL_PANEL_ICONS[tool.id]}
-            label={tool.label}
-            description={tool.description}
-            selected={activeOrganizeTool === tool.id}
-            onSelect={() => onOrganizeToolSelected(tool.id)}
-            onHelp={() => onHelpRequested(tool.helpArticleId)}
-          />
-        ))}
+        {ORGANIZE_TOOLS.map((tool) => {
+          const selected = activeOrganizeTool === tool.id;
+
+          return (
+            <div key={tool.id}>
+              <ToolRow
+                icon={TOOL_PANEL_ICONS[tool.id]}
+                label={tool.label}
+                description={tool.description}
+                selected={selected}
+                onSelect={() => onOrganizeToolSelected(tool.id)}
+              />
+              {tool.id === "rotate" && selected ? (
+                <ToolExpansion onEscape={() => onOrganizeToolSelected("rotate")}>
+                  <RotatePanel
+                    hasDocument={hasDocument}
+                    onRotateLeft={onRotateLeft}
+                    onRotateRight={onRotateRight}
+                    onHelp={() => onHelpRequested(tool.helpArticleId)}
+                  />
+                </ToolExpansion>
+              ) : null}
+              {tool.id === "compress" && selected ? (
+                <ToolExpansion onEscape={() => onOrganizeToolSelected("compress")}>
+                  <CompressPanel
+                    hasDocument={hasDocument}
+                    available={compressAvailable}
+                    status={sidecarStatus}
+                    onCompress={onCompress}
+                    onHelp={() => onHelpRequested(tool.helpArticleId)}
+                  />
+                </ToolExpansion>
+              ) : null}
+            </div>
+          );
+        })}
       </AccordionGroup>
 
       <AccordionGroup
@@ -258,7 +352,6 @@ export function ToolPanel({
           description={MAKE_SEARCHABLE_TOOL.description}
           disabled={isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
-          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
@@ -266,17 +359,13 @@ export function ToolPanel({
           description="Rebuild the invisible searchable text by re-rendering the whole file."
           disabled={!hasDocument || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onForceOcr}
-          onHelp={() => onHelpRequested(MAKE_SEARCHABLE_TOOL.helpArticleId)}
         />
-        {ocrState.phase !== "idle" || ocrStarting ? (
-          <OcrStatusPanel
-            hasDocument={hasDocument}
-            ocrState={ocrState}
-            ocrAvailable={ocrAvailable}
-            ocrStarting={ocrStarting}
-          />
+        {ocrState.phase === "done" || ocrState.phase === "error" ? (
+          <OcrResultNotice ocrState={ocrState} ocrAvailable={ocrAvailable} />
         ) : null}
       </div>
+
+      <ConnectToAiRow onSelect={onConnectToAi} />
 
       <AccordionGroup
         id="legal"
@@ -297,7 +386,6 @@ export function ToolPanel({
                 description={tool.description}
                 selected={selected}
                 onSelect={() => onLegalToolSelected(tool.id)}
-                onHelp={() => onHelpRequested(tool.helpArticleId)}
               />
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel
@@ -334,48 +422,53 @@ export function ToolPanel({
   );
 }
 
-interface OcrStatusPanelProps {
-  hasDocument: boolean;
-  ocrState: OcrUiState;
-  ocrAvailable: boolean;
-  ocrStarting: boolean;
+// Top-level entry point (item 11) -- previously the only way to reach this
+// surface was the Built-by-Macrify byline or the invisible native File menu.
+// Copy follows the two-halves framing: no AI runs inside RaioPDF; this wires
+// Raio up to the user's OWN AI tools. Deliberately calm, not a promo card --
+// no badge, no accent wash, just a labeled row like everything else here.
+function ConnectToAiRow({ onSelect }: { onSelect: () => void }) {
+  return (
+    <div className="tool-panel__ai-connect">
+      <button type="button" className="tool-panel__ai-connect-button" onClick={onSelect}>
+        <span className="tool-panel__ai-connect-icon">
+          <PlugIcon size={16} />
+        </span>
+        <span className="tool-panel__ai-connect-copy">
+          <span className="tool-panel__ai-connect-label">Connect to AI Agent</span>
+          <span className="tool-panel__ai-connect-description">
+            Let your own AI assistant drive Raio — nothing runs in the app itself.
+          </span>
+        </span>
+      </button>
+    </div>
+  );
 }
 
-function OcrStatusPanel({
-  hasDocument,
-  ocrState,
-  ocrAvailable,
-  ocrStarting,
-}: OcrStatusPanelProps) {
-  const message = ocrState.message ?? getDefaultOcrMessage(hasDocument, ocrAvailable);
-  const phase = ocrStarting && ocrState.phase === "starting-engine"
-    ? "starting-engine"
-    : ocrState.phase;
-  const active = isOcrActive(phase, ocrStarting);
+interface OcrResultNoticeProps {
+  ocrState: OcrUiState;
+  ocrAvailable: boolean;
+}
 
-  // A missing capability (no desktop engine) is not a processing failure --
-  // OCR never ran. Every other tool in this panel (Redact, Sanitize, Repair,
-  // Compress, Scrub Metadata, Passwords) renders that same "not available
-  // here" fact as a calm, neutral note, never as an attention-grabbing error.
-  // OCR should read the same way instead of the only tool that flashes amber
-  // for a browser/desktop capability gap.
-  if (phase === "error" && !ocrAvailable) {
+// The active phases (confirm/starting-engine/processing/verifying) live in
+// the OcrDialog now -- this only ever renders for the terminal done/error
+// phases, as a brief result line under the Make Searchable/Force re-OCR
+// buttons, reusing the same InlineMessage pattern every other tool in this
+// panel (Redact, Sanitize, Repair, Compress, Scrub Metadata, Passwords)
+// already uses for its own result/availability messaging.
+function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
+  const message = ocrState.message ?? "OCR finished.";
+
+  // A missing capability (no desktop engine, no OCR toolchain) is not a
+  // processing failure -- OCR never ran. Every other tool in this panel
+  // renders that same "not available here" fact as a calm, neutral note,
+  // never as an attention-grabbing error. OCR reads the same way.
+  if (ocrState.phase === "error" && !ocrAvailable) {
     return <InlineMessage tone="neutral" message={message} />;
   }
 
   return (
-    <div
-      className="tool-panel__ocr-status"
-      data-phase={phase}
-      role="status"
-      aria-live="polite"
-    >
-      <p className="tool-panel__ocr-status-label">
-        {active ? <LoadingSun size={13} label="OCR processing" /> : null}
-        {getOcrStatusLabel(phase)}
-      </p>
-      <p className="tool-panel__ocr-status-message">{message}</p>
-    </div>
+    <InlineMessage tone={ocrState.phase === "done" ? "ok" : "danger"} message={message} />
   );
 }
 
@@ -789,18 +882,6 @@ function InlineMessage({
   );
 }
 
-function getDefaultOcrMessage(hasDocument: boolean, ocrAvailable: boolean): string {
-  if (!hasDocument) {
-    return "Open a PDF before running OCR.";
-  }
-
-  if (!ocrAvailable) {
-    return "This action is available in the desktop app.";
-  }
-
-  return "Ready to make this PDF searchable.";
-}
-
 function parsePlacement(value: string): PdfStampPlacement {
   const [edge, align] = value.split("-");
 
@@ -810,35 +891,338 @@ function parsePlacement(value: string): PdfStampPlacement {
   };
 }
 
+function parsePlacementValue(value: string): PdfPageNumbersOptions["placement"] {
+  const [edge, align] = value.split("-");
+
+  return {
+    edge: edge === "header" ? "header" : "footer",
+    align: align === "left" || align === "right" ? align : "center",
+  };
+}
+
+// Wraps an inline tool's expanded form. Mounted only while its ToolRow is
+// selected, so entry gets the CSS keyframe below; there's no exit animation,
+// matching every other appear-on-demand card in this panel (Redact confirm,
+// Scanner results, etc.) -- collapse is an unmount, not a reverse transition.
+// Escape while focus is anywhere inside re-fires the same select handler
+// that opened the tool, which item 18's toggle-off-on-reselect logic in
+// App.tsx turns into a close.
+function ToolExpansion({
+  onEscape,
+  children,
+}: {
+  onEscape: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="tool-row__expansion"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onEscape();
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function RotatePanel({
+  hasDocument,
+  onRotateLeft,
+  onRotateRight,
+  onHelp,
+}: {
+  hasDocument: boolean;
+  onRotateLeft: () => void;
+  onRotateRight: () => void;
+  onHelp: () => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__card-title">Rotate Pages</p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: Rotate Pages" onClick={onHelp} />
+      </div>
+      <div className="tool-panel__button-row">
+        <button
+          type="button"
+          className="tool-panel__secondary-button"
+          disabled={!hasDocument}
+          onClick={onRotateLeft}
+        >
+          <RotateIcon size={15} className="tool-panel__icon-mirror" />
+          Rotate Left
+        </button>
+        <button
+          type="button"
+          className="tool-panel__secondary-button"
+          disabled={!hasDocument}
+          onClick={onRotateRight}
+        >
+          <RotateIcon size={15} />
+          Rotate Right
+        </button>
+      </div>
+      <p className="tool-panel__note">Rotates the selected pages.</p>
+    </div>
+  );
+}
+
+function PageNumbersPanel({
+  hasDocument,
+  pageCount,
+  status,
+  onApply,
+  onHelp,
+}: {
+  hasDocument: boolean;
+  pageCount: number;
+  status: SidecarStatus;
+  onApply: (options: PdfPageNumbersOptions) => Promise<boolean>;
+  onHelp: () => void;
+}) {
+  const [range, setRange] = useState(formatDefaultRange(pageCount));
+  const [format, setFormat] = useState<PdfPageNumbersOptions["format"]>("number");
+  const [startAt, setStartAt] = useState(1);
+  const [fontSizePt, setFontSizePt] = useState(11);
+  const [placement, setPlacement] = useState<PdfPageNumbersOptions["placement"]>({
+    edge: "footer",
+    align: "center",
+  });
+  const [touched, setTouched] = useState(false);
+  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTouched(true);
+
+    if (parsed.error) {
+      return;
+    }
+
+    await onApply({
+      startAt,
+      pageIndexes: parsed.pageIndexes,
+      format,
+      placement,
+      fontSizePt,
+    });
+  }
+
+  return (
+    <form className="tool-panel__inline-card" onSubmit={submit}>
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__card-title">Page Numbers</p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: Page Numbers" onClick={onHelp} />
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-range">Pages</label>
+        <input id="page-number-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
+        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
+      </div>
+      <div className="tool-panel__field-grid">
+        <div className="tool-panel__field">
+          <label htmlFor="page-number-start">Start at</label>
+          <input id="page-number-start" type="number" min="0" value={startAt} onChange={(event) => setStartAt(Number(event.target.value))} />
+        </div>
+        <div className="tool-panel__field">
+          <label htmlFor="page-number-size">Font size</label>
+          <input id="page-number-size" type="number" min="1" value={fontSizePt} onChange={(event) => setFontSizePt(Number(event.target.value))} />
+        </div>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-format">Format</label>
+        <select id="page-number-format" value={format} onChange={(event) => setFormat(event.target.value as PdfPageNumbersOptions["format"])}>
+          <option value="number">1, 2, 3</option>
+          <option value="page-of-total">Page N of M</option>
+        </select>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="page-number-position">Position</label>
+        <select id="page-number-position" value={`${placement.edge}-${placement.align}`} onChange={(event) => setPlacement(parsePlacementValue(event.target.value))}>
+          <option value="footer-left">Footer left</option>
+          <option value="footer-center">Footer center</option>
+          <option value="footer-right">Footer right</option>
+          <option value="header-left">Header left</option>
+          <option value="header-center">Header center</option>
+          <option value="header-right">Header right</option>
+        </select>
+      </div>
+      <SidecarStatusLine status={status} label="Applying page numbers" />
+      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
+        Apply Page Numbers
+      </button>
+    </form>
+  );
+}
+
+function WatermarkPanel({
+  hasDocument,
+  pageCount,
+  status,
+  onApply,
+  onHelp,
+}: {
+  hasDocument: boolean;
+  pageCount: number;
+  status: SidecarStatus;
+  onApply: (options: PdfWatermarkOptions) => Promise<boolean>;
+  onHelp: () => void;
+}) {
+  const [text, setText] = useState("DRAFT");
+  const [range, setRange] = useState(formatDefaultRange(pageCount));
+  const [orientation, setOrientation] = useState<PdfWatermarkOptions["orientation"]>("diagonal");
+  const [opacity, setOpacity] = useState(0.18);
+  const [touched, setTouched] = useState(false);
+  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTouched(true);
+
+    if (parsed.error || !text.trim()) {
+      return;
+    }
+
+    await onApply({
+      text: text.trim(),
+      pageIndexes: parsed.pageIndexes,
+      orientation,
+      opacity,
+    });
+  }
+
+  return (
+    <form className="tool-panel__inline-card" onSubmit={submit}>
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__card-title">Watermark</p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: Watermark" onClick={onHelp} />
+      </div>
+      <div className="tool-panel__button-row">
+        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("DRAFT")}>DRAFT</button>
+        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("CONFIDENTIAL")}>CONFIDENTIAL</button>
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="watermark-text">Text</label>
+        <input id="watermark-text" value={text} onChange={(event) => setText(event.target.value)} />
+      </div>
+      <div className="tool-panel__field">
+        <label htmlFor="watermark-range">Pages</label>
+        <input id="watermark-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
+        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
+      </div>
+      <div className="tool-panel__field-grid">
+        <div className="tool-panel__field">
+          <label htmlFor="watermark-orientation">Direction</label>
+          <select id="watermark-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as PdfWatermarkOptions["orientation"])}>
+            <option value="diagonal">Diagonal</option>
+            <option value="horizontal">Horizontal</option>
+          </select>
+        </div>
+        <div className="tool-panel__field">
+          <label htmlFor="watermark-opacity">Opacity</label>
+          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.01" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
+        </div>
+      </div>
+      <SidecarStatusLine status={status} label="Applying watermark" />
+      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
+        Apply Watermark
+      </button>
+    </form>
+  );
+}
+
+function CompressPanel({
+  hasDocument,
+  available,
+  status,
+  onCompress,
+  onHelp,
+}: {
+  hasDocument: boolean;
+  available: boolean;
+  status: SidecarStatus;
+  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
+  onHelp: () => void;
+}) {
+  const [quality, setQuality] = useState(5);
+  const [grayscale, setGrayscale] = useState(false);
+
+  return (
+    <div className="tool-panel__inline-card">
+      <div className="tool-panel__card-header">
+        <p className="tool-panel__card-title">Compress</p>
+        <IconButton icon={<HelpIcon size={14} />} label="Help: Compress" onClick={onHelp} />
+      </div>
+      {!available ? <DesktopCapabilityMessage /> : null}
+      <div className="tool-panel__field">
+        <label htmlFor="compress-quality">Quality</label>
+        <input id="compress-quality" type="number" min="1" max="9" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
+      </div>
+      <label className="tool-panel__check-row">
+        <input type="checkbox" checked={grayscale} onChange={(event) => setGrayscale(event.target.checked)} />
+        Grayscale
+      </label>
+      {status.beforeBytes !== null && status.afterBytes !== null ? (
+        <p className="tool-panel__status-line">
+          {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
+        </p>
+      ) : null}
+      <SidecarStatusLine status={status} label="Compressing PDF" />
+      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onCompress({ quality, grayscale })}>
+        Compress PDF
+      </button>
+    </div>
+  );
+}
+
+export function DesktopCapabilityMessage() {
+  return (
+    <p className="tool-panel__status-line">
+      This action is available in the desktop app.
+    </p>
+  );
+}
+
+export function SidecarStatusLine({
+  status,
+  label,
+}: {
+  status: SidecarStatus;
+  label: string;
+}) {
+  if (!status.message) {
+    return null;
+  }
+
+  return (
+    <p className="tool-panel__status-line tool-panel__status-line--inline">
+      {status.running ? <LoadingSun size={13} label={label} /> : null}
+      {status.message}
+    </p>
+  );
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// Covers the confirm dialog too -- once "Make Searchable" is clicked, the
+// buttons stay disabled through the confirm step and the whole run, not
+// just while bytes are actually moving.
 function isOcrActive(phase: OcrUiState["phase"], ocrStarting: boolean): boolean {
   return (
     ocrStarting ||
+    phase === "confirm" ||
     phase === "starting-engine" ||
     phase === "processing" ||
     phase === "verifying"
   );
-}
-
-function getOcrStatusLabel(phase: OcrUiState["phase"]): string {
-  if (phase === "done") {
-    return "Verified";
-  }
-
-  if (phase === "error") {
-    return "Needs attention";
-  }
-
-  if (phase === "starting-engine") {
-    return "Starting";
-  }
-
-  if (phase === "processing") {
-    return "Processing";
-  }
-
-  if (phase === "verifying") {
-    return "Verifying";
-  }
-
-  return "OCR";
 }

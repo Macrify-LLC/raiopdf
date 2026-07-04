@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import { MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
+import { MenuBar } from "./MenuBar";
 import "./TitleBar.css";
 
 export interface DocumentTabInfo {
@@ -12,9 +13,25 @@ export interface DocumentTabInfo {
 export interface TitleBarProps {
   tabs?: DocumentTabInfo[];
   onOpenAbout?: () => void;
+  /** Gates every File-menu action that operates on the open document. */
+  hasDocument?: boolean;
+  /** Gates Edit > Undo in the menu bar. */
+  canUndo?: boolean;
+  /**
+   * Shared dispatch for the menu bar -- the same function App wires to the
+   * native `raiopdf-menu` Tauri event, so both entry points funnel through
+   * one switch statement.
+   */
+  onMenuCommand?: (command: string) => void;
 }
 
-export function TitleBar({ tabs = [], onOpenAbout }: TitleBarProps) {
+export function TitleBar({
+  tabs = [],
+  onOpenAbout,
+  hasDocument = false,
+  canUndo = false,
+  onMenuCommand,
+}: TitleBarProps) {
   const showWindowControls = isTauriRuntime();
   const hasTabs = tabs.length > 0;
 
@@ -35,6 +52,13 @@ export function TitleBar({ tabs = [], onOpenAbout }: TitleBarProps) {
       <div className="title-bar__brand" data-tauri-drag-region>
         <RaioWordmarkIcon height={24} className="title-bar__wordmark-mark" />
       </div>
+
+      <MenuBar
+        hasDocument={hasDocument}
+        canUndo={canUndo}
+        onCommand={(command) => onMenuCommand?.(command)}
+        onExit={() => void closeWindow()}
+      />
 
       {hasTabs ? (
         <div className="title-bar__tabs" data-tauri-drag-region>

@@ -1,0 +1,107 @@
+.context-menu {
+  position: fixed;
+  z-index: 8;
+  /* Explicit, not inherited -- callers may render this inside a layer that
+     sets `pointer-events: none` by default (e.g. EditLayer outside an
+     active placement tool), and the menu must stay clickable regardless. */
+  pointer-events: auto;
+  min-width: 168px;
+  display: grid;
+  gap: 1px;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+  outline: none;
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: top left;
+  animation: context-menu-in var(--duration-fast) ease forwards;
+}
+
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Quick exit: asymmetric with the entrance above -- 90ms vs 120ms, dismissal
+   should always read faster than arrival. Overrides the entrance animation
+   (still running or already finished, doesn't matter) the instant closing
+   starts. Pointer-events off so a fast second click during the fade can't
+   hit a menu item that's on its way out. */
+.context-menu[data-closing="true"] {
+  pointer-events: none;
+  animation: context-menu-out 90ms ease forwards;
+}
+
+@keyframes context-menu-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-menu {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .context-menu[data-closing="true"] {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-align: left;
+  padding: 0 var(--space-2);
+  cursor: default;
+}
+
+.context-menu__item[data-active="true"] {
+  background: var(--hover-ground);
+  color: var(--ink);
+}
+
+.context-menu__item[data-danger="true"] {
+  color: var(--danger);
+}
+
+.context-menu__item[data-danger="true"][data-active="true"] {
+  background: var(--danger-bg);
+}
+
+.context-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.context-menu__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

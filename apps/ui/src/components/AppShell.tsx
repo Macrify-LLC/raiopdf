@@ -1,6 +1,6 @@
 import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from "react";
 import type { OcrUiState } from "../App";
-import type { DocumentState } from "../hooks/useDocument";
+import type { DocumentState, PageScrollIntent } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
@@ -17,9 +17,15 @@ import {
 import type {
   RedactionPanelState,
   ScannerPanelState,
+  SidecarStatus,
 } from "./ToolPanel";
 import type { PendingRedactionOverlay } from "./CanvasWell";
-import type { PdfRedactionArea } from "@raiopdf/engine-api";
+import type {
+  PdfCompressOptions,
+  PdfPageNumbersOptions,
+  PdfRedactionArea,
+  PdfWatermarkOptions,
+} from "@raiopdf/engine-api";
 import type { EditingState } from "../hooks/useEditing";
 import type { SensitiveHit } from "../lib/legalTools";
 import { deriveTextLayerStatus } from "../lib/textLayerStatus";
@@ -29,6 +35,8 @@ export interface AppShellProps {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
   documentSearch: DocumentSearchState;
+  pageScrollIntent: PageScrollIntent | null;
+  onVisiblePageChange: (page: number) => void;
   selectedPageIndexes: ReadonlySet<number>;
   onOpenRequested: () => void;
   onFileDropped: (file: File) => void;
@@ -43,6 +51,8 @@ export interface AppShellProps {
   onRenderError: (message: string) => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
+  onRotateLeft: () => void;
+  onRotateRight: () => void;
   onDeleteSelected: () => void;
   onMoveSelectedUp: () => void;
   onMoveSelectedDown: () => void;
@@ -60,6 +70,12 @@ export interface AppShellProps {
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
   onForceOcr: () => void;
+  pageCount: number;
+  sidecarStatus: SidecarStatus;
+  onApplyPageNumbers: (options: PdfPageNumbersOptions) => Promise<boolean>;
+  onApplyWatermark: (options: PdfWatermarkOptions) => Promise<boolean>;
+  compressAvailable: boolean;
+  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
   redaction: RedactionPanelState;
   scanner: ScannerPanelState;
   pendingRedactions: readonly PendingRedactionOverlay[];
@@ -73,12 +89,16 @@ export interface AppShellProps {
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onOpenAbout: () => void;
   onHelpRequested: (articleId?: string) => void;
+  onConnectToAi: () => void;
+  onMenuCommand: (command: string) => void;
 }
 
 export function AppShell({
   document,
   pdfDocument,
   documentSearch,
+  pageScrollIntent,
+  onVisiblePageChange,
   selectedPageIndexes,
   onOpenRequested,
   onFileDropped,
@@ -93,6 +113,8 @@ export function AppShell({
   onRenderError,
   onThumbnailClick,
   onRotateSelected,
+  onRotateLeft,
+  onRotateRight,
   onDeleteSelected,
   onMoveSelectedUp,
   onMoveSelectedDown,
@@ -110,6 +132,12 @@ export function AppShell({
   onOrganizeToolSelected,
   onMakeSearchable,
   onForceOcr,
+  pageCount,
+  sidecarStatus,
+  onApplyPageNumbers,
+  onApplyWatermark,
+  compressAvailable,
+  onCompress,
   redaction,
   scanner,
   pendingRedactions,
@@ -123,9 +151,12 @@ export function AppShell({
   onMarkScannerHit,
   onOpenAbout,
   onHelpRequested,
+  onConnectToAi,
+  onMenuCommand,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
+  const canUndo = editing.pendingEdits.length > 0;
   const tabs = document.fileName
     ? [
         {
@@ -161,7 +192,13 @@ export function AppShell({
         aria-label="Open PDF file"
         onChange={handleFileInputChange}
       />
-      <TitleBar tabs={tabs} onOpenAbout={onOpenAbout} />
+      <TitleBar
+        tabs={tabs}
+        onOpenAbout={onOpenAbout}
+        hasDocument={hasDocument}
+        canUndo={canUndo}
+        onMenuCommand={onMenuCommand}
+      />
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}
@@ -185,6 +222,7 @@ export function AppShell({
         onSearchNext={documentSearch.goToNext}
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
+        onPrepareForFiling={() => onLegalToolSelected("prepare-for-filing")}
       />
       <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">
@@ -209,6 +247,8 @@ export function AppShell({
           currentPage={document.currentPage}
           zoom={document.zoom}
           fitWidth={document.fitWidth}
+          scrollIntent={pageScrollIntent}
+          onVisiblePageChange={onVisiblePageChange}
           error={document.error}
           onZoomOut={onZoomOut}
           onZoomIn={onZoomIn}
@@ -227,6 +267,7 @@ export function AppShell({
         />
         <ToolPanel
           hasDocument={hasDocument}
+          pageCount={pageCount}
           ocrState={ocrState}
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
@@ -240,6 +281,13 @@ export function AppShell({
           onOrganizeToolSelected={onOrganizeToolSelected}
           onMakeSearchable={onMakeSearchable}
           onForceOcr={onForceOcr}
+          onRotateLeft={onRotateLeft}
+          onRotateRight={onRotateRight}
+          sidecarStatus={sidecarStatus}
+          onApplyPageNumbers={onApplyPageNumbers}
+          onApplyWatermark={onApplyWatermark}
+          compressAvailable={compressAvailable}
+          onCompress={onCompress}
           redaction={redaction}
           scanner={scanner}
           pendingEdits={editing.pendingEdits}
@@ -249,6 +297,7 @@ export function AppShell({
           onRunScanner={onRunScanner}
           onMarkScannerHit={onMarkScannerHit}
           onHelpRequested={onHelpRequested}
+          onConnectToAi={onConnectToAi}
         />
       </div>
       <StatusBar

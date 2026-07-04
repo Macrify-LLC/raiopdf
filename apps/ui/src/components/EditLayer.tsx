@@ -50,6 +50,7 @@ import {
   pdfEditColorToHex,
 } from "../lib/editStyles";
 import { newEditId, type EditingState } from "../hooks/useEditing";
+import { isTextEntryTarget } from "../lib/domGuards";
 import type { PDFPageProxy } from "../lib/pdfjs";
 import {
   clamp,
@@ -66,6 +67,8 @@ import {
 } from "../lib/viewportGeometry";
 import { computeTextBoxPreviewLines } from "../lib/textBoxPreview";
 import { CommentMarkerIcon } from "../icons";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { hasOpenDialogStackEntry } from "./FloatingDialog";
 import "./EditLayer.css";
 
 /** Rapid re-clicks inside this window never place a second item. */
@@ -154,15 +157,29 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     useState<CalloutPlacementDraft | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ id: string; rect: ViewportRect } | null>(
     null,
   );
+  const [itemContextMenu, setItemContextMenu] = useState<{
+    x: number;
+    y: number;
+    editId: string;
+  } | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const drawPointsRef = useRef<ViewportPoint[]>([]);
   const itemDragRef = useRef<ItemDrag | null>(null);
   const placementGuardRef = useRef(0);
-  const { tool, pendingEdits, addEdit, updateEdit, removeEdit } = editing;
+  const {
+    tool,
+    pendingEdits,
+    addEdit,
+    updateEdit,
+    removeEdit,
+    // Selection is shared editing state (not per-layer) because one
+    // EditLayer mounts per visible page in the continuous-scroll viewer.
+    selectedEditId: selectedId,
+    setSelectedEditId: setSelectedId,
+  } = editing;
   const scale = viewport.scale;
   const sideways = viewport.rotation % 180 !== 0;
   const pageEdits = useMemo(
@@ -204,8 +221,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setCalloutPlacementDraft(null);
     setTextDraft(null);
     setCommentDraft(null);
-    setSelectedId(null);
     setDragPreview(null);
+    setItemContextMenu(null);
     dragStartRef.current = null;
     drawPointsRef.current = [];
     itemDragRef.current = null;
@@ -230,6 +247,39 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const suppressPlacement = useCallback(() => {
     placementGuardRef.current = Date.now() + PLACEMENT_GUARD_MS;
   }, []);
+
+  // Delete/Backspace removes the currently selected placed item (stamp,
+  // image, text box). Ignored while typing into a field (the text-box/
+  // comment drafts have their own textareas, which this already covers) or
+  // while a dialog is open on top of the canvas. One EditLayer mounts per
+  // visible page, so only the layer whose page owns the selected item acts.
+  const selectedIdOnThisPage = useMemo(
+    () => (selectedId && pageEdits.some((edit) => edit.id === selectedId) ? selectedId : null),
+    [pageEdits, selectedId],
+  );
+
+  useEffect(() => {
+    if (!selectedIdOnThisPage) {
+      return;
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Delete" && event.key !== "Backspace") {
+        return;
+      }
+
+      if (!selectedIdOnThisPage || isTextEntryTarget(event.target) || hasOpenDialogStackEntry()) {
+        return;
+      }
+
+      event.preventDefault();
+      removeEdit(selectedIdOnThisPage);
+      setSelectedId(null);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [removeEdit, selectedIdOnThisPage, setSelectedId]);
 
   const getLayerPoint = useCallback(
     (event: ReactPointerEvent): ViewportPoint | null => {
@@ -944,6 +994,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                 )
               }
               onRemove={() => removeEdit(edit.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedId(edit.id);
+                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
+              }}
             />
           );
         }
@@ -974,6 +1030,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onPointerUp={handleItemPointerUp}
               onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
               onRemove={() => removeEdit(edit.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedId(edit.id);
+                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
+              }}
             />
           );
         }
@@ -1129,8 +1191,30 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           }
         />
       ) : null}
+
+      {itemContextMenu ? (
+        <ContextMenu
+          x={itemContextMenu.x}
+          y={itemContextMenu.y}
+          items={buildItemContextMenuItems(itemContextMenu.editId, removeEdit)}
+          onClose={() => setItemContextMenu(null)}
+        />
+      ) : null}
     </div>
   );
+}
+
+function buildItemContextMenuItems(
+  editId: string,
+  removeEdit: (id: string) => void,
+): ContextMenuItem[] {
+  return [
+    {
+      label: "Delete",
+      danger: true,
+      onSelect: () => removeEdit(editId),
+    },
+  ];
 }
 
 function TextMarkupOverlay({
@@ -1778,6 +1862,7 @@ function TextBoxOverlay({
   onFontSizeChange,
   onTextStyleChange,
   onRemove,
+  onContextMenu,
 }: {
   edit: PendingTextBox;
   viewport: PageViewport;
@@ -1792,6 +1877,7 @@ function TextBoxOverlay({
   onFontSizeChange: (fontSizePt: number) => void;
   onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
   const font = useTextBoxPreviewFont(
@@ -1818,6 +1904,7 @@ function TextBoxOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={onContextMenu}
       onDoubleClick={(event) => {
         event.stopPropagation();
         onEditRequested();
@@ -1860,6 +1947,7 @@ function StampOverlay({
   onPointerUp,
   onResizeStart,
   onRemove,
+  onContextMenu,
 }: {
   edit: PendingStamp;
   viewport: PageViewport;
@@ -1870,6 +1958,7 @@ function StampOverlay({
   onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onRemove: () => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
 
@@ -1881,6 +1970,7 @@ function StampOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={onContextMenu}
     >
       <img
         className="edit-layer__stamp-image"

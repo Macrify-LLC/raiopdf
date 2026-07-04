@@ -18,6 +18,14 @@ export interface FloatingDialogProps {
   children: ReactNode;
   onClose: () => void;
   onHelp?: (() => void) | undefined;
+  /**
+   * Extra header controls for a dialog whose content used to render its own
+   * second header (e.g. Prepare for Filing's overflow menu -- item 8 folds
+   * that "double chrome" down to one). Rendered before Help/Close so a
+   * dialog-specific action reads as part of the same toolbar, not bolted on.
+   * Generic on purpose: any dialog can use this, not just Prepare for Filing.
+   */
+  actions?: ReactNode | undefined;
   width?: "sm" | "md" | "lg" | undefined;
   draggable?: boolean | undefined;
   scrim?: boolean | undefined;
@@ -29,6 +37,7 @@ export function FloatingDialog({
   children,
   onClose,
   onHelp,
+  actions,
   width = "md",
   draggable = true,
   scrim = false,
@@ -105,6 +114,19 @@ export function FloatingDialog({
       return;
     }
 
+    // Capturing the pointer on the header retargets the synthesized click to the
+    // header itself, so buttons inside it (close/help) would never receive their
+    // click. Leave interactive children alone and only drag from inert areas.
+    // `[role='menu']` covers a header-hosted dropdown's own padding (e.g. the
+    // Prepare for Filing overflow menu passed in via `actions`) so a pointerdown
+    // that lands beside its menu items doesn't start dragging the dialog.
+    if (
+      event.target instanceof Element
+      && event.target.closest("button, a, input, select, textarea, [role='button'], [role='menu']")
+    ) {
+      return;
+    }
+
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -163,6 +185,7 @@ export function FloatingDialog({
             <h2 id={titleId}>{title}</h2>
           </div>
           <div className="floating-dialog__actions">
+            {actions}
             {onHelp ? (
               <IconButton
                 icon={<HelpIcon size={15} />}

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { PDFDocument } from "pdf-lib";
 import type { ResizePreset } from "../lib/cropResize";
+import { isTextEntryTarget } from "../lib/domGuards";
 import { readBrowserFile, type OpenedFile, type SavedFile } from "../lib/filePort";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import type { DocumentState } from "../hooks/useDocument";
@@ -27,6 +28,8 @@ import {
   RotateIcon,
   SplitIcon,
 } from "../icons";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { hasOpenDialogStackEntry } from "./FloatingDialog";
 import { IconButton } from "./IconButton";
 import "./OrganizeWorkspace.css";
 
@@ -41,6 +44,10 @@ export interface OrganizeWorkspaceProps {
   onPageSelected?: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected?: () => void;
   onDeleteSelected?: () => void;
+  /** Context-menu rotate -- acts on exactly the right-clicked page. */
+  onRotatePage?: (pageIndex: number, degrees: number) => void;
+  /** Context-menu delete -- acts on exactly the right-clicked page. */
+  onDeletePageRequested?: (pageIndex: number) => void;
   onMoveSelectedUp?: () => void;
   onMoveSelectedDown?: () => void;
   onReorderPages?: (pageIndexes: readonly number[], currentPage: number) => Promise<boolean>;
@@ -65,6 +72,8 @@ export function OrganizeWorkspace({
   onPageSelected,
   onRotateSelected,
   onDeleteSelected,
+  onRotatePage,
+  onDeletePageRequested,
   onMoveSelectedUp,
   onMoveSelectedDown,
   onReorderPages,
@@ -99,6 +108,8 @@ export function OrganizeWorkspace({
         onPageSelected={onPageSelected}
         onRotateSelected={onRotateSelected}
         onDeleteSelected={onDeleteSelected}
+        onRotatePage={onRotatePage}
+        onDeletePageRequested={onDeletePageRequested}
         onMoveSelectedUp={onMoveSelectedUp}
         onMoveSelectedDown={onMoveSelectedDown}
         onReorderPages={onReorderPages}
@@ -140,6 +151,8 @@ function OrganizePagesGrid({
   onPageSelected,
   onRotateSelected,
   onDeleteSelected,
+  onRotatePage,
+  onDeletePageRequested,
   onMoveSelectedUp,
   onMoveSelectedDown,
   onReorderPages,
@@ -156,6 +169,8 @@ function OrganizePagesGrid({
   onPageSelected?: ((pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void) | undefined;
   onRotateSelected?: (() => void) | undefined;
   onDeleteSelected?: (() => void) | undefined;
+  onRotatePage?: ((pageIndex: number, degrees: number) => void) | undefined;
+  onDeletePageRequested?: ((pageIndex: number) => void) | undefined;
   onMoveSelectedUp?: (() => void) | undefined;
   onMoveSelectedDown?: (() => void) | undefined;
   onReorderPages?: ((pageIndexes: readonly number[], currentPage: number) => Promise<boolean>) | undefined;
@@ -167,7 +182,15 @@ function OrganizePagesGrid({
 }) {
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
+  const [dragOverPageIndex, setDragOverPageIndex] = useState<number | null>(null);
+  const [pageContextMenu, setPageContextMenu] = useState<{ x: number; y: number; pageIndex: number } | null>(null);
   const [reorderPending, setReorderPending] = useState(false);
+  // Drop settle: the grid's cells are positional (0..pageCount-1), not keyed
+  // by page identity, so a reorder never slides a thumbnail across the grid
+  // -- it repaints new content into the cell the drag landed on. Settling
+  // that one cell (rather than teleporting straight to full opacity/scale)
+  // is the honest, cheap stand-in for a real FLIP-style move animation.
+  const [settledPageIndex, setSettledPageIndex] = useState<number | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const pages = Array.from({ length: document.pageCount }, (_, index) => index);
@@ -178,6 +201,55 @@ function OrganizePagesGrid({
   const canMoveDown = selectedIndexes.some((pageIndex) => (
     pageIndex < document.pageCount - 1 && !selectedPageIndexes.has(pageIndex + 1)
   ));
+
+  // Delete/Backspace removes the selected pages (with confirmation --
+  // page deletion is destructive). Ignored while typing into one of this
+  // workspace's own inputs (insert-after, split ranges, ...) or while a
+  // dialog (e.g. the delete confirmation itself) is already open on top.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Delete" && event.key !== "Backspace") {
+        return;
+      }
+
+      if (
+        reorderPending ||
+        selectedCount === 0 ||
+        isTextEntryTarget(event.target) ||
+        hasOpenDialogStackEntry()
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      onDeleteSelected?.();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onDeleteSelected, reorderPending, selectedCount]);
+
+  function closePageContextMenu() {
+    setPageContextMenu(null);
+  }
+
+  function pageContextMenuItems(pageIndex: number): ContextMenuItem[] {
+    return [
+      {
+        label: "Rotate right",
+        onSelect: () => onRotatePage?.(pageIndex, 90),
+      },
+      {
+        label: "Rotate left",
+        onSelect: () => onRotatePage?.(pageIndex, -90),
+      },
+      {
+        label: "Delete page",
+        danger: true,
+        onSelect: () => onDeletePageRequested?.(pageIndex),
+      },
+    ];
+  }
 
   async function extractSelection() {
     if (selectedIndexes.length === 0) {
@@ -222,6 +294,8 @@ function OrganizePagesGrid({
   }
 
   async function dropOn(targetPageIndex: number) {
+    setDragOverPageIndex(null);
+
     if (reorderPending || draggingPageIndex === null || draggingPageIndex === targetPageIndex) {
       setDraggingPageIndex(null);
       return;
@@ -250,7 +324,14 @@ function OrganizePagesGrid({
     setReorderPending(true);
 
     try {
-      await onReorderPages(nextOrder, nextCurrentPage);
+      const reordered = await onReorderPages(nextOrder, nextCurrentPage);
+
+      if (reordered) {
+        // insertIndex is where the moved page(s) actually land in nextOrder
+        // -- the grid always renders positions 0..pageCount-1, so that's
+        // exactly the cell that will repaint with the moved content.
+        setSettledPageIndex(insertIndex);
+      }
     } finally {
       setReorderPending(false);
     }
@@ -356,6 +437,16 @@ function OrganizePagesGrid({
               className="organize-page"
               data-selected={selected ? "true" : undefined}
               data-current={document.currentPage === pageNumber ? "true" : undefined}
+              data-dragging={draggingPageIndex === pageIndex ? "true" : undefined}
+              data-drop-target={
+                dragOverPageIndex === pageIndex && draggingPageIndex !== null && draggingPageIndex !== pageIndex
+                  ? "true"
+                  : undefined
+              }
+              data-drop-settle={settledPageIndex === pageIndex ? "true" : undefined}
+              onAnimationEnd={() => {
+                setSettledPageIndex((current) => (current === pageIndex ? null : current));
+              }}
               aria-pressed={selected}
               aria-label={`Organize page ${pageNumber}`}
               disabled={reorderPending}
@@ -365,17 +456,57 @@ function OrganizePagesGrid({
                   onPageSelected?.(pageIndex, event);
                 }
               }}
-              onDragStart={() => {
-                if (!reorderPending) {
-                  setDraggingPageIndex(pageIndex);
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setPageContextMenu({ x: event.clientX, y: event.clientY, pageIndex });
+              }}
+              onDragStart={(event) => {
+                if (reorderPending) {
+                  event.preventDefault();
+                  return;
+                }
+
+                setDraggingPageIndex(pageIndex);
+                // Without a real drag payload, WebView2 refuses to initiate
+                // the drag at all on a <button><canvas> source.
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", String(pageIndex));
+
+                const thumbCanvas = event.currentTarget.querySelector<HTMLCanvasElement>(
+                  ".organize-page__canvas",
+                );
+
+                if (thumbCanvas) {
+                  event.dataTransfer.setDragImage(
+                    thumbCanvas,
+                    thumbCanvas.width / 2,
+                    thumbCanvas.height / 2,
+                  );
+                }
+              }}
+              onDragEnter={(event) => {
+                if (!reorderPending && draggingPageIndex !== null) {
+                  event.preventDefault();
+                  setDragOverPageIndex(pageIndex);
                 }
               }}
               onDragOver={(event) => {
                 if (!reorderPending) {
                   event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
                 }
               }}
-              onDrop={() => void dropOn(pageIndex)}
+              onDragLeave={() => {
+                setDragOverPageIndex((current) => (current === pageIndex ? null : current));
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                void dropOn(pageIndex);
+              }}
+              onDragEnd={() => {
+                setDraggingPageIndex(null);
+                setDragOverPageIndex(null);
+              }}
             >
               <span className="organize-page__thumb">
                 {pdfDocument ? (
@@ -387,6 +518,15 @@ function OrganizePagesGrid({
           );
         })}
       </div>
+
+      {pageContextMenu ? (
+        <ContextMenu
+          x={pageContextMenu.x}
+          y={pageContextMenu.y}
+          items={pageContextMenuItems(pageContextMenu.pageIndex)}
+          onClose={closePageContextMenu}
+        />
+      ) : null}
     </section>
   );
 }

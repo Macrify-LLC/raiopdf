@@ -2,10 +2,11 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OcrUiState } from "../App";
 import { ForceOcrConfirmationDialog } from "./ForceOcrConfirmationDialog";
 import { resetDialogStackForTests } from "./FloatingDialog";
 import { TextLayerDetailPanel } from "./TextLayerDetailPanel";
-import { ToolPanel } from "./ToolPanel";
+import { ToolPanel, type SidecarStatus } from "./ToolPanel";
 
 describe("force OCR controls", () => {
   let root: Root | null = null;
@@ -55,6 +56,7 @@ describe("force OCR controls", () => {
     render(
       <ToolPanel
         hasDocument
+        pageCount={2}
         ocrState={{ phase: "idle", message: null }}
         ocrAvailable
         ocrStarting={false}
@@ -68,6 +70,13 @@ describe("force OCR controls", () => {
         onOrganizeToolSelected={() => undefined}
         onMakeSearchable={() => undefined}
         onForceOcr={onForceOcr}
+        onRotateLeft={() => undefined}
+        onRotateRight={() => undefined}
+        sidecarStatus={idleSidecarStatus}
+        onApplyPageNumbers={async () => true}
+        onApplyWatermark={async () => true}
+        compressAvailable
+        onCompress={async () => true}
         redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
         scanner={{ scanning: false, message: null, hits: [] }}
         pendingEdits={[]}
@@ -77,6 +86,7 @@ describe("force OCR controls", () => {
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
+        onConnectToAi={() => undefined}
       />,
     );
 
@@ -86,6 +96,46 @@ describe("force OCR controls", () => {
     click(button);
 
     expect(onForceOcr).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Make Searchable while the confirm dialog is up, with no inline status box", () => {
+    render(<ToolPanelHarness ocrState={{ phase: "confirm", message: null }} />);
+
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
+    expect(getButton("Force re-OCR text layer").disabled).toBe(true);
+    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+  });
+
+  it("disables Make Searchable while OCR is running, with no inline status box", () => {
+    render(<ToolPanelHarness ocrState={{ phase: "processing", message: "Making searchable…" }} />);
+
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
+    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+  });
+
+  it("shows a result notice once OCR finishes, replacing the old always-on status box", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{ phase: "done", message: "Rebuilt the text layer on 3 pages." }}
+      />,
+    );
+
+    const notice = document.querySelector(".tool-panel__inline-card");
+    expect(notice?.getAttribute("data-tone")).toBe("ok");
+    expect(notice?.textContent).toContain("Rebuilt the text layer on 3 pages.");
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(false);
+  });
+
+  it("shows OCR errors as a neutral note when the desktop engine is unavailable, not an alarming one", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{ phase: "error", message: "This action is available in the desktop app." }}
+        ocrAvailable={false}
+      />,
+    );
+
+    const notice = document.querySelector(".tool-panel__inline-card");
+    expect(notice?.getAttribute("data-tone")).toBe("neutral");
   });
 
   it("shows the whole-document force OCR interstitial before running", () => {
@@ -121,6 +171,59 @@ describe("force OCR controls", () => {
     });
   }
 });
+
+function ToolPanelHarness({
+  ocrState,
+  ocrAvailable = true,
+}: {
+  ocrState: OcrUiState;
+  ocrAvailable?: boolean;
+}) {
+  return (
+    <ToolPanel
+      hasDocument
+      pageCount={2}
+      ocrState={ocrState}
+      ocrAvailable={ocrAvailable}
+      ocrStarting={false}
+      activeEditTool="select"
+      activeEditDialogTool={null}
+      activeLegalTool={null}
+      activeOrganizeTool={null}
+      onEditToolSelected={() => undefined}
+      onEditDialogToolSelected={() => undefined}
+      onLegalToolSelected={() => undefined}
+      onOrganizeToolSelected={() => undefined}
+      onMakeSearchable={() => undefined}
+      onForceOcr={() => undefined}
+      onRotateLeft={() => undefined}
+      onRotateRight={() => undefined}
+      sidecarStatus={idleSidecarStatus}
+      onApplyPageNumbers={async () => true}
+      onApplyWatermark={async () => true}
+      compressAvailable
+      onCompress={async () => true}
+      redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
+      scanner={{ scanning: false, message: null, hits: [] }}
+      pendingEdits={[]}
+      onRemovePendingEdit={() => undefined}
+      onConfirmRedactions={() => undefined}
+      onCancelRedactions={() => undefined}
+      onRunScanner={() => undefined}
+      onMarkScannerHit={() => undefined}
+      onHelpRequested={() => undefined}
+      onConnectToAi={() => undefined}
+    />
+  );
+}
+
+const idleSidecarStatus: SidecarStatus = {
+  running: false,
+  message: null,
+  removed: [],
+  beforeBytes: null,
+  afterBytes: null,
+};
 
 function getButton(name: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(

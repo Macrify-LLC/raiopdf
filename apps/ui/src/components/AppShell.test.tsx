@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+
+// pdfjs-dist's canvas module touches DOMMatrix at import time; jsdom has no
+// implementation and this static-markup test never renders a page, so a
+// bare stub is enough. Hoisted so it lands before the module graph loads.
+vi.hoisted(() => {
+  (globalThis as { DOMMatrix?: unknown }).DOMMatrix ??= class DOMMatrixStub {};
+});
 import type { DocumentState } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
@@ -57,6 +64,18 @@ describe("AppShell", () => {
         onMarkScannerHit={() => undefined}
         onOpenAbout={() => undefined}
         onHelpRequested={() => undefined}
+        pageScrollIntent={null}
+        onVisiblePageChange={() => undefined}
+        onRotateLeft={() => undefined}
+        onRotateRight={() => undefined}
+        pageCount={0}
+        sidecarStatus={{ running: false, message: null, removed: [], beforeBytes: null, afterBytes: null }}
+        onApplyPageNumbers={() => Promise.resolve(true)}
+        onApplyWatermark={() => Promise.resolve(true)}
+        compressAvailable={false}
+        onCompress={() => Promise.resolve(true)}
+        onConnectToAi={() => undefined}
+        onMenuCommand={() => undefined}
       />,
     );
 
@@ -132,6 +151,8 @@ const mockEditing: EditingState = {
   updateTextBoxStyle: noop,
   inkStyle: { strokeWidthPt: 1.5 },
   updateInkStyle: noop,
+  selectedEditId: null,
+  setSelectedEditId: noop,
   textMarkupStyles: {
     underline: {},
     strikethrough: {},

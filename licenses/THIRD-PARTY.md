@@ -39,6 +39,14 @@ It is not a substitute for the full upstream license texts shipped by each compo
 - Use: Ghostscript command-line tools required by OCRmyPDF and Stirling PDF/A flows.
 - Aggregation note: Ghostscript is bundled as a separate executable toolchain component and invoked as an external process by OCR/PDF workflows.
 
+## qpdf
+
+- Component: qpdf Windows x64
+- License: Apache-2.0
+- Source: https://github.com/qpdf/qpdf
+- Use: qpdf command-line tool required by Stirling-PDF repair and other structure-preserving PDF workflows.
+- License text: bundled at `payload/ocr/qpdf/LICENSE.txt` by `installer/assemble-payload.sh` from the upstream qpdf distribution.
+
 ## Python
 
 - Component: Python embeddable package for Windows x86-64

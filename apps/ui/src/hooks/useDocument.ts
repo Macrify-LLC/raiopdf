@@ -105,6 +105,48 @@ interface ReplaceBytesOptions {
 
 export type ReplaceBytesResult = "replaced" | "stale" | "failed";
 
+/**
+ * Discriminated result of `openFile` (B3, 2026-07-03 live-test fix plan).
+ * Replaces the old `Promise<boolean>` shape so a caller can branch
+ * explicitly on *why* an open didn't succeed instead of inferring it from a
+ * bare `false` -- a password-protected PDF and a genuinely corrupt one need
+ * very different UI (a password prompt vs. routing to Repair).
+ */
+export type OpenFileResult =
+  | { status: "opened" }
+  | {
+      status: "password-required";
+      /** The still-encrypted source bytes, for feeding into removeEncryption. */
+      bytes: Uint8Array;
+      fileName: string;
+      filePath: string | null;
+    }
+  /** User declined the signature-invalidation confirmation; not an error. */
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
+
+export interface OpenFileOptions {
+  /**
+   * Marks the newly opened document dirty immediately instead of clean.
+   * Used for the decrypted-bytes-from-a-password-prompt path: those bytes
+   * never had an on-disk representation of their own (they're a fresh
+   * unlocked working copy), so Save As is the natural next step.
+   */
+  markDirty?: boolean;
+}
+
+/**
+ * A one-shot "scroll the viewer to this page" request. Every explicit
+ * navigation (prev/next commands, thumbnail clicks, search jumps, mutation
+ * commits that move the reader) emits one of these; the continuous-scroll
+ * viewer consumes it by nonce. Derived current-page updates from scrolling
+ * go through `syncVisiblePage` instead and never emit an intent.
+ */
+export interface PageScrollIntent {
+  page: number;
+  nonce: number;
+}
+
 interface OperationContext {
   handle: PdfDocumentHandle;
   token: number;
@@ -150,10 +192,17 @@ interface PreparedDocument {
 export function useDocument(options: UseDocumentOptions = {}) {
   const engine = useMemo<PdfEngine>(() => new LocalPdfEngine(), []);
   const [document, setDocument] = useState<DocumentState>(INITIAL_DOCUMENT);
+  const [pageScrollIntent, setPageScrollIntent] = useState<PageScrollIntent | null>(null);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
+  const scrollNonceRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const requestPageScroll = useCallback((page: number) => {
+    scrollNonceRef.current += 1;
+    setPageScrollIntent({ page, nonce: scrollNonceRef.current });
+  }, []);
 
   const setError = useCallback((error: string | null) => {
     setDocument((current) => ({ ...current, error }));
@@ -228,13 +277,21 @@ export function useDocument(options: UseDocumentOptions = {}) {
         error: null,
       }));
 
+      // A mutation that explicitly moves the reader (merge -> 1, insert ->
+      // the inserted page, ...) is a navigation: it becomes a scroll intent.
+      // The function form (delete keeps the reader near its page) and
+      // in-place mutations leave the scroll position alone.
+      if (typeof options.currentPage === "number") {
+        requestPageScroll(clampPage(options.currentPage, pageCount));
+      }
+
       if (previousHandle !== engineHandle) {
         await closeHandle(previousHandle);
       }
 
       return true;
     },
-    [closeHandle, engine],
+    [closeHandle, engine, requestPageScroll],
   );
 
   const currentOperation = useCallback((): OperationContext | null => {
@@ -362,7 +419,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   );
 
   const openFile = useCallback(
-    async (file: DocumentFileInput) => {
+    async (file: DocumentFileInput, options: OpenFileOptions = {}): Promise<OpenFileResult> => {
       const token = openTokenRef.current + 1;
       openTokenRef.current = token;
       const previousHandle = activeHandleRef.current;
@@ -371,7 +428,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       try {
         prepared = await openPreparedDocument(file);
         if (!prepared) {
-          return false;
+          return { status: "cancelled" };
         }
 
         const { bytes, engineHandle, signatureInvalidationNotice } = prepared;
@@ -380,7 +437,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (openTokenRef.current !== token) {
           await closeHandle(engineHandle);
-          return false;
+          return { status: "failed", error: "This document was replaced before it finished opening." };
         }
 
         activeHandleRef.current = null;
@@ -395,7 +452,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           currentPage: 1,
           zoom: 1,
           fitWidth: true,
-          dirty: signatureInvalidated,
+          dirty: (options.markDirty ?? false) || signatureInvalidated,
           fileName: file.name,
           filePath: signatureInvalidated ? null : file.path ?? null,
           fileSizeBytes: bytes.byteLength,
@@ -406,28 +463,60 @@ export function useDocument(options: UseDocumentOptions = {}) {
           error: null,
         });
         prepared = null;
-        return true;
+        requestPageScroll(1);
+        return { status: "opened" };
       } catch (error) {
         await closeHandle(prepared?.engineHandle ?? null);
 
-        if (openTokenRef.current === token) {
-          if (previousHandle) {
-            setDocument((current) => ({
-              ...current,
-              error: getEngineErrorMessage(error),
-            }));
-          } else {
-            setDocument({
-              ...INITIAL_DOCUMENT,
-              error: getEngineErrorMessage(error),
-            });
-          }
+        if (openTokenRef.current !== token) {
+          return { status: "failed", error: getEngineErrorMessage(error) };
         }
 
-        return false;
+        // ENCRYPTED_DOCUMENT: raw engine error when no protected-PDF resolver
+        // is wired. PASSWORD_REQUIRED: the resolver ran, silently unlocked
+        // owner-restricted PDFs if it could, and reports a genuine open
+        // password is needed. Both route to the password prompt.
+        if (
+          error instanceof PdfEngineError &&
+          (error.code === "ENCRYPTED_DOCUMENT" || error.code === "PASSWORD_REQUIRED")
+        ) {
+          // No active bytes/handle -- the document stays in a clean, empty
+          // state while the caller shows a password prompt. The still-
+          // encrypted bytes travel in the result itself (not `document`),
+          // since they're not this hook's concern until they're unlocked.
+          // Any previously open document is being replaced by the prompt
+          // flow, so release its handle rather than leaking it.
+          activeHandleRef.current = null;
+          activeBytesRef.current = null;
+          await closeHandle(previousHandle);
+          setDocument(INITIAL_DOCUMENT);
+          return {
+            status: "password-required",
+            bytes: file.bytes,
+            fileName: file.name,
+            filePath: file.path ?? null,
+          };
+        }
+
+        const message = getEngineErrorMessage(error);
+        if (previousHandle) {
+          // A failed replacement open keeps the current document on screen --
+          // and USABLE: the refs must keep pointing at the still-open
+          // previous handle or save/rotate/delete on the visible document
+          // would find no engine handle (Codex Cloud P1 on #115).
+          setDocument((current) => ({ ...current, error: message }));
+        } else {
+          activeHandleRef.current = null;
+          activeBytesRef.current = null;
+          setDocument({
+            ...INITIAL_DOCUMENT,
+            error: message,
+          });
+        }
+        return { status: "failed", error: message };
       }
     },
-    [closeHandle, engine, openPreparedDocument],
+    [closeHandle, engine, openPreparedDocument, requestPageScroll],
   );
 
   const replaceBytes = useCallback(
@@ -508,11 +597,34 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
   const getOpenToken = useCallback(() => openTokenRef.current, []);
 
+  /**
+   * Explicit navigation: updates `currentPage` AND emits a scroll intent so
+   * the continuous-scroll viewer brings the page into view. Every caller —
+   * prev/next commands, thumbnail clicks, search navigation — is a scroll
+   * intent by construction.
+   */
   const setCurrentPage = useCallback((page: number) => {
     setDocument((current) => ({
       ...current,
       currentPage: clampPage(page, current.pageCount),
     }));
+    // The viewer clamps against its own layout; an out-of-range intent can
+    // never scroll past the last page.
+    requestPageScroll(Math.max(1, Math.round(page)));
+  }, [requestPageScroll]);
+
+  /**
+   * Derived update from the viewer's scroll position (most-visible page).
+   * Never emits a scroll intent — that would fight the user's scrolling.
+   */
+  const syncVisiblePage = useCallback((page: number) => {
+    setDocument((current) => {
+      const clamped = clampPage(page, current.pageCount);
+
+      return clamped === current.currentPage
+        ? current
+        : { ...current, currentPage: clamped };
+    });
   }, []);
 
   const setZoom = useCallback((zoom: number) => {
@@ -544,13 +656,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
   }, []);
 
   const rotatePages = useCallback(
-    async (pageIndexes: readonly number[]) => {
+    async (pageIndexes: readonly number[], degrees = 90) => {
       if (pageIndexes.length === 0) {
         return false;
       }
 
       return enqueueMutation("rotate", async ({ handle }) => ({
-        engineHandle: await engine.rotatePages(handle, pageIndexes, 90),
+        engineHandle: await engine.rotatePages(handle, pageIndexes, degrees),
         options: { dirty: true },
       }));
     },
@@ -1083,10 +1195,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
   return {
     document,
+    pageScrollIntent,
     openFile,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
+    syncVisiblePage,
     setZoom,
     setFitZoom,
     setHasTextLayer,
@@ -1189,7 +1303,7 @@ function getEngineErrorMessage(error: unknown): string {
   }
 
   if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-    return "This PDF is encrypted. Use Legal > Prepare for Filing to remove encryption with the open password.";
+    return "This PDF is password-protected.";
   }
 
   if (error instanceof PdfEngineError && error.code === "UNSUPPORTED") {

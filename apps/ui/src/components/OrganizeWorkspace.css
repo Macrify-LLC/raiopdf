@@ -298,6 +298,50 @@
   background: var(--accent-pale);
 }
 
+.organize-page {
+  transition: opacity var(--duration-fast) ease;
+}
+
+.organize-page[data-dragging="true"] {
+  opacity: 0.4;
+}
+
+.organize-page[data-drop-target="true"] {
+  border-color: var(--accent);
+  background: var(--accent-pale);
+}
+
+.organize-page[data-drop-target="true"] .organize-page__thumb {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Drop settle: the grid is positional, not identity-keyed (see the comment
+   in OrganizeWorkspace.tsx), so a reorder can't slide a thumbnail across
+   the grid -- the cell the drag landed on just settles into place instead
+   of teleporting straight to full size the instant the new order commits. */
+.organize-page[data-drop-settle="true"] {
+  animation: organize-page-settle var(--duration-medium) var(--ease-out);
+}
+
+@keyframes organize-page-settle {
+  from {
+    transform: scale(0.94);
+    opacity: 0.55;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .organize-page[data-drop-settle="true"] {
+    animation: none;
+  }
+}
+
 .organize-page__thumb {
   width: 140px;
   height: 180px;

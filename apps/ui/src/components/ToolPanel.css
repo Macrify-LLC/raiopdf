@@ -23,53 +23,62 @@
   padding: var(--space-1) 0;
 }
 
-.tool-panel__ocr-status {
-  margin: 0 var(--space-4) var(--space-2) 42px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
+.tool-panel__ai-connect {
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-1) 0;
+}
+
+.tool-panel__ai-connect-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  padding: 8.5px 18px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.tool-panel__ai-connect-button:hover,
+.tool-panel__ai-connect-button:focus-visible {
   background: var(--chrome);
 }
 
-.tool-panel__ocr-status[data-phase="done"] {
-  border-color: var(--ok-bg);
-  background: var(--ok-bg);
+.tool-panel__ai-connect-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.tool-panel__ocr-status[data-phase="error"] {
-  border-color: var(--warn-bg);
-  background: var(--warn-bg);
-}
-
-.tool-panel__ocr-status-label,
-.tool-panel__ocr-status-message {
-  margin: 0;
-}
-
-.tool-panel__ocr-status-label {
+.tool-panel__ai-connect-icon {
   display: flex;
+  width: 20px;
+  height: 20px;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-2xs);
-  font-weight: 700;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-micro);
 }
 
-.tool-panel__ocr-status[data-phase="done"] .tool-panel__ocr-status-label {
-  color: var(--ok);
+.tool-panel__ai-connect-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
-.tool-panel__ocr-status[data-phase="error"] .tool-panel__ocr-status-label {
-  color: var(--warn);
-}
-
-.tool-panel__ocr-status-message {
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
-  line-height: 1.35;
+.tool-panel__ai-connect-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
   color: var(--body);
+}
+
+.tool-panel__ai-connect-description {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 .tool-panel__inline-card {
@@ -400,4 +409,42 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Inline tool expansion (Rotate, Page Numbers, Watermark, Compress) --
+   mounted only while its ToolRow is selected. The height/opacity grow-in
+   is the one motion exception item 18 calls out: an instant appearance
+   here reads as broken, unlike every other appear-on-demand card in this
+   panel. `max-height` is a generous ceiling, not a fixed height -- the box
+   still sizes to its actual (shorter) content once the animation ends.
+   Shares --duration-medium/--ease-out with AccordionGroup's panel grow-in
+   (AccordionGroup.css) so every "a section just grew open" moment in the
+   tool panel reads as the same motion. */
+.tool-row__expansion {
+  overflow: hidden;
+  animation: tool-row-expansion-in var(--duration-medium) var(--ease-out);
+}
+
+@keyframes tool-row-expansion-in {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 640px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row__expansion {
+    animation: none;
+  }
+}
+
+/* Cheap mirror of the single Rotate glyph for "Rotate Left" -- avoids
+   shipping a second nearly-identical icon asset. */
+.tool-panel__icon-mirror {
+  transform: scaleX(-1);
 }

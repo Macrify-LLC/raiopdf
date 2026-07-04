@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDownIcon } from "../icons";
 import "./AccordionGroup.css";
 
@@ -27,6 +27,28 @@ export function AccordionGroup({
 }: AccordionGroupProps) {
   const headerId = `accordion-header-${id}`;
   const panelId = `accordion-panel-${id}`;
+  // Grow-in only on a genuine closed-to-open transition -- never on initial
+  // mount (a group that starts open shouldn't animate just for existing),
+  // matching the honesty rule applied to the tool-row expansions this
+  // mirrors. useLayoutEffect so the flag (and its CSS "from" state) lands
+  // before paint -- no one-frame flash of the fully-open panel first.
+  const previousOpenRef = useRef(isOpen);
+  const [justOpened, setJustOpened] = useState(false);
+
+  useLayoutEffect(() => {
+    if (isOpen && !previousOpenRef.current) {
+      // Under reduced motion the grow animation never runs, so
+      // onAnimationEnd would never clear the flag and the panel would stay
+      // overflow-clipped forever. Skip the animated state entirely there.
+      const reducedMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      if (!reducedMotion) {
+        setJustOpened(true);
+      }
+    }
+    previousOpenRef.current = isOpen;
+  }, [isOpen]);
 
   return (
     <section className="accordion-group" data-variant={variant}>
@@ -53,6 +75,8 @@ export function AccordionGroup({
         role="region"
         aria-labelledby={headerId}
         className="accordion-group__panel"
+        data-grow={justOpened ? "true" : undefined}
+        onAnimationEnd={() => setJustOpened(false)}
         hidden={!isOpen}
       >
         {children}

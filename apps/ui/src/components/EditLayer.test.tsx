@@ -303,7 +303,12 @@ function EditLayerHarness({
       ({
         tool,
         pendingEdits,
-        removeEdit: (id) =>
+        // Shared selection lives on EditingState since the continuous-scroll
+        // viewer mounts one EditLayer per page; the layer destructures these
+        // at runtime, so the partial mock must provide them.
+        selectedEditId: null,
+        setSelectedEditId: () => undefined,
+        removeEdit: (id: string) =>
           setPendingEdits((current) => current.filter((edit) => edit.id !== id)),
         shapeStyles: {
           shapeRect: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT, fillColor: null },
@@ -312,7 +317,7 @@ function EditLayerHarness({
           shapeArrow: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
         },
         calloutStyle: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
-      }) as EditingState,
+      }) as unknown as EditingState,
     [pendingEdits, tool],
   );
 

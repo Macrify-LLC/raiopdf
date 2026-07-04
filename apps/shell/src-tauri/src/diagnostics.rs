@@ -2,6 +2,8 @@ use crate::sidecar::SidecarManager;
 use engine_sidecar_core::{ENGINE_LOG_FILE_NAME, ENGINE_LOG_GENERATIONS};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     backtrace::Backtrace,
     fs::{self, OpenOptions},
@@ -22,6 +24,8 @@ const CRASH_REPORT_OPTOUT_FILE_NAME: &str = "crash-report.optout";
 const CRASH_REPORT_LOG_TAIL_BYTES: u64 = 3500;
 const CRASH_REPORT_BODY_MAX_CHARS: usize = 4500;
 const CRASH_REPORT_BACKTRACE_MAX_CHARS: usize = 1800;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct AppDiagnostics {
     app_data_dir: PathBuf,
@@ -722,14 +726,24 @@ fn os_version() -> String {
 
 #[cfg(target_os = "windows")]
 fn os_version() -> String {
-    std::process::Command::new("cmd")
-        .args(["/C", "ver"])
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/C", "ver"]);
+    apply_platform_spawn_flags(&mut command);
+
+    command
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|version| version.trim().to_string())
         .filter(|version| !version.is_empty())
         .unwrap_or_else(|| "version unavailable".to_string())
+}
+
+// Windows-only on purpose: the sole caller is the Windows os_version(), so a
+// non-Windows stub would be dead code and fail the deny-warnings lint.
+#[cfg(windows)]
+fn apply_platform_spawn_flags(command: &mut std::process::Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

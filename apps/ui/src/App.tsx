@@ -19,6 +19,7 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
@@ -48,6 +49,7 @@ import {
 } from "./components/OrganizeWorkspace";
 import {
   PrepareForFilingWorkspace,
+  FilingOverflowMenu,
   type CertificateOfServiceDraft,
   type FilingImpactState,
   type FilingPacketBuildInput,
@@ -56,6 +58,7 @@ import {
   type FilingOutputPart,
   type FilingProgressState,
   type FilingResultState,
+  type PrepareForFilingWorkspaceHandle,
   type PrepareOptions,
 } from "./components/PrepareForFilingWorkspace";
 import {
@@ -73,12 +76,14 @@ import {
   CrashReportDialog,
   type CrashReportPayload,
 } from "./components/CrashReportDialog";
+import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
 import { DocumentBanner } from "./components/DocumentBanner";
 import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
-import { LoadingSun } from "./components/LoadingSun";
+import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
+import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import {
   isEngineBridgeUnavailableError,
@@ -88,10 +93,11 @@ import { useDocument, type DocumentState, type SignatureUnlockPrompt } from "./h
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
-import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
+import { isTextEntryTarget } from "./lib/domGuards";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
+  PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
 import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
@@ -102,6 +108,7 @@ import {
 import { writeProductionLastUsed } from "./lib/productionHints";
 import { resolveProtectedPdfBytes } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
+import { recordDiagnosticEvent } from "./lib/diagnostics";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -124,6 +131,7 @@ import {
 import {
   hasSearchableTextLayerCoverage,
   inspectTextLayer,
+  textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
@@ -147,8 +155,11 @@ import {
 } from "@raiopdf/engine-pdf-lib";
 import {
   BatesPanel,
+  DesktopCapabilityMessage,
+  formatBytes,
   PasswordsPanel,
   ScrubMetadataPanel,
+  SidecarStatusLine,
   type EditDialogToolId,
   type LegalToolId,
   type OrganizeToolId,
@@ -158,6 +169,7 @@ import type {
   RedactionPanelState,
   ScannerPanelState,
   ScrubMetadataPanelState,
+  SidecarStatus,
 } from "./components/ToolPanel";
 import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
@@ -178,6 +190,7 @@ declare global {
 
 export type OcrPhase =
   | "idle"
+  | "confirm"
   | "starting-engine"
   | "processing"
   | "verifying"
@@ -189,9 +202,29 @@ export interface OcrUiState {
   message: string | null;
 }
 
+function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
+  return (
+    phase === "confirm" ||
+    phase === "starting-engine" ||
+    phase === "processing" ||
+    phase === "verifying"
+  );
+}
+
 type OcrType = "skip-text" | "force-ocr";
 
 type ForceOcrConfirmationReason = "garbled" | "manual";
+
+/** B3 (2026-07-03 live-test fix plan): state for the password-prompt dialog
+ * shown when opening a password-protected PDF. `bytes` is the still-
+ * encrypted source; `error` is the inline "wrong password" retry message. */
+interface PasswordPromptState {
+  bytes: Uint8Array;
+  fileName: string;
+  filePath: string | null;
+  phase: PasswordDialogPhase;
+  error: string | null;
+}
 
 interface PendingRedaction {
   id: string;
@@ -238,10 +271,12 @@ export function App() {
   );
   const {
     document,
+    pageScrollIntent,
     openFile: openDocumentFile,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
+    syncVisiblePage,
     setZoom,
     setFitZoom,
     setHasTextLayer,
@@ -291,6 +326,9 @@ export function App() {
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
+  const [pageDeleteConfirmation, setPageDeleteConfirmation] = useState<
+    readonly number[] | null
+  >(null);
   const [ocrState, setOcrState] = useState<OcrUiState>({
     phase: "idle",
     message: null,
@@ -300,6 +338,11 @@ export function App() {
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
     null,
   );
+  // Item 8: the "..." overflow menu moved out of PrepareForFilingWorkspace
+  // and into the outer FloatingDialog's header (see getFloatingDialog
+  // below), but its one action (insert a Certificate of Service page) is
+  // still state that lives inside the workspace. This ref is the bridge.
+  const filingWorkspaceRef = useRef<PrepareForFilingWorkspaceHandle>(null);
   const [activeEditDialogTool, setActiveEditDialogTool] = useState<EditDialogToolId | null>(
     null,
   );
@@ -394,6 +437,8 @@ export function App() {
     afterBytes: null,
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
+  const [passwordPrompt, setPasswordPrompt] = useState<PasswordPromptState | null>(null);
+  const passwordUnlockRunRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpArticleId, setHelpArticleId] = useState<string | undefined>(undefined);
@@ -742,6 +787,7 @@ export function App() {
   }, [filingPack.id, filingPack.maxEnvelopeBytes, filingPack.maxFileBytes]);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
+  const pendingOcrTypeRef = useRef<OcrType>("skip-text");
   const savingRef = useRef(false);
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
@@ -841,15 +887,39 @@ export function App() {
         setPdfDocumentState({ bytes: sourceBytes, proxy: loaded });
       })
       .catch((error: unknown) => {
-        if (!disposed) {
-          setError(getPdfLoadErrorMessage(error));
+        if (disposed) {
+          return;
         }
+
+        if (error instanceof PasswordException) {
+          // Defense in depth: today `engine.open()` (pdf-lib) already
+          // rejects any encrypted PDF before this preview even runs, so
+          // this branch isn't reachable through the normal open path (see
+          // openOpenedFile's "password-required" branch above). Kept in
+          // case a future engine change lets a document open on the engine
+          // side while pdf.js still needs a password to render it --
+          // route that into the same unlock dialog instead of a dead-end
+          // preview error.
+          setPasswordPrompt({
+            bytes: sourceBytes,
+            fileName: document.fileName ?? "Document.pdf",
+            filePath: document.filePath,
+            phase: "prompt",
+            error: null,
+          });
+          return;
+        }
+
+        setError(getPdfLoadErrorMessage(error));
       });
 
     return () => {
       disposed = true;
       void loadedDocument?.loadingTask.destroy();
     };
+    // fileName/filePath intentionally excluded: this effect should only
+    // reload the preview when the bytes themselves change, not on a rename
+    // (e.g. a Save that only updates the display name).
   }, [document.bytes, setError]);
 
   useEffect(() => {
@@ -1052,7 +1122,15 @@ export function App() {
     const isCurrentRun = () => (
       ocrRunRef.current === runId && getOpenToken() === sourceOpenToken
     );
-    const finishCurrentRun = () => {
+    // Busy-guard fix: this clears unconditionally once the run settles (see
+    // the .finally() below), even if the run went stale along the way.
+    // isCurrentRun() still gates every state write above -- it just no
+    // longer also gates whether the guard gets released. The old code only
+    // released it from inside the isCurrentRun()-gated branches, so a run
+    // that went stale without a newer run superseding it (e.g. the document
+    // changed but no new OCR was kicked off) left ocrActiveRef stuck at
+    // true forever, wedging "Make Searchable" shut.
+    const clearBusyGuard = () => {
       if (ocrRunRef.current === runId) {
         ocrActiveRef.current = false;
       }
@@ -1101,7 +1179,6 @@ export function App() {
         }
 
         if (workflowResult.verification.status === "failed") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: workflowResult.verification.message,
@@ -1113,7 +1190,11 @@ export function App() {
           dirty: true,
           hasTextLayer: true,
           textLayerCoverage: workflowResult.textLayerCoverage,
-          knownPageCount: workflowResult.pageCount,
+          // Codex P2 on #107: derive the committed page count from the
+          // coverage (counted from the OCR OUTPUT bytes), not the echoed
+          // input count, so the navigator can never desync from the
+          // committed document.
+          knownPageCount: textLayerCoveragePageCount(workflowResult.textLayerCoverage),
           expectedOpenToken: sourceOpenToken,
           expectedSourceBytes: sourceBytes,
         });
@@ -1123,7 +1204,6 @@ export function App() {
         }
 
         if (replaced === "stale") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: "The document changed before OCR finished. The result was not applied.",
@@ -1132,7 +1212,6 @@ export function App() {
         }
 
         if (replaced === "failed") {
-          finishCurrentRun();
           setOcrState({
             phase: "error",
             message: "The searchable PDF could not be opened. The document was left unchanged.",
@@ -1141,7 +1220,6 @@ export function App() {
         }
 
         setSelectedPageIndexes(new Set([0]));
-        finishCurrentRun();
         setOcrState({
           phase: "done",
           message: workflowResult.verification.message,
@@ -1153,7 +1231,9 @@ export function App() {
         }
 
         if (isEngineBridgeUnavailableError(error)) {
-          finishCurrentRun();
+          // A missing desktop engine / OCR toolchain is a capability gap,
+          // not a bug -- surface its own specific, calm message and skip
+          // the diagnostics log (there's nothing actionable to investigate).
           setOcrState({
             phase: "error",
             message: error.message,
@@ -1161,19 +1241,52 @@ export function App() {
           return;
         }
 
-        const message = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
+        const detail = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
 
-        finishCurrentRun();
         setOcrState({
           phase: "error",
-          message,
+          message: "Couldn't make this document searchable.",
         });
-      });
+
+        void recordDiagnosticEvent("ocr.failed", detail, [
+          error instanceof Error && error.stack ? error.stack : null,
+        ]);
+      })
+      .finally(clearBusyGuard);
   }, [document.bytes, document.pageCount, engineBridge, getOpenToken, replaceBytes]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
   }, []);
+
+  const openOcrDialog = useCallback((ocrType: OcrType) => {
+    if (!document.bytes) {
+      setOcrState({
+        phase: "error",
+        message: "Open a PDF before running OCR.",
+      });
+      return;
+    }
+
+    if (!engineBridge.ocrAvailable) {
+      setOcrState({
+        phase: "error",
+        message: engineBridge.available
+          ? "OCR toolchain missing from this installation."
+          : "This action is available in the desktop app.",
+      });
+      return;
+    }
+
+    pendingOcrTypeRef.current = ocrType;
+    // Silent pre-warm while the confirm dialog is up, so the engine may
+    // already be ready by the time the user clicks "Make searchable." A
+    // pre-warm failure is swallowed here (engineBridge.warmEngine never
+    // rejects) -- the real run surfaces its own error if the engine still
+    // won't start.
+    engineBridge.warmEngine();
+    setOcrState({ phase: "confirm", message: null });
+  }, [document.bytes, engineBridge]);
 
   const makeSearchable = useCallback(() => {
     const status = deriveTextLayerStatus(document.textLayerCoverage);
@@ -1183,8 +1296,23 @@ export function App() {
       return;
     }
 
-    runOcrWorkflow("skip-text");
-  }, [document.textLayerCoverage, requestForceOcr, runOcrWorkflow]);
+    openOcrDialog("skip-text");
+  }, [document.textLayerCoverage, openOcrDialog, requestForceOcr]);
+
+  const confirmOcrDialog = useCallback(() => {
+    runOcrWorkflow(pendingOcrTypeRef.current);
+  }, [runOcrWorkflow]);
+
+  const cancelOcrDialog = useCallback(() => {
+    // Dismissing mid-run (rather than at the confirm step) can't cancel the
+    // in-flight engine call -- there's no abort plumbing for that -- so this
+    // just invalidates the run the same way opening a new document does:
+    // isCurrentRun() stops applying its result once it eventually settles,
+    // and the busy guard is released immediately rather than waiting on it.
+    ocrRunRef.current += 1;
+    ocrActiveRef.current = false;
+    setOcrState({ phase: "idle", message: null });
+  }, []);
 
   const confirmForceOcr = useCallback(() => {
     setForceOcrConfirmation(null);
@@ -1198,10 +1326,29 @@ export function App() {
       setOcrState({ phase: "idle", message: null });
       resetLegalState();
       setSelectedPageIndexes(new Set());
-      void openDocumentFile(file).then((opened) => {
-        if (opened) {
+      setPasswordPrompt(null);
+      void openDocumentFile(file).then((result) => {
+        if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
+        } else if (result.status === "password-required") {
+          // A password-protected PDF is not a corrupt/unsupported one --
+          // prompt to unlock it instead of routing to the Repair tool,
+          // which is a dead end for encryption (issue #2, 2026-07-03
+          // live-test fix plan).
+          setRepairCandidate(null);
+          setPasswordPrompt({
+            bytes: result.bytes,
+            fileName: result.fileName,
+            filePath: result.filePath,
+            phase: "prompt",
+            error: null,
+          });
+        } else if (result.status === "cancelled") {
+          // The user declined the signature-invalidation confirmation.
+          // That's a choice, not a broken file -- no Repair routing, no
+          // error UI; whatever was on screen stays as-is.
+          setRepairCandidate(null);
         } else {
           setRepairCandidate(file);
           setActiveEditDialogTool(null);
@@ -1211,6 +1358,122 @@ export function App() {
       });
     },
     [openDocumentFile, resetLegalState],
+  );
+
+  const cancelPasswordPrompt = useCallback(() => {
+    // Invalidate any in-flight unlock so a wrong/right-password result that
+    // resolves after Cancel was clicked doesn't reopen a document (or flash
+    // a retry state) the user already dismissed.
+    passwordUnlockRunRef.current += 1;
+
+    // This dialog can also be triggered by pdf.js failing to preview an
+    // already-open document (see the PasswordException branch in the
+    // preview-loading effect below) rather than the initial open failing
+    // outright. In that case the document is still technically "open" but
+    // unrenderable -- restore the informative message instead of leaving a
+    // silent, unexplained blank canvas behind the closed dialog.
+    if (passwordPrompt && document.bytes === passwordPrompt.bytes) {
+      setError(
+        "This PDF is encrypted. Preview is available after removing encryption with the open password.",
+      );
+    }
+
+    setPasswordPrompt(null);
+  }, [document.bytes, passwordPrompt, setError]);
+
+  const submitPassword = useCallback(
+    (password: string) => {
+      if (!passwordPrompt || passwordPrompt.phase !== "prompt") {
+        return;
+      }
+
+      const prompt = passwordPrompt;
+      const runId = passwordUnlockRunRef.current + 1;
+      passwordUnlockRunRef.current = runId;
+      const isCurrentUnlock = () => passwordUnlockRunRef.current === runId;
+
+      setPasswordPrompt({ ...prompt, phase: "starting-engine", error: null });
+
+      void engineBridge
+        .removeEncryption(prompt.bytes, password, {
+          onEngineReady: () => {
+            if (isCurrentUnlock()) {
+              setPasswordPrompt((current) => (current ? { ...current, phase: "unlocking" } : current));
+            }
+          },
+        })
+        .then(async (decryptedBytes) => {
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          // Fresh open, marked dirty: the decrypted bytes never had an
+          // on-disk representation of their own (the original file on disk
+          // is still the encrypted one), so Save As is the natural next
+          // step. Keep the original display name -- "Repaired X.pdf"-style
+          // renaming doesn't apply here, this is the same document.
+          const result = await openDocumentFile(
+            { bytes: decryptedBytes, name: prompt.fileName, path: null },
+            { markDirty: true },
+          );
+
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          if (result.status === "opened") {
+            setPasswordPrompt(null);
+            setRepairCandidate(null);
+            setSelectedPageIndexes(new Set([0]));
+            return;
+          }
+
+          // The server accepted the password and handed back decrypted
+          // bytes, but RaioPDF still couldn't finish opening them -- an
+          // unusual or partially-supported encryption scheme, most likely.
+          // That's not a wrong-password situation, so close the dialog
+          // rather than inviting another password attempt that can't help.
+          setPasswordPrompt(null);
+          setError(
+            "The password was accepted, but RaioPDF could not finish opening this PDF. It may use an unusual encryption scheme.",
+          );
+          void recordDiagnosticEvent(
+            "password.unlock-reopen-failed",
+            "Decrypted PDF bytes failed to reopen",
+            [result.status === "failed" ? result.error : null],
+          );
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentUnlock()) {
+            return;
+          }
+
+          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+            setPasswordPrompt((current) => (
+              current
+                ? { ...current, phase: "prompt", error: "That password wasn't accepted. Try again." }
+                : current
+            ));
+            return;
+          }
+
+          setPasswordPrompt(null);
+          setError(
+            isEngineBridgeUnavailableError(error)
+              ? error.message
+              : "This PDF could not be unlocked. Try again in a moment.",
+          );
+          void recordDiagnosticEvent(
+            "password.unlock-failed",
+            "Removing PDF encryption failed",
+            [
+              error instanceof Error ? error.message : String(error),
+              error instanceof Error && error.stack ? error.stack : null,
+            ],
+          );
+        });
+    },
+    [engineBridge, openDocumentFile, passwordPrompt, setError],
   );
 
   const openFile = useCallback(() => {
@@ -1331,6 +1594,57 @@ export function App() {
     void rotatePages(selectedIndexes());
   }, [rotatePages, selectedIndexes]);
 
+  /** Backs the sidebar's inline Rotate expansion (item 18) -- unlike
+   * `rotateSelected` above, this collapses the expansion once a rotation
+   * actually happens, but leaves it open if there was nothing selected to
+   * rotate (the scope note stays visible so the user can go select pages). */
+  const rotateSelectedByDegrees = useCallback(
+    (degrees: number) => {
+      void rotatePages(selectedIndexes(), degrees).then((rotated) => {
+        if (rotated) {
+          setActiveOrganizeTool((current) => (current === "rotate" ? null : current));
+        }
+      });
+    },
+    [rotatePages, selectedIndexes],
+  );
+
+  const rotateSelectedRight = useCallback(() => {
+    rotateSelectedByDegrees(90);
+  }, [rotateSelectedByDegrees]);
+
+  const rotateSelectedLeft = useCallback(() => {
+    rotateSelectedByDegrees(-90);
+  }, [rotateSelectedByDegrees]);
+
+  /** Context-menu rotate: acts on exactly the right-clicked page, independent
+   * of whatever the current multi-selection happens to be. */
+  const rotatePage = useCallback(
+    (pageIndex: number, degrees: number) => {
+      void rotatePages([pageIndex], degrees);
+    },
+    [rotatePages],
+  );
+
+  const runDeletePages = useCallback(
+    (indexes: readonly number[]) => {
+      const nextSelectedPageIndex = Math.max(
+        0,
+        Math.min(indexes[0] ?? 0, document.pageCount - indexes.length - 1),
+      );
+
+      void deletePages(indexes).then((deleted) => {
+        if (deleted) {
+          setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+        }
+      });
+    },
+    [deletePages, document.pageCount],
+  );
+
+  // Page deletion is destructive, so both entry points below only *request*
+  // it -- the actual delete happens from confirmDeletePagesRequest, once the
+  // DeletePagesConfirmationDialog is accepted.
   const deleteSelected = useCallback(() => {
     const indexes = selectedIndexes();
 
@@ -1343,25 +1657,34 @@ export function App() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Delete ${indexes.length} selected ${indexes.length === 1 ? "page" : "pages"}?`,
-    );
+    setPageDeleteConfirmation(indexes);
+  }, [document.pageCount, selectedIndexes, setError]);
 
-    if (!confirmed) {
-      return;
-    }
-
-    const nextSelectedPageIndex = Math.max(
-      0,
-      Math.min(indexes[0] ?? 0, document.pageCount - indexes.length - 1),
-    );
-
-    void deletePages(indexes).then((deleted) => {
-      if (deleted) {
-        setSelectedPageIndexes(new Set([nextSelectedPageIndex]));
+  /** Context-menu delete: targets exactly the right-clicked page. */
+  const requestDeletePage = useCallback(
+    (pageIndex: number) => {
+      if (document.pageCount <= 1) {
+        setError("A document must keep at least one page.");
+        return;
       }
-    });
-  }, [deletePages, document.pageCount, selectedIndexes, setError]);
+
+      setPageDeleteConfirmation([pageIndex]);
+    },
+    [document.pageCount, setError],
+  );
+
+  const cancelDeletePagesRequest = useCallback(() => {
+    setPageDeleteConfirmation(null);
+  }, []);
+
+  const confirmDeletePagesRequest = useCallback(() => {
+    const indexes = pageDeleteConfirmation;
+    setPageDeleteConfirmation(null);
+
+    if (indexes && indexes.length > 0) {
+      runDeletePages(indexes);
+    }
+  }, [pageDeleteConfirmation, runDeletePages]);
 
   const moveSelected = useCallback(
     (direction: -1 | 1) => {
@@ -1536,20 +1859,26 @@ export function App() {
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
-    if (toolId === "rotate") {
-      rotateSelected();
-      setActiveOrganizeTool(null);
+    // Rotate and Compress (item 18) expand inline under their own ToolRow
+    // instead of opening a FloatingDialog, so re-clicking the already-open
+    // row collapses it -- there's no dialog "X" to close it otherwise.
+    if (toolId === "rotate" || toolId === "compress") {
+      setActiveOrganizeTool((current) => (current === toolId ? null : toolId));
       setActiveLegalTool(null);
+      setActiveEditDialogTool(null);
       return;
     }
 
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
     setActiveEditDialogTool(null);
-  }, [rotateSelected]);
+  }, []);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
-    setActiveEditDialogTool(toolId);
+    // Both current entries (Page Numbers, Watermark) are inline expansions
+    // (item 18) -- toggle off on reselect, same reasoning as Rotate/Compress
+    // above.
+    setActiveEditDialogTool((current) => (current === toolId ? null : toolId));
     setActiveLegalTool(null);
     setActiveOrganizeTool(null);
     editing.setTool("select");
@@ -2113,11 +2442,12 @@ export function App() {
 
       try {
         const repairedBytes = await engineBridge.repair(source.bytes);
-        const opened = await openDocumentFile({
+        const openResult = await openDocumentFile({
           bytes: repairedBytes,
           name: `Repaired ${source.name}`,
           path: null,
         });
+        const opened = openResult.status === "opened";
 
         setSidecarStatus({
           running: false,
@@ -2781,6 +3111,13 @@ export function App() {
     setSettingsFocusSection("about-macrify");
     setSettingsOpen(true);
   }, []);
+  // Shared by the File menu's "Open Raio to AI..." item and the tool
+  // sidebar's top-level "Connect to AI Agent" entry -- both open the exact
+  // same settings surface, not two copies of the same wiring.
+  const openConnectToAi = useCallback(() => {
+    setSettingsFocusSection("open-raio-to-ai");
+    setSettingsOpen(true);
+  }, []);
   const openHelp = useCallback((articleId?: string) => {
     setHelpArticleId(articleId);
     setHelpOpen(true);
@@ -2835,8 +3172,7 @@ export function App() {
           setSettingsOpen(true);
           break;
         case "file:open-raio-to-ai":
-          setSettingsFocusSection("open-raio-to-ai");
-          setSettingsOpen(true);
+          openConnectToAi();
           break;
         case "help:open":
           openHelp();
@@ -2867,6 +3203,7 @@ export function App() {
       handleExportDiagnostics,
       openHelp,
       openAboutMacrify,
+      openConnectToAi,
       openFile,
       printDocument,
       save,
@@ -2959,6 +3296,8 @@ export function App() {
       onPageSelected={handleThumbnailClick}
       onRotateSelected={rotateSelected}
       onDeleteSelected={deleteSelected}
+      onRotatePage={rotatePage}
+      onDeletePageRequested={requestDeletePage}
       onMoveSelectedUp={() => moveSelected(-1)}
       onMoveSelectedDown={() => moveSelected(1)}
       onReorderPages={reorderPagesFromGrid}
@@ -2983,8 +3322,14 @@ export function App() {
           width="lg"
           onClose={closeWorkspace}
           onHelp={() => openHelp("prepare-for-filing")}
+          actions={(
+            <FilingOverflowMenu
+              onInsertCertificate={() => filingWorkspaceRef.current?.openCertificateOfService()}
+            />
+          )}
         >
           <PrepareForFilingWorkspace
+            ref={filingWorkspaceRef}
             document={document}
             pack={filingPack}
             availablePacks={AVAILABLE_FILING_PACKS}
@@ -3012,7 +3357,6 @@ export function App() {
             onPacketPreferencesChange={handlePacketPreferencesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
-            onHelpRequested={() => openHelp("prepare-for-filing")}
           />
         </FloatingDialog>
       );
@@ -3114,45 +3458,6 @@ export function App() {
       );
     }
 
-    if (activeEditDialogTool === "page-numbers") {
-      return (
-        <FloatingDialog title="Page Numbers" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("page-numbers")}>
-          <PageNumbersPanel
-            hasDocument={Boolean(document.bytes)}
-            pageCount={document.pageCount}
-            status={sidecarStatus}
-            onApply={applyPageNumbers}
-          />
-        </FloatingDialog>
-      );
-    }
-
-    if (activeEditDialogTool === "watermark") {
-      return (
-        <FloatingDialog title="Watermark" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("watermark")}>
-          <WatermarkPanel
-            hasDocument={Boolean(document.bytes)}
-            pageCount={document.pageCount}
-            status={sidecarStatus}
-            onApply={applyWatermark}
-          />
-        </FloatingDialog>
-      );
-    }
-
-    if (activeOrganizeTool === "compress") {
-      return (
-        <FloatingDialog title="Compress" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("compress")}>
-          <CompressPanel
-            hasDocument={Boolean(document.bytes)}
-            available={engineBridge.available}
-            status={sidecarStatus}
-            onCompress={compressDocument}
-          />
-        </FloatingDialog>
-      );
-    }
-
     if (activeOrganizeTool === "repair") {
       return (
         <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("repair")}>
@@ -3227,6 +3532,8 @@ export function App() {
         document={document}
         pdfDocument={pdfDocument}
         documentSearch={documentSearch}
+        pageScrollIntent={pageScrollIntent}
+        onVisiblePageChange={syncVisiblePage}
         selectedPageIndexes={selectedPageIndexes}
         onOpenRequested={openFile}
         onFileDropped={openDroppedFile}
@@ -3241,6 +3548,8 @@ export function App() {
         onRenderError={setError}
         onThumbnailClick={handleThumbnailClick}
         onRotateSelected={rotateSelected}
+        onRotateLeft={rotateSelectedLeft}
+        onRotateRight={rotateSelectedRight}
         onDeleteSelected={deleteSelected}
         onMoveSelectedUp={() => moveSelected(-1)}
         onMoveSelectedDown={() => moveSelected(1)}
@@ -3258,6 +3567,12 @@ export function App() {
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
         onForceOcr={() => requestForceOcr("manual")}
+        pageCount={document.pageCount}
+        sidecarStatus={sidecarStatus}
+        onApplyPageNumbers={applyPageNumbers}
+        onApplyWatermark={applyWatermark}
+        compressAvailable={engineBridge.available}
+        onCompress={compressDocument}
         redaction={redactionPanel}
         scanner={scannerState}
         pendingRedactions={pendingRedactions}
@@ -3271,12 +3586,38 @@ export function App() {
         onMarkScannerHit={markScannerHit}
         onOpenAbout={openAboutMacrify}
         onHelpRequested={openHelp}
+        onConnectToAi={openConnectToAi}
+        onMenuCommand={handleNativeMenuCommand}
       />
       {forceOcrConfirmation ? (
         <ForceOcrConfirmationDialog
           reason={forceOcrConfirmation}
           onConfirm={confirmForceOcr}
           onCancel={() => setForceOcrConfirmation(null)}
+        />
+      ) : null}
+      {isOcrDialogPhase(ocrState.phase) ? (
+        <OcrDialog
+          phase={ocrState.phase}
+          pageCount={document.pageCount}
+          onConfirm={confirmOcrDialog}
+          onCancel={cancelOcrDialog}
+        />
+      ) : null}
+      {pageDeleteConfirmation ? (
+        <DeletePagesConfirmationDialog
+          pageCount={pageDeleteConfirmation.length}
+          onConfirm={confirmDeletePagesRequest}
+          onCancel={cancelDeletePagesRequest}
+        />
+      ) : null}
+      {passwordPrompt ? (
+        <PasswordDialog
+          fileName={passwordPrompt.fileName}
+          phase={passwordPrompt.phase}
+          error={passwordPrompt.error}
+          onSubmit={submitPassword}
+          onCancel={cancelPasswordPrompt}
         />
       ) : null}
       {helpOpen ? (
@@ -3389,204 +3730,6 @@ function batchCleanupCompletionMessage(files: readonly {
   }
 
   return `Batch cleanup finished for ${files.length} file(s). ${invalidatedCount} had digital signatures invalidated.`;
-}
-
-type SidecarStatus = {
-  running: boolean;
-  message: string | null;
-  removed: readonly PdfSanitizeRemovedItem[];
-  beforeBytes: number | null;
-  afterBytes: number | null;
-};
-
-function PageNumbersPanel({
-  hasDocument,
-  pageCount,
-  status,
-  onApply,
-}: {
-  hasDocument: boolean;
-  pageCount: number;
-  status: SidecarStatus;
-  onApply: (options: PdfPageNumbersOptions) => Promise<boolean>;
-}) {
-  const [range, setRange] = useState(formatDefaultRange(pageCount));
-  const [format, setFormat] = useState<PdfPageNumbersOptions["format"]>("number");
-  const [startAt, setStartAt] = useState(1);
-  const [fontSizePt, setFontSizePt] = useState(11);
-  const [placement, setPlacement] = useState<PdfPageNumbersOptions["placement"]>({
-    edge: "footer",
-    align: "center",
-  });
-  const [touched, setTouched] = useState(false);
-  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTouched(true);
-
-    if (parsed.error) {
-      return;
-    }
-
-    await onApply({
-      startAt,
-      pageIndexes: parsed.pageIndexes,
-      format,
-      placement,
-      fontSizePt,
-    });
-  }
-
-  return (
-    <form className="tool-panel__inline-card" onSubmit={submit}>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-range">Pages</label>
-        <input id="page-number-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
-        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
-      </div>
-      <div className="tool-panel__field-grid">
-        <div className="tool-panel__field">
-          <label htmlFor="page-number-start">Start at</label>
-          <input id="page-number-start" type="number" min="0" value={startAt} onChange={(event) => setStartAt(Number(event.target.value))} />
-        </div>
-        <div className="tool-panel__field">
-          <label htmlFor="page-number-size">Font size</label>
-          <input id="page-number-size" type="number" min="1" value={fontSizePt} onChange={(event) => setFontSizePt(Number(event.target.value))} />
-        </div>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-format">Format</label>
-        <select id="page-number-format" value={format} onChange={(event) => setFormat(event.target.value as PdfPageNumbersOptions["format"])}>
-          <option value="number">1, 2, 3</option>
-          <option value="page-of-total">Page N of M</option>
-        </select>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-position">Position</label>
-        <select id="page-number-position" value={`${placement.edge}-${placement.align}`} onChange={(event) => setPlacement(parsePlacementValue(event.target.value))}>
-          <option value="footer-left">Footer left</option>
-          <option value="footer-center">Footer center</option>
-          <option value="footer-right">Footer right</option>
-          <option value="header-left">Header left</option>
-          <option value="header-center">Header center</option>
-          <option value="header-right">Header right</option>
-        </select>
-      </div>
-      <SidecarStatusLine status={status} label="Applying page numbers" />
-      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
-        Apply Page Numbers
-      </button>
-    </form>
-  );
-}
-
-function WatermarkPanel({
-  hasDocument,
-  pageCount,
-  status,
-  onApply,
-}: {
-  hasDocument: boolean;
-  pageCount: number;
-  status: SidecarStatus;
-  onApply: (options: PdfWatermarkOptions) => Promise<boolean>;
-}) {
-  const [text, setText] = useState("DRAFT");
-  const [range, setRange] = useState(formatDefaultRange(pageCount));
-  const [orientation, setOrientation] = useState<PdfWatermarkOptions["orientation"]>("diagonal");
-  const [opacity, setOpacity] = useState(0.18);
-  const [touched, setTouched] = useState(false);
-  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTouched(true);
-
-    if (parsed.error || !text.trim()) {
-      return;
-    }
-
-    await onApply({
-      text: text.trim(),
-      pageIndexes: parsed.pageIndexes,
-      orientation,
-      opacity,
-    });
-  }
-
-  return (
-    <form className="tool-panel__inline-card" onSubmit={submit}>
-      <div className="tool-panel__button-row">
-        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("DRAFT")}>DRAFT</button>
-        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("CONFIDENTIAL")}>CONFIDENTIAL</button>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="watermark-text">Text</label>
-        <input id="watermark-text" value={text} onChange={(event) => setText(event.target.value)} />
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="watermark-range">Pages</label>
-        <input id="watermark-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
-        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
-      </div>
-      <div className="tool-panel__field-grid">
-        <div className="tool-panel__field">
-          <label htmlFor="watermark-orientation">Direction</label>
-          <select id="watermark-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as PdfWatermarkOptions["orientation"])}>
-            <option value="diagonal">Diagonal</option>
-            <option value="horizontal">Horizontal</option>
-          </select>
-        </div>
-        <div className="tool-panel__field">
-          <label htmlFor="watermark-opacity">Opacity</label>
-          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.05" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
-        </div>
-      </div>
-      <SidecarStatusLine status={status} label="Applying watermark" />
-      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
-        Apply Watermark
-      </button>
-    </form>
-  );
-}
-
-function CompressPanel({
-  hasDocument,
-  available,
-  status,
-  onCompress,
-}: {
-  hasDocument: boolean;
-  available: boolean;
-  status: SidecarStatus;
-  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
-}) {
-  const [quality, setQuality] = useState(5);
-  const [grayscale, setGrayscale] = useState(false);
-
-  return (
-    <div className="tool-panel__inline-card">
-      {!available ? <DesktopCapabilityMessage /> : null}
-      <div className="tool-panel__field">
-        <label htmlFor="compress-quality">Quality</label>
-        <input id="compress-quality" type="number" min="1" max="9" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
-      </div>
-      <label className="tool-panel__check-row">
-        <input type="checkbox" checked={grayscale} onChange={(event) => setGrayscale(event.target.checked)} />
-        Grayscale
-      </label>
-      {status.beforeBytes !== null && status.afterBytes !== null ? (
-        <p className="tool-panel__status-line">
-          {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
-        </p>
-      ) : null}
-      <SidecarStatusLine status={status} label="Compressing PDF" />
-      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onCompress({ quality, grayscale })}>
-        Compress PDF
-      </button>
-    </div>
-  );
 }
 
 function SanitizePanel({
@@ -3712,33 +3855,6 @@ function DocumentPropertiesPanel({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function DesktopCapabilityMessage() {
-  return (
-    <p className="tool-panel__status-line">
-      This action is available in the desktop app.
-    </p>
-  );
-}
-
-function SidecarStatusLine({
-  status,
-  label,
-}: {
-  status: SidecarStatus;
-  label: string;
-}) {
-  if (!status.message) {
-    return null;
-  }
-
-  return (
-    <p className="tool-panel__status-line tool-panel__status-line--inline">
-      {status.running ? <LoadingSun size={13} label={label} /> : null}
-      {status.message}
-    </p>
   );
 }
 
@@ -4197,15 +4313,6 @@ function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
 }
 
-function parsePlacementValue(value: string): PdfPageNumbersOptions["placement"] {
-  const [edge, align] = value.split("-");
-
-  return {
-    edge: edge === "header" ? "header" : "footer",
-    align: align === "left" || align === "right" ? align : "center",
-  };
-}
-
 function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   if (item === "javascript") {
     return "JavaScript";
@@ -4216,22 +4323,6 @@ function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   }
 
   return "external links";
-}
-
-function isTextEntryTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  }
-
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 async function countPdfPages(bytes: Uint8Array): Promise<number> {

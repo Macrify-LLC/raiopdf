@@ -6,10 +6,21 @@
   place-items: start center;
   padding: 56px var(--space-5) var(--space-5);
   pointer-events: none;
+  animation: floating-dialog-scrim-in var(--duration-medium) ease-out;
 }
 
 .floating-dialog-layer[data-scrim="true"] {
   background: var(--modal-scrim);
+}
+
+@keyframes floating-dialog-scrim-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .floating-dialog {
@@ -24,6 +35,44 @@
   color: var(--body);
   pointer-events: auto;
   overflow: hidden;
+  /* Standalone `scale` (not the `transform` shorthand) so this entrance
+     never collides with the drag offset the component applies via
+     `style.transform` -- the two compose instead of one clobbering the
+     other. Modals stay centered (no transform-origin override): the
+     entrance grows from the box's own center, not from a trigger. */
+  animation: floating-dialog-in var(--duration-medium) var(--ease-out);
+}
+
+@keyframes floating-dialog-in {
+  from {
+    scale: 0.98;
+    opacity: 0;
+  }
+
+  to {
+    scale: 1;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-dialog-layer {
+    animation: none;
+  }
+
+  .floating-dialog {
+    animation: floating-dialog-fade-in var(--duration-fast) ease;
+  }
+}
+
+@keyframes floating-dialog-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .floating-dialog[data-width="sm"] {

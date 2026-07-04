@@ -50,6 +50,14 @@ export interface EditingState {
   updateEdit: (id: string, update: (edit: PendingEdit) => PendingEdit) => void;
   removeEdit: (id: string) => void;
   clearPending: () => void;
+  /**
+   * The one selected placed item (stamp/image/text box) across ALL pages.
+   * Shared here rather than per-EditLayer because the continuous-scroll
+   * viewer mounts one EditLayer per visible page — a per-layer selection
+   * would let Delete remove an item on every mounted page at once.
+   */
+  selectedEditId: string | null;
+  setSelectedEditId: (id: string | null) => void;
   /** Pick-to-place state for the Image tool. */
   armedImage: ArmedStamp | null;
   handleImageFile: (file: File) => void;
@@ -107,6 +115,7 @@ export function newEditId(): string {
 export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [tool, setToolState] = useState<EditToolId>("select");
   const [pendingEdits, setPendingEdits] = useState<readonly PendingEdit[]>([]);
+  const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
   const [armedImage, setArmedImage] = useState<ArmedStamp | null>(null);
   const [armedSignature, setArmedSignature] = useState<ArmedStamp | null>(null);
   const [signatureCardOpen, setSignatureCardOpen] = useState(false);
@@ -168,6 +177,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const setTool = useCallback((nextTool: EditToolId) => {
     setToolState(nextTool);
     setMessage(null);
+    setSelectedEditId(null);
     setSignatureCardOpen(nextTool === "sign");
   }, []);
 
@@ -186,11 +196,13 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
 
   const removeEdit = useCallback((id: string) => {
     setPendingEdits((current) => current.filter((edit) => edit.id !== id));
+    setSelectedEditId((current) => (current === id ? null : current));
   }, []);
 
   const clearPending = useCallback(() => {
     setPendingEdits([]);
     setFormValues({});
+    setSelectedEditId(null);
   }, []);
 
   const handleImageFile = useCallback((file: File) => {
@@ -335,6 +347,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setPendingEdits([]);
     setFormValues({});
     setMessage(null);
+    setSelectedEditId(null);
   }, []);
 
   return useMemo(
@@ -346,6 +359,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateEdit,
       removeEdit,
       clearPending,
+      selectedEditId,
+      setSelectedEditId,
       armedImage,
       handleImageFile,
       disarmImage,
@@ -387,6 +402,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateEdit,
       removeEdit,
       clearPending,
+      selectedEditId,
       armedImage,
       handleImageFile,
       disarmImage,

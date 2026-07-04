@@ -2,6 +2,7 @@ import {
   GlobalWorkerOptions,
   OPS,
   PasswordException,
+  TextLayer,
   getDocument,
   type PDFDocumentProxy,
   type PDFPageProxy,
@@ -11,7 +12,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export type { PDFDocumentProxy, PDFPageProxy };
-export { OPS };
+export { OPS, PasswordException, TextLayer };
 
 const pdfjsAssetBaseUrl = `${import.meta.env.BASE_URL}pdfjs/`;
 

@@ -99,8 +99,17 @@
   --shadow-primary-hover: 0 3px 8px rgba(27, 58, 92, 0.32);
   --shadow-primary-active: 0 1px 2px rgba(27, 58, 92, 0.22);
 
-  /* ---- Motion ---- */
+  /* ---- Motion ----
+     One systematic scale for the whole app: fast for micro-feedback
+     (hover washes, chevron flips, press states), medium for anything that
+     grows/shrinks or crossfades a whole panel (accordion + tool-expansion
+     grow-ins, dialog entrances, loader phase changes). `--ease-out` is a
+     stronger, more responsive curve than the built-in CSS `ease-out` --
+     entrances and reveals should reach for it; plain `ease`/`ease-out`
+     keywords remain fine for tiny hover/press transitions. */
   --duration-fast: 120ms;
+  --duration-medium: 180ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
   /* Emil-style expansion easing -- the command bar's active-tool widen/
      collapse (Change 3) and any future "reveal on select" motion. Distinct

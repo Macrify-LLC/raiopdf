@@ -31,14 +31,14 @@ export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogPr
     >
       <div className="ocr-dialog" data-phase={phase}>
         {isRunning ? (
-          <div className="ocr-dialog__progress">
+          <div className="ocr-dialog__progress" key={phase}>
             <LoadingSun size={30} label="Making the document searchable" />
             <p className="ocr-dialog__status-line" role="status" aria-live="polite">
               {RUNNING_STATUS_LABEL[phase]}
             </p>
           </div>
         ) : (
-          <>
+          <div className="ocr-dialog__form">
             <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
             {/*
               v1 ships all-pages only (DECIDED 2026-07-03). This is the seam
@@ -55,7 +55,7 @@ export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogPr
                 Make searchable
               </button>
             </div>
-          </>
+          </div>
         )}
       </div>
     </FloatingDialog>

@@ -41,6 +41,39 @@
   cursor: crosshair;
 }
 
+/* ---- Rotation feedback ----
+   Wraps the canvas + text layer only (never the render-pending veil, which
+   must stay perfectly still and legible while it's up). A rotate mutation
+   round-trips the whole document through the engine, so the honest thing to
+   animate is this container, not a literal 90/180/270deg spin of stale
+   pixels that are about to be replaced wholesale: it dips into a slightly
+   perturbed "still turning" look the instant a rotation is detected, then
+   eases back to rest the moment the freshly rotated canvas has painted --
+   the settle lands right as the veil lifts. */
+.page-view__content {
+  position: absolute;
+  inset: 0;
+  transition: transform var(--duration-medium) var(--ease-out),
+    opacity var(--duration-medium) var(--ease-out);
+}
+
+.page-view__content[data-rotate-settling="true"] {
+  transition: none;
+  transform: scale(0.97) rotate(-1.5deg);
+  opacity: 0.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-view__content {
+    transition: opacity var(--duration-fast) ease;
+  }
+
+  .page-view__content[data-rotate-settling="true"] {
+    transform: none;
+    opacity: 0.85;
+  }
+}
+
 .page-view__canvas {
   position: absolute;
   top: 0;

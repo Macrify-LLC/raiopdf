@@ -81,6 +81,16 @@ export function PageView({
   const [renderPending, setRenderPending] = useState(false);
   const [draftRect, setDraftRect] = useState<ViewportRect | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
+  // Rotation feedback: remembers the last rotation this PageView instance
+  // actually displayed. A rotate mutation swaps the whole pdfDocument (a new
+  // engine handle round-trips through the sidecar), so every already-mounted
+  // page re-fetches -- this ref is what tells THIS page apart from the
+  // others: "I was showing content, and my orientation just changed under
+  // me." A freshly-mounted instance (scrolled into view) has no prior
+  // rotation to compare against, so it never gets the settle treatment --
+  // only a real orientation change on an already-visible page does.
+  const previousRotationRef = useRef<number | null>(null);
+  const [rotationSettling, setRotationSettling] = useState(false);
   const viewport = useMemo(
     () => page?.getViewport({ scale: zoom }) ?? null,
     [page, zoom],
@@ -96,6 +106,13 @@ export function PageView({
       .getPage(pageIndex + 1)
       .then((loadedPage) => {
         if (!cancelled) {
+          const previousRotation = previousRotationRef.current;
+
+          if (previousRotation !== null && previousRotation !== loadedPage.rotate) {
+            setRotationSettling(true);
+          }
+
+          previousRotationRef.current = loadedPage.rotate;
           setPage(loadedPage);
           setPagePending(false);
         }
@@ -150,6 +167,11 @@ export function PageView({
       .then(() => {
         if (!cancelled) {
           setRenderPending(false);
+          // The new (correctly rotated) canvas has just painted -- release
+          // the settle transform now, so the container eases from its
+          // perturbed "still turning" look into rest exactly as the veil
+          // lifts and the result appears.
+          setRotationSettling(false);
         }
       });
 
@@ -305,13 +327,18 @@ export function PageView({
         setDraftRect(null);
       }}
     >
-      <canvas
-        ref={canvasRef}
-        className="page-view__canvas"
-        aria-label={`Page ${pageIndex + 1}`}
-        data-testid="pdf-page-canvas"
-      />
-      <div ref={textLayerRef} className="textLayer page-view__text-layer" />
+      <div
+        className="page-view__content"
+        data-rotate-settling={rotationSettling ? "true" : undefined}
+      >
+        <canvas
+          ref={canvasRef}
+          className="page-view__canvas"
+          aria-label={`Page ${pageIndex + 1}`}
+          data-testid="pdf-page-canvas"
+        />
+        <div ref={textLayerRef} className="textLayer page-view__text-layer" />
+      </div>
       {pagePending || renderPending ? (
         <div className="page-view__render-pending" role="status" aria-live="polite">
           <LoadingSun size={18} label="Rendering page" />

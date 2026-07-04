@@ -7,6 +7,23 @@ import {
 } from "react";
 import "./ContextMenu.css";
 
+/** Matches the exit keyframe duration in ContextMenu.css. Asymmetric with
+ * the (slightly longer) entrance -- release should always read faster than
+ * arrival. */
+const EXIT_DURATION_MS = 90;
+
+function exitDurationMs(): number {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return EXIT_DURATION_MS;
+  }
+
+  // Reduced motion: skip the wait entirely rather than holding the menu on
+  // screen for a transition that will never visibly play.
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? 0
+    : EXIT_DURATION_MS;
+}
+
 export interface ContextMenuItem {
   label: string;
   onSelect: () => void;
@@ -35,6 +52,32 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     return firstEnabled === -1 ? 0 : firstEnabled;
   });
   const [position, setPosition] = useState({ left: x, top: y, ready: false });
+  // Quick exit: play the closing animation, THEN tell the caller to unmount
+  // us -- a menu that just vanishes reads as broken next to its own
+  // entrance. `closeRequestedRef` (not state) guards against double-firing
+  // an outside click racing Escape -- it needs to be correct the instant
+  // either handler runs, not after a re-render.
+  const [closing, setClosing] = useState(false);
+  const closeRequestedRef = useRef(false);
+  const closeTimeoutRef = useRef<number | null>(null);
+
+  function requestClose() {
+    if (closeRequestedRef.current) {
+      return;
+    }
+
+    closeRequestedRef.current = true;
+    setClosing(true);
+    closeTimeoutRef.current = window.setTimeout(onClose, exitDurationMs());
+  }
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current !== null) {
+        window.clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -53,13 +96,13 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose();
+        requestClose();
       }
     }
 
-    // Scroll events don't bubble, but capture-phase dispatch still reaches a
-    // window listener for a scroll on any descendant -- this is how we hear
-    // about a scrolled-away anchor without knowing which container scrolled.
+    // Scroll and blur both mean the anchor is no longer valid (scrolled
+    // away, or the window lost focus entirely) -- close immediately rather
+    // than animating a dismissal at a position that's already stale.
     function handleScroll() {
       onClose();
     }
@@ -110,7 +153,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       return;
     }
 
-    onClose();
+    // The action fires immediately -- only the menu's own visual dismissal
+    // is deferred for the exit animation.
+    requestClose();
     item.onSelect();
   }
 
@@ -118,7 +163,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      requestClose();
       return;
     }
 
@@ -147,6 +192,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       role="menu"
       tabIndex={-1}
       data-ready={position.ready ? "true" : undefined}
+      data-closing={closing ? "true" : undefined}
       style={{ left: `${position.left}px`, top: `${position.top}px` }}
       onKeyDown={handleKeyDown}
       onContextMenu={(event) => event.preventDefault()}

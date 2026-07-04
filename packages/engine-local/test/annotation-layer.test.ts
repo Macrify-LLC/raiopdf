@@ -156,6 +156,61 @@ describe("annotation-layer foundation", () => {
     expect(readOperandPairs(content, "cm")).toContainEqual([1, 0, 0, 1, 40, 50]);
   });
 
+  it("emits markup annotations by default and keeps baked mode reachable", async () => {
+    const engine = createLocalPdfEngine();
+    const defaultSource = await engine.open(await createPdf([[300, 200]]));
+    const bakedSource = await engine.open(await createPdf([[300, 200]]));
+    const edit: PdfEdit = {
+      type: "highlight",
+      pageIndex: 0,
+      rects: [{ x: 20, y: 30, w: 120, h: 14 }],
+    };
+
+    const defaultEdited = await engine.applyEdits(defaultSource, [edit]);
+    const defaultPdf = await PDFDocument.load(await engine.saveToBytes(defaultEdited));
+    const bakedEdited = await engine.applyEdits(bakedSource, [edit], { markupMode: "baked" });
+    const bakedBytes = await engine.saveToBytes(bakedEdited);
+    const bakedPdf = await PDFDocument.load(bakedBytes);
+
+    expect(readRaioPdfMarkupAnnotations(defaultPdf.getPage(0)).map((entry) => entry.subtype)).toEqual([
+      "Highlight",
+    ]);
+    expect(readRaioPdfMarkupAnnotations(bakedPdf.getPage(0))).toHaveLength(0);
+    expect(await readDecodedPageContent(bakedBytes, 0)).toContain(" rg");
+  });
+
+  it("uses the print flag according to printMarkupAnnotations", async () => {
+    const engine = createLocalPdfEngine();
+    const printableSource = await engine.open(await createPdf([[300, 200]]));
+    const nonPrintableSource = await engine.open(await createPdf([[300, 200]]));
+    const edit: PdfEdit = {
+      type: "shape",
+      pageIndex: 0,
+      shape: "rect",
+      rect: { x: 40, y: 50, w: 80, h: 30 },
+    };
+
+    const printable = await engine.applyEdits(printableSource, [edit], {
+      printMarkupAnnotations: true,
+    });
+    const nonPrintable = await engine.applyEdits(nonPrintableSource, [edit], {
+      printMarkupAnnotations: false,
+    });
+    const printablePdf = await PDFDocument.load(await engine.saveToBytes(printable));
+    const nonPrintablePdf = await PDFDocument.load(await engine.saveToBytes(nonPrintable));
+
+    expect(
+      readRaioPdfMarkupAnnotations(printablePdf.getPage(0))[0]?.dict
+        .lookup(PDFName.of("F"), PDFNumber)
+        .asNumber(),
+    ).toBe(4);
+    expect(
+      readRaioPdfMarkupAnnotations(nonPrintablePdf.getPage(0))[0]?.dict
+        .lookup(PDFName.of("F"), PDFNumber)
+        .asNumber(),
+    ).toBe(0);
+  });
+
   it("emits ink and shape edits as marked printable annotations with appearances", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -1005,7 +1060,7 @@ async function renderBakedAndFlattenedMark(
   const engine = createLocalPdfEngine();
   const bakedSource = await engine.open(sourceBytes);
   const annotationSource = await engine.open(sourceBytes);
-  const baked = await engine.applyEdits(bakedSource, [edit]);
+  const baked = await engine.applyEdits(bakedSource, [edit], { markupMode: "baked" });
   const annotationMode = await engine.applyEdits(annotationSource, [edit], { markupMode: "annotation" });
   const bakedBytes = await engine.saveToBytes(baked);
   const annotationBytes = await engine.saveToBytes(annotationMode);

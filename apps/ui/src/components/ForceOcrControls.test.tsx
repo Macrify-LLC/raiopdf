@@ -87,6 +87,10 @@ describe("force OCR controls", () => {
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
         onConnectToAi={() => undefined}
+        printMarkupAnnotations={true}
+        onPrintMarkupAnnotationsChange={() => undefined}
+        onFlattenMarkupAnnotations={() => undefined}
+        markupAnnotationMessage={null}
       />,
     );
 
@@ -98,19 +102,19 @@ describe("force OCR controls", () => {
     expect(onForceOcr).toHaveBeenCalledTimes(1);
   });
 
-  it("disables Make Searchable while the confirm dialog is up, with no inline status box", () => {
+  it("disables Make Searchable while the confirm dialog is up, with no inline OCR status", () => {
     render(<ToolPanelHarness ocrState={{ phase: "confirm", message: null }} />);
 
     expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
     expect(getButton("Force re-OCR text layer").disabled).toBe(true);
-    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+    expect(document.body.textContent).not.toContain("Making searchable");
   });
 
-  it("disables Make Searchable while OCR is running, with no inline status box", () => {
+  it("disables Make Searchable while OCR is running, with no inline OCR status", () => {
     render(<ToolPanelHarness ocrState={{ phase: "processing", message: "Making searchable…" }} />);
 
     expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
-    expect(document.querySelector(".tool-panel__inline-card")).toBeNull();
+    expect(document.body.textContent).not.toContain("Making searchable");
   });
 
   it("shows a result notice once OCR finishes, replacing the old always-on status box", () => {
@@ -120,8 +124,8 @@ describe("force OCR controls", () => {
       />,
     );
 
-    const notice = document.querySelector(".tool-panel__inline-card");
-    expect(notice?.getAttribute("data-tone")).toBe("ok");
+    const notice = document.querySelector('.tool-panel__inline-card[data-tone="ok"]');
+    expect(notice).not.toBeNull();
     expect(notice?.textContent).toContain("Rebuilt the text layer on 3 pages.");
     expect(getButton("Make Searchable (OCR)").disabled).toBe(false);
   });
@@ -134,8 +138,64 @@ describe("force OCR controls", () => {
       />,
     );
 
-    const notice = document.querySelector(".tool-panel__inline-card");
-    expect(notice?.getAttribute("data-tone")).toBe("neutral");
+    const notice = document.querySelector('.tool-panel__inline-card[data-tone="neutral"]');
+    expect(notice).not.toBeNull();
+  });
+
+  it("exposes annotation print and flatten controls", () => {
+    const onPrintMarkupAnnotationsChange = vi.fn();
+    const onFlattenMarkupAnnotations = vi.fn();
+
+    render(
+      <ToolPanel
+        hasDocument
+        pageCount={2}
+        ocrState={{ phase: "idle", message: null }}
+        ocrAvailable
+        ocrStarting={false}
+        activeEditTool="select"
+        activeEditDialogTool={null}
+        activeLegalTool={null}
+        activeOrganizeTool={null}
+        onEditToolSelected={() => undefined}
+        onEditDialogToolSelected={() => undefined}
+        onLegalToolSelected={() => undefined}
+        onOrganizeToolSelected={() => undefined}
+        onMakeSearchable={() => undefined}
+        onForceOcr={() => undefined}
+        onRotateLeft={() => undefined}
+        onRotateRight={() => undefined}
+        sidecarStatus={idleSidecarStatus}
+        onApplyPageNumbers={async () => true}
+        onApplyWatermark={async () => true}
+        compressAvailable
+        onCompress={async () => true}
+        redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
+        scanner={{ scanning: false, message: null, hits: [] }}
+        pendingEdits={[]}
+        onRemovePendingEdit={() => undefined}
+        onConfirmRedactions={() => undefined}
+        onCancelRedactions={() => undefined}
+        onRunScanner={() => undefined}
+        onMarkScannerHit={() => undefined}
+        onHelpRequested={() => undefined}
+        onConnectToAi={() => undefined}
+        printMarkupAnnotations={true}
+        onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
+        onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
+        markupAnnotationMessage="Flattened RaioPDF markup into permanent page content."
+      />,
+    );
+
+    const switchButton = document.querySelector("[role='switch'][aria-labelledby='markup-print-label']");
+    expect(switchButton?.getAttribute("aria-checked")).toBe("true");
+
+    click(switchButton as HTMLButtonElement);
+    click(getButton("Flatten markup"));
+
+    expect(onPrintMarkupAnnotationsChange).toHaveBeenCalledWith(false);
+    expect(onFlattenMarkupAnnotations).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Flattened RaioPDF markup");
   });
 
   it("shows the whole-document force OCR interstitial before running", () => {
@@ -213,6 +273,10 @@ function ToolPanelHarness({
       onMarkScannerHit={() => undefined}
       onHelpRequested={() => undefined}
       onConnectToAi={() => undefined}
+      printMarkupAnnotations={true}
+      onPrintMarkupAnnotationsChange={() => undefined}
+      onFlattenMarkupAnnotations={() => undefined}
+      markupAnnotationMessage={null}
     />
   );
 }

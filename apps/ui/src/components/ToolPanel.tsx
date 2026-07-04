@@ -54,6 +54,7 @@ import type { EditToolId } from "../lib/edits";
 import { AccordionGroup } from "./AccordionGroup";
 import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
+import { Switch } from "./Switch";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
@@ -175,6 +176,10 @@ export interface ToolPanelProps {
   onApplyWatermark: (options: PdfWatermarkOptions) => Promise<boolean>;
   compressAvailable: boolean;
   onCompress: (options: PdfCompressOptions) => Promise<boolean>;
+  printMarkupAnnotations: boolean;
+  onPrintMarkupAnnotationsChange: (next: boolean) => void;
+  onFlattenMarkupAnnotations: () => void;
+  markupAnnotationMessage: string | null;
 }
 
 export function ToolPanel({
@@ -210,6 +215,10 @@ export function ToolPanel({
   onApplyWatermark,
   compressAvailable,
   onCompress,
+  printMarkupAnnotations,
+  onPrintMarkupAnnotationsChange,
+  onFlattenMarkupAnnotations,
+  markupAnnotationMessage,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -279,6 +288,13 @@ export function ToolPanel({
             </div>
           );
         })}
+        <MarkupAnnotationControls
+          hasDocument={hasDocument}
+          printMarkupAnnotations={printMarkupAnnotations}
+          onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
+          onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
+          message={markupAnnotationMessage}
+        />
         {pendingContentEdits.length > 0 ? (
           <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
         ) : null}
@@ -441,6 +457,55 @@ function ConnectToAiRow({ onSelect }: { onSelect: () => void }) {
           </span>
         </span>
       </button>
+    </div>
+  );
+}
+
+function MarkupAnnotationControls({
+  hasDocument,
+  printMarkupAnnotations,
+  onPrintMarkupAnnotationsChange,
+  onFlattenMarkupAnnotations,
+  message,
+}: {
+  hasDocument: boolean;
+  printMarkupAnnotations: boolean;
+  onPrintMarkupAnnotationsChange: (next: boolean) => void;
+  onFlattenMarkupAnnotations: () => void;
+  message: string | null;
+}) {
+  const labelId = "markup-print-label";
+  const descriptionId = "markup-print-description";
+
+  return (
+    <div className="tool-panel__inline-card" aria-label="Markup annotation options">
+      <div className="tool-panel__switch-row">
+        <div>
+          <p id={labelId} className="tool-panel__card-title">Print markup</p>
+          <p id={descriptionId} className="tool-panel__note">Saved annotations print by default.</p>
+        </div>
+        <Switch
+          checked={printMarkupAnnotations}
+          disabled={!hasDocument}
+          onChange={onPrintMarkupAnnotationsChange}
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+        />
+      </div>
+      <div className="tool-panel__button-row">
+        <button
+          type="button"
+          className="tool-panel__secondary-button"
+          disabled={!hasDocument}
+          aria-label="Flatten RaioPDF markup annotations"
+          onClick={onFlattenMarkupAnnotations}
+        >
+          Flatten markup
+        </button>
+      </div>
+      {message ? (
+        <p className="tool-panel__status-line" role="status">{message}</p>
+      ) : null}
     </div>
   );
 }

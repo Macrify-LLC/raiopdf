@@ -88,6 +88,9 @@ type OutlineEntry = {
 
 type PageRotation = 0 | 90 | 180 | 270;
 type MarkupMode = NonNullable<PdfApplyEditsOptions["markupMode"]>;
+type MarkupAnnotationOptions = {
+  print: boolean;
+};
 
 type TextBoxFontKey = `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
 
@@ -774,14 +777,12 @@ export class LocalPdfEngine implements PdfEngine {
    * Applies add-content edits with pdf-lib.
    *
    * Comments become real `/Annots` `/Text` annotations so they stay live in
-   * other viewers. Highlights are drawn as translucent rectangles rather than
-   * `/Highlight` annotations: pdf-lib has no highlight-annotation API, and a
-   * hand-built one needs QuadPoints plus a multiply-blend appearance stream to
-   * render consistently across viewers — drawn rects are the clean, reliable
-   * option here and match the product's bake-on-save model. Text boxes, ink,
-   * images, and signatures are drawn content. Text, image, and signature
-   * placement is rotation-aware: content renders upright to the viewer on
-   * pages rotated 90/180/270 degrees, reusing the stamp rotation mapping.
+   * other viewers. Supported markup edits default to RaioPDF-owned annotations
+   * with appearance streams; callers can still request baked page content with
+   * `markupMode: "baked"`. Images and signatures are drawn content. Text,
+   * image, and signature placement is rotation-aware: content renders upright
+   * to the viewer on pages rotated 90/180/270 degrees, reusing the stamp
+   * rotation mapping.
    */
   async applyEdits(
     document: PdfDocumentHandle,
@@ -790,7 +791,10 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     const output = await this.load(document);
     const pageCount = output.getPageCount();
-    const markupMode = options.markupMode ?? "baked";
+    const markupMode = options.markupMode ?? "annotation";
+    const markupAnnotationOptions: MarkupAnnotationOptions = {
+      print: options.printMarkupAnnotations ?? true,
+    };
 
     for (const edit of edits) {
       assertValidEdit(edit, pageCount);
@@ -810,7 +814,7 @@ export class LocalPdfEngine implements PdfEngine {
     };
 
     for (const edit of edits) {
-      await applyEditInPlace(output, edit, resolveTextBoxFont, markupMode);
+      await applyEditInPlace(output, edit, resolveTextBoxFont, markupMode, markupAnnotationOptions);
     }
 
     return this.store(await output.save());
@@ -1424,11 +1428,12 @@ async function applyEditInPlace(
   edit: PdfEdit,
   resolveTextBoxFont: TextBoxFontResolver,
   markupMode: MarkupMode,
+  markupAnnotationOptions: MarkupAnnotationOptions,
 ): Promise<void> {
   switch (edit.type) {
     case "highlight":
       if (markupMode === "annotation") {
-        applyHighlightAnnotationEdit(pdf, edit);
+        applyHighlightAnnotationEdit(pdf, edit, markupAnnotationOptions);
       } else {
         applyHighlightEdit(pdf, edit);
       }
@@ -1436,21 +1441,21 @@ async function applyEditInPlace(
     case "underline":
     case "strikethrough":
       if (markupMode === "annotation") {
-        applyTextMarkupAnnotationEdit(pdf, edit);
+        applyTextMarkupAnnotationEdit(pdf, edit, markupAnnotationOptions);
       } else {
         applyTextMarkupEdit(pdf, edit);
       }
       return;
     case "textBox":
       if (markupMode === "annotation") {
-        applyTextBoxAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit));
+        applyTextBoxAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit), markupAnnotationOptions);
       } else {
         applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
       }
       return;
     case "callout":
       if (markupMode === "annotation") {
-        applyCalloutAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit));
+        applyCalloutAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit), markupAnnotationOptions);
       } else {
         applyCalloutEdit(pdf, edit, await resolveTextBoxFont(edit));
       }
@@ -1461,14 +1466,14 @@ async function applyEditInPlace(
       return;
     case "ink":
       if (markupMode === "annotation") {
-        applyInkAnnotationEdit(pdf, edit);
+        applyInkAnnotationEdit(pdf, edit, markupAnnotationOptions);
       } else {
         applyInkEdit(pdf, edit);
       }
       return;
     case "shape":
       if (markupMode === "annotation") {
-        applyShapeAnnotationEdit(pdf, edit);
+        applyShapeAnnotationEdit(pdf, edit, markupAnnotationOptions);
       } else {
         applyShapeEdit(pdf, edit);
       }
@@ -1828,7 +1833,11 @@ function applyShapeEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
   }
 }
 
-function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
+function applyInkAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfInkEdit,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const thickness = edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT;
   const strokeColor = toEditColor(edit.color, EDIT_INK_COLOR);
@@ -1851,7 +1860,7 @@ function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
     });
   }
 
-  addMarkupAnnotation(page, {
+  addMarkupAnnotation(page, options, {
     Subtype: "Ink",
     Rect: rectToPdfArray(appearanceTarget.annotationRect),
     InkList: edit.strokes.map((stroke) => stroke.flatMap((point) => [point.x, point.y])),
@@ -1861,7 +1870,11 @@ function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
   });
 }
 
-function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
+function applyShapeAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfShapeEdit,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const thickness = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
   const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
@@ -1880,7 +1893,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
         ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
       });
 
-      addMarkupAnnotation(page, {
+      addMarkupAnnotation(page, options, {
         Subtype: "Square",
         Rect: rectToPdfArray(appearanceTarget.annotationRect),
         C: colorToPdfArray(edit.strokeColor),
@@ -1902,7 +1915,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
         ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
       });
 
-      addMarkupAnnotation(page, {
+      addMarkupAnnotation(page, options, {
         Subtype: "Circle",
         Rect: rectToPdfArray(appearanceTarget.annotationRect),
         C: colorToPdfArray(edit.strokeColor),
@@ -1934,7 +1947,7 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
         drawArrowHead(appearanceTarget, edit.from, edit.to, thickness, strokeColor);
       }
 
-      addMarkupAnnotation(page, {
+      addMarkupAnnotation(page, options, {
         Subtype: "Line",
         Rect: rectToPdfArray(appearanceTarget.annotationRect),
         L: [edit.from.x, edit.from.y, edit.to.x, edit.to.y],
@@ -1948,7 +1961,11 @@ function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
   }
 }
 
-function applyHighlightAnnotationEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
+function applyHighlightAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfHighlightEdit,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const rect = unionRects(edit.rects);
   const color = toEditColor(edit.color, HIGHLIGHT_COLOR);
@@ -1963,7 +1980,7 @@ function applyHighlightAnnotationEdit(pdf: PDFDocument, edit: PdfHighlightEdit):
     appearanceTarget.drawRectangle({ rect: lineRect, fillColor: color, fillAlpha: opacity });
   }
 
-  addMarkupAnnotation(page, {
+  addMarkupAnnotation(page, options, {
     Subtype: "Highlight",
     Rect: rectToPdfArray(rect),
     QuadPoints: rectsToQuadPoints(edit.rects),
@@ -1972,7 +1989,11 @@ function applyHighlightAnnotationEdit(pdf: PDFDocument, edit: PdfHighlightEdit):
   });
 }
 
-function applyTextMarkupAnnotationEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
+function applyTextMarkupAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfTextMarkupEdit,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const rect = unionRects(edit.rects);
   const color = toEditColor(edit.color, EDIT_INK_COLOR);
@@ -1995,7 +2016,7 @@ function applyTextMarkupAnnotationEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit
     });
   }
 
-  addMarkupAnnotation(page, {
+  addMarkupAnnotation(page, options, {
     Subtype: edit.type === "underline" ? "Underline" : "StrikeOut",
     Rect: rectToPdfArray(appearanceTarget.annotationRect),
     QuadPoints: rectsToQuadPoints(edit.rects),
@@ -2004,7 +2025,12 @@ function applyTextMarkupAnnotationEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit
   });
 }
 
-function applyTextBoxAnnotationEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
+function applyTextBoxAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfTextBoxEdit,
+  font: PDFFont,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const pageRotation = normalizePageRotation(page.getRotation().angle);
   const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
@@ -2013,7 +2039,7 @@ function applyTextBoxAnnotationEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font
 
   drawTextBoxText(pdf, edit, font, appearanceTarget);
 
-  addMarkupAnnotation(page, {
+  addMarkupAnnotation(page, options, {
     Subtype: "FreeText",
     Rect: rectToPdfArray(appearanceTarget.annotationRect),
     Contents: PDFString.of(edit.text),
@@ -2024,7 +2050,12 @@ function applyTextBoxAnnotationEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font
   });
 }
 
-function applyCalloutAnnotationEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font: PDFFont): void {
+function applyCalloutAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfCalloutEdit,
+  font: PDFFont,
+  options: MarkupAnnotationOptions,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const thickness = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
   const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
@@ -2081,7 +2112,7 @@ function applyCalloutAnnotationEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font
     Math.max(0, inner.y - outer.y),
   ];
 
-  addMarkupAnnotation(page, {
+  addMarkupAnnotation(page, options, {
     Subtype: "FreeText",
     IT: PDFName.of("FreeTextCallout"),
     Rect: rectToPdfArray(appearanceTarget.annotationRect),
@@ -2127,11 +2158,12 @@ function formatPdfNumber(value: number): string {
 
 function addMarkupAnnotation(
   page: ReturnType<PDFDocument["getPage"]>,
+  options: MarkupAnnotationOptions,
   values: Record<string, unknown>,
 ): void {
   const annotation = page.doc.context.obj({
     Type: "Annot",
-    F: ANNOTATION_FLAG_PRINT,
+    F: options.print ? ANNOTATION_FLAG_PRINT : 0,
     ...values,
   }) as PDFDict;
 

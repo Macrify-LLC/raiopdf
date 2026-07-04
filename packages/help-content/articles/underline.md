@@ -2,14 +2,14 @@
 id: underline
 title: Underline
 group: edit
-summary: Drag over text to add an underline that saves with the PDF.
+summary: Drag over text to add a real underline annotation that saves with the PDF.
 order: 11
 ---
 
 # Underline
 
-Underline marks text with a line under it — and it saves into the PDF page, so
-anyone who opens the file sees it.
+Underline marks text with a line under it. When you save, it becomes a real PDF
+annotation you can toggle, delete, or flatten later.
 
 ## How to do it
 
@@ -20,7 +20,13 @@ anyone who opens the file sees it.
 
 ## What to know
 
-- **Underlines are held until you Save,** then baked into the page as lines.
+- **Underlines are held until you Save,** then saved as PDF annotations.
+- **Print markup controls printing.** Leave **Print markup** on to include saved
+  underlines when printing, or turn it off before saving new underlines.
+- **Flatten markup makes it permanent.** Use **Flatten markup** when you want
+  underlines baked into the page.
+- **Prepare for Filing asks first.** If saved RaioPDF markup is present, filing
+  offers to flatten it or keep it live before continuing.
 - **It needs real text to grab onto.** On a scanned page, run **Make Searchable**
   first so there's text to underline.
 - **Reorganizing pages clears unsaved underlines.** If you rotate, delete, or

@@ -341,8 +341,9 @@ export type PdfEditImageFormat = "png" | "jpeg";
 /**
  * Translucent text highlight covering one rectangle per highlighted line.
  *
- * Highlights are baked into page content by default. Callers can opt into
- * annotation-layer saving with `markupMode: "annotation"`.
+ * Highlights are emitted as live annotations by default. Callers can request
+ * baked page content with `markupMode: "baked"` or flatten markup annotations
+ * later.
  */
 export type PdfHighlightEdit = {
   type: "highlight";
@@ -359,8 +360,9 @@ export type PdfHighlightEdit = {
 /**
  * Text markup drawn from text-line rectangles.
  *
- * Underline and strikethrough are baked into page content by default. Callers
- * can opt into annotation-layer saving with `markupMode: "annotation"`.
+ * Underline and strikethrough are emitted as live annotations by default.
+ * Callers can request baked page content with `markupMode: "baked"` or flatten
+ * markup annotations later.
  */
 export type PdfTextMarkupEdit = {
   type: "underline" | "strikethrough";
@@ -404,7 +406,7 @@ export type PdfTextBoxEdit = {
 };
 
 /**
- * A text callout baked into page content as one atomic edit.
+ * A text callout emitted as one atomic markup edit.
  *
  * The text box renders through the same wrapping, font, color, and alignment
  * rules as `PdfTextBoxEdit`. The leader line is drawn in user-space points from
@@ -465,7 +467,7 @@ export type PdfImageEdit = {
 };
 
 /**
- * Freehand ink strokes baked into page content.
+ * Freehand ink strokes emitted as live annotations by default.
  *
  * Each stroke is a polyline of user-space points (already rotation-mapped by
  * the caller, like redaction rectangles), so engines draw them verbatim.
@@ -485,7 +487,7 @@ export type PdfInkEdit = {
 export type PdfShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 /**
- * Geometric shapes baked into page content.
+ * Geometric shapes emitted as live annotations by default.
  *
  * Shape geometry is orientation-agnostic and drawn verbatim in PDF user-space
  * points, matching highlights and ink. Rectangle and ellipse edits require a
@@ -529,11 +531,18 @@ export type PdfApplyEditsOptions = {
    * Controls whether supported markup edits are baked into page content or
    * emitted as live PDF annotations with generated appearances.
    *
-   * Defaults to `"baked"` for the existing save behavior. Annotation mode is
-   * currently opt-in and applies to ink, geometric shape, highlight, underline,
-   * and strikethrough edits.
+   * Defaults to `"annotation"` for live, toggleable markup. Baked mode remains
+   * available for permanent page marks and is also reachable by flattening
+   * RaioPDF-owned markup annotations after annotation-mode saving.
    */
   markupMode?: PdfMarkupMode;
+  /**
+   * Controls the PDF `/F` Print flag on RaioPDF-owned markup annotations.
+   *
+   * Defaults to true. Ignored when `markupMode` is `"baked"` and does not
+   * change regular sticky-note comments.
+   */
+  printMarkupAnnotations?: boolean;
 };
 
 /**
@@ -900,13 +909,13 @@ export interface PdfEngine {
    * points, bottom-left origin, caller-mapped from canvas coordinates);
    * engines must render text, image, and signature edits upright to the
    * viewer on pages rotated 90/180/270 degrees. Comments must be written as
-   * real `/Annots` entries so they remain live annotations. By default, the
-   * other edit types are baked into page content. Callers may opt into
-   * `markupMode: "annotation"` to emit supported markup edits as real PDF
-   * annotations; currently supported markup edits are ink, geometric shapes,
-   * highlights, underlines, and strikethroughs. Other edit types keep their
-   * existing path. Engines without an add-content pipeline must reject with
-   * `PdfEngineError("UNSUPPORTED", ...)`.
+   * real `/Annots` entries so they remain live annotations. By default,
+   * supported markup edits are emitted as real PDF annotations; currently
+   * supported markup edits are ink, geometric shapes, highlights, underlines,
+   * strikethroughs, text boxes, and callouts. Callers may request
+   * `markupMode: "baked"` to write permanent page content. Other edit types
+   * keep their existing path. Engines without an add-content pipeline must
+   * reject with `PdfEngineError("UNSUPPORTED", ...)`.
    */
   applyEdits(
     document: PdfDocumentHandle,

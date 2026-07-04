@@ -20,12 +20,24 @@ import { createLocalPdfEngine } from "../src/index";
 const ONE_BY_ONE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+type LocalEngine = ReturnType<typeof createLocalPdfEngine>;
+type ApplyEditsArgs = Parameters<LocalEngine["applyEdits"]>;
+
+function applyBakedEdits(
+  engine: LocalEngine,
+  document: ApplyEditsArgs[0],
+  edits: ApplyEditsArgs[1],
+  options: ApplyEditsArgs[2] = {},
+) {
+  return engine.applyEdits(document, edits, { markupMode: "baked", ...options });
+}
+
 describe("LocalPdfEngine.applyEdits", () => {
   it("bakes highlight edits as translucent rectangles at the given rects", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "highlight",
         pageIndex: 0,
@@ -62,7 +74,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "underline",
         pageIndex: 0,
@@ -101,7 +113,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "strikethrough",
         pageIndex: 0,
@@ -137,7 +149,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "textBox",
         pageIndex: 0,
@@ -167,7 +179,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createPdf([[300, 200]]));
     const text = "  Alpha   beta  gamma";
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "textBox",
         pageIndex: 0,
@@ -201,7 +213,8 @@ describe("LocalPdfEngine.applyEdits", () => {
       ["courier", true, true, "Courier-BoldOblique"],
     ] as const;
 
-    const edited = await engine.applyEdits(
+    const edited = await applyBakedEdits(
+      engine,
       document,
       faces.map(([fontFamily, bold, italic], index) => ({
         type: "textBox",
@@ -235,7 +248,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const rect = { x: 20, y: 120, w: 100, h: 20 };
     const lineWidth = font.widthOfTextAtSize(text, fontSizePt);
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       { type: "textBox", pageIndex: 0, rect, text, fontSizePt, align: "left" },
       {
         type: "textBox",
@@ -273,7 +286,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const visualWidth = 80;
     const lineWidth = font.widthOfTextAtSize(text, fontSizePt);
 
-    const edited = await engine.applyEdits(rotated, [
+    const edited = await applyBakedEdits(engine, rotated, [
       {
         type: "textBox",
         pageIndex: 0,
@@ -328,7 +341,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       "ic",
     ];
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "textBox",
         pageIndex: 0,
@@ -362,7 +375,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       font,
     });
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "callout",
         pageIndex: 0,
@@ -422,7 +435,8 @@ describe("LocalPdfEngine.applyEdits", () => {
       },
     ];
 
-    const edited = await engine.applyEdits(
+    const edited = await applyBakedEdits(
+      engine,
       document,
       cases.map(({ tip }) => ({
         type: "callout" as const,
@@ -454,7 +468,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "image",
         pageIndex: 0,
@@ -482,7 +496,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "signature",
         pageIndex: 0,
@@ -510,7 +524,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "ink",
         pageIndex: 0,
@@ -545,7 +559,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "shape",
         pageIndex: 0,
@@ -575,7 +589,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "shape",
         pageIndex: 0,
@@ -612,7 +626,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "shape",
         pageIndex: 0,
@@ -640,7 +654,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "shape",
         pageIndex: 0,
@@ -683,7 +697,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "shape",
         pageIndex: 0,
@@ -701,7 +715,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "highlight",
         pageIndex: 0,
@@ -744,7 +758,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792], [612, 792]]));
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "comment",
         pageIndex: 1,
@@ -775,7 +789,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createPdf([[200, 300]]));
     const rotated = await engine.rotatePages(document, [0], 90);
 
-    const edited = await engine.applyEdits(rotated, [
+    const edited = await applyBakedEdits(engine, rotated, [
       {
         type: "textBox",
         pageIndex: 0,
@@ -840,7 +854,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createFormPdf());
 
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "formValues",
         values: { name: "Jane Doe", agree: true },
@@ -859,14 +873,14 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createFormPdf());
 
     await expect(
-      engine.applyEdits(document, [{ type: "formValues", values: { missing: "nope" } }]),
+      applyBakedEdits(engine, document, [{ type: "formValues", values: { missing: "nope" } }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 
   it("flattens filled forms so values stay visible and fields disappear", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createFormPdf());
-    const filled = await engine.applyEdits(document, [
+    const filled = await applyBakedEdits(engine, document, [
       { type: "formValues", values: { name: "Jane Doe", agree: true } },
     ]);
 
@@ -894,7 +908,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [210, 310]]));
 
-    const edited = await engine.applyEdits(document, []);
+    const edited = await applyBakedEdits(engine, document, []);
     const bytes = await engine.saveToBytes(edited);
     const pdf = await PDFDocument.load(bytes);
 
@@ -910,7 +924,7 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createPdf([[200, 300]]));
 
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "highlight",
           pageIndex: 3,
@@ -919,7 +933,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_PAGE_INDEX" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         { type: "comment", pageIndex: 0, at: { x: 10, y: 10 }, text: "" },
       ]),
     ).rejects.toBeInstanceOf(PdfEngineError);
@@ -930,10 +944,10 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createPdf([[200, 300]]));
 
     await expect(
-      engine.applyEdits(document, [{ type: "underline", pageIndex: 0, rects: [] }]),
+      applyBakedEdits(engine, document, [{ type: "underline", pageIndex: 0, rects: [] }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "strikethrough",
           pageIndex: 0,
@@ -943,7 +957,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "underline",
           pageIndex: 0,
@@ -959,12 +973,12 @@ describe("LocalPdfEngine.applyEdits", () => {
     const document = await engine.open(await createPdf([[200, 300]]));
 
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         { type: "shape", pageIndex: 0, shape: "rect", rect: { x: 10, y: 10, w: 0, h: 20 } },
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "shape",
           pageIndex: 0,
@@ -974,7 +988,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "shape",
           pageIndex: 0,
@@ -985,7 +999,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "shape",
           pageIndex: 0,
@@ -997,7 +1011,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "shape",
           pageIndex: 0,
@@ -1008,7 +1022,7 @@ describe("LocalPdfEngine.applyEdits", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         {
           type: "shape",
           pageIndex: 0,
@@ -1032,24 +1046,24 @@ describe("LocalPdfEngine.applyEdits", () => {
     };
 
     await expect(
-      engine.applyEdits(document, [{ ...valid, rect: { x: 10, y: 10, w: 0, h: 40 } }]),
+      applyBakedEdits(engine, document, [{ ...valid, rect: { x: 10, y: 10, w: 0, h: 40 } }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
-    await expect(engine.applyEdits(document, [{ ...valid, text: "" }])).rejects.toMatchObject({
+    await expect(applyBakedEdits(engine, document, [{ ...valid, text: "" }])).rejects.toMatchObject({
       code: "INVALID_DOCUMENT",
     });
     await expect(
-      engine.applyEdits(document, [{ ...valid, tip: { x: Number.NaN, y: 50 } }]),
+      applyBakedEdits(engine, document, [{ ...valid, tip: { x: Number.NaN, y: 50 } }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [{ ...valid, strokeWidthPt: 0 }]),
+      applyBakedEdits(engine, document, [{ ...valid, strokeWidthPt: 0 }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [
+      applyBakedEdits(engine, document, [
         { ...valid, strokeColor: { r: 0, g: 0, b: Number.POSITIVE_INFINITY } },
       ]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
     await expect(
-      engine.applyEdits(document, [{ ...valid, boxFill: { r: 0, g: -1, b: 0 } }]),
+      applyBakedEdits(engine, document, [{ ...valid, boxFill: { r: 0, g: -1, b: 0 } }]),
     ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 });

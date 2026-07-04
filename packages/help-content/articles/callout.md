@@ -2,14 +2,15 @@
 id: callout
 title: Callout
 group: edit
-summary: Add a text box with a leader arrow pointing to a spot on the page.
+summary: Add a callout annotation pointing to a spot on the page.
 order: 21
 ---
 
 # Callout
 
 Callout lets you add a short note that points at a specific paragraph, figure,
-signature line, or other spot on the page.
+signature line, or other spot on the page. When you save, the callout becomes a
+real PDF annotation.
 
 ## How to do it
 
@@ -21,7 +22,13 @@ signature line, or other spot on the page.
 
 ## What to know
 
-- **It's held until you Save,** then written into the page as visible PDF content.
+- **It's held until you Save,** then saved as a PDF annotation.
+- **Print markup controls printing.** Leave **Print markup** on to include saved
+  callouts when printing, or turn it off before saving new callouts.
+- **Flatten markup makes it permanent.** Use **Flatten markup** when you want
+  the callout baked into the page.
+- **Prepare for Filing asks first.** If saved RaioPDF markup is present, filing
+  offers to flatten it or keep it live before continuing.
 - **It behaves as one pending edit.** Undo or remove clears the text box and
   leader arrow together.
 - **Reorganizing pages clears unsaved callouts.** If you rotate, delete, or

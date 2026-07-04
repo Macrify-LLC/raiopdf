@@ -9,7 +9,7 @@ order: 40
 # Draw
 
 Draw lets you make freehand marks — circle something, add an arrow, initial a
-spot — saved right into the PDF.
+spot. When you save, the mark becomes a real PDF annotation.
 
 ## How to do it
 
@@ -19,7 +19,13 @@ spot — saved right into the PDF.
 
 ## What to know
 
-- **It's held until you Save,** then written into the document.
+- **It's held until you Save,** then saved as a PDF annotation.
+- **Print markup controls printing.** Leave **Print markup** on to include saved
+  ink when printing, or turn it off before saving new ink.
+- **Flatten markup makes it permanent.** Use **Flatten markup** when you want
+  the ink baked into the page.
+- **Prepare for Filing asks first.** If saved RaioPDF markup is present, filing
+  offers to flatten it or keep it live before continuing.
 - **Reorganizing pages clears unsaved ink.** Rotate, delete, or reorder pages
   before saving and it's cleared — save first.
 

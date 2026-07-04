@@ -771,12 +771,11 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await expect(toolPanel.getByText("2 pending edits")).toHaveCount(0);
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 
-  // Saved bytes carry the baked text box, the highlight fill, and a live
+  // Saved bytes carry RaioPDF markup as live annotations, plus a regular
   // /Text annotation for the comment.
-  const content = await readDecodedPageContent(saved, 0);
-  expect(content).toContain(encodeTextAsHex("Deposition note"));
-  expect(content).toMatch(/1 0\.9 0\.3 rg/);
-  await expectTextAnnotation(saved, 0, "Check exhibit reference");
+  await expectPdfAnnotation(saved, 0, "FreeText", "Deposition note");
+  await expectPdfAnnotation(saved, 0, "Highlight");
+  await expectPdfAnnotation(saved, 0, "Text", "Check exhibit reference");
 
   // Re-open the saved file: it loads and renders cleanly, with nothing pending.
   await openPdf(page, "edit-round-trip-reopened.pdf", saved);
@@ -808,9 +807,9 @@ test("places a text box rotation-correctly on a rotated page", async ({ page }) 
   const saved = await savePdf(page);
   const pdf = await PDFDocument.load(saved);
   expect(pdf.getPage(0).getRotation().angle).toBe(90);
-  expect(await readDecodedPageContent(saved, 0)).toContain(encodeTextAsHex("ROTCHECK"));
+  await expectPdfAnnotation(saved, 0, "FreeText", "ROTCHECK");
 
-  // Re-open the saved file: the baked text must render where it was placed
+  // Re-open the saved file: the annotation text must render where it was placed
   // (near the click point), not mirrored to another corner by a bad mapping.
   await openPdf(page, "rotated-edit-reopened.pdf", saved);
   await expect
@@ -860,8 +859,7 @@ test("rapid double-clicks cannot double-place or double-save", async ({ page }) 
   }
 
   const saved = new Uint8Array(await readFile(path));
-  const content = await readDecodedPageContent(saved, 0);
-  expect(countOccurrences(content, encodeTextAsHex("ONCE"))).toBe(1);
+  expect(await countPdfAnnotations(saved, 0, "FreeText", "ONCE")).toBe(1);
 
   // Give a second (erroneous) download a moment to appear, then confirm
   // there was only ever one.
@@ -1447,22 +1445,11 @@ async function canvasRegionInkPixels(
   );
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let index = haystack.indexOf(needle);
-
-  while (index !== -1) {
-    count += 1;
-    index = haystack.indexOf(needle, index + needle.length);
-  }
-
-  return count;
-}
-
-async function expectTextAnnotation(
+async function expectPdfAnnotation(
   bytes: Uint8Array,
   pageIndex: number,
-  contents: string,
+  subtypeName: string,
+  contents?: string,
 ): Promise<void> {
   const pdf = await PDFDocument.load(bytes);
   const annotations = pdf
@@ -1477,12 +1464,59 @@ async function expectTextAnnotation(
     .filter((entry): entry is PDFDict => entry instanceof PDFDict)
     .some((dict) => {
       const subtype = dict.get(PDFName.of("Subtype"));
-      const text = dict.lookupMaybe(PDFName.of("Contents"), PDFString, PDFHexString);
+      if (subtype !== PDFName.of(subtypeName)) {
+        return false;
+      }
 
-      return subtype === PDFName.of("Text") && text?.decodeText() === contents;
+      if (contents === undefined) {
+        return true;
+      }
+
+      const text = dict.lookupMaybe(PDFName.of("Contents"), PDFString, PDFHexString);
+      return text?.decodeText() === contents;
     });
 
-  expect(found, `expected a /Text annotation with contents "${contents}"`).toBe(true);
+  expect(
+    found,
+    contents === undefined
+      ? `expected a /${subtypeName} annotation`
+      : `expected a /${subtypeName} annotation with contents "${contents}"`,
+  ).toBe(true);
+}
+
+async function countPdfAnnotations(
+  bytes: Uint8Array,
+  pageIndex: number,
+  subtypeName: string,
+  contents?: string,
+): Promise<number> {
+  const pdf = await PDFDocument.load(bytes);
+  const annotations = pdf
+    .getPage(pageIndex)
+    .node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+  if (!annotations) {
+    return 0;
+  }
+
+  return annotations
+    .asArray()
+    .map((entry) => (entry instanceof PDFRef ? pdf.context.lookup(entry, PDFDict) : entry))
+    .filter((entry): entry is PDFDict => entry instanceof PDFDict)
+    .filter((dict) => {
+      const subtype = dict.get(PDFName.of("Subtype"));
+
+      if (subtype !== PDFName.of(subtypeName)) {
+        return false;
+      }
+
+      if (contents === undefined) {
+        return true;
+      }
+
+      const text = dict.lookupMaybe(PDFName.of("Contents"), PDFString, PDFHexString);
+      return text?.decodeText() === contents;
+    }).length;
 }
 
 async function expectPdf(

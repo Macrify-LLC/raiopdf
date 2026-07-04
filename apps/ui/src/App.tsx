@@ -133,6 +133,7 @@ import {
   inspectTextLayer,
   textLayerCoveragePageCount,
 } from "./lib/textLayer";
+import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import {
@@ -294,6 +295,7 @@ export function App() {
     buildBinder,
     batesStamp,
     applyEdits,
+    flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,
     watermark,
@@ -379,6 +381,8 @@ export function App() {
   });
   const [filingResult, setFilingResult] = useState<FilingResultState | null>(null);
   const [filingImpact, setFilingImpact] = useState<FilingImpactState | null>(null);
+  const [printMarkupAnnotations, setPrintMarkupAnnotations] = useState(true);
+  const [markupAnnotationMessage, setMarkupAnnotationMessage] = useState<string | null>(null);
   const [filingPacketProgress, setFilingPacketProgress] = useState<FilingPacketProgress>({
     running: false,
     message: null,
@@ -1784,6 +1788,7 @@ export function App() {
       if (pendingApply) {
         const applied = await applyEdits(pendingApply.edits, {
           flatten: pendingApply.flatten,
+          printMarkupAnnotations,
         });
 
         if (!applied) {
@@ -1825,7 +1830,35 @@ export function App() {
       .finally(() => {
         savingRef.current = false;
       });
-  }, [applyEdits, editing, markSaved, saveDocument, setError]);
+  }, [applyEdits, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
+
+  const flattenCurrentMarkup = useCallback(() => {
+    const sourceBytes = document.bytes;
+
+    if (!sourceBytes) {
+      setMarkupAnnotationMessage("Open a PDF before flattening markup.");
+      return;
+    }
+
+    void (async () => {
+      const annotationCount = await countRaioPdfMarkupAnnotations(sourceBytes);
+
+      if (annotationCount === 0) {
+        setMarkupAnnotationMessage("No RaioPDF markup annotations were found.");
+        return;
+      }
+
+      setMarkupAnnotationMessage("Flattening markup annotations...");
+      const flattened = await flattenMarkupAnnotations();
+      setMarkupAnnotationMessage(
+        flattened
+          ? `Flattened ${annotationCount} RaioPDF markup ${annotationCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+          : "Markup annotations were not flattened.",
+      );
+    })().catch(() => {
+      setMarkupAnnotationMessage("Markup annotations could not be flattened.");
+    });
+  }, [document.bytes, flattenMarkupAnnotations]);
 
   const save = useCallback(() => {
     saveToFile(false);
@@ -2687,6 +2720,7 @@ export function App() {
     const sourceOpenToken = getOpenToken();
     const selectedSteps = new Set(options.selectedStepIds);
     const convertOutputToPdfA = selectedSteps.has("convert-pdfa");
+    const markupAnnotationChoice = options.markupAnnotations ?? null;
     const customSplitBytes = options.customSplitMegabytes
       ? Math.round(options.customSplitMegabytes * 1024 * 1024)
       : null;
@@ -2763,15 +2797,21 @@ export function App() {
         const conversionImpact = needsImpactConfirmation
           ? await getCachedConversionImpact(filingSourceBytes)
           : null;
+        const markupAnnotationCount = await countRaioPdfMarkupAnnotations(filingSourceBytes);
 
         if (!isCurrentFilingRun()) {
           return;
         }
 
-        if (unappliedRedactionMarks > 0 || (conversionImpact && hasPdfAConversionImpact(conversionImpact))) {
+        if (
+          unappliedRedactionMarks > 0 ||
+          markupAnnotationCount > 0 ||
+          (conversionImpact && hasPdfAConversionImpact(conversionImpact))
+        ) {
           setFilingImpact({
             conversionImpact,
             unappliedRedactionMarks,
+            markupAnnotationCount,
           });
           setFilingProgress({ phase: "idle", message: null });
           return;
@@ -2784,6 +2824,16 @@ export function App() {
       try {
         workingHandle = await filingEngine.open(filingSourceBytes);
         closeHandles.push(workingHandle);
+
+        if (markupAnnotationChoice === "flatten") {
+          setFilingProgress({
+            phase: "normalizing",
+            message: "Flattening RaioPDF markup annotations for filing...",
+          });
+          const flattenedMarkupHandle = await filingEngine.flattenMarkupAnnotations(workingHandle);
+          closeHandles.push(flattenedMarkupHandle);
+          workingHandle = flattenedMarkupHandle;
+        }
 
         if (certificate && hasCertificateContent(certificate)) {
           const certificateBytes = await createCertificateOfServicePdf(certificate);
@@ -3588,6 +3638,10 @@ export function App() {
         onHelpRequested={openHelp}
         onConnectToAi={openConnectToAi}
         onMenuCommand={handleNativeMenuCommand}
+        printMarkupAnnotations={printMarkupAnnotations}
+        onPrintMarkupAnnotationsChange={setPrintMarkupAnnotations}
+        onFlattenMarkupAnnotations={flattenCurrentMarkup}
+        markupAnnotationMessage={markupAnnotationMessage}
       />
       {forceOcrConfirmation ? (
         <ForceOcrConfirmationDialog

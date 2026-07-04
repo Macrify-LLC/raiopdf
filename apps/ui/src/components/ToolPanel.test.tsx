@@ -116,6 +116,10 @@ describe("ToolPanel", () => {
         onApplyWatermark={() => Promise.resolve(true)}
         compressAvailable
         onCompress={() => Promise.resolve(true)}
+        printMarkupAnnotations={true}
+        onPrintMarkupAnnotationsChange={() => undefined}
+        onFlattenMarkupAnnotations={() => undefined}
+        markupAnnotationMessage={null}
       />
     );
   }

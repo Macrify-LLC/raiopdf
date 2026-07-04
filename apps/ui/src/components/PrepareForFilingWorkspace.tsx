@@ -92,6 +92,8 @@ export interface CertificateOfServiceDraft {
 export interface PrepareOptions {
   /** The user saw the conversion-impact warning and chose to continue anyway. */
   acknowledgeImpact?: boolean;
+  /** User choice for RaioPDF-owned markup annotations in the filing copy. */
+  markupAnnotations?: "flatten" | "keep";
   /** Current PDF open password for this one prepare run. Never persisted. */
   removeEncryptionPassword?: string;
   selectedStepIds: readonly PrepPlanStepId[];
@@ -107,6 +109,8 @@ export interface FilingImpactState {
   conversionImpact: PdfAConversionImpact | null;
   /** In-app redaction marks that have not been applied and will NOT redact the output. */
   unappliedRedactionMarks: number;
+  /** RaioPDF-owned markup annotations in the PDF that need a filing choice. */
+  markupAnnotationCount: number;
 }
 
 export interface PrepareForFilingWorkspaceProps {
@@ -457,9 +461,10 @@ export const PrepareForFilingWorkspace = forwardRef<
         {impact ? (
           <ImpactWarning
             impact={impact}
-            onContinue={() => onPrepare(certificateOpen ? certificate : null, {
+            onContinue={(markupAnnotations) => onPrepare(certificateOpen ? certificate : null, {
               ...prepareOptions(),
               acknowledgeImpact: true,
+              ...(markupAnnotations ? { markupAnnotations } : {}),
               ...(activeUnlockPassword ? { removeEncryptionPassword: activeUnlockPassword } : {}),
             })}
             onCancel={() => {
@@ -674,13 +679,14 @@ function ImpactWarning({
   onCancel,
 }: {
   impact: FilingImpactState;
-  onContinue: () => void;
+  onContinue: (markupAnnotations?: "flatten" | "keep") => void;
   onCancel: () => void;
 }) {
   const lines = describeImpact(impact);
+  const hasMarkupChoice = impact.markupAnnotationCount > 0;
 
   return (
-    <div className="filing-impact" role="alertdialog" aria-label="Prepare for Filing will remove document features">
+    <div className="filing-impact" role="alertdialog" aria-label="Prepare for Filing needs a markup choice">
       <p className="filing-impact__title">Stopped before anything was changed</p>
       <ul>
         {lines.map((line) => (
@@ -688,7 +694,9 @@ function ImpactWarning({
         ))}
       </ul>
       <p className="filing-impact__hint">
-        {impact.unappliedRedactionMarks > 0
+        {hasMarkupChoice
+          ? "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations."
+          : impact.unappliedRedactionMarks > 0
           ? "Apply your redactions first, then run Prepare for Filing again."
           : "If these features are load-bearing — an unsigned form, a signature you need intact — cancel and handle them first."}
       </p>
@@ -696,9 +704,28 @@ function ImpactWarning({
         <button type="button" className="filing-card__secondary-button" onClick={onCancel}>
           Cancel
         </button>
-        <button type="button" className="filing-card__ghost-button" onClick={onContinue}>
-          Continue anyway
-        </button>
+        {hasMarkupChoice ? (
+          <>
+            <button
+              type="button"
+              className="filing-card__secondary-button"
+              onClick={() => onContinue("keep")}
+            >
+              Keep them
+            </button>
+            <button
+              type="button"
+              className="filing-card__ghost-button"
+              onClick={() => onContinue("flatten")}
+            >
+              Flatten them
+            </button>
+          </>
+        ) : (
+          <button type="button" className="filing-card__ghost-button" onClick={() => onContinue()}>
+            Continue anyway
+          </button>
+        )}
       </div>
     </div>
   );
@@ -884,6 +911,12 @@ function describeImpact(impact: FilingImpactState): string[] {
   if (impact.unappliedRedactionMarks > 0) {
     lines.push(
       `${formatCount(impact.unappliedRedactionMarks, "redaction mark")} you made in RaioPDF ${impact.unappliedRedactionMarks === 1 ? "has" : "have"} not been applied — the filing copy would keep that content readable.`,
+    );
+  }
+
+  if (impact.markupAnnotationCount > 0) {
+    lines.push(
+      `${formatCount(impact.markupAnnotationCount, "RaioPDF markup annotation")} can be flattened into the filing copy or kept as a live annotation.`,
     );
   }
 

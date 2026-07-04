@@ -226,6 +226,13 @@
   flex-wrap: wrap;
 }
 
+.tool-panel__switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .tool-panel__primary-button,
 .tool-panel__danger-button,
 .tool-panel__secondary-button {

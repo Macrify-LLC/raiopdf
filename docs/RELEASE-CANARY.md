@@ -137,8 +137,70 @@ same commit and don't need the real engine, so the canary doesn't duplicate them
 organize (merge/split/reorder/extract/insert/rotate/crop), annotations (text box, highlight,
 comment, callout), zoom, search, insert-image, and the filing-dialog choreography.
 
+## The MCP connector canary
+
+The same "prove the advertised feature works in the real artifact" discipline applies to
+the **MCP connector** — the optional "Open Raio to AI" bridge that lets an AI client drive
+RaioPDF's local tools (see [`MCP.md`](./MCP.md)). The connector is its own shipped artifact:
+an esbuild-bundled Node runtime (`payload/mcp/app/index.mjs`) that the `raiopdf-mcp` launcher
+runs, spawning its **own** engine host on the first engine-backed call. A mocked unit suite
+(`apps/mcp/test/*.test.ts`, in CI) can't see the stdio protocol, the access gate, or the
+bundled runtime booting a real engine — the same blind spot the UI canary exists to close.
+
+`apps/mcp/test/mcp-e2e.canary.ts` drives the **real bundled connector over stdio, as an AI
+client does** (via `@modelcontextprotocol/sdk`), with the "Open Raio to AI" gate flipped on,
+and asserts each tool's OUTPUT against a known answer for a known input. It reuses the
+committed, non-sensitive `apps/mcp/eval/fixtures/` PDFs.
+
+```bash
+pnpm canary        # runs the UI canary AND the MCP canary
+pnpm canary:mcp    # just the MCP end-to-end canary
+```
+
+Prerequisite is the same assembled payload (`pnpm prepare:shell-bundle`) — it contains both
+the engine and the bundled MCP runtime. Point `RAIOPDF_ENGINE_HOST_BIN` / `RAIOPDF_ENGINE_PAYLOAD_DIR`
+at an assembled payload to run it from a worktree.
+
+| Advertised claim | Pass criteria | Tool |
+|---|---|---|
+| **Access gate is real** | With "Open Raio to AI" off, every tool call returns `MCP_DISABLED` (discovery still lists them) | gate |
+| **Tool surface is stable** | `tools/list` returns exactly the documented set (drift guard for the count in `MCP.md`) | listing |
+| Engine reachable | `raiopdf_health` returns `ok` through the connector's own spawned engine | `raiopdf_health` |
+| Counts pages | `pdf_page_count` on a 3-page fixture returns 3 | `pdf_page_count` |
+| Merges in order | `merge_pdfs` of a 3- and 5-page file yields a valid 8-page PDF | `merge_pdfs` |
+| Extracts pages | `extract_pages` of indexes [0,2] yields 2 pages | `extract_pages` |
+| Rotates | `rotate_pages` by 90° preserves count and sets page rotation to 90 | `rotate_pages` |
+| Compresses | `compress_pdf` writes a valid, same-page-count PDF via the real engine | `compress_pdf` |
+| Assembles a binder | `build_exhibit_binder` (main + one exhibit) yields an 8-page binder | `build_exhibit_binder` |
+| Bates stamps | `bates_stamp` writes a stamped copy, page count preserved | `bates_stamp` |
+| **Verified redaction** | `redact_terms` writes only after confirming no term is extractable (`survivingTerms: []`) | `redact_terms` |
+| Honest preflight | `prepare_for_filing` returns cited checks and is not `confirmedReady` while any check is unverifiable locally | `prepare_for_filing` |
+| Locates text | `locate_text` finds a known word and returns match rects via pdf.js through the bundled connector | `locate_text` |
+| Annotates text | `highlight_text` annotates located text and preserves the page count | `highlight_text` |
+
+### Adding a tool keeps the docs honest
+
+The tool-surface check asserts the **exact** current tool set, and `MCP.md` quotes the count.
+Adding an MCP tool therefore means updating both the `EXPECTED_TOOLS` list in
+`mcp-e2e.canary.ts` **and** the count/table in `MCP.md` in the same change — that coupling is
+intentional. Ideally add an output check for the new tool while you're there, as the annotation
+tools below do.
+
 ## Known gaps & findings
 
+- **The bundled MCP connector was missing pdf.js's worker — FIXED at packaging.** The MCP
+  canary caught that `installer/build-mcp-runtime.mjs` bundled `index.mjs` but never shipped
+  `pdf.worker.mjs`. `pdfjs-node.ts` uses `pdfjs-dist/legacy/build/pdf.mjs`, which fake-worker-
+  imports `./pdf.worker.mjs` relative to the running module — a runtime import esbuild can't
+  see. In the packaged connector every pdf.js-backed op therefore threw *"Setting up fake
+  worker failed"*: `redact_terms` could never write (its removal verification is a pdf.js
+  step) and `prepare_for_filing`'s searchable-text check silently degraded to "unverified".
+  The unit suite missed it because it runs against `node_modules`, where the worker resolves.
+  Fix: `pdfjs-node.ts` now statically imports the worker and pre-seeds `globalThis.pdfjsWorker`,
+  so esbuild bundles it as code and pdf.js skips the fake-worker setup entirely — no separate
+  file, no bundle-relative path to resolve. The `redact_terms` canary guards it. The same
+  defect hit PR #125's pdf.js-backed annotation tools (now landed); the `locate_text` /
+  `highlight_text` canary checks confirm they work once the worker is bundled.
 - **PDF/A conversion runs on the bundled Ghostscript — RESOLVED at the engine layer.** The
   canary surfaced `Stirling PDF request failed: This endpoint is disabled` on
   `/api/v1/convert/pdf/pdfa`. Root cause: **Stirling-PDF 2.14.0 gates that endpoint behind
@@ -224,3 +286,5 @@ Committed as a work-in-progress. Open items, roughly in priority order:
 | `apps/ui/smoke/real-engine/global-setup.ts` | Boots the engine once per run, publishes its endpoint |
 | `apps/ui/smoke/real-engine/helpers.ts` | UI drivers, fixtures, PDF-decode + real-engine bridge |
 | `apps/ui/smoke/real-engine/*.canary.ts` | The runbook tests |
+| `apps/mcp/test/mcp-e2e.canary.ts` | The MCP connector end-to-end canary (real stdio client + real engine) |
+| `apps/mcp/vitest.canary.config.ts` | Canary vitest config (canary-only include, generous timeouts) |

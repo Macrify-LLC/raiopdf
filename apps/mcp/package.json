@@ -10,6 +10,7 @@
     "build": "pnpm --filter @raiopdf/engine-api build && pnpm --filter @raiopdf/engine-pdf-lib build && pnpm --filter @raiopdf/engine-sidecar build && pnpm --filter @raiopdf/engine-local build && pnpm --filter @raiopdf/package-writer build && pnpm --filter @raiopdf/rules build && pnpm --filter @raiopdf/batch-cleanup build && pnpm --filter @raiopdf/production-set build && pnpm --filter @raiopdf/filing-packet build && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:canary": "vitest run --config vitest.canary.config.ts",
     "lint": "eslint ."
   },
   "dependencies": {

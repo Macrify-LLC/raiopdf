@@ -1472,12 +1472,14 @@ fn handle_local_decrypt(
         .unwrap_or_default();
 
     match run_qpdf_decrypt(&body, &password) {
-        Ok(decrypted) => {
-            write_bytes_response(client, 200, "OK", "application/pdf", &decrypted)
-        }
-        Err(message) => {
-            write_bytes_response(client, 422, "Unprocessable Entity", "text/plain", message.as_bytes())
-        }
+        Ok(decrypted) => write_bytes_response(client, 200, "OK", "application/pdf", &decrypted),
+        Err(message) => write_bytes_response(
+            client,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
     }
 }
 
@@ -1515,7 +1517,11 @@ fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("qpdf --decrypt failed ({}): {}", output.status, stderr.trim()));
+        return Err(format!(
+            "qpdf --decrypt failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
     }
     if output.stdout.is_empty() {
         return Err("qpdf produced no output".to_string());

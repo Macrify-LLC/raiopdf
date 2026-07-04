@@ -3,9 +3,21 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
+// @ts-expect-error - the pdf.js worker entry ships no type declarations.
+import * as pdfjsWorker from "pdfjs-dist/legacy/build/pdf.worker.min.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
 import { scoreGarbledPage, type TextLayerCoverage } from "@raiopdf/rules";
 import type { PdfEditRect } from "@raiopdf/engine-api";
+
+// Pre-seed pdf.js's worker on globalThis. In Node, pdf.js sets up a "fake worker" by
+// doing a runtime-string `import("./pdf.worker.mjs")` — a dynamic import esbuild can't
+// see, so in the bundled MCP connector it fails with "Setting up fake worker failed"
+// and every pdf.js-backed tool (redaction's removal verification, filing's
+// searchable-text check) throws. A *static* import bundles the worker as code, and
+// pdf.js skips fake-worker setup when globalThis.pdfjsWorker.WorkerMessageHandler is
+// already present — so the runtime import never fires. Handled uniformly at bundle
+// time, independent of the emitted file's location or cwd.
+(globalThis as typeof globalThis & { pdfjsWorker?: unknown }).pdfjsWorker ??= pdfjsWorker;
 
 const require = createRequire(import.meta.url);
 const PDFJS_ASSET_DIR_ENV = "RAIOPDF_PDFJS_ASSET_DIR";

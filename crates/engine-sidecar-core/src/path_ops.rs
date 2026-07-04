@@ -1538,9 +1538,13 @@ pub fn prepare_filing(
             size_bytes: facts.size_bytes,
             encrypted: facts.encrypted,
             all_letter_portrait: facts.pages.iter().all(|page| page.letter_portrait),
+            // An oversized part is NOT within the cap — the flag must stay
+            // honest so filing preflights can't green-light a part the court
+            // portal will reject (Codex review, PR #123). `oversized` on the
+            // part descriptor carries the "single page too big" explanation.
             within_byte_cap: plan
                 .split_max_bytes
-                .map(|max_bytes| part.byte_length <= max_bytes || part.oversized),
+                .map(|max_bytes| part.byte_length <= max_bytes),
         });
     }
 

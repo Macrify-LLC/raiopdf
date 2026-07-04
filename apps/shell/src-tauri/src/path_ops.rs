@@ -606,19 +606,27 @@ pub async fn path_op_merge(
     let work_dir = OpWorkDir::create(&app)?;
     let name = "merged.pdf".to_string();
     let output_path = work_dir.path().join(&name);
-    let input_size: u64 = inputs
+    // Snapshot every input up front and re-verify after qpdf finishes — a
+    // multi-input op gets the same mid-operation drift guard as the
+    // single-output ops, or a moving input could silently produce a stale or
+    // mixed merged PDF (Codex review, PR #123).
+    let snapshots: Vec<InputSnapshot> = inputs
         .iter()
-        .filter_map(|path| fs::metadata(path).ok())
-        .map(|m| m.len())
-        .sum();
+        .map(|path| snapshot(path))
+        .collect::<OpResult<_>>()?;
+    let input_size: u64 = snapshots.iter().map(|snapshot| snapshot.len).sum();
     let started = Instant::now();
 
     let (page_count, output_size) = {
         let inputs = inputs.clone();
+        let snapshots = snapshots.clone();
         let output_path = output_path.clone();
         let toolchain = toolchain.clone();
         on_blocking_pool(move || {
             core_ops::merge(&toolchain, &inputs, &output_path)?;
+            for (input, before) in inputs.iter().zip(snapshots) {
+                ensure_unchanged(input, before)?;
+            }
             let page_count = core_ops::page_count(&toolchain, &output_path)?;
             let size = fs::metadata(&output_path)
                 .map(|metadata| metadata.len())

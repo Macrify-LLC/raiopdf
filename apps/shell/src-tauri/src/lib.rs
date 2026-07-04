@@ -274,6 +274,16 @@ fn save_pdf_copy_dialog(
     };
 
     let destination = destination.into_path().map_err(|error| error.to_string())?;
+
+    // Copying a file onto itself truncates the source to zero bytes before
+    // the copy begins (fs::copy opens the destination with truncation), which
+    // would destroy the user's original. A streamed document is clean by
+    // construction, so "save over the original" is already satisfied — treat
+    // it as a successful no-op (Codex review, PR #124).
+    if is_same_file(&entry.path, &destination) {
+        return Ok(Some(saved_pdf(&destination, file_grants.inner())?));
+    }
+
     fs::copy(&entry.path, &destination).map_err(|error| {
         format!(
             "Failed to save PDF copy at {}: {error}",
@@ -282,6 +292,16 @@ fn save_pdf_copy_dialog(
     })?;
 
     Ok(Some(saved_pdf(&destination, file_grants.inner())?))
+}
+
+/// True when both paths refer to the same on-disk file. Canonicalization
+/// resolves case/short-name/symlink differences; when the destination does
+/// not exist yet (the common Save As case) the paths cannot be the same file.
+fn is_same_file(source: &Path, destination: &Path) -> bool {
+    match (fs::canonicalize(source), fs::canonicalize(destination)) {
+        (Ok(source), Ok(destination)) => source == destination,
+        _ => false,
+    }
 }
 
 #[tauri::command]

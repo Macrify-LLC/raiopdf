@@ -613,6 +613,17 @@ export function useDocument(options: UseDocumentOptions = {}) {
       const generation = nextGeneration();
       sourceKindRef.current = input.source.kind;
       await closeHandle(previousHandle);
+
+      // Same token guard as the memory open path: if another open started
+      // while the previous handle was closing, this streamed open is stale
+      // and must not replace the newer document (Codex review, PR #124).
+      if (openTokenRef.current !== token) {
+        return {
+          status: "failed",
+          error: "This document was replaced before it finished opening.",
+        };
+      }
+
       setDocument({
         ...INITIAL_DOCUMENT,
         source: { ...input.source, generation },

@@ -57,8 +57,8 @@ Four ways it fits into an actual day at the firm:
 | Moment | What happens |
 |---|---|
 | **Open it and go** | No account screen, no sign-in, no "create a free account to continue." |
-| **Drop in a scan, hit "Make Searchable"** | OCR runs entirely offline — no upload, no wait on a server. |
-| **One click, "Prepare for Filing"** | Normalizes every page to letter-size portrait and splits an oversized file into properly labeled, sequential, portal-compliant parts. |
+| **Drop in a scan, hit "Make Searchable"** | OCR runs entirely offline — no upload, no wait on a server. And the status bar tells you honestly whether the result can be trusted. |
+| **One click, "Prepare for Filing"** | Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, normalize every page, and split an oversized file into properly labeled, sequential, portal-compliant parts. |
 | **"Combine with Exhibits"** | Assembles a motion or brief with exhibit files in order, auto-stamped ("Exhibit A" — configurable) and auto-bookmarked. |
 
 ## Features
@@ -67,28 +67,34 @@ Four ways it fits into an actual day at the firm:
 
 | Capability | What it means |
 |---|---|
-| View, search, print | Standard reading and navigation |
-| Organize pages | Merge, split, reorder, extract, insert, rotate, crop |
+| View, search, print | Standard reading and navigation, full-document search, keyboard and Ctrl+wheel zoom |
+| Organize pages | Merge, split, reorder, extract, insert, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
-| Annotate | Highlight, comment, draw, stamp |
-| Fill & sign | Add text and images, fill forms, signature stamp + flatten |
-| Compress & protect | File compression, passwords, permissions |
-| Native MCP Integration | No AI features (intentional), but speaks natively to your AI agents |
+| **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
+| Annotate | Highlight, underline, strikethrough, freehand draw, shapes and arrows, callouts, text boxes, comments, images — with color, opacity, and stroke-width controls |
+| Fill & sign | Fill forms, add text and images, signature stamp + flatten |
+| Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
+| Unlock PDFs | Save a decrypted copy of a password- or owner-restricted PDF (you supply the password if one is required) — the original on disk stays untouched. *Adding* password protection isn't in this build yet. |
+| In-app help | Built-in, offline help for every tool — the same articles published at [raio.macrify.me/help](https://raio.macrify.me/help/) |
+| Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can drive the whole toolbox |
 | No catches | No watermarks, no nag screens, ever |
 
 ### Legal — the stuff nobody bothered building for lawyers
 
 | Workflow | What it means |
 |---|---|
-| **Prepare for Filing** | One click: normalizes every page to letter-size portrait; if the file exceeds the e-portal size limit, splits it into properly labeled sequential parts exported as PDF/A |
-| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped and auto-bookmarked |
-| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath |
-| **Bates numbering** | Across an entire document set, in one pass |
+| **Prepare for Filing** | Pick your court, get a prep checklist and a preflight report with the actual rule citations, normalize pages to the portal's requirements, and split an oversized file into properly labeled sequential parts |
+| **Jurisdiction packs** | E-filing rules for the Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS) — every constraint cites its authority and the date it was last verified. Guidance, not legal advice. |
+| **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
+| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with an optional generated index |
+| **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
+| **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
+| **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |
+| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
 | **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
-| **e-filing preflight report** | Rule citations attached (Fla. R. Jud. Admin. 2.520 / 2.525) |
 
-All of the above are planned/in-progress for the first release — see [Status](#status).
+Everything above is implemented and working in the development build today — what's still pre-alpha is the release packaging, not the features. See [Status](#status).
 
 ## What it is not
 
@@ -96,7 +102,7 @@ All of the above are planned/in-progress for the first release — see [Status](
 - **Not released yet.** Pre-alpha, no promised date. But if you want it I'll give it to you.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
 - **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
-- **Not phoning home.** No telemetry, no background analytics — RaioPDF makes no network requests of its own, and the content-security policy only lets it reach its own bundled engine. Nothing is ever sent automatically. If it ever crashes, it can ask — once — to open a pre-filled GitHub issue in your browser that you review and submit yourself; that's the only thing that ever leaves your machine, only if you choose to, and you can switch the prompt off entirely.
+- **Not phoning home.** No telemetry, no background analytics — RaioPDF makes no network requests of its own, and the content-security policy only lets it reach its own bundled engine. Nothing is ever sent automatically. If it ever crashes, it asks — once — whether to report it, your choice of two ways: open a pre-filled GitHub issue in your browser, or save the report to a file you can email in yourself (no account needed). Either way you review every word before anything is sent, and you can switch the prompt off entirely.
 
 ## How it's built
 
@@ -118,11 +124,11 @@ A [Tauri](https://tauri.app) desktop shell with a custom UI built to feel famili
 
 Everything in that diagram runs on your machine. Nothing in it talks to the internet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown, including how the Stirling-PDF engine is vendored and scrubbed to its MIT-licensed core only ([`docs/ENGINE-VENDORING.md`](docs/ENGINE-VENDORING.md)).
 
-Optionally, an off-by-default "bring your own AI" connector lets your own AI assistant (Claude Desktop / Claude Code) operate RaioPDF's local tools over [MCP](https://modelcontextprotocol.io) — still entirely on-device, no AI inside RaioPDF itself. See [`docs/MCP.md`](docs/MCP.md).
+Optionally, an off-by-default "bring your own AI" connector — bundled right in the installer — lets your own AI assistant (Claude Desktop / Claude Code) operate RaioPDF's local tools over [MCP](https://modelcontextprotocol.io): twenty tools covering OCR, verified redaction, Bates stamping, exhibit binders, production sets, filing packets, batch cleanup, and e-filing preflight. Still entirely on-device, no AI inside RaioPDF itself. See [`docs/MCP.md`](docs/MCP.md).
 
 ## Status
 
-**Pre-alpha.** Built in the open — every feature above is being implemented against the architecture in [`docs/`](docs/). Windows ships first; macOS is planned with no committed date.
+**Pre-alpha.** Built in the open — the features above are implemented and working in the development build; none of this is a roadmap slide. What's left before the first public build is release engineering: the Windows installer (NSIS) and the maintainer code-signing pipeline already exist, and signed auto-update infrastructure is in place (not yet wired to a user-facing "check for updates"). Windows ships first; macOS is planned with no committed date.
 
 The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically — there's no download link to click until a real build exists behind it.
 

@@ -75,9 +75,16 @@ Claude app and Claude Code.)
 - **Verified redaction.** `redact_terms` rasterizes the pages (truly removing
   recoverable text) and then verifies with an on-device text check that no
   redacted term remains extractable — it writes the output *only* if that
-  verification passes. Nothing is saved on a failed verification.
+  verification passes. Nothing is saved on a failed verification. The check is
+  garble-aware: text that survives only as corrupted or unmappable glyphs is
+  treated as *still present*, biasing the verifier toward failing a clean-looking
+  redaction rather than ever passing a leaked one.
 
 ## Tools
+
+**20 tools as of 2026-07-03** (the Bates row below covers two). This table is
+the canonical list — the README, the landing page, and the macrify.me product
+card all quote the count from here; update them when it changes.
 
 | Tool | What it does |
 |------|--------------|
@@ -89,13 +96,17 @@ Claude app and Claude Code.)
 | `extract_pages` | Keep only selected pages (original order). |
 | `rotate_pages` | Rotate selected pages (multiples of 90°). |
 | `compress_pdf` | Produce a smaller copy. |
+| `remove_encryption` | Save a decrypted copy of a password- or owner-restricted PDF (you supply the password when one is required). |
 | `sanitize_pdf` | Remove JavaScript, attachments, external links. |
 | `scrub_metadata` | Remove document metadata. |
 | `page_numbers` | Stamp page numbers. |
 | `bates_stamp` / `bates_stamp_folder` | Bates numbers on one file, or one continuous sequence across an ordered set. |
 | `build_exhibit_binder` | Assemble a main document + ordered, labeled exhibits into one bookmarked binder. |
+| `build_production_set` | Build a Bates-numbered discovery production from a document set: confidentiality designations, index files, volume splits. |
+| `batch_cleanup` | Run OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs in one queue. |
 | `redact_terms` | Redact terms with verified removal (see above). |
 | `prepare_for_filing` | Read-only e-filing preflight: page size, orientation, searchable text, file-size caps, PDF/A — each with its rule citation. |
+| `build_filing_packet` | Assemble a multi-document filing as one packet with a manifest and per-document rule checks. |
 
 **File-handling rules** every tool follows: absolute paths only; inputs must be
 regular files; outputs are never overwritten (a name collision is an error); each

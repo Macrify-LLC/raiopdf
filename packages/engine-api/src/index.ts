@@ -522,6 +522,19 @@ export type PdfShapeEdit =
       strokeColor?: PdfEditColor;
     };
 
+export type PdfMarkupMode = "baked" | "annotation";
+
+export type PdfApplyEditsOptions = {
+  /**
+   * Controls whether supported markup edits are baked into page content or
+   * emitted as live PDF annotations with generated appearances.
+   *
+   * Defaults to `"baked"` for the existing save behavior. Annotation mode is
+   * currently opt-in and only applies to ink and geometric shape edits.
+   */
+  markupMode?: PdfMarkupMode;
+};
+
 /**
  * A sticky-note comment stored as a real PDF `/Text` annotation.
  *
@@ -886,13 +899,17 @@ export interface PdfEngine {
    * points, bottom-left origin, caller-mapped from canvas coordinates);
    * engines must render text, image, and signature edits upright to the
    * viewer on pages rotated 90/180/270 degrees. Comments must be written as
-   * real `/Annots` entries so they remain live annotations; the other edit
-   * types are baked into page content. Engines without an add-content
+   * real `/Annots` entries so they remain live annotations. By default, the
+   * other edit types are baked into page content. Callers may opt into
+   * `markupMode: "annotation"` to emit supported markup edits as real PDF
+   * annotations; Phase 1 supports ink and geometric shapes only, while all
+   * other edit types keep their existing path. Engines without an add-content
    * pipeline must reject with `PdfEngineError("UNSUPPORTED", ...)`.
    */
   applyEdits(
     document: PdfDocumentHandle,
     edits: readonly PdfEdit[],
+    options?: PdfApplyEditsOptions,
   ): Promise<PdfDocumentHandle>;
 
   /**

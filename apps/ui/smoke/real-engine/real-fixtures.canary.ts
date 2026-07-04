@@ -36,35 +36,46 @@ if (garbleFixtures.length === 0) {
 // than the app's search feature, which is separately flaky on some real PDFs.
 const COMMON_WORDS = /\b(the|and|of|to|in|is|for|that|with|shall|this|court|county)\b/gi;
 
+// The garble check is split into two independent tests on purpose. DETECTION
+// (below) is fast and deterministic — the app reads the broken text layer and
+// flags it. RE-OCR VERIFICATION (further below) drives the real OCRmyPDF pass,
+// whose completion is nondeterministic under full-suite load: Stirling caps
+// concurrent OCR at `ocrMyPdfSessionLimit` (2), and a slot not yet released by an
+// earlier OCR test can make this — the suite's 3rd OCR call — queue and stall.
+// Keeping them separate means a re-OCR stall reports as exactly that, and never
+// masks that detection (the reliable half) works. See docs/RELEASE-CANARY.md
+// "Unfinished" for the determinism follow-up (raise the session limit above the
+// suite's OCR-call count, or split the engine onto a fresh session per OCR).
 for (const name of garbleFixtures) {
-  test(`Force re-OCR rebuilds a garbled text layer into readable text: ${name}`, async ({ page }) => {
-    // NOTE: OCR completion is nondeterministic under load — this occasionally
-    // stalls in a full-suite run (see docs/RELEASE-CANARY.md "Unfinished"). The
-    // detection half is reliable; the re-OCR poll is kept short so a stall fails
-    // fast (~3 min) instead of dragging the suite out.
-    test.setTimeout(240_000);
+  test(`Detects a garbled text layer: ${name}`, async ({ page }) => {
     await installRealEngineBridge(page, endpoint);
     await page.goto("/");
     await openPdf(page, name, localFixture(name)!);
 
-    // 1) Detection: the app must recognize the text layer is garbled.
     await expect(
       page.getByText(/garbled on \d+ of \d+ pages/i),
       "the app should detect a garbled text layer",
     ).toBeVisible({ timeout: 20_000 });
+  });
+
+  test(`Force re-OCR rebuilds a garbled text layer into readable text: ${name}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    await installRealEngineBridge(page, endpoint);
+    await page.goto("/");
+    await openPdf(page, name, localFixture(name)!);
 
     const canvasRegion = page.getByRole("region", { name: "Document canvas" });
     const commonWordCount = async (): Promise<number> =>
       ((await canvasRegion.innerText()).match(COMMON_WORDS) ?? []).length;
     const before = await commonWordCount();
 
-    // 2) Force re-OCR (NOT plain "Make Searchable", which SKIPS pages that already
-    //    carry a — broken — text layer). Confirm via "Rebuild Text Layer".
+    // Force re-OCR (NOT plain "Make Searchable", which SKIPS pages that already
+    // carry a — broken — text layer). Confirm via "Rebuild Text Layer".
     await page.getByRole("button", { name: "Force re-OCR text layer" }).click();
     await page.getByRole("button", { name: "Rebuild Text Layer", exact: true }).click();
 
-    // 3) Outcome: the rebuilt text layer now renders real, readable words. Poll
-    //    the rendered text (reliable) with a generous budget for a many-page scan.
+    // Outcome: the rebuilt text layer now renders real, readable words. Poll the
+    // rendered text (reliable) with a generous budget for a many-page scan.
     await expect
       .poll(commonWordCount, {
         timeout: 180_000,

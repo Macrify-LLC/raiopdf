@@ -173,11 +173,18 @@ comment, callout), zoom, search, insert-image, and the filing-dialog choreograph
 
 Committed as a work-in-progress. Open items, roughly in priority order:
 
-- **Garble re-OCR test is flaky under load.** It passes in isolation (~10 s) but the OCR
-  occasionally stalls in a full-suite run (never returns readable text). The *detection*
-  half (the app flags "garbled on N pages") is reliable; the re-OCR poll now fails fast
-  (~3 min) instead of dragging the suite out. Root cause is OCR-completion nondeterminism —
-  related to the large-PDF/OCR reliability work.
+- **Garble re-OCR verification is nondeterministic under load — now split from detection.**
+  The check is two independent tests: **`Detects a garbled text layer`** (fast, reliable —
+  the app reads the broken text layer and flags it) and **`Force re-OCR rebuilds … readable
+  text`** (drives the real OCRmyPDF pass). The re-OCR half occasionally stalls in a
+  full-suite run (never returns readable text within the 3-min poll). Likely cause: Stirling
+  caps concurrent OCR at `ocrMyPdfSessionLimit` (2), and a slot not yet released by an earlier
+  OCR test (`engine-ops` runs two) makes this — the suite's 3rd OCR call — queue. The split
+  means a stall reports as exactly that and never masks that detection works. **Determinism
+  follow-up (not yet done):** raise `ocrMyPdfSessionLimit` above the suite's OCR-call count in
+  `stirling_settings_yaml` (a slot-exhaustion band-aid, cheap), and/or boot the engine on a
+  fresh OCR session per call so a leaked slot can't accumulate — verify by looping the full
+  canary. Root cause confirmation needs repeated full-suite runs (the stall is intermittent).
 - **Separate-files two-parter is verified only at the unit level.** `packages/filing-packet`
   tests prove an oversized exhibit splits into `Part 1 of 2 …` in separate-files mode. The
   **desktop packet builder itself** (`build_filing_packet` Tauri command + its UI, which

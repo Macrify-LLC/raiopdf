@@ -141,13 +141,14 @@ export async function extractTextBoxesByPage(bytes: Uint8Array): Promise<readonl
           continue;
         }
 
+        const baselineY = transform[5] ?? 0;
         items.push({
           str: textItem.str,
           rect: {
             x: transform[4] ?? 0,
-            y: transform[5] ?? 0,
+            y: baselineY - 0.35 * height,
             w: width,
-            h: height,
+            h: 1.35 * height,
           },
           hasEOL: textItem.hasEOL ?? false,
         });

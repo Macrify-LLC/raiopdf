@@ -46,6 +46,16 @@ describe("MCP annotation tools", () => {
       defaultEngineHandle,
     );
     expect(wholeWord.structuredContent.matchCount).toBe(1);
+    const [catMatch] = wholeWord.structuredContent.matches as Array<{
+      rects: Array<{ y: number; h: number }>;
+    }>;
+    const [catRect] = catMatch?.rects ?? [];
+    expect(catRect).toBeDefined();
+    if (catRect === undefined) {
+      throw new Error("Expected cat match to include a rectangle");
+    }
+    expect(catRect.y).toBeLessThan(150);
+    expect(catRect.y + catRect.h).toBeGreaterThan(150);
 
     const substring = await handleLocateText(
       { input: inputPath, query: "cat" },

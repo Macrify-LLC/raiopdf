@@ -1,3 +1,5 @@
+pub mod path_ops;
+
 use serde::Serialize;
 use std::{
     env,

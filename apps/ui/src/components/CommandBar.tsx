@@ -67,6 +67,11 @@ export interface CommandBarProps {
   pageCount?: number;
   zoom?: number;
   hasDocument?: boolean;
+  /**
+   * Streamed (large) documents can't dirty — mutations are gated — so Save
+   * has nothing to write and stays disabled while the document is open.
+   */
+  saveDisabled?: boolean;
   editTool?: EditToolId;
   onEditToolChange?: ((tool: EditToolId) => void) | undefined;
   searchValue?: string;
@@ -99,6 +104,7 @@ export function CommandBar({
   pageCount = 0,
   zoom = 1,
   hasDocument = false,
+  saveDisabled = false,
   editTool = "select",
   onEditToolChange,
   searchValue = "",
@@ -150,7 +156,7 @@ export function CommandBar({
           icon={<SaveIcon size={17} />}
           label="Save"
           onClick={onSave}
-          disabled={!hasDocument}
+          disabled={!hasDocument || saveDisabled}
         />
         <IconButton
           icon={<PrintIcon size={17} />}

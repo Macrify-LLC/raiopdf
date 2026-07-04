@@ -29,12 +29,16 @@ import {
   filePort,
   isTauriRuntime,
   pickBrowserFile,
+  pickPdfsForAdd as pickPdfsForAddPrimitive,
   readBrowserFile,
-  toUint8Array,
-  type BinaryInvokeResponse,
+  readPdfRange,
+  type FileGrant,
   type OpenedFile,
 } from "./filePort";
-import { getLargeDocThresholdBytes } from "./largeDocThreshold";
+import {
+  getLargeDocThresholdBytes,
+  setLargeDocThresholdBytes,
+} from "./largeDocThreshold";
 
 /** Contract of one entry returned by the shell's `pick_pdfs_for_add` command. */
 export interface PickedPdfForAdd {
@@ -100,23 +104,27 @@ export async function readFileForAdd(input: FileAddInput): Promise<FileAddResult
  * fall back to their DOM `<input type=file>` and feed the resulting `File`s
  * back through `readFileForAdd`.
  */
-export async function pickPdfsForAdd(
-  options: { multiple?: boolean } = {},
-): Promise<PickedPdfForAdd[] | null> {
+export async function pickPdfsForAdd(): Promise<PickedPdfForAdd[] | null> {
   if (!isTauriRuntime()) {
     return null;
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
-
   try {
-    const picked = await invoke<PickedPdfForAdd[] | null>("pick_pdfs_for_add", {
-      multiple: options.multiple ?? false,
-    });
-    return picked ?? [];
+    const picked = await pickPdfsForAddPrimitive();
+
+    if (!picked) {
+      // Dialog cancelled.
+      return [];
+    }
+
+    // The shell echoes its authoritative threshold with every pick — keep
+    // the UI-side constant in lockstep so the two can never drift.
+    setLargeDocThresholdBytes(picked.thresholdBytes);
+    return [...picked.files];
   } catch (error) {
     if (isMissingCommandError(error, "pick_pdfs_for_add")) {
-      // FALLBACK (pre-Lane-A): the command isn't registered yet.
+      // Shell predates the picker command — callers fall back to their DOM
+      // input / legacy dialog.
       return null;
     }
 
@@ -144,38 +152,42 @@ export async function pickFileForAdd(): Promise<FileAddResult | null> {
     return file ? readFileForAdd(file) : null;
   }
 
-  const picks = await pickPdfsForAdd({ multiple: false });
+  const picks = await pickPdfsForAdd();
 
   if (picks !== null) {
     const pick = picks[0];
     return pick ? readFileForAdd(pick) : null;
   }
 
+  // Legacy-shell fallback: `filePort.openFile()` returns a size-branched
+  // source; map it onto the add-result shape without ever materializing an
+  // above-threshold file.
   const opened = await filePort.openFile();
 
   if (!opened) {
     return null;
   }
 
-  const sizeBytes = opened.bytes.byteLength;
-
-  if (sizeBytes <= getLargeDocThresholdBytes()) {
-    return { kind: "bytes", file: opened };
+  if (opened.kind === "memory") {
+    return {
+      kind: "bytes",
+      file: { bytes: opened.bytes, name: opened.name, path: opened.path },
+    };
   }
 
-  if (opened.path !== null) {
+  if (opened.kind === "rangeGrant") {
     return {
       kind: "descriptor",
       descriptor: {
-        grant: opened.path,
+        grant: opened.grant,
         name: opened.name,
-        sizeBytes,
-        pageCount: await tryPageCountByGrant(opened.path),
+        sizeBytes: opened.sizeBytes,
+        pageCount: await tryPageCountByGrant(opened.grant),
       },
     };
   }
 
-  return { kind: "tooLarge", name: opened.name, sizeBytes };
+  return { kind: "tooLarge", name: opened.name, sizeBytes: opened.sizeBytes };
 }
 
 /** Shared honest-gate copy for above-threshold adds. */
@@ -189,24 +201,19 @@ export function tooLargeToAddMessage(name: string): string {
  * length cap (max(4 MB, threshold)) by definition.
  */
 async function readWholeFileByGrant(grant: string, sizeBytes: number): Promise<Uint8Array> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  const bytes = await invoke<BinaryInvokeResponse>("read_pdf_range", {
-    grant,
-    offset: 0,
-    length: sizeBytes,
-  });
-
-  return toUint8Array(bytes);
+  return readPdfRange(grant as FileGrant, 0, sizeBytes);
 }
 
 /**
- * `page_count(grant)` when available; `null` when the command is missing
- * (pre-Lane-A shell) or the count fails -- callers treat null as "deferred".
+ * `path_op_page_count(grant)` when available; `null` when the command is
+ * missing (older shell) or the count fails -- callers treat null as
+ * "deferred" and must render it honestly, never as 0.
  */
 async function tryPageCountByGrant(grant: string): Promise<number | null> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const count = await invoke<number>("page_count", { grant });
+    const response = await invoke<{ pageCount: number }>("path_op_page_count", { grant });
+    const count = response.pageCount;
     return Number.isInteger(count) && count >= 0 ? count : null;
   } catch {
     return null;

@@ -29,3 +29,6 @@ tauri-plugin-process = "2"
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-updater = "2"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

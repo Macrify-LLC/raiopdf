@@ -163,7 +163,10 @@ export function AppShell({
   markupAnnotationMessage,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasDocument = Boolean(document.engineHandle && document.bytes);
+  // "Is a document open" is source-based [R1-1]: a streamed document has no
+  // engine handle and no bytes but is absolutely open.
+  const hasDocument = document.source !== null;
+  const streamedDocument = document.source !== null && document.source.kind !== "memory";
   const canUndo = editing.pendingEdits.length > 0;
   const tabs = document.fileName
     ? [
@@ -210,6 +213,7 @@ export function AppShell({
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}
+        saveDisabled={streamedDocument}
         onPrint={onPrint}
         onPreviousPage={onPreviousPage}
         onNextPage={onNextPage}
@@ -271,6 +275,7 @@ export function AppShell({
           onRedactionAreaRemoved={onRedactionAreaRemoved}
           searchResults={documentSearch.results}
           activeSearchResultId={documentSearch.activeMatch?.id ?? null}
+          lazyPageMeasurement={streamedDocument}
           engineStarting={ocrStarting}
         />
         <ToolPanel

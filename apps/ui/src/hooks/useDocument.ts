@@ -22,14 +22,46 @@ import {
   type ProtectedPdfSource,
   type UnlockResult,
 } from "../lib/protectedPdfResolver";
+import type { FileGrant } from "../lib/filePort";
 
 export interface PageSizeInches {
   width: number;
   height: number;
 }
 
+/**
+ * First-class document source [R1-1]. Streamed docs are NOT "a document with
+ * `bytes: null`" — they are a distinct source kind, and "is a document open"
+ * checks branch on `source !== null`, never on `engineHandle && bytes`.
+ *
+ * `generation` on the range kinds records the document identity the source
+ * was opened under; a Phase 3 reconcile (path op output → fresh grant) opens
+ * a NEW source with a bumped generation so in-flight work for the old one
+ * goes stale by construction [R1-8].
+ */
+export type DocumentSource =
+  | { kind: "memory"; bytes: Uint8Array }
+  | { kind: "rangeGrant"; grant: FileGrant; sizeBytes: number; generation: number }
+  | { kind: "rangeFile"; file: File; sizeBytes: number; generation: number };
+
+/**
+ * Gate copy for every mutation path while a streamed document is open. The
+ * named alternatives run file-to-file through the local engine (Phase 3 path
+ * ops) and never require materializing the document in memory.
+ */
+export const STREAMED_DOCUMENT_GATE_MESSAGE =
+  "This document is too large for in-app editing. Split, extract, compress, and OCR run through the local engine and still work.";
+
 export interface DocumentState {
   bytes: Uint8Array | null;
+  source: DocumentSource | null;
+  /**
+   * Monotonically increasing document identity [R1-8]: bumped on every open
+   * AND every committed mutation, replacing `Uint8Array` reference-identity
+   * in staleness checks (`replaceBytes` guards, `isCurrentDocument`,
+   * per-document caches key on `(openToken, generation)`).
+   */
+  generation: number;
   engineHandle: PdfDocumentHandle | null;
   pageCount: number;
   currentPage: number;
@@ -65,6 +97,8 @@ const MAX_ZOOM = 4;
 
 const INITIAL_DOCUMENT: DocumentState = {
   bytes: null,
+  source: null,
+  generation: 0,
   engineHandle: null,
   pageCount: 0,
   currentPage: 1,
@@ -98,7 +132,9 @@ interface ReplaceBytesOptions {
   textLayerCoverage?: TextLayerCoverage | null;
   knownPageCount?: number;
   expectedOpenToken?: number;
-  expectedSourceBytes?: Uint8Array | null;
+  /** Generation-based staleness guard [R1-8], replacing the old
+   * `expectedSourceBytes` Uint8Array reference check. */
+  expectedGeneration?: number;
   fileName?: string;
   filePath?: string | null;
   signatureInvalidationNotice?: SignatureInvalidationNotice | null;
@@ -155,13 +191,23 @@ interface OperationContext {
 
 interface MutationGuards {
   expectedOpenToken?: number;
-  expectedSourceBytes?: Uint8Array | null;
+  expectedGeneration?: number;
 }
 
 export interface DocumentFileInput {
   bytes: Uint8Array;
   name: string;
   path?: string | null;
+}
+
+/** Input for opening a streamed (range-read) document. No bytes anywhere. */
+export interface StreamedFileInput {
+  source:
+    | { kind: "rangeGrant"; grant: FileGrant; sizeBytes: number }
+    | { kind: "rangeFile"; file: File; sizeBytes: number };
+  name: string;
+  /** The grant string in Tauri (grants double as `filePath` [R1-9]); null in browser. */
+  path: string | null;
 }
 
 export interface SaveDocumentResult {
@@ -197,8 +243,17 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
+  // Never reset: generation is a globally monotonic document identity, so a
+  // (generation) capture alone distinguishes documents across opens [R1-8].
+  const generationRef = useRef(0);
+  const sourceKindRef = useRef<DocumentSource["kind"] | null>(null);
   const scrollNonceRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const nextGeneration = useCallback(() => {
+    generationRef.current += 1;
+    return generationRef.current;
+  }, []);
 
   const requestPageScroll = useCallback((page: number) => {
     scrollNonceRef.current += 1;
@@ -258,9 +313,15 @@ export function useDocument(options: UseDocumentOptions = {}) {
       const previousHandle = activeHandleRef.current;
       activeHandleRef.current = engineHandle;
       activeBytesRef.current = bytes;
+      // Each commit bumps generation exactly where it swapped the bytes ref
+      // before — memory-mode staleness semantics are unchanged [R1-8].
+      const generation = nextGeneration();
+      sourceKindRef.current = "memory";
       setDocument((current) => ({
         ...current,
         bytes,
+        source: { kind: "memory", bytes },
+        generation,
         engineHandle,
         pageCount,
         currentPage: clampPage(resolveCurrentPage(options, current, pageCount), pageCount),
@@ -292,7 +353,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
       return true;
     },
-    [closeHandle, engine, requestPageScroll],
+    [closeHandle, engine, nextGeneration, requestPageScroll],
   );
 
   const currentOperation = useCallback((): OperationContext | null => {
@@ -318,6 +379,16 @@ export function useDocument(options: UseDocumentOptions = {}) {
       requestedToken = openTokenRef.current,
     ) => {
       const queued = mutationQueueRef.current.then(async () => {
+        // Streamed docs are never mutated in memory: every enqueueMutation
+        // op is gated with the message naming what still works [R1-2].
+        if (sourceKindRef.current !== null && sourceKindRef.current !== "memory") {
+          if (openTokenRef.current === requestedToken) {
+            setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+          }
+
+          return false;
+        }
+
         const context = currentOperation();
 
         if (!context || context.token !== requestedToken) {
@@ -446,8 +517,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
         await closeHandle(previousHandle);
         activeHandleRef.current = engineHandle;
         activeBytesRef.current = bytes;
+        sourceKindRef.current = "memory";
         setDocument({
           bytes,
+          source: { kind: "memory", bytes },
+          generation: nextGeneration(),
           engineHandle,
           pageCount,
           currentPage: 1,
@@ -489,6 +563,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           // flow, so release its handle rather than leaking it.
           activeHandleRef.current = null;
           activeBytesRef.current = null;
+          sourceKindRef.current = null;
           await closeHandle(previousHandle);
           setDocument(INITIAL_DOCUMENT);
           return {
@@ -509,6 +584,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         } else {
           activeHandleRef.current = null;
           activeBytesRef.current = null;
+          sourceKindRef.current = null;
           setDocument({
             ...INITIAL_DOCUMENT,
             error: message,
@@ -517,7 +593,66 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, engine, openPreparedDocument, requestPageScroll],
+    [closeHandle, engine, nextGeneration, openPreparedDocument, requestPageScroll],
+  );
+
+  /**
+   * Open a streamed (large) document [R1-1]: pdf-lib is never loaded —
+   * `engine.open` is skipped entirely and `engineHandle: null` is legal only
+   * in this mode. `pageCount` starts at 0 and arrives from the pdf.js proxy
+   * via `setStreamedPageCount` once the transport delivers the xref tail.
+   */
+  const openStreamedFile = useCallback(
+    async (input: StreamedFileInput): Promise<OpenFileResult> => {
+      const token = openTokenRef.current + 1;
+      openTokenRef.current = token;
+      const previousHandle = activeHandleRef.current;
+
+      activeHandleRef.current = null;
+      activeBytesRef.current = null;
+      const generation = nextGeneration();
+      sourceKindRef.current = input.source.kind;
+      await closeHandle(previousHandle);
+      setDocument({
+        ...INITIAL_DOCUMENT,
+        source: { ...input.source, generation },
+        generation,
+        // Streamed docs can't dirty (mutations are gated), so `dirty` stays
+        // false for the document's whole lifetime.
+        fileName: input.name,
+        filePath: input.path,
+        fileSizeBytes: input.source.sizeBytes,
+      });
+      requestPageScroll(1);
+      return { status: "opened" };
+    },
+    [closeHandle, nextGeneration, requestPageScroll],
+  );
+
+  /**
+   * Commit the page count reported by the streamed pdf.js proxy. Guarded by
+   * generation so a proxy that finished loading for a superseded document
+   * can't stamp its count onto the current one.
+   */
+  const setStreamedPageCount = useCallback(
+    (pageCount: number, expected: { generation: number }) => {
+      setDocument((current) => {
+        if (
+          current.generation !== expected.generation ||
+          current.source === null ||
+          current.source.kind === "memory"
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          pageCount,
+          currentPage: clampPage(current.currentPage, pageCount),
+        };
+      });
+    },
+    [],
   );
 
   const replaceBytes = useCallback(
@@ -535,8 +670,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         if (
-          options.expectedSourceBytes !== undefined &&
-          activeBytesRef.current !== options.expectedSourceBytes
+          options.expectedGeneration !== undefined &&
+          generationRef.current !== options.expectedGeneration
         ) {
           stale = true;
           return null;
@@ -597,6 +732,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   );
 
   const getOpenToken = useCallback(() => openTokenRef.current, []);
+  const getGeneration = useCallback(() => generationRef.current, []);
 
   /**
    * Explicit navigation: updates `currentPage` AND emits a scroll intent so
@@ -974,7 +1110,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const batesStamp = useCallback(
     async (
       options: PdfBatesStampOptions,
-      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+      guards: MutationGuards = {},
     ) => {
       const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
 
@@ -987,8 +1123,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         if (
-          guards.expectedSourceBytes !== undefined &&
-          activeBytesRef.current !== guards.expectedSourceBytes
+          guards.expectedGeneration !== undefined &&
+          generationRef.current !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1061,7 +1197,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const pageNumbers = useCallback(
     async (
       options: PdfPageNumbersOptions,
-      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+      guards: MutationGuards = {},
     ) => {
       const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
 
@@ -1074,8 +1210,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         if (
-          guards.expectedSourceBytes !== undefined &&
-          activeBytesRef.current !== guards.expectedSourceBytes
+          guards.expectedGeneration !== undefined &&
+          generationRef.current !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1092,7 +1228,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const watermark = useCallback(
     async (
       options: PdfWatermarkOptions,
-      guards: { expectedOpenToken?: number; expectedSourceBytes?: Uint8Array | null } = {},
+      guards: MutationGuards = {},
     ) => {
       const requestedToken = guards.expectedOpenToken ?? openTokenRef.current;
 
@@ -1105,8 +1241,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         if (
-          guards.expectedSourceBytes !== undefined &&
-          activeBytesRef.current !== guards.expectedSourceBytes
+          guards.expectedGeneration !== undefined &&
+          generationRef.current !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1137,8 +1273,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         if (
-          guards.expectedSourceBytes !== undefined &&
-          activeBytesRef.current !== guards.expectedSourceBytes
+          guards.expectedGeneration !== undefined &&
+          generationRef.current !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1183,6 +1319,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return {
           ...current,
           bytes,
+          // Fresh source object so the preview reloads from the saved
+          // serialization (the old bytes-ref-change behavior). Generation is
+          // intentionally NOT bumped: a save re-serializes the same content,
+          // and in-flight work guarded by generation must stay valid across
+          // it — mirroring how the engine-side bytes ref was left untouched
+          // here before [R1-8].
+          source: { kind: "memory", bytes },
           fileSizeBytes: bytes.byteLength,
           error: null,
         };
@@ -1216,8 +1359,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
     document,
     pageScrollIntent,
     openFile,
+    openStreamedFile,
+    setStreamedPageCount,
     replaceBytes,
     getOpenToken,
+    getGeneration,
     setCurrentPage,
     syncVisiblePage,
     setZoom,

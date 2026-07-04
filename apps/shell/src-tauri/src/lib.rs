@@ -1,9 +1,14 @@
 mod diagnostics;
 mod mcp;
 mod path_ops;
+mod range_read;
 mod sidecar;
 
 use diagnostics::AppDiagnostics;
+use range_read::{
+    large_doc_threshold_bytes, range_call_cap_bytes, read_file_range, snapshot_file, FileSnapshot,
+    RangeReadError,
+};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -32,9 +37,18 @@ struct PendingPdfBytes {
     bytes: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+/// Grant-time state for one shell-issued file grant. The snapshot is the
+/// drift baseline for ranged reads: `read_pdf_range` refuses to serve bytes
+/// from a file whose `{len, mtime}` no longer match [R1-5].
+#[derive(Clone)]
+struct FileGrantEntry {
+    path: PathBuf,
+    snapshot: Option<FileSnapshot>,
+}
+
 #[derive(Default)]
 struct FileGrants {
-    paths: Mutex<HashMap<String, PathBuf>>,
+    paths: Mutex<HashMap<String, FileGrantEntry>>,
 }
 
 #[derive(Serialize)]
@@ -42,7 +56,12 @@ struct FileGrants {
 struct OpenedPdf {
     name: String,
     file_grant: String,
-    bytes_token: String,
+    size_bytes: u64,
+    /// Present only below the large-doc threshold; large files are never
+    /// materialized (`fs::read`) — the UI streams them via `read_pdf_range`.
+    bytes_token: Option<String>,
+    /// The shell-owned threshold, echoed so UI and shell agree on the branch.
+    threshold_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -50,6 +69,21 @@ struct OpenedPdf {
 struct SavedPdf {
     name: String,
     file_grant: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedPdf {
+    grant: String,
+    name: String,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedPdfs {
+    files: Vec<PickedPdf>,
+    threshold_bytes: u64,
 }
 
 impl PendingPdfBytes {
@@ -69,14 +103,22 @@ impl PendingPdfBytes {
 }
 
 impl FileGrants {
+    /// Issue a grant, snapshotting `{len, mtime}` best-effort so ranged reads
+    /// have a drift baseline. Grants whose file could not be stat'ed still
+    /// resolve to a path (save flows need that) but refuse ranged reads.
     fn grant(&self, path: PathBuf) -> Result<String, String> {
         let grant = Uuid::new_v4().to_string();
+        let snapshot = snapshot_file(&path).ok();
         let mut paths = self.paths.lock().map_err(|_| "File grant lock poisoned")?;
-        paths.insert(grant.clone(), path);
+        paths.insert(grant.clone(), FileGrantEntry { path, snapshot });
         Ok(grant)
     }
 
     fn resolve(&self, grant: &str) -> Result<PathBuf, String> {
+        Ok(self.resolve_entry(grant)?.path)
+    }
+
+    fn resolve_entry(&self, grant: &str) -> Result<FileGrantEntry, String> {
         let paths = self.paths.lock().map_err(|_| "File grant lock poisoned")?;
         paths
             .get(grant)
@@ -103,16 +145,143 @@ fn open_pdf_dialog(
     let path = path.into_path().map_err(|error| error.to_string())?;
     require_pdf_extension(&path)?;
 
-    let bytes = fs::read(&path)
-        .map_err(|error| format!("Failed to read PDF at {}: {error}", path.to_string_lossy()))?;
-    let bytes_token = pending_pdf_bytes.insert(bytes)?;
+    // Stat first: the branch between "materialize bytes" and "stream by
+    // range" is decided before any read, so a 283 MB filing never touches
+    // the heap on open.
+    let threshold_bytes = large_doc_threshold_bytes();
+    let size_bytes = fs::metadata(&path)
+        .map_err(|error| format!("Failed to stat PDF at {}: {error}", path.to_string_lossy()))?
+        .len();
+
+    let bytes_token = if size_bytes < threshold_bytes {
+        let bytes = fs::read(&path).map_err(|error| {
+            format!("Failed to read PDF at {}: {error}", path.to_string_lossy())
+        })?;
+        Some(pending_pdf_bytes.insert(bytes)?)
+    } else {
+        None
+    };
     let file_grant = file_grants.grant(path.clone())?;
 
     Ok(Some(OpenedPdf {
         name: file_name(&path),
         file_grant,
+        size_bytes,
         bytes_token,
+        threshold_bytes,
     }))
+}
+
+/// Multi-select picker for add-file flows (Organize adds, Binder exhibits,
+/// pages-tab insert, package workspaces). Never reads bytes eagerly — below
+/// the threshold the UI fetches the whole file with one ranged read
+/// (`read_pdf_range(grant, 0, sizeBytes)`), above it the descriptors feed
+/// the path-op pipeline [R5-1][R7-2].
+#[tauri::command]
+fn pick_pdfs_for_add(
+    app: tauri::AppHandle,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<PickedPdfs>, String> {
+    let Some(paths) = app
+        .dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .blocking_pick_files()
+    else {
+        return Ok(None);
+    };
+
+    let threshold_bytes = large_doc_threshold_bytes();
+    let mut files = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        require_pdf_extension(&path)?;
+        let size_bytes = fs::metadata(&path)
+            .map_err(|error| format!("Failed to stat PDF at {}: {error}", path.to_string_lossy()))?
+            .len();
+        files.push(PickedPdf {
+            grant: file_grants.grant(path.clone())?,
+            name: file_name(&path),
+            size_bytes,
+        });
+    }
+
+    Ok(Some(PickedPdfs {
+        files,
+        threshold_bytes,
+    }))
+}
+
+/// Ranged read for the streamed viewer. Raw binary response; bounds are
+/// end-exclusive and validated against the grant-time snapshot (see
+/// `range_read.rs` for the contract).
+#[tauri::command]
+fn read_pdf_range(
+    grant: String,
+    offset: u64,
+    length: u64,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<tauri::ipc::Response, RangeReadError> {
+    let entry = file_grants
+        .resolve_entry(&grant)
+        .map_err(|_| RangeReadError::grant_not_found())?;
+    let snapshot = entry
+        .snapshot
+        .ok_or_else(RangeReadError::grant_without_snapshot)?;
+    let cap = range_call_cap_bytes(large_doc_threshold_bytes());
+
+    Ok(tauri::ipc::Response::new(read_file_range(
+        &entry.path,
+        &snapshot,
+        offset,
+        length,
+        cap,
+    )?))
+}
+
+/// Save As for streamed documents: a shell-side file copy by grant — the
+/// bytes never cross into the WebView. The copy is refused if the source
+/// drifted from its open-time snapshot (a changed file must be reopened,
+/// not silently propagated).
+#[tauri::command]
+fn save_pdf_copy_dialog(
+    app: tauri::AppHandle,
+    source_grant: String,
+    suggested_name: String,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<SavedPdf>, String> {
+    let entry = file_grants.resolve_entry(&source_grant)?;
+    let snapshot = entry
+        .snapshot
+        .ok_or("This file could not be verified against its open-time snapshot — reopen it.")?;
+    let current = snapshot_file(&entry.path)
+        .map_err(|_| "This file changed on disk — reopen it.".to_string())?;
+
+    if current != snapshot {
+        return Err("This file changed on disk — reopen it.".to_string());
+    }
+
+    let suggested_name = ensure_pdf_extension(&suggested_name);
+    let Some(destination) = app
+        .dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .set_file_name(suggested_name)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+
+    let destination = destination.into_path().map_err(|error| error.to_string())?;
+    fs::copy(&entry.path, &destination).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+
+    Ok(Some(saved_pdf(&destination, file_grants.inner())?))
 }
 
 #[tauri::command]
@@ -307,9 +476,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_pdf_dialog,
             read_opened_pdf_bytes,
+            read_pdf_range,
+            pick_pdfs_for_add,
             resolve_file_grants,
             save_pdf_dialog,
             save_pdf_to_path,
+            save_pdf_copy_dialog,
             sidecar::engine_start,
             sidecar::engine_status,
             sidecar::engine_stop,
@@ -415,5 +587,38 @@ mod tests {
         assert_eq!(grants.resolve(&grant).expect("grant should resolve"), path);
         assert!(!grant.contains("case.pdf"));
         assert!(grants.resolve("/tmp/case.pdf").is_err());
+    }
+
+    #[test]
+    fn grants_snapshot_existing_files_and_serve_ranged_reads() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        std::fs::File::create(&path)
+            .expect("create")
+            .write_all(b"0123456789")
+            .expect("write");
+
+        let grants = FileGrants::default();
+        let grant = grants.grant(path.clone()).expect("grant");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+        let snapshot = entry.snapshot.expect("existing files get a snapshot");
+
+        let bytes = read_file_range(&entry.path, &snapshot, 4, 3, 1024).expect("range");
+        assert_eq!(bytes, b"456");
+    }
+
+    #[test]
+    fn grants_for_missing_files_carry_no_snapshot() {
+        let grants = FileGrants::default();
+        let grant = grants
+            .grant(PathBuf::from("/definitely/not/present.pdf"))
+            .expect("grant");
+
+        // Path still resolves (save flows need it) but there is no drift
+        // baseline, so ranged reads must be refused upstream.
+        let entry = grants.resolve_entry(&grant).expect("entry");
+        assert!(entry.snapshot.is_none());
     }
 }

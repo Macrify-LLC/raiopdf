@@ -43,6 +43,8 @@ export interface CanvasWellProps {
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
+  /** Streamed mode: PageList skips the full page-size sweep [R2-1]. */
+  lazyPageMeasurement?: boolean;
   /**
    * True while the desktop engine sidecar is booting (`engineBridge.starting`
    * in App.tsx). Only meaningful with a document open -- see the big
@@ -81,6 +83,7 @@ export function CanvasWell({
   editing,
   searchResults = [],
   activeSearchResultId = null,
+  lazyPageMeasurement = false,
   engineStarting = false,
 }: CanvasWellProps) {
   const hasDocument = Boolean(pdfDocument);
@@ -173,6 +176,7 @@ export function CanvasWell({
             editing={editing}
             searchResults={searchResults}
             activeSearchResultId={activeSearchResultId}
+            lazyPageMeasurement={lazyPageMeasurement}
           />
           {error ? (
             <p className="canvas-well__message canvas-well__message--floating" role="status">

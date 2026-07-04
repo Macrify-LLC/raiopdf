@@ -35,6 +35,11 @@ interface PageTextDocumentCache {
 
 const REDACTION_PADDING_PT = 2;
 const textCaches = new WeakMap<Uint8Array, WeakMap<PDFDocumentProxy, PageTextDocumentCache>>();
+// Bare-proxy inputs (the streamed, no-bytes path) cache keyed on the proxy
+// itself. Proxy identity IS document identity there: every open and every
+// committed generation produces a NEW PDFDocumentProxy, so proxy-keyed
+// caching is (openToken, generation)-keyed by construction [R1-8].
+const proxyTextCaches = new WeakMap<PDFDocumentProxy, PageTextDocumentCache>();
 
 export async function extractPageText(input: PageTextInput): Promise<ExtractedPageText[]> {
   const pageIndexes = Array.from(
@@ -49,12 +54,8 @@ export async function extractPageTextForIndexes(
   input: PageTextInput,
   pageIndexes: readonly number[],
 ): Promise<ExtractedPageText[]> {
-  if (isPageTextSource(input)) {
-    const cache = getDocumentCache(input);
-    return Promise.all(pageIndexes.map((pageIndex) => getCachedPageText(cache, pageIndex)));
-  }
-
-  return Promise.all(pageIndexes.map((pageIndex) => extractSinglePageText(input, pageIndex)));
+  const cache = isPageTextSource(input) ? getDocumentCache(input) : getProxyCache(input);
+  return Promise.all(pageIndexes.map((pageIndex) => getCachedPageText(cache, pageIndex)));
 }
 
 function getPdfDocument(input: PageTextInput): PDFDocumentProxy {
@@ -81,6 +82,20 @@ function getDocumentCache(source: PageTextSource): PageTextDocumentCache {
       pages: new Map(),
     };
     cachesForBytes.set(source.pdfDocument, cache);
+  }
+
+  return cache;
+}
+
+function getProxyCache(pdfDocument: PDFDocumentProxy): PageTextDocumentCache {
+  let cache = proxyTextCaches.get(pdfDocument);
+
+  if (!cache) {
+    cache = {
+      pdfDocument,
+      pages: new Map(),
+    };
+    proxyTextCaches.set(pdfDocument, cache);
   }
 
   return cache;

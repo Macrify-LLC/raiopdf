@@ -91,7 +91,12 @@ import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
 } from "./hooks/useEngineBridge";
-import { useDocument, type DocumentState, type SignatureUnlockPrompt } from "./hooks/useDocument";
+import {
+  STREAMED_DOCUMENT_GATE_MESSAGE,
+  useDocument,
+  type DocumentState,
+  type SignatureUnlockPrompt,
+} from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
@@ -99,13 +104,25 @@ import { isTextEntryTarget } from "./lib/domGuards";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
+  loadStreamedPdfDocument,
   PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
-import { filePort, type OpenedFile } from "./lib/filePort";
+import {
+  createFileRangeTransport,
+  createGrantRangeTransport,
+  type RaioPdfRangeTransport,
+} from "./lib/pdfRangeTransport";
+import {
+  filePort,
+  isFileChangedError,
+  readBrowserFileSource,
+  saveStreamedCopy,
+  type OpenedFile,
+  type OpenedFileSource,
+} from "./lib/filePort";
 import {
   pickFileForAdd,
-  readFileForAdd,
   tooLargeToAddMessage,
   type FileAddResult,
 } from "./lib/readFileForAdd";
@@ -144,6 +161,7 @@ import {
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
+import { extractPageTextForIndexes } from "./lib/pageTextCache";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -314,6 +332,8 @@ export function App() {
     document,
     pageScrollIntent,
     openFile: openDocumentFile,
+    openStreamedFile,
+    setStreamedPageCount,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
@@ -349,19 +369,24 @@ export function App() {
       return null;
     });
   }, []);
+  // Proxy identity is generation-based [R1-8]: the loaded pdf.js document is
+  // "current" only while its generation matches the document's. In streamed
+  // mode `bytes` is null — the proxy is the ONLY view of the document.
   const [pdfDocumentState, setPdfDocumentState] = useState<{
-    bytes: Uint8Array;
+    generation: number;
+    bytes: Uint8Array | null;
     proxy: PDFDocumentProxy;
   } | null>(null);
-  const currentPdfDocumentState = pdfDocumentState?.bytes === document.bytes
+  const currentPdfDocumentState = pdfDocumentState?.generation === document.generation
     ? pdfDocumentState
     : null;
   const pdfDocument = currentPdfDocumentState?.proxy ?? null;
   const pdfDocumentBytes = currentPdfDocumentState?.bytes ?? null;
+  const streamedDocument = document.source !== null && document.source.kind !== "memory";
   const editing = useEditing(pdfDocument);
   const documentSearch = useDocumentSearch({
     pdfDocumentState: currentPdfDocumentState,
-    documentBytes: document.bytes,
+    documentGeneration: document.generation,
     textLayerCoverage: document.textLayerCoverage,
     setCurrentPage,
   });
@@ -835,9 +860,9 @@ export function App() {
   const savingRef = useRef(false);
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
-  const documentBytesRef = useRef<Uint8Array | null>(null);
-  const legalStateDocumentBytesRef = useRef<Uint8Array | null>(document.bytes);
-  const preserveFilingProgressForBytesRef = useRef<Uint8Array | null>(null);
+  const documentGenerationRef = useRef<number>(document.generation);
+  const legalStateDocumentGenerationRef = useRef<number>(document.generation);
+  const preserveFilingProgressForGenerationRef = useRef<number | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
   const filingFactsCacheRef = useRef<FilingFactsCache>({
@@ -847,11 +872,11 @@ export function App() {
   const filingEngine = useMemo(() => new LocalPdfEngine(), []);
 
   useLayoutEffect(() => {
-    documentBytesRef.current = document.bytes;
-  }, [document.bytes]);
+    documentGenerationRef.current = document.generation;
+  }, [document.generation]);
 
   const resetLegalState = useCallback(() => {
-    preserveFilingProgressForBytesRef.current = null;
+    preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
     setRedactionPhase("idle");
     setRedactionMessage(null);
@@ -878,11 +903,10 @@ export function App() {
     });
   }, []);
 
-  const clearDocumentBoundLegalState = useCallback((previousBytes: Uint8Array | null) => {
-    const preserveFilingProgress = Boolean(
-      previousBytes && preserveFilingProgressForBytesRef.current === previousBytes,
-    );
-    preserveFilingProgressForBytesRef.current = null;
+  const clearDocumentBoundLegalState = useCallback((previousGeneration: number) => {
+    const preserveFilingProgress =
+      preserveFilingProgressForGenerationRef.current === previousGeneration;
+    preserveFilingProgressForGenerationRef.current = null;
     scannerRunRef.current += 1;
     filingRunRef.current += 1;
     setPendingRedactions([]);
@@ -900,9 +924,11 @@ export function App() {
     }
   }, []);
 
+  // Document identity is (openToken, generation) [R1-8] — never a
+  // Uint8Array reference, which streamed documents don't have.
   const isCurrentDocument = useCallback(
-    (sourceOpenToken: number, sourceBytes: Uint8Array) => (
-      getOpenToken() === sourceOpenToken && documentBytesRef.current === sourceBytes
+    (sourceOpenToken: number, sourceGeneration: number) => (
+      getOpenToken() === sourceOpenToken && documentGenerationRef.current === sourceGeneration
     ),
     [getOpenToken],
   );
@@ -910,61 +936,125 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let loadedDocument: PDFDocumentProxy | null = null;
-    const sourceBytes = document.bytes;
+    let transport: RaioPdfRangeTransport | null = null;
+    const source = document.source;
+    const sourceGeneration = document.generation;
 
-    if (!sourceBytes) {
+    if (!source) {
       setPdfDocumentState(null);
       return;
     }
 
     setPdfDocumentState(null);
 
-    void loadPdfDocument(sourceBytes)
-      .then((loaded) => {
-        loadedDocument = loaded;
+    if (source.kind === "memory") {
+      const sourceBytes = source.bytes;
 
+      void loadPdfDocument(sourceBytes)
+        .then((loaded) => {
+          loadedDocument = loaded;
+
+          if (disposed) {
+            void loaded.loadingTask.destroy();
+            return;
+          }
+
+          setPdfDocumentState({ generation: sourceGeneration, bytes: sourceBytes, proxy: loaded });
+        })
+        .catch((error: unknown) => {
+          if (disposed) {
+            return;
+          }
+
+          if (error instanceof PasswordException) {
+            // Defense in depth: today `engine.open()` (pdf-lib) already
+            // rejects any encrypted PDF before this preview even runs, so
+            // this branch isn't reachable through the normal open path (see
+            // openOpenedFile's "password-required" branch above). Kept in
+            // case a future engine change lets a document open on the engine
+            // side while pdf.js still needs a password to render it --
+            // route that into the same unlock dialog instead of a dead-end
+            // preview error.
+            setPasswordPrompt({
+              bytes: sourceBytes,
+              fileName: document.fileName ?? "Document.pdf",
+              filePath: document.filePath,
+              phase: "prompt",
+              error: null,
+            });
+            return;
+          }
+
+          setError(getPdfLoadErrorMessage(error));
+        });
+    } else {
+      // Streamed open [R1-4]: pdf.js reads the file through a range
+      // transport — bytes are fetched on demand and never held whole in the
+      // WebView. The transport is keyed to this effect's lifetime: cleanup
+      // aborts it so a superseded/closed document ignores late invoke
+      // resolutions instead of feeding a destroyed worker.
+      const onRangeReadError = (error: unknown) => {
         if (disposed) {
-          void loaded.loadingTask.destroy();
           return;
         }
 
-        setPdfDocumentState({ bytes: sourceBytes, proxy: loaded });
-      })
-      .catch((error: unknown) => {
-        if (disposed) {
-          return;
-        }
+        setError(
+          isFileChangedError(error)
+            ? "This file changed on disk — reopen it."
+            : "Part of this document could not be read from disk. Scroll again to retry, or reopen the file.",
+        );
+      };
+      transport = source.kind === "rangeGrant"
+        ? createGrantRangeTransport(source.grant, source.sizeBytes, onRangeReadError)
+        : createFileRangeTransport(source.file, onRangeReadError);
 
-        if (error instanceof PasswordException) {
-          // Defense in depth: today `engine.open()` (pdf-lib) already
-          // rejects any encrypted PDF before this preview even runs, so
-          // this branch isn't reachable through the normal open path (see
-          // openOpenedFile's "password-required" branch above). Kept in
-          // case a future engine change lets a document open on the engine
-          // side while pdf.js still needs a password to render it --
-          // route that into the same unlock dialog instead of a dead-end
-          // preview error.
-          setPasswordPrompt({
-            bytes: sourceBytes,
-            fileName: document.fileName ?? "Document.pdf",
-            filePath: document.filePath,
-            phase: "prompt",
-            error: null,
-          });
-          return;
-        }
+      void loadStreamedPdfDocument(transport)
+        .then((loaded) => {
+          loadedDocument = loaded;
 
-        setError(getPdfLoadErrorMessage(error));
-      });
+          if (disposed) {
+            void loaded.loadingTask.destroy();
+            return;
+          }
+
+          // pageCount lives on the pdf.js proxy in streamed mode — there is
+          // no engine handle to count pages with.
+          setStreamedPageCount(loaded.numPages, { generation: sourceGeneration });
+          setPdfDocumentState({ generation: sourceGeneration, bytes: null, proxy: loaded });
+        })
+        .catch((error: unknown) => {
+          if (disposed) {
+            return;
+          }
+
+          if (error instanceof PasswordException) {
+            // Encrypted large file: honest error until the path-based
+            // decrypt op lands (Phase 3) — the byte-based unlock flow would
+            // require materializing the whole file.
+            setError(
+              "This PDF is encrypted. Removing encryption isn't available yet for very large files.",
+            );
+            return;
+          }
+
+          // Badly malformed large files: typed open error; Repair becomes
+          // path-based in Phase 3 — until then the message stays honest.
+          setError(
+            "This large PDF could not be opened for streaming view. It may be malformed; Repair for very large files arrives with the local engine ops.",
+          );
+        });
+    }
 
     return () => {
       disposed = true;
+      transport?.abort();
       void loadedDocument?.loadingTask.destroy();
     };
     // fileName/filePath intentionally excluded: this effect should only
-    // reload the preview when the bytes themselves change, not on a rename
-    // (e.g. a Save that only updates the display name).
-  }, [document.bytes, setError]);
+    // reload the preview when the document identity changes (source swap on
+    // open/commit), not on a rename (e.g. a Save that only updates the
+    // display name).
+  }, [document.source, document.generation, setError, setStreamedPageCount]);
 
   useEffect(() => {
     const sourceBytes = document.bytes;
@@ -1007,21 +1097,32 @@ export function App() {
     setTextLayerCoverage,
   ]);
 
+  // Keyed on `source` (not generation): a plain Save swaps the source object
+  // without bumping generation, and document-bound legal state cleared on
+  // save before this change too — the cadence must not loosen.
   useEffect(() => {
-    const previousBytes = legalStateDocumentBytesRef.current;
-    legalStateDocumentBytesRef.current = document.bytes;
-    clearDocumentBoundLegalState(previousBytes);
-  }, [clearDocumentBoundLegalState, document.bytes]);
+    const previousGeneration = legalStateDocumentGenerationRef.current;
+    legalStateDocumentGenerationRef.current = document.generation;
+    clearDocumentBoundLegalState(previousGeneration);
+  }, [clearDocumentBoundLegalState, document.generation, document.source]);
 
   // Pending edits and form values are geometry- and page-bound, so any change
-  // to the underlying bytes (rotate, delete, reorder, apply) invalidates them.
+  // to the underlying document (rotate, delete, reorder, apply — each swaps
+  // the source and bumps the generation) invalidates them.
   const resetEditingForDocument = editing.resetForDocument;
   useEffect(() => {
     resetEditingForDocument();
-  }, [resetEditingForDocument, document.bytes]);
+  }, [resetEditingForDocument, document.source]);
 
   const selectEditTool = useCallback(
     (toolId: EditToolId) => {
+      // Streamed mode: pending edits are applied on Save through the engine
+      // (byte path), so every non-Select tool is gated [R1-2].
+      if (toolId !== "select" && document.source !== null && document.source.kind !== "memory") {
+        setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+        return;
+      }
+
       if (toolId !== "select" && activeLegalTool === "redact") {
         setActiveLegalTool(null);
       }
@@ -1029,7 +1130,7 @@ export function App() {
       setActiveEditDialogTool(null);
       editing.setTool(toolId);
     },
-    [activeLegalTool, editing],
+    [activeLegalTool, document.source, editing, setError],
   );
 
   // Esc exits any edit mode. Inline editors (text draft, comment popover)
@@ -1054,6 +1155,26 @@ export function App() {
     let disposed = false;
 
     if (!document.bytes) {
+      // Streamed mode: metadata comes from pdf.js `getMetadata()` on the
+      // shared proxy (no pdf-lib, no full-byte parse); gaps render as "—".
+      if (streamedDocument && pdfDocument) {
+        void readStreamedMetadataSummary(pdfDocument)
+          .then((summary) => {
+            if (!disposed) {
+              setMetadataSummary(summary);
+            }
+          })
+          .catch(() => {
+            if (!disposed) {
+              setMetadataSummary(null);
+            }
+          });
+
+        return () => {
+          disposed = true;
+        };
+      }
+
       setMetadataSummary(null);
       return;
     }
@@ -1073,11 +1194,12 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [document.bytes]);
+  }, [document.bytes, pdfDocument, streamedDocument]);
 
   useEffect(() => {
     let disposed = false;
     const sourceBytes = document.bytes;
+    const sourceGeneration = document.generation;
 
     if (activeLegalTool !== "prepare-for-filing") {
       setFilingReportLoading(false);
@@ -1086,6 +1208,8 @@ export function App() {
     }
 
     if (!sourceBytes) {
+      // Streamed docs never reach here — Prepare for Filing is gated at the
+      // tool entry point until the path-based filing pipeline lands.
       setFilingReport(null);
       setFilingFacts(null);
       setFilingReportLoading(false);
@@ -1108,7 +1232,7 @@ export function App() {
 
     void getCachedFilingFacts(filingFactsCacheRef, sourceBytes, factsOptions)
       .then((facts) => {
-        if (disposed || documentBytesRef.current !== sourceBytes) {
+        if (disposed || documentGenerationRef.current !== sourceGeneration) {
           return;
         }
 
@@ -1117,14 +1241,14 @@ export function App() {
         setFilingReportError(null);
       })
       .catch(() => {
-        if (!disposed && documentBytesRef.current === sourceBytes) {
+        if (!disposed && documentGenerationRef.current === sourceGeneration) {
           setFilingFacts(null);
           setFilingReport(null);
           setFilingReportError("RaioPDF could not read the facts needed for filing checks. The document was left unchanged; try reopening or repairing the PDF.");
         }
       })
       .finally(() => {
-        if (!disposed && documentBytesRef.current === sourceBytes) {
+        if (!disposed && documentGenerationRef.current === sourceGeneration) {
           setFilingReportLoading(false);
         }
       });
@@ -1132,7 +1256,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.generation, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pdfDocument, pdfDocumentBytes]);
 
   const runOcrWorkflow = useCallback((ocrType: OcrType) => {
     if (ocrActiveRef.current) {
@@ -1141,6 +1265,14 @@ export function App() {
 
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
+
+    if (streamedDocument) {
+      // OCR is a byte-based sidecar round-trip [R2-2] — gated until the
+      // path-based OCR op lands in Phase 3.
+      setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+      return;
+    }
 
     if (!sourceBytes) {
       setOcrState({
@@ -1240,7 +1372,7 @@ export function App() {
           // committed document.
           knownPageCount: textLayerCoveragePageCount(workflowResult.textLayerCoverage),
           expectedOpenToken: sourceOpenToken,
-          expectedSourceBytes: sourceBytes,
+          expectedGeneration: sourceGeneration,
         });
 
         if (!isCurrentRun()) {
@@ -1297,13 +1429,18 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.pageCount, engineBridge, getOpenToken, replaceBytes]);
+  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
   }, []);
 
   const openOcrDialog = useCallback((ocrType: OcrType) => {
+    if (streamedDocument) {
+      setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+      return;
+    }
+
     if (!document.bytes) {
       setOcrState({
         phase: "error",
@@ -1330,7 +1467,7 @@ export function App() {
     // won't start.
     engineBridge.warmEngine();
     setOcrState({ phase: "confirm", message: null });
-  }, [document.bytes, engineBridge]);
+  }, [document.bytes, engineBridge, streamedDocument]);
 
   const makeSearchable = useCallback(() => {
     const status = deriveTextLayerStatus(document.textLayerCoverage);
@@ -1536,18 +1673,59 @@ export function App() {
     [engineBridge, openDocumentFile, passwordPrompt, setError],
   );
 
+  /** Streamed variant of `openOpenedFile`: same per-open state resets, but
+   * the document opens over a range transport — no bytes anywhere. */
+  const openStreamedSource = useCallback(
+    (source: Exclude<OpenedFileSource, { kind: "memory" }>) => {
+      ocrRunRef.current += 1;
+      ocrActiveRef.current = false;
+      setOcrState({ phase: "idle", message: null });
+      resetLegalState();
+      setSelectedPageIndexes(new Set());
+      setPasswordPrompt(null);
+      setRepairCandidate(null);
+      void openStreamedFile(
+        source.kind === "rangeGrant"
+          ? {
+              source: { kind: "rangeGrant", grant: source.grant, sizeBytes: source.sizeBytes },
+              name: source.name,
+              path: source.grant,
+            }
+          : {
+              source: { kind: "rangeFile", file: source.file, sizeBytes: source.sizeBytes },
+              name: source.name,
+              path: null,
+            },
+      ).then(() => {
+        setSelectedPageIndexes(new Set([0]));
+      });
+    },
+    [openStreamedFile, resetLegalState],
+  );
+
+  const openFileSource = useCallback(
+    (source: OpenedFileSource) => {
+      if (source.kind === "memory") {
+        openOpenedFile(source);
+      } else {
+        openStreamedSource(source);
+      }
+    },
+    [openOpenedFile, openStreamedSource],
+  );
+
   const openFile = useCallback(() => {
     void filePort
       .openFile()
-      .then((file) => {
-        if (file) {
-          openOpenedFile(file);
+      .then((source) => {
+        if (source) {
+          openFileSource(source);
         }
       })
       .catch(() => {
         setError("This PDF could not be opened. The file may be corrupt or unsupported.");
       });
-  }, [openOpenedFile, setError]);
+  }, [openFileSource, setError]);
 
   const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
@@ -1659,23 +1837,16 @@ export function App() {
 
   const openDroppedFile = useCallback(
     (file: File) => {
-      void readFileForAdd(file)
-        .then((result) => {
-          if (result.kind === "bytes") {
-            openOpenedFile(result.file);
-            return;
-          }
-
-          // A dropped DOM File above the threshold: honest gate until the
-          // streamed rangeFile/rangeGrant source (large-PDF plan Phase 2)
-          // replaces this with a real streamed open.
-          setError(`"${file.name}" is too large to open this way right now. Use File > Open.`);
-        })
+      // Size-check BEFORE reading [R2-4]: an above-threshold drop becomes a
+      // rangeFile source and is never arrayBuffer()ed — a real streamed open,
+      // superseding the interim "too large to open this way" gate.
+      void readBrowserFileSource(file)
+        .then(openFileSource)
         .catch(() => {
           setError("This PDF could not be opened. The file may be corrupt or unsupported.");
         });
     },
-    [openOpenedFile, setError],
+    [openFileSource, setError],
   );
 
   const handleThumbnailClick = useCallback(
@@ -1905,6 +2076,40 @@ export function App() {
       return;
     }
 
+    // Streamed documents can't dirty, so Save has nothing to write (the
+    // button is disabled); Save As is a shell-side copy by grant — no bytes
+    // cross into the WebView.
+    if (document.source !== null && document.source.kind !== "memory") {
+      if (!forceSaveAs) {
+        return;
+      }
+
+      const source = document.source;
+      savingRef.current = true;
+      void saveStreamedCopy(
+        source.kind === "rangeGrant"
+          ? { kind: "rangeGrant", grant: source.grant }
+          : { kind: "rangeFile", file: source.file },
+        document.fileName ?? "Document.pdf",
+      )
+        .then((written) => {
+          if (written) {
+            markSaved({ fileName: written.name, filePath: written.path });
+          }
+        })
+        .catch((error: unknown) => {
+          setError(
+            error instanceof Error && error.message.includes("changed on disk")
+              ? "This file changed on disk — reopen it."
+              : "This PDF could not be saved. Try reopening the document and saving again.",
+          );
+        })
+        .finally(() => {
+          savingRef.current = false;
+        });
+      return;
+    }
+
     savingRef.current = true;
 
     void (async () => {
@@ -1955,13 +2160,15 @@ export function App() {
       .finally(() => {
         savingRef.current = false;
       });
-  }, [applyEdits, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
+  }, [applyEdits, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;
 
     if (!sourceBytes) {
-      setMarkupAnnotationMessage("Open a PDF before flattening markup.");
+      setMarkupAnnotationMessage(
+        streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before flattening markup.",
+      );
       return;
     }
 
@@ -1983,7 +2190,7 @@ export function App() {
     })().catch(() => {
       setMarkupAnnotationMessage("Markup annotations could not be flattened.");
     });
-  }, [document.bytes, flattenMarkupAnnotations]);
+  }, [document.bytes, flattenMarkupAnnotations, streamedDocument]);
 
   const save = useCallback(() => {
     saveToFile(false);
@@ -1994,16 +2201,35 @@ export function App() {
   }, [saveToFile]);
 
   const printDocument = useCallback(() => {
+    if (streamedDocument) {
+      // Whole-document print of a >threshold doc is v1-gated; page-range
+      // printing (extract-to-temp via path ops) and the native streaming
+      // print pipeline are Phase 3/4 work.
+      setError(
+        "Printing a very large document isn't available yet. Page-range printing arrives with the local engine ops.",
+      );
+      return;
+    }
+
     if (!document.bytes) {
       setError("Open a PDF before printing.");
       return;
     }
 
     window.print();
-  }, [document.bytes, setError]);
+  }, [document.bytes, setError, streamedDocument]);
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
+      // Streamed mode: byte-based legal workflows are gated at their entry
+      // door with the message naming what still works [R1-2]. The 2.425
+      // scanner (user-initiated, proxy-based) and the static Passwords panel
+      // stay available.
+      if (streamedDocument && toolId !== "scanner-2425" && toolId !== "passwords") {
+        setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+        return;
+      }
+
       setActiveLegalTool(toolId);
       setActiveEditDialogTool(null);
 
@@ -2013,10 +2239,18 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [editing],
+    [editing, setError, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
+    // Streamed mode: everything except Document Properties mutates bytes or
+    // round-trips the sidecar — gated until the path ops land [R1-2].
+    // Properties works from pdf.js `getMetadata()` on the shared proxy.
+    if (streamedDocument && toolId !== "properties") {
+      setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+      return;
+    }
+
     // Rotate and Compress (item 18) expand inline under their own ToolRow
     // instead of opening a FloatingDialog, so re-clicking the already-open
     // row collapses it -- there's no dialog "X" to close it otherwise.
@@ -2030,9 +2264,14 @@ export function App() {
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
     setActiveEditDialogTool(null);
-  }, []);
+  }, [setError, streamedDocument]);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
+    if (streamedDocument) {
+      setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+      return;
+    }
+
     // Both current entries (Page Numbers, Watermark) are inline expansions
     // (item 18) -- toggle off on reselect, same reasoning as Rotate/Compress
     // above.
@@ -2040,7 +2279,7 @@ export function App() {
     setActiveLegalTool(null);
     setActiveOrganizeTool(null);
     editing.setTool("select");
-  }, [editing]);
+  }, [editing, setError, streamedDocument]);
 
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
@@ -2121,6 +2360,7 @@ export function App() {
 
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setRedactionMessage("Open a PDF before searching for redaction text.");
@@ -2132,7 +2372,7 @@ export function App() {
         redactionSearchText,
       );
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return;
       }
 
@@ -2155,7 +2395,7 @@ export function App() {
       setRedactionPhase("idle");
       setRedactionMessage(`${areas.length} ${areas.length === 1 ? "area" : "areas"} marked from search.`);
     },
-    [document.bytes, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText],
+    [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText],
   );
 
   const requestApplyRedactions = useCallback(() => {
@@ -2189,6 +2429,7 @@ export function App() {
   const confirmRedactions = useCallback(async () => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
     const areas = pendingRedactions.map((pending) => pending.area);
 
     if (!sourceBytes || areas.length === 0) {
@@ -2203,19 +2444,19 @@ export function App() {
         ? await collectRedactionAreaTexts({ bytes: sourceBytes, pdfDocument }, areas)
         : [];
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return;
       }
 
       const redactedBytes = await engineBridge.redactAreas(sourceBytes, areas);
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return;
       }
 
       const verified = await verifyRedactionAreasClear(redactedBytes, areas, redactedTerms);
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return;
       }
 
@@ -2229,7 +2470,7 @@ export function App() {
         dirty: true,
         hasTextLayer: null,
         expectedOpenToken: sourceOpenToken,
-        expectedSourceBytes: sourceBytes,
+        expectedGeneration: sourceGeneration,
         fileName: `${stripPdfExtension(document.fileName ?? "Untitled")}_redacted.pdf`,
         filePath: null,
       });
@@ -2248,7 +2489,7 @@ export function App() {
         ? error.message
         : formatWorkflowError(error, "Redaction could not finish. The document was left unchanged.");
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return;
       }
 
@@ -2274,6 +2515,7 @@ export function App() {
 
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setBatesState({
@@ -2290,7 +2532,7 @@ export function App() {
       try {
         applied = await batesStamp(options, {
           expectedOpenToken: sourceOpenToken,
-          expectedSourceBytes: sourceBytes,
+          expectedGeneration: sourceGeneration,
         });
 
         if (applied) {
@@ -2301,7 +2543,7 @@ export function App() {
           return true;
         }
 
-        if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           setBatesState({
             applying: false,
             message: "Bates numbers could not be applied. Check the format and try again.",
@@ -2313,20 +2555,21 @@ export function App() {
       } finally {
         batesApplyingRef.current = false;
 
-        if (!applied && isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        if (!applied && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           setBatesState((current) => (
             current.applying ? { ...current, applying: false } : current
           ));
         }
       }
     },
-    [batesStamp, document.bytes, getOpenToken, isCurrentDocument],
+    [batesStamp, document.bytes, document.generation, getOpenToken, isCurrentDocument],
   );
 
   const applyPageNumbers = useCallback(
     async (options: PdfPageNumbersOptions) => {
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setSidecarStatus((current) => ({
@@ -2346,7 +2589,7 @@ export function App() {
 
       const applied = await pageNumbers(options, {
         expectedOpenToken: sourceOpenToken,
-        expectedSourceBytes: sourceBytes,
+        expectedGeneration: sourceGeneration,
       });
 
       if (getOpenToken() === sourceOpenToken) {
@@ -2361,13 +2604,14 @@ export function App() {
 
       return applied;
     },
-    [document.bytes, getOpenToken, pageNumbers],
+    [document.bytes, document.generation, getOpenToken, pageNumbers],
   );
 
   const applyWatermark = useCallback(
     async (options: PdfWatermarkOptions) => {
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setSidecarStatus((current) => ({
@@ -2387,7 +2631,7 @@ export function App() {
 
       const applied = await watermark(options, {
         expectedOpenToken: sourceOpenToken,
-        expectedSourceBytes: sourceBytes,
+        expectedGeneration: sourceGeneration,
       });
 
       if (getOpenToken() === sourceOpenToken) {
@@ -2402,18 +2646,21 @@ export function App() {
 
       return applied;
     },
-    [document.bytes, getOpenToken, watermark],
+    [document.bytes, document.generation, getOpenToken, watermark],
   );
 
   const compressDocument = useCallback(
     async (options: PdfCompressOptions) => {
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setSidecarStatus({
           running: false,
-          message: "Open a PDF before compressing.",
+          message: streamedDocument
+            ? STREAMED_DOCUMENT_GATE_MESSAGE
+            : "Open a PDF before compressing.",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -2443,7 +2690,7 @@ export function App() {
       try {
         const compressedBytes = await engineBridge.compress(sourceBytes, options);
 
-        if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           return false;
         }
 
@@ -2451,7 +2698,7 @@ export function App() {
           dirty: true,
           hasTextLayer: null,
           expectedOpenToken: sourceOpenToken,
-          expectedSourceBytes: sourceBytes,
+          expectedGeneration: sourceGeneration,
         });
         const applied = replaced === "replaced";
 
@@ -2465,7 +2712,7 @@ export function App() {
 
         return applied;
       } catch (error) {
-        if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+        if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           setSidecarStatus({
             running: false,
             message: isEngineBridgeUnavailableError(error)
@@ -2480,17 +2727,20 @@ export function App() {
         return false;
       }
     },
-    [document.bytes, engineBridge, getOpenToken, isCurrentDocument, replaceBytes],
+    [document.bytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, replaceBytes, streamedDocument],
   );
 
   const sanitizeDocument = useCallback(async () => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
 
     if (!sourceBytes) {
       setSidecarStatus({
         running: false,
-        message: "Open a PDF before sanitizing.",
+        message: streamedDocument
+          ? STREAMED_DOCUMENT_GATE_MESSAGE
+          : "Open a PDF before sanitizing.",
         removed: [],
         beforeBytes: null,
         afterBytes: null,
@@ -2524,7 +2774,7 @@ export function App() {
         removeLinks: true,
       });
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         return false;
       }
 
@@ -2532,7 +2782,7 @@ export function App() {
         dirty: true,
         hasTextLayer: null,
         expectedOpenToken: sourceOpenToken,
-        expectedSourceBytes: sourceBytes,
+        expectedGeneration: sourceGeneration,
       });
       const applied = replaced === "replaced";
 
@@ -2546,7 +2796,7 @@ export function App() {
 
       return applied;
     } catch (error) {
-      if (isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         setSidecarStatus({
           running: false,
           message: isEngineBridgeUnavailableError(error)
@@ -2560,13 +2810,24 @@ export function App() {
 
       return false;
     }
-  }, [document.bytes, engineBridge, getOpenToken, isCurrentDocument, replaceBytes]);
+  }, [document.bytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, replaceBytes, streamedDocument]);
 
   const repairDocument = useCallback(
     async () => {
       const source = repairCandidate ?? (document.bytes
         ? { bytes: document.bytes, name: document.fileName ?? "Repaired.pdf", path: null }
         : null);
+
+      if (!source && streamedDocument) {
+        setSidecarStatus({
+          running: false,
+          message: STREAMED_DOCUMENT_GATE_MESSAGE,
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
 
       if (!source) {
         setSidecarStatus({
@@ -2634,13 +2895,14 @@ export function App() {
         return false;
       }
     },
-    [document.bytes, document.fileName, engineBridge, openDocumentFile, repairCandidate],
+    [document.bytes, document.fileName, engineBridge, openDocumentFile, repairCandidate, streamedDocument],
   );
 
   const insertImageFilesAsPages = useCallback(
     async (files: readonly File[]) => {
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
         setSidecarStatus({
@@ -2663,7 +2925,7 @@ export function App() {
       });
       const images = await Promise.all(files.map(readImagePageInput));
 
-      if (!isCurrentDocument(sourceOpenToken, sourceBytes)) {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
         setSidecarStatus({
           running: false,
           message: "The document changed before image pages finished loading.",
@@ -2676,7 +2938,7 @@ export function App() {
 
       const inserted = await insertImagePages(images, insertAt, {
         expectedOpenToken: sourceOpenToken,
-        expectedSourceBytes: sourceBytes,
+        expectedGeneration: sourceGeneration,
       });
       setSidecarStatus({
         running: false,
@@ -2687,7 +2949,7 @@ export function App() {
       });
       return inserted;
     },
-    [document.bytes, document.currentPage, getOpenToken, insertImagePages, isCurrentDocument, selectedPageIndexes],
+    [document.bytes, document.currentPage, document.generation, getOpenToken, insertImagePages, isCurrentDocument, selectedPageIndexes],
   );
 
   const exportPageAsImage = useCallback(
@@ -2736,11 +2998,17 @@ export function App() {
   const runScanner = useCallback(() => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
 
-    if (!sourceBytes) {
+    // Streamed mode: allowed — the scan is explicitly user-initiated [R1-3],
+    // runs off the shared streamed proxy, and pre-warms the extraction cache
+    // page-by-page so progress is visible on a 2,556-page document.
+    if (!sourceBytes && !(streamedDocument && pdfDocument)) {
       setScannerState({
         scanning: false,
-        message: "Open a PDF before running the 2.425 scanner.",
+        message: streamedDocument
+          ? "The document is still opening. Try again in a moment."
+          : "Open a PDF before running the 2.425 scanner.",
         hits: [],
       });
       return;
@@ -2749,7 +3017,7 @@ export function App() {
     const runId = scannerRunRef.current + 1;
     scannerRunRef.current = runId;
     const isCurrentScannerRun = () => (
-      scannerRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
+      scannerRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceGeneration)
     );
 
     setScannerState((current) => ({
@@ -2760,6 +3028,34 @@ export function App() {
     }));
 
     void (async () => {
+      if (!sourceBytes) {
+        // Streamed: walk pages in windows first (fills the proxy-keyed text
+        // cache) so the user sees progress, then run the pattern scan over
+        // the warmed cache in one cheap pass.
+        const scanProxy = pdfDocument!;
+        const totalPages = scanProxy.numPages;
+
+        for (let start = 0; start < totalPages; start += 8) {
+          const windowEnd = Math.min(start + 8, totalPages);
+          await extractPageTextForIndexes(
+            scanProxy,
+            Array.from({ length: windowEnd - start }, (_, offset) => start + offset),
+          );
+
+          if (!isCurrentScannerRun()) {
+            return [];
+          }
+
+          setScannerState((current) => (
+            current.scanning
+              ? { ...current, message: `Scanning page ${windowEnd} of ${totalPages}...` }
+              : current
+          ));
+        }
+
+        return scanSensitivePatterns(scanProxy);
+      }
+
       const loadedForScan = pdfDocument ? null : await loadPdfDocument(sourceBytes);
       const scanDocument = pdfDocument ?? loadedForScan;
 
@@ -2797,7 +3093,7 @@ export function App() {
           hits: [],
         });
       });
-  }, [document.bytes, getOpenToken, isCurrentDocument, pdfDocument]);
+  }, [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, streamedDocument]);
 
   const markScannerHit = useCallback(
     (hit: SensitiveHit) => {
@@ -2843,6 +3139,7 @@ export function App() {
   ) => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
     const selectedSteps = new Set(options.selectedStepIds);
     const convertOutputToPdfA = selectedSteps.has("convert-pdfa");
     const markupAnnotationChoice = options.markupAnnotations ?? null;
@@ -2851,9 +3148,14 @@ export function App() {
       : null;
 
     if (!sourceBytes) {
+      // Streamed docs can't reach this workflow (the tool entry is gated),
+      // but menu paths like Export PDF/A land here directly -- keep the gate
+      // honest rather than claiming no document is open.
       setFilingProgress({
         phase: "error",
-        message: "Open a PDF before preparing a filing copy.",
+        message: streamedDocument
+          ? STREAMED_DOCUMENT_GATE_MESSAGE
+          : "Open a PDF before preparing a filing copy.",
       });
       return;
     }
@@ -2869,7 +3171,7 @@ export function App() {
     const runId = filingRunRef.current + 1;
     filingRunRef.current = runId;
     const isCurrentFilingRun = () => (
-      filingRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceBytes)
+      filingRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceGeneration)
     );
     const unappliedRedactionMarks = pendingRedactions.length;
 
@@ -3206,10 +3508,11 @@ export function App() {
     getOpenToken,
     isCurrentDocument,
     pendingRedactions.length,
+    streamedDocument,
   ]);
 
   const compressBeforeFiling = useCallback(() => {
-    preserveFilingProgressForBytesRef.current = document.bytes;
+    preserveFilingProgressForGenerationRef.current = document.generation;
     setFilingProgress({
       phase: "normalizing",
       message: "Compressing before the split check...",
@@ -3217,7 +3520,7 @@ export function App() {
 
     void compressDocument({ quality: 5, grayscale: false }).then((compressed) => {
       if (!compressed) {
-        preserveFilingProgressForBytesRef.current = null;
+        preserveFilingProgressForGenerationRef.current = null;
       }
 
       setFilingProgress({
@@ -3227,7 +3530,7 @@ export function App() {
           : "Compression could not finish. The document was left unchanged.",
       });
     });
-  }, [compressDocument, document.bytes]);
+  }, [compressDocument, document.generation]);
 
   const undoLastPendingEdit = useCallback(() => {
     const lastEdit = editing.pendingEdits[editing.pendingEdits.length - 1];
@@ -3239,7 +3542,9 @@ export function App() {
 
   const exportPdfA = useCallback(() => {
     if (!document.bytes) {
-      setError("Open a PDF before exporting PDF/A.");
+      setError(
+        streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before exporting PDF/A.",
+      );
       return;
     }
 
@@ -3252,7 +3557,7 @@ export function App() {
       ],
       customSplitMegabytes: null,
     });
-  }, [document.bytes, filingPrepPlan, prepareFilingCopy, setError]);
+  }, [document.bytes, filingPrepPlan, prepareFilingCopy, setError, streamedDocument]);
 
   const showPasswordProtection = useCallback(() => {
     setActiveOrganizeTool(null);
@@ -3260,12 +3565,12 @@ export function App() {
   }, []);
 
   const fitToPageWidth = useCallback(() => {
-    if (!document.bytes) {
+    if (document.source === null) {
       return;
     }
 
     setFitZoom(document.zoom);
-  }, [document.bytes, document.zoom, setFitZoom]);
+  }, [document.source, document.zoom, setFitZoom]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -3273,7 +3578,7 @@ export function App() {
         return;
       }
 
-      if (!document.bytes) {
+      if (document.source === null) {
         return;
       }
 
@@ -3307,7 +3612,7 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [document.bytes, document.zoom, fitToPageWidth, setZoom]);
+  }, [document.source, document.zoom, fitToPageWidth, setZoom]);
 
   const openAboutMacrify = useCallback(() => {
     setSettingsFocusSection("about-macrify");
@@ -4044,7 +4349,9 @@ function DocumentPropertiesPanel({
     { label: "Pages", value: String(document.pageCount || "Not set") },
     { label: "Page size", value: document.pageSizeInches ? `${document.pageSizeInches.width} x ${document.pageSizeInches.height} in` : "Not set" },
     { label: "File size", value: document.fileSizeBytes ? formatBytes(document.fileSizeBytes) : "Not set" },
-    { label: "Encryption", value: document.bytes ? "Not encrypted" : "Not set" },
+    // Streamed docs opened successfully through pdf.js without a password,
+    // but the deep pdf-lib inspection never ran -- show the honest gap.
+    { label: "Encryption", value: document.bytes ? "Not encrypted" : document.source ? "—" : "Not set" },
     { label: "Searchable", value: describeTextLayerStatus(deriveTextLayerStatus(document.textLayerCoverage)) },
   ];
 
@@ -4529,6 +4836,67 @@ function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   }
 
   return "external links";
+}
+
+/**
+ * Streamed-mode metadata: pdf.js `getMetadata()` on the shared proxy — no
+ * pdf-lib, no full-byte parse. Fields the info dictionary doesn't carry
+ * render as "—" (a real gap, distinct from "Not set" which means the
+ * deep pdf-lib read ran and found nothing).
+ */
+async function readStreamedMetadataSummary(
+  pdfDocument: PDFDocumentProxy,
+): Promise<PdfMetadataSummary> {
+  const { info } = await pdfDocument.getMetadata();
+  const record = info as Record<string, unknown>;
+  const stringField = (key: string): string => {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value : "—";
+  };
+  const dateField = (key: string): string => {
+    const value = record[key];
+    const parsed = typeof value === "string" ? parsePdfDateString(value) : null;
+    return parsed
+      ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "2-digit" }).format(parsed)
+      : "—";
+  };
+
+  return {
+    rows: [
+      { label: "Title", value: stringField("Title") },
+      { label: "Author", value: stringField("Author") },
+      { label: "Creator", value: stringField("Creator") },
+      { label: "Producer", value: stringField("Producer") },
+      { label: "Created", value: dateField("CreationDate") },
+      { label: "Modified", value: dateField("ModDate") },
+      { label: "Custom fields", value: "—" },
+    ],
+    // Scrub is gated in streamed mode, so the removable-field inventory is
+    // never consumed -- and claiming one from a shallow read would overstate
+    // what a scrub could verify.
+    removedFields: [],
+  };
+}
+
+/** Minimal `D:YYYYMMDDHHmmSS` parser for pdf.js info-dictionary dates. */
+function parsePdfDateString(value: string): Date | null {
+  const match = /^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?/.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(
+    Number(year),
+    Number(month ?? "1") - 1,
+    Number(day ?? "1"),
+    Number(hour ?? "0"),
+    Number(minute ?? "0"),
+    Number(second ?? "0"),
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 async function countPdfPages(bytes: Uint8Array): Promise<number> {

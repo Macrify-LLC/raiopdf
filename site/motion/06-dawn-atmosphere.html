@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- dawn-atmosphere — ambient hero backdrop loop: drifting clouds + spotlight beams + rising sun glow.
+     Placement: full-bleed hero background (behind everything). Background: navy dawn. Seamless loop. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · dawn-atmosphere</title>
+<style>
+:root{--navy-deep:#0B1A2E;--navy:#132D52;--primary:#1D4E8F;--accent:#4AADE0;
+  --gold:#F5B942;--gold-deep:#E0932E;--gold-pale:#FFE7B3;}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{overflow:hidden;background:linear-gradient(180deg,#08131f 0%,var(--navy-deep) 40%,#123056 100%);
+  font-family:ui-sans-serif,system-ui,sans-serif}
+.scene{position:fixed;inset:0;overflow:hidden}
+
+/* horizon dawn glow */
+.dawn{position:absolute;left:50%;bottom:-38%;translate:-50% 0;width:120vw;height:90vh;border-radius:50%;
+  background:radial-gradient(circle,rgba(245,185,66,.55),rgba(245,185,66,.18) 38%,transparent 62%);
+  filter:blur(8px);animation:rise 12s ease-in-out infinite}
+@keyframes rise{0%,100%{transform:translateY(4%) scale(1)}50%{transform:translateY(-3%) scale(1.05)}}
+
+/* rising sun disc with glow */
+.suncore{position:absolute;left:50%;bottom:6%;translate:-50% 0;width:26vmin;height:26vmin;border-radius:50%;
+  background:radial-gradient(circle at 50% 45%,#FFE7B3,#F5B942 55%,#E0932E 80%);
+  box-shadow:0 0 90px 30px rgba(245,185,66,.5);animation:bob 12s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(6px)}50%{transform:translateY(-10px)}}
+
+/* spotlight beams fanning up */
+.beams{position:absolute;left:50%;bottom:0;translate:-50% 0;width:1px;height:100%;transform-origin:bottom center}
+.beam{position:absolute;bottom:0;left:0;width:22vmin;height:130vh;transform-origin:bottom center;
+  background:linear-gradient(180deg,transparent,rgba(122,200,240,.14) 55%,rgba(245,185,66,.20));
+  filter:blur(3px);mix-blend-mode:screen;animation:flick 9s ease-in-out infinite alternate}
+.beam.b1{transform:rotate(-34deg)}
+.beam.b2{transform:rotate(-16deg);animation-delay:-2s}
+.beam.b3{transform:rotate(0deg);animation-delay:-4s;opacity:.8}
+.beam.b4{transform:rotate(16deg);animation-delay:-1s}
+.beam.b5{transform:rotate(34deg);animation-delay:-3s}
+@keyframes flick{from{opacity:.35}to{opacity:.85}}
+
+/* drifting clouds */
+.cloud{position:absolute;border-radius:50%;filter:blur(26px);opacity:.5;background:radial-gradient(circle,rgba(30,63,110,.9),transparent 70%)}
+.c1{width:52vw;height:22vh;top:14%;left:-20%;animation:drift1 42s linear infinite}
+.c2{width:40vw;height:18vh;top:30%;left:60%;background:radial-gradient(circle,rgba(11,26,46,.9),transparent 70%);animation:drift2 55s linear infinite}
+.c3{width:60vw;height:24vh;top:4%;left:30%;animation:drift1 68s linear infinite;opacity:.35}
+.c4{width:34vw;height:16vh;top:44%;left:-10%;background:radial-gradient(circle,rgba(18,48,86,.8),transparent 70%);animation:drift2 48s linear infinite}
+@keyframes drift1{from{transform:translateX(-10vw)}to{transform:translateX(120vw)}}
+@keyframes drift2{from{transform:translateX(10vw)}to{transform:translateX(-120vw)}}
+
+/* fine grain vignette for depth */
+.vignette{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(4,10,18,.7));pointer-events:none}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style></head>
+<body>
+  <div class="scene">
+    <div class="cloud c3"></div>
+    <div class="beams">
+      <span class="beam b1"></span><span class="beam b2"></span><span class="beam b3"></span><span class="beam b4"></span><span class="beam b5"></span>
+    </div>
+    <div class="dawn"></div>
+    <div class="suncore"></div>
+    <div class="cloud c1"></div><div class="cloud c2"></div><div class="cloud c4"></div>
+    <div class="vignette"></div>
+  </div>
+</body></html>

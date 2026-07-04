@@ -1,0 +1,166 @@
+<!doctype html>
+<!-- prepare-filing-v2 — iteration of 09-prepare-filing.html. Identical animation: an
+     oversized/landscape page snaps to letter-size portrait, then splits into 3 labeled,
+     fanned parts each tagged with a portal-limit note, alongside a small rule-agnostic
+     readiness tag. ONLY CHANGE from v1: the preflight pill no longer cites any specific
+     court rule by name or number — it now reads a neutral "letter-size · portal-ready"
+     tag instead of a Florida rule citation. Loops.
+     Placement: marketing feature grid — one drop-in card among several (~360-420px wide).
+     Background: transparent card; shown here on a light bg-alt demo canvas. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · prepare for filing (v2)</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  --border:#D4DFEE;
+  --well:#E7EEF7;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:grid;place-items:center;padding:32px;
+  background:var(--bg-alt);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+.card{
+  width:100%;max-width:400px;min-width:320px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-window);
+  box-shadow:0 30px 60px -30px rgba(11,26,46,.35),0 2px 10px rgba(11,26,46,.06);
+  overflow:hidden;
+}
+.accent-bar{height:3px;background:linear-gradient(90deg,var(--navy),var(--primary),var(--accent))}
+.card-head{display:flex;align-items:center;gap:10px;padding:16px 18px 10px}
+.card-head .icon{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--gold),var(--gold-deep));box-shadow:0 6px 14px -6px rgba(224,147,46,.6)}
+.card-head .icon svg{width:16px;height:16px}
+.card-head .t b{display:block;font-size:14.5px;color:var(--text-primary);letter-spacing:-.1px}
+.card-head .t span{display:block;font-size:11px;color:var(--text-muted);margin-top:1px}
+
+.stage{position:relative;margin:2px 18px 0;height:216px;background:var(--well);border:1px solid var(--border);
+  border-radius:var(--radius-window);overflow:hidden}
+
+.preflight{position:absolute;top:10px;left:50%;transform:translateX(-50%) translateY(-4px);
+  display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  font:700 8.5px ui-monospace,monospace;color:var(--navy);background:#fff;border:1px solid var(--border);
+  border-radius:20px;padding:3px 9px;opacity:0;box-shadow:0 6px 14px -8px rgba(11,26,46,.3);
+  z-index:4;animation:preflightShow 9.6s var(--ease-out) infinite}
+.preflight b{color:#166534}
+
+.center{position:absolute;left:50%;top:56%;transform:translate(-50%,-50%)}
+
+.mainpage{position:relative;background:#fff;border-radius:4px;box-shadow:0 16px 34px -16px rgba(11,26,46,.4);
+  padding:10px 12px;opacity:0;animation:mainpageResize 9.6s var(--ease-out) infinite}
+.mainpage .ln{height:4px;border-radius:3px;background:#dfe6f0;margin:6px 0}
+.mainpage .ln.l{width:100%}.mainpage .ln.m{width:78%}.mainpage .ln.s{width:56%}
+.mainpage .badge{position:absolute;left:50%;bottom:-11px;transform:translateX(-50%);white-space:nowrap;
+  font:700 7px ui-monospace,monospace;color:#166534;background:#DCFCE7;border-radius:20px;padding:2px 6px;
+  opacity:0;animation:normBadge 9.6s var(--ease-out) infinite}
+
+.part{position:absolute;left:50%;top:54%;width:78px;height:92px;margin:-46px 0 0 -39px;
+  background:#fff;border:1px solid var(--border);border-radius:4px;
+  box-shadow:0 12px 26px -12px rgba(11,26,46,.4);opacity:0;z-index:1;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding-bottom:6px}
+.part .ln{width:66%;height:4px;border-radius:3px;background:#dfe6f0;margin:3px 0}
+.part b{font:700 6.5px/1.3 ui-monospace,monospace;color:var(--navy-deep);background:var(--bg-alt);
+  border:1px solid var(--border);border-radius:8px;padding:3px 4px;white-space:normal;text-align:center;
+  max-width:70px;margin-top:4px}
+.part.p1{animation:partShow1 9.6s var(--ease-out) infinite}
+.part.p2{animation:partShow2 9.6s var(--ease-out) infinite;z-index:2}
+.part.p3{animation:partShow3 9.6s var(--ease-out) infinite}
+
+@keyframes preflightShow{
+  0%,14%{opacity:0;transform:translateX(-50%) translateY(-4px)}
+  20%{opacity:1;transform:translateX(-50%) translateY(0)}
+  84%{opacity:1;transform:translateX(-50%) translateY(0)}
+  90%,100%{opacity:0;transform:translateX(-50%) translateY(-4px)}
+}
+@keyframes mainpageResize{
+  0%{opacity:0;width:200px;height:126px}
+  4%{opacity:1;width:200px;height:126px;animation-timing-function:linear}
+  26%{opacity:1;width:200px;height:126px;animation-timing-function:cubic-bezier(.34,1.56,.64,1)}
+  40%{opacity:1;width:126px;height:162px;animation-timing-function:linear}
+  64%{opacity:1;width:126px;height:162px;animation-timing-function:var(--ease-out)}
+  74%,100%{opacity:0;width:126px;height:162px}
+}
+@keyframes normBadge{
+  0%,38%{opacity:0}
+  42%{opacity:1}
+  62%{opacity:1}
+  68%,100%{opacity:0}
+}
+@keyframes partShow1{
+  0%,40%{opacity:0;transform:translate(0,0) rotate(0) scale(.85)}
+  46%{opacity:1;transform:translate(-72px,0) rotate(-9deg) scale(1)}
+  74%{opacity:1;transform:translate(-72px,0) rotate(-9deg) scale(1)}
+  80%,100%{opacity:0;transform:translate(-78px,0) rotate(-11deg) scale(.9)}
+}
+@keyframes partShow2{
+  0%,44%{opacity:0;transform:translate(0,0) rotate(0) scale(.85)}
+  50%{opacity:1;transform:translate(0,-4px) rotate(0) scale(1.05)}
+  74%{opacity:1;transform:translate(0,-4px) rotate(0) scale(1.05)}
+  82%,100%{opacity:0;transform:translate(0,0) rotate(0) scale(.9)}
+}
+@keyframes partShow3{
+  0%,48%{opacity:0;transform:translate(0,0) rotate(0) scale(.85)}
+  54%{opacity:1;transform:translate(72px,0) rotate(9deg) scale(1)}
+  74%{opacity:1;transform:translate(72px,0) rotate(9deg) scale(1)}
+  84%,100%{opacity:0;transform:translate(78px,0) rotate(11deg) scale(.9)}
+}
+
+.status{display:flex;align-items:center;gap:7px;padding:10px 18px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-muted)}
+.status .live{width:6px;height:6px;border-radius:50%;background:#63c86b;flex:none;animation:ping 2s infinite}
+.status .right{margin-left:auto;font-weight:700;color:var(--gold-deep)}
+@keyframes ping{0%{box-shadow:0 0 0 0 rgba(99,200,107,.5)}70%{box-shadow:0 0 0 6px rgba(99,200,107,0)}100%{box-shadow:0 0 0 0 rgba(99,200,107,0)}}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .preflight{opacity:1;transform:translateX(-50%) translateY(0)}
+  .mainpage{opacity:0}
+  .part{opacity:1}
+  .part.p1{transform:translate(-72px,0) rotate(-9deg) scale(1)}
+  .part.p2{transform:translate(0,-4px) rotate(0) scale(1.05)}
+  .part.p3{transform:translate(72px,0) rotate(9deg) scale(1)}
+}
+</style></head>
+<body>
+  <div class="card">
+    <div class="accent-bar"></div>
+    <div class="card-head">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 8V5a1 1 0 0 1 1-1h3M20 8V5a1 1 0 0 0-1-1h-3M4 16v3a1 1 0 0 0 1 1h3M20 16v3a1 1 0 0 1-1 1h-3"/>
+      </svg></span>
+      <span class="t"><b>Prepare for Filing</b><span>One click, portal-ready</span></span>
+    </div>
+    <div class="stage">
+      <span class="preflight">&#10003; <b>Letter-size</b> &middot; portal-ready</span>
+      <div class="center">
+        <div class="mainpage">
+          <div class="ln l"></div><div class="ln m"></div><div class="ln l"></div><div class="ln s"></div>
+          <span class="badge">&#10003; normalized &middot; letter portrait</span>
+        </div>
+        <div class="part p1"><div class="ln"></div><div class="ln"></div><div class="ln"></div><b>Part 1 of 3 &middot; &le; portal limit</b></div>
+        <div class="part p2"><div class="ln"></div><div class="ln"></div><div class="ln"></div><b>Part 2 of 3 &middot; &le; portal limit</b></div>
+        <div class="part p3"><div class="ln"></div><div class="ln"></div><div class="ln"></div><b>Part 3 of 3 &middot; &le; portal limit</b></div>
+      </div>
+    </div>
+    <div class="status"><span class="live"></span><span>Runs on this machine</span><span class="right">Portal-ready</span></div>
+  </div>
+</body></html>

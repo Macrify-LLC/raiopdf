@@ -1,0 +1,148 @@
+<!doctype html>
+<!-- sun-divider — full-width section divider. A thin horizon rule with the sun cresting
+     it from behind: filled disc + rotating rays, soft gold glow spreading along the line.
+     Placement: between page sections (e.g. under a hero, above a feature grid, above a
+     footer). Background: light surface/bg-alt. Wide, short aspect (~1200x220). Gentle,
+     continuous rise-bob loop — nothing here ever "restarts," so it's seamless forever. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · sun-divider</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  /* sun-mark variable aliases (the SVG uses these names) */
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  --border:#D4DFEE;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:grid;place-items:center;min-height:100%;
+  background:var(--bg-alt);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+
+.divider{
+  position:relative;
+  width:100%;max-width:1400px;
+  aspect-ratio:1200/220;
+  margin:0 auto;
+  overflow:hidden;
+  background:var(--surface);
+}
+
+/* ambient gold wash behind the whole scene, breathing gently */
+.glow-wash{
+  position:absolute;left:50%;top:50%;width:64%;height:170%;
+  transform:translate(-50%,-50%);
+  background:radial-gradient(ellipse at center, rgba(245,185,66,.38), rgba(245,185,66,.10) 45%, transparent 70%);
+  filter:blur(14px);
+  animation:washBreathe 7s ease-in-out infinite;
+}
+@keyframes washBreathe{
+  0%,100%{opacity:.6;transform:translate(-50%,-50%) scale(1)}
+  50%{opacity:1;transform:translate(-50%,-50%) scale(1.06)}
+}
+
+/* the sun itself — positioned + bobbing */
+.sun-pos{
+  position:absolute;left:50%;top:56%;width:11.4%;aspect-ratio:1;
+  animation:bob 8s ease-in-out infinite;
+}
+@keyframes bob{
+  0%,100%{transform:translate(-50%,-50%) translateY(0)}
+  50%{transform:translate(-50%,-50%) translateY(-7px)}
+}
+.suncore{
+  position:absolute;inset:0;margin:auto;width:46%;height:46%;border-radius:50%;
+  background:radial-gradient(circle at 50% 42%, var(--gold-pale), var(--gold) 55%, var(--gold-deep) 88%);
+  box-shadow:0 0 30px 10px rgba(245,185,66,.5);
+}
+.raio-sun{position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 4px 16px rgba(224,147,46,.35));}
+.raio-sun #rays{transform-origin:100px 100px;animation:spin 26s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.raio-sun #sun-ring circle{stroke:var(--primary-deep)}
+
+/* the "ground" plane that crops the lower part of the sun to sell the crest */
+.ground-cover{
+  position:absolute;left:0;right:0;top:50%;bottom:0;
+  background:var(--surface);
+}
+
+/* warm wash sitting on the ground plane right at the seam */
+.horizon-glow-bar{
+  position:absolute;left:50%;top:50%;width:58%;height:36px;transform:translate(-50%,-50%);
+  background:radial-gradient(ellipse at center, rgba(245,185,66,.55), rgba(245,185,66,.12) 55%, transparent 80%);
+  filter:blur(6px);
+}
+
+/* the crisp hairline itself */
+.horizon-line{
+  position:absolute;left:0;right:0;top:50%;height:1.5px;
+  background:linear-gradient(90deg,transparent,var(--gold-deep) 12%,var(--gold) 50%,var(--gold-deep) 88%,transparent);
+  box-shadow:0 0 8px 1px rgba(245,185,66,.6);
+}
+
+@media (prefers-reduced-motion:reduce){
+  .glow-wash,.sun-pos,.raio-sun #rays{animation:none!important;}
+  .sun-pos{transform:translate(-50%,-50%);}
+}
+</style></head>
+<body>
+  <div class="divider" aria-hidden="true">
+    <div class="glow-wash"></div>
+    <div class="sun-pos">
+      <div class="suncore"></div>
+      <svg class="raio-sun" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <g id="rays">
+          <path d="M141.80,95.91 L191.56,91.03 L191.00,86.48 L141.54,93.83 Z" fill="var(--identity-amber)"/>
+          <path d="M139.67,86.20 L186.89,69.77 L185.35,65.66 L138.96,84.32 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M135.70,77.87 L178.19,51.52 L173.27,44.36 L133.45,74.60 Z" fill="var(--identity-amber)"/>
+          <path d="M129.10,69.71 L163.74,33.66 L158.28,28.81 L126.61,67.50 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M120.04,63.09 L143.90,19.15 L141.04,17.66 L118.74,62.41 Z" fill="var(--identity-amber)"/>
+          <path d="M111.15,59.51 L124.42,11.30 L120.59,10.33 L109.40,59.07 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M101.60,58.03 L103.51,8.07 L97.30,8.04 L98.77,58.02 Z" fill="var(--identity-amber)"/>
+          <path d="M91.60,58.85 L81.61,9.86 L75.25,11.39 L88.70,59.55 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M81.98,62.06 L60.52,16.90 L54.65,19.95 L79.30,63.46 Z" fill="var(--identity-amber)"/>
+          <path d="M73.28,67.59 L41.48,29.01 L36.06,33.85 L70.81,69.80 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M65.83,75.57 L25.16,46.49 L23.04,49.59 L64.87,76.98 Z" fill="var(--identity-amber)"/>
+          <path d="M61.18,83.98 L14.96,64.90 L12.93,70.28 L60.25,86.43 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M58.45,93.88 L8.98,86.59 L8.55,89.97 L58.25,95.42 Z" fill="var(--identity-amber)"/>
+          <path d="M58.17,103.78 L8.37,108.27 L9.11,114.23 L58.51,106.49 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M60.29,113.69 L13.03,129.99 L14.69,134.44 L61.05,115.72 Z" fill="var(--identity-amber)"/>
+          <path d="M65.05,123.29 L23.45,151.03 L25.62,154.14 L66.04,124.72 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M71.49,130.84 L37.54,167.55 L40.07,169.81 L72.64,131.87 Z" fill="var(--identity-amber)"/>
+          <path d="M79.38,136.59 L54.84,180.15 L59.22,182.47 L81.38,137.65 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M88.61,140.43 L75.04,188.55 L80.01,189.80 L90.88,141.00 Z" fill="var(--identity-amber)"/>
+          <path d="M99.04,141.99 L97.91,191.98 L101.78,191.98 L100.81,141.99 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M108.48,141.14 L118.57,190.11 L124.21,188.76 L111.05,140.52 Z" fill="var(--identity-amber)"/>
+          <path d="M117.63,138.12 L138.62,183.50 L145.79,179.80 L120.90,136.43 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M127.33,131.89 L159.86,169.86 L162.36,167.64 L128.47,130.88 Z" fill="var(--identity-amber)"/>
+          <path d="M133.58,125.22 L173.56,155.25 L177.22,150.01 L135.25,122.83 Z" fill="var(--identity-amber-bright)"/>
+          <path d="M138.51,116.77 L184.35,136.73 L187.30,129.02 L139.86,113.25 Z" fill="var(--identity-amber)"/>
+          <path d="M141.49,106.53 L190.88,114.30 L191.59,108.64 L141.81,103.94 Z" fill="var(--identity-amber-bright)"/>
+        </g>
+        <g id="sun-ring"><circle cx="100" cy="100" r="42" fill="none" stroke-width="5"/></g>
+      </svg>
+    </div>
+    <div class="ground-cover"></div>
+    <div class="horizon-glow-bar"></div>
+    <div class="horizon-line"></div>
+  </div>
+</body></html>

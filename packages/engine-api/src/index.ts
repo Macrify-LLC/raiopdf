@@ -404,6 +404,48 @@ export type PdfTextBoxEdit = {
 };
 
 /**
+ * A text callout baked into page content as one atomic edit.
+ *
+ * The text box renders through the same wrapping, font, color, and alignment
+ * rules as `PdfTextBoxEdit`. The leader line is drawn in user-space points from
+ * the nearest text-box boundary point to `tip`, optionally with an arrowhead at
+ * the tip.
+ */
+export type PdfCalloutEdit = {
+  type: "callout";
+  /** Zero-based page index receiving the callout. */
+  pageIndex: number;
+  /** User-space bounding box of the text box. */
+  rect: PdfEditRect;
+  /** User-space target point where the leader points. */
+  tip: PdfEditPoint;
+  /** Text content. `\n` produces additional lines. Must not be empty. */
+  text: string;
+  /** Font size in points. Defaults to 12. */
+  fontSizePt?: number;
+  /** Text ink color. Defaults to near-black (#111111). */
+  color?: PdfEditColor;
+  /** Standard PDF font family. Defaults to Helvetica. */
+  fontFamily?: PdfTextBoxFontFamily;
+  /** Use the bold face of the selected standard font family. Defaults to false. */
+  bold?: boolean;
+  /** Use the italic/oblique face of the selected standard font family. Defaults to false. */
+  italic?: boolean;
+  /** Horizontal alignment for each rendered line. Defaults to left. */
+  align?: PdfTextBoxAlign;
+  /** Leader stroke color. Defaults to near-black (#111111). */
+  strokeColor?: PdfEditColor;
+  /** Leader stroke thickness in points. Defaults to 1.5. */
+  strokeWidthPt?: number;
+  /** Draw an arrowhead at `tip`. Defaults to true. */
+  arrowhead?: boolean;
+  /** Draw a thin border around the text box. Defaults to true. */
+  boxBorder?: boolean;
+  /** Optional fill color for the text box. Omitted means transparent. */
+  boxFill?: PdfEditColor;
+};
+
+/**
  * A raster image drawn inside a rectangle.
  *
  * On rotated pages the image is drawn upright to the viewer; `rect` is the
@@ -551,6 +593,7 @@ export type PdfEdit =
   | PdfHighlightEdit
   | PdfTextMarkupEdit
   | PdfTextBoxEdit
+  | PdfCalloutEdit
   | PdfImageEdit
   | PdfInkEdit
   | PdfShapeEdit

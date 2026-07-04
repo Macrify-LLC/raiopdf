@@ -10,6 +10,8 @@ import type {
   PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
 import {
+  DEFAULT_CALLOUT_STROKE_COLOR,
+  DEFAULT_CALLOUT_STROKE_WIDTH_PT,
   DEFAULT_SHAPE_STROKE_COLOR,
   DEFAULT_SHAPE_STROKE_WIDTH_PT,
   DEFAULT_TEXT_COLOR,
@@ -29,6 +31,7 @@ export type EditToolId =
   | "underline"
   | "strikethrough"
   | "textBox"
+  | "callout"
   | "image"
   | "comment"
   | "draw"
@@ -72,6 +75,26 @@ export interface PendingTextBox {
   bold?: boolean;
   italic?: boolean;
   align?: PdfTextBoxAlign;
+}
+
+export interface PendingCallout {
+  kind: "callout";
+  id: string;
+  pageIndex: number;
+  rect: PdfEditRect;
+  tip: PdfEditPoint;
+  text: string;
+  fontSizePt: number;
+  color?: PdfEditColor;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
+  strokeColor?: PdfEditColor;
+  strokeWidthPt?: number;
+  arrowhead?: boolean;
+  boxBorder?: boolean;
+  boxFill?: PdfEditColor | null;
 }
 
 export interface PendingStamp {
@@ -130,6 +153,7 @@ export type PendingEdit =
   | PendingHighlight
   | PendingTextMarkup
   | PendingTextBox
+  | PendingCallout
   | PendingStamp
   | PendingComment
   | PendingInk
@@ -186,6 +210,32 @@ export function toPdfEdits(
           ...(edit.italic ? { italic: edit.italic } : {}),
           ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
         };
+      case "callout": {
+        const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+
+        return {
+          type: "callout",
+          pageIndex: edit.pageIndex,
+          rect: edit.rect,
+          tip: edit.tip,
+          text: edit.text,
+          fontSizePt: edit.fontSizePt,
+          ...(edit.color ? { color: edit.color } : {}),
+          ...(edit.fontFamily && edit.fontFamily !== "helvetica"
+            ? { fontFamily: edit.fontFamily }
+            : {}),
+          ...(edit.bold ? { bold: edit.bold } : {}),
+          ...(edit.italic ? { italic: edit.italic } : {}),
+          ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
+          ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_CALLOUT_STROKE_COLOR)
+            ? { strokeColor: edit.strokeColor }
+            : {}),
+          ...(strokeWidthPt !== DEFAULT_CALLOUT_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
+          ...(edit.arrowhead === false ? { arrowhead: false } : {}),
+          ...(edit.boxBorder === false ? { boxBorder: false } : {}),
+          ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
+        };
+      }
       case "image":
       case "signature":
         return {
@@ -270,6 +320,8 @@ export function describePendingEdit(edit: PendingEdit): {
       };
     case "textBox":
       return { label: "Text box", detail: excerpt(edit.text) };
+    case "callout":
+      return { label: "Callout", detail: excerpt(edit.text) };
     case "image":
       return { label: "Image", detail: null };
     case "signature":

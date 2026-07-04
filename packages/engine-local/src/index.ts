@@ -4,6 +4,7 @@ import type {
   PdfBinderOptions,
   PdfBytes,
   PdfAConversionOptions,
+  PdfCalloutEdit,
   PdfCommentEdit,
   PdfCompressOptions,
   PdfDocumentHandle,
@@ -71,7 +72,9 @@ type PageRotation = 0 | 90 | 180 | 270;
 
 type TextBoxFontKey = `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
 
-type TextBoxFontResolver = (edit: PdfTextBoxEdit) => Promise<PDFFont>;
+type TextRenderableEdit = PdfTextBoxEdit | PdfCalloutEdit;
+
+type TextBoxFontResolver = (edit: TextRenderableEdit) => Promise<PDFFont>;
 
 export type ExhibitBinderIndexExhibit = {
   label: string;
@@ -124,6 +127,8 @@ const DEFAULT_WATERMARK_OPACITY = 0.18;
 const TEXT_BOX_LINE_HEIGHT_FACTOR = 1.2;
 const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
+const DEFAULT_CALLOUT_STROKE_WIDTH_PT = DEFAULT_SHAPE_STROKE_WIDTH_PT;
+const DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT = 0.75;
 const ARROW_HEAD_MIN_PT = 8;
 const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
@@ -1273,6 +1278,9 @@ async function applyEditInPlace(
     case "textBox":
       applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
       return;
+    case "callout":
+      applyCalloutEdit(pdf, edit, await resolveTextBoxFont(edit));
+      return;
     case "image":
     case "signature":
       await applyImageEdit(pdf, edit);
@@ -1341,6 +1349,46 @@ function applyTextMarkupEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
  * sits one font-size below the rectangle's visual top edge.
  */
 function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
+  drawTextBoxText(pdf, edit, font);
+}
+
+function applyCalloutEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font: PDFFont): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+  const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
+  const anchor = computeCalloutLeaderAnchor(edit.rect, edit.tip);
+
+  page.drawLine({
+    start: anchor,
+    end: edit.tip,
+    thickness,
+    color: strokeColor,
+  });
+
+  if (edit.arrowhead ?? true) {
+    drawArrowHead(page, anchor, edit.tip, thickness, strokeColor);
+  }
+
+  if (edit.boxFill || edit.boxBorder !== false) {
+    page.drawRectangle({
+      x: edit.rect.x,
+      y: edit.rect.y,
+      width: edit.rect.w,
+      height: edit.rect.h,
+      ...(edit.boxFill ? { color: toEditColor(edit.boxFill, EDIT_INK_COLOR) } : {}),
+      ...(edit.boxBorder !== false
+        ? {
+            borderColor: strokeColor,
+            borderWidth: DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT,
+          }
+        : {}),
+    });
+  }
+
+  drawTextBoxText(pdf, edit, font);
+}
+
+function drawTextBoxText(pdf: PDFDocument, edit: TextRenderableEdit, font: PDFFont): void {
   const page = pdf.getPage(edit.pageIndex);
   const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
   const lineHeight = fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR;
@@ -1378,6 +1426,44 @@ function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont)
       rotate: pdfDegrees(pageRotation),
     });
   });
+}
+
+function computeCalloutLeaderAnchor(rect: PdfEditRect, tip: PdfEditPoint): PdfEditPoint {
+  const minX = rect.x;
+  const maxX = rect.x + rect.w;
+  const minY = rect.y;
+  const maxY = rect.y + rect.h;
+  const clampedX = clamp(tip.x, minX, maxX);
+  const clampedY = clamp(tip.y, minY, maxY);
+
+  if (tip.x < minX || tip.x > maxX || tip.y < minY || tip.y > maxY) {
+    return { x: clampedX, y: clampedY };
+  }
+
+  const distances = [
+    { edge: "left", value: tip.x - minX },
+    { edge: "right", value: maxX - tip.x },
+    { edge: "bottom", value: tip.y - minY },
+    { edge: "top", value: maxY - tip.y },
+  ] as const;
+  const nearest = distances.reduce((best, candidate) =>
+    candidate.value < best.value ? candidate : best,
+  );
+
+  switch (nearest.edge) {
+    case "left":
+      return { x: minX, y: tip.y };
+    case "right":
+      return { x: maxX, y: tip.y };
+    case "bottom":
+      return { x: tip.x, y: minY };
+    case "top":
+      return { x: tip.x, y: maxY };
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 /**
@@ -1711,26 +1797,20 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       assertValidTextMarkupEdit(edit);
       return;
     case "textBox":
-      assertEditRect(edit.rect);
-      assertNonEmptyEditText(edit.text, "Text box");
+      assertValidTextRenderableEdit(edit, "Text box");
+      return;
+    case "callout":
+      assertValidTextRenderableEdit(edit, "Callout");
+      assertEditPoint(edit.tip, "Callout tip");
 
-      if (edit.fontSizePt !== undefined) {
-        assertPositiveNumber(edit.fontSizePt, "fontSizePt");
+      if (edit.strokeWidthPt !== undefined) {
+        assertPositiveNumber(edit.strokeWidthPt, "strokeWidthPt");
       }
-      if (
-        edit.fontFamily !== undefined &&
-        !["helvetica", "times", "courier"].includes(edit.fontFamily)
-      ) {
-        throw new PdfEngineError(
-          "INVALID_DOCUMENT",
-          "Text box fontFamily must be helvetica, times, or courier.",
-        );
+      if (edit.strokeColor !== undefined) {
+        assertEditColor(edit.strokeColor, "Callout stroke color");
       }
-      if (edit.align !== undefined && !["left", "center", "right"].includes(edit.align)) {
-        throw new PdfEngineError(
-          "INVALID_DOCUMENT",
-          "Text box align must be left, center, or right.",
-        );
+      if (edit.boxFill !== undefined) {
+        assertEditColor(edit.boxFill, "Callout box fill");
       }
       return;
     case "image":
@@ -1761,6 +1841,33 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
     case "comment":
       assertNonEmptyEditText(edit.text, "Comment");
       return;
+  }
+}
+
+function assertValidTextRenderableEdit(edit: TextRenderableEdit, label: string): void {
+  assertEditRect(edit.rect);
+  assertNonEmptyEditText(edit.text, label);
+
+  if (edit.fontSizePt !== undefined) {
+    assertPositiveNumber(edit.fontSizePt, "fontSizePt");
+  }
+  if (edit.color !== undefined) {
+    assertEditColor(edit.color, `${label} color`);
+  }
+  if (
+    edit.fontFamily !== undefined &&
+    !["helvetica", "times", "courier"].includes(edit.fontFamily)
+  ) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `${label} fontFamily must be helvetica, times, or courier.`,
+    );
+  }
+  if (edit.align !== undefined && !["left", "center", "right"].includes(edit.align)) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `${label} align must be left, center, or right.`,
+    );
   }
 }
 
@@ -1872,7 +1979,7 @@ function toEditColor(
   return color ? rgb(color.r, color.g, color.b) : fallback;
 }
 
-function textBoxFontKey(edit: PdfTextBoxEdit): TextBoxFontKey {
+function textBoxFontKey(edit: TextRenderableEdit): TextBoxFontKey {
   const family = edit.fontFamily ?? "helvetica";
 
   if (edit.bold && edit.italic) {

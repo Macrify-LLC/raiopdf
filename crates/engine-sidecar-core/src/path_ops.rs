@@ -2307,4 +2307,105 @@ mod tests {
         arguments.push(path_arg(&fixture));
         run_qpdf(&toolchain, arguments).unwrap();
     }
+
+    /// Opt-in acceptance harness for the large-pdf-handling plan: point
+    /// `RAIOPDF_LARGE_FIXTURE` at a multi-hundred-MB PDF (a real canary
+    /// fixture, or the synthetic one from
+    /// `apps/ui/smoke/generate-large-fixture.mjs`) and run:
+    ///
+    /// ```text
+    /// RAIOPDF_ENGINE_PAYLOAD_DIR=<payload> RAIOPDF_LARGE_FIXTURE=<pdf>     ///   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
+    /// ```
+    ///
+    /// Demonstrates: split-by-max-bytes producing qpdf-valid parts under the
+    /// cap, and `prepare_filing` (scrub + split) with per-part facts
+    /// preflight — the two path-op acceptance items that don't need a UI.
+    #[test]
+    #[ignore = "acceptance harness — needs RAIOPDF_LARGE_FIXTURE and the payload toolchain"]
+    fn large_fixture_split_and_prepare_filing_acceptance() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let Some(fixture) = env::var_os("RAIOPDF_LARGE_FIXTURE") else {
+            eprintln!("set RAIOPDF_LARGE_FIXTURE to a large PDF to run this acceptance test");
+            return;
+        };
+        let fixture = PathBuf::from(fixture);
+        let input_len = fs::metadata(&fixture).expect("fixture must exist").len();
+        let total_pages = page_count(&toolchain, &fixture).unwrap();
+        let dir = TestDir::new("large-acceptance");
+        let cap: u64 = 50 * 1024 * 1024;
+
+        // 1. split_by_max_bytes → contiguous, qpdf-valid parts under the cap.
+        let split_dir = dir.path().join("split");
+        fs::create_dir_all(&split_dir).unwrap();
+        let started = std::time::Instant::now();
+        let parts = split_by_max_bytes(&toolchain, &fixture, cap, &split_dir).unwrap();
+        eprintln!(
+            "[acceptance] split_by_max_bytes: {} bytes / {} pages -> {} parts in {:.1?}",
+            input_len,
+            total_pages,
+            parts.len(),
+            started.elapsed(),
+        );
+        assert!(parts.len() >= 2, "a multi-hundred-MB fixture must split");
+        let mut covered_pages = 0u32;
+        for part in &parts {
+            assert!(
+                part.oversized || part.byte_length <= cap,
+                "part {} is {} bytes over a {} cap without an oversized flag",
+                part.path.display(),
+                part.byte_length,
+                cap,
+            );
+            covered_pages += part.last_page_index - part.first_page_index + 1;
+            let mut arguments = args(&["--check"]);
+            arguments.push(path_arg(&part.path));
+            run_qpdf(&toolchain, arguments).expect("every split part must pass qpdf --check");
+        }
+        assert_eq!(
+            covered_pages, total_pages,
+            "split parts must cover every source page"
+        );
+
+        // 2. prepare_filing (scrub-metadata + split) with facts preflight.
+        let stage_dir = dir.path().join("stage");
+        let out_dir = dir.path().join("out");
+        fs::create_dir_all(&stage_dir).unwrap();
+        fs::create_dir_all(&out_dir).unwrap();
+        let plan = PrepareFilingPlan {
+            decrypt_password: None,
+            sanitize: false,
+            normalize: false,
+            ocr: false,
+            scrub: true,
+            split_max_bytes: Some(cap),
+        };
+        let started = std::time::Instant::now();
+        let outcome = prepare_filing(&toolchain, &fixture, &plan, &stage_dir, &out_dir).unwrap();
+        eprintln!(
+            "[acceptance] prepare_filing(scrub+split): {} parts, {} facts rows in {:.1?}",
+            outcome.parts.len(),
+            outcome.facts_report.len(),
+            started.elapsed(),
+        );
+        assert_eq!(
+            outcome
+                .steps
+                .iter()
+                .map(|step| step.step)
+                .collect::<Vec<_>>(),
+            vec!["scrub-metadata", "split-by-size"],
+        );
+        assert_eq!(outcome.parts.len(), outcome.facts_report.len());
+        for preflight in &outcome.facts_report {
+            assert!(!preflight.encrypted);
+            assert_eq!(preflight.within_byte_cap, Some(true));
+        }
+        for part in &outcome.parts {
+            let mut arguments = args(&["--check"]);
+            arguments.push(path_arg(&part.path));
+            run_qpdf(&toolchain, arguments).expect("every filing part must pass qpdf --check");
+        }
+    }
 }

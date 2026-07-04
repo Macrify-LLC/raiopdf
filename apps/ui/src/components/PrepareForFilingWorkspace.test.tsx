@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPack, preflight, resolvePrepPlan } from "@raiopdf/rules";
 import { PrepareForFilingWorkspace } from "./PrepareForFilingWorkspace";
 import type { DocumentState } from "../hooks/useDocument";
+import type { FileGrant } from "../lib/filePort";
 
 const MiB = 1024 * 1024;
 
@@ -241,6 +242,123 @@ describe("PrepareForFilingWorkspace", () => {
     );
   });
 
+  it("enables the streamed run once facts load, honoring the closed-form step rule", () => {
+    const pack = getPack();
+    // The closed-form rule's output [R7-1]: steps without a registered path
+    // op arrive as extraUnavailableSteps and must render disabled.
+    const extraUnavailableSteps = new Map([
+      ["convert-pdfa", "not available for very large files yet"],
+      ["flatten-forms", "not available for very large files yet"],
+    ] as const);
+
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={streamedDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        extraUnavailableSteps={extraUnavailableSteps}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    // Enable gate: bytes present OR (streamed AND facts loaded) — facts are
+    // loaded here, so the primary button must NOT be disabled.
+    const buttonIndex = html.indexOf('class="filing-card__primary-button"');
+    const primaryButton = html.slice(buttonIndex, html.indexOf(">", buttonIndex));
+    expect(primaryButton).not.toContain("disabled");
+    // A step the rule disabled renders as a locked row.
+    expect(articleContaining(html, "Convert to PDFA")).toContain('data-disabled="true"');
+    // The empty state must not claim no document is open.
+    expect(html).not.toContain("Open a PDF before preparing a filing copy.");
+  });
+
+  it("keeps the streamed run disabled until the facts-based preflight loads", () => {
+    const pack = getPack();
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={streamedDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={null}
+        report={null}
+        loadingReport
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    const buttonIndex = html.indexOf('class="filing-card__primary-button"');
+    const primaryButton = html.slice(buttonIndex, html.indexOf(">", buttonIndex));
+    expect(primaryButton).toContain("disabled");
+  });
+
+  it("does not force a password prompt for owner-restricted (usage_restricted) facts", () => {
+    const pack = getPack("federal-cmecf");
+    const restrictedFacts = {
+      ...mockFacts,
+      encryptionState: "usage_restricted" as const,
+    };
+    const onPrepare = vi.fn();
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, restrictedFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={restrictedFacts}
+        report={preflight(restrictedFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={onPrepare}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    click(getButton("Make Filing-Ready"));
+
+    // Owner restrictions decrypt with an empty password in both pipelines —
+    // the run starts immediately instead of demanding a password that was
+    // never set.
+    expect(onPrepare).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("PDF password");
+  });
+
   function render(element: ReactNode) {
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -309,4 +427,23 @@ const mockFacts = {
   pages: [],
   fileBytes: 28 * MiB,
   filename: "motion.pdf",
+};
+
+// Streamed (large) document: no bytes, no engine handle — the source is a
+// range grant and the workspace runs the reduced path-based pipeline.
+const streamedDocument: DocumentState = {
+  ...mockDocument,
+  bytes: null,
+  source: {
+    kind: "rangeGrant",
+    grant: "grant-appendix" as FileGrant,
+    sizeBytes: 283 * MiB,
+    generation: 1,
+  },
+  fileName: "appendix.pdf",
+  filePath: "grant-appendix",
+  fileSizeBytes: 283 * MiB,
+  pageCount: 2556,
+  hasTextLayer: null,
+  textLayerCoverage: null,
 };

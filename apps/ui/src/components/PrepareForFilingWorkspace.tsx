@@ -120,6 +120,13 @@ export interface PrepareForFilingWorkspaceProps {
   pack: JurisdictionPack;
   availablePacks?: readonly JurisdictionPack[];
   prepPlan: readonly PrepPlanStep[];
+  /**
+   * Steps unavailable for reasons the plan itself doesn't know — for
+   * streamed (large) documents this is the closed-form PathOpsEngine rule
+   * [R7-1]: a step with no registered path op renders as a disabled
+   * checkbox with an honest reason, never as silently runnable.
+   */
+  extraUnavailableSteps?: ReadonlyMap<PrepPlanStepId, string> | undefined;
   courtProfiles: readonly CourtProfile[];
   selectedCourtProfile: CourtProfile | null;
   facts: DocumentFacts | null;
@@ -168,6 +175,7 @@ export const PrepareForFilingWorkspace = forwardRef<
     pack,
     availablePacks = [pack],
     prepPlan,
+    extraUnavailableSteps,
     courtProfiles,
     selectedCourtProfile,
     facts,
@@ -232,8 +240,8 @@ export const PrepareForFilingWorkspace = forwardRef<
   const unavailableSteps = useMemo(
     () => resolveUnavailableSteps(prepPlan, {
       pdfAAvailable,
-    }),
-    [pdfAAvailable, prepPlan],
+    }, extraUnavailableSteps),
+    [extraUnavailableSteps, pdfAAvailable, prepPlan],
   );
   const selectedAvailableStepIds = useMemo(
     () => prepPlan
@@ -251,10 +259,16 @@ export const PrepareForFilingWorkspace = forwardRef<
   const primaryLabel = needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
+  // Streamed (large) documents run the reduced path-based pipeline: the run
+  // is available once the facts-based preflight loaded — bytes present OR
+  // (streamed AND facts loaded).
+  const streamedDocument = document.source !== null && document.source.kind !== "memory";
+  const hasPreparableDocument = Boolean(document.bytes) || (streamedDocument && facts !== null);
   // Gate on "this pack will convert", not on the report's pdfa status -- an input
   // that already passes the PDF/A check still gets converted by the pipeline, so
   // the button must stay disabled wherever the conversion engine is unavailable.
-  const canPrepare = Boolean(document.bytes && report) &&
+  const canPrepare = hasPreparableDocument &&
+    Boolean(report) &&
     progress.phase !== "normalizing" &&
     progress.phase !== "splitting" &&
     progress.phase !== "converting" &&
@@ -269,7 +283,10 @@ export const PrepareForFilingWorkspace = forwardRef<
     Boolean(onBuildPacket) &&
     !packetProgress.running;
   const removeEncryptionSelected = selectedAvailableStepIds.includes("remove-encryption");
-  const needsUnlockPassword = removeEncryptionSelected && hasEncryptedFacts(facts);
+  // Only a genuinely encrypted document needs an open password. Owner-
+  // restricted ("usage_restricted") files decrypt with an empty password in
+  // both pipelines — never force a prompt for a password the user never set.
+  const needsUnlockPassword = removeEncryptionSelected && facts?.encryptionState === "encrypted";
 
   useEffect(() => {
     setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps));
@@ -456,7 +473,7 @@ export const PrepareForFilingWorkspace = forwardRef<
           </div>
         )}
 
-        {!document.bytes ? (
+        {document.source === null ? (
           <p className="filing-card__empty" role="status">Open a PDF before preparing a filing copy.</p>
         ) : null}
 
@@ -1612,12 +1629,16 @@ function defaultCheckedSteps(
 function resolveUnavailableSteps(
   steps: readonly PrepPlanStep[],
   availability: { pdfAAvailable: boolean },
+  extraUnavailableSteps?: ReadonlyMap<PrepPlanStepId, string>,
 ): ReadonlyMap<PrepPlanStepId, string> {
-  const unavailable = new Map<PrepPlanStepId, string>();
+  // Caller-supplied reasons (the streamed closed-form rule [R7-1]) win over
+  // the generic engine-availability reason below.
+  const unavailable = new Map<PrepPlanStepId, string>(extraUnavailableSteps ?? []);
 
   for (const step of steps) {
     if (
       !availability.pdfAAvailable &&
+      !unavailable.has(step.id) &&
       (step.id === "sanitize-content" || step.id === "make-searchable" || step.id === "convert-pdfa")
     ) {
       unavailable.set(step.id, "available in the desktop app");
@@ -1625,10 +1646,6 @@ function resolveUnavailableSteps(
   }
 
   return unavailable;
-}
-
-function hasEncryptedFacts(facts: DocumentFacts | null): boolean {
-  return facts?.encryptionState === "encrypted" || facts?.encryptionState === "usage_restricted";
 }
 
 const STANCE_LABEL: Record<PrepPlanStep["stance"], string> = {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { JurisdictionPack } from "@raiopdf/rules";
-import type { OpenedFile } from "../lib/filePort";
+import { tooLargeToAddMessage, type FileAddResult } from "../lib/readFileForAdd";
 import { formatBatchFailureReason } from "../lib/userMessages";
 import { CheckIcon, HelpIcon, PlusIcon } from "../icons";
 import { IconButton } from "./IconButton";
@@ -61,11 +61,23 @@ export interface BatchCleanupProgress {
   result: BatchCleanupRunResult | null;
 }
 
+/**
+ * Batch cleanup is path-based end-to-end (the shell resolves grants to real
+ * paths), so a queue entry needs only a name and a path/grant — never bytes.
+ * Streamed (large) documents therefore queue exactly like small ones.
+ */
+export interface BatchCleanupSourceFile {
+  name: string;
+  path: string | null;
+}
+
 export interface BatchCleanupWorkspaceProps {
-  currentFile: OpenedFile | null;
+  currentFile: BatchCleanupSourceFile | null;
   packs: readonly JurisdictionPack[];
   progress: BatchCleanupProgress;
-  onAddFile: () => Promise<OpenedFile | null>;
+  /** Add flow rides the `readFileForAdd` choke point [R7-2]: descriptor adds
+   * carry the grant, browser `tooLarge` adds render an honest gate here. */
+  onAddFile: () => Promise<FileAddResult | null>;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
   onHelpRequested?: (() => void) | undefined;
 }
@@ -102,7 +114,7 @@ export function BatchCleanupWorkspace({
   onHelpRequested,
 }: BatchCleanupWorkspaceProps) {
   const [files, setFiles] = useState<BatchCleanupFile[]>(() =>
-    currentFile ? [fromOpenedFile(currentFile)] : [],
+    currentFile ? [fromSourceFile(currentFile)] : [],
   );
   const [packId, setPackId] = useState<string>("");
   const [outputDir, setOutputDir] = useState("");
@@ -118,11 +130,23 @@ export function BatchCleanupWorkspace({
   const canRun = files.length > 0 && outputDir.trim().length > 0 && !progress.running;
 
   async function addFile() {
-    const opened = await onAddFile();
-    if (!opened) {
+    const result = await onAddFile();
+    if (!result) {
       return;
     }
-    setFiles((current) => [...current, fromOpenedFile(opened)]);
+
+    if (result.kind === "tooLarge") {
+      // A browser DOM `File` can never yield a shell grant [R3-2] — honest
+      // gate instead of a silently-broken queue entry.
+      setLocalMessage(tooLargeToAddMessage(result.name));
+      return;
+    }
+
+    const source: BatchCleanupSourceFile = result.kind === "bytes"
+      ? { name: result.file.name, path: result.file.path }
+      : { name: result.descriptor.name, path: result.descriptor.grant };
+    setLocalMessage(null);
+    setFiles((current) => [...current, fromSourceFile(source)]);
   }
 
   async function run() {
@@ -403,7 +427,7 @@ function Checkbox({
   );
 }
 
-function fromOpenedFile(file: OpenedFile): BatchCleanupFile {
+function fromSourceFile(file: BatchCleanupSourceFile): BatchCleanupFile {
   return {
     id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: file.name,

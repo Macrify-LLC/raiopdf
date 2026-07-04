@@ -118,6 +118,7 @@ import {
   isFileChangedError,
   readBrowserFileSource,
   saveStreamedCopy,
+  type FileGrant,
   type OpenedFile,
   type OpenedFileSource,
 } from "./lib/filePort";
@@ -126,6 +127,30 @@ import {
   tooLargeToAddMessage,
   type FileAddResult,
 } from "./lib/readFileForAdd";
+import {
+  isPathOpsRuntime,
+  pathOpCompress,
+  pathOpDecrypt,
+  pathOpDocumentFacts,
+  pathOpOcr,
+  pathOpPrepareFiling,
+  pathOpRedactAreas,
+  pathOpRepair,
+  pathOpSanitize,
+  pathOpsStatus,
+  pathOpErrorMessage,
+  PathOpsError,
+  type PathOpsRedactionVerification,
+  type PathOpsStatus,
+} from "./lib/pathOps";
+import {
+  annotateStreamedPreflight,
+  buildPrepareFilingPlan,
+  buildStreamedFilingOutputReport,
+  buildStreamedUnavailableSteps,
+  mapPathOpsFactsToDocumentFacts,
+} from "./lib/streamedFiling";
+import { extractPrintableRange } from "./lib/printRange";
 import {
   looksLikeAbsolutePath,
   resolveDesktopFileGrantPaths,
@@ -242,11 +267,18 @@ type OcrType = "skip-text" | "force-ocr";
 
 type ForceOcrConfirmationReason = "garbled" | "manual";
 
+/** What the password prompt unlocks: the still-encrypted source bytes
+ * (small files, engine decrypt) or a shell grant (streamed large files,
+ * path-based qpdf decrypt — bytes never enter the WebView). */
+type PasswordPromptSource =
+  | { kind: "bytes"; bytes: Uint8Array }
+  | { kind: "grant"; grant: FileGrant };
+
 /** B3 (2026-07-03 live-test fix plan): state for the password-prompt dialog
- * shown when opening a password-protected PDF. `bytes` is the still-
- * encrypted source; `error` is the inline "wrong password" retry message. */
+ * shown when opening a password-protected PDF. `source` is the still-
+ * encrypted input; `error` is the inline "wrong password" retry message. */
 interface PasswordPromptState {
-  bytes: Uint8Array;
+  source: PasswordPromptSource;
   fileName: string;
   filePath: string | null;
   phase: PasswordDialogPhase;
@@ -383,6 +415,12 @@ export function App() {
   const pdfDocument = currentPdfDocumentState?.proxy ?? null;
   const pdfDocumentBytes = currentPdfDocumentState?.bytes ?? null;
   const streamedDocument = document.source !== null && document.source.kind !== "memory";
+  // Delegated (path-based) ops need a shell grant AND the Tauri runtime —
+  // browser streamed docs (`rangeFile`) have neither, so their gates stay up.
+  const pathOpsGrant =
+    document.source?.kind === "rangeGrant" && isPathOpsRuntime()
+      ? document.source.grant
+      : null;
   const editing = useEditing(pdfDocument);
   const documentSearch = useDocumentSearch({
     pdfDocumentState: currentPdfDocumentState,
@@ -438,6 +476,14 @@ export function App() {
   ));
   const [filingReport, setFilingReport] = useState<PreflightReport | null>(null);
   const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
+  /** PathOpsEngine status for the streamed filing checklist rule [R7-1]. */
+  const [pathOpsFilingStatus, setPathOpsFilingStatus] = useState<PathOpsStatus | null>(null);
+  /** Page-range print prompt for streamed docs (whole-doc print is gated). */
+  const [printRangePrompt, setPrintRangePrompt] = useState<{
+    value: string;
+    message: string | null;
+    running: boolean;
+  } | null>(null);
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingReportError, setFilingReportError] = useState<string | null>(null);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
@@ -482,6 +528,15 @@ export function App() {
   const filingPrepPlan = useMemo(
     () => resolvePrepPlan(filingPack, filingFacts ?? emptyDocumentFacts(document)),
     [document.fileName, document.fileSizeBytes, filingFacts, filingPack],
+  );
+  // Streamed checklist enablement is the closed-form rule [R7-1]: a step is
+  // enabled ⟺ a registered path op implements it AND its toolchain is
+  // available — computed from `path_ops_status`, never a hand list.
+  const streamedFilingUnavailableSteps = useMemo(
+    () => (streamedDocument
+      ? buildStreamedUnavailableSteps(filingPrepPlan, pathOpsFilingStatus)
+      : undefined),
+    [filingPrepPlan, pathOpsFilingStatus, streamedDocument],
   );
   const [scrubState, setScrubState] = useState<{
     scrubbing: boolean;
@@ -933,6 +988,59 @@ export function App() {
     [getOpenToken],
   );
 
+  /** Streamed variant of `openOpenedFile`: same per-open state resets, but
+   * the document opens over a range transport — no bytes anywhere. */
+  const openStreamedSource = useCallback(
+    (source: Exclude<OpenedFileSource, { kind: "memory" }>) => {
+      ocrRunRef.current += 1;
+      ocrActiveRef.current = false;
+      setOcrState({ phase: "idle", message: null });
+      resetLegalState();
+      setSelectedPageIndexes(new Set());
+      setPasswordPrompt(null);
+      setRepairCandidate(null);
+      return openStreamedFile(
+        source.kind === "rangeGrant"
+          ? {
+              source: { kind: "rangeGrant", grant: source.grant, sizeBytes: source.sizeBytes },
+              name: source.name,
+              path: source.grant,
+            }
+          : {
+              source: { kind: "rangeFile", file: source.file, sizeBytes: source.sizeBytes },
+              name: source.name,
+              path: null,
+            },
+      ).then((result) => {
+        if (result.status === "opened") {
+          setSelectedPageIndexes(new Set([0]));
+        }
+
+        return result;
+      });
+    },
+    [openStreamedFile, resetLegalState],
+  );
+
+  /**
+   * The shared reconcile flow for delegated (path-based) ops: an op's output
+   * file reopens as a NEW streamed document over its fresh grant, so the
+   * generation bumps by construction [R1-8] — in-flight work for the old
+   * document goes stale and per-generation caches drop. Every un-gated
+   * streamed workflow (OCR, repair, compress, sanitize, redact, decrypt)
+   * funnels its output through here.
+   */
+  const openPathOpOutput = useCallback(
+    (output: { outputGrant: FileGrant; name: string; sizeBytes: number }) =>
+      openStreamedSource({
+        kind: "rangeGrant",
+        grant: output.outputGrant,
+        name: output.name,
+        sizeBytes: output.sizeBytes,
+      }),
+    [openStreamedSource],
+  );
+
   useEffect(() => {
     let disposed = false;
     let loadedDocument: PDFDocumentProxy | null = null;
@@ -976,7 +1084,7 @@ export function App() {
             // route that into the same unlock dialog instead of a dead-end
             // preview error.
             setPasswordPrompt({
-              bytes: sourceBytes,
+              source: { kind: "bytes", bytes: sourceBytes },
               fileName: document.fileName ?? "Document.pdf",
               filePath: document.filePath,
               phase: "prompt",
@@ -1028,19 +1136,33 @@ export function App() {
           }
 
           if (error instanceof PasswordException) {
-            // Encrypted large file: honest error until the path-based
-            // decrypt op lands (Phase 3) — the byte-based unlock flow would
-            // require materializing the whole file.
+            if (source.kind === "rangeGrant" && isPathOpsRuntime()) {
+              // Encrypted large file: prompt for the open password and
+              // decrypt by grant through the path-based qpdf op — the file
+              // is never materialized in the WebView.
+              setPasswordPrompt({
+                source: { kind: "grant", grant: source.grant },
+                fileName: document.fileName ?? "Document.pdf",
+                filePath: document.filePath,
+                phase: "prompt",
+                error: null,
+              });
+              return;
+            }
+
+            // Browser streamed docs have no shell grant — honest error.
             setError(
-              "This PDF is encrypted. Removing encryption isn't available yet for very large files.",
+              "This PDF is encrypted. Removing encryption isn't available here for very large files.",
             );
             return;
           }
 
-          // Badly malformed large files: typed open error; Repair becomes
-          // path-based in Phase 3 — until then the message stays honest.
+          // Badly malformed large files: typed open error. Repair now runs
+          // path-based through the local engine — point at it.
           setError(
-            "This large PDF could not be opened for streaming view. It may be malformed; Repair for very large files arrives with the local engine ops.",
+            source.kind === "rangeGrant" && isPathOpsRuntime()
+              ? "This large PDF could not be opened for streaming view. It may be malformed — try Organize → Repair, which runs through the local engine."
+              : "This large PDF could not be opened for streaming view. It may be malformed.",
           );
         });
     }
@@ -1208,8 +1330,54 @@ export function App() {
     }
 
     if (!sourceBytes) {
-      // Streamed docs never reach here — Prepare for Filing is gated at the
-      // tool entry point until the path-based filing pipeline lands.
+      if (pathOpsGrant) {
+        // Streamed preflight [R5-2]: facts come from `document_facts` (qpdf
+        // --json) — no bytes, no pdf-lib. Checks the facts can't evaluate
+        // render as "not evaluated for very large files", never as passed.
+        // The PathOpsEngine status rides along for the closed-form checklist
+        // rule [R7-1].
+        const grant = pathOpsGrant;
+        setFilingReportLoading(true);
+        setFilingReportError(null);
+
+        void Promise.all([pathOpDocumentFacts(grant), pathOpsStatus()])
+          .then(([rawFacts, status]) => {
+            if (disposed || documentGenerationRef.current !== sourceGeneration) {
+              return;
+            }
+
+            const facts = mapPathOpsFactsToDocumentFacts(rawFacts, {
+              ...(document.fileName ? { filename: document.fileName } : {}),
+            });
+            setPathOpsFilingStatus(status);
+            setFilingFacts(facts);
+            setFilingReport(annotateStreamedPreflight(runFilingPreflight(facts, filingPack)));
+            setFilingReportError(null);
+          })
+          .catch((error: unknown) => {
+            if (disposed || documentGenerationRef.current !== sourceGeneration) {
+              return;
+            }
+
+            setFilingFacts(null);
+            setFilingReport(null);
+            setFilingReportError(pathOpErrorMessage(
+              error,
+              "RaioPDF could not read the facts needed for filing checks. The document was left unchanged; try reopening the PDF.",
+            ));
+          })
+          .finally(() => {
+            if (!disposed && documentGenerationRef.current === sourceGeneration) {
+              setFilingReportLoading(false);
+            }
+          });
+
+        return () => {
+          disposed = true;
+        };
+      }
+
+      // Browser streamed docs (no shell grant) and empty state: no report.
       setFilingReport(null);
       setFilingFacts(null);
       setFilingReportLoading(false);
@@ -1256,7 +1424,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.generation, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, document.bytes, document.generation, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pathOpsGrant, pdfDocument, pdfDocumentBytes]);
 
   const runOcrWorkflow = useCallback((ocrType: OcrType) => {
     if (ocrActiveRef.current) {
@@ -1268,9 +1436,64 @@ export function App() {
     const sourceGeneration = document.generation;
 
     if (streamedDocument) {
-      // OCR is a byte-based sidecar round-trip [R2-2] — gated until the
-      // path-based OCR op lands in Phase 3.
-      setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+      if (!pathOpsGrant) {
+        // Browser streamed docs have no shell grant — the gate stays up.
+        setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+        return;
+      }
+
+      if (ocrType === "force-ocr") {
+        // The path-based op keeps existing text layers (--skip-text); a full
+        // text-layer rebuild has no file-to-file implementation yet.
+        setOcrState({
+          phase: "error",
+          message: "Rebuilding the text layer isn't available for very large files yet. Make Searchable (which keeps existing text) still works.",
+        });
+        return;
+      }
+
+      // Delegated OCR [R2-2]: OCRmyPDF runs file-to-file on the shell side;
+      // the output reopens as a new streamed document (generation bump).
+      const grant = pathOpsGrant;
+      const runId = ocrRunRef.current + 1;
+      ocrRunRef.current = runId;
+      ocrActiveRef.current = true;
+      const isCurrentStreamedRun = () => (
+        ocrRunRef.current === runId && getOpenToken() === sourceOpenToken
+      );
+
+      setOcrState({
+        phase: "processing",
+        message: "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+      });
+
+      void pathOpOcr(grant)
+        .then(async (output) => {
+          if (!isCurrentStreamedRun()) {
+            return;
+          }
+
+          await openPathOpOutput(output);
+          setOcrState({
+            phase: "done",
+            message: "Searchable copy ready — it opened as a new document. Use Save As to keep it.",
+          });
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentStreamedRun()) {
+            return;
+          }
+
+          setOcrState({
+            phase: "error",
+            message: pathOpErrorMessage(error, "OCR could not finish. The document was left unchanged."),
+          });
+        })
+        .finally(() => {
+          if (ocrRunRef.current === runId) {
+            ocrActiveRef.current = false;
+          }
+        });
       return;
     }
 
@@ -1429,7 +1652,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
@@ -1437,7 +1660,15 @@ export function App() {
 
   const openOcrDialog = useCallback((ocrType: OcrType) => {
     if (streamedDocument) {
-      setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+      if (!pathOpsGrant) {
+        setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
+        return;
+      }
+
+      // Delegated OCR runs file-to-file through the PathOpsEngine — no
+      // sidecar warm-up, and only the text-preserving pass is available.
+      pendingOcrTypeRef.current = "skip-text";
+      setOcrState({ phase: "confirm", message: null });
       return;
     }
 
@@ -1467,7 +1698,7 @@ export function App() {
     // won't start.
     engineBridge.warmEngine();
     setOcrState({ phase: "confirm", message: null });
-  }, [document.bytes, engineBridge, streamedDocument]);
+  }, [document.bytes, engineBridge, pathOpsGrant, streamedDocument]);
 
   const makeSearchable = useCallback(() => {
     const status = deriveTextLayerStatus(document.textLayerCoverage);
@@ -1519,7 +1750,7 @@ export function App() {
           // live-test fix plan).
           setRepairCandidate(null);
           setPasswordPrompt({
-            bytes: result.bytes,
+            source: { kind: "bytes", bytes: result.bytes },
             fileName: result.fileName,
             filePath: result.filePath,
             phase: "prompt",
@@ -1548,19 +1779,26 @@ export function App() {
     passwordUnlockRunRef.current += 1;
 
     // This dialog can also be triggered by pdf.js failing to preview an
-    // already-open document (see the PasswordException branch in the
+    // already-open document (see the PasswordException branches in the
     // preview-loading effect below) rather than the initial open failing
     // outright. In that case the document is still technically "open" but
     // unrenderable -- restore the informative message instead of leaving a
     // silent, unexplained blank canvas behind the closed dialog.
-    if (passwordPrompt && document.bytes === passwordPrompt.bytes) {
+    const promptCoversOpenDocument = passwordPrompt !== null && (
+      passwordPrompt.source.kind === "bytes"
+        ? document.bytes === passwordPrompt.source.bytes
+        : document.source?.kind === "rangeGrant" &&
+          document.source.grant === passwordPrompt.source.grant
+    );
+
+    if (promptCoversOpenDocument) {
       setError(
         "This PDF is encrypted. Preview is available after removing encryption with the open password.",
       );
     }
 
     setPasswordPrompt(null);
-  }, [document.bytes, passwordPrompt, setError]);
+  }, [document.bytes, document.source, passwordPrompt, setError]);
 
   const submitPassword = useCallback(
     (password: string) => {
@@ -1573,10 +1811,55 @@ export function App() {
       passwordUnlockRunRef.current = runId;
       const isCurrentUnlock = () => passwordUnlockRunRef.current === runId;
 
+      if (prompt.source.kind === "grant") {
+        // Streamed large file: qpdf decrypts file-to-file by grant; the
+        // decrypted copy reopens as a new streamed document [R1-7].
+        const { grant } = prompt.source;
+        setPasswordPrompt({ ...prompt, phase: "unlocking", error: null });
+
+        void pathOpDecrypt(grant, password)
+          .then(async (output) => {
+            if (!isCurrentUnlock()) {
+              return;
+            }
+
+            setPasswordPrompt(null);
+            await openPathOpOutput(output);
+          })
+          .catch((error: unknown) => {
+            if (!isCurrentUnlock()) {
+              return;
+            }
+
+            if (
+              error instanceof PathOpsError &&
+              error.code === "OP_FAILED" &&
+              /invalid password/i.test(error.message)
+            ) {
+              setPasswordPrompt((current) => (
+                current
+                  ? { ...current, phase: "prompt", error: "That password wasn't accepted. Try again." }
+                  : current
+              ));
+              return;
+            }
+
+            setPasswordPrompt(null);
+            setError(pathOpErrorMessage(error, "This PDF could not be unlocked. Try again in a moment."));
+            void recordDiagnosticEvent(
+              "password.unlock-failed",
+              "Removing PDF encryption by grant failed",
+              [error instanceof Error ? error.message : String(error)],
+            );
+          });
+        return;
+      }
+
+      const promptBytes = prompt.source.bytes;
       setPasswordPrompt({ ...prompt, phase: "starting-engine", error: null });
 
       void engineBridge
-        .removeEncryption(prompt.bytes, password, {
+        .removeEncryption(promptBytes, password, {
           onEngineReady: () => {
             if (isCurrentUnlock()) {
               setPasswordPrompt((current) => (current ? { ...current, phase: "unlocking" } : current));
@@ -1670,37 +1953,7 @@ export function App() {
           );
         });
     },
-    [engineBridge, openDocumentFile, passwordPrompt, setError],
-  );
-
-  /** Streamed variant of `openOpenedFile`: same per-open state resets, but
-   * the document opens over a range transport — no bytes anywhere. */
-  const openStreamedSource = useCallback(
-    (source: Exclude<OpenedFileSource, { kind: "memory" }>) => {
-      ocrRunRef.current += 1;
-      ocrActiveRef.current = false;
-      setOcrState({ phase: "idle", message: null });
-      resetLegalState();
-      setSelectedPageIndexes(new Set());
-      setPasswordPrompt(null);
-      setRepairCandidate(null);
-      void openStreamedFile(
-        source.kind === "rangeGrant"
-          ? {
-              source: { kind: "rangeGrant", grant: source.grant, sizeBytes: source.sizeBytes },
-              name: source.name,
-              path: source.grant,
-            }
-          : {
-              source: { kind: "rangeFile", file: source.file, sizeBytes: source.sizeBytes },
-              name: source.name,
-              path: null,
-            },
-      ).then(() => {
-        setSelectedPageIndexes(new Set([0]));
-      });
-    },
-    [openStreamedFile, resetLegalState],
+    [confirmDecryptSignatureInvalidation, engineBridge, openDocumentFile, openPathOpOutput, passwordPrompt, setError],
   );
 
   const openFileSource = useCallback(
@@ -1708,7 +1961,7 @@ export function App() {
       if (source.kind === "memory") {
         openOpenedFile(source);
       } else {
-        openStreamedSource(source);
+        void openStreamedSource(source);
       }
     },
     [openOpenedFile, openStreamedSource],
@@ -1740,37 +1993,12 @@ export function App() {
     }
   }, []);
 
-  const openBatchCleanupFile = useCallback(async (): Promise<OpenedFile | null> => {
+  const openBatchCleanupFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
-      const result = await pickFileForAdd();
-
-      if (!result) {
-        return null;
-      }
-
-      if (result.kind === "bytes") {
-        return result.file;
-      }
-
-      if (result.kind === "descriptor") {
-        // Batch cleanup runs path-based (resolveDesktopFileGrantPaths) and its
-        // workspace reads only name/path from OpenedFile, so above-threshold
-        // adds carry the grant with empty bytes -- nothing downstream loads
-        // them. Integration note: BatchCleanupWorkspace's onAddFile prop
-        // should move to FileAddResult so this shim can go away.
-        return {
-          bytes: new Uint8Array(0),
-          name: result.descriptor.name,
-          path: result.descriptor.grant,
-        };
-      }
-
-      setBatchCleanupProgress({
-        running: false,
-        message: tooLargeToAddMessage(result.name),
-        result: null,
-      });
-      return null;
+      // The workspace consumes the FileAddResult directly: descriptor adds
+      // carry the grant (batch cleanup is path-based end-to-end), and the
+      // browser tooLarge case renders its own honest gate.
+      return await pickFileForAdd();
     } catch {
       setBatchCleanupProgress({
         running: false,
@@ -1798,9 +2026,10 @@ export function App() {
       }
 
       if (result.kind === "descriptor") {
-        // FilingPacketFile requires a known page count; a descriptor without
-        // one (shell predates page_count(grant)) is honestly gated rather
-        // than shown with a fake count.
+        // FilingPacketFile requires a known page count. `path_op_page_count`
+        // ships in the same shell now, so a null count only happens when the
+        // bundled qpdf is missing or the count itself failed — still gated
+        // honestly rather than shown with a fake count.
         if (result.descriptor.pageCount === null) {
           setFilingPacketProgress({
             running: false,
@@ -2202,11 +2431,16 @@ export function App() {
 
   const printDocument = useCallback(() => {
     if (streamedDocument) {
-      // Whole-document print of a >threshold doc is v1-gated; page-range
-      // printing (extract-to-temp via path ops) and the native streaming
-      // print pipeline are Phase 3/4 work.
+      if (pathOpsGrant) {
+        // Page-range printing for streamed docs: extract the range to a
+        // temp output (path op), open it as an ordinary small document, and
+        // the existing print path applies. Whole-document print stays gated.
+        setPrintRangePrompt({ value: "", message: null, running: false });
+        return;
+      }
+
       setError(
-        "Printing a very large document isn't available yet. Page-range printing arrives with the local engine ops.",
+        "Printing a very large document isn't available here. In the desktop app, a page range can be printed instead.",
       );
       return;
     }
@@ -2217,15 +2451,50 @@ export function App() {
     }
 
     window.print();
-  }, [document.bytes, setError, streamedDocument]);
+  }, [document.bytes, pathOpsGrant, setError, streamedDocument]);
+
+  const cancelPrintRangePrompt = useCallback(() => {
+    setPrintRangePrompt(null);
+  }, []);
+
+  const submitPrintRange = useCallback((rangeInput: string) => {
+    const grant = pathOpsGrant;
+
+    if (!grant) {
+      setPrintRangePrompt(null);
+      return;
+    }
+
+    const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+    setPrintRangePrompt((current) => (
+      current ? { ...current, value: rangeInput, running: true, message: null } : current
+    ));
+
+    void extractPrintableRange(grant, rangeInput, document.pageCount, baseName)
+      .then((result) => {
+        if (!result.ok) {
+          setPrintRangePrompt((current) => (
+            current ? { ...current, running: false, message: result.error } : current
+          ));
+          return;
+        }
+
+        setPrintRangePrompt(null);
+        // The extracted range opens as an ordinary small document — the
+        // regular Print button (window.print on the rendered pages) now
+        // applies to exactly those pages. The temp output on disk was
+        // already deleted; these bytes live only in memory.
+        openOpenedFile({ bytes: result.extraction.bytes, name: result.extraction.name, path: null });
+      });
+  }, [document.fileName, document.pageCount, openOpenedFile, pathOpsGrant]);
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
-      // Streamed mode: byte-based legal workflows are gated at their entry
-      // door with the message naming what still works [R1-2]. The 2.425
-      // scanner (user-initiated, proxy-based) and the static Passwords panel
-      // stay available.
-      if (streamedDocument && toolId !== "scanner-2425" && toolId !== "passwords") {
+      // Streamed mode: tools whose flow now runs file-to-file through the
+      // PathOpsEngine (or that were already path/proxy-based) are open;
+      // everything still byte-based stays gated with the message naming
+      // what works [R1-2].
+      if (streamedDocument && !isStreamedLegalToolAvailable(toolId, pathOpsGrant !== null)) {
         setError(STREAMED_DOCUMENT_GATE_MESSAGE);
         return;
       }
@@ -2239,14 +2508,18 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [editing, setError, streamedDocument],
+    [editing, pathOpsGrant, setError, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
-    // Streamed mode: everything except Document Properties mutates bytes or
-    // round-trips the sidecar — gated until the path ops land [R1-2].
-    // Properties works from pdf.js `getMetadata()` on the shared proxy.
-    if (streamedDocument && toolId !== "properties") {
+    // Streamed mode: Properties works from pdf.js `getMetadata()` on the
+    // shared proxy; Compress and Repair run file-to-file through the
+    // PathOpsEngine. Everything else still mutates bytes — gated [R1-2].
+    const streamedOrganizeAvailable =
+      toolId === "properties" ||
+      (pathOpsGrant !== null && (toolId === "compress" || toolId === "repair"));
+
+    if (streamedDocument && !streamedOrganizeAvailable) {
       setError(STREAMED_DOCUMENT_GATE_MESSAGE);
       return;
     }
@@ -2264,7 +2537,7 @@ export function App() {
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
     setActiveEditDialogTool(null);
-  }, [setError, streamedDocument]);
+  }, [pathOpsGrant, setError, streamedDocument]);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
     if (streamedDocument) {
@@ -2363,7 +2636,11 @@ export function App() {
       const sourceGeneration = document.generation;
 
       if (!sourceBytes) {
-        setRedactionMessage("Open a PDF before searching for redaction text.");
+        setRedactionMessage(
+          streamedDocument
+            ? "Search-to-redact isn't available for very large files yet — draw boxes over the areas instead."
+            : "Open a PDF before searching for redaction text.",
+        );
         return;
       }
 
@@ -2395,17 +2672,23 @@ export function App() {
       setRedactionPhase("idle");
       setRedactionMessage(`${areas.length} ${areas.length === 1 ? "area" : "areas"} marked from search.`);
     },
-    [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText],
+    [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText, streamedDocument],
   );
 
   const requestApplyRedactions = useCallback(() => {
-    if (!document.bytes) {
+    if (streamedDocument) {
+      // Streamed redaction runs file-to-file through the PathOpsEngine —
+      // it needs a shell grant, not the sidecar bridge.
+      if (!pathOpsGrant) {
+        setRedactionPhase("error");
+        setRedactionMessage("This action is available in the desktop app.");
+        return;
+      }
+    } else if (!document.bytes) {
       setRedactionPhase("error");
       setRedactionMessage("Open a PDF before applying redactions.");
       return;
-    }
-
-    if (!engineBridge.available) {
+    } else if (!engineBridge.available) {
       setRedactionPhase("error");
       setRedactionMessage("This action is available in the desktop app.");
       return;
@@ -2419,7 +2702,7 @@ export function App() {
 
     setRedactionPhase("confirming");
     setRedactionMessage(null);
-  }, [document.bytes, engineBridge.available, pendingRedactions.length]);
+  }, [document.bytes, engineBridge.available, pathOpsGrant, pendingRedactions.length, streamedDocument]);
 
   const cancelRedactions = useCallback(() => {
     setRedactionPhase("idle");
@@ -2432,7 +2715,46 @@ export function App() {
     const sourceGeneration = document.generation;
     const areas = pendingRedactions.map((pending) => pending.area);
 
-    if (!sourceBytes || areas.length === 0) {
+    if (areas.length === 0) {
+      return;
+    }
+
+    if (!sourceBytes && pathOpsGrant) {
+      // Delegated redaction [R3-1][R4-1]: file-to-file with engine-side,
+      // fail-closed verification — the op re-extracts text from the redacted
+      // regions of the OUTPUT file; any recoverable text (or any inability
+      // to verify) rejects with VERIFICATION_FAILED and no output grant ever
+      // exists, so an unverified result can never be committed.
+      setRedactionPhase("applying");
+      setRedactionMessage("Applying redactions in the local engine and verifying the redacted output file...");
+
+      try {
+        const result = await pathOpRedactAreas(pathOpsGrant, areas);
+
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return;
+        }
+
+        await openPathOpOutput(result);
+        setRedactionPhase("verified");
+        setRedactionMessage(formatStreamedRedactionSuccess(result.verification));
+      } catch (error) {
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return;
+        }
+
+        setRedactionPhase("error");
+        setRedactionMessage(
+          error instanceof PathOpsError && error.code === "VERIFICATION_FAILED"
+            ? `${error.message} The document was NOT modified.`
+            : pathOpErrorMessage(error, "Redaction could not finish. The document was left unchanged."),
+        );
+      }
+
+      return;
+    }
+
+    if (!sourceBytes) {
       return;
     }
 
@@ -2502,6 +2824,8 @@ export function App() {
     engineBridge,
     getOpenToken,
     isCurrentDocument,
+    openPathOpOutput,
+    pathOpsGrant,
     pdfDocument,
     pendingRedactions,
     replaceBytes,
@@ -2655,6 +2979,42 @@ export function App() {
       const sourceOpenToken = getOpenToken();
       const sourceGeneration = document.generation;
 
+      if (!sourceBytes && pathOpsGrant) {
+        // Delegated compress [R2-2]: qpdf's structural pass (object streams
+        // + linearization) file-to-file. The quality/grayscale options are a
+        // sidecar (image-downsampling) feature and do not apply here.
+        const beforeBytes = document.fileSizeBytes;
+        setSidecarStatus({
+          running: true,
+          message: "Compressing through the local engine...",
+          removed: [],
+          beforeBytes,
+          afterBytes: null,
+        });
+
+        try {
+          const output = await pathOpCompress(pathOpsGrant);
+          await openPathOpOutput(output);
+          setSidecarStatus({
+            running: false,
+            message: "Compression complete — very large files use the engine's structural pass; image downsampling is not applied.",
+            removed: [],
+            beforeBytes,
+            afterBytes: output.sizeBytes,
+          });
+          return true;
+        } catch (error) {
+          setSidecarStatus({
+            running: false,
+            message: pathOpErrorMessage(error, "Compression could not finish. The document was left unchanged."),
+            removed: [],
+            beforeBytes,
+            afterBytes: null,
+          });
+          return false;
+        }
+      }
+
       if (!sourceBytes) {
         setSidecarStatus({
           running: false,
@@ -2727,13 +3087,48 @@ export function App() {
         return false;
       }
     },
-    [document.bytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, replaceBytes, streamedDocument],
+    [document.bytes, document.fileSizeBytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument],
   );
 
   const sanitizeDocument = useCallback(async () => {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
+
+    if (!sourceBytes && pathOpsGrant) {
+      // Delegated sanitize [R2-2]: a Ghostscript pdfwrite rewrite on disk —
+      // document JavaScript, embedded files, and launch actions don't
+      // survive it.
+      setSidecarStatus({
+        running: true,
+        message: "Sanitizing through the local engine...",
+        removed: [],
+        beforeBytes: null,
+        afterBytes: null,
+      });
+
+      try {
+        const output = await pathOpSanitize(pathOpsGrant);
+        await openPathOpOutput(output);
+        setSidecarStatus({
+          running: false,
+          message: "Sanitize complete. The rewrite removes document JavaScript, embedded files, and launch actions; the sanitized copy opened as a new document.",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return true;
+      } catch (error) {
+        setSidecarStatus({
+          running: false,
+          message: pathOpErrorMessage(error, "Sanitize could not finish. The document was left unchanged."),
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+        return false;
+      }
+    }
 
     if (!sourceBytes) {
       setSidecarStatus({
@@ -2810,13 +3205,48 @@ export function App() {
 
       return false;
     }
-  }, [document.bytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const repairDocument = useCallback(
     async () => {
       const source = repairCandidate ?? (document.bytes
         ? { bytes: document.bytes, name: document.fileName ?? "Repaired.pdf", path: null }
         : null);
+
+      if (!source && pathOpsGrant) {
+        // Delegated repair [R2-2]: qpdf rebuilds the file on disk — the
+        // malformed-large-file fallback the streamed open error points at.
+        const beforeBytes = document.fileSizeBytes;
+        setSidecarStatus({
+          running: true,
+          message: "Repairing through the local engine...",
+          removed: [],
+          beforeBytes,
+          afterBytes: null,
+        });
+
+        try {
+          const output = await pathOpRepair(pathOpsGrant);
+          await openPathOpOutput(output);
+          setSidecarStatus({
+            running: false,
+            message: "Repair complete. The repaired copy opened as a new document — use Save As to keep it.",
+            removed: [],
+            beforeBytes,
+            afterBytes: output.sizeBytes,
+          });
+          return true;
+        } catch (error) {
+          setSidecarStatus({
+            running: false,
+            message: pathOpErrorMessage(error, "Repair could not finish."),
+            removed: [],
+            beforeBytes,
+            afterBytes: null,
+          });
+          return false;
+        }
+      }
 
       if (!source && streamedDocument) {
         setSidecarStatus({
@@ -2895,7 +3325,7 @@ export function App() {
         return false;
       }
     },
-    [document.bytes, document.fileName, engineBridge, openDocumentFile, repairCandidate, streamedDocument],
+    [document.bytes, document.fileName, document.fileSizeBytes, engineBridge, openDocumentFile, openPathOpOutput, pathOpsGrant, repairCandidate, streamedDocument],
   );
 
   const insertImageFilesAsPages = useCallback(
@@ -3133,6 +3563,164 @@ export function App() {
     });
   }, [document.bytes, metadataSummary, scrubMetadata]);
 
+  /**
+   * The streamed filing run [R6-1]: the reduced, fully path-based pipeline.
+   * `prepare_filing` composes the registered ops engine-side in one pass
+   * (decrypt → sanitize → normalize → OCR → scrub → split), the part
+   * descriptors save by grant (shell-side copy — no bytes in the WebView),
+   * and the output preflight is recomputed from `document_facts` per part.
+   * Only steps the closed-form rule enabled can appear in the selection.
+   */
+  const prepareStreamedFilingCopy = useCallback((
+    grant: FileGrant,
+    certificate: CertificateOfServiceDraft | null,
+    options: PrepareOptions,
+  ) => {
+    const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
+    const selectedSteps = new Set(options.selectedStepIds);
+    const customSplitBytes = options.customSplitMegabytes
+      ? Math.round(options.customSplitMegabytes * 1024 * 1024)
+      : null;
+
+    if (certificate && hasCertificateContent(certificate)) {
+      setFilingProgress({
+        phase: "error",
+        message: "Certificate of Service pages aren't available for very large files yet — file the certificate separately.",
+      });
+      return;
+    }
+
+    const runId = filingRunRef.current + 1;
+    filingRunRef.current = runId;
+    const isCurrentFilingRun = () => (
+      filingRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceGeneration)
+    );
+    const unappliedRedactionMarks = pendingRedactions.length;
+
+    if (!options.acknowledgeImpact && unappliedRedactionMarks > 0) {
+      setFilingImpact({
+        conversionImpact: null,
+        unappliedRedactionMarks,
+        markupAnnotationCount: 0,
+        normalizePagesSelected: selectedSteps.has("normalize-pages"),
+      });
+      setFilingProgress({ phase: "idle", message: null });
+      return;
+    }
+
+    // Encryption: a rendered streamed doc can only be owner-restricted (an
+    // open password would have blocked the viewer), so an empty password is
+    // the expected decrypt input; a genuinely encrypted doc still demands one.
+    let decryptPassword: string | undefined;
+    if (
+      selectedSteps.has("remove-encryption") &&
+      (filingFacts?.encryptionState === "encrypted" || filingFacts?.encryptionState === "usage_restricted")
+    ) {
+      decryptPassword = options.removeEncryptionPassword ?? "";
+
+      if (!decryptPassword && filingFacts?.encryptionState === "encrypted") {
+        setFilingProgress({
+          phase: "error",
+          message: "Enter the PDF open password to remove encryption before preparing this file.",
+        });
+        return;
+      }
+    }
+
+    const splitTargetBytes = selectedSteps.has("split-by-size")
+      ? customSplitBytes ?? filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null
+      : null;
+    const plan = buildPrepareFilingPlan(options.selectedStepIds, {
+      decryptPassword,
+      splitMaxBytes: splitTargetBytes,
+    });
+
+    setFilingResult(null);
+    setFilingImpact(null);
+    setFilingProgress({
+      phase: "normalizing",
+      message: "Preparing the filing copy in the local engine — very large files run file-to-file, nothing loads into memory...",
+    });
+
+    void pathOpPrepareFiling(grant, plan)
+      .then(async (result) => {
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingProgress({
+          phase: "verifying",
+          message: "Saving the output parts and reading the facts-based output preflight...",
+        });
+
+        const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+        const partNames: string[] = [];
+
+        for (const [index, part] of result.parts.entries()) {
+          if (!isCurrentFilingRun()) {
+            return;
+          }
+
+          const suggestedName = formatFilingOutputName(
+            baseName,
+            filingPack,
+            index + 1,
+            result.parts.length,
+          );
+          const written = await saveStreamedCopy(
+            { kind: "rangeGrant", grant: part.outputGrant },
+            suggestedName,
+          );
+          partNames.push(written?.name ?? suggestedName);
+        }
+
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingResult({
+          parts: result.parts.map((part, index) => ({
+            fileName: partNames[index] ?? part.name,
+            byteLength: part.byteLength,
+            pageIndexes: part.pageIndexes,
+            oversized: part.oversized,
+          })),
+          report: buildStreamedFilingOutputReport(result.factsReport),
+          verifiedAt: new Date().toISOString(),
+          skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
+          overrides: filingRunOverrides({
+            customSplitBytes,
+            packDefaultSplitBytes: filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null,
+            scrubbedBeforePdfA: false,
+          }),
+        });
+        setFilingProgress({
+          phase: "done",
+          message: "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
+        });
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        setFilingProgress({
+          phase: "error",
+          message: pathOpErrorMessage(error, "The filing copy could not be prepared."),
+        });
+      });
+  }, [
+    document.fileName,
+    document.generation,
+    filingFacts,
+    filingPack,
+    filingPrepPlan,
+    getOpenToken,
+    isCurrentDocument,
+    pendingRedactions.length,
+  ]);
+
   const prepareFilingCopy = useCallback((
     certificate: CertificateOfServiceDraft | null,
     options: PrepareOptions,
@@ -3148,9 +3736,16 @@ export function App() {
       : null;
 
     if (!sourceBytes) {
-      // Streamed docs can't reach this workflow (the tool entry is gated),
-      // but menu paths like Export PDF/A land here directly -- keep the gate
-      // honest rather than claiming no document is open.
+      if (pathOpsGrant && streamedDocument) {
+        // Streamed run branch [R6-1]: the reduced, fully path-based filing
+        // pipeline replaces the byte pipeline for very large documents.
+        prepareStreamedFilingCopy(pathOpsGrant, certificate, options);
+        return;
+      }
+
+      // Browser streamed docs (no grant) and menu paths like Export PDF/A
+      // land here directly -- keep the gate honest rather than claiming no
+      // document is open.
       setFilingProgress({
         phase: "error",
         message: streamedDocument
@@ -3507,7 +4102,9 @@ export function App() {
     filingPrepPlan,
     getOpenToken,
     isCurrentDocument,
+    pathOpsGrant,
     pendingRedactions.length,
+    prepareStreamedFilingCopy,
     streamedDocument,
   ]);
 
@@ -3841,6 +4438,7 @@ export function App() {
             pack={filingPack}
             availablePacks={AVAILABLE_FILING_PACKS}
             prepPlan={filingPrepPlan}
+            extraUnavailableSteps={streamedFilingUnavailableSteps}
             courtProfiles={filingPreferences.courtProfiles}
             selectedCourtProfile={selectedCourtProfile}
             facts={filingFacts}
@@ -3879,8 +4477,7 @@ export function App() {
           onHelp={() => openHelp("batch-cleanup")}
         >
           <BatchCleanupWorkspace
-            currentFile={document.bytes ? {
-              bytes: document.bytes,
+            currentFile={document.source ? {
               name: document.fileName ?? "Untitled.pdf",
               path: document.filePath,
             } : null}
@@ -4131,6 +4728,17 @@ export function App() {
           onCancel={cancelPasswordPrompt}
         />
       ) : null}
+      {printRangePrompt ? (
+        <FloatingDialog title="Print a Page Range" eyebrow="Print" onClose={cancelPrintRangePrompt}>
+          <PrintRangePanel
+            pageCount={document.pageCount}
+            running={printRangePrompt.running}
+            message={printRangePrompt.message}
+            onSubmit={submitPrintRange}
+            onCancel={cancelPrintRangePrompt}
+          />
+        </FloatingDialog>
+      ) : null}
       {helpOpen ? (
         <HelpPanel
           initialArticleId={helpArticleId}
@@ -4241,6 +4849,107 @@ function batchCleanupCompletionMessage(files: readonly {
   }
 
   return `Batch cleanup finished for ${files.length} file(s). ${invalidatedCount} had digital signatures invalidated.`;
+}
+
+/**
+ * Streamed-mode gate list for the legal tool group [R1-2]: the 2.425 scanner
+ * (proxy-based, user-initiated) and the static Passwords panel are always
+ * open; the delegated set opens when the document has a shell grant for the
+ * PathOpsEngine (Prepare for Filing runs the reduced path pipeline; Batch
+ * Cleanup and Production Set are path-based package flows; Redact and
+ * Sanitize run file-to-file).
+ */
+const STREAMED_LEGAL_TOOLS_ALWAYS: readonly LegalToolId[] = ["scanner-2425", "passwords"];
+const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
+  "prepare-for-filing",
+  "batch-cleanup",
+  "production-set",
+  "redact",
+  "sanitize",
+];
+
+function isStreamedLegalToolAvailable(toolId: LegalToolId, delegated: boolean): boolean {
+  return (
+    STREAMED_LEGAL_TOOLS_ALWAYS.includes(toolId) ||
+    (delegated && STREAMED_LEGAL_TOOLS_DELEGATED.includes(toolId))
+  );
+}
+
+/** Per-area pass/fail rendering for the delegated redaction's verification.
+ * Reaching this at all means every area verified (fail-closed contract) —
+ * the message still names the count and pages so the pass/fail state per
+ * area is visible, not implied. */
+function formatStreamedRedactionSuccess(verification: PathOpsRedactionVerification): string {
+  const passed = verification.areas.filter((area) => area.pass);
+  const pages = [...new Set(passed.map((area) => area.pageIndex + 1))].sort(
+    (left, right) => left - right,
+  );
+  const areaCount = verification.areas.length;
+
+  return (
+    `Redacted and verified in the output file: ${passed.length} of ${areaCount} ` +
+    `${areaCount === 1 ? "area" : "areas"} verified clean` +
+    (pages.length > 0 ? ` (page${pages.length === 1 ? "" : "s"} ${pages.join(", ")})` : "") +
+    ". Redacted pages were rasterized — run Make Searchable to restore text search on them. " +
+    "Your original file is untouched; the redacted copy opened as a new document, use Save As to keep it."
+  );
+}
+
+function PrintRangePanel({
+  pageCount,
+  running,
+  message,
+  onSubmit,
+  onCancel,
+}: {
+  pageCount: number;
+  running: boolean;
+  message: string | null;
+  onSubmit: (rangeInput: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState("");
+
+  return (
+    <div className="tool-panel__inline-card">
+      <p className="tool-panel__note">
+        Whole-document printing isn't available for very large files. Enter a
+        page range — those pages open as a small document, then press Print
+        once they appear.
+      </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(value);
+        }}
+      >
+        <div className="tool-panel__field">
+          <label htmlFor="print-range-pages">Pages (1-{Math.max(pageCount, 1)})</label>
+          <input
+            id="print-range-pages"
+            autoFocus
+            inputMode="numeric"
+            placeholder="e.g. 1-5, 12"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </div>
+        {message ? (
+          <p className="tool-panel__status-line" role="status">{message}</p>
+        ) : null}
+        <button
+          type="submit"
+          className="tool-panel__primary-button"
+          disabled={running || !value.trim()}
+        >
+          {running ? "Extracting pages..." : "Open Pages for Printing"}
+        </button>
+        <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
+          Cancel
+        </button>
+      </form>
+    </div>
+  );
 }
 
 function SanitizePanel({

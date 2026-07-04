@@ -143,12 +143,18 @@ export class SidecarPdfEngine implements PdfEngine {
   constructor(options: SidecarPdfEngineOptions) {
     this.authToken = options.authToken;
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    // Native fetch must not be stored bare: `this.fetchImpl(...)` invokes it
+    // with the engine instance as receiver, and Chromium throws
+    // "Failed to execute 'fetch' on 'Window': Illegal invocation" -- an
+    // instant TypeError indistinguishable from a network failure once
+    // wrapped. (Node's fetch doesn't enforce the receiver, which is why unit
+    // tests never caught this; only the packaged WebView2/browser did.)
+    this.fetchImpl = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   static async probe(
     baseUrl: string,
-    fetchImpl: Fetch = globalThis.fetch,
+    fetchImpl: Fetch = (input, init) => globalThis.fetch(input, init),
     authToken?: string,
   ): Promise<SidecarPdfEngineInfo | null> {
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl);

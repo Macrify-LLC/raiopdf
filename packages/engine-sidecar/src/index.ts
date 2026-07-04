@@ -4,6 +4,7 @@ import type {
   PdfBinderOptions,
   PdfBytes,
   PdfAConversionOptions,
+  PdfApplyEditsOptions,
   PdfCompressOptions,
   PdfDocumentHandle,
   PdfEdit,
@@ -717,6 +718,7 @@ export class SidecarPdfEngine implements PdfEngine {
   async applyEdits(
     _document: PdfDocumentHandle,
     _edits: readonly PdfEdit[],
+    _options?: PdfApplyEditsOptions,
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",

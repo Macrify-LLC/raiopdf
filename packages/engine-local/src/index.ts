@@ -4,6 +4,7 @@ import type {
   PdfBinderOptions,
   PdfBytes,
   PdfAConversionOptions,
+  PdfApplyEditsOptions,
   PdfCalloutEdit,
   PdfCommentEdit,
   PdfCompressOptions,
@@ -62,6 +63,7 @@ import {
   StandardFonts,
 } from "pdf-lib";
 import {
+  createAnnotationAppearanceTarget,
   createPageDrawTarget,
   drawAnnotationAppearanceOnPage,
   type DrawColor,
@@ -84,6 +86,7 @@ type OutlineEntry = {
 };
 
 type PageRotation = 0 | 90 | 180 | 270;
+type MarkupMode = NonNullable<PdfApplyEditsOptions["markupMode"]>;
 
 type TextBoxFontKey = `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
 
@@ -153,6 +156,7 @@ const DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT = 0.75;
 const ARROW_HEAD_MIN_PT = 8;
 const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
+const EDIT_INK_COLOR_COMPONENTS = [0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff] as const;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
 const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
@@ -779,9 +783,11 @@ export class LocalPdfEngine implements PdfEngine {
   async applyEdits(
     document: PdfDocumentHandle,
     edits: readonly PdfEdit[],
+    options: PdfApplyEditsOptions = {},
   ): Promise<PdfDocumentHandle> {
     const output = await this.load(document);
     const pageCount = output.getPageCount();
+    const markupMode = options.markupMode ?? "baked";
 
     for (const edit of edits) {
       assertValidEdit(edit, pageCount);
@@ -801,7 +807,7 @@ export class LocalPdfEngine implements PdfEngine {
     };
 
     for (const edit of edits) {
-      await applyEditInPlace(output, edit, resolveTextBoxFont);
+      await applyEditInPlace(output, edit, resolveTextBoxFont, markupMode);
     }
 
     return this.store(await output.save());
@@ -1414,6 +1420,7 @@ async function applyEditInPlace(
   pdf: PDFDocument,
   edit: PdfEdit,
   resolveTextBoxFont: TextBoxFontResolver,
+  markupMode: MarkupMode,
 ): Promise<void> {
   switch (edit.type) {
     case "highlight":
@@ -1434,10 +1441,18 @@ async function applyEditInPlace(
       await applyImageEdit(pdf, edit);
       return;
     case "ink":
-      applyInkEdit(pdf, edit);
+      if (markupMode === "annotation") {
+        applyInkAnnotationEdit(pdf, edit);
+      } else {
+        applyInkEdit(pdf, edit);
+      }
       return;
     case "shape":
-      applyShapeEdit(pdf, edit);
+      if (markupMode === "annotation") {
+        applyShapeAnnotationEdit(pdf, edit);
+      } else {
+        applyShapeEdit(pdf, edit);
+      }
       return;
     case "comment":
       applyCommentEdit(pdf, edit);
@@ -1748,6 +1763,182 @@ function applyShapeEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
   }
 }
 
+function applyInkAnnotationEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT;
+  const strokeColor = toEditColor(edit.color, EDIT_INK_COLOR);
+  const rect = boundingRectForPoints(
+    edit.strokes.flatMap((stroke) => [...stroke]),
+    thickness / 2,
+  );
+  const appearanceTarget = createAnnotationAppearanceTarget(
+    pdf,
+    rect,
+    normalizePageRotation(page.getRotation().angle),
+  );
+
+  for (const stroke of edit.strokes) {
+    appearanceTarget.drawPolyline(stroke, {
+      strokeWidthPt: thickness,
+      strokeColor,
+      lineCap: LineCapStyle.Round,
+    });
+  }
+
+  addMarkupAnnotation(page, {
+    Subtype: "Ink",
+    Rect: rectToPdfArray(rect),
+    InkList: edit.strokes.map((stroke) => stroke.flatMap((point) => [point.x, point.y])),
+    C: colorToPdfArray(edit.color),
+    BS: { W: thickness, S: "S" },
+    AP: { N: appearanceTarget.finish() },
+  });
+}
+
+function applyShapeAnnotationEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
+  const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+
+  switch (edit.shape) {
+    case "rect": {
+      const rect = padRect(edit.rect, thickness / 2);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+
+      appearanceTarget.drawRectangle({
+        rect: edit.rect,
+        strokeColor,
+        strokeWidthPt: thickness,
+        ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      });
+
+      addMarkupAnnotation(page, {
+        Subtype: "Square",
+        Rect: rectToPdfArray(rect),
+        C: colorToPdfArray(edit.strokeColor),
+        ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
+        BS: { W: thickness, S: "S" },
+        AP: { N: appearanceTarget.finish() },
+      });
+      return;
+    }
+    case "ellipse": {
+      const rect = padRect(edit.rect, thickness / 2);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+
+      appearanceTarget.drawEllipse({
+        rect: edit.rect,
+        strokeColor,
+        strokeWidthPt: thickness,
+        ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      });
+
+      addMarkupAnnotation(page, {
+        Subtype: "Circle",
+        Rect: rectToPdfArray(rect),
+        C: colorToPdfArray(edit.strokeColor),
+        ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
+        BS: { W: thickness, S: "S" },
+        AP: { N: appearanceTarget.finish() },
+      });
+      return;
+    }
+    case "line":
+    case "arrow": {
+      const boundsPoints =
+        edit.shape === "arrow"
+          ? [edit.from, ...computeArrowHeadPoints(edit.from, edit.to, thickness)]
+          : [edit.from, edit.to];
+      const rect = boundingRectForPoints(boundsPoints, thickness / 2);
+      const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
+
+      appearanceTarget.drawLine({
+        from: edit.from,
+        to: edit.to,
+        strokeWidthPt: thickness,
+        strokeColor,
+      });
+
+      if (edit.shape === "arrow") {
+        drawArrowHead(appearanceTarget, edit.from, edit.to, thickness, strokeColor);
+      }
+
+      addMarkupAnnotation(page, {
+        Subtype: "Line",
+        Rect: rectToPdfArray(rect),
+        L: [edit.from.x, edit.from.y, edit.to.x, edit.to.y],
+        C: colorToPdfArray(edit.strokeColor),
+        BS: { W: thickness, S: "S" },
+        ...(edit.shape === "arrow" ? { LE: ["None", "ClosedArrow"] } : {}),
+        AP: { N: appearanceTarget.finish() },
+      });
+      return;
+    }
+  }
+}
+
+function addMarkupAnnotation(
+  page: ReturnType<PDFDocument["getPage"]>,
+  values: Record<string, unknown>,
+): void {
+  const annotation = page.doc.context.obj({
+    Type: "Annot",
+    F: ANNOTATION_FLAG_PRINT,
+    ...values,
+  }) as PDFDict;
+
+  stampRaioPdfAnnotation(annotation);
+  addAnnotationToPage(page, annotation);
+}
+
+function addAnnotationToPage(page: ReturnType<PDFDocument["getPage"]>, annotation: PDFDict): void {
+  const annotationRef = page.doc.context.register(annotation);
+  const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+  if (annotations) {
+    annotations.push(annotationRef);
+    return;
+  }
+
+  page.node.set(PDFName.of("Annots"), page.doc.context.obj([annotationRef]));
+}
+
+function rectToPdfArray(rect: PdfEditRect): number[] {
+  return [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h];
+}
+
+function colorToPdfArray(color: PdfEditColor | undefined): number[] {
+  return color
+    ? [color.r, color.g, color.b]
+    : [...EDIT_INK_COLOR_COMPONENTS];
+}
+
+function padRect(rect: PdfEditRect, padding: number): PdfEditRect {
+  return {
+    x: rect.x - padding,
+    y: rect.y - padding,
+    w: rect.w + padding * 2,
+    h: rect.h + padding * 2,
+  };
+}
+
+function boundingRectForPoints(points: readonly PdfEditPoint[], padding: number): PdfEditRect {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  return {
+    x: minX - padding,
+    y: minY - padding,
+    w: maxX - minX + padding * 2,
+    h: maxY - minY + padding * 2,
+  };
+}
+
 function drawArrowHead(
   target: DrawTarget,
   from: PdfEditPoint,
@@ -1755,6 +1946,22 @@ function drawArrowHead(
   thickness: number,
   color: DrawColor,
 ): void {
+  const [tip, left, right] = computeArrowHeadPoints(from, to, thickness);
+  const targetTo = target.mapPoint(tip);
+  const targetLeft = target.mapPoint(left);
+  const targetRight = target.mapPoint(right);
+  const path =
+    `M ${targetTo.x} ${targetTo.y} L ${targetLeft.x} ${targetLeft.y} ` +
+    `L ${targetRight.x} ${targetRight.y} Z`;
+
+  target.drawSvgPath({ path, fillColor: color, strokeColor: color, strokeWidthPt: 0 });
+}
+
+function computeArrowHeadPoints(
+  from: PdfEditPoint,
+  to: PdfEditPoint,
+  thickness: number,
+): readonly [PdfEditPoint, PdfEditPoint, PdfEditPoint] {
   const angle = Math.atan2(to.y - from.y, to.x - from.x);
   const length = Math.min(ARROW_HEAD_MAX_PT, Math.max(ARROW_HEAD_MIN_PT, thickness * 7));
   const halfWidth = length * 0.45;
@@ -1774,14 +1981,8 @@ function drawArrowHead(
     x: baseCenter.x - normal.x * halfWidth,
     y: baseCenter.y - normal.y * halfWidth,
   };
-  const targetTo = target.mapPoint(to);
-  const targetLeft = target.mapPoint(left);
-  const targetRight = target.mapPoint(right);
-  const path =
-    `M ${targetTo.x} ${targetTo.y} L ${targetLeft.x} ${targetLeft.y} ` +
-    `L ${targetRight.x} ${targetRight.y} Z`;
 
-  target.drawSvgPath({ path, fillColor: color, strokeColor: color, strokeWidthPt: 0 });
+  return [to, left, right];
 }
 
 /**
@@ -1805,16 +2006,9 @@ function applyCommentEdit(pdf: PDFDocument, edit: PdfCommentEdit): void {
     F: ANNOTATION_FLAG_PRINT,
     Open: false,
     ...(edit.author !== undefined ? { T: PDFString.of(edit.author) } : {}),
-  });
-  const annotationRef = pdf.context.register(annotation);
-  const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+  }) as PDFDict;
 
-  if (annotations) {
-    annotations.push(annotationRef);
-    return;
-  }
-
-  page.node.set(PDFName.of("Annots"), pdf.context.obj([annotationRef]));
+  addAnnotationToPage(page, annotation);
 }
 
 function applyFormValuesEdit(pdf: PDFDocument, edit: PdfFormValuesEdit): void {

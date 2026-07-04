@@ -309,6 +309,11 @@ interface FilingFactsOptions {
   occupiedRegionPages?: "first" | "all";
 }
 
+interface DocumentIdentityGuard {
+  openToken: number;
+  generation: number;
+}
+
 export function App() {
   const engineBridge = useEngineBridge();
   const [signatureUnlockPrompt, setSignatureUnlockPrompt] = useState<
@@ -1044,8 +1049,27 @@ export function App() {
    * fresh grant, exactly as before.
    */
   const openPathOpOutput = useCallback(
-    async (output: { outputGrant: FileGrant; name: string; sizeBytes: number }) => {
+    async (
+      output: { outputGrant: FileGrant; name: string; sizeBytes: number },
+      expected: DocumentIdentityGuard,
+    ) => {
+      const staleResult = {
+        status: "failed" as const,
+        error: "The document changed before the operation output could reopen.",
+      };
+      const releaseStaleOutput = async () => {
+        await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+        return staleResult;
+      };
+      if (!isCurrentDocument(expected.openToken, expected.generation)) {
+        return releaseStaleOutput();
+      }
+
       const plan = await planPathOpReopen(output);
+
+      if (!isCurrentDocument(expected.openToken, expected.generation)) {
+        return releaseStaleOutput();
+      }
 
       if (plan.mode === "memory") {
         // Same per-open resets as `openOpenedFile` — this IS a fresh open.
@@ -1076,6 +1100,9 @@ export function App() {
         // The in-memory engine couldn't open the small output — fall back
         // to the streamed reopen over the still-valid grant (not released)
         // rather than dead-ending a file qpdf just verified.
+        if (result.status === "failed" && !isCurrentDocument(expected.openToken, expected.generation)) {
+          return releaseStaleOutput();
+        }
       }
 
       return openStreamedSource({
@@ -1085,7 +1112,7 @@ export function App() {
         sizeBytes: output.sizeBytes,
       });
     },
-    [openDocumentFile, openStreamedSource, resetLegalState],
+    [isCurrentDocument, openDocumentFile, openStreamedSource, resetLegalState],
   );
 
   useEffect(() => {
@@ -1498,7 +1525,7 @@ export function App() {
       ocrRunRef.current = runId;
       ocrActiveRef.current = true;
       const isCurrentStreamedRun = () => (
-        ocrRunRef.current === runId && getOpenToken() === sourceOpenToken
+        ocrRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceGeneration)
       );
 
       setOcrState({
@@ -1514,7 +1541,14 @@ export function App() {
             return;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return;
+          }
+
           setOcrState({
             phase: "done",
             message: "Searchable copy ready — it opened as a new document. Use Save As to keep it.",
@@ -1693,7 +1727,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
@@ -1849,6 +1883,8 @@ export function App() {
       }
 
       const prompt = passwordPrompt;
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
       const runId = passwordUnlockRunRef.current + 1;
       passwordUnlockRunRef.current = runId;
       const isCurrentUnlock = () => passwordUnlockRunRef.current === runId;
@@ -1861,15 +1897,21 @@ export function App() {
 
         void pathOpDecrypt(grant, password)
           .then(async (output) => {
-            if (!isCurrentUnlock()) {
+            if (!isCurrentUnlock() || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
               return;
             }
 
             setPasswordPrompt(null);
-            await openPathOpOutput(output);
+            const reopened = await openPathOpOutput(output, {
+              openToken: sourceOpenToken,
+              generation: sourceGeneration,
+            });
+            if (reopened.status !== "opened" && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+              setError("This PDF could not be unlocked. Try again in a moment.");
+            }
           })
           .catch((error: unknown) => {
-            if (!isCurrentUnlock()) {
+            if (!isCurrentUnlock() || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
               return;
             }
 
@@ -1995,7 +2037,7 @@ export function App() {
           );
         });
     },
-    [confirmDecryptSignatureInvalidation, engineBridge, openDocumentFile, openPathOpOutput, passwordPrompt, setError],
+    [confirmDecryptSignatureInvalidation, document.generation, engineBridge, getOpenToken, isCurrentDocument, openDocumentFile, openPathOpOutput, passwordPrompt, setError],
   );
 
   const openFileSource = useCallback(
@@ -2645,8 +2687,11 @@ export function App() {
           return false;
         }
 
-        await openPathOpOutput(output);
-        return true;
+        const reopened = await openPathOpOutput(output, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+        return reopened.status === "opened";
       } catch (error) {
         if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           setError(pathOpErrorMessage(error, "The PDFs could not be merged. Check the files and try again."));
@@ -2681,8 +2726,11 @@ export function App() {
           return false;
         }
 
-        await openPathOpOutput(output);
-        return true;
+        const reopened = await openPathOpOutput(output, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+        return reopened.status === "opened";
       } catch (error) {
         if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           setError(pathOpErrorMessage(error, "The selected file could not be inserted. Check the file and try again."));
@@ -2889,7 +2937,14 @@ export function App() {
           return;
         }
 
-        await openPathOpOutput(result);
+        const reopened = await openPathOpOutput(result, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+        if (reopened.status !== "opened") {
+          return;
+        }
+
         setRedactionPhase("verified");
         setRedactionMessage(formatStreamedRedactionSuccess(result.verification));
       } catch (error) {
@@ -3014,7 +3069,14 @@ export function App() {
             return true;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return isCurrentDocument(sourceOpenToken, sourceGeneration) ? false : true;
+          }
+
           setBatesState({
             applying: false,
             message: "Bates numbers applied — the stamped copy opened as a new document. Use Save As to keep it.",
@@ -3110,7 +3172,14 @@ export function App() {
             return false;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return false;
+          }
+
           setSidecarStatus({
             running: false,
             message: "Page numbers applied — the numbered copy opened as a new document. Use Save As to keep it.",
@@ -3198,7 +3267,14 @@ export function App() {
             return false;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return false;
+          }
+
           setSidecarStatus({
             running: false,
             message: "Watermark applied — the watermarked copy opened as a new document. Use Save As to keep it.",
@@ -3289,7 +3365,14 @@ export function App() {
             return false;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return false;
+          }
+
           setSidecarStatus({
             running: false,
             message: "Compression complete — very large files use the engine's structural pass; image downsampling is not applied.",
@@ -3414,7 +3497,14 @@ export function App() {
           return false;
         }
 
-        await openPathOpOutput(output);
+        const reopened = await openPathOpOutput(output, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+        if (reopened.status !== "opened") {
+          return false;
+        }
+
         setSidecarStatus({
           running: false,
           message: "Sanitize complete. The rewrite removes document JavaScript, embedded files, and launch actions; the sanitized copy opened as a new document.",
@@ -3544,7 +3634,14 @@ export function App() {
             return false;
           }
 
-          await openPathOpOutput(output);
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            return false;
+          }
+
           setSidecarStatus({
             running: false,
             message: "Repair complete. The repaired copy opened as a new document — use Save As to keep it.",

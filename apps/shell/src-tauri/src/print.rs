@@ -176,12 +176,14 @@ pub async fn print_pdf(
     let work_dir = OpWorkDir::create(&app)?;
 
     let cancel_flag = jobs.register(&job_token)?;
+    let fallback_part_queued = Arc::new(AtomicBool::new(false));
     let result = {
         let app = app.clone();
         let input = input.clone();
         let job_token = job_token.clone();
         let work_path = work_dir.path().to_path_buf();
         let cancel_flag = cancel_flag.clone();
+        let fallback_part_queued = fallback_part_queued.clone();
         on_blocking_pool(move || {
             run_print_job(
                 &app,
@@ -193,23 +195,20 @@ pub async fn print_pdf(
                 &job_token,
                 &work_path,
                 &cancel_flag,
+                &fallback_part_queued,
             )
         })
         .await
     };
     jobs.remove(&job_token);
 
-    match result {
-        Ok(outcome) => {
-            if outcome.method == "printto" && outcome.fallback_parts > 0 {
-                // Parts may still be spooling in the OS handler — keep the
-                // dir; the startup sweep reclaims it next launch.
-                work_dir.keep();
-            }
-            Ok(outcome.into_response())
-        }
-        Err(error) => Err(error),
+    if should_keep_print_work_dir(&result, fallback_part_queued.load(Ordering::Relaxed)) {
+        // Parts may still be spooling in the OS handler — keep the dir; the
+        // startup sweep reclaims it next launch.
+        work_dir.keep();
     }
+
+    result.map(JobOutcome::into_response)
 }
 
 struct JobOutcome {
@@ -232,6 +231,14 @@ impl JobOutcome {
     }
 }
 
+fn should_keep_print_work_dir(result: &OpResult<JobOutcome>, fallback_part_queued: bool) -> bool {
+    fallback_part_queued
+        || matches!(
+            result,
+            Ok(outcome) if outcome.method == "printto" && outcome.fallback_parts > 0
+        )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_print_job(
     app: &tauri::AppHandle,
@@ -243,6 +250,7 @@ fn run_print_job(
     job_token: &str,
     work_dir: &std::path::Path,
     cancel_flag: &AtomicBool,
+    fallback_part_queued: &AtomicBool,
 ) -> OpResult<JobOutcome> {
     // Printing is read-only, but a mid-print change on disk means the paper
     // may mix revisions — snapshot up front, report drift with the result.
@@ -269,7 +277,11 @@ fn run_print_job(
         core_print::split_print_part(toolchain, input, part, index, work_dir)
     };
     let mut print_part = |part: &std::path::Path| -> OpResult<()> {
-        core_print::print_part_via_printto(part, printer)
+        let result = core_print::print_part_via_printto(part, printer);
+        if result.is_ok() {
+            fallback_part_queued.store(true, Ordering::Relaxed);
+        }
+        result
     };
     let mut progress = |event: core_print::PrintProgress| {
         let _ = app.emit(
@@ -333,5 +345,38 @@ mod tests {
         assert!(!jobs.cancel("job-1"));
         // Token is reusable after removal.
         jobs.register("job-1").expect("re-register");
+    }
+
+    #[test]
+    fn print_work_dir_is_kept_after_fallback_part_was_queued() {
+        let result = Err(PathOpError {
+            code: core_print::ERR_PRINT_CANCELLED,
+            message: "Printing was cancelled.".to_string(),
+        });
+
+        assert!(should_keep_print_work_dir(&result, true));
+    }
+
+    #[test]
+    fn print_work_dir_is_kept_after_successful_fallback() {
+        let result = Ok(JobOutcome {
+            method: "printto",
+            gs_invocations: 1,
+            fallback_parts: 2,
+            fallback_reason: Some("driver quirk".to_string()),
+            input_changed: false,
+        });
+
+        assert!(should_keep_print_work_dir(&result, false));
+    }
+
+    #[test]
+    fn print_work_dir_is_removed_before_fallback_parts_are_queued() {
+        let result = Err(PathOpError {
+            code: core_print::ERR_PRINT_NOT_SUPPORTED,
+            message: "Native printing is not available on this platform yet.".to_string(),
+        });
+
+        assert!(!should_keep_print_work_dir(&result, false));
     }
 }

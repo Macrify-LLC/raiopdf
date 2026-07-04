@@ -131,9 +131,12 @@ export function PrintDialog({
           setProgressText(describePrintProgress(event));
         }
       });
-      if (runningJobRef.current?.token === token) {
-        runningJobRef.current.unlisten = unlisten;
+      if (disposedRef.current || runningJobRef.current?.token !== token) {
+        unlisten();
+        unlisten = null;
+        return;
       }
+      runningJobRef.current.unlisten = unlisten;
 
       const printResult = await printPdf(
         grant,

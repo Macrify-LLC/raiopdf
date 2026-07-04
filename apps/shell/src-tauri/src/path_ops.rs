@@ -144,7 +144,7 @@ pub struct PathOpsStatusResponse {
 // Shared plumbing
 // ---------------------------------------------------------------------------
 
-fn discover_toolchain(app: &tauri::AppHandle) -> PathOpsToolchain {
+pub(crate) fn discover_toolchain(app: &tauri::AppHandle) -> PathOpsToolchain {
     let resource_dir = app.path().resource_dir().ok();
     PathOpsToolchain::discover(resource_dir.as_deref())
 }
@@ -193,13 +193,13 @@ fn releasable_output_dir(path: &Path, root: &Path) -> Option<PathBuf> {
 
 /// Per-op working directory under app data. Kept on success (grants reference
 /// files inside it), removed wholesale on failure.
-struct OpWorkDir {
+pub(crate) struct OpWorkDir {
     dir: PathBuf,
     keep: bool,
 }
 
 impl OpWorkDir {
-    fn create(app: &tauri::AppHandle) -> OpResult<Self> {
+    pub(crate) fn create(app: &tauri::AppHandle) -> OpResult<Self> {
         let root = path_ops_root(app)?;
         let dir = root.join(Uuid::new_v4().to_string());
         fs::create_dir_all(&dir).map_err(|error| PathOpError {
@@ -209,11 +209,11 @@ impl OpWorkDir {
         Ok(Self { dir, keep: false })
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.dir
     }
 
-    fn keep(mut self) -> PathBuf {
+    pub(crate) fn keep(mut self) -> PathBuf {
         self.keep = true;
         self.dir.clone()
     }
@@ -228,12 +228,12 @@ impl Drop for OpWorkDir {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct InputSnapshot {
+pub(crate) struct InputSnapshot {
     len: u64,
     modified: Option<SystemTime>,
 }
 
-fn snapshot(path: &Path) -> OpResult<InputSnapshot> {
+pub(crate) fn snapshot(path: &Path) -> OpResult<InputSnapshot> {
     let metadata = fs::metadata(path).map_err(|error| PathOpError {
         code: "IO_ERROR",
         message: format!("cannot stat input {}: {error}", path.display()),
@@ -244,7 +244,7 @@ fn snapshot(path: &Path) -> OpResult<InputSnapshot> {
     })
 }
 
-fn ensure_unchanged(path: &Path, before: InputSnapshot) -> OpResult<()> {
+pub(crate) fn ensure_unchanged(path: &Path, before: InputSnapshot) -> OpResult<()> {
     let after = snapshot(path)?;
     if after != before {
         return Err(PathOpError {
@@ -255,7 +255,10 @@ fn ensure_unchanged(path: &Path, before: InputSnapshot) -> OpResult<()> {
     Ok(())
 }
 
-fn resolve_grant(grants: &tauri::State<'_, FileGrants>, grant: &str) -> OpResult<PathBuf> {
+pub(crate) fn resolve_grant(
+    grants: &tauri::State<'_, FileGrants>,
+    grant: &str,
+) -> OpResult<PathBuf> {
     grants.resolve(grant).map_err(|message| PathOpError {
         code: "INVALID_INPUT",
         message,
@@ -288,7 +291,7 @@ fn file_size(path: &Path) -> OpResult<u64> {
         })
 }
 
-async fn on_blocking_pool<T, F>(work: F) -> OpResult<T>
+pub(crate) async fn on_blocking_pool<T, F>(work: F) -> OpResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> OpResult<T> + Send + 'static,

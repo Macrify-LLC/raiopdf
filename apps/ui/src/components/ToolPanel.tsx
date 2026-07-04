@@ -1111,7 +1111,7 @@ function WatermarkPanel({
         </div>
         <div className="tool-panel__field">
           <label htmlFor="watermark-opacity">Opacity</label>
-          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.05" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
+          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.01" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
         </div>
       </div>
       <SidecarStatusLine status={status} label="Applying watermark" />

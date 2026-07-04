@@ -66,13 +66,21 @@ test.describe("streamed large-PDF memory ceiling", () => {
         await sample();
       }
 
-      // Exercise lazy windowed search (touches many pages' text).
-      const search = page.getByPlaceholder(/search/i).first();
-      if (await search.count()) {
-        await search.fill("MARKER-5");
-        await page.waitForTimeout(3000);
-        await sample();
-      }
+      // Exercise lazy windowed search (touches many pages' text). Wait for
+      // the actual result label ("1 of N", anchored so page text can't
+      // satisfy it) rather than a fixed delay — a fixed wait could elapse
+      // before search produces anything on a slow/real fixture, leaving the
+      // search phase unsampled (Codex review, PR #129). Sample WHILE waiting.
+      const search = page.getByLabel("Search document");
+      await search.fill("MARKER-5 ");
+      const resultLabel = page.getByText(/^1 of \d+$/);
+      await expect
+        .poll(async () => {
+          await sample();
+          return resultLabel.isVisible();
+        }, { timeout: 120_000 })
+        .toBe(true);
+      await sample();
     } finally {
       clearInterval(poller);
       await sample();

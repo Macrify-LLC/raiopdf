@@ -1,4 +1,5 @@
-import type { TextLayerCoverage } from "./textLayer";
+import type { TextLayerCoverage } from "@raiopdf/rules";
+import { textLayerCoveragePageCount } from "./textLayer";
 
 export type OcrVerificationResult =
   | {
@@ -10,29 +11,30 @@ export type OcrVerificationResult =
   | {
       status: "failed";
       garbledPages: number;
-      missingTextPages: number;
+      imageOnlyPages: number;
       message: string;
     };
 
 export function verifyOcrTextLayer(coverage: TextLayerCoverage): OcrVerificationResult {
+  const pageCount = textLayerCoveragePageCount(coverage);
   const garbledPages = coverage.garbledPages.length;
-  const missingTextPages = coverage.missingTextPages.length;
+  const imageOnlyPages = coverage.imageOnlyPages.length;
 
-  if (coverage.pageCount <= 0) {
+  if (pageCount <= 0) {
     return {
       status: "failed",
       garbledPages,
-      missingTextPages,
+      imageOnlyPages,
       message: "OCR produced an empty document — the original was kept unchanged.",
     };
   }
 
-  if (garbledPages === 0 && missingTextPages === 0) {
+  if (garbledPages === 0 && imageOnlyPages === 0) {
     return {
       status: "verified",
-      pageCount: coverage.pageCount,
-      rebuiltPages: coverage.pageCount,
-      message: `Rebuilt the text layer on ${formatPageCount(coverage.pageCount)}. Copy, paste, and search now return real text. Verified: all ${formatPageCount(coverage.pageCount)} now ${coverage.pageCount === 1 ? "has" : "have"} clean searchable text.`,
+      pageCount,
+      rebuiltPages: pageCount,
+      message: `Rebuilt the text layer on ${formatPageCount(pageCount)}. Copy, paste, and search now return real text. Verified: all ${formatPageCount(pageCount)} now ${pageCount === 1 ? "has" : "have"} clean searchable text.`,
     };
   }
 
@@ -40,16 +42,16 @@ export function verifyOcrTextLayer(coverage: TextLayerCoverage): OcrVerification
     return {
       status: "failed",
       garbledPages,
-      missingTextPages,
-      message: `Re-OCR ran, but ${formatPageCount(garbledPages)} still ${garbledPages === 1 ? "looks" : "look"} garbled${missingTextPages > 0 ? ` and ${formatPageCount(missingTextPages)} still ${missingTextPages === 1 ? "has" : "have"} no searchable text` : ""} — the original was kept unchanged; the underlying scan is likely too low-quality to read.`,
+      imageOnlyPages,
+      message: `Re-OCR ran, but ${formatPageCount(garbledPages)} still ${garbledPages === 1 ? "looks" : "look"} garbled${imageOnlyPages > 0 ? ` and ${formatPageCount(imageOnlyPages)} still ${imageOnlyPages === 1 ? "has" : "have"} no searchable text` : ""} — the original was kept unchanged; the underlying scan is likely too low-quality to read.`,
     };
   }
 
   return {
     status: "failed",
     garbledPages,
-    missingTextPages,
-    message: `OCR ran, but ${formatPageCount(missingTextPages)} still ${missingTextPages === 1 ? "has" : "have"} no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.`,
+    imageOnlyPages,
+    message: `OCR ran, but ${formatPageCount(imageOnlyPages)} still ${imageOnlyPages === 1 ? "has" : "have"} no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.`,
   };
 }
 

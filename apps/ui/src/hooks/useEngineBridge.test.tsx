@@ -19,17 +19,12 @@ vi.mock("@raiopdf/engine-sidecar", () => {
       sidecarState.instances.push(this);
     }
 
-    async open() {
-      return "source-handle";
-    }
-
-    async ocr(_handle: string, options: unknown) {
+    async ocrBytes(_bytes: Uint8Array, options: { knownPageCount?: number } = {}) {
       this.ocrCalls.push(options);
-      return "output-handle";
-    }
-
-    async saveToBytes() {
-      return new Uint8Array([9]);
+      return {
+        bytes: new Uint8Array([9]),
+        pageCount: options.knownPageCount ?? 1,
+      };
     }
 
     async close() {
@@ -78,12 +73,17 @@ describe("useEngineBridge runOcr", () => {
 
   it("passes force-ocr through to the sidecar", async () => {
     const bridge = renderHookValue();
+    let result: Awaited<ReturnType<EngineBridge["runOcr"]>> | undefined;
 
     await act(async () => {
-      await bridge.runOcr(new Uint8Array([1]), { ocrType: "force-ocr" });
+      result = await bridge.runOcr(new Uint8Array([1]), { ocrType: "force-ocr", pageCount: 4 });
     });
 
-    expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({ ocrType: "force-ocr" });
+    expect(result).toEqual({ bytes: new Uint8Array([9]), pageCount: 4 });
+    expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({
+      ocrType: "force-ocr",
+      knownPageCount: 4,
+    });
   });
 
   function renderHookValue(): EngineBridge {

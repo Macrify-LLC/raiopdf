@@ -511,6 +511,25 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[1], "deskew", "true");
   });
 
+  it("runs raw-byte OCR without probing basic-info when page count is known", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(42));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    const searchable = await engine.ocrBytes(bytes(1), {
+      languages: ["eng"],
+      ocrType: "force-ocr",
+      knownPageCount: 6,
+    });
+
+    expect(searchable).toEqual({
+      bytes: bytes(42),
+      pageCount: 6,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/ocr-pdf");
+    expectFormField(calls[0], "ocrType", "force-ocr");
+  });
+
   it("closes document handles and ignores unknown handles", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

@@ -85,6 +85,7 @@ interface CommitOptions {
   currentPage?: number | ((current: DocumentState, pageCount: number) => number);
   hasTextLayer?: boolean | null;
   textLayerCoverage?: TextLayerCoverage | null;
+  knownPageCount?: number;
   fileName?: string;
   filePath?: string | null;
   signatureInvalidationNotice?: SignatureInvalidationNotice | null;
@@ -94,6 +95,7 @@ interface ReplaceBytesOptions {
   dirty: boolean;
   hasTextLayer?: boolean | null;
   textLayerCoverage?: TextLayerCoverage | null;
+  knownPageCount?: number;
   expectedOpenToken?: number;
   expectedSourceBytes?: Uint8Array | null;
   fileName?: string;
@@ -190,7 +192,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
     ) => {
       const [bytes, pageCount] = await Promise.all([
         engine.saveToBytes(engineHandle),
-        engine.pageCount(engineHandle),
+        options.knownPageCount !== undefined
+          ? Promise.resolve(options.knownPageCount)
+          : engine.pageCount(engineHandle),
       ]);
 
       if (
@@ -471,6 +475,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
           dirty: options.dirty || Boolean(signatureInvalidationNotice),
           hasTextLayer: options.hasTextLayer ?? null,
           textLayerCoverage: options.textLayerCoverage ?? null,
+          ...(options.knownPageCount !== undefined
+            ? { knownPageCount: options.knownPageCount }
+            : {}),
           signatureInvalidationNotice,
         };
 

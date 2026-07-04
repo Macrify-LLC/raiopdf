@@ -18,12 +18,31 @@
     transform var(--duration-fast) ease;
 }
 
+/*
+ * Icon-only buttons -- the default, and the compact 24/26px overrides in
+ * panel/dialog headers (.tool-panel__card-header, .tool-row, .floating-dialog__actions,
+ * the workspace header actions) -- let the slot FILL the button so the icon
+ * stays centered at whatever width/height the button is overridden to. The
+ * fixed 30px square is applied only when a reveal label is present (the
+ * command-bar edit tools), where the icon must stay anchored as the label
+ * expands. The label span is always rendered when set, so ":only-child"
+ * cleanly distinguishes the two cases.
+ */
 .icon-button__icon {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
+  align-self: stretch;
+  aspect-ratio: 1 / 1;
+  min-width: 0;
+}
+
+.icon-button__icon:not(:only-child) {
+  flex: 0 0 30px;
   width: 30px;
   height: 30px;
-  flex: 0 0 30px;
+  align-self: center;
+  aspect-ratio: auto;
 }
 
 /*

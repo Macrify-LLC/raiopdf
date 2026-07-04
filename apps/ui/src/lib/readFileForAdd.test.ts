@@ -205,6 +205,15 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
     await expect(pickFileForAdd()).resolves.toBeNull();
   });
 
+  it("treats a picker-less shell as a cancel — no legacy main-document dialog fallback", async () => {
+    // The UI and shell ship as one binary, so `pick_pdfs_for_add` always
+    // exists in production; the old `filePort.openFile()` fallback is gone.
+    invokeMock.mockRejectedValue(missingCommandError("pick_pdfs_for_add"));
+
+    await expect(pickFileForAdd()).resolves.toBeNull();
+    expect(invokeMock).not.toHaveBeenCalledWith("open_pdf_dialog");
+  });
+
   it("returns a descriptor for an above-threshold pick", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "pick_pdfs_for_add") {

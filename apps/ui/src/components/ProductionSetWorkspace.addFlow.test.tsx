@@ -22,7 +22,11 @@ describe("ProductionSetWorkspace add flow", () => {
     container = null;
   });
 
-  function render(onAddFile: () => Promise<FileAddResult | null>) {
+  function render(
+    onAddFile: () => Promise<FileAddResult | null>,
+    currentFile: { name: string; path: string | null } | null = null,
+    currentPageCount = 0,
+  ) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
     root = createRoot(container);
@@ -30,8 +34,8 @@ describe("ProductionSetWorkspace add flow", () => {
     act(() => {
       root?.render(
         <ProductionSetWorkspace
-          currentFile={null}
-          currentPageCount={0}
+          currentFile={currentFile}
+          currentPageCount={currentPageCount}
           progress={progress}
           onAddFile={onAddFile}
           onRun={async () => undefined}
@@ -50,6 +54,20 @@ describe("ProductionSetWorkspace add flow", () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
   }
+
+  it("seeds the production order from a bytes-free current document (streamed doc)", () => {
+    // Post-#127 shape: `currentFile` is `{ name, path }` — no bytes — so a
+    // streamed large document auto-seeds; the build is path-based downstream.
+    render(
+      async () => null,
+      { name: "streamed.pdf", path: "grant-streamed" },
+      340,
+    );
+
+    expect(container?.textContent).toContain("streamed.pdf");
+    expect(container?.textContent).toContain("340 pages");
+    expect(container?.textContent).not.toContain("Add PDFs to build the production order.");
+  });
 
   it("adds a descriptor without bytes, deferring the page count when uncounted", async () => {
     render(async () => ({

@@ -175,12 +175,18 @@ export async function pickPdfsForAdd(): Promise<PickedPdfsForAdd | null> {
 }
 
 /**
- * Fetch a picked file for an add flow [R6-2]: below the threshold the whole
- * file arrives via ONE ranged read (`read_pdf_range(grant, 0, sizeBytes)`) —
- * no bytes token in this flow, one consistent contract for all sizes. Above
- * the threshold the caller keeps the descriptor for the path-op pipeline.
+ * Fetch a picked file as an `OpenedFileSource` [R6-2]: below the threshold the
+ * whole file arrives via ONE ranged read (`read_pdf_range(grant, 0,
+ * sizeBytes)`) — no bytes token in this flow, one consistent contract for all
+ * sizes. Above the threshold the caller keeps the descriptor for the path-op
+ * pipeline.
+ *
+ * NOTE: this is the low-level source-shaped primitive. The canonical add-flow
+ * entry point is `readFileForAdd` in `./readFileForAdd.ts` (the [R7-2] choke
+ * point), which returns the add-result shape — this function was renamed from
+ * `readFileForAdd` to end the naming collision with it.
  */
-export async function readFileForAdd(
+export async function readPickedFileSource(
   picked: PickedPdfForAdd,
   thresholdBytes: number,
 ): Promise<OpenedFileSource> {

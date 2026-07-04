@@ -401,6 +401,41 @@ fn run_ghostscript(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> Op
     Ok(output)
 }
 
+/// Ghostscript sandbox arguments: `-dSAFER` plus explicit permits scoped to
+/// exactly the files this invocation touches. The bundled Ghostscript is 10.x,
+/// where SAFER is already the default when neither flag is passed — passing it
+/// explicitly with narrow permits is the belt-and-braces posture (and guards
+/// against a future toolchain swap changing the default). Untrusted user PDFs
+/// must never run with `-dNOSAFER`.
+///
+/// Command-line input operands and `-sOutputFile` are auto-permitted under
+/// SAFER, so these explicit permits are redundant today — kept deliberately so
+/// every call site states its exact file surface. Permit paths are emitted
+/// with forward slashes: Ghostscript's permit matching accepts them against
+/// backslash operands on Windows (verified empirically against gs 10.07.1),
+/// and forward slashes behave more reliably across gs path handling.
+fn gs_safer_args(read_paths: &[&Path], write_paths: &[&Path]) -> Vec<OsString> {
+    let mut arguments = vec![OsString::from("-dSAFER")];
+    for path in read_paths {
+        arguments.push(OsString::from(format!(
+            "--permit-file-read={}",
+            gs_permit_path(path)
+        )));
+    }
+    for path in write_paths {
+        arguments.push(OsString::from(format!(
+            "--permit-file-write={}",
+            gs_permit_path(path)
+        )));
+    }
+    arguments
+}
+
+/// Forward-slash-normalized path string for `--permit-file-*` values.
+fn gs_permit_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 fn require_input_file(input: &Path) -> OpResult<u64> {
     let metadata = fs::metadata(input)
         .map_err(|error| PathOpError::io(&format!("input {}", input.display()), error))?;
@@ -913,46 +948,79 @@ pub fn normalize_to_letter_portrait(
     output_path: &Path,
 ) -> OpResult<()> {
     require_input_file(input)?;
-    let mut arguments = args(&[
-        "-dBATCH",
-        "-dNOPAUSE",
-        "-dNOSAFER",
+    run_ghostscript(toolchain, normalize_gs_args(input, output_path))?;
+    require_output("ghostscript normalize", output_path)?;
+    Ok(())
+}
+
+/// Pure arg builder for the normalize rewrite — split out so the SAFER posture
+/// is unit-testable without a toolchain.
+fn normalize_gs_args(input: &Path, output_path: &Path) -> Vec<OsString> {
+    let mut arguments = args(&["-dBATCH", "-dNOPAUSE"]);
+    arguments.extend(gs_safer_args(&[input], &[output_path]));
+    arguments.extend(args(&[
         "-sDEVICE=pdfwrite",
         "-dFIXEDMEDIA",
         "-dPDFFitPage",
         "-dDEVICEWIDTHPOINTS=612",
         "-dDEVICEHEIGHTPOINTS=792",
         "-dAutoRotatePages=/None",
-    ]);
+    ]));
     arguments.push(OsString::from(format!(
         "-sOutputFile={}",
         output_path.display()
     )));
     arguments.push(path_arg(input));
-    run_ghostscript(toolchain, arguments)?;
-    require_output("ghostscript normalize", output_path)?;
-    Ok(())
+    arguments
 }
 
 /// Ghostscript pdfwrite rewrite as content sanitizing: document-level
 /// JavaScript, embedded files, and launch actions do not survive the rewrite.
 pub fn sanitize(toolchain: &PathOpsToolchain, input: &Path, output_path: &Path) -> OpResult<()> {
     require_input_file(input)?;
-    let mut arguments = args(&[
-        "-dBATCH",
-        "-dNOPAUSE",
-        "-dNOSAFER",
-        "-sDEVICE=pdfwrite",
-        "-dAutoRotatePages=/None",
-    ]);
+    run_ghostscript(toolchain, sanitize_gs_args(input, output_path))?;
+    require_output("ghostscript sanitize", output_path)?;
+    Ok(())
+}
+
+fn sanitize_gs_args(input: &Path, output_path: &Path) -> Vec<OsString> {
+    let mut arguments = args(&["-dBATCH", "-dNOPAUSE"]);
+    arguments.extend(gs_safer_args(&[input], &[output_path]));
+    arguments.extend(args(&["-sDEVICE=pdfwrite", "-dAutoRotatePages=/None"]));
     arguments.push(OsString::from(format!(
         "-sOutputFile={}",
         output_path.display()
     )));
     arguments.push(path_arg(input));
-    run_ghostscript(toolchain, arguments)?;
-    require_output("ghostscript sanitize", output_path)?;
-    Ok(())
+    arguments
+}
+
+/// Redaction step 2: rasterize the boxed pages (`pdfimage24`) so the
+/// underlying text objects are destroyed.
+fn rasterize_gs_args(input: &Path, output_path: &Path) -> Vec<OsString> {
+    let mut arguments = args(&["-dBATCH", "-dNOPAUSE"]);
+    arguments.extend(gs_safer_args(&[input], &[output_path]));
+    arguments.extend(args(&["-sDEVICE=pdfimage24", "-r150"]));
+    arguments.push(OsString::from(format!(
+        "-sOutputFile={}",
+        output_path.display()
+    )));
+    arguments.push(path_arg(input));
+    arguments
+}
+
+/// Redaction step 4: re-extract text (`txtwrite`) from the redacted pages of
+/// the output for the fail-closed verification pass.
+fn txt_extract_gs_args(input: &Path, output_txt: &Path) -> Vec<OsString> {
+    let mut arguments = args(&["-dBATCH", "-dNOPAUSE"]);
+    arguments.extend(gs_safer_args(&[input], &[output_txt]));
+    arguments.push(OsString::from("-sDEVICE=txtwrite"));
+    arguments.push(OsString::from(format!(
+        "-sOutputFile={}",
+        output_txt.display()
+    )));
+    arguments.push(path_arg(input));
+    arguments
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,19 +1234,7 @@ pub(crate) fn redact_areas_impl(
     extract_pages_one_based(toolchain, &boxed_path, &affected_range, &affected_path)?;
     let raster_path = if rasterize {
         let raster_path = work_dir.join("redact-raster.pdf");
-        let mut gs_arguments = args(&[
-            "-dBATCH",
-            "-dNOPAUSE",
-            "-dNOSAFER",
-            "-sDEVICE=pdfimage24",
-            "-r150",
-        ]);
-        gs_arguments.push(OsString::from(format!(
-            "-sOutputFile={}",
-            raster_path.display()
-        )));
-        gs_arguments.push(path_arg(&affected_path));
-        run_ghostscript(toolchain, gs_arguments)?;
+        run_ghostscript(toolchain, rasterize_gs_args(&affected_path, &raster_path))?;
         require_output("ghostscript rasterize", &raster_path)?;
         raster_path
     } else {
@@ -1344,13 +1400,7 @@ fn verify_redaction(
     extract_pages_one_based(toolchain, output_path, &affected_range, &verify_pdf)?;
 
     let verify_txt = work_dir.join("verify-affected.txt");
-    let mut arguments = args(&["-dBATCH", "-dNOPAUSE", "-dNOSAFER", "-sDEVICE=txtwrite"]);
-    arguments.push(OsString::from(format!(
-        "-sOutputFile={}",
-        verify_txt.display()
-    )));
-    arguments.push(path_arg(&verify_pdf));
-    run_ghostscript(toolchain, arguments)?;
+    run_ghostscript(toolchain, txt_extract_gs_args(&verify_pdf, &verify_txt))?;
 
     let extracted = fs::read_to_string(&verify_txt)
         .map_err(|error| PathOpError::io("read verification text", error))?;
@@ -1694,6 +1744,56 @@ mod tests {
     use super::*;
 
     // ---- pure-logic tests (no toolchain required) ----
+
+    #[test]
+    fn gs_arg_builders_run_safer_with_scoped_permits() {
+        let input = Path::new(r"C:\work\input docs\brief.pdf");
+        let output = Path::new(r"C:\work\out\normalized.pdf");
+
+        // Representative op: the normalize rewrite.
+        let arguments = normalize_gs_args(input, output);
+        let rendered: Vec<String> = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(rendered.contains(&"-dSAFER".to_string()));
+        assert!(
+            !rendered.iter().any(|argument| argument == "-dNOSAFER"),
+            "normalize must not disable the Ghostscript sandbox"
+        );
+        // Permit paths are forward-slash normalized and scoped to exactly the
+        // input (read) and output (write) of this invocation.
+        assert!(rendered.contains(&"--permit-file-read=C:/work/input docs/brief.pdf".to_string()));
+        assert!(rendered.contains(&"--permit-file-write=C:/work/out/normalized.pdf".to_string()));
+        // Permits precede the input operand (Ghostscript applies switches in
+        // argument order).
+        let permit_index = rendered
+            .iter()
+            .position(|argument| argument.starts_with("--permit-file-read="))
+            .unwrap();
+        let operand_index = rendered
+            .iter()
+            .position(|argument| argument.ends_with("brief.pdf") && !argument.starts_with("--"))
+            .unwrap();
+        assert!(permit_index < operand_index);
+
+        // Every gs-backed op builder rides the same SAFER posture.
+        for arguments in [
+            sanitize_gs_args(input, output),
+            rasterize_gs_args(input, output),
+            txt_extract_gs_args(input, Path::new(r"C:\work\out\verify.txt")),
+        ] {
+            assert!(arguments.iter().any(|argument| argument == "-dSAFER"));
+            assert!(!arguments.iter().any(|argument| argument == "-dNOSAFER"));
+            assert!(arguments.iter().any(|argument| argument
+                .to_string_lossy()
+                .starts_with("--permit-file-read=")));
+            assert!(arguments.iter().any(|argument| argument
+                .to_string_lossy()
+                .starts_with("--permit-file-write=")));
+        }
+    }
 
     #[test]
     fn range_string_collapses_runs() {

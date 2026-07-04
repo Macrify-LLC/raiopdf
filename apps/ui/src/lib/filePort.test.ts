@@ -25,8 +25,8 @@ import {
   FileRangeError,
   isFileChangedError,
   readBrowserFileSource,
-  readFileForAdd,
   readPdfRange,
+  readPickedFileSource,
   type FileGrant,
 } from "./filePort";
 
@@ -110,11 +110,11 @@ describe("readPdfRange", () => {
   });
 });
 
-describe("readFileForAdd", () => {
+describe("readPickedFileSource", () => {
   it("fetches a below-threshold file with ONE whole-file ranged read", async () => {
     invokeState.handler = () => new Uint8Array(10);
 
-    const result = await readFileForAdd(
+    const result = await readPickedFileSource(
       { grant: "grant-2" as FileGrant, name: "exhibit.pdf", sizeBytes: 10 },
       64,
     );
@@ -133,7 +133,7 @@ describe("readFileForAdd", () => {
   });
 
   it("keeps an at/above-threshold file as a descriptor — no read at all", async () => {
-    const result = await readFileForAdd(
+    const result = await readPickedFileSource(
       { grant: "grant-3" as FileGrant, name: "appendix.pdf", sizeBytes: 64 },
       64,
     );

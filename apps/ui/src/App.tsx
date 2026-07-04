@@ -2466,12 +2466,20 @@ export function App() {
     }
 
     const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+    // Stale guard (Codex review, PR #127): if the user opens a different
+    // document while the extraction runs, the old range must not replace it.
+    const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
     setPrintRangePrompt((current) => (
       current ? { ...current, value: rangeInput, running: true, message: null } : current
     ));
 
     void extractPrintableRange(grant, rangeInput, document.pageCount, baseName)
       .then((result) => {
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return;
+        }
+
         if (!result.ok) {
           setPrintRangePrompt((current) => (
             current ? { ...current, running: false, message: result.error } : current
@@ -2486,7 +2494,7 @@ export function App() {
         // already deleted; these bytes live only in memory.
         openOpenedFile({ bytes: result.extraction.bytes, name: result.extraction.name, path: null });
       });
-  }, [document.fileName, document.pageCount, openOpenedFile, pathOpsGrant]);
+  }, [document.fileName, document.generation, document.pageCount, getOpenToken, isCurrentDocument, openOpenedFile, pathOpsGrant]);
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
@@ -2994,6 +3002,13 @@ export function App() {
 
         try {
           const output = await pathOpCompress(pathOpsGrant);
+
+          // A slow op must never clobber a document the user opened while it
+          // ran (Codex review, PR #127) — same stale guard as the byte branch.
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
           await openPathOpOutput(output);
           setSidecarStatus({
             running: false,
@@ -3004,6 +3019,9 @@ export function App() {
           });
           return true;
         } catch (error) {
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
           setSidecarStatus({
             running: false,
             message: pathOpErrorMessage(error, "Compression could not finish. The document was left unchanged."),
@@ -3109,6 +3127,13 @@ export function App() {
 
       try {
         const output = await pathOpSanitize(pathOpsGrant);
+
+        // Stale guard (Codex review, PR #127): don't reopen an output for a
+        // document the user has since replaced.
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return false;
+        }
+
         await openPathOpOutput(output);
         setSidecarStatus({
           running: false,
@@ -3119,6 +3144,9 @@ export function App() {
         });
         return true;
       } catch (error) {
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return false;
+        }
         setSidecarStatus({
           running: false,
           message: pathOpErrorMessage(error, "Sanitize could not finish. The document was left unchanged."),
@@ -3209,6 +3237,8 @@ export function App() {
 
   const repairDocument = useCallback(
     async () => {
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
       const source = repairCandidate ?? (document.bytes
         ? { bytes: document.bytes, name: document.fileName ?? "Repaired.pdf", path: null }
         : null);
@@ -3227,6 +3257,13 @@ export function App() {
 
         try {
           const output = await pathOpRepair(pathOpsGrant);
+
+          // Stale guard (Codex review, PR #127): don't reopen an output for
+          // a document the user has since replaced.
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
           await openPathOpOutput(output);
           setSidecarStatus({
             running: false,
@@ -3237,6 +3274,9 @@ export function App() {
           });
           return true;
         } catch (error) {
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
           setSidecarStatus({
             running: false,
             message: pathOpErrorMessage(error, "Repair could not finish."),
@@ -3325,7 +3365,7 @@ export function App() {
         return false;
       }
     },
-    [document.bytes, document.fileName, document.fileSizeBytes, engineBridge, openDocumentFile, openPathOpOutput, pathOpsGrant, repairCandidate, streamedDocument],
+    [document.bytes, document.fileName, document.fileSizeBytes, document.generation, engineBridge, getOpenToken, isCurrentDocument, openDocumentFile, openPathOpOutput, pathOpsGrant, repairCandidate, streamedDocument],
   );
 
   const insertImageFilesAsPages = useCallback(

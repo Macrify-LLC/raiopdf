@@ -2072,17 +2072,27 @@ function applyCalloutAnnotationEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font
 
   drawTextBoxText(pdf, edit, font, appearanceTarget);
 
+  const outer = appearanceTarget.annotationRect;
+  const inner = edit.rect;
+  const rd = [
+    Math.max(0, inner.x - outer.x),
+    Math.max(0, outer.y + outer.h - (inner.y + inner.h)),
+    Math.max(0, outer.x + outer.w - (inner.x + inner.w)),
+    Math.max(0, inner.y - outer.y),
+  ];
+
   addMarkupAnnotation(page, {
     Subtype: "FreeText",
     IT: PDFName.of("FreeTextCallout"),
     Rect: rectToPdfArray(appearanceTarget.annotationRect),
+    RD: rd,
     Contents: PDFString.of(edit.text),
     DA: PDFString.of(defaultAppearanceString(appearanceTarget, font, fontSize, edit.color)),
     Q: textAlignToPdfQ(edit.align),
     CL: [anchor.x, anchor.y, edit.tip.x, edit.tip.y],
     C: colorToPdfArray(edit.color),
     BS: { W: thickness, S: "S" },
-    ...(edit.arrowhead ?? true ? { LE: ["None", "ClosedArrow"] } : {}),
+    ...(edit.arrowhead ?? true ? { LE: PDFName.of("ClosedArrow") } : {}),
     AP: { N: appearanceTarget.finish() },
   });
 }

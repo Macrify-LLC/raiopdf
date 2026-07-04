@@ -1429,23 +1429,41 @@ function drawTextBoxText(pdf: PDFDocument, edit: TextRenderableEdit, font: PDFFo
 }
 
 function computeCalloutLeaderAnchor(rect: PdfEditRect, tip: PdfEditPoint): PdfEditPoint {
-  const centerX = rect.x + rect.w / 2;
-  const centerY = rect.y + rect.h / 2;
-  const dx = tip.x - centerX;
-  const dy = tip.y - centerY;
+  const minX = rect.x;
+  const maxX = rect.x + rect.w;
+  const minY = rect.y;
+  const maxY = rect.y + rect.h;
+  const clampedX = clamp(tip.x, minX, maxX);
+  const clampedY = clamp(tip.y, minY, maxY);
 
-  if (dx === 0 && dy === 0) {
-    return { x: centerX, y: rect.y };
+  if (tip.x < minX || tip.x > maxX || tip.y < minY || tip.y > maxY) {
+    return { x: clampedX, y: clampedY };
   }
 
-  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : rect.w / 2 / Math.abs(dx);
-  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : rect.h / 2 / Math.abs(dy);
-  const scale = Math.min(scaleX, scaleY);
+  const distances = [
+    { edge: "left", value: tip.x - minX },
+    { edge: "right", value: maxX - tip.x },
+    { edge: "bottom", value: tip.y - minY },
+    { edge: "top", value: maxY - tip.y },
+  ] as const;
+  const nearest = distances.reduce((best, candidate) =>
+    candidate.value < best.value ? candidate : best,
+  );
 
-  return {
-    x: centerX + dx * scale,
-    y: centerY + dy * scale,
-  };
+  switch (nearest.edge) {
+    case "left":
+      return { x: minX, y: tip.y };
+    case "right":
+      return { x: maxX, y: tip.y };
+    case "bottom":
+      return { x: tip.x, y: minY };
+    case "top":
+      return { x: tip.x, y: maxY };
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 /**

@@ -403,6 +403,53 @@ describe("LocalPdfEngine.applyEdits", () => {
     expectWithin1Pt(matrices[0]![5]!, rect.y + rect.h - fontSizePt);
   });
 
+  it("anchors callout leaders at the nearest box boundary point", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 240]]));
+    const rect = { x: 40, y: 120, w: 80, h: 50 };
+    const cases = [
+      {
+        tip: { x: 180, y: 150 },
+        expectedAnchor: { x: 120, y: 150 },
+      },
+      {
+        tip: { x: 180, y: 200 },
+        expectedAnchor: { x: 120, y: 170 },
+      },
+      {
+        tip: { x: 60, y: 135 },
+        expectedAnchor: { x: 60, y: 120 },
+      },
+    ];
+
+    const edited = await engine.applyEdits(
+      document,
+      cases.map(({ tip }) => ({
+        type: "callout" as const,
+        pageIndex: 0,
+        rect,
+        tip,
+        text: "X",
+        arrowhead: false,
+        boxBorder: false,
+      })),
+    );
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    const moves = readOperandPairs(content, "m").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+    const lines = readOperandPairs(content, "l").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+
+    for (const { tip, expectedAnchor } of cases) {
+      expectSomePointWithin1Pt(moves, expectedAnchor);
+      expectSomePointWithin1Pt(lines, tip);
+    }
+  });
+
   it("draws image edits scaled into the target rect", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));

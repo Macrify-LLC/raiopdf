@@ -230,6 +230,51 @@ describe("EditLayer shape removal", () => {
     expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(0);
   });
 
+  it("previews callout leaders from the nearest box boundary point", async () => {
+    const cases = [
+      {
+        id: "callout-side",
+        tip: { x: 180, y: 150 },
+        expectedAnchor: { x: 120, y: 150 },
+      },
+      {
+        id: "callout-corner",
+        tip: { x: 180, y: 200 },
+        expectedAnchor: { x: 120, y: 170 },
+      },
+      {
+        id: "callout-inside",
+        tip: { x: 60, y: 135 },
+        expectedAnchor: { x: 60, y: 120 },
+      },
+    ];
+
+    await renderEditLayer(
+      cases.map(({ id, tip }) => ({
+        kind: "callout",
+        id,
+        pageIndex: 0,
+        rect: { x: 40, y: 120, w: 80, h: 50 },
+        tip,
+        text: "Review this",
+        fontSizePt: 12,
+      })),
+      "callout",
+    );
+
+    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])]
+      .filter((line) => !line.classList.contains("edit-layer__callout-hit-line"));
+
+    expect(leaders).toHaveLength(cases.length);
+
+    for (const [index, { tip, expectedAnchor }] of cases.entries()) {
+      expect(leaders[index]?.getAttribute("x1")).toBe(String(expectedAnchor.x));
+      expect(leaders[index]?.getAttribute("y1")).toBe(String(expectedAnchor.y));
+      expect(leaders[index]?.getAttribute("x2")).toBe(String(tip.x));
+      expect(leaders[index]?.getAttribute("y2")).toBe(String(tip.y));
+    }
+  });
+
   async function renderEditLayer(
     initialEdits: readonly PendingEdit[],
     tool: EditingState["tool"] = "shapeRect",

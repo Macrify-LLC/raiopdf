@@ -1731,23 +1731,37 @@ function CalloutLeaderSvg({
 }
 
 function computeCalloutLeaderAnchor(rect: ViewportRect, tip: ViewportPoint): ViewportPoint {
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
-  const dx = tip.x - centerX;
-  const dy = tip.y - centerY;
+  const minX = rect.left;
+  const maxX = rect.left + rect.width;
+  const minY = rect.top;
+  const maxY = rect.top + rect.height;
+  const clampedX = clamp(tip.x, minX, maxX);
+  const clampedY = clamp(tip.y, minY, maxY);
 
-  if (dx === 0 && dy === 0) {
-    return { x: centerX, y: rect.top + rect.height };
+  if (tip.x < minX || tip.x > maxX || tip.y < minY || tip.y > maxY) {
+    return { x: clampedX, y: clampedY };
   }
 
-  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : rect.width / 2 / Math.abs(dx);
-  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : rect.height / 2 / Math.abs(dy);
-  const factor = Math.min(scaleX, scaleY);
+  const distances = [
+    { edge: "left", value: tip.x - minX },
+    { edge: "right", value: maxX - tip.x },
+    { edge: "top", value: tip.y - minY },
+    { edge: "bottom", value: maxY - tip.y },
+  ] as const;
+  const nearest = distances.reduce((best, candidate) =>
+    candidate.value < best.value ? candidate : best,
+  );
 
-  return {
-    x: centerX + dx * factor,
-    y: centerY + dy * factor,
-  };
+  switch (nearest.edge) {
+    case "left":
+      return { x: minX, y: tip.y };
+    case "right":
+      return { x: maxX, y: tip.y };
+    case "top":
+      return { x: tip.x, y: minY };
+    case "bottom":
+      return { x: tip.x, y: maxY };
+  }
 }
 
 function TextBoxOverlay({

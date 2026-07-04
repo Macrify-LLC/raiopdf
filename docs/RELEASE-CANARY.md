@@ -146,6 +146,11 @@ cd apps/ui && node smoke/generate-large-fixture.mjs
 #    absent:
 pnpm exec playwright test smoke/streamed-large.smoke.ts
 
+# 2b. Memory ceiling probe — samples peak JS heap (CDP) while opening +
+#     paging + searching the fixture, asserts it stays under the streamed
+#     target and far below the file size:
+pnpm exec playwright test smoke/streamed-memory.smoke.ts
+
 # 3. Path-op acceptance (split-by-max-bytes parts pass qpdf --check;
 #    prepare_filing scrub+split with per-part facts preflight):
 RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload \
@@ -156,6 +161,25 @@ RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
 When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
 disk, point `RAIOPDF_LARGE_FIXTURE` (and the smoke test's env var of the same
 name) at them instead — the synthetic file is the stand-in, not the goal.
+
+**Recorded run (2026-07-04, v1.1 Phase 4 validation, synthetic 270 MB / 270 pp):**
+
+| Scenario | Result |
+|---|---|
+| Path-op split-by-max-bytes | 283,263,942 B / 270 pp → 6 parts in ~65 s, every part ≤ 50 MB cap, all `qpdf --check` clean |
+| Path-op prepare_filing (scrub+split) | 6 parts + 6 facts rows in ~11 s, preflight all within-cap |
+| Browser streamed open + render + windowed search | passed; page 1 rendered from the range transport, `MARKER-1` visible, lazy search hit |
+| **Memory ceiling (CDP JSHeapUsedSize)** | **peak 10.9 MB heap, 5.5 MB attributable to the doc** — vs. a whole-file-in-memory approach that would sit at 2–3× the 270 MB file. The streaming architecture holds. |
+
+**Measured vs. not.** These ran in **real Chromium** driving the **browser-runtime**
+range transport (`File.slice`-backed `RaioPdfRangeTransport`) — the same transport class
+the Tauri grant path uses, exercising the streaming architecture end to end. The memory
+figure is **main-thread JS heap** (CDP `Performance.getMetrics`), the load-bearing proxy
+for "is the file being materialized" — it excludes canvas bitmap memory and the pdf.js
+worker heap, which live off the main heap by design. **Still not exercised headlessly:**
+packaged-Tauri over real **WebView2 IPC** ranged reads, and full renderer-process RSS
+sampling — both require a live desktop session and are the one honest gap remaining from
+the streamed-viewer validation.
 
 ### Covered by the mocked breadth suite (CI, every PR)
 

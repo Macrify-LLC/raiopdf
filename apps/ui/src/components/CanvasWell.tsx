@@ -6,6 +6,7 @@ import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { FloatingDialog } from "./FloatingDialog";
+import { LoadingSun } from "./LoadingSun";
 import { PageList } from "./PageList";
 import { SignatureCard } from "./SignatureCard";
 import type { PendingRedactionOverlay } from "./PageView";
@@ -42,6 +43,12 @@ export interface CanvasWellProps {
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
+  /**
+   * True while the desktop engine sidecar is booting (`engineBridge.starting`
+   * in App.tsx). Only meaningful with a document open -- see the big
+   * `canvas-well__engine-starting` overlay below.
+   */
+  engineStarting?: boolean;
 }
 
 /**
@@ -74,6 +81,7 @@ export function CanvasWell({
   editing,
   searchResults = [],
   activeSearchResultId = null,
+  engineStarting = false,
 }: CanvasWellProps) {
   const hasDocument = Boolean(pdfDocument);
   const viewerActive = hasDocument && !workspace;
@@ -107,6 +115,24 @@ export function CanvasWell({
     >
       {showModeBar ? (
         <div className="canvas-well__mode-bar-slot">{modeBar}</div>
+      ) : null}
+      {viewerActive && engineStarting ? (
+        <div className="canvas-well__engine-starting" role="status" aria-live="polite">
+          <div className="canvas-well__engine-starting-card">
+            {/* LoadingSun sizes itself via `1em` on `.loading-sun` (see
+                LoadingSun.css) -- the `size` prop alone won't render at
+                60px without an ambient font-size to resolve against, so
+                this wrapper sets one explicitly. */}
+            <span className="canvas-well__engine-starting-sun">
+              <LoadingSun size={60} label="Starting the PDF engine" />
+            </span>
+            {/* Deliberately a real ellipsis (not "...") so this never
+                collides with the OCR panel's own "Starting the PDF
+                engine..." status text -- see smoke test coverage on that
+                exact string. */}
+            <p className="canvas-well__engine-starting-text">Starting the PDF engine…</p>
+          </div>
+        </div>
       ) : null}
       {viewerActive && signatureCardOpen && editing ? (
         <FloatingDialog

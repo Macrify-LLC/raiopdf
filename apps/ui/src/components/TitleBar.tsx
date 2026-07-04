@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { SunMarkIcon } from "../icons";
+import { MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
 import { MenuBar } from "./MenuBar";
 import "./TitleBar.css";
 
@@ -50,12 +50,7 @@ export function TitleBar({
       onDoubleClick={handleDragRegionDoubleClick}
     >
       <div className="title-bar__brand" data-tauri-drag-region>
-        <span className="title-bar__mark">
-          <SunMarkIcon size={22} className="title-bar__mark-icon" />
-        </span>
-        <span className="title-bar__wordmark">
-          Raio<span className="title-bar__wordmark-accent">PDF</span>
-        </span>
+        <RaioWordmarkIcon height={24} className="title-bar__wordmark-mark" />
       </div>
 
       <MenuBar
@@ -96,8 +91,10 @@ export function TitleBar({
           className="title-bar__byline"
           onClick={onOpenAbout}
           title="About Macrify"
+          aria-label="Built by Macrify"
         >
-          Built by Macrify
+          <span className="title-bar__byline-text">Built by</span>
+          <MacrifyWordmarkIcon height={16} decorative className="title-bar__byline-mark" />
         </button>
         {showWindowControls ? <WindowControls /> : null}
       </div>

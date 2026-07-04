@@ -54,6 +54,14 @@
   --accent-bar-mid: #1d4e8f;
   --accent-bar-end: #4aade0;
 
+  /* Brand-mark navy fills baked into the two wordmark SVGs inlined via
+     `?raw` (title bar). Kept distinct from --accent-bar-mid /
+     --primary-deep even where the hex happens to match, so a future
+     re-tune of the gradient bar or ink color doesn't silently drag the
+     wordmarks along with it. */
+  --identity-navy: #00357a; /* RaioPDF wordmark letterform navy */
+  --brand-macrify-navy: #1d4e8f; /* Macrify wordmark letterform navy */
+
   /* ---- Type ---- */
   --font-ui: "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-document: "Times New Roman", Times, serif;
@@ -102,4 +110,13 @@
   --duration-fast: 120ms;
   --duration-medium: 180ms;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Emil-style expansion easing -- the command bar's active-tool widen/
+     collapse (Change 3) and any future "reveal on select" motion. Distinct
+     from --duration-fast, which stays for instant hover/press feedback. */
+  --ease-emil: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-tool-expand: 280ms;
+  --dur-tool-collapse: 220ms;
+  --dur-tool-label-in: 190ms;
+  --dur-tool-label-out: 120ms;
 }

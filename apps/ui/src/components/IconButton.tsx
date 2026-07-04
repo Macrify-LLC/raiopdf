@@ -16,6 +16,17 @@ export interface IconButtonProps {
    * to assistive tech as toggle buttons.
    */
   active?: boolean;
+  /**
+   * A short name (e.g. "Highlight") that gracefully reveals to the right of
+   * the icon while this button is `active` -- the Emil-style command bar
+   * tool expansion. The icon itself never moves; only the button widens.
+   * Purely decorative -- the accessible name stays `label` -- so it's
+   * always rendered (not just while active) to let the width/opacity
+   * transition play in both directions, and marked `aria-hidden`.
+   * Omitted entirely for plain action buttons (Open/Save/Print/zoom/etc.),
+   * which stay fixed 30x30 icon squares.
+   */
+  expandLabel?: string;
 }
 
 export function IconButton({
@@ -25,6 +36,7 @@ export function IconButton({
   onClick,
   disabled = false,
   active,
+  expandLabel,
 }: IconButtonProps) {
   return (
     <button
@@ -37,7 +49,12 @@ export function IconButton({
       disabled={disabled}
       onClick={onClick}
     >
-      {icon}
+      <span className="icon-button__icon">{icon}</span>
+      {expandLabel ? (
+        <span className="icon-button__expand-label" aria-hidden="true">
+          {expandLabel}
+        </span>
+      ) : null}
     </button>
   );
 }

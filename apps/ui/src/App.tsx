@@ -1344,6 +1344,11 @@ export function App() {
             phase: "prompt",
             error: null,
           });
+        } else if (result.status === "cancelled") {
+          // The user declined the signature-invalidation confirmation.
+          // That's a choice, not a broken file -- no Repair routing, no
+          // error UI; whatever was on screen stays as-is.
+          setRepairCandidate(null);
         } else {
           setRepairCandidate(file);
           setActiveEditDialogTool(null);

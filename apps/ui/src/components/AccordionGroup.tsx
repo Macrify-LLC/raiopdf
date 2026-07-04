@@ -37,7 +37,15 @@ export function AccordionGroup({
 
   useLayoutEffect(() => {
     if (isOpen && !previousOpenRef.current) {
-      setJustOpened(true);
+      // Under reduced motion the grow animation never runs, so
+      // onAnimationEnd would never clear the flag and the panel would stay
+      // overflow-clipped forever. Skip the animated state entirely there.
+      const reducedMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      if (!reducedMotion) {
+        setJustOpened(true);
+      }
     }
     previousOpenRef.current = isOpen;
   }, [isOpen]);

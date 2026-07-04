@@ -1,5 +1,6 @@
 mod diagnostics;
 mod mcp;
+mod path_ops;
 mod sidecar;
 
 use diagnostics::AppDiagnostics;
@@ -322,7 +323,23 @@ pub fn run() {
             mcp::mcp_set_enabled,
             mcp::build_production_set,
             mcp::batch_cleanup,
-            mcp::build_filing_packet
+            mcp::build_filing_packet,
+            path_ops::path_ops_status,
+            path_ops::path_op_page_count,
+            path_ops::path_op_document_facts,
+            path_ops::path_op_decrypt,
+            path_ops::path_op_extract_pages,
+            path_ops::path_op_merge,
+            path_ops::path_op_split_by_max_bytes,
+            path_ops::path_op_prepare_filing,
+            path_ops::path_op_ocr,
+            path_ops::path_op_repair,
+            path_ops::path_op_redact_areas,
+            path_ops::path_op_linearize,
+            path_ops::path_op_compress,
+            path_ops::path_op_sanitize,
+            path_ops::path_op_normalize,
+            path_ops::path_op_scrub_metadata
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

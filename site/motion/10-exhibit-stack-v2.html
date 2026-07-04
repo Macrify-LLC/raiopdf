@@ -1,0 +1,288 @@
+<!doctype html>
+<!-- exhibit-stack-v2 — iteration on 10-exhibit-stack.html (original kept untouched).
+     Same tiles-fly-in-and-stack-into-a-binder motion, side "Exhibit A/B/C" tabs, and left
+     bookmark rail as v1 — PLUS a rubber-ink stamp that lands directly on the face of each
+     document tile, sequentially: EXHIBIT A slams down first, then once tile B arrives and
+     covers it, EXHIBIT B slams down on B, then EXHIBIT C on C. Each stamp gets a real
+     "ink impact" beat (big/rotated → undershoot → settle overshoot) plus a quick radial
+     flash and a tiny recoil in the tile itself, so the landing reads as a physical hit,
+     not a fade-in. Placement: feature card / inline product-tour panel. Background: light
+     surface card (white card floating on a pale surface page) — for LIGHT sections of the site. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · exhibit-stack v2</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  /* light-surface extras, mirroring the app-hero reference */
+  --border:#D4DFEE;
+  --well:#E7EEF7;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:grid;place-items:center;
+  background:radial-gradient(120% 100% at 50% 0%,#ffffff 0%,var(--bg-alt) 55%,#e2ecf8 100%);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  overflow:hidden;
+}
+
+.card{
+  position:relative;width:min(600px,92vw);border-radius:var(--radius-window);
+  background:#fff;border:1px solid var(--border);box-shadow:var(--shadow-page);overflow:hidden;
+}
+.accent-bar{height:3px;background:linear-gradient(90deg,var(--navy),var(--primary),var(--accent))}
+.titlebar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border)}
+.dots{display:flex;gap:6px}.dots i{width:9px;height:9px;border-radius:50%;display:block}
+.dots i:nth-child(1){background:#f0685f}.dots i:nth-child(2){background:#f5be4f}.dots i:nth-child(3){background:#63c86b}
+.titlebar b{margin-left:6px;font-size:11.5px;color:var(--text-muted);font-weight:600;letter-spacing:.2px}
+
+.content{display:grid;grid-template-columns:126px 1fr;min-height:250px}
+
+/* left bookmark rail */
+.bookmarks{background:var(--bg-alt);border-right:1px solid var(--border);padding:14px 12px;display:flex;flex-direction:column}
+.bm-head{font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px}
+.bm-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.bm{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--text-body);
+  background:#fff;border:1px solid var(--border);border-radius:7px;padding:6px 8px;
+  box-shadow:0 4px 10px -6px rgba(11,26,46,.25);
+  opacity:0;transform:translateX(-10px)}
+.bm svg{width:12px;height:12px;color:var(--gold-deep);flex:0 0 auto}
+
+/* stack stage */
+.stack-wrap{position:relative;display:grid;place-items:center;padding:26px 64px 26px 18px}
+.stack{position:relative;width:148px;aspect-ratio:8.5/11}
+.tile{
+  position:absolute;inset:0;background:#fff;border:1px solid var(--border);border-radius:6px;
+  box-shadow:0 16px 34px -14px rgba(11,26,46,.4);padding:13px 12px;opacity:0;
+}
+.tile h5{margin:0 0 8px;font-size:7.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+.ln{height:4px;border-radius:2px;background:#e3e9f1;margin:5px 0}
+.ln.s{width:58%}.ln.m{width:86%}.ln.l{width:100%}
+
+/* index tabs stamped onto the edge as each tile lands (unchanged from v1) */
+.tab{
+  position:absolute;right:-56px;width:68px;height:26px;border-radius:0 7px 7px 0;z-index:5;
+  background:linear-gradient(135deg,var(--gold),var(--gold-deep));
+  box-shadow:0 6px 14px -6px rgba(224,147,46,.65);
+  display:flex;align-items:center;justify-content:center;gap:4px;
+  font-size:9px;font-weight:700;color:#4a2c06;letter-spacing:.2px;white-space:nowrap;
+  opacity:0;transform:translateX(-14px) scale(.7);
+}
+.tab svg{width:9px;height:9px}
+
+/* NEW — the ink stamp that lands squarely on the document face */
+.stamp-ring{
+  position:absolute;left:50%;top:63%;width:64px;height:64px;border-radius:50%;z-index:4;
+  background:radial-gradient(circle,rgba(245,185,66,.62),transparent 68%);pointer-events:none;opacity:0;
+}
+.doc-stamp{
+  position:absolute;left:50%;top:63%;width:104px;z-index:6;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;gap:0;
+  padding:5px 4px 6px;border:2.5px solid var(--gold-deep);border-radius:7px;
+  background:rgba(255,255,255,.62);box-shadow:0 10px 22px -10px rgba(224,147,46,.55);
+  opacity:0;
+}
+.doc-stamp .ds-top{font-size:7px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--gold-deep)}
+.doc-stamp .ds-letter{font-size:22px;font-weight:800;line-height:1;color:var(--gold-deep);margin-top:1px}
+
+.caption{
+  padding:11px 16px;border-top:1px solid var(--border);background:var(--bg-alt);
+  text-align:center;font-size:11.5px;color:var(--text-muted);letter-spacing:.1px;
+}
+.caption b{color:var(--text-body);font-weight:600}
+
+/* ---------- timeline (10s, seamless — every element is opacity:0 at 0% and 100%) ---------- */
+@keyframes flyA{
+  0%,3%{opacity:0;transform:translate(230px,-172px) rotate(20deg) scale(.8)}
+  9%{opacity:1;transform:translate(-6px,-4px) rotate(-6deg) scale(1.04)}
+  12%,13.7%{opacity:1;transform:translate(0,0) rotate(-2deg) scale(1)}
+  14.3%{transform:translate(0,1.4px) rotate(-2.6deg) scale(.985)}
+  15.6%{transform:translate(0,-.4px) rotate(-1.6deg) scale(1.01)}
+  17%,88%{opacity:1;transform:translate(0,0) rotate(-2deg) scale(1)}
+  96%,100%{opacity:0;transform:translate(0,0) rotate(-2deg) scale(1)}
+}
+@keyframes flyB{
+  0%,25%{opacity:0;transform:translate(230px,-172px) rotate(20deg) scale(.8)}
+  31%{opacity:1;transform:translate(3px,3px) rotate(5deg) scale(1.04)}
+  34%,35.7%{opacity:1;transform:translate(6px,6px) rotate(2deg) scale(1)}
+  36.3%{transform:translate(6px,7.4px) rotate(1.4deg) scale(.985)}
+  37.6%{transform:translate(6px,5.6px) rotate(2.6deg) scale(1.01)}
+  39%,88%{opacity:1;transform:translate(6px,6px) rotate(2deg) scale(1)}
+  96%,100%{opacity:0;transform:translate(6px,6px) rotate(2deg) scale(1)}
+}
+@keyframes flyC{
+  0%,47%{opacity:0;transform:translate(230px,-172px) rotate(20deg) scale(.8)}
+  53%{opacity:1;transform:translate(9px,9px) rotate(-4deg) scale(1.04)}
+  56%,57.7%{opacity:1;transform:translate(12px,12px) rotate(-1deg) scale(1)}
+  58.3%{transform:translate(12px,13.4px) rotate(-1.6deg) scale(.985)}
+  59.6%{transform:translate(12px,11.6px) rotate(-.4deg) scale(1.01)}
+  61%,88%{opacity:1;transform:translate(12px,12px) rotate(-1deg) scale(1)}
+  96%,100%{opacity:0;transform:translate(12px,12px) rotate(-1deg) scale(1)}
+}
+.tile-a{animation:flyA 10s var(--ease-out) infinite;z-index:1}
+.tile-b{animation:flyB 10s var(--ease-out) infinite;z-index:2}
+.tile-c{animation:flyC 10s var(--ease-out) infinite;z-index:3}
+
+@keyframes popTabA{
+  0%,11%{opacity:0;transform:translateX(-14px) scale(.7)}
+  14%{opacity:1;transform:translateX(4px) scale(1.1)}
+  16%,88%{opacity:1;transform:translateX(0) scale(1)}
+  96%,100%{opacity:0;transform:translateX(0) scale(1)}
+}
+@keyframes popTabB{
+  0%,33%{opacity:0;transform:translateX(-14px) scale(.7)}
+  36%{opacity:1;transform:translateX(4px) scale(1.1)}
+  38%,88%{opacity:1;transform:translateX(0) scale(1)}
+  96%,100%{opacity:0;transform:translateX(0) scale(1)}
+}
+@keyframes popTabC{
+  0%,55%{opacity:0;transform:translateX(-14px) scale(.7)}
+  58%{opacity:1;transform:translateX(4px) scale(1.1)}
+  60%,88%{opacity:1;transform:translateX(0) scale(1)}
+  96%,100%{opacity:0;transform:translateX(0) scale(1)}
+}
+.tab-a{top:16px;animation:popTabA 10s var(--ease-out) infinite}
+.tab-b{top:56px;animation:popTabB 10s var(--ease-out) infinite}
+.tab-c{top:96px;animation:popTabC 10s var(--ease-out) infinite}
+
+@keyframes popBmA{
+  0%,13%{opacity:0;transform:translateX(-10px)}
+  18%,88%{opacity:1;transform:translateX(0)}
+  96%,100%{opacity:0;transform:translateX(0)}
+}
+@keyframes popBmB{
+  0%,35%{opacity:0;transform:translateX(-10px)}
+  40%,88%{opacity:1;transform:translateX(0)}
+  96%,100%{opacity:0;transform:translateX(0)}
+}
+@keyframes popBmC{
+  0%,57%{opacity:0;transform:translateX(-10px)}
+  62%,88%{opacity:1;transform:translateX(0)}
+  96%,100%{opacity:0;transform:translateX(0)}
+}
+.bm-a{animation:popBmA 10s var(--ease-out) infinite}
+.bm-b{animation:popBmB 10s var(--ease-out) infinite}
+.bm-c{animation:popBmC 10s var(--ease-out) infinite}
+
+/* NEW — sequential ink-stamp impacts: A lands first (~14%), then B (~36%, once tile B
+   has arrived and is topmost), then C (~58%). Each: big+rotated → undershoot → overshoot
+   → settle, like a rubber stamp actually striking the page. */
+@keyframes stampA{
+  0%,12.5%{opacity:0;transform:translate(-50%,-50%) scale(2.3) rotate(-22deg)}
+  14%{opacity:1;transform:translate(-50%,-50%) scale(.8) rotate(-4deg)}
+  15.6%{transform:translate(-50%,-50%) scale(1.08) rotate(-9deg)}
+  17%,88%{opacity:1;transform:translate(-50%,-50%) scale(1) rotate(-7deg)}
+  96%,100%{opacity:0;transform:translate(-50%,-50%) scale(1) rotate(-7deg)}
+}
+@keyframes ringA{
+  0%,12.8%{opacity:0;transform:translate(-50%,-50%) scale(.3)}
+  14%{opacity:.85;transform:translate(-50%,-50%) scale(.7)}
+  18%,100%{opacity:0;transform:translate(-50%,-50%) scale(1.7)}
+}
+@keyframes stampB{
+  0%,34.5%{opacity:0;transform:translate(-50%,-50%) scale(2.3) rotate(17deg)}
+  36%{opacity:1;transform:translate(-50%,-50%) scale(.8) rotate(3deg)}
+  37.6%{transform:translate(-50%,-50%) scale(1.08) rotate(8deg)}
+  39%,88%{opacity:1;transform:translate(-50%,-50%) scale(1) rotate(6deg)}
+  96%,100%{opacity:0;transform:translate(-50%,-50%) scale(1) rotate(6deg)}
+}
+@keyframes ringB{
+  0%,34.8%{opacity:0;transform:translate(-50%,-50%) scale(.3)}
+  36%{opacity:.85;transform:translate(-50%,-50%) scale(.7)}
+  40%,100%{opacity:0;transform:translate(-50%,-50%) scale(1.7)}
+}
+@keyframes stampC{
+  0%,56.5%{opacity:0;transform:translate(-50%,-50%) scale(2.3) rotate(-15deg)}
+  58%{opacity:1;transform:translate(-50%,-50%) scale(.8) rotate(-2deg)}
+  59.6%{transform:translate(-50%,-50%) scale(1.08) rotate(-6deg)}
+  61%,88%{opacity:1;transform:translate(-50%,-50%) scale(1) rotate(-5deg)}
+  96%,100%{opacity:0;transform:translate(-50%,-50%) scale(1) rotate(-5deg)}
+}
+@keyframes ringC{
+  0%,56.8%{opacity:0;transform:translate(-50%,-50%) scale(.3)}
+  58%{opacity:.85;transform:translate(-50%,-50%) scale(.7)}
+  62%,100%{opacity:0;transform:translate(-50%,-50%) scale(1.7)}
+}
+.ds-a{animation:stampA 10s var(--ease-out) infinite}
+.ds-b{animation:stampB 10s var(--ease-out) infinite}
+.ds-c{animation:stampC 10s var(--ease-out) infinite}
+.ring-a{animation:ringA 10s var(--ease-out) infinite}
+.ring-b{animation:ringB 10s var(--ease-out) infinite}
+.ring-c{animation:ringC 10s var(--ease-out) infinite}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .tile-a,.tile-b,.tile-c,.tab-a,.tab-b,.tab-c,.bm-a,.bm-b,.bm-c,.ds-a,.ds-b,.ds-c{opacity:1!important}
+  .tile-a{transform:translate(0,0) rotate(-2deg)!important}
+  .tile-b{transform:translate(6px,6px) rotate(2deg)!important}
+  .tile-c{transform:translate(12px,12px) rotate(-1deg)!important}
+  .tab-a,.tab-b,.tab-c,.bm-a,.bm-b,.bm-c{transform:translateX(0)!important}
+  .ds-a{transform:translate(-50%,-50%) rotate(-7deg)!important}
+  .ds-b{transform:translate(-50%,-50%) rotate(6deg)!important}
+  .ds-c{transform:translate(-50%,-50%) rotate(-5deg)!important}
+  .ring-a,.ring-b,.ring-c{display:none!important}
+}
+</style></head>
+<body>
+  <div class="card" role="img" aria-label="Documents assembling into an ordered exhibit binder — Exhibit A, then B, then C stamped directly onto each page in sequence, plus auto-bookmarks">
+    <div class="accent-bar"></div>
+    <div class="titlebar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <b>Combine with Exhibits</b>
+    </div>
+    <div class="content">
+      <aside class="bookmarks">
+        <div class="bm-head">Bookmarks</div>
+        <ul class="bm-list">
+          <li class="bm bm-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg><span>Exhibit A</span></li>
+          <li class="bm bm-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg><span>Exhibit B</span></li>
+          <li class="bm bm-c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg><span>Exhibit C</span></li>
+        </ul>
+      </aside>
+      <div class="stack-wrap">
+        <div class="stack">
+          <div class="tile tile-a">
+            <h5>Declaration</h5>
+            <div class="ln l"></div><div class="ln m"></div><div class="ln s"></div><div class="ln l"></div>
+            <span class="stamp-ring ring-a"></span>
+            <div class="doc-stamp ds-a"><span class="ds-top">Exhibit</span><span class="ds-letter">A</span></div>
+          </div>
+          <div class="tile tile-b">
+            <h5>Invoice</h5>
+            <div class="ln m"></div><div class="ln l"></div><div class="ln s"></div>
+            <span class="stamp-ring ring-b"></span>
+            <div class="doc-stamp ds-b"><span class="ds-top">Exhibit</span><span class="ds-letter">B</span></div>
+          </div>
+          <div class="tile tile-c">
+            <h5>Correspondence</h5>
+            <div class="ln l"></div><div class="ln s"></div><div class="ln m"></div><div class="ln l"></div>
+            <span class="stamp-ring ring-c"></span>
+            <div class="doc-stamp ds-c"><span class="ds-top">Exhibit</span><span class="ds-letter">C</span></div>
+          </div>
+          <div class="tab tab-a"><span>Exhibit A</span></div>
+          <div class="tab tab-b"><span>Exhibit B</span></div>
+          <div class="tab tab-c"><span>Exhibit C</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="caption"><b>Assembled in order</b> · auto-stamped · auto-bookmarked</div>
+  </div>
+</body></html>

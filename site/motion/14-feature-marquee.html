@@ -1,0 +1,210 @@
+<!doctype html>
+<!-- feature-marquee — infinite horizontal ribbon of RaioPDF feature chips, separated by
+     tiny rotating sun glyphs. Placement: full-width strip between page sections (e.g.
+     under the hero, above pricing/FAQ). Bare embed: transparent body, band is edge-to-edge
+     at any viewport width (no boxed/capped look). Seamless loop (duplicated track, each
+     copy padded wide enough to outrun any viewport so the wrap never runs out of content),
+     pauses on hover, soft edge-fade mask on both sides. The scrolling row is decorative
+     (aria-hidden); a visually-hidden list carries the real content for screen readers. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · feature-marquee</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  /* sun-mark variable aliases (the SVG uses these names) */
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  --border:#D4DFEE;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:flex;flex-direction:column;justify-content:center;
+  background:transparent;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+
+/* No max-width wrapper on purpose — the band must reach both viewport edges at any
+   width. A capped inner width used to leave a static, un-scrolled gap on wide screens. */
+.accent-top{height:3px;background:linear-gradient(90deg,var(--navy),var(--primary),var(--accent));}
+
+.marquee{
+  position:relative;overflow:hidden;background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:20px 0;
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 8%,#000 92%,transparent);
+  mask-image:linear-gradient(to right,transparent,#000 8%,#000 92%,transparent);
+}
+.track{
+  display:flex;align-items:center;width:max-content;
+  animation:scroll 34s linear infinite;
+}
+.marquee:hover .track{animation-play-state:paused;}
+@keyframes scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* Each "copy" is one of exactly two identical halves of .track — translateX(-50%) always
+   shifts by exactly one copy's width, so the loop wraps invisibly regardless of how many
+   times the chip list got repeated inside each copy (see script). */
+.copy{display:flex;align-items:center;flex:0 0 auto;}
+
+.chip{
+  display:inline-flex;align-items:center;white-space:nowrap;
+  padding:10px 20px;margin:0 7px;border-radius:999px;
+  background:#fff;border:1px solid var(--border);
+  color:var(--text-primary);font-weight:600;font-size:14.5px;letter-spacing:.1px;
+  box-shadow:0 8px 18px -12px rgba(11,26,46,.3);
+}
+.sep{display:inline-flex;flex:0 0 auto;width:20px;height:20px;margin:0 11px;}
+.sep svg{width:100%;height:100%;display:block;}
+.sep #rays{transform-origin:100px 100px;animation:spin 15s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media (prefers-reduced-motion:reduce){
+  .track,.sep #rays{animation:none!important;}
+}
+</style></head>
+<body>
+  <div class="accent-top"></div>
+
+  <ul class="sr-only">
+    <li>True redaction</li><li>Bates numbering</li><li>OCR — fully offline</li>
+    <li>Prepare for filing</li><li>Exhibit binders</li><li>Metadata scrub</li>
+    <li>Sensitive-info scanner</li><li>$0 forever</li><li>No account</li><li>No cloud</li>
+  </ul>
+
+  <div class="marquee" aria-hidden="true">
+    <div class="track" id="track">
+      <div class="copy">
+        <span class="chip">True redaction</span><span class="sep"></span>
+        <span class="chip">Bates numbering</span><span class="sep"></span>
+        <span class="chip">OCR — fully offline</span><span class="sep"></span>
+        <span class="chip">Prepare for filing</span><span class="sep"></span>
+        <span class="chip">Exhibit binders</span><span class="sep"></span>
+        <span class="chip">Metadata scrub</span><span class="sep"></span>
+        <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
+        <span class="chip">$0 forever</span><span class="sep"></span>
+        <span class="chip">No account</span><span class="sep"></span>
+        <span class="chip">No cloud</span><span class="sep"></span>
+      </div>
+      <div class="copy">
+        <span class="chip">True redaction</span><span class="sep"></span>
+        <span class="chip">Bates numbering</span><span class="sep"></span>
+        <span class="chip">OCR — fully offline</span><span class="sep"></span>
+        <span class="chip">Prepare for filing</span><span class="sep"></span>
+        <span class="chip">Exhibit binders</span><span class="sep"></span>
+        <span class="chip">Metadata scrub</span><span class="sep"></span>
+        <span class="chip">Sensitive-info scanner</span><span class="sep"></span>
+        <span class="chip">$0 forever</span><span class="sep"></span>
+        <span class="chip">No account</span><span class="sep"></span>
+        <span class="chip">No cloud</span><span class="sep"></span>
+      </div>
+    </div>
+  </div>
+
+  <template id="sun-tpl">
+    <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <g id="rays">
+        <path d="M141.80,95.91 L191.56,91.03 L191.00,86.48 L141.54,93.83 Z" fill="var(--identity-amber)"/>
+        <path d="M139.67,86.20 L186.89,69.77 L185.35,65.66 L138.96,84.32 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M135.70,77.87 L178.19,51.52 L173.27,44.36 L133.45,74.60 Z" fill="var(--identity-amber)"/>
+        <path d="M129.10,69.71 L163.74,33.66 L158.28,28.81 L126.61,67.50 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M120.04,63.09 L143.90,19.15 L141.04,17.66 L118.74,62.41 Z" fill="var(--identity-amber)"/>
+        <path d="M111.15,59.51 L124.42,11.30 L120.59,10.33 L109.40,59.07 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M101.60,58.03 L103.51,8.07 L97.30,8.04 L98.77,58.02 Z" fill="var(--identity-amber)"/>
+        <path d="M91.60,58.85 L81.61,9.86 L75.25,11.39 L88.70,59.55 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M81.98,62.06 L60.52,16.90 L54.65,19.95 L79.30,63.46 Z" fill="var(--identity-amber)"/>
+        <path d="M73.28,67.59 L41.48,29.01 L36.06,33.85 L70.81,69.80 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M65.83,75.57 L25.16,46.49 L23.04,49.59 L64.87,76.98 Z" fill="var(--identity-amber)"/>
+        <path d="M61.18,83.98 L14.96,64.90 L12.93,70.28 L60.25,86.43 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M58.45,93.88 L8.98,86.59 L8.55,89.97 L58.25,95.42 Z" fill="var(--identity-amber)"/>
+        <path d="M58.17,103.78 L8.37,108.27 L9.11,114.23 L58.51,106.49 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M60.29,113.69 L13.03,129.99 L14.69,134.44 L61.05,115.72 Z" fill="var(--identity-amber)"/>
+        <path d="M65.05,123.29 L23.45,151.03 L25.62,154.14 L66.04,124.72 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M71.49,130.84 L37.54,167.55 L40.07,169.81 L72.64,131.87 Z" fill="var(--identity-amber)"/>
+        <path d="M79.38,136.59 L54.84,180.15 L59.22,182.47 L81.38,137.65 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M88.61,140.43 L75.04,188.55 L80.01,189.80 L90.88,141.00 Z" fill="var(--identity-amber)"/>
+        <path d="M99.04,141.99 L97.91,191.98 L101.78,191.98 L100.81,141.99 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M108.48,141.14 L118.57,190.11 L124.21,188.76 L111.05,140.52 Z" fill="var(--identity-amber)"/>
+        <path d="M117.63,138.12 L138.62,183.50 L145.79,179.80 L120.90,136.43 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M127.33,131.89 L159.86,169.86 L162.36,167.64 L128.47,130.88 Z" fill="var(--identity-amber)"/>
+        <path d="M133.58,125.22 L173.56,155.25 L177.22,150.01 L135.25,122.83 Z" fill="var(--identity-amber-bright)"/>
+        <path d="M138.51,116.77 L184.35,136.73 L187.30,129.02 L139.86,113.25 Z" fill="var(--identity-amber)"/>
+        <path d="M141.49,106.53 L190.88,114.30 L191.59,108.64 L141.81,103.94 Z" fill="var(--identity-amber-bright)"/>
+      </g>
+      <g id="sun-ring"><circle cx="100" cy="100" r="42" fill="none" stroke="var(--gold-deep)" stroke-width="7"/></g>
+    </svg>
+  </template>
+
+<script>
+(function(){
+  // Constant apparent scroll speed (px/s), derived from the original single-copy
+  // width (~2273px) travelling in 34s — kept so the fix doesn't change the feel on
+  // the viewport sizes that already worked.
+  var SPEED = 67;
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var track = document.getElementById('track');
+  if(!track) return;
+  var copies = [].slice.call(track.children);
+  var originalUnits = copies.length === 2 ? [].slice.call(copies[0].children) : [];
+
+  // Guarantee each of the two copies is at least as wide as the viewport (plus a
+  // safety margin). translateX(-50%) only wraps invisibly if the track is exactly
+  // two IDENTICAL copies — so any padding gets appended to both copies in lockstep,
+  // never breaking that equality. Without this, a single copy shorter than the
+  // viewport runs out of chips before the loop point, showing a blank gap and a
+  // visible jump when it resets.
+  function ensureWidth(){
+    if(copies.length !== 2 || !originalUnits.length) return;
+    var target = Math.max(innerWidth, document.documentElement.clientWidth) * 1.2;
+    var guard = 0;
+    while(copies[0].getBoundingClientRect().width < target && guard < 24){
+      copies.forEach(function(copy){
+        originalUnits.forEach(function(node){ copy.appendChild(node.cloneNode(true)); });
+      });
+      guard++;
+    }
+    if(!reduce){
+      var copyWidth = copies[0].getBoundingClientRect().width;
+      var dur = Math.max(8, copyWidth / SPEED);
+      track.style.animationDuration = dur + 's';
+    }
+  }
+
+  ensureWidth();
+
+  var tpl = document.getElementById('sun-tpl');
+  if(tpl){
+    document.querySelectorAll('.sep').forEach(function(el){
+      if(!el.firstChild) el.appendChild(tpl.content.cloneNode(true));
+    });
+  }
+
+  var resizeTimer;
+  addEventListener('resize', function(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(ensureWidth, 200);
+  }, {passive:true});
+})();
+</script>
+</body></html>

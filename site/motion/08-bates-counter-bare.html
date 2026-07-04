@@ -1,0 +1,111 @@
+<!doctype html>
+<!-- bates-counter (bare) — chrome-stripped primitive for direct landing-page embedding.
+     Core element only: the fanned page stack picking up corner stamps + the rolling
+     RAIO_000... odometer. No card shell, header, or footer. Transparent background,
+     uniform 360x300 canvas to match the other bare primitives. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · Bates numbering (bare)</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --text-muted:#5A6F8A;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --border:#D4DFEE;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:grid;place-items:center;
+  background:transparent;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+.frame{position:relative;width:360px;height:300px;display:grid;place-items:center}
+.stage{position:relative;width:320px;height:200px;display:flex;align-items:center;justify-content:center;gap:22px}
+
+.stack{position:relative;width:96px;height:120px;flex:none}
+.pg{position:absolute;width:78px;height:100px;background:#fff;border:1px solid var(--border);border-radius:3px;
+  box-shadow:0 10px 22px -10px rgba(11,26,46,.35)}
+.pg:nth-child(1){top:16px;left:0;transform:rotate(-7deg)}
+.pg:nth-child(2){top:9px;left:8px;transform:rotate(-2deg)}
+.pg:nth-child(3){top:3px;left:16px;transform:rotate(3deg)}
+.pg:nth-child(4){top:0;left:24px;transform:rotate(7deg);z-index:2}
+.pg .stamp{position:absolute;right:4px;bottom:4px;font:700 5.5px ui-monospace,monospace;color:var(--gold-deep);
+  background:#fff;border:1px solid var(--gold);border-radius:3px;padding:1.5px 3px;opacity:0;transform:scale(.5);
+  animation:stampPulse 9.6s var(--ease-out) infinite}
+.pg:nth-child(1) .stamp{animation-delay:0s}
+.pg:nth-child(2) .stamp{animation-delay:1.9s}
+.pg:nth-child(3) .stamp{animation-delay:3.6s}
+.pg:nth-child(4) .stamp{animation-delay:5.4s}
+@keyframes stampPulse{
+  0%{opacity:0;transform:scale(.5)}
+  4%{opacity:1;transform:scale(1.15)}
+  8%{transform:scale(1)}
+  90%{opacity:1;transform:scale(1)}
+  96%{opacity:0;transform:scale(.6)}
+  100%{opacity:0;transform:scale(.5)}
+}
+
+.odo{position:relative;background:#fff;border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 14px 30px -14px rgba(11,26,46,.35);padding:14px 14px;z-index:3;flex:none}
+.odo .row{display:flex;align-items:center;font:700 19px ui-monospace,monospace;color:var(--navy-deep);letter-spacing:.5px;white-space:nowrap}
+.odo .prefix{color:var(--text-muted);margin-right:1px}
+.odo .zeros{color:var(--navy-deep)}
+.wheel{width:13px;height:25px;overflow:hidden;position:relative;display:inline-block;vertical-align:top}
+.wheel .strip{position:absolute;left:0;top:0;width:100%}
+.wheel .strip span{display:block;height:25px;line-height:25px;text-align:center}
+.wheel-h .strip{animation:hundredsRoll 9.6s var(--ease-out) infinite}
+.wheel-t .strip{animation:tensRoll 9.6s linear infinite}
+.wheel-o .strip{animation:onesRoll 9.6s linear infinite}
+@keyframes hundredsRoll{
+  0%{transform:translateY(0);animation-timing-function:steps(5,end)}
+  80%{transform:translateY(-125px);animation-timing-function:steps(1,end)}
+  92%{transform:translateY(-125px);animation-timing-function:steps(1,end)}
+  100%{transform:translateY(0)}
+}
+@keyframes tensRoll{
+  0%{transform:translateY(0)}
+  80%{transform:translateY(-250px);animation-timing-function:steps(1,end)}
+  92%{transform:translateY(-250px);animation-timing-function:steps(1,end)}
+  100%{transform:translateY(0)}
+}
+@keyframes onesRoll{
+  0%{transform:translateY(0)}
+  80%{transform:translateY(-500px);animation-timing-function:steps(1,end)}
+  92%{transform:translateY(-500px);animation-timing-function:steps(1,end)}
+  100%{transform:translateY(0)}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .wheel-h .strip{transform:translateY(-125px)}
+  .wheel-t .strip{transform:translateY(0)}
+  .wheel-o .strip{transform:translateY(0)}
+  .pg .stamp{opacity:1;transform:none}
+}
+</style></head>
+<body>
+  <div class="frame">
+    <div class="stage">
+      <div class="stack">
+        <div class="pg"><span class="stamp">RAIO</span></div>
+        <div class="pg"><span class="stamp">RAIO</span></div>
+        <div class="pg"><span class="stamp">RAIO</span></div>
+        <div class="pg"><span class="stamp">RAIO</span></div>
+      </div>
+      <div class="odo">
+        <div class="row">
+          <span class="prefix">RAIO_</span><span class="zeros">000</span><span
+          class="wheel wheel-h"><span class="strip"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></span></span><span
+          class="wheel wheel-t"><span class="strip"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>0</span></span></span><span
+          class="wheel wheel-o"><span class="strip"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>0</span></span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+<script>/* fit-to-width: scale the fixed 360px demo down so it never clips in a narrow (mobile) cell */
+(function(){var f=document.querySelector('.frame');if(!f)return;f.style.transformOrigin='center center';
+function fit(){var w=document.documentElement.clientWidth;f.style.transform='scale('+Math.min(1,(w/360)).toFixed(3)+')';}
+addEventListener('resize',fit,{passive:true});fit();})();</script>
+</body></html>

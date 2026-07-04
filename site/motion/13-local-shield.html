@@ -1,0 +1,167 @@
+<!doctype html>
+<!-- local-shield — "It never leaves your computer." A document sits on a small machine inside a
+     calm perimeter ring. Upload attempts launch outward toward a faint distant cloud, hit the
+     perimeter, and dissolve back — over and over, without alarm. Placement: privacy/local-first
+     feature panel. Background: navy dawn. Loops seamlessly. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · local-shield</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;overflow:hidden;
+  background:radial-gradient(130% 100% at 50% 30%,#173259 0%,var(--navy-deep) 55%,#060f1b 100%);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+
+.scene{position:relative;width:min(360px,86vmin);aspect-ratio:1}
+
+/* faint warm sun-glow behind the whole scene */
+.warm-glow{position:absolute;inset:0;margin:auto;width:72%;aspect-ratio:1;border-radius:50%;
+  background:radial-gradient(circle,rgba(245,185,66,.22),rgba(245,185,66,.05) 45%,transparent 72%);
+  filter:blur(10px);animation:glowbreathe 7s ease-in-out infinite}
+@keyframes glowbreathe{0%,100%{opacity:.65;transform:scale(.95)}50%{opacity:1;transform:scale(1.05)}}
+
+/* perimeter — the boundary of "your computer" */
+.ring-wrap{position:absolute;inset:0;margin:auto;width:64%;aspect-ratio:1;animation:breathe 5.2s ease-in-out infinite}
+.ring-wrap svg{width:100%;height:100%}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.035);opacity:.85}}
+
+/* the machine + its document */
+.machine{position:absolute;top:50%;left:50%;translate:-50% -50%;display:flex;flex-direction:column;align-items:center;z-index:2}
+.doc{width:32px;height:32px;color:var(--gold);margin-bottom:-9px;position:relative;z-index:2;
+  filter:drop-shadow(0 5px 14px rgba(245,185,66,.55))}
+.laptop{width:94px;height:60px;color:rgba(226,238,250,.85);position:relative;z-index:1}
+
+/* the distant, faint cloud every attempt is reaching for */
+.cloud-wrap{position:absolute;top:2%;left:60%;opacity:.34;animation:cloudbob 6s ease-in-out infinite}
+.cloud-wrap svg{width:40px;height:40px;color:rgba(226,238,250,.8)}
+@keyframes cloudbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+
+/* arrows: each launches from the document, reaches the perimeter, and bounces back to dissolve */
+.arrow{position:absolute;top:50%;left:50%;width:20px;height:20px;margin:-10px 0 0 -10px;z-index:3}
+.arrow svg{width:100%;height:100%;color:var(--gold-pale);filter:drop-shadow(0 2px 8px rgba(245,185,66,.5))}
+
+@keyframes arrowA{
+  0%,2%{opacity:0;transform:translate(0,-10px) scale(.6) rotate(0)}
+  6%{opacity:1;transform:translate(16px,-16px) scale(.9) rotate(0)}
+  16%{opacity:1;transform:translate(80px,-80px) scale(1.14) rotate(0)}
+  18%{opacity:1;transform:translate(64px,-64px) scale(.9) rotate(24deg)}
+  26%{opacity:.3;transform:translate(24px,-24px) scale(.75) rotate(46deg)}
+  30%,100%{opacity:0;transform:translate(8px,-8px) scale(.6) rotate(46deg)}
+}
+@keyframes arrowB{
+  0%,35%{opacity:0;transform:translate(0,-10px) scale(.6) rotate(0)}
+  39%{opacity:1;transform:translate(0,-20px) scale(.9) rotate(0)}
+  49%{opacity:1;transform:translate(0,-108px) scale(1.14) rotate(0)}
+  51%{opacity:1;transform:translate(0,-86px) scale(.9) rotate(24deg)}
+  59%{opacity:.3;transform:translate(0,-32px) scale(.75) rotate(46deg)}
+  63%,100%{opacity:0;transform:translate(0,-10px) scale(.6) rotate(46deg)}
+}
+@keyframes arrowC{
+  0%,68%{opacity:0;transform:translate(0,-10px) scale(.6) rotate(0)}
+  72%{opacity:1;transform:translate(-16px,-16px) scale(.9) rotate(0)}
+  82%{opacity:1;transform:translate(-80px,-80px) scale(1.14) rotate(0)}
+  84%{opacity:1;transform:translate(-64px,-64px) scale(.9) rotate(-24deg)}
+  92%{opacity:.3;transform:translate(-24px,-24px) scale(.75) rotate(-46deg)}
+  96%,100%{opacity:0;transform:translate(-8px,-8px) scale(.6) rotate(-46deg)}
+}
+.arrow-a{animation:arrowA 9s var(--ease-out) infinite}
+.arrow-b{animation:arrowB 9s var(--ease-out) infinite}
+.arrow-c{animation:arrowC 9s var(--ease-out) infinite}
+
+/* impact ripples where each attempt hits the perimeter */
+.ripple{position:absolute;top:50%;left:50%;width:16px;height:16px;margin:-8px 0 0 -8px;
+  border:2px solid var(--accent);border-radius:50%;opacity:0;z-index:2}
+@keyframes rippleA{
+  0%,15%{opacity:0;transform:translate(80px,-80px) scale(.4)}
+  17%{opacity:.85;transform:translate(80px,-80px) scale(1.35)}
+  23%,100%{opacity:0;transform:translate(80px,-80px) scale(1.9)}
+}
+@keyframes rippleB{
+  0%,48%{opacity:0;transform:translate(0,-108px) scale(.4)}
+  50%{opacity:.85;transform:translate(0,-108px) scale(1.35)}
+  56%,100%{opacity:0;transform:translate(0,-108px) scale(1.9)}
+}
+@keyframes rippleC{
+  0%,81%{opacity:0;transform:translate(-80px,-80px) scale(.4)}
+  83%{opacity:.85;transform:translate(-80px,-80px) scale(1.35)}
+  89%,100%{opacity:0;transform:translate(-80px,-80px) scale(1.9)}
+}
+.ripple-a{animation:rippleA 9s var(--ease-out) infinite}
+.ripple-b{animation:rippleB 9s var(--ease-out) infinite}
+.ripple-c{animation:rippleC 9s var(--ease-out) infinite}
+
+.caption{font-size:12.5px;letter-spacing:.15px;text-align:center;color:rgba(226,238,250,.72)}
+.caption b{color:rgba(255,255,255,.92);font-weight:600}
+.caption .dot{color:var(--gold-deep);margin:0 4px}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .ring-wrap{opacity:.7;transform:none}
+  .warm-glow{opacity:.8;transform:none}
+  .cloud-wrap{transform:none}
+  .arrow,.ripple{display:none!important}
+}
+</style></head>
+<body>
+  <div class="scene" role="img" aria-label="A document stays inside a protective perimeter around a local machine while repeated upload attempts toward a distant cloud are stopped at the boundary and fade away">
+    <div class="warm-glow"></div>
+
+    <div class="ring-wrap">
+      <svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="120" cy="120" r="106" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="6 8"/>
+      </svg>
+    </div>
+
+    <div class="cloud-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h.79a4.5 4.5 0 1 1 0 9Z"/>
+      </svg>
+    </div>
+
+    <div class="machine">
+      <svg class="doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>
+        <path d="M14 2v4a2 2 0 0 0 2 2h4"/>
+        <path d="M8 13h8M8 17h8"/>
+      </svg>
+      <svg class="laptop" viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="10" y="3" width="44" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2.2"/>
+        <path d="M2 39 L13 33 H51 L62 39 Z" fill="currentColor" opacity=".9"/>
+        <rect x="1" y="39" width="62" height="3.5" rx="1.75" fill="currentColor"/>
+      </svg>
+    </div>
+
+    <div class="arrow arrow-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg></div>
+    <div class="arrow arrow-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></div>
+    <div class="arrow arrow-c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 17-10-10"/><path d="M17 7H7v10"/></svg></div>
+
+    <div class="ripple ripple-a"></div>
+    <div class="ripple ripple-b"></div>
+    <div class="ripple ripple-c"></div>
+  </div>
+
+  <div class="caption"><b>No upload</b> <span class="dot">·</span> no account <span class="dot">·</span> no telemetry</div>
+</body></html>

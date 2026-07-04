@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- ocr-scanline-v2 — iteration of 11-ocr-scanline.html. Same feature-card shell and gold
+     scanline sweep, but the payoff is now REAL, LEGIBLE TEXT rather than grey placeholder
+     bars: a small invoice document with a heading, a couple of line items, and a closing
+     line. Every row starts blurred + low-contrast (raw-scan look) and snaps to crisp, dark,
+     selectable-looking text (with a faint accent highlight on two lines) exactly as the
+     gold line passes over it — then the whole page reverts to blur and the loop repeats.
+     Placement: marketing feature grid — one drop-in card among several (~360-420px wide).
+     Background: transparent card; shown here on a light bg-alt demo canvas. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · make searchable (v2)</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  --identity-amber:var(--gold-deep);
+  --identity-amber-bright:var(--gold);
+  --primary-deep:var(--navy-deep);
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  --border:#D4DFEE;
+  --well:#E7EEF7;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:grid;place-items:center;padding:32px;
+  background:var(--bg-alt);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+.card{
+  width:100%;max-width:400px;min-width:320px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-window);
+  box-shadow:0 30px 60px -30px rgba(11,26,46,.35),0 2px 10px rgba(11,26,46,.06);
+  overflow:hidden;
+}
+.accent-bar{height:3px;background:linear-gradient(90deg,var(--navy),var(--primary),var(--accent))}
+.card-head{display:flex;align-items:center;gap:10px;padding:16px 18px 10px}
+.card-head .icon{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--gold),var(--gold-deep));box-shadow:0 6px 14px -6px rgba(224,147,46,.6)}
+.card-head .icon svg{width:16px;height:16px}
+.card-head .t b{display:block;font-size:14.5px;color:var(--text-primary);letter-spacing:-.1px}
+.card-head .t span{display:block;font-size:11px;color:var(--text-muted);margin-top:1px}
+
+.stage{position:relative;margin:2px 18px 0;height:216px;background:var(--well);border:1px solid var(--border);
+  border-radius:var(--radius-window);display:grid;place-items:center;overflow:hidden}
+
+.page{position:relative;width:212px;height:198px;background:#fff;border-radius:4px;
+  box-shadow:0 16px 34px -16px rgba(11,26,46,.4);padding:17px 19px;overflow:hidden}
+
+.scanline{position:absolute;left:0;right:0;height:14px;top:-14px;opacity:0;
+  background:linear-gradient(180deg,transparent,rgba(245,185,66,.9),transparent);
+  animation:scanMove 9.6s var(--ease-out) infinite;z-index:5;pointer-events:none}
+@keyframes scanMove{
+  0%,5%{top:-14px;opacity:0}
+  8%{opacity:1}
+  68%{top:100%;opacity:1}
+  72%,100%{top:100%;opacity:0}
+}
+
+/* every document line starts blurred + muted (raw scan) and snaps to crisp + dark exactly
+   when the scanline passes it, via a real CSS blur filter — not a swapped placeholder. */
+.line{position:relative;filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7;
+  font-family:ui-monospace,monospace;white-space:nowrap}
+.line.head{font:700 10.5px/1.3 ui-monospace,monospace;letter-spacing:.4px;margin:0 0 8px}
+.line.sub{font:500 8.5px/1.3 ui-monospace,monospace;margin:0 0 11px;color:var(--text-muted)}
+.line.item{display:flex;justify-content:space-between;gap:14px;font:500 8.5px/1.3 ui-monospace,monospace;
+  margin:6px 0;padding:2px 4px;border-radius:3px}
+.line.total{display:flex;justify-content:space-between;gap:14px;font:700 8.5px/1.3 ui-monospace,monospace;
+  margin:9px 0 6px;padding:5px 4px 2px;border-top:1px dashed var(--border)}
+.line.note{font:500 7.8px/1.3 ui-monospace,monospace;margin-top:9px;color:var(--text-muted)}
+
+.hl{position:absolute;inset:-1px -4px;background:rgba(74,173,224,.22);border-radius:4px;z-index:-1;opacity:0}
+.line span{position:relative;z-index:1}
+
+.line.r1{animation:reveal1 9.6s var(--ease-out) infinite}
+.line.r2{animation:reveal2 9.6s var(--ease-out) infinite}
+.line.r3{animation:reveal3 9.6s var(--ease-out) infinite}
+.line.r4{animation:reveal4 9.6s var(--ease-out) infinite}
+.line.r5{animation:reveal5 9.6s var(--ease-out) infinite}
+.line.r6{animation:reveal6 9.6s var(--ease-out) infinite}
+.line.r7{animation:reveal7 9.6s var(--ease-out) infinite}
+.r3 .hl{animation:hl3 9.6s var(--ease-out) infinite}
+.r5 .hl{animation:hl5 9.6s var(--ease-out) infinite}
+.r6 .hl{animation:hl6 9.6s var(--ease-out) infinite}
+
+@keyframes reveal1{
+  0%,10%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  14%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal2{
+  0%,18%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  22%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal3{
+  0%,26%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  30%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal4{
+  0%,34%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  38%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal5{
+  0%,42%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  46%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal6{
+  0%,50%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  54%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes reveal7{
+  0%,58%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+  62%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  90%{filter:blur(0) contrast(1);color:var(--navy-deep);opacity:1}
+  96%,100%{filter:blur(3.4px) contrast(.85);color:var(--text-muted);opacity:.7}
+}
+@keyframes hl3{0%,26%{opacity:0}30%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+@keyframes hl5{0%,42%{opacity:0}46%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+@keyframes hl6{0%,50%{opacity:0}54%{opacity:1}90%{opacity:1}96%,100%{opacity:0}}
+
+.status{display:flex;align-items:center;gap:7px;padding:10px 18px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-muted)}
+.status .live{width:6px;height:6px;border-radius:50%;background:#63c86b;flex:none;animation:ping 2s infinite}
+.status b{color:var(--navy-deep)}
+.status .right{margin-left:auto;font-weight:700;color:var(--gold-deep)}
+@keyframes ping{0%{box-shadow:0 0 0 0 rgba(99,200,107,.5)}70%{box-shadow:0 0 0 6px rgba(99,200,107,0)}100%{box-shadow:0 0 0 0 rgba(99,200,107,0)}}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .scanline{opacity:0}
+  .line{filter:blur(0) contrast(1)!important;color:var(--navy-deep)!important;opacity:1!important}
+  .r3 .hl,.r5 .hl,.r6 .hl{opacity:1!important}
+}
+</style></head>
+<body>
+  <div class="card">
+    <div class="accent-bar"></div>
+    <div class="card-head">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 3h9l4 4v3"/><path d="M6 3v18h6"/><circle cx="16" cy="16" r="4"/><path d="m19.5 19.5 2 2"/>
+      </svg></span>
+      <span class="t"><b>Make Searchable</b><span>OCR, fully offline</span></span>
+    </div>
+    <div class="stage">
+      <div class="page">
+        <span class="scanline"></span>
+        <div class="line head r1">GRANITE REPORTING CO.</div>
+        <div class="line sub r2">Invoice #1042 &middot; Due Jul 15</div>
+        <div class="line item r3"><span class="hl"></span><span>Deposition transcript</span><span>$420.00</span></div>
+        <div class="line item r4"><span>Expedited delivery</span><span>$75.00</span></div>
+        <div class="line item r5"><span class="hl"></span><span>Exhibit binder prep</span><span>$60.00</span></div>
+        <div class="line total r6"><span class="hl"></span><span>Balance due</span><span>$555.00</span></div>
+        <div class="line note r7">Thank you for your business.</div>
+      </div>
+    </div>
+    <div class="status"><span class="live"></span><span><b>Runs on your machine</b> &middot; no upload</span><span class="right">Zero telemetry</span></div>
+  </div>
+</body></html>

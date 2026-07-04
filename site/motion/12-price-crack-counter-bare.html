@@ -1,0 +1,218 @@
+<!doctype html>
+<!-- price-crack-counter — BARE variant of 12-price-crack-counter.html, for embedding
+     directly on a dark navy page band (not inside its own boxed scene). Strips the
+     full-scene navy radial background and the standalone rotating-sun corner accent
+     (that accent existed only to fill dead space in the boxed version — on a shared
+     band it just duplicates the page's own brand marks and reads as visual noise).
+     Keeps only the core beat: the subscription price ratchets $9 → $29 → $79 → $149 →
+     $299/mo, accelerating, "auto-renews" ticking underneath — then the tag cracks and
+     shatters, collapsing to the glowing gold "$0 forever" + centered "no account · no
+     cloud · no nag screens" line. Background: transparent. Loops with a held beat
+     before resetting. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · price-crack (climbing counter) — bare</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --navy:#132D52;
+  --primary:#1D4E8F;
+  --accent:#4AADE0;
+  --surface:#F7FAFE;
+  --bg-alt:#EDF4FB;
+  --text-primary:#0B1A2E;
+  --text-body:#2D3E56;
+  --text-muted:#5A6F8A;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --gold-pale:#FFE7B3;
+  --radius-window:12px;
+  --shadow-page:0 24px 60px -18px rgba(11,26,46,.55);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.65,0,.35,1);
+  --border:#D4DFEE;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:grid;place-items:center;overflow:hidden;
+  background:transparent;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+
+.stage{position:relative;width:min(480px,92vw);height:400px}
+
+.tag-stage{position:absolute;inset:0}
+.tag-box{position:absolute;top:42%;left:50%;translate:-50% -50%;width:236px;height:176px}
+
+/* the shared subscription tag card, duplicated into whole + two clipped halves */
+.tagcard{
+  width:100%;height:100%;border-radius:14px;background:linear-gradient(160deg,#ffffff,var(--bg-alt));
+  border:1px solid var(--border);box-shadow:0 22px 55px -18px rgba(2,8,16,.6);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;
+}
+.tagcard-head{display:flex;align-items:center;gap:5px;font-size:9.5px;font-weight:700;letter-spacing:.5px;
+  text-transform:uppercase;color:var(--text-muted)}
+.tagcard-head svg{width:11px;height:11px;color:var(--text-muted)}
+.tagcard-sub{font-size:10px;color:var(--text-muted)}
+
+/* the climbing price reel — a slot-machine style window; only the number ratchets */
+.price-wheel{position:relative;width:172px;height:44px;overflow:hidden}
+.reel{position:absolute;left:0;top:0;width:100%;animation:reelClimb 12s var(--ease-out) infinite}
+.reel .v{height:44px;display:flex;align-items:baseline;justify-content:center;gap:3px}
+.reel .v .amt{font-size:32px;font-weight:800;color:var(--navy-deep);line-height:1;white-space:nowrap}
+.reel .v .per{font-size:13px;font-weight:600;color:var(--text-muted)}
+
+@keyframes reelClimb{
+  0%,13%{transform:translateY(0)}
+  13.6%,19%{transform:translateY(-44px)}
+  19.6%,24%{transform:translateY(-88px)}
+  24.6%,28.5%{transform:translateY(-132px)}
+  29%,36%{transform:translateY(-176px)}
+  100%{transform:translateY(-176px)}
+}
+
+/* static "peak value" price display used inside the two shattered halves */
+.peakcard-price{font-size:32px;font-weight:800;color:var(--navy-deep);line-height:1}
+.peakcard-price .per{font-size:13px;font-weight:600;color:var(--text-muted);margin-left:3px}
+
+.crack{position:absolute;inset:0;width:100%;height:100%;opacity:0;overflow:visible}
+.crack path{filter:drop-shadow(0 0 5px rgba(245,185,66,.8))}
+
+.tag-half{position:absolute;top:42%;left:50%;translate:-50% -50%;width:236px;height:176px;opacity:0}
+.tag-half-l{clip-path:polygon(0% 0%,50% 0%,44% 20%,58% 40%,40% 62%,55% 82%,46% 100%,0% 100%)}
+.tag-half-r{clip-path:polygon(100% 0%,50% 0%,44% 20%,58% 40%,40% 62%,55% 82%,46% 100%,100% 100%)}
+
+/* the reveal: big gold "$0 forever" */
+.reveal{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0}
+.reveal-glow{position:absolute;width:270px;height:270px;border-radius:50%;
+  background:radial-gradient(circle,rgba(245,185,66,.45),rgba(245,185,66,.08) 46%,transparent 72%);filter:blur(6px)}
+.reveal-amt{position:relative;font-size:66px;font-weight:800;line-height:1;
+  background:linear-gradient(160deg,var(--gold-pale),var(--gold) 45%,var(--gold-deep));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.reveal-sub{position:relative;margin-top:2px;font-size:12.5px;font-weight:700;letter-spacing:3px;
+  text-transform:uppercase;color:var(--gold-pale)}
+
+/* the stamped payoff line — centering lives ONLY in `transform` (no base `translate`
+   property), same fix carried over from price-crack-v2. */
+.stamps{
+  position:absolute;left:50%;bottom:8%;opacity:0;white-space:nowrap;
+  border:1.5px dashed rgba(245,185,66,.55);border-radius:9px;padding:7px 15px;
+  font-size:11.5px;font-weight:700;letter-spacing:.2px;color:var(--gold-pale);
+  background:rgba(245,185,66,.07);
+}
+.stamps .dot{color:var(--gold-deep);margin:0 3px}
+
+/* ---------- timeline (12s, seamless — everything is opacity:0 at 0% and 100%) ---------- */
+@keyframes tagWhole{
+  0%,1.5%{opacity:0;transform:scale(.92) rotate(0)}
+  4%{opacity:1;transform:scale(1.03) rotate(0)}
+  6%,36%{opacity:1;transform:scale(1) rotate(0)}
+  39%{opacity:1;transform:scale(1) rotate(-2deg)}
+  41%{transform:scale(1) rotate(2.3deg)}
+  43%{opacity:1;transform:scale(1) rotate(-1deg)}
+  44.5%,100%{opacity:0;transform:scale(1) rotate(0)}
+}
+.tag-whole{animation:tagWhole 12s var(--ease-out) infinite}
+
+@keyframes crackDraw{
+  0%,37%{opacity:0;stroke-dashoffset:100}
+  38%{opacity:1;stroke-dashoffset:100}
+  44%{opacity:1;stroke-dashoffset:0}
+  46%,100%{opacity:0;stroke-dashoffset:0}
+}
+.crack path{stroke-dasharray:100;animation:crackDraw 12s var(--ease-out) infinite}
+
+@keyframes flyHalfL{
+  0%,44%{opacity:0;transform:translate(0,0) rotate(0)}
+  45%{opacity:1;transform:translate(0,0) rotate(0)}
+  50%{opacity:1;transform:translate(-24px,10px) rotate(-13deg)}
+  58%,100%{opacity:0;transform:translate(-72px,96px) rotate(-32deg)}
+}
+@keyframes flyHalfR{
+  0%,44%{opacity:0;transform:translate(0,0) rotate(0)}
+  45%{opacity:1;transform:translate(0,0) rotate(0)}
+  50%{opacity:1;transform:translate(22px,13px) rotate(11deg)}
+  58%,100%{opacity:0;transform:translate(68px,102px) rotate(28deg)}
+}
+.tag-half-l{animation:flyHalfL 12s var(--ease-out) infinite}
+.tag-half-r{animation:flyHalfR 12s var(--ease-out) infinite}
+
+@keyframes revealIn{
+  0%,54%{opacity:0;transform:scale(.7)}
+  61%{opacity:1;transform:scale(1.08)}
+  65%,92%{opacity:1;transform:scale(1)}
+  97%,100%{opacity:0;transform:scale(1)}
+}
+.reveal{animation:revealIn 12s var(--ease-out) infinite}
+
+@keyframes stampIn{
+  0%,66%{opacity:0;transform:translate(-50%,0) scale(1.5) rotate(-4deg)}
+  70%{opacity:1;transform:translate(-50%,0) scale(.94) rotate(1.5deg)}
+  73%,92%{opacity:1;transform:translate(-50%,0) scale(1) rotate(-1deg)}
+  97%,100%{opacity:0;transform:translate(-50%,0) scale(1) rotate(-1deg)}
+}
+.stamps{animation:stampIn 12s var(--ease-out) infinite}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .tag-whole,.crack,.tag-half,.reel{display:none!important}
+  .reveal{opacity:1!important;transform:none!important}
+  .stamps{opacity:1!important;transform:translate(-50%,0) rotate(-1deg)!important}
+}
+</style></head>
+<body>
+  <div class="stage" role="img" aria-label="A subscription price ratchets from $9 to $299 a month, accelerating, then cracks apart to reveal Raio costs $0, forever, with no account, cloud, or nag screens">
+    <div class="tag-stage">
+      <div class="tag-box tag-whole">
+        <div class="tagcard">
+          <div class="tagcard-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            <span>Subscription plan</span>
+          </div>
+          <div class="price-wheel">
+            <div class="reel">
+              <div class="v"><span class="amt">$9</span><span class="per">/mo</span></div>
+              <div class="v"><span class="amt">$29</span><span class="per">/mo</span></div>
+              <div class="v"><span class="amt">$79</span><span class="per">/mo</span></div>
+              <div class="v"><span class="amt">$149</span><span class="per">/mo</span></div>
+              <div class="v"><span class="amt">$299</span><span class="per">/mo</span></div>
+            </div>
+          </div>
+          <div class="tagcard-sub">auto-renews</div>
+        </div>
+        <svg class="crack" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M50 0 L44 20 L58 40 L40 62 L55 82 L46 100" fill="none" stroke="var(--gold)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+
+      <div class="tag-half tag-half-l">
+        <div class="tagcard">
+          <div class="tagcard-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            <span>Subscription plan</span>
+          </div>
+          <div class="peakcard-price">$299<span class="per">/mo</span></div>
+          <div class="tagcard-sub">auto-renews</div>
+        </div>
+      </div>
+      <div class="tag-half tag-half-r">
+        <div class="tagcard">
+          <div class="tagcard-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            <span>Subscription plan</span>
+          </div>
+          <div class="peakcard-price">$299<span class="per">/mo</span></div>
+          <div class="tagcard-sub">auto-renews</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal">
+      <div class="reveal-glow"></div>
+      <div class="reveal-amt">$0</div>
+      <div class="reveal-sub">Forever</div>
+    </div>
+
+    <div class="stamps">no account <span class="dot">·</span> no cloud <span class="dot">·</span> no nag screens</div>
+  </div>
+</body></html>

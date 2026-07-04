@@ -16,6 +16,7 @@ export class PathPolicyError extends Error {
 export type ResolvedInput = {
   originalPath: string;
   realPath: string;
+  sizeBytes: number;
 };
 
 export type PreparedOutput = {
@@ -29,6 +30,8 @@ export type PreparedOutput = {
 export type PreparedPackageOutputDir = {
   outputPath: string;
 };
+
+export const DEFAULT_MCP_MAX_INPUT_BYTES = 52_428_800;
 
 export async function resolveInput(inputPath: string): Promise<ResolvedInput> {
   assertAbsolutePath(inputPath, "input");
@@ -55,7 +58,15 @@ export async function resolveInput(inputPath: string): Promise<ResolvedInput> {
     );
   }
 
-  return { originalPath: inputPath, realPath };
+  const maxInputBytes = mcpMaxInputBytes();
+  if (stats.size >= maxInputBytes) {
+    throw new PathPolicyError(
+      `Input file is too large for MCP's in-memory PDF tools: ${inputPath} (${formatBytes(stats.size)}).`,
+      `Use RaioPDF desktop's large-document workflows for this file, or choose a PDF below ${formatBytes(maxInputBytes)}.`,
+    );
+  }
+
+  return { originalPath: inputPath, realPath, sizeBytes: stats.size };
 }
 
 export async function prepareOutput(outputPath: string): Promise<PreparedOutput> {
@@ -277,6 +288,32 @@ async function removeIfExists(filePath: string): Promise<void> {
 
 function pathError(message: string, action: string, cause: unknown): PathPolicyError {
   return new PathPolicyError(message, action, { cause });
+}
+
+function mcpMaxInputBytes(): number {
+  const override = process.env.RAIOPDF_MCP_MAX_INPUT_BYTES?.trim();
+  if (!override) {
+    return DEFAULT_MCP_MAX_INPUT_BYTES;
+  }
+
+  const parsed = Number(override);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MCP_MAX_INPUT_BYTES;
+}
+
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) {
+    return `${mb.toFixed(1)} MB`;
+  }
+
+  const kb = bytes / 1024;
+  if (kb >= 1) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${bytes} B`;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

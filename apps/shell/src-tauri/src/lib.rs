@@ -14,7 +14,9 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    process,
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
@@ -290,15 +292,11 @@ fn save_pdf_copy_dialog(
     // construction, so "save over the original" is already satisfied — treat
     // it as a successful no-op (Codex review, PR #124).
     if is_same_file(&entry.path, &destination) {
+        ensure_grant_file_unchanged(&entry)?;
         return Ok(Some(saved_pdf(&destination, file_grants.inner())?));
     }
 
-    fs::copy(&entry.path, &destination).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
+    atomic_copy_grant_if_unchanged(&entry, &destination)?;
 
     Ok(Some(saved_pdf(&destination, file_grants.inner())?))
 }
@@ -357,7 +355,7 @@ fn save_pdf_dialog(
     };
 
     let path = path.into_path().map_err(|error| error.to_string())?;
-    write_pdf_bytes(&path, request.body())?;
+    write_pdf_bytes_atomic(&path, request.body())?;
 
     Ok(Some(saved_pdf(&path, file_grants.inner())?))
 }
@@ -368,19 +366,291 @@ fn save_pdf_to_path(
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
     let grant = required_header(&request, HEADER_FILE_GRANT)?;
-    let path = file_grants.resolve(&grant)?;
-    write_pdf_bytes(&path, request.body())?;
+    let entry = file_grants.resolve_entry(&grant)?;
+    write_pdf_bytes_atomic_if_unchanged(&entry, request.body())?;
 
-    saved_pdf(&path, file_grants.inner())
+    saved_pdf(&entry.path, file_grants.inner())
 }
 
-fn write_pdf_bytes(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<(), String> {
+fn write_pdf_bytes_atomic(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<(), String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = body else {
         return Err("Expected raw PDF bytes".to_string());
     };
 
-    fs::write(path, bytes)
+    atomic_write_file(path, bytes)
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
+}
+
+fn write_pdf_bytes_atomic_if_unchanged(
+    entry: &FileGrantEntry,
+    body: &tauri::ipc::InvokeBody,
+) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = body else {
+        return Err("Expected raw PDF bytes".to_string());
+    };
+
+    atomic_write_grant_if_unchanged(entry, bytes)
+}
+
+fn ensure_grant_file_unchanged(entry: &FileGrantEntry) -> Result<(), String> {
+    let snapshot = entry
+        .snapshot
+        .ok_or("This file could not be verified against its open-time snapshot — reopen it.")?;
+    let current = snapshot_file(&entry.path)
+        .map_err(|_| "This file changed on disk — reopen it.".to_string())?;
+
+    if current != snapshot {
+        return Err("This file changed on disk — reopen it.".to_string());
+    }
+
+    Ok(())
+}
+
+fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let permissions = replacement_permissions(path, None)?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())?;
+    temp.write_all(bytes)?;
+    apply_replacement_permissions(&temp, permissions)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    persist_atomic_file(temp, path)?;
+
+    sync_parent_dir(parent)
+}
+
+#[cfg(test)]
+fn atomic_copy_file(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let mut input = fs::File::open(source)?;
+    let permissions = replacement_permissions(destination, Some(source))?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())?;
+    io::copy(&mut input, temp.as_file_mut())?;
+    apply_replacement_permissions(&temp, permissions)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    persist_atomic_file(temp, destination)?;
+
+    sync_parent_dir(parent)
+}
+
+fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Result<(), String> {
+    let path = fs::canonicalize(&entry.path).map_err(|error| {
+        format!(
+            "Failed to write PDF at {}: {error}",
+            entry.path.to_string_lossy()
+        )
+    })?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let permissions = replacement_permissions(&path, None)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    temp.write_all(bytes)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    apply_replacement_permissions(&temp, permissions)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    temp.flush()
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+
+    let backup = backup_path_for(&path);
+    fs::rename(&path, &backup)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+
+    let result = (|| {
+        let backup_entry = FileGrantEntry {
+            path: backup.clone(),
+            snapshot: entry.snapshot,
+        };
+        ensure_grant_file_unchanged(&backup_entry)?;
+        persist_atomic_file_noclobber(temp, &path)
+            .and_then(|_| sync_parent_dir(parent))
+            .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
+    })();
+
+    match result {
+        Ok(()) => {
+            fs::remove_file(&backup).map_err(|error| {
+                format!(
+                    "Failed to remove old PDF at {}: {error}",
+                    backup.to_string_lossy()
+                )
+            })?;
+            Ok(())
+        }
+        Err(error) => {
+            restore_staged_original(&backup, &path).map_err(|restore_error| {
+                format!(
+                    "{error} Original file could not be restored from {}: {restore_error}",
+                    backup.to_string_lossy()
+                )
+            })?;
+            Err(error)
+        }
+    }
+}
+
+fn atomic_copy_grant_if_unchanged(
+    entry: &FileGrantEntry,
+    destination: &Path,
+) -> Result<(), String> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let mut input = fs::File::open(&entry.path).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    apply_replacement_permissions(&temp, permissions).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.flush().map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.as_file().sync_all().map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+
+    ensure_grant_file_unchanged(entry)?;
+    persist_atomic_file(temp, destination)
+        .and_then(|_| sync_parent_dir(parent))
+        .map_err(|error| {
+            format!(
+                "Failed to save PDF copy at {}: {error}",
+                destination.to_string_lossy()
+            )
+        })
+}
+
+fn persist_atomic_file(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), std::io::Error> {
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn persist_atomic_file_noclobber(
+    temp: tempfile::NamedTempFile,
+    path: &Path,
+) -> Result<(), std::io::Error> {
+    temp.persist_noclobber(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn backup_path_for(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "document.pdf".into());
+
+    parent.join(format!(
+        ".{file_name}.{}.{}.raio-save-backup",
+        process::id(),
+        Uuid::new_v4()
+    ))
+}
+
+fn restore_staged_original(backup: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    match fs::metadata(destination) {
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination path was recreated while saving",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::rename(backup, destination)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn replacement_permissions(
+    destination: &Path,
+    source_fallback: Option<&Path>,
+) -> Result<Option<fs::Permissions>, std::io::Error> {
+    match fs::metadata(destination) {
+        Ok(metadata) => Ok(Some(metadata.permissions())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => source_fallback
+            .map(fs::metadata)
+            .transpose()
+            .map(|metadata| metadata.map(|metadata| metadata.permissions())),
+        Err(error) => Err(error),
+    }
+}
+
+fn replacement_temp_file(
+    parent: &Path,
+    permissions: Option<&fs::Permissions>,
+) -> Result<tempfile::NamedTempFile, std::io::Error> {
+    let mut builder = tempfile::Builder::new();
+    apply_default_create_permissions(&mut builder, permissions);
+    builder.tempfile_in(parent)
+}
+
+fn apply_replacement_permissions(
+    temp: &tempfile::NamedTempFile,
+    permissions: Option<fs::Permissions>,
+) -> Result<(), std::io::Error> {
+    if let Some(permissions) = permissions {
+        temp.as_file().set_permissions(permissions)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_default_create_permissions(
+    builder: &mut tempfile::Builder,
+    permissions: Option<&fs::Permissions>,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if permissions.is_none() {
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+}
+
+#[cfg(not(unix))]
+fn apply_default_create_permissions(
+    _builder: &mut tempfile::Builder,
+    _permissions: Option<&fs::Permissions>,
+) {
+}
+
+fn sync_parent_dir(parent: &Path) -> Result<(), std::io::Error> {
+    if let Ok(parent_dir) = fs::File::open(parent) {
+        let _ = parent_dir.sync_all();
+    }
+
+    Ok(())
 }
 
 fn saved_pdf(path: &Path, file_grants: &FileGrants) -> Result<SavedPdf, String> {
@@ -664,5 +934,243 @@ mod tests {
         // baseline, so ranged reads must be refused upstream.
         let entry = grants.resolve_entry(&grant).expect("entry");
         assert!(entry.snapshot.is_none());
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"old pdf bytes").expect("write original");
+
+        atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
+
+        assert_eq!(fs::read(&path).expect("read replaced"), b"new pdf bytes");
+    }
+
+    #[test]
+    fn atomic_copy_replaces_destination_without_changing_source() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.pdf");
+        let destination = dir.path().join("destination.pdf");
+        fs::write(&source, b"source pdf bytes").expect("write source");
+        fs::write(&destination, b"old destination bytes").expect("write destination");
+
+        atomic_copy_file(&source, &destination).expect("atomic copy");
+
+        assert_eq!(fs::read(&source).expect("read source"), b"source pdf bytes");
+        assert_eq!(
+            fs::read(&destination).expect("read destination"),
+            b"source pdf bytes"
+        );
+    }
+
+    #[test]
+    fn grant_copy_refuses_drift_and_leaves_destination_intact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.pdf");
+        let destination = dir.path().join("destination.pdf");
+        fs::write(&source, b"opened bytes").expect("write source");
+        fs::write(&destination, b"existing destination").expect("write destination");
+        let grants = FileGrants::default();
+        let grant = grants
+            .grant(source.clone())
+            .expect("grant should be issued");
+        fs::write(&source, b"changed externally after open").expect("external edit");
+
+        let entry = grants.resolve_entry(&grant).expect("entry");
+        let error = atomic_copy_grant_if_unchanged(&entry, &destination)
+            .expect_err("drift should be refused");
+
+        assert_eq!(error, "This file changed on disk — reopen it.");
+        assert_eq!(
+            fs::read(&destination).expect("read destination"),
+            b"existing destination"
+        );
+    }
+
+    #[test]
+    fn grant_write_replaces_unchanged_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"opened bytes").expect("write original");
+        let grants = FileGrants::default();
+        let grant = grants.grant(path.clone()).expect("grant should be issued");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+
+        atomic_write_grant_if_unchanged(&entry, b"saved bytes").expect("save unchanged grant");
+
+        assert_eq!(fs::read(&path).expect("read saved"), b"saved bytes");
+    }
+
+    #[test]
+    fn grant_write_refuses_drift_and_restores_current_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"opened bytes").expect("write original");
+        let grants = FileGrants::default();
+        let grant = grants.grant(path.clone()).expect("grant should be issued");
+        fs::write(&path, b"changed externally after open").expect("external edit");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+
+        let error = atomic_write_grant_if_unchanged(&entry, b"saved bytes")
+            .expect_err("drift should be refused");
+
+        assert_eq!(error, "This file changed on disk — reopen it.");
+        assert_eq!(
+            fs::read(&path).expect("read restored"),
+            b"changed externally after open"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grant_write_through_symlink_preserves_link_and_updates_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("target.pdf");
+        let link = dir.path().join("link.pdf");
+        fs::write(&target, b"opened target bytes").expect("write target");
+        symlink(&target, &link).expect("symlink");
+        let grants = FileGrants::default();
+        let grant = grants.grant(link.clone()).expect("grant should be issued");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+
+        atomic_write_grant_if_unchanged(&entry, b"saved target bytes")
+            .expect("save through symlink");
+
+        assert_eq!(fs::read_link(&link).expect("link preserved"), target);
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"saved target bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_respects_restrictive_umask_for_new_files() {
+        if std::env::var("RAIOPDF_UMASK_CHILD").as_deref() == Ok("1") {
+            atomic_write_respects_restrictive_umask_child();
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .env("RAIOPDF_UMASK_CHILD", "1")
+            .arg("--exact")
+            .arg("tests::atomic_write_respects_restrictive_umask_for_new_files")
+            .arg("--nocapture")
+            .output()
+            .expect("spawn umask child");
+
+        assert!(
+            output.status.success(),
+            "child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn atomic_write_respects_restrictive_umask_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        unsafe extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+
+        struct UmaskGuard(u32);
+
+        impl Drop for UmaskGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    umask(self.0);
+                }
+            }
+        }
+
+        let _guard = UmaskGuard(unsafe { umask(0o077) });
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("new.pdf");
+
+        atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_destination_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"old pdf bytes").expect("write original");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("set mode");
+
+        atomic_write_file(&path, b"new pdf bytes").expect("atomic write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_copy_preserves_existing_destination_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.pdf");
+        let destination = dir.path().join("destination.pdf");
+        fs::write(&source, b"source pdf bytes").expect("write source");
+        fs::write(&destination, b"old destination bytes").expect("write destination");
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o640)).expect("set mode");
+
+        atomic_copy_file(&source, &destination).expect("atomic copy");
+
+        let mode = fs::metadata(&destination)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_copy_uses_source_permissions_for_new_destination() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.pdf");
+        let destination = dir.path().join("destination.pdf");
+        fs::write(&source, b"source pdf bytes").expect("write source");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o640)).expect("set mode");
+
+        atomic_copy_file(&source, &destination).expect("atomic copy");
+
+        let mode = fs::metadata(&destination)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[test]
+    fn in_place_save_refuses_a_drifted_grant() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"opened bytes").expect("write original");
+        let grants = FileGrants::default();
+        let grant = grants.grant(path.clone()).expect("grant should be issued");
+        fs::write(&path, b"changed externally after open").expect("external edit");
+
+        let entry = grants
+            .resolve_entry(&grant)
+            .expect("grant should resolve to entry");
+        let error = ensure_grant_file_unchanged(&entry).expect_err("drift should be refused");
+
+        assert_eq!(error, "This file changed on disk — reopen it.");
     }
 }

@@ -4973,8 +4973,8 @@ export function App() {
       return (
         <FloatingDialog title="Sanitize" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("sanitize")}>
           <SanitizePanel
-            hasDocument={Boolean(document.bytes)}
-            available={engineBridge.available}
+            hasDocument={Boolean(document.bytes || pathOpsGrant)}
+            available={document.bytes ? engineBridge.available : pathOpsGrant !== null}
             status={sidecarStatus}
             onSanitize={sanitizeDocument}
           />
@@ -4994,8 +4994,8 @@ export function App() {
       return (
         <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("repair")}>
           <RepairPanel
-            hasSource={Boolean(repairCandidate || document.bytes)}
-            available={engineBridge.available}
+            hasSource={Boolean(repairCandidate || document.bytes || pathOpsGrant)}
+            available={repairCandidate || document.bytes ? engineBridge.available : pathOpsGrant !== null}
             candidateName={repairCandidate?.name ?? document.fileName}
             status={sidecarStatus}
             onRepair={repairDocument}

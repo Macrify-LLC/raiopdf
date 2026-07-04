@@ -397,7 +397,7 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
 });
 
-test("compresses through the mocked desktop engine from the floating dialog", async ({ page }) => {
+test("compresses through the mocked desktop engine from the inline Compress expansion", async ({ page }) => {
   const compressedPdf = await createPdf([180]);
   await installCompressBridgeMock(page, compressedPdf);
   await page.goto("/");
@@ -405,7 +405,9 @@ test("compresses through the mocked desktop engine from the floating dialog", as
 
   await page.getByRole("button", { name: "Organize" }).click();
   await page.getByRole("button", { name: "Compress...", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Compress" })).toBeVisible();
+  // Item 18: Compress lives inline under its own ToolRow now, not a
+  // FloatingDialog -- there is no dialog role to wait on.
+  await expect(page.getByRole("button", { name: "Compress PDF" })).toBeVisible();
   await page.getByLabel("Quality").fill("6");
   await page.getByLabel("Grayscale").check();
   await page.getByRole("button", { name: "Compress PDF" }).click();
@@ -413,6 +415,9 @@ test("compresses through the mocked desktop engine from the floating dialog", as
   await expect(page.getByText("Compression complete.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
   await expect.poll(() => getCompressCallCount(page)).toBe(1);
+  // Compress keeps its expansion open after success so the before/after
+  // note stays visible, same as the floating dialog it replaced.
+  await expect(page.getByRole("button", { name: "Compress PDF" })).toBeVisible();
 
   const saved = await savePdf(page);
   await expectPdf(saved, {
@@ -421,13 +426,13 @@ test("compresses through the mocked desktop engine from the floating dialog", as
   });
 });
 
-test("page numbers apply as stamped bytes", async ({ page }) => {
+test("page numbers apply as stamped bytes from the inline Page Numbers expansion", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "page-numbers.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("button", { name: "Page Numbers...", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Page Numbers" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply Page Numbers" })).toBeVisible();
   await page.getByLabel("Format").selectOption("page-of-total");
   await page.getByRole("button", { name: "Apply Page Numbers" }).click();
   await expect(page.getByText("Page numbers applied.")).toBeVisible();
@@ -435,6 +440,59 @@ test("page numbers apply as stamped bytes", async ({ page }) => {
   const saved = await savePdf(page);
   expect(await readDecodedPageContent(saved, 0)).toContain(encodeTextAsHex("Page 1 of 2"));
   expect(await readDecodedPageContent(saved, 1)).toContain(encodeTextAsHex("Page 2 of 2"));
+});
+
+test("watermark applies from the inline Watermark expansion", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "watermark.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Watermark...", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply Watermark" })).toBeVisible();
+  // Pre-existing quirk, unrelated to item 18 and left as-is: the default
+  // Opacity value (0.18) doesn't line up with its own step="0.05", so a
+  // browser's native constraint validation silently blocks submission
+  // until the field is touched. Set a step-aligned value so this test
+  // exercises the relocation, not that separate bug.
+  await page.getByLabel("Opacity").fill("0.2");
+  await page.getByRole("button", { name: "Apply Watermark" }).click();
+  await expect(page.getByText("Watermark applied.")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+});
+
+test("rotates the selected page through the inline Rotate expansion, then collapses on success", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "sidebar-rotate.pdf", await createPdf([200, 210]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  // Item 18: Rotate used to fire instantly from the row; it now expands
+  // inline like every other tool, with explicit left/right actions.
+  await page.getByRole("button", { name: "Rotate Pages", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Rotate Right" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Rotate Right" }).click();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  // A successful rotation collapses the expansion (there's no result to
+  // review, unlike Compress/Page Numbers/Watermark).
+  await expect(page.getByRole("button", { name: "Rotate Right" })).toBeHidden();
+
+  const saved = await savePdf(page);
+  await expectPdf(saved, {
+    widths: [200, 210],
+    rotations: [90, 0],
+  });
+});
+
+test("clicking an inline tool row again collapses its expansion", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "inline-toggle.pdf", await createPdf([200]));
+
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Compress...", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Compress PDF" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Compress...", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Compress PDF" })).toBeHidden();
 });
 
 test("inserts an image as a full PDF page", async ({ page }) => {

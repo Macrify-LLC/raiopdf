@@ -79,7 +79,6 @@ import { EditModeBar } from "./components/EditModeBar";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
-import { LoadingSun } from "./components/LoadingSun";
 import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
 import {
   isEngineBridgeUnavailableError,
@@ -90,7 +89,6 @@ import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
-import { formatDefaultRange, parsePageRanges } from "./lib/pageRanges";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
@@ -149,8 +147,11 @@ import {
 } from "@raiopdf/engine-pdf-lib";
 import {
   BatesPanel,
+  DesktopCapabilityMessage,
+  formatBytes,
   PasswordsPanel,
   ScrubMetadataPanel,
+  SidecarStatusLine,
   type EditDialogToolId,
   type LegalToolId,
   type OrganizeToolId,
@@ -160,6 +161,7 @@ import type {
   RedactionPanelState,
   ScannerPanelState,
   ScrubMetadataPanelState,
+  SidecarStatus,
 } from "./components/ToolPanel";
 import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
@@ -1357,6 +1359,29 @@ export function App() {
     void rotatePages(selectedIndexes());
   }, [rotatePages, selectedIndexes]);
 
+  /** Backs the sidebar's inline Rotate expansion (item 18) -- unlike
+   * `rotateSelected` above, this collapses the expansion once a rotation
+   * actually happens, but leaves it open if there was nothing selected to
+   * rotate (the scope note stays visible so the user can go select pages). */
+  const rotateSelectedByDegrees = useCallback(
+    (degrees: number) => {
+      void rotatePages(selectedIndexes(), degrees).then((rotated) => {
+        if (rotated) {
+          setActiveOrganizeTool((current) => (current === "rotate" ? null : current));
+        }
+      });
+    },
+    [rotatePages, selectedIndexes],
+  );
+
+  const rotateSelectedRight = useCallback(() => {
+    rotateSelectedByDegrees(90);
+  }, [rotateSelectedByDegrees]);
+
+  const rotateSelectedLeft = useCallback(() => {
+    rotateSelectedByDegrees(-90);
+  }, [rotateSelectedByDegrees]);
+
   /** Context-menu rotate: acts on exactly the right-clicked page, independent
    * of whatever the current multi-selection happens to be. */
   const rotatePage = useCallback(
@@ -1599,26 +1624,26 @@ export function App() {
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
-    if (toolId === "rotate") {
-      rotateSelected();
-      // The sidebar's "Rotate Pages" row is a standalone action from the
-      // plain canvas, but when the Organize Pages workspace is already open
-      // it must stay open -- rotating shouldn't kick the reader back to the
-      // canvas. Read the current value functionally so this stays a no-op
-      // dependency (the callback below doesn't need to be recreated when
-      // activeOrganizeTool changes).
-      setActiveOrganizeTool((current) => (current === "pages" ? current : null));
+    // Rotate and Compress (item 18) expand inline under their own ToolRow
+    // instead of opening a FloatingDialog, so re-clicking the already-open
+    // row collapses it -- there's no dialog "X" to close it otherwise.
+    if (toolId === "rotate" || toolId === "compress") {
+      setActiveOrganizeTool((current) => (current === toolId ? null : toolId));
       setActiveLegalTool(null);
+      setActiveEditDialogTool(null);
       return;
     }
 
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
     setActiveEditDialogTool(null);
-  }, [rotateSelected]);
+  }, []);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
-    setActiveEditDialogTool(toolId);
+    // Both current entries (Page Numbers, Watermark) are inline expansions
+    // (item 18) -- toggle off on reselect, same reasoning as Rotate/Compress
+    // above.
+    setActiveEditDialogTool((current) => (current === toolId ? null : toolId));
     setActiveLegalTool(null);
     setActiveOrganizeTool(null);
     editing.setTool("select");
@@ -3179,45 +3204,6 @@ export function App() {
       );
     }
 
-    if (activeEditDialogTool === "page-numbers") {
-      return (
-        <FloatingDialog title="Page Numbers" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("page-numbers")}>
-          <PageNumbersPanel
-            hasDocument={Boolean(document.bytes)}
-            pageCount={document.pageCount}
-            status={sidecarStatus}
-            onApply={applyPageNumbers}
-          />
-        </FloatingDialog>
-      );
-    }
-
-    if (activeEditDialogTool === "watermark") {
-      return (
-        <FloatingDialog title="Watermark" eyebrow="Edit" onClose={closeWorkspace} onHelp={() => openHelp("watermark")}>
-          <WatermarkPanel
-            hasDocument={Boolean(document.bytes)}
-            pageCount={document.pageCount}
-            status={sidecarStatus}
-            onApply={applyWatermark}
-          />
-        </FloatingDialog>
-      );
-    }
-
-    if (activeOrganizeTool === "compress") {
-      return (
-        <FloatingDialog title="Compress" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("compress")}>
-          <CompressPanel
-            hasDocument={Boolean(document.bytes)}
-            available={engineBridge.available}
-            status={sidecarStatus}
-            onCompress={compressDocument}
-          />
-        </FloatingDialog>
-      );
-    }
-
     if (activeOrganizeTool === "repair") {
       return (
         <FloatingDialog title="Repair" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("repair")}>
@@ -3308,6 +3294,8 @@ export function App() {
         onRenderError={setError}
         onThumbnailClick={handleThumbnailClick}
         onRotateSelected={rotateSelected}
+        onRotateLeft={rotateSelectedLeft}
+        onRotateRight={rotateSelectedRight}
         onDeleteSelected={deleteSelected}
         onMoveSelectedUp={() => moveSelected(-1)}
         onMoveSelectedDown={() => moveSelected(1)}
@@ -3324,6 +3312,12 @@ export function App() {
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
         onForceOcr={() => requestForceOcr("manual")}
+        pageCount={document.pageCount}
+        sidecarStatus={sidecarStatus}
+        onApplyPageNumbers={applyPageNumbers}
+        onApplyWatermark={applyWatermark}
+        compressAvailable={engineBridge.available}
+        onCompress={compressDocument}
         redaction={redactionPanel}
         scanner={scannerState}
         pendingRedactions={pendingRedactions}
@@ -3455,204 +3449,6 @@ function RedactionModeBar({
   );
 }
 
-type SidecarStatus = {
-  running: boolean;
-  message: string | null;
-  removed: readonly PdfSanitizeRemovedItem[];
-  beforeBytes: number | null;
-  afterBytes: number | null;
-};
-
-function PageNumbersPanel({
-  hasDocument,
-  pageCount,
-  status,
-  onApply,
-}: {
-  hasDocument: boolean;
-  pageCount: number;
-  status: SidecarStatus;
-  onApply: (options: PdfPageNumbersOptions) => Promise<boolean>;
-}) {
-  const [range, setRange] = useState(formatDefaultRange(pageCount));
-  const [format, setFormat] = useState<PdfPageNumbersOptions["format"]>("number");
-  const [startAt, setStartAt] = useState(1);
-  const [fontSizePt, setFontSizePt] = useState(11);
-  const [placement, setPlacement] = useState<PdfPageNumbersOptions["placement"]>({
-    edge: "footer",
-    align: "center",
-  });
-  const [touched, setTouched] = useState(false);
-  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTouched(true);
-
-    if (parsed.error) {
-      return;
-    }
-
-    await onApply({
-      startAt,
-      pageIndexes: parsed.pageIndexes,
-      format,
-      placement,
-      fontSizePt,
-    });
-  }
-
-  return (
-    <form className="tool-panel__inline-card" onSubmit={submit}>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-range">Pages</label>
-        <input id="page-number-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
-        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
-      </div>
-      <div className="tool-panel__field-grid">
-        <div className="tool-panel__field">
-          <label htmlFor="page-number-start">Start at</label>
-          <input id="page-number-start" type="number" min="0" value={startAt} onChange={(event) => setStartAt(Number(event.target.value))} />
-        </div>
-        <div className="tool-panel__field">
-          <label htmlFor="page-number-size">Font size</label>
-          <input id="page-number-size" type="number" min="1" value={fontSizePt} onChange={(event) => setFontSizePt(Number(event.target.value))} />
-        </div>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-format">Format</label>
-        <select id="page-number-format" value={format} onChange={(event) => setFormat(event.target.value as PdfPageNumbersOptions["format"])}>
-          <option value="number">1, 2, 3</option>
-          <option value="page-of-total">Page N of M</option>
-        </select>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="page-number-position">Position</label>
-        <select id="page-number-position" value={`${placement.edge}-${placement.align}`} onChange={(event) => setPlacement(parsePlacementValue(event.target.value))}>
-          <option value="footer-left">Footer left</option>
-          <option value="footer-center">Footer center</option>
-          <option value="footer-right">Footer right</option>
-          <option value="header-left">Header left</option>
-          <option value="header-center">Header center</option>
-          <option value="header-right">Header right</option>
-        </select>
-      </div>
-      <SidecarStatusLine status={status} label="Applying page numbers" />
-      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
-        Apply Page Numbers
-      </button>
-    </form>
-  );
-}
-
-function WatermarkPanel({
-  hasDocument,
-  pageCount,
-  status,
-  onApply,
-}: {
-  hasDocument: boolean;
-  pageCount: number;
-  status: SidecarStatus;
-  onApply: (options: PdfWatermarkOptions) => Promise<boolean>;
-}) {
-  const [text, setText] = useState("DRAFT");
-  const [range, setRange] = useState(formatDefaultRange(pageCount));
-  const [orientation, setOrientation] = useState<PdfWatermarkOptions["orientation"]>("diagonal");
-  const [opacity, setOpacity] = useState(0.18);
-  const [touched, setTouched] = useState(false);
-  const parsed = useMemo(() => parsePageRanges(range, pageCount), [pageCount, range]);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTouched(true);
-
-    if (parsed.error || !text.trim()) {
-      return;
-    }
-
-    await onApply({
-      text: text.trim(),
-      pageIndexes: parsed.pageIndexes,
-      orientation,
-      opacity,
-    });
-  }
-
-  return (
-    <form className="tool-panel__inline-card" onSubmit={submit}>
-      <div className="tool-panel__button-row">
-        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("DRAFT")}>DRAFT</button>
-        <button type="button" className="tool-panel__secondary-button" onClick={() => setText("CONFIDENTIAL")}>CONFIDENTIAL</button>
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="watermark-text">Text</label>
-        <input id="watermark-text" value={text} onChange={(event) => setText(event.target.value)} />
-      </div>
-      <div className="tool-panel__field">
-        <label htmlFor="watermark-range">Pages</label>
-        <input id="watermark-range" value={range} onBlur={() => setTouched(true)} onChange={(event) => setRange(event.target.value)} />
-        {touched && parsed.error ? <span className="tool-panel__field-error">{parsed.error}</span> : null}
-      </div>
-      <div className="tool-panel__field-grid">
-        <div className="tool-panel__field">
-          <label htmlFor="watermark-orientation">Direction</label>
-          <select id="watermark-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as PdfWatermarkOptions["orientation"])}>
-            <option value="diagonal">Diagonal</option>
-            <option value="horizontal">Horizontal</option>
-          </select>
-        </div>
-        <div className="tool-panel__field">
-          <label htmlFor="watermark-opacity">Opacity</label>
-          <input id="watermark-opacity" type="number" min="0.05" max="1" step="0.05" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
-        </div>
-      </div>
-      <SidecarStatusLine status={status} label="Applying watermark" />
-      <button type="submit" className="tool-panel__primary-button" disabled={!hasDocument || status.running}>
-        Apply Watermark
-      </button>
-    </form>
-  );
-}
-
-function CompressPanel({
-  hasDocument,
-  available,
-  status,
-  onCompress,
-}: {
-  hasDocument: boolean;
-  available: boolean;
-  status: SidecarStatus;
-  onCompress: (options: PdfCompressOptions) => Promise<boolean>;
-}) {
-  const [quality, setQuality] = useState(5);
-  const [grayscale, setGrayscale] = useState(false);
-
-  return (
-    <div className="tool-panel__inline-card">
-      {!available ? <DesktopCapabilityMessage /> : null}
-      <div className="tool-panel__field">
-        <label htmlFor="compress-quality">Quality</label>
-        <input id="compress-quality" type="number" min="1" max="9" value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
-      </div>
-      <label className="tool-panel__check-row">
-        <input type="checkbox" checked={grayscale} onChange={(event) => setGrayscale(event.target.checked)} />
-        Grayscale
-      </label>
-      {status.beforeBytes !== null && status.afterBytes !== null ? (
-        <p className="tool-panel__status-line">
-          {formatBytes(status.beforeBytes)} to {formatBytes(status.afterBytes)}
-        </p>
-      ) : null}
-      <SidecarStatusLine status={status} label="Compressing PDF" />
-      <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onCompress({ quality, grayscale })}>
-        Compress PDF
-      </button>
-    </div>
-  );
-}
-
 function SanitizePanel({
   hasDocument,
   available,
@@ -3776,33 +3572,6 @@ function DocumentPropertiesPanel({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function DesktopCapabilityMessage() {
-  return (
-    <p className="tool-panel__status-line">
-      This action is available in the desktop app.
-    </p>
-  );
-}
-
-function SidecarStatusLine({
-  status,
-  label,
-}: {
-  status: SidecarStatus;
-  label: string;
-}) {
-  if (!status.message) {
-    return null;
-  }
-
-  return (
-    <p className="tool-panel__status-line tool-panel__status-line--inline">
-      {status.running ? <LoadingSun size={13} label={label} /> : null}
-      {status.message}
-    </p>
   );
 }
 
@@ -4307,15 +4076,6 @@ function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
 }
 
-function parsePlacementValue(value: string): PdfPageNumbersOptions["placement"] {
-  const [edge, align] = value.split("-");
-
-  return {
-    edge: edge === "header" ? "header" : "footer",
-    align: align === "left" || align === "right" ? align : "center",
-  };
-}
-
 function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   if (item === "javascript") {
     return "JavaScript";
@@ -4326,14 +4086,6 @@ function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {
   }
 
   return "external links";
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  }
-
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 async function countPdfPages(bytes: Uint8Array): Promise<number> {

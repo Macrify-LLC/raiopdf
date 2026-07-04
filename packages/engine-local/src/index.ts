@@ -397,55 +397,26 @@ export class LocalPdfEngine implements PdfEngine {
     }
 
     const source = await this.load(document);
+    const pageIndices = source.getPageIndices();
     const parts: Array<{
       bytes: Uint8Array;
       pageIndexes: number[];
       oversized: boolean;
     }> = [];
-    let currentPageIndexes: number[] = [];
-    let currentBytes: Uint8Array | null = null;
+    let start = 0;
+    let previousPartPageCount = 1;
 
-    for (const pageIndex of source.getPageIndices()) {
-      const candidatePageIndexes = [...currentPageIndexes, pageIndex];
-      const candidateBytes = await createDocumentBytesForPages(source, candidatePageIndexes);
-
-      if (candidateBytes.byteLength <= maxBytes) {
-        currentPageIndexes = candidatePageIndexes;
-        currentBytes = candidateBytes;
-        continue;
-      }
-
-      if (currentPageIndexes.length > 0 && currentBytes) {
-        parts.push({
-          bytes: currentBytes,
-          pageIndexes: currentPageIndexes,
-          oversized: false,
-        });
-        currentPageIndexes = [];
-        currentBytes = null;
-      }
-
-      const singlePageBytes = await createDocumentBytesForPages(source, [pageIndex]);
-
-      if (singlePageBytes.byteLength > maxBytes) {
-        parts.push({
-          bytes: singlePageBytes,
-          pageIndexes: [pageIndex],
-          oversized: true,
-        });
-        continue;
-      }
-
-      currentPageIndexes = [pageIndex];
-      currentBytes = singlePageBytes;
-    }
-
-    if (currentPageIndexes.length > 0 && currentBytes) {
-      parts.push({
-        bytes: currentBytes,
-        pageIndexes: currentPageIndexes,
-        oversized: false,
-      });
+    while (start < pageIndices.length) {
+      const part = await packSplitPart(
+        source,
+        pageIndices,
+        start,
+        maxBytes,
+        previousPartPageCount,
+      );
+      parts.push(part);
+      previousPartPageCount = Math.max(1, part.pageIndexes.length);
+      start += part.pageIndexes.length;
     }
 
     return {
@@ -1091,6 +1062,109 @@ async function copyPagesInto(
   for (const page of copiedPages) {
     output.addPage(page);
   }
+}
+
+interface SplitPart {
+  bytes: Uint8Array;
+  pageIndexes: number[];
+  oversized: boolean;
+}
+
+/**
+ * Packs the largest page prefix starting at `start` whose serialized document
+ * fits `maxBytes`.
+ *
+ * The previous implementation re-serialized the growing part for every
+ * candidate page, making splitByMaxBytes O(n^2) in page count. This version
+ * serializes O(log n) probe documents per part instead: probe a candidate
+ * prefix, estimate the marginal per-page cost from the two most recent
+ * fitting probes, jump close to the cap, and binary-search the boundary only
+ * when a probe overshoots. Serialized size is treated as monotone in page
+ * count (adding a page never shrinks the document) -- the same assumption the
+ * old greedy page-by-page scan relied on, so the resulting parts (including
+ * the single-page `oversized` behavior) are unchanged.
+ */
+async function packSplitPart(
+  source: PDFDocument,
+  pageIndices: readonly number[],
+  start: number,
+  maxBytes: number,
+  initialGuess: number,
+): Promise<SplitPart> {
+  const remaining = pageIndices.length - start;
+  const pagesFor = (count: number): number[] => pageIndices.slice(start, start + count);
+
+  let fit: { count: number; bytes: Uint8Array } | null = null;
+  let previousFit: { count: number; byteLength: number } | null = null;
+  let overflowCount: number | null = null;
+  let candidate = clampSplitCandidate(initialGuess, 1, remaining);
+
+  for (;;) {
+    const bytes = await createDocumentBytesForPages(source, pagesFor(candidate));
+
+    if (bytes.byteLength > maxBytes) {
+      if (candidate === 1) {
+        // A lone page that exceeds the cap ships as its own oversized part,
+        // exactly like the old per-page scan did.
+        return { bytes, pageIndexes: pagesFor(1), oversized: true };
+      }
+
+      overflowCount = candidate;
+    } else {
+      previousFit = fit ? { count: fit.count, byteLength: fit.bytes.byteLength } : null;
+      fit = { count: candidate, bytes };
+
+      if (candidate === remaining) {
+        break;
+      }
+    }
+
+    if (fit && overflowCount !== null && fit.count + 1 >= overflowCount) {
+      // Boundary confirmed: `fit.count` pages fit, one more page does not.
+      break;
+    }
+
+    if (fit === null) {
+      // Every probe so far overshot; halve toward the single-page floor.
+      candidate = clampSplitCandidate(Math.floor(candidate / 2), 1, remaining);
+    } else if (overflowCount !== null) {
+      // Overshoot recorded: binary-search the boundary in (fit, overflow).
+      candidate = Math.floor((fit.count + overflowCount) / 2);
+    } else {
+      candidate = nextSplitGrowthCandidate(fit, previousFit, maxBytes, remaining);
+    }
+  }
+
+  if (!fit) {
+    // Unreachable: every exit path above either returns or records a fit.
+    throw new PdfEngineError("INVALID_DOCUMENT", "Split packing failed to find a fitting part.");
+  }
+
+  return { bytes: fit.bytes, pageIndexes: pagesFor(fit.count), oversized: false };
+}
+
+function nextSplitGrowthCandidate(
+  fit: { count: number; bytes: Uint8Array },
+  previousFit: { count: number; byteLength: number } | null,
+  maxBytes: number,
+  remaining: number,
+): number {
+  const fitLength = fit.bytes.byteLength;
+  // Marginal per-page cost from the last two fitting probes when available;
+  // otherwise the (conservative) average, which includes document overhead.
+  const marginalPerPage = previousFit && fit.count > previousFit.count
+    ? (fitLength - previousFit.byteLength) / (fit.count - previousFit.count)
+    : fitLength / fit.count;
+  const safePerPage = Math.max(1, marginalPerPage);
+  // Aim ~10% short of the cap so a slightly-low estimate lands on another
+  // fitting probe (refining the estimate) rather than an overshoot.
+  const estimatedAdditional = Math.floor(((maxBytes - fitLength) / safePerPage) * 0.9);
+
+  return clampSplitCandidate(fit.count + estimatedAdditional, fit.count + 1, remaining);
+}
+
+function clampSplitCandidate(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 async function createDocumentBytesForPages(

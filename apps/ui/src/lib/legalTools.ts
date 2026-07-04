@@ -16,6 +16,7 @@ import {
   type PageTextInput,
 } from "./pageTextCache";
 import { scoreGarbledPage } from "@raiopdf/rules";
+import type { PDFDocumentProxy } from "./pdfjs";
 
 export { extractPageText } from "./pageTextCache";
 export type { ExtractedPageText } from "./pageTextCache";
@@ -247,6 +248,10 @@ export async function verifyRedactionAreasClear(
   bytes: Uint8Array,
   areas: readonly PdfRedactionArea[],
   redactedTerms: readonly string[] = [],
+  // Optional pdf.js proxy ALREADY LOADED OVER THESE SAME BYTES (the redaction
+  // output). When provided, the text-layer pass reuses it instead of loading
+  // its own document; the caller keeps ownership (it is not destroyed here).
+  pdfDocument: PDFDocumentProxy | null = null,
 ): Promise<RedactionVerificationResult> {
   if (areas.length === 0) {
     return redactionVerificationResult({
@@ -258,7 +263,7 @@ export async function verifyRedactionAreasClear(
   }
 
   const uniqueTerms = uniqueRedactionTerms(redactedTerms);
-  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms);
+  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms, pdfDocument);
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const redactedPageIndexes = uniquePageIndexes(areas);
 
@@ -404,6 +409,7 @@ function areasIntersect(left: PdfRedactionArea, right: PdfRedactionArea): boolea
 async function verifyFullDocumentTextLayer(
   bytes: Uint8Array,
   terms: readonly string[],
+  injectedPdfDocument: PDFDocumentProxy | null = null,
 ): Promise<RedactionVerificationCheck> {
   const garbledRedactionPages = garbledRedactionPagesFromTerms(terms);
   if (garbledRedactionPages.length > 0) {
@@ -417,8 +423,10 @@ async function verifyFullDocumentTextLayer(
   }
 
   try {
-    const { loadPdfDocument } = await import("./pdfjs");
-    const pdfDocument = await loadPdfDocument(bytes);
+    // Injected proxy (already loaded over these bytes) is caller-owned and
+    // never destroyed here; a self-loaded fallback document is.
+    const pdfDocument = injectedPdfDocument
+      ?? await (await import("./pdfjs")).loadPdfDocument(bytes);
 
     try {
       const pages = await extractPageText({ bytes, pdfDocument });
@@ -431,7 +439,9 @@ async function verifyFullDocumentTextLayer(
 
       return pass("Text layer verified clean across the full document.");
     } finally {
-      await pdfDocument.loadingTask.destroy();
+      if (pdfDocument !== injectedPdfDocument) {
+        await pdfDocument.loadingTask.destroy();
+      }
     }
   } catch (error) {
     return fail(`Text layer verification could not run: ${errorMessage(error)}`);

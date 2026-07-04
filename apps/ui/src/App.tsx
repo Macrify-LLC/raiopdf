@@ -100,7 +100,13 @@ import {
   PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
-import { filePort, readBrowserFile, type OpenedFile } from "./lib/filePort";
+import { filePort, type OpenedFile } from "./lib/filePort";
+import {
+  pickFileForAdd,
+  readFileForAdd,
+  tooLargeToAddMessage,
+  type FileAddResult,
+} from "./lib/readFileForAdd";
 import {
   looksLikeAbsolutePath,
   resolveDesktopFileGrantPaths,
@@ -1493,9 +1499,9 @@ export function App() {
       });
   }, [openOpenedFile, setError]);
 
-  const openProductionFile = useCallback(async (): Promise<OpenedFile | null> => {
+  const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
-      return await filePort.openFile();
+      return await pickFileForAdd();
     } catch {
       setProductionProgress({
         running: false,
@@ -1508,7 +1514,35 @@ export function App() {
 
   const openBatchCleanupFile = useCallback(async (): Promise<OpenedFile | null> => {
     try {
-      return await filePort.openFile();
+      const result = await pickFileForAdd();
+
+      if (!result) {
+        return null;
+      }
+
+      if (result.kind === "bytes") {
+        return result.file;
+      }
+
+      if (result.kind === "descriptor") {
+        // Batch cleanup runs path-based (resolveDesktopFileGrantPaths) and its
+        // workspace reads only name/path from OpenedFile, so above-threshold
+        // adds carry the grant with empty bytes -- nothing downstream loads
+        // them. Integration note: BatchCleanupWorkspace's onAddFile prop
+        // should move to FileAddResult so this shim can go away.
+        return {
+          bytes: new Uint8Array(0),
+          name: result.descriptor.name,
+          path: result.descriptor.grant,
+        };
+      }
+
+      setBatchCleanupProgress({
+        running: false,
+        message: tooLargeToAddMessage(result.name),
+        result: null,
+      });
+      return null;
     } catch {
       setBatchCleanupProgress({
         running: false,
@@ -1521,11 +1555,42 @@ export function App() {
 
   const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile | null> => {
     try {
-      const file = await filePort.openFile();
-      if (!file) {
+      const result = await pickFileForAdd();
+      if (!result) {
         return null;
       }
 
+      if (result.kind === "tooLarge") {
+        setFilingPacketProgress({
+          running: false,
+          message: tooLargeToAddMessage(result.name),
+          result: null,
+        });
+        return null;
+      }
+
+      if (result.kind === "descriptor") {
+        // FilingPacketFile requires a known page count; a descriptor without
+        // one (shell predates page_count(grant)) is honestly gated rather
+        // than shown with a fake count.
+        if (result.descriptor.pageCount === null) {
+          setFilingPacketProgress({
+            running: false,
+            message: `"${result.descriptor.name}" is too large to add until RaioPDF can count its pages without opening it.`,
+            result: null,
+          });
+          return null;
+        }
+
+        return {
+          id: `${result.descriptor.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          name: result.descriptor.name,
+          path: result.descriptor.grant,
+          pages: result.descriptor.pageCount,
+        };
+      }
+
+      const file = result.file;
       return {
         id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: file.name,
@@ -1544,8 +1609,18 @@ export function App() {
 
   const openDroppedFile = useCallback(
     (file: File) => {
-      void readBrowserFile(file)
-        .then(openOpenedFile)
+      void readFileForAdd(file)
+        .then((result) => {
+          if (result.kind === "bytes") {
+            openOpenedFile(result.file);
+            return;
+          }
+
+          // A dropped DOM File above the threshold: honest gate until the
+          // streamed rangeFile/rangeGrant source (large-PDF plan Phase 2)
+          // replaces this with a real streamed open.
+          setError(`"${file.name}" is too large to open this way right now. Use File > Open.`);
+        })
         .catch(() => {
           setError("This PDF could not be opened. The file may be corrupt or unsupported.");
         });

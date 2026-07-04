@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+
+// pdfjs-dist's canvas module touches DOMMatrix at import time; jsdom has no
+// implementation and this static-markup test never renders a page, so a
+// bare stub is enough. Hoisted so it lands before the module graph loads.
+vi.hoisted(() => {
+  (globalThis as { DOMMatrix?: unknown }).DOMMatrix ??= class DOMMatrixStub {};
+});
 import type { DocumentState } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";

@@ -29,7 +29,6 @@ import {
   listPacks,
   preflight,
   resolvePrepPlan,
-  scoreGarbledPage,
 } from "@raiopdf/rules";
 import type {
   DocumentFactsTextExtractor,
@@ -97,7 +96,6 @@ import { isTextEntryTarget } from "./lib/domGuards";
 import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
-  OPS,
   PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
@@ -130,7 +128,9 @@ import {
   fitCrashReportPayloadToIssueUrl,
 } from "./lib/crashReportIssue";
 import {
+  hasSearchableTextLayerCoverage,
   inspectTextLayer,
+  textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
@@ -923,21 +923,21 @@ export function App() {
       return;
     }
 
+    if (document.textLayerCoverage) {
+      setHasTextLayer(hasSearchableTextLayerCoverage(document.textLayerCoverage));
+      return;
+    }
+
     let disposed = false;
 
-    void extractUiTextLayerCoverage(sourceBytes, pdfDocument)
+    void inspectTextLayer(sourceBytes, pdfDocument)
       .then((textLayerCoverage) => {
         if (disposed) {
           return;
         }
 
         setTextLayerCoverage(textLayerCoverage);
-        setHasTextLayer(
-          textLayerCoverage.imageOnlyPages.length +
-            textLayerCoverage.mixedPages.length +
-            textLayerCoverage.textPages.length > 0 &&
-            textLayerCoverage.imageOnlyPages.length === 0,
-        );
+        setHasTextLayer(hasSearchableTextLayerCoverage(textLayerCoverage));
       })
       .catch(() => {
         if (!disposed) {
@@ -949,7 +949,13 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [document.bytes, pdfDocument, setHasTextLayer, setTextLayerCoverage]);
+  }, [
+    document.bytes,
+    document.textLayerCoverage,
+    pdfDocument,
+    setHasTextLayer,
+    setTextLayerCoverage,
+  ]);
 
   useEffect(() => {
     const previousBytes = legalStateDocumentBytesRef.current;
@@ -1132,6 +1138,7 @@ export function App() {
     void engineBridge
       .runOcr(sourceBytes, {
         ocrType,
+        pageCount: document.pageCount,
         onEngineReady: () => {
           if (isCurrentRun()) {
             setOcrState({
@@ -1143,7 +1150,7 @@ export function App() {
           }
         },
       })
-      .then(async (ocrBytes) => {
+      .then(async (ocrResult) => {
         if (!isCurrentRun()) {
           return;
         }
@@ -1153,24 +1160,35 @@ export function App() {
           message: "Verifying the text layer...",
         });
 
-        const coverage = await inspectTextLayer(ocrBytes);
-        const verification = verifyOcrTextLayer(coverage);
+        const textLayerCoverage = await inspectTextLayer(ocrResult.bytes);
+        const verification = verifyOcrTextLayer(textLayerCoverage);
+        const workflowResult = {
+          ...ocrResult,
+          textLayerCoverage,
+          verification,
+        };
 
         if (!isCurrentRun()) {
           return;
         }
 
-        if (verification.status === "failed") {
+        if (workflowResult.verification.status === "failed") {
           setOcrState({
             phase: "error",
-            message: verification.message,
+            message: workflowResult.verification.message,
           });
           return;
         }
 
-        const replaced = await replaceBytes(ocrBytes, {
+        const replaced = await replaceBytes(workflowResult.bytes, {
           dirty: true,
           hasTextLayer: true,
+          textLayerCoverage: workflowResult.textLayerCoverage,
+          // Codex P2 on #107: derive the committed page count from the
+          // coverage (counted from the OCR OUTPUT bytes), not the echoed
+          // input count, so the navigator can never desync from the
+          // committed document.
+          knownPageCount: textLayerCoveragePageCount(workflowResult.textLayerCoverage),
           expectedOpenToken: sourceOpenToken,
           expectedSourceBytes: sourceBytes,
         });
@@ -1198,7 +1216,7 @@ export function App() {
         setSelectedPageIndexes(new Set([0]));
         setOcrState({
           phase: "done",
-          message: verification.message,
+          message: workflowResult.verification.message,
         });
       })
       .catch((error: unknown) => {
@@ -1229,7 +1247,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, engineBridge, getOpenToken, replaceBytes]);
+  }, [document.bytes, document.pageCount, engineBridge, getOpenToken, replaceBytes]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     setForceOcrConfirmation(reason);
@@ -2824,12 +2842,18 @@ export function App() {
             phase: "normalizing",
             message: "Making the filing copy searchable...",
           });
+          const [workingBytes, workingPageCount] = await Promise.all([
+            filingEngine.saveToBytes(workingHandle),
+            filingEngine.pageCount(workingHandle),
+          ]);
+          const ocrResult = await engineBridge.runOcr(workingBytes, {
+            ocrType: document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
+            pageCount: workingPageCount,
+          });
           workingHandle = await reopenFilingHandle(
             filingEngine,
             closeHandles,
-            await engineBridge.runOcr(await filingEngine.saveToBytes(workingHandle), {
-              ocrType: document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
-            }),
+            ocrResult.bytes,
           );
         }
 
@@ -4039,7 +4063,7 @@ function createUiDocumentFactsTextExtractor(
   currentPdfDocument: PDFDocumentProxy | null,
 ): DocumentFactsTextExtractor {
   return {
-    extractTextLayerCoverage: (bytes) => extractUiTextLayerCoverage(bytes, currentPdfDocument),
+    extractTextLayerCoverage: (bytes) => inspectTextLayer(bytes, currentPdfDocument),
     extractPageTextByPage: (bytes) => extractUiPageTextByPage(bytes, currentPdfDocument),
   };
 }
@@ -4059,42 +4083,6 @@ async function withPdfDocument<T>(
   } finally {
     await pdfDocument.loadingTask.destroy();
   }
-}
-
-async function extractUiTextLayerCoverage(
-  bytes: Uint8Array,
-  currentPdfDocument: PDFDocumentProxy | null,
-): Promise<NonNullable<DocumentFacts["textLayerCoverage"]>> {
-  return withPdfDocument(bytes, currentPdfDocument, async (pdfDocument) => {
-    const imageOnlyPages: number[] = [];
-    const mixedPages: number[] = [];
-    const textPages: number[] = [];
-    const garbledPages: NonNullable<DocumentFacts["textLayerCoverage"]>["garbledPages"][number][] = [];
-
-    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-      const page = await pdfDocument.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(textItemString).join(" ");
-      const hasText = pageText.trim().length > 0;
-      const operatorList = await page.getOperatorList();
-      const hasImage = operatorList.fnArray.some(isImageOperator);
-      const pageIndex = pageNumber - 1;
-      const garbleInfo = scoreGarbledPage(pageText, pageIndex);
-      if (garbleInfo) {
-        garbledPages.push(garbleInfo);
-      }
-
-      if (!hasText) {
-        imageOnlyPages.push(pageIndex);
-      } else if (hasImage) {
-        mixedPages.push(pageIndex);
-      } else {
-        textPages.push(pageIndex);
-      }
-    }
-
-    return { imageOnlyPages, mixedPages, textPages, garbledPages };
-  });
 }
 
 async function extractUiPageTextByPage(
@@ -4124,16 +4112,6 @@ function textItemString(item: unknown): string {
 
   const { str } = item as { str?: unknown };
   return typeof str === "string" ? str : "";
-}
-
-function isImageOperator(fn: number): boolean {
-  return fn === OPS.paintImageXObject ||
-    fn === OPS.paintInlineImageXObject ||
-    fn === OPS.paintInlineImageXObjectGroup ||
-    fn === OPS.paintImageMaskXObject ||
-    fn === OPS.paintImageMaskXObjectGroup ||
-    fn === OPS.paintImageXObjectRepeat ||
-    fn === OPS.paintImageMaskXObjectRepeat;
 }
 
 async function readOccupiedRegions(

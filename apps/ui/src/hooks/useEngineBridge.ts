@@ -23,6 +23,7 @@ interface EngineOcrToolchainStatus {
 
 export interface RunOcrOptions {
   ocrType?: "skip-text" | "force-ocr";
+  pageCount?: number;
   onEngineReady?: () => void;
 }
 
@@ -36,6 +37,11 @@ export interface RemoveEncryptionOptions {
   onEngineReady?: () => void;
 }
 
+export type RunOcrResult = {
+  bytes: Uint8Array;
+  pageCount: number;
+};
+
 export interface EngineBridge {
   available: boolean;
   ocrAvailable: boolean;
@@ -48,7 +54,7 @@ export interface EngineBridge {
    * real operation, when the user commits to it, has less to wait on.
    */
   warmEngine: () => void;
-  runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<Uint8Array>;
+  runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<RunOcrResult>;
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
   convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
   compress: (bytes: Uint8Array, options: PdfCompressOptions) => Promise<Uint8Array>;
@@ -201,21 +207,16 @@ export function useEngineBridge(): EngineBridge {
 
         options.onEngineReady?.();
 
-        const sourceHandle = await engine.open(bytes);
-        let outputHandle: PdfDocumentHandle | null = null;
-
-        try {
-          outputHandle = await engine.ocr(sourceHandle, {
-            languages: ["eng"],
-            ocrType: options.ocrType ?? "skip-text",
-            deskew: false,
-          });
-
-          return await engine.saveToBytes(outputHandle);
-        } finally {
-          await closeHandle(engine, outputHandle);
-          await closeHandle(engine, sourceHandle);
-        }
+        // Single raw-byte OCR request (#107): the sidecar returns bytes +
+        // page count directly, skipping the redundant basic-info probe.
+        return engine.ocrBytes(bytes, {
+          languages: ["eng"],
+          ocrType: options.ocrType ?? "skip-text",
+          deskew: false,
+          ...(options.pageCount !== undefined
+            ? { knownPageCount: options.pageCount }
+            : {}),
+        });
       }),
     [ensureEngine],
   );

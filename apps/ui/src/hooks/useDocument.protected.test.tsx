@@ -8,6 +8,7 @@ import { useDocument, type UseDocumentOptions } from "./useDocument";
 
 const engineState = vi.hoisted(() => ({
   openInputs: [] as number[],
+  pageCountCalls: 0,
   saveBytes: new Uint8Array([2]),
 }));
 
@@ -32,6 +33,7 @@ vi.mock("@raiopdf/engine-local", async () => {
     }
 
     async pageCount() {
+      engineState.pageCountCalls += 1;
       return 1;
     }
 
@@ -49,6 +51,7 @@ describe("useDocument protected PDFs", () => {
 
   beforeEach(() => {
     engineState.openInputs.length = 0;
+    engineState.pageCountCalls = 0;
     engineState.saveBytes = new Uint8Array([2]);
   });
 
@@ -111,6 +114,41 @@ describe("useDocument protected PDFs", () => {
     const saved = await act(async () => harness.current.save());
 
     expect(saved?.filePath).toBeNull();
+  });
+
+  it("replaceBytes uses a known page count during commit instead of asking the engine again", async () => {
+    const harness = renderUseDocument();
+
+    await act(async () => {
+      await harness.current.openFile({
+        bytes: new Uint8Array([2]),
+        name: "brief.pdf",
+      });
+    });
+
+    const pageCountCallsAfterOpen = engineState.pageCountCalls;
+    const textLayerCoverage = {
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0, 1, 2, 3, 4],
+      garbledPages: [],
+    };
+    let result: Awaited<ReturnType<ReturnType<typeof useDocument>["replaceBytes"]>> | undefined;
+
+    await act(async () => {
+      result = await harness.current.replaceBytes(new Uint8Array([8]), {
+        dirty: true,
+        hasTextLayer: true,
+        textLayerCoverage,
+        knownPageCount: 5,
+      });
+    });
+
+    expect(result).toBe("replaced");
+    expect(engineState.pageCountCalls).toBe(pageCountCallsAfterOpen);
+    expect(harness.current.document.pageCount).toBe(5);
+    expect(harness.current.document.hasTextLayer).toBe(true);
+    expect(harness.current.document.textLayerCoverage).toBe(textLayerCoverage);
   });
 
   function renderUseDocument(options: UseDocumentOptions = {}) {

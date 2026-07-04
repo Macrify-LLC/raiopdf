@@ -28,11 +28,7 @@ vi.mock("@raiopdf/engine-sidecar", () => {
       sidecarState.instances.push(this);
     }
 
-    async open() {
-      return "source-handle";
-    }
-
-    async ocr(_handle: string, options: unknown) {
+    async ocrBytes(_bytes: Uint8Array, options: { knownPageCount?: number } = {}) {
       this.ocrCalls.push(options);
       const behavior = sidecarState.ocrBehaviors.shift();
 
@@ -40,7 +36,10 @@ vi.mock("@raiopdf/engine-sidecar", () => {
         throw behavior;
       }
 
-      return "output-handle";
+      return {
+        bytes: new Uint8Array([9]),
+        pageCount: options.knownPageCount ?? 1,
+      };
     }
 
     async removeEncryption(_bytes: Uint8Array, password: string) {
@@ -52,10 +51,6 @@ vi.mock("@raiopdf/engine-sidecar", () => {
       }
 
       return new Uint8Array([7]);
-    }
-
-    async saveToBytes() {
-      return new Uint8Array([9]);
     }
 
     async close() {
@@ -105,12 +100,17 @@ describe("useEngineBridge runOcr", () => {
 
   it("passes force-ocr through to the sidecar", async () => {
     const bridge = renderHookValue();
+    let result: Awaited<ReturnType<EngineBridge["runOcr"]>> | undefined;
 
     await act(async () => {
-      await bridge.runOcr(new Uint8Array([1]), { ocrType: "force-ocr" });
+      result = await bridge.runOcr(new Uint8Array([1]), { ocrType: "force-ocr", pageCount: 4 });
     });
 
-    expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({ ocrType: "force-ocr" });
+    expect(result).toEqual({ bytes: new Uint8Array([9]), pageCount: 4 });
+    expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({
+      ocrType: "force-ocr",
+      knownPageCount: 4,
+    });
   });
 
   it("self-heals after an idle-killed engine: retries once against a fresh engine and succeeds", async () => {
@@ -125,13 +125,13 @@ describe("useEngineBridge runOcr", () => {
     sidecarState.ocrBehaviors.push(connectionError);
 
     const bridge = renderHookValue();
-    let bytes: Uint8Array | undefined;
+    let result: Awaited<ReturnType<EngineBridge["runOcr"]>> | undefined;
 
     await act(async () => {
-      bytes = await bridge.runOcr(new Uint8Array([1]));
+      result = await bridge.runOcr(new Uint8Array([1]));
     });
 
-    expect(bytes).toEqual(new Uint8Array([9]));
+    expect(result?.bytes).toEqual(new Uint8Array([9]));
     // One dead engine, one fresh replacement -- exactly one retry.
     expect(sidecarState.instances).toHaveLength(2);
     expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);

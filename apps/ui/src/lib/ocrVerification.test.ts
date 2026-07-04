@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { verifyOcrTextLayer } from "./ocrVerification";
-import type { TextLayerCoverage } from "./textLayer";
+import type { TextLayerCoverage } from "@raiopdf/rules";
 
 describe("verifyOcrTextLayer", () => {
   it("verifies only when every page has clean searchable text", () => {
     const result = verifyOcrTextLayer(coverage({
-      pageCount: 2,
-      pagesWithText: [1, 2],
-      missingTextPages: [],
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0, 1],
       garbledPages: [],
     }));
 
@@ -21,9 +21,9 @@ describe("verifyOcrTextLayer", () => {
 
   it("reports garbled output as a failed verification so callers keep the original", () => {
     const result = verifyOcrTextLayer(coverage({
-      pageCount: 2,
-      pagesWithText: [1, 2],
-      missingTextPages: [],
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0, 1],
       garbledPages: [{
         pageIndex: 0,
         confidence: 0.91,
@@ -37,7 +37,7 @@ describe("verifyOcrTextLayer", () => {
     expect(result).toMatchObject({
       status: "failed",
       garbledPages: 1,
-      missingTextPages: 0,
+      imageOnlyPages: 0,
     });
     expect(result.message).toContain("Re-OCR ran, but 1 page still looks garbled");
     expect(result.message).toContain("the original was kept unchanged");
@@ -52,24 +52,38 @@ describe("verifyOcrTextLayer", () => {
 
   it("fails verification when OCR produces an empty document", () => {
     const result = verifyOcrTextLayer(coverage({
-      pageCount: 0,
-      pagesWithText: [],
-      missingTextPages: [],
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [],
       garbledPages: [],
     }));
 
     expect(result).toMatchObject({
       status: "failed",
       garbledPages: 0,
-      missingTextPages: 0,
+      imageOnlyPages: 0,
     });
+  });
+
+  it("fails verification when OCR leaves any image-only pages", () => {
+    const result = verifyOcrTextLayer(coverage({
+      imageOnlyPages: [1],
+      mixedPages: [],
+      textPages: [0],
+      garbledPages: [],
+    }));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      garbledPages: 0,
+      imageOnlyPages: 1,
+    });
+    expect(result.message).toContain("1 page still has no searchable text");
   });
 });
 
-function coverage(overrides: Pick<TextLayerCoverage, "pageCount" | "pagesWithText" | "missingTextPages" | "garbledPages">): TextLayerCoverage {
+function coverage(overrides: TextLayerCoverage): TextLayerCoverage {
   return {
-    allPagesHaveText: overrides.missingTextPages.length === 0,
-    hasAnyText: overrides.pagesWithText.length > 0,
     ...overrides,
   };
 }

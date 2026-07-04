@@ -129,20 +129,27 @@ import {
 } from "./lib/readFileForAdd";
 import {
   isPathOpsRuntime,
+  pathOpBatesStamp,
   pathOpCompress,
   pathOpDecrypt,
   pathOpDocumentFacts,
+  pathOpInsertPages,
+  pathOpMerge,
   pathOpOcr,
+  pathOpPageNumbers,
   pathOpPrepareFiling,
   pathOpRedactAreas,
+  pathOpReleaseOutput,
   pathOpRepair,
   pathOpSanitize,
   pathOpsStatus,
+  pathOpWatermark,
   pathOpErrorMessage,
   PathOpsError,
   type PathOpsRedactionVerification,
   type PathOpsStatus,
 } from "./lib/pathOps";
+import { planPathOpReopen } from "./lib/pathOpReopen";
 import {
   annotateStreamedPreflight,
   buildPrepareFilingPlan,
@@ -1024,21 +1031,61 @@ export function App() {
 
   /**
    * The shared reconcile flow for delegated (path-based) ops: an op's output
-   * file reopens as a NEW streamed document over its fresh grant, so the
-   * generation bumps by construction [R1-8] — in-flight work for the old
-   * document goes stale and per-generation caches drop. Every un-gated
-   * streamed workflow (OCR, repair, compress, sanitize, redact, decrypt)
+   * reopens as a NEW document, so the generation bumps by construction
+   * [R1-8] — in-flight work for the old document goes stale and
+   * per-generation caches drop. Every un-gated streamed workflow (OCR,
+   * repair, compress, sanitize, redact, decrypt, stamps, merge/insert)
    * funnels its output through here.
+   *
+   * Memory-mode reopen (v1.1 decision): a BELOW-threshold output is read
+   * once by grant and opened as an ordinary in-memory document — full
+   * editing restored (a 283 MB file compressed to 30 MB becomes editable
+   * again). At/above the threshold the output reopens streamed over its
+   * fresh grant, exactly as before.
    */
   const openPathOpOutput = useCallback(
-    (output: { outputGrant: FileGrant; name: string; sizeBytes: number }) =>
-      openStreamedSource({
+    async (output: { outputGrant: FileGrant; name: string; sizeBytes: number }) => {
+      const plan = await planPathOpReopen(output);
+
+      if (plan.mode === "memory") {
+        // Same per-open resets as `openOpenedFile` — this IS a fresh open.
+        ocrRunRef.current += 1;
+        ocrActiveRef.current = false;
+        setOcrState({ phase: "idle", message: null });
+        resetLegalState();
+        setSelectedPageIndexes(new Set());
+        setPasswordPrompt(null);
+        setRepairCandidate(null);
+
+        const result = await openDocumentFile({
+          bytes: plan.bytes,
+          name: output.name,
+          path: null,
+        });
+
+        if (result.status === "opened") {
+          setSelectedPageIndexes(new Set([0]));
+          // The bytes live in memory now and the document deliberately has
+          // no on-disk identity (filePath null, clean, Save As flow) — the
+          // temp output file has no further use. Best-effort: the startup
+          // sweep covers anything this misses.
+          await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+          return result;
+        }
+
+        // The in-memory engine couldn't open the small output — fall back
+        // to the streamed reopen over the still-valid grant (not released)
+        // rather than dead-ending a file qpdf just verified.
+      }
+
+      return openStreamedSource({
         kind: "rangeGrant",
         grant: output.outputGrant,
         name: output.name,
         sizeBytes: output.sizeBytes,
-      }),
-    [openStreamedSource],
+      });
+    },
+    [openDocumentFile, openStreamedSource, resetLegalState],
   );
 
   useEffect(() => {
@@ -1442,18 +1489,10 @@ export function App() {
         return;
       }
 
-      if (ocrType === "force-ocr") {
-        // The path-based op keeps existing text layers (--skip-text); a full
-        // text-layer rebuild has no file-to-file implementation yet.
-        setOcrState({
-          phase: "error",
-          message: "Rebuilding the text layer isn't available for very large files yet. Make Searchable (which keeps existing text) still works.",
-        });
-        return;
-      }
-
-      // Delegated OCR [R2-2]: OCRmyPDF runs file-to-file on the shell side;
-      // the output reopens as a new streamed document (generation bump).
+      // Delegated OCR [R2-2]: OCRmyPDF runs file-to-file on the shell side
+      // in either mode (`--skip-text` keeps existing text layers;
+      // `--force-ocr` re-renders every page and rebuilds the layer); the
+      // output reopens as a new document (generation bump).
       const grant = pathOpsGrant;
       const runId = ocrRunRef.current + 1;
       ocrRunRef.current = runId;
@@ -1464,10 +1503,12 @@ export function App() {
 
       setOcrState({
         phase: "processing",
-        message: "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+        message: ocrType === "force-ocr"
+          ? "Rebuilding the searchable text layer — the local engine re-renders the file itself; nothing is loaded into memory."
+          : "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
       });
 
-      void pathOpOcr(grant)
+      void pathOpOcr(grant, ocrType)
         .then(async (output) => {
           if (!isCurrentStreamedRun()) {
             return;
@@ -1666,8 +1707,9 @@ export function App() {
       }
 
       // Delegated OCR runs file-to-file through the PathOpsEngine — no
-      // sidecar warm-up, and only the text-preserving pass is available.
-      pendingOcrTypeRef.current = "skip-text";
+      // sidecar warm-up. Both passes are available: skip-text (default) and
+      // force-ocr (full text-layer rebuild).
+      pendingOcrTypeRef.current = ocrType;
       setOcrState({ phase: "confirm", message: null });
       return;
     }
@@ -2521,11 +2563,20 @@ export function App() {
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
     // Streamed mode: Properties works from pdf.js `getMetadata()` on the
-    // shared proxy; Compress and Repair run file-to-file through the
-    // PathOpsEngine. Everything else still mutates bytes — gated [R1-2].
+    // shared proxy; Compress, Repair, Merge, and Insert run file-to-file
+    // through the PathOpsEngine; the Pages grid renders from the shared
+    // proxy and its insert delegates too (the byte-bound grid actions keep
+    // their own honest gates). Everything else still mutates bytes — gated
+    // [R1-2].
     const streamedOrganizeAvailable =
       toolId === "properties" ||
-      (pathOpsGrant !== null && (toolId === "compress" || toolId === "repair"));
+      (pathOpsGrant !== null && (
+        toolId === "compress" ||
+        toolId === "repair" ||
+        toolId === "merge" ||
+        toolId === "insert" ||
+        toolId === "pages"
+      ));
 
     if (streamedDocument && !streamedOrganizeAvailable) {
       setError(STREAMED_DOCUMENT_GATE_MESSAGE);
@@ -2548,7 +2599,10 @@ export function App() {
   }, [pathOpsGrant, setError, streamedDocument]);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
-    if (streamedDocument) {
+    // Streamed mode: both entries (Page Numbers, Watermark) run file-to-file
+    // through the PathOpsEngine stamping ops when the document has a shell
+    // grant; browser streamed docs stay gated.
+    if (streamedDocument && !pathOpsGrant) {
       setError(STREAMED_DOCUMENT_GATE_MESSAGE);
       return;
     }
@@ -2560,7 +2614,7 @@ export function App() {
     setActiveLegalTool(null);
     setActiveOrganizeTool(null);
     editing.setTool("select");
-  }, [editing, setError, streamedDocument]);
+  }, [editing, pathOpsGrant, setError, streamedDocument]);
 
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
@@ -2568,8 +2622,100 @@ export function App() {
     setActiveEditDialogTool(null);
   }, []);
 
+  /**
+   * Delegated merge for a streamed current document [item 4]: the current
+   * grant goes first, added grants follow in order — one qpdf `--pages`
+   * pass, file-to-file — and the merged output funnels through
+   * `openPathOpOutput` behind the standard (openToken, generation) guard.
+   */
+  const mergeStreamedWithGrants = useCallback(
+    async (addGrants: readonly FileGrant[]) => {
+      const grant = pathOpsGrant;
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
+
+      if (!grant || addGrants.length === 0) {
+        return false;
+      }
+
+      try {
+        const output = await pathOpMerge([grant, ...addGrants]);
+
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return false;
+        }
+
+        await openPathOpOutput(output);
+        return true;
+      } catch (error) {
+        if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setError(pathOpErrorMessage(error, "The PDFs could not be merged. Check the files and try again."));
+        }
+
+        return false;
+      }
+    },
+    [document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, setError],
+  );
+
+  /**
+   * Delegated insert-into-current for a streamed document [item 4]: the
+   * dedicated `insert_pages` core op composes target and insert grants in a
+   * single qpdf `--pages` assembly; the output funnels through
+   * `openPathOpOutput` behind the standard stale guard.
+   */
+  const insertStreamedGrant = useCallback(
+    async (insertGrant: FileGrant, insertAtPageIndex: number) => {
+      const grant = pathOpsGrant;
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
+
+      if (!grant) {
+        return false;
+      }
+
+      try {
+        const output = await pathOpInsertPages(grant, insertGrant, insertAtPageIndex);
+
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return false;
+        }
+
+        await openPathOpOutput(output);
+        return true;
+      } catch (error) {
+        if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setError(pathOpErrorMessage(error, "The selected file could not be inserted. Check the file and try again."));
+        }
+
+        return false;
+      }
+    },
+    [document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, setError],
+  );
+
+  /** Grant-based Organize handlers, present only when the streamed current
+   * document can delegate (Tauri + shell grant). Browser streamed docs get
+   * null and keep their gates. */
+  const delegatedOrganizeOps = useMemo(
+    () => (streamedDocument && pathOpsGrant !== null
+      ? { merge: mergeStreamedWithGrants, insert: insertStreamedGrant }
+      : null),
+    [insertStreamedGrant, mergeStreamedWithGrants, pathOpsGrant, streamedDocument],
+  );
+
   const splitAndSavePages = useCallback(
     async (pageGroups: readonly (readonly number[])[]) => {
+      if (streamedDocument) {
+        // The range-split flow is still byte-bound; the honest gate points
+        // at the delegated alternative instead of a generic "could not be
+        // split".
+        setError(
+          "Splitting a very large document by page ranges isn't available yet. Prepare for Filing can split it by size through the local engine.",
+        );
+        return null;
+      }
+
       const parts = await splitPages(
         pageGroups,
         stripPdfExtension(document.fileName ?? "Untitled"),
@@ -2590,7 +2736,7 @@ export function App() {
 
       return saved;
     },
-    [document.fileName, splitPages],
+    [document.fileName, setError, splitPages, streamedDocument],
   );
 
   const cropResize = useCallback(
@@ -2849,10 +2995,52 @@ export function App() {
       const sourceOpenToken = getOpenToken();
       const sourceGeneration = document.generation;
 
+      if (!sourceBytes && pathOpsGrant) {
+        // Delegated Bates stamping: a generated text overlay + one qpdf
+        // --overlay pass, file-to-file. The stamped copy funnels through
+        // openPathOpOutput (memory reopen when small, streamed otherwise).
+        batesApplyingRef.current = true;
+        setBatesState({
+          applying: true,
+          message: "Applying Bates numbers through the local engine...",
+        });
+
+        try {
+          const output = await pathOpBatesStamp(pathOpsGrant, options);
+
+          // Stale guard (same pattern as the post-#127 funnels): a slow op
+          // must never reopen its output over a newer document.
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return true;
+          }
+
+          await openPathOpOutput(output);
+          setBatesState({
+            applying: false,
+            message: "Bates numbers applied — the stamped copy opened as a new document. Use Save As to keep it.",
+          });
+          return true;
+        } catch (error) {
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return true;
+          }
+
+          setBatesState({
+            applying: false,
+            message: pathOpErrorMessage(error, "Bates numbers could not be applied. The document was left unchanged."),
+          });
+          return false;
+        } finally {
+          batesApplyingRef.current = false;
+        }
+      }
+
       if (!sourceBytes) {
         setBatesState({
           applying: false,
-          message: "Open a PDF before applying Bates numbers.",
+          message: streamedDocument
+            ? STREAMED_DOCUMENT_GATE_MESSAGE
+            : "Open a PDF before applying Bates numbers.",
         });
         return false;
       }
@@ -2894,7 +3082,7 @@ export function App() {
         }
       }
     },
-    [batesStamp, document.bytes, document.generation, getOpenToken, isCurrentDocument],
+    [batesStamp, document.bytes, document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, streamedDocument],
   );
 
   const applyPageNumbers = useCallback(
@@ -2903,10 +3091,56 @@ export function App() {
       const sourceOpenToken = getOpenToken();
       const sourceGeneration = document.generation;
 
+      if (!sourceBytes && pathOpsGrant) {
+        // Delegated page numbering: overlay technique, file-to-file; the
+        // numbered copy funnels through openPathOpOutput with the standard
+        // (openToken, generation) stale guard.
+        setSidecarStatus({
+          running: true,
+          message: "Applying page numbers through the local engine...",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+
+        try {
+          const output = await pathOpPageNumbers(pathOpsGrant, options);
+
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
+          await openPathOpOutput(output);
+          setSidecarStatus({
+            running: false,
+            message: "Page numbers applied — the numbered copy opened as a new document. Use Save As to keep it.",
+            removed: [],
+            beforeBytes: null,
+            afterBytes: null,
+          });
+          return true;
+        } catch (error) {
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
+          setSidecarStatus({
+            running: false,
+            message: pathOpErrorMessage(error, "Page numbers could not be applied. The document was left unchanged."),
+            removed: [],
+            beforeBytes: null,
+            afterBytes: null,
+          });
+          return false;
+        }
+      }
+
       if (!sourceBytes) {
         setSidecarStatus((current) => ({
           ...current,
-          message: "Open a PDF before applying page numbers.",
+          message: streamedDocument
+            ? STREAMED_DOCUMENT_GATE_MESSAGE
+            : "Open a PDF before applying page numbers.",
         }));
         return false;
       }
@@ -2936,7 +3170,7 @@ export function App() {
 
       return applied;
     },
-    [document.bytes, document.generation, getOpenToken, pageNumbers],
+    [document.bytes, document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pageNumbers, pathOpsGrant, streamedDocument],
   );
 
   const applyWatermark = useCallback(
@@ -2945,10 +3179,56 @@ export function App() {
       const sourceOpenToken = getOpenToken();
       const sourceGeneration = document.generation;
 
+      if (!sourceBytes && pathOpsGrant) {
+        // Delegated watermark: overlay technique with real transparency
+        // (ExtGState), file-to-file; funneled through openPathOpOutput with
+        // the standard stale guard.
+        setSidecarStatus({
+          running: true,
+          message: "Applying watermark through the local engine...",
+          removed: [],
+          beforeBytes: null,
+          afterBytes: null,
+        });
+
+        try {
+          const output = await pathOpWatermark(pathOpsGrant, options);
+
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
+          await openPathOpOutput(output);
+          setSidecarStatus({
+            running: false,
+            message: "Watermark applied — the watermarked copy opened as a new document. Use Save As to keep it.",
+            removed: [],
+            beforeBytes: null,
+            afterBytes: null,
+          });
+          return true;
+        } catch (error) {
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return false;
+          }
+
+          setSidecarStatus({
+            running: false,
+            message: pathOpErrorMessage(error, "The watermark could not be applied. The document was left unchanged."),
+            removed: [],
+            beforeBytes: null,
+            afterBytes: null,
+          });
+          return false;
+        }
+      }
+
       if (!sourceBytes) {
         setSidecarStatus((current) => ({
           ...current,
-          message: "Open a PDF before applying a watermark.",
+          message: streamedDocument
+            ? STREAMED_DOCUMENT_GATE_MESSAGE
+            : "Open a PDF before applying a watermark.",
         }));
         return false;
       }
@@ -2978,7 +3258,7 @@ export function App() {
 
       return applied;
     },
-    [document.bytes, document.generation, getOpenToken, watermark],
+    [document.bytes, document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, streamedDocument, watermark],
   );
 
   const compressDocument = useCallback(
@@ -4449,6 +4729,7 @@ export function App() {
       onExtract={extractPages}
       onSplit={splitAndSavePages}
       onInsert={insertFile}
+      delegatedOps={delegatedOrganizeOps}
       onExportPageAsImage={exportPageAsImage}
       onCropResize={cropResize}
       onHelpRequested={() => openHelp("pages")}
@@ -4560,7 +4841,7 @@ export function App() {
         <FloatingDialog title="Bates Numbering" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("bates-numbering")}>
           <BatesPanel
             state={batesState}
-            hasDocument={Boolean(document.bytes)}
+            hasDocument={Boolean(document.bytes) || pathOpsGrant !== null}
             pageCount={document.pageCount}
             onApply={applyBates}
           />
@@ -4654,6 +4935,7 @@ export function App() {
             onExtract={extractPages}
             onSplit={splitAndSavePages}
             onInsert={insertFile}
+            delegatedOps={delegatedOrganizeOps}
             onCropResize={cropResize}
             onHelpRequested={() => openHelp(activeOrganizeTool)}
           />
@@ -4895,8 +5177,8 @@ function batchCleanupCompletionMessage(files: readonly {
  * (proxy-based, user-initiated) and the static Passwords panel are always
  * open; the delegated set opens when the document has a shell grant for the
  * PathOpsEngine (Prepare for Filing runs the reduced path pipeline; Batch
- * Cleanup and Production Set are path-based package flows; Redact and
- * Sanitize run file-to-file).
+ * Cleanup and Production Set are path-based package flows; Redact, Sanitize,
+ * and Bates Numbering run file-to-file).
  */
 const STREAMED_LEGAL_TOOLS_ALWAYS: readonly LegalToolId[] = ["scanner-2425", "passwords"];
 const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
@@ -4905,6 +5187,7 @@ const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
   "production-set",
   "redact",
   "sanitize",
+  "bates-numbering",
 ];
 
 function isStreamedLegalToolAvailable(toolId: LegalToolId, delegated: boolean): boolean {

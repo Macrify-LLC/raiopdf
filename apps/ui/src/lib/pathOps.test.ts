@@ -142,7 +142,7 @@ describe("path op invoke plumbing", () => {
     invokeMock.mockResolvedValueOnce(output);
 
     await expect(pathOpOcr(grant)).resolves.toEqual(output);
-    expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", { grant: "grant-1" });
+    expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", { grant: "grant-1", mode: "skip-text" });
   });
 
   it("rethrows a serialized PathOpError payload as a typed PathOpsError", async () => {

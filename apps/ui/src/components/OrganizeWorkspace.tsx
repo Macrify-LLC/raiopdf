@@ -10,7 +10,8 @@ import {
 import { PDFDocument } from "pdf-lib";
 import type { ResizePreset } from "../lib/cropResize";
 import { isTextEntryTarget } from "../lib/domGuards";
-import type { OpenedFile, SavedFile } from "../lib/filePort";
+import type { FileGrant, OpenedFile, SavedFile } from "../lib/filePort";
+import { pathOpPageCount } from "../lib/pathOps";
 import {
   pickPdfsForAdd,
   readFileForAdd,
@@ -41,6 +42,52 @@ import "./OrganizeWorkspace.css";
 
 export type OrganizeFlowId = "pages" | "merge" | "insert" | "crop";
 
+/**
+ * Grant-based handlers for a streamed (large) current document [item 4]:
+ * merge and insert-into-current delegate to the PathOpsEngine, so added
+ * files stay on disk as grants — any size — and never materialize in the
+ * WebView. Null when the current document is in-memory (byte flows apply)
+ * or a browser streamed doc (no shell grants — honest gates stay up).
+ */
+export interface OrganizeDelegatedOps {
+  merge: (addGrants: readonly FileGrant[]) => Promise<boolean>;
+  insert: (insertGrant: FileGrant, insertAtPageIndex: number) => Promise<boolean>;
+}
+
+/** One added file in a delegated (grant-based) add list. */
+interface GrantEntry {
+  grant: FileGrant;
+  name: string;
+  /** Null = not counted yet; rendered honestly, never as 0. */
+  pageCount: number | null;
+}
+
+const DELEGATED_BROWSER_FILE_MESSAGE =
+  "Files dropped from the browser can't be added to a very large document — choose them with the file picker instead.";
+
+/** Grant-based add path: descriptors only, page count by grant, no bytes. */
+async function readGrantEntry(input: FileAddInput): Promise<GrantEntry | null> {
+  if (input instanceof File) {
+    // A DOM File can never yield a shell grant [R3-2]; the delegated flows
+    // require grants, so this add is refused honestly.
+    return null;
+  }
+
+  return {
+    grant: input.grant as FileGrant,
+    name: input.name,
+    pageCount: await pathOpPageCount(input.grant as FileGrant).catch(() => null),
+  };
+}
+
+function formatEntryPages(pageCount: number | null): string {
+  if (pageCount === null) {
+    return "";
+  }
+
+  return ` · ${pageCount} ${pageCount === 1 ? "page" : "pages"}`;
+}
+
 export interface OrganizeWorkspaceProps {
   flow: OrganizeFlowId;
   document: DocumentState;
@@ -61,6 +108,8 @@ export interface OrganizeWorkspaceProps {
   onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+  /** Grant-based merge/insert for a streamed current doc; null = byte flows. */
+  delegatedOps?: OrganizeDelegatedOps | null;
   onExportPageAsImage?: (pageIndex: number) => Promise<boolean>;
   onCropResize: (
     pageIndexes: readonly number[],
@@ -87,6 +136,7 @@ export function OrganizeWorkspace({
   onExtract,
   onSplit,
   onInsert,
+  delegatedOps = null,
   onExportPageAsImage,
   onCropResize,
   onHelpRequested,
@@ -122,6 +172,7 @@ export function OrganizeWorkspace({
         onExtract={onExtract}
         onSplit={onSplit}
         onInsert={onInsert}
+        delegatedOps={delegatedOps}
         onExportPageAsImage={onExportPageAsImage}
         onHelpRequested={onHelpRequested}
       />
@@ -136,10 +187,10 @@ export function OrganizeWorkspace({
             the close control -- an inner header here would just duplicate
             it verbatim. */}
         {flow === "merge" ? (
-          <MergeFlow document={document} onMerge={onMerge} />
+          <MergeFlow document={document} onMerge={onMerge} delegatedMerge={delegatedOps?.merge ?? null} />
         ) : null}
         {flow === "insert" ? (
-          <InsertFlow document={document} onInsert={onInsert} />
+          <InsertFlow document={document} onInsert={onInsert} delegatedInsert={delegatedOps?.insert ?? null} />
         ) : null}
         {flow === "crop" ? (
           <CropResizeFlow document={document} onCropResize={onCropResize} />
@@ -165,6 +216,7 @@ function OrganizePagesGrid({
   onExtract,
   onSplit,
   onInsert,
+  delegatedOps,
   onExportPageAsImage,
   onHelpRequested,
 }: {
@@ -183,6 +235,7 @@ function OrganizePagesGrid({
   onExtract: (pageIndexes: readonly number[]) => Promise<boolean>;
   onSplit: (pageGroups: readonly (readonly number[])[]) => Promise<SavedFile[] | null>;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+  delegatedOps: OrganizeDelegatedOps | null;
   onExportPageAsImage?: ((pageIndex: number) => Promise<boolean>) | undefined;
   onHelpRequested?: (() => void) | undefined;
 }) {
@@ -270,12 +323,28 @@ function OrganizePagesGrid({
 
   async function insertFromInput(input: FileAddInput) {
     try {
+      if (delegatedOps) {
+        // Streamed current doc: the insert delegates to the path-based
+        // `insert_pages` op — the chosen file rides as a grant, any size.
+        const entry = await readGrantEntry(input);
+
+        if (!entry) {
+          setStatus(DELEGATED_BROWSER_FILE_MESSAGE);
+          return;
+        }
+
+        setStatus("Inserting pages through the local engine...");
+        const inserted = await delegatedOps.insert(entry.grant, insertAt);
+        setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted.");
+        return;
+      }
+
       const result = await readFileForAdd(input);
 
       if (result.kind !== "bytes") {
-        // Inserting runs through the in-memory pdf-lib engine, so
-        // above-threshold files stay gated here until the delegated
-        // path-based insert lands (large-PDF-handling plan, Phase 3).
+        // Inserting into an in-memory document runs through pdf-lib, so
+        // above-threshold ADDED files stay gated here (the delegated insert
+        // above only applies when the CURRENT document is streamed).
         const name = result.kind === "descriptor" ? result.descriptor.name : result.name;
         setStatus(tooLargeToAddMessage(name));
         return;
@@ -641,17 +710,23 @@ const OrganizePageCanvas = memo(function OrganizePageCanvas({
   );
 });
 
+type MergeEntry =
+  | { kind: "bytes"; file: OpenedFile & { pageCount: number } }
+  | ({ kind: "grant" } & GrantEntry);
+
 function MergeFlow({
   document,
   onMerge,
+  delegatedMerge,
 }: {
   document: DocumentState;
   onMerge: (files: readonly OpenedFile[]) => Promise<boolean>;
+  delegatedMerge: OrganizeDelegatedOps["merge"] | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [files, setFiles] = useState<Array<OpenedFile & { pageCount: number }>>([]);
+  const [entries, setEntries] = useState<MergeEntry[]>([]);
   const [status, setStatus] = useState<string | null>(null);
-  const totalFiles = files.length + (document.bytes ? 1 : 0);
+  const totalFiles = entries.length + (document.source ? 1 : 0);
 
   async function addPdfInputs(inputs: readonly FileAddInput[]) {
     if (inputs.length === 0) {
@@ -659,12 +734,30 @@ function MergeFlow({
     }
 
     try {
+      if (delegatedMerge) {
+        // Streamed current doc: added files ride as grants for the
+        // path-based merge — any size, no bytes in the WebView.
+        const grantEntries = await Promise.all(inputs.map(readGrantEntry));
+        const added = grantEntries.flatMap((entry): MergeEntry[] => (
+          entry ? [{ kind: "grant", ...entry }] : []
+        ));
+
+        if (added.length > 0) {
+          setEntries((current) => [...current, ...added]);
+        }
+
+        setStatus(added.length === grantEntries.length ? null : DELEGATED_BROWSER_FILE_MESSAGE);
+        return;
+      }
+
       const outcomes = await Promise.all(inputs.map(readOpenedPdfWithCount));
-      const added = outcomes.flatMap((outcome) => (outcome.status === "ok" ? [outcome.file] : []));
+      const added = outcomes.flatMap((outcome): MergeEntry[] => (
+        outcome.status === "ok" ? [{ kind: "bytes", file: outcome.file }] : []
+      ));
       const rejected = outcomes.flatMap((outcome) => (outcome.status === "tooLarge" ? [outcome.name] : []));
 
       if (added.length > 0) {
-        setFiles((current) => [...current, ...added]);
+        setEntries((current) => [...current, ...added]);
       }
 
       setStatus(
@@ -699,13 +792,15 @@ function MergeFlow({
   }
 
   async function merge() {
-    if (files.length === 0) {
+    if (entries.length === 0) {
       setStatus("Add at least one PDF to merge with the current document.");
       return;
     }
 
-    setStatus("Merging PDFs...");
-    const merged = await onMerge(files);
+    setStatus(delegatedMerge ? "Merging PDFs through the local engine..." : "Merging PDFs...");
+    const merged = delegatedMerge
+      ? await delegatedMerge(entries.flatMap((entry) => (entry.kind === "grant" ? [entry.grant] : [])))
+      : await onMerge(entries.flatMap((entry) => (entry.kind === "bytes" ? [entry.file] : [])));
     setStatus(merged ? "Merged PDF opened as the working document." : "The PDFs could not be merged. Check the files and try again.");
   }
 
@@ -714,8 +809,12 @@ function MergeFlow({
       <p className="organize-flow__copy">The current PDF stays first. Added PDFs follow in the order shown.</p>
       <div className="organize-file-list" role="list">
         <p role="listitem">{document.fileName ?? "Current PDF"} · {document.pageCount} {document.pageCount === 1 ? "page" : "pages"}</p>
-        {files.map((file) => (
-          <p key={`${file.name}-${file.pageCount}`} role="listitem">{file.name} · {file.pageCount} {file.pageCount === 1 ? "page" : "pages"}</p>
+        {entries.map((entry) => (
+          <p key={`${entry.kind === "bytes" ? entry.file.name : entry.name}-${entry.kind === "bytes" ? entry.file.pageCount : entry.grant}`} role="listitem">
+            {entry.kind === "bytes"
+              ? `${entry.file.name} · ${entry.file.pageCount} ${entry.file.pageCount === 1 ? "page" : "pages"}`
+              : `${entry.name}${formatEntryPages(entry.pageCount)}`}
+          </p>
         ))}
       </div>
       <input ref={inputRef} className="organize-file-input" type="file" accept="application/pdf" multiple aria-label="Add PDFs to merge" onChange={handleFiles} />
@@ -724,7 +823,7 @@ function MergeFlow({
         Add PDFs...
       </button>
       <ActionStatus message={status} />
-      <button type="button" className="organize-primary" onClick={merge} disabled={files.length === 0}>
+      <button type="button" className="organize-primary" onClick={merge} disabled={entries.length === 0}>
         <CombineExhibitsIcon size={16} />
         Merge {totalFiles} Files
       </button>
@@ -775,12 +874,14 @@ function SplitFlow({
 function InsertFlow({
   document,
   onInsert,
+  delegatedInsert,
 }: {
   document: DocumentState;
   onInsert: (file: OpenedFile, insertAtPageIndex: number) => Promise<boolean>;
+  delegatedInsert: OrganizeDelegatedOps["insert"] | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<(OpenedFile & { pageCount: number }) | null>(null);
+  const [entry, setEntry] = useState<MergeEntry | null>(null);
   const [insertAfter, setInsertAfter] = useState(String(document.currentPage));
   const [touched, setTouched] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -789,6 +890,21 @@ function InsertFlow({
 
   async function setFileFromInput(input: FileAddInput) {
     try {
+      if (delegatedInsert) {
+        // Streamed current doc: the chosen file rides as a grant for the
+        // path-based insert — any size.
+        const grantEntry = await readGrantEntry(input);
+
+        if (!grantEntry) {
+          setStatus(DELEGATED_BROWSER_FILE_MESSAGE);
+          return;
+        }
+
+        setEntry({ kind: "grant", ...grantEntry });
+        setStatus(null);
+        return;
+      }
+
       const outcome = await readOpenedPdfWithCount(input);
 
       if (outcome.status === "tooLarge") {
@@ -796,7 +912,7 @@ function InsertFlow({
         return;
       }
 
-      setFile(outcome.file);
+      setEntry({ kind: "bytes", file: outcome.file });
       setStatus(null);
     } catch {
       setStatus("This PDF could not be opened. Check the file and try again.");
@@ -834,7 +950,7 @@ function InsertFlow({
   async function insert() {
     setTouched(true);
 
-    if (!file) {
+    if (!entry) {
       setStatus("Choose a PDF to insert.");
       return;
     }
@@ -843,8 +959,20 @@ function InsertFlow({
       return;
     }
 
+    if (entry.kind === "grant") {
+      if (!delegatedInsert) {
+        setStatus("The selected file could not be inserted. Check the file and try again.");
+        return;
+      }
+
+      setStatus("Inserting pages through the local engine...");
+      const inserted = await delegatedInsert(entry.grant, pageNumber);
+      setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted. Check the file and try again.");
+      return;
+    }
+
     setStatus("Inserting pages...");
-    const inserted = await onInsert(file, pageNumber);
+    const inserted = await onInsert(entry.file, pageNumber);
     setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted. Check the file and try again.");
   }
 
@@ -855,14 +983,20 @@ function InsertFlow({
         <InsertIcon size={15} />
         Choose PDF...
       </button>
-      {file ? <p className="organize-flow__copy">{file.name} · {file.pageCount} {file.pageCount === 1 ? "page" : "pages"}</p> : null}
+      {entry ? (
+        <p className="organize-flow__copy">
+          {entry.kind === "bytes"
+            ? `${entry.file.name} · ${entry.file.pageCount} ${entry.file.pageCount === 1 ? "page" : "pages"}`
+            : `${entry.name}${formatEntryPages(entry.pageCount)}`}
+        </p>
+      ) : null}
       <label className="organize-field">
         <span>Insert after page</span>
         <input value={insertAfter} inputMode="numeric" onBlur={() => setTouched(true)} onChange={(event) => setInsertAfter(event.currentTarget.value)} />
         {touched && error ? <span className="organize-field__error">{error}</span> : null}
       </label>
       <ActionStatus message={status} />
-      <button type="button" className="organize-primary" onClick={insert} disabled={!file}>
+      <button type="button" className="organize-primary" onClick={insert} disabled={!entry}>
         <InsertIcon size={16} />
         Insert from File
       </button>

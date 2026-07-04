@@ -120,14 +120,40 @@ function buildRawPage(items: readonly PdfTextBoxItem[]): RawChar[] {
       chars.push({ char: item.str[offset] ?? "", itemIndex, offset });
     }
 
-    if (item.hasEOL) {
-      chars.push({ char: "\n" });
-    } else {
-      chars.push({ char: " " });
+    const next = items[itemIndex + 1];
+    const separator = inferItemSeparator(item, next);
+    if (separator !== "") {
+      chars.push({ char: separator });
     }
   }
 
   return chars;
+}
+
+function inferItemSeparator(current: PdfTextBoxItem, next: PdfTextBoxItem | undefined): "" | " " | "\n" {
+  if (
+    next === undefined ||
+    current.str.length === 0 ||
+    next.str.length === 0 ||
+    /\s$/.test(current.str) ||
+    /^\s/.test(next.str)
+  ) {
+    return "";
+  }
+
+  if (current.hasEOL) {
+    return "\n";
+  }
+
+  const lineThreshold = Math.max(current.rect.h, next.rect.h, 8) * 0.5;
+  if (Math.abs(current.rect.y - next.rect.y) > lineThreshold) {
+    return "";
+  }
+
+  const gap = next.rect.x - (current.rect.x + current.rect.w);
+  const spaceThreshold = Math.max(1, Math.max(current.rect.h, next.rect.h, 8) * 0.15);
+
+  return gap > spaceThreshold ? " " : "";
 }
 
 function normalizeString(input: string, options: LocateTextOptions): string {

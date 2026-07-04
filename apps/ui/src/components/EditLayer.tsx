@@ -642,12 +642,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   function removeShapeAtPoint(point: ViewportPoint, shape: PendingShape["shape"]) {
     const pdfPoint = viewportPointToPdfPoint(point, viewport);
-    const hit = pageEdits.find(
-      (edit): edit is PendingShape => edit.kind === "shape" && edit.shape === shape,
-    );
 
-    if (hit && shapeHitTest(hit, pdfPoint)) {
-      removeEdit(hit.id);
+    for (let index = pageEdits.length - 1; index >= 0; index -= 1) {
+      const edit = pageEdits[index];
+
+      if (edit?.kind === "shape" && edit.shape === shape && shapeHitTest(edit, pdfPoint)) {
+        removeEdit(edit.id);
+        return;
+      }
     }
   }
 

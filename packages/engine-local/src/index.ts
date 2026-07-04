@@ -1610,6 +1610,52 @@ function drawTextBoxText(
   });
 }
 
+function computeTextBoxTextRect(
+  page: ReturnType<PDFDocument["getPage"]>,
+  edit: TextRenderableEdit,
+  font: PDFFont,
+): PdfEditRect {
+  const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
+  const lineHeight = fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR;
+  const align = edit.align ?? "left";
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const visualRect = mapPageRectToVisualRect(
+    edit.rect,
+    page.getWidth(),
+    page.getHeight(),
+    pageRotation,
+  );
+  const lines = wrapTextBoxLines({
+    text: edit.text,
+    boxWidthPt: visualRect.w,
+    fontSizePt: fontSize,
+    font,
+  });
+  const lineBounds = lines.map((line, lineIndex) => {
+    const lineWidth = font.widthOfTextAtSize(line, fontSize);
+    const x = visualRect.x + computeTextBoxAlignOffset(visualRect.w, lineWidth, align);
+    const y = visualRect.y + visualRect.h - fontSize - lineIndex * lineHeight;
+
+    return { x, y, w: lineWidth, h: fontSize };
+  });
+  const visualTextRect = unionRects(lineBounds);
+  const pageCorners = [
+    { visualX: visualTextRect.x, visualY: visualTextRect.y },
+    { visualX: visualTextRect.x + visualTextRect.w, visualY: visualTextRect.y },
+    { visualX: visualTextRect.x, visualY: visualTextRect.y + visualTextRect.h },
+    { visualX: visualTextRect.x + visualTextRect.w, visualY: visualTextRect.y + visualTextRect.h },
+  ].map((corner) =>
+    mapVisualPointToPagePoint({
+      ...corner,
+      pageWidth: page.getWidth(),
+      pageHeight: page.getHeight(),
+      pageRotation,
+    }),
+  );
+
+  return boundingRectForPoints(pageCorners, 0);
+}
+
 function computeCalloutLeaderAnchor(rect: PdfEditRect, tip: PdfEditPoint): PdfEditPoint {
   const minX = rect.x;
   const maxX = rect.x + rect.w;
@@ -1962,7 +2008,8 @@ function applyTextBoxAnnotationEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font
   const page = pdf.getPage(edit.pageIndex);
   const pageRotation = normalizePageRotation(page.getRotation().angle);
   const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
-  const appearanceTarget = createAnnotationAppearanceTarget(pdf, edit.rect, pageRotation);
+  const rect = unionRects([edit.rect, computeTextBoxTextRect(page, edit, font)]);
+  const appearanceTarget = createAnnotationAppearanceTarget(pdf, rect, pageRotation);
 
   drawTextBoxText(pdf, edit, font, appearanceTarget);
 
@@ -1987,7 +2034,11 @@ function applyCalloutAnnotationEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font
     edit.arrowhead ?? true
       ? [anchor, ...computeArrowHeadPoints(anchor, edit.tip, thickness)]
       : [anchor, edit.tip];
-  const rect = unionRects([edit.rect, boundingRectForPoints(boundsPoints, 0)]);
+  const rect = unionRects([
+    edit.rect,
+    computeTextBoxTextRect(page, edit, font),
+    boundingRectForPoints(boundsPoints, 0),
+  ]);
   const appearanceTarget = createAnnotationAppearanceTarget(
     pdf,
     rect,

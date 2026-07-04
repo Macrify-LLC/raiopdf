@@ -554,6 +554,32 @@ describe("annotation-layer foundation", () => {
     },
   );
 
+  it.each(freeTextOverflowCases)(
+    "expands $name FreeText bounds for overflowing text and preserves flattened text",
+    async ({ edit }) => {
+      const equivalence = await renderBakedAndFlattenedMark(edit, await createPdf([[612, 792]]));
+      const annotationRect = readRectArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray));
+      const apTextBounds = textRunLineBounds(equivalence.apTextRuns);
+      const annotationTextBounds = transformBounds(apTextBounds, equivalence.placementMatrix);
+      const visibleApRuns = clipTextRunsToBBox(equivalence.apTextRuns, equivalence.apBBox);
+
+      expect(annotationRect.y).toBeLessThan(edit.rect.y);
+      expect(annotationRect.h).toBeGreaterThan(edit.rect.h);
+      expectBoundsToContain(rectToBounds(equivalence.apBBox), apTextBounds);
+      expectBoundsToContain(rectToBounds(annotationRect), annotationTextBounds);
+      expectTextRunsEquivalent(
+        equivalence.bakedTextRuns,
+        visibleApRuns,
+        equivalence.placementMatrix,
+      );
+      expectTextRunsEquivalent(
+        equivalence.bakedTextRuns,
+        equivalence.apTextRuns,
+        equivalence.placementMatrix,
+      );
+    },
+  );
+
   it.each([90, 180, 270] as const)(
     "flattens FreeText text and callout equivalently on %i-degree rotated pages",
     async (rotation) => {
@@ -762,6 +788,34 @@ const freeTextEquivalenceCases: ReadonlyArray<{ name: string; edit: PdfEdit }> =
       strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
       strokeWidthPt: 3,
       boxFill: { r: 1, g: 0.95, b: 0.65 },
+    },
+  },
+];
+
+const freeTextOverflowCases: ReadonlyArray<{
+  name: string;
+  edit: Extract<PdfEdit, { type: "textBox" | "callout" }>;
+}> = [
+  {
+    name: "text box",
+    edit: {
+      type: "textBox",
+      pageIndex: 0,
+      rect: { x: 40, y: 600, w: 110, h: 24 },
+      text: "One\nTwo\nThree\nFour",
+      fontSizePt: 12,
+    },
+  },
+  {
+    name: "callout",
+    edit: {
+      type: "callout",
+      pageIndex: 0,
+      rect: { x: 80, y: 120, w: 100, h: 20 },
+      tip: { x: 240, y: 130 },
+      text: "One\nTwo\nThree\nFour",
+      fontSizePt: 12,
+      strokeWidthPt: 3,
     },
   },
 ];
@@ -1529,6 +1583,13 @@ function expectBoundsClose(actual: Bounds, expected: Bounds): void {
   expectNumberClose(actual.maxY, expected.maxY);
 }
 
+function expectBoundsToContain(actual: Bounds, expected: Bounds): void {
+  expect(actual.minX).toBeLessThanOrEqual(expected.minX + 0.001);
+  expect(actual.minY).toBeLessThanOrEqual(expected.minY + 0.001);
+  expect(actual.maxX).toBeGreaterThanOrEqual(expected.maxX - 0.001);
+  expect(actual.maxY).toBeGreaterThanOrEqual(expected.maxY - 0.001);
+}
+
 function expectNumberClose(actual: number, expected: number): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(0.001);
 }
@@ -1748,6 +1809,34 @@ function rectToBounds(rect: Rect): Bounds {
     maxX: rect.x + rect.w,
     maxY: rect.y + rect.h,
   };
+}
+
+function clipTextRunsToBBox(runs: readonly TextRun[], bbox: Rect): TextRun[] {
+  const bboxBounds = rectToBounds(bbox);
+
+  return runs.filter((run) => boundsContains(bboxBounds, textRunLineBounds([run])));
+}
+
+function textRunLineBounds(runs: readonly TextRun[]): Bounds {
+  return boundsForPoints(
+    runs.flatMap((run) => {
+      const fontSize = run.fontSize ?? 0;
+
+      return [
+        transformPoint(run.matrix, { x: 0, y: 0 }),
+        transformPoint(run.matrix, { x: 0, y: fontSize }),
+      ];
+    }),
+  );
+}
+
+function boundsContains(outer: Bounds, inner: Bounds): boolean {
+  return (
+    outer.minX <= inner.minX + 0.001 &&
+    outer.minY <= inner.minY + 0.001 &&
+    outer.maxX >= inner.maxX - 0.001 &&
+    outer.maxY >= inner.maxY - 0.001
+  );
 }
 
 function paintedPathExtent(path: PaintedPath): Bounds | undefined {

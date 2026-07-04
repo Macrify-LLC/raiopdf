@@ -2,14 +2,14 @@
 id: highlight
 title: Highlight
 group: edit
-summary: Drag over text to add a highlight that saves with the PDF.
+summary: Drag over text to add a real highlight annotation that saves with the PDF.
 order: 10
 ---
 
 # Highlight
 
-Highlight marks text the way a marker would — and it saves into the PDF page,
-so anyone who opens the file sees it.
+Highlight marks text the way a marker would. When you save, it becomes a real
+PDF annotation you can toggle, delete, or flatten later.
 
 ## How to do it
 
@@ -20,8 +20,13 @@ so anyone who opens the file sees it.
 
 ## What to know
 
-- **Highlights are held until you Save,** then baked into the page as
-  translucent rectangles.
+- **Highlights are held until you Save,** then saved as PDF annotations.
+- **Print markup controls printing.** Leave **Print markup** on to include saved
+  highlights when printing, or turn it off before saving new highlights.
+- **Flatten markup makes it permanent.** Use **Flatten markup** when you want
+  the highlight baked into the page.
+- **Prepare for Filing asks first.** If saved RaioPDF markup is present, filing
+  offers to flatten it or keep it live before continuing.
 - **It needs real text to grab onto.** On a scanned page, run **Make Searchable**
   first so there's text to highlight.
 - **Reorganizing pages clears unsaved highlights.** If you rotate, delete, or

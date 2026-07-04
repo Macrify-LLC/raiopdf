@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { act, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPack, preflight, resolvePrepPlan } from "@raiopdf/rules";
 import { PrepareForFilingWorkspace } from "./PrepareForFilingWorkspace";
 import type { DocumentState } from "../hooks/useDocument";
@@ -7,6 +10,21 @@ import type { DocumentState } from "../hooks/useDocument";
 const MiB = 1024 * 1024;
 
 describe("PrepareForFilingWorkspace", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
   it("renders selection checks from the output preflight report", () => {
     const pack = getPack();
     const report = preflight(
@@ -142,6 +160,96 @@ describe("PrepareForFilingWorkspace", () => {
     // the always-visible one-line row instead: its `data-disabled` flag.
     expect(articleContaining(html, "Remove encryption")).toContain('data-disabled="false"');
   });
+
+  it("asks whether to flatten RaioPDF markup annotations before filing", () => {
+    const pack = getPack();
+    const onPrepare = vi.fn();
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={{
+          conversionImpact: null,
+          unappliedRedactionMarks: 0,
+          markupAnnotationCount: 2,
+          normalizePagesSelected: false,
+        }}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={onPrepare}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(document.body.textContent).toContain("RaioPDF markup annotation");
+    click(getButton("Flatten them"));
+
+    expect(onPrepare).toHaveBeenCalledTimes(1);
+    expect(onPrepare.mock.calls[0]?.[1]).toMatchObject({
+      acknowledgeImpact: true,
+      markupAnnotations: "flatten",
+    });
+  });
+
+  it("warns that normalize pages bakes kept RaioPDF markup", () => {
+    const pack = getPack();
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={{
+          conversionImpact: null,
+          unappliedRedactionMarks: 0,
+          markupAnnotationCount: 1,
+          normalizePagesSelected: true,
+        }}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(document.body.textContent).toContain(
+      "Normalize pages will bake kept markup into the filing copy",
+    );
+  });
+
+  function render(element: ReactNode) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(element);
+    });
+  }
 });
 
 /** Finds the `<article ...>` opening tag for the row whose text contains `needle`. */
@@ -152,6 +260,24 @@ function articleContaining(html: string, needle: string): string {
   expect(articleStart).toBeGreaterThan(-1);
   const articleTagEnd = html.indexOf(">", articleStart);
   return html.slice(articleStart, articleTagEnd + 1);
+}
+
+function getButton(name: string): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element): element is HTMLButtonElement => element.textContent?.trim() === name,
+  );
+
+  if (!button) {
+    throw new Error(`Button not found: ${name}`);
+  }
+
+  return button;
+}
+
+function click(button: HTMLButtonElement) {
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
 }
 
 const mockDocument: DocumentState = {

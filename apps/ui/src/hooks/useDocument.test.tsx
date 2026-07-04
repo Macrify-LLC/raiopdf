@@ -2,6 +2,7 @@
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PdfApplyEditsOptions, PdfDocumentHandle, PdfEdit } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import { useDocument } from "./useDocument";
 
@@ -13,6 +14,8 @@ type UseDocumentValue = ReturnType<typeof useDocument>;
 const engineState = vi.hoisted(() => ({
   openBehaviors: [] as Array<"succeed" | "encrypted" | "invalid">,
   openCalls: [] as Uint8Array[],
+  applyOptions: [] as PdfApplyEditsOptions[],
+  flattenedMarkupHandles: [] as PdfDocumentHandle[],
 }));
 
 vi.mock("@raiopdf/engine-local", () => {
@@ -29,19 +32,39 @@ vi.mock("@raiopdf/engine-local", () => {
         throw new PdfEngineError("INVALID_DOCUMENT", "PDF bytes could not be read.");
       }
 
-      return { id: `handle-${engineState.openCalls.length}` };
+      return `handle-${engineState.openCalls.length}` as PdfDocumentHandle;
     }
 
     async pageCount() {
       return 3;
     }
 
-    async saveToBytes(handle: { id: string }) {
-      return new Uint8Array([handle.id.length]);
+    async saveToBytes(handle: PdfDocumentHandle) {
+      return new Uint8Array([String(handle).length]);
     }
 
     async close() {
       return undefined;
+    }
+
+    async applyEdits(
+      _document: PdfDocumentHandle,
+      _edits: readonly PdfEdit[],
+      options: PdfApplyEditsOptions = {},
+    ) {
+      engineState.applyOptions.push(options);
+
+      return "edited-handle" as PdfDocumentHandle;
+    }
+
+    async flattenForm(document: PdfDocumentHandle) {
+      return `${document}-flattened-form` as PdfDocumentHandle;
+    }
+
+    async flattenMarkupAnnotations(document: PdfDocumentHandle) {
+      engineState.flattenedMarkupHandles.push(document);
+
+      return "flattened-markup-handle" as PdfDocumentHandle;
     }
   }
 
@@ -56,6 +79,8 @@ describe("useDocument openFile", () => {
   beforeEach(() => {
     engineState.openBehaviors.length = 0;
     engineState.openCalls.length = 0;
+    engineState.applyOptions.length = 0;
+    engineState.flattenedMarkupHandles.length = 0;
     latest = null;
   });
 
@@ -137,6 +162,57 @@ describe("useDocument openFile", () => {
     expect(getHook().document.dirty).toBe(true);
     expect(getHook().document.fileName).toBe("sealed-order.pdf");
     expect(getHook().document.filePath).toBeNull();
+  });
+
+  it("passes annotation print settings when applying edits", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({
+        bytes: new Uint8Array([4]),
+        name: "markups.pdf",
+      });
+    });
+
+    await act(async () => {
+      await getHook().applyEdits([
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 100, h: 12 }],
+        },
+      ], {
+        flatten: false,
+        printMarkupAnnotations: false,
+      });
+    });
+
+    expect(engineState.applyOptions).toEqual([
+      {
+        markupMode: "annotation",
+        printMarkupAnnotations: false,
+      },
+    ]);
+  });
+
+  it("flattens RaioPDF markup annotations on the current document", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({
+        bytes: new Uint8Array([5]),
+        name: "markups.pdf",
+      });
+    });
+
+    let flattened = false;
+    await act(async () => {
+      flattened = await getHook().flattenMarkupAnnotations();
+    });
+
+    expect(flattened).toBe(true);
+    expect(engineState.flattenedMarkupHandles).toEqual(["handle-1"]);
+    expect(getHook().document.dirty).toBe(true);
   });
 
   function mount(): void {

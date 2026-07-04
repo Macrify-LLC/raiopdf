@@ -5,6 +5,7 @@ import type {
   PdfDocumentHandle,
   PdfEdit,
   PdfEngine,
+  PdfApplyEditsOptions,
   PdfImagePageInput,
   PdfPageNumbersOptions,
   PdfWatermarkOptions,
@@ -1002,13 +1003,24 @@ export function useDocument(options: UseDocumentOptions = {}) {
   );
 
   const applyEdits = useCallback(
-    async (edits: readonly PdfEdit[], options: { flatten: boolean }) => {
+    async (
+      edits: readonly PdfEdit[],
+      options: { flatten: boolean; printMarkupAnnotations?: boolean },
+    ) => {
       if (edits.length === 0) {
         return false;
       }
 
       return enqueueMutation("apply edits", async ({ handle }) => {
-        let editedHandle: PdfDocumentHandle | null = await engine.applyEdits(handle, edits);
+        const applyOptions: PdfApplyEditsOptions = {
+          markupMode: "annotation",
+          printMarkupAnnotations: options.printMarkupAnnotations ?? true,
+        };
+        let editedHandle: PdfDocumentHandle | null = await engine.applyEdits(
+          handle,
+          edits,
+          applyOptions,
+        );
 
         try {
           if (options.flatten) {
@@ -1031,6 +1043,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
     },
     [closeHandle, engine, enqueueMutation],
   );
+
+  const flattenMarkupAnnotations = useCallback(async () => {
+    return enqueueMutation("flatten markup", async ({ handle }) => ({
+      engineHandle: await engine.flattenMarkupAnnotations(handle),
+      options: { dirty: true, hasTextLayer: null },
+    }));
+  }, [engine, enqueueMutation]);
 
   const scrubMetadata = useCallback(async () => {
     return enqueueMutation("scrub metadata", async ({ handle }) => ({
@@ -1218,6 +1237,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     buildBinder,
     batesStamp,
     applyEdits,
+    flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,
     watermark,
@@ -1364,6 +1384,10 @@ function getActionErrorMessage(action: string, error: unknown): string {
 
   if (action === "apply edits") {
     return "The edits could not be applied. The document was left unchanged.";
+  }
+
+  if (action === "flatten markup") {
+    return "The markup annotations could not be flattened. The document was left unchanged.";
   }
 
   if (action === "save") {

@@ -17,6 +17,18 @@ import type { PageViewport } from "../lib/viewportGeometry";
 import type { EditingState } from "../hooks/useEditing";
 import { EditLayer, TextBoxDraftEditor } from "./EditLayer";
 
+type LocalEngine = ReturnType<typeof createLocalPdfEngine>;
+type ApplyEditsArgs = Parameters<LocalEngine["applyEdits"]>;
+
+function applyBakedEdits(
+  engine: LocalEngine,
+  document: ApplyEditsArgs[0],
+  edits: ApplyEditsArgs[1],
+  options: ApplyEditsArgs[2] = {},
+) {
+  return engine.applyEdits(document, edits, { markupMode: "baked", ...options });
+}
+
 describe("TextBoxDraftEditor", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
@@ -53,7 +65,7 @@ describe("TextBoxDraftEditor", () => {
     const previewLines = await readPreviewLines();
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[240, 240]]));
-    const edited = await engine.applyEdits(document, [
+    const edited = await applyBakedEdits(engine, document, [
       {
         type: "textBox",
         pageIndex: 0,

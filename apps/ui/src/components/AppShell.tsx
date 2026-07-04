@@ -91,6 +91,10 @@ export interface AppShellProps {
   onHelpRequested: (articleId?: string) => void;
   onConnectToAi: () => void;
   onMenuCommand: (command: string) => void;
+  printMarkupAnnotations: boolean;
+  onPrintMarkupAnnotationsChange: (next: boolean) => void;
+  onFlattenMarkupAnnotations: () => void;
+  markupAnnotationMessage: string | null;
 }
 
 export function AppShell({
@@ -153,6 +157,10 @@ export function AppShell({
   onHelpRequested,
   onConnectToAi,
   onMenuCommand,
+  printMarkupAnnotations,
+  onPrintMarkupAnnotationsChange,
+  onFlattenMarkupAnnotations,
+  markupAnnotationMessage,
 }: AppShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasDocument = Boolean(document.engineHandle && document.bytes);
@@ -298,6 +306,10 @@ export function AppShell({
           onMarkScannerHit={onMarkScannerHit}
           onHelpRequested={onHelpRequested}
           onConnectToAi={onConnectToAi}
+          printMarkupAnnotations={printMarkupAnnotations}
+          onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
+          onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
+          markupAnnotationMessage={markupAnnotationMessage}
         />
       </div>
       <StatusBar

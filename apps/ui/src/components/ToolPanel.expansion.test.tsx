@@ -232,6 +232,10 @@ function Harness(overrides: Partial<ToolPanelProps>) {
     onApplyWatermark: async () => true,
     compressAvailable: true,
     onCompress: async () => true,
+    printMarkupAnnotations: true,
+    onPrintMarkupAnnotationsChange: () => undefined,
+    onFlattenMarkupAnnotations: () => undefined,
+    markupAnnotationMessage: null,
     ...overrides,
   };
 

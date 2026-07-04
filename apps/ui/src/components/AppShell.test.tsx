@@ -76,6 +76,10 @@ describe("AppShell", () => {
         onCompress={() => Promise.resolve(true)}
         onConnectToAi={() => undefined}
         onMenuCommand={() => undefined}
+        printMarkupAnnotations={true}
+        onPrintMarkupAnnotationsChange={() => undefined}
+        onFlattenMarkupAnnotations={() => undefined}
+        markupAnnotationMessage={null}
       />,
     );
 

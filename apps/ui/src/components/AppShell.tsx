@@ -223,6 +223,7 @@ export function AppShell({
           onRedactionAreaRemoved={onRedactionAreaRemoved}
           searchResults={documentSearch.results}
           activeSearchResultId={documentSearch.activeMatch?.id ?? null}
+          engineStarting={ocrStarting}
         />
         <ToolPanel
           hasDocument={hasDocument}

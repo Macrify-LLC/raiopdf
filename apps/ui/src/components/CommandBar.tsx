@@ -29,6 +29,14 @@ import { COMMAND_BAR_EDIT_TOOLS } from "../lib/toolRegistry";
 import { IconButton } from "./IconButton";
 import "./CommandBar.css";
 
+// Short names the active tool reveals as it expands (Change 3, "Emil-style"
+// tool selection). "Select" -> "Select text" is the one deliberate deviation
+// from the registry's own `label`; every other tool's registry label is
+// already short enough to reuse as-is.
+const EDIT_TOOL_EXPAND_LABELS: Partial<Record<EditToolId, string>> = {
+  select: "Select text",
+};
+
 const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   select: (size) => <SelectTextIcon size={size} />,
   highlight: (size) => <HighlightIcon size={size} />,
@@ -154,6 +162,7 @@ export function CommandBar({
             label={tool.label}
             tooltip={tool.tooltip}
             active={editTool === tool.id}
+            expandLabel={EDIT_TOOL_EXPAND_LABELS[tool.id] ?? tool.label}
             disabled={!hasDocument && tool.id !== "select"}
             onClick={() => toggleTool(tool.id)}
           />

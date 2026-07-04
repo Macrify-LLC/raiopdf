@@ -1160,7 +1160,7 @@ async function installFilingBridgeMock(
         });
       }
 
-      if (url.endsWith("/api/v1/convert/pdf/pdfa")) {
+      if (url.endsWith("/local/pdfa")) {
         testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
 
@@ -1231,7 +1231,7 @@ async function installFilingAndCompressBridgeMock(
         });
       }
 
-      if (url.endsWith("/api/v1/convert/pdf/pdfa")) {
+      if (url.endsWith("/local/pdfa")) {
         testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
 

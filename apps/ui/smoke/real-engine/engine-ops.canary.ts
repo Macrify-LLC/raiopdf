@@ -22,6 +22,7 @@ import {
   mainCanvas,
   openPdf,
   savePdf,
+  saveCanaryArtifact,
 } from "./helpers";
 
 const endpoint = readEngineEndpoint();
@@ -131,6 +132,55 @@ test("Compress: runs a real compression pass and saves a valid PDF", async ({ pa
   await expect(page.getByText("Compression complete.")).toBeVisible({ timeout: 120_000 });
   const saved = await savePdf(page);
   expect(Buffer.from(saved.slice(0, 5)).toString("latin1")).toBe("%PDF-");
+  logs.assertClean(BENIGN_LOG);
+});
+
+test("PDF/A: converts a real PDF to a genuine PDF/A via the bundled Ghostscript", async ({ page }) => {
+  // The input a lawyer exports for e-filing: a real, text-bearing PDF.
+  const source = await createHeavyTextPdf(3);
+
+  // Convert through the real engine's local Ghostscript interceptor. Stirling
+  // 2.14.0 gates /api/v1/convert/pdf/pdfa behind the LibreOffice group (soffice),
+  // which RaioPDF doesn't bundle — so that endpoint is disabled in the payload and
+  // the engine converts on the bundled Ghostscript instead (POST /local/pdfa).
+  const response = await fetch(`${endpoint.baseUrl}/local/pdfa`, {
+    method: "POST",
+    headers: {
+      "X-RaioPDF-Auth": endpoint.token,
+      "Content-Type": "application/pdf",
+      "X-RaioPDF-PdfA-Level": "2",
+      "X-RaioPDF-PdfA-Strict": "false",
+    },
+    body: new Uint8Array(source),
+  });
+  expect(response.status, "engine PDF/A conversion should succeed").toBe(200);
+  const converted = new Uint8Array(await response.arrayBuffer());
+  const latin1 = Buffer.from(converted).toString("latin1");
+
+  // The advertised outcome is a GENUINE PDF/A, not a re-saved PDF: it must carry a
+  // PDF/A output intent (which Ghostscript only writes once it has embedded the
+  // sRGB ICC profile) and identify itself as PDF/A-2 conformance level B in its
+  // XMP metadata. (The ICC stream itself lives in a compressed object stream in
+  // PDF/A-2 output, so we assert on the always-plaintext OutputIntent + pdfaid.)
+  expect(latin1.includes("/OutputIntent"), "PDF/A output must carry an OutputIntent").toBe(true);
+  expect(
+    /pdfaid:part\s*=\s*['"]2/.test(latin1),
+    "XMP metadata must identify the file as PDF/A part 2",
+  ).toBe(true);
+  expect(
+    /pdfaid:conformance\s*=\s*['"]B/.test(latin1),
+    "XMP metadata must declare PDF/A conformance level B",
+  ).toBe(true);
+
+  saveCanaryArtifact("pdfa conversion", "converted-pdfa.pdf", converted,
+    "converted to PDF/A-2b via the bundled Ghostscript — confirm it opens as PDF/A");
+
+  // End-to-end: the converted bytes open and render in the app, not just parse.
+  const logs = captureLogs(page);
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+  await openPdf(page, "converted-pdfa.pdf", converted);
+  await expect(mainCanvas(page)).toBeVisible();
   logs.assertClean(BENIGN_LOG);
 });
 

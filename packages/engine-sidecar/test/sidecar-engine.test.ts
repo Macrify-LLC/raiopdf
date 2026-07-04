@@ -425,7 +425,7 @@ describe("SidecarPdfEngine", () => {
     });
   });
 
-  it("converts to PDF/A through the verified Stirling endpoint", async () => {
+  it("converts to PDF/A through the engine-local Ghostscript interceptor", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(91));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
@@ -436,9 +436,32 @@ describe("SidecarPdfEngine", () => {
     });
 
     expect(await engine.saveToBytes(converted)).toEqual(bytes(91));
-    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/convert/pdf/pdfa");
-    expectFormField(calls[1], "outputFormat", "pdfa-2b");
-    expectFormField(calls[1], "strict", "true");
+    // PDF/A goes to the local Ghostscript interceptor, not Stirling's
+    // LibreOffice-gated (and therefore disabled) /api/v1/convert/pdf/pdfa.
+    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/local/pdfa");
+    expectRawBody(calls[1], [1]);
+    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Level")).toBe("2");
+    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Strict")).toBe("true");
+  });
+
+  it("maps each PDF/A flavor to its Ghostscript conformance level", async () => {
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 1 }),
+      pdfResponse(1),
+      pdfResponse(2),
+      pdfResponse(3),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    for (const flavor of ["pdfa-1", "pdfa-2b", "pdfa-3b"] as const) {
+      await engine.convertToPdfA(document, { flavor });
+    }
+
+    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Level")).toBe("1");
+    expect(headerValue(calls[2], "X-RaioPDF-PdfA-Level")).toBe("2");
+    expect(headerValue(calls[3], "X-RaioPDF-PdfA-Level")).toBe("3");
+    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Strict")).toBe("false");
   });
 
   it("compresses through compress-pdf with quality and grayscale fields", async () => {

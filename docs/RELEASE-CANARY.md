@@ -101,6 +101,7 @@ engine" rows exercise the bundled Stirling/OCR stack; "Real build" rows are clie
 | **Verified redaction** | Content is actually removed, not just covered | Searched text is gone from the saved bytes (re-extraction) | `engine-ops` · real engine |
 | Redaction — no-match edge | Honest when nothing matches | "No matching text was found." | `engine-ops` · real engine |
 | **Compression** | Shrinks a PDF for filing | Real compress pass runs, saves a valid PDF | `engine-ops` · real engine |
+| **PDF/A export** | Produces a genuine PDF/A for e-filing | Output carries a PDF/A OutputIntent + embedded ICC profile + `pdfaid:part=2` XMP, and opens in the app | `engine-ops` · real engine (bundled Ghostscript) |
 | Engine error handling | Fails loud, never silent | Unreachable engine → user-facing error, no blank-app hang | `engine-ops` · real engine |
 | **Sensitive-data scanner** | Catches SSNs/account numbers (Fla. R. Jud. Admin. 2.425) | Planted SSN detected, shown masked, one-click redaction offered | `features` · real build |
 | **Bates numbering** | Sequential numbers stamped across a set | `SMITH000001/2/3` stamped into each page's content bytes | `features` · real build |
@@ -138,12 +139,19 @@ comment, callout), zoom, search, insert-image, and the filing-dialog choreograph
 
 ## Known gaps & findings
 
-- **PDF/A conversion endpoint is disabled in the bundled engine.** The canary surfaced
-  `Stirling PDF request failed: This endpoint is disabled` on `/api/v1/convert/pdf/pdfa`.
-  The "Export PDF/A for ePortal" path in Prepare for Filing therefore can't complete in the
-  current payload. Decide whether PDF/A is intentionally out of the bundle (and the UI should
-  hide/disable the step) or a packaging gap to fix — then either add a real-engine PDF/A check
-  here or document the exclusion. *(This is exactly the class of finding the canary is for.)*
+- **PDF/A conversion runs on the bundled Ghostscript — RESOLVED at the engine layer.** The
+  canary surfaced `Stirling PDF request failed: This endpoint is disabled` on
+  `/api/v1/convert/pdf/pdfa`. Root cause: **Stirling-PDF 2.14.0 gates that endpoint behind
+  the LibreOffice dependency group** (`soffice`), not Ghostscript — the startup log reads
+  `Missing dependency: soffice - Disabling group: LibreOffice (Affected features: ... PDF To
+  Pdfa ...)`. RaioPDF doesn't bundle LibreOffice (anti-bloat), and Stirling 2.14.0 has no
+  `ghostscript` custom-path key to redirect it, so the endpoint is unconditionally disabled in
+  the payload. Fix: `SidecarPdfEngine.convertToPdfA` now posts to `POST /local/pdfa`,
+  intercepted in the Rust auth-proxy, which converts with the **already-bundled Ghostscript**
+  (the same engine Stirling uses under the hood — `PDFA_def.ps` + `iccprofiles/srgb.icc`).
+  Output carries a real PDF/A OutputIntent, embedded ICC, and `pdfaid` XMP. The `PDF/A:
+  converts a real PDF to a genuine PDF/A` canary guards this. Because it's at the engine layer,
+  every caller — Prepare for Filing's "Export PDF/A for ePortal", MCP, batch — gets it.
 - **Decrypt is now lossless (qpdf) — FIXED at the engine layer.** The canary found that a
   real owner-restricted PDF (an `/Encrypt` dict, no user password) lost its text layer:
   both the Repair path and Stirling's `/remove-password` stripped `/Encrypt` but gutted the
@@ -180,7 +188,6 @@ Committed as a work-in-progress. Open items, roughly in priority order:
   2,556 pages; 59 MB / 1,461 pages) are **not** run — `LocalPdfEngine.splitByMaxBytes`
   re-serializes per page (O(n²)) and the browser can't open them at all. Tracked in Blueprint
   **`raiopdf-large-pdf-handling`** (viewer range-streaming + delegate heavy ops to qpdf).
-- **PDF/A convert path** (disabled endpoint, above) has no real-engine check yet.
 - **Decrypt PR2 follow-ups** (open-routing → decrypt not Repair; signature-invalidation
   confirm on the decrypt path; filing empty-password for owner-restricted) — the qpdf backend
   landed; these wiring/UX pieces did not.

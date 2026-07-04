@@ -1387,7 +1387,26 @@ fn proxy_client_with_activity(
         && request_target(&request_head) == Some("/local/decrypt")
     {
         let result = handle_local_decrypt(&mut client, &request_head, &buffered_body);
-        let _ = client.shutdown(Shutdown::Both);
+        // Shutdown::Write (not Both): send the queued response + FIN and close the
+        // write half gracefully. Shutdown::Both disables the receive half too, so
+        // any inbound TCP segment that lands afterwards makes Windows answer with
+        // an RST — surfacing as an intermittent ECONNRESET on the client.
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
+    // PDF/A runs the bundled Ghostscript locally. Stirling 2.14.0 gates its
+    // /api/v1/convert/pdf/pdfa endpoint behind the LibreOffice dependency group
+    // (soffice), which RaioPDF does not bundle — so that endpoint is always
+    // "disabled" in the payload. Ghostscript (already bundled for OCR) is the same
+    // engine Stirling would use under the hood, so we convert here and keep the
+    // whole path on-device.
+    if request_method(&request_head) == Some("POST")
+        && request_target(&request_head) == Some("/local/pdfa")
+    {
+        let result = handle_local_pdfa(&mut client, &request_head, &buffered_body);
+        // Graceful close (see the decrypt branch above): Shutdown::Write, never Both.
+        let _ = client.shutdown(Shutdown::Write);
         return result;
     }
 
@@ -1481,6 +1500,144 @@ fn handle_local_decrypt(
             message.as_bytes(),
         ),
     }
+}
+
+/// Handle `POST /local/pdfa`: raw PDF bytes in the body, the target conformance
+/// level (`1`, `2`, or `3`) in `X-RaioPDF-PdfA-Level` and, when strict, a
+/// `X-RaioPDF-PdfA-Strict: true` header. Responds with the PDF/A (200) or a
+/// plain-text error (422).
+fn handle_local_pdfa(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let content_length = request_header(request_head, "content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let mut body = buffered_body.to_vec();
+    if content_length > body.len() {
+        client.set_read_timeout(Some(Duration::from_secs(60)))?;
+        let mut remaining = vec![0u8; content_length - body.len()];
+        client.read_exact(&mut remaining)?;
+        body.extend_from_slice(&remaining);
+    }
+
+    let level = request_header(request_head, "x-raiopdf-pdfa-level")
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .filter(|level| (1..=3).contains(level))
+        .unwrap_or(2);
+    let strict = request_header(request_head, "x-raiopdf-pdfa-strict")
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    match run_gs_pdfa(&body, level, strict) {
+        Ok(converted) => write_bytes_response(client, 200, "OK", "application/pdf", &converted),
+        Err(message) => write_bytes_response(
+            client,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+/// Convert to PDF/A with the bundled Ghostscript. The stock `PDFA_def.ps` opens
+/// its sRGB output-intent profile by the relative name `(srgb.icc)`, so both it
+/// and the profile are copied into the work dir and Ghostscript runs with that
+/// dir as its cwd. `-dPDFACompatibilityPolicy=2` (strict) makes Ghostscript
+/// refuse to write a non-conformant file; policy `1` converts best-effort.
+fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
+    let ghostscript = resolve_ghostscript()
+        .ok_or_else(|| "ghostscript binary not found in payload".to_string())?;
+    // gs.exe lives at <gs-root>/bin/gs.exe; the profile and definition file hang
+    // off <gs-root>.
+    let gs_root = ghostscript
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "could not resolve ghostscript root directory".to_string())?;
+    let icc_source = gs_root.join("iccprofiles").join("srgb.icc");
+    let def_source = gs_root.join("lib").join("PDFA_def.ps");
+    if !icc_source.is_file() {
+        return Err(format!(
+            "ghostscript sRGB profile not found at {}",
+            icc_source.display()
+        ));
+    }
+    if !def_source.is_file() {
+        return Err(format!(
+            "ghostscript PDF/A definition not found at {}",
+            def_source.display()
+        ));
+    }
+
+    let work_dir = unique_temp_dir("raiopdf-pdfa");
+    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let _cleanup = TempDirGuard(work_dir.clone());
+
+    let in_path = work_dir.join("in.pdf");
+    let out_path = work_dir.join("out.pdf");
+    fs::copy(&icc_source, work_dir.join("srgb.icc"))
+        .map_err(|error| format!("copy sRGB profile: {error}"))?;
+    fs::copy(&def_source, work_dir.join("PDFA_def.ps"))
+        .map_err(|error| format!("copy PDF/A definition: {error}"))?;
+    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
+
+    let policy = if strict { "2" } else { "1" };
+    let mut command = Command::new(&ghostscript);
+    command
+        .current_dir(&work_dir)
+        .arg(format!("-dPDFA={level}"))
+        .arg("-dBATCH")
+        .arg("-dNOPAUSE")
+        .arg("-dNOSAFER")
+        .arg("-sColorConversionStrategy=RGB")
+        .arg("-sDEVICE=pdfwrite")
+        .arg(format!("-dPDFACompatibilityPolicy={policy}"))
+        .arg("-sOutputFile=out.pdf")
+        .arg("PDFA_def.ps")
+        .arg("in.pdf")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_platform_spawn_flags(&mut command);
+
+    let output = command
+        .output()
+        .map_err(|error| format!("ghostscript spawn failed: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "ghostscript PDF/A conversion failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    // Under strict policy Ghostscript exits 0 but withholds the file when the
+    // document cannot be made conformant, so a missing output is a real failure.
+    let converted = fs::read(&out_path)
+        .map_err(|error| format!("ghostscript did not produce a PDF/A output file ({error})"))?;
+    if converted.is_empty() {
+        return Err("ghostscript produced an empty PDF/A output".to_string());
+    }
+    Ok(converted)
+}
+
+fn resolve_ghostscript() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("RAIOPDF_ENGINE_GHOSTSCRIPT") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let payload = env::var_os("RAIOPDF_ENGINE_PAYLOAD_DIR")?;
+    let bin_dir = PathBuf::from(payload).join("ocr").join("gs").join("bin");
+    ["gs.exe", "gs"]
+        .into_iter()
+        .map(|name| bin_dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Losslessly strip encryption with the bundled qpdf. Input goes via a temp file

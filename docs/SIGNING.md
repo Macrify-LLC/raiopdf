@@ -88,9 +88,26 @@ git tag v0.1.0   # example
 #    prepare:shell-bundle (assemble OCR payload + build engine-host/MCP sidecars) ->
 #    sign app + sidecars + installers -> emit updater .sig. The first run is heavy.
 pnpm build:shell:signed
+
+# 6. Upload the signed NSIS installer to the GitHub release.
+$tag = "v0.1.0"  # same tag as the release commit
+$installer = Get-ChildItem apps\shell\src-tauri\target\release\bundle\nsis\*.exe |
+  Select-Object -First 1
+gh release upload $tag $installer.FullName --clobber
+
+# 7. Generate latest.json from that signed installer + .sig, then upload it.
+node scripts/generate-latest-json.mjs --tag $tag --upload
 ```
 
-Output lands in `apps/shell/src-tauri/target/release/bundle/` (`nsis/*.exe`).
+Output lands in `apps/shell/src-tauri/target/release/bundle/` (`nsis/*.exe`,
+`nsis/*.exe.sig`, and `nsis/latest.json`). The updater endpoint uses GitHub's
+`/releases/latest/download/latest.json` URL, so `latest.json` must be uploaded to the
+latest **published** release; a draft or older release will not serve updates to shipped
+apps.
+
+CI's unsigned draft-release flow (`.github/workflows/release.yml`) intentionally does
+**not** generate `latest.json`. The manifest must point at the locally built, signed
+installer only, because it embeds the updater signature for that exact release asset.
 
 ### Verify the signature
 

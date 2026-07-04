@@ -487,6 +487,30 @@ pub enum StartupOutcome {
 pub struct ProxyHandle {
     port: u16,
     shutdown: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
+}
+
+impl ProxyHandle {
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
+    }
+}
+
+struct ProxyLivenessGuard {
+    alive: Arc<AtomicBool>,
+}
+
+impl ProxyLivenessGuard {
+    fn new(alive: Arc<AtomicBool>) -> Self {
+        alive.store(true, Ordering::Relaxed);
+        Self { alive }
+    }
+}
+
+impl Drop for ProxyLivenessGuard {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
+    }
 }
 
 impl PortReservation {
@@ -707,9 +731,11 @@ impl SidecarManager {
                 .lock()
                 .expect("sidecar proxy lock poisoned")
                 .as_ref()
-                .is_some_and(|proxy| Some(proxy.port) == state.port);
+                .is_some_and(|proxy| Some(proxy.port) == state.port && proxy.is_alive());
             if !proxy_running {
-                return Err("authenticated engine proxy is not running".to_string());
+                drop(state);
+                self.stop_child();
+                return Ok(None);
             }
             return Ok(state.port);
         }
@@ -1240,13 +1266,26 @@ fn start_auth_proxy_inner(
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let shutdown = Arc::new(AtomicBool::new(false));
+    let alive = Arc::new(AtomicBool::new(true));
     let shutdown_for_thread = Arc::clone(&shutdown);
+    let alive_for_thread = Arc::clone(&alive);
 
     thread::spawn(move || {
-        run_auth_proxy_inner(listener, engine_port, token, shutdown_for_thread, idle);
+        run_auth_proxy_inner(
+            listener,
+            engine_port,
+            token,
+            shutdown_for_thread,
+            alive_for_thread,
+            idle,
+        );
     });
 
-    Ok(ProxyHandle { port, shutdown })
+    Ok(ProxyHandle {
+        port,
+        shutdown,
+        alive,
+    })
 }
 
 pub fn run_auth_proxy(
@@ -1255,7 +1294,14 @@ pub fn run_auth_proxy(
     token: String,
     shutdown: Arc<AtomicBool>,
 ) {
-    run_auth_proxy_inner(listener, engine_port, token, shutdown, None);
+    run_auth_proxy_inner(
+        listener,
+        engine_port,
+        token,
+        shutdown,
+        Arc::new(AtomicBool::new(true)),
+        None,
+    );
 }
 
 fn run_auth_proxy_inner(
@@ -1263,8 +1309,11 @@ fn run_auth_proxy_inner(
     engine_port: u16,
     token: String,
     shutdown: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
     idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
 ) {
+    let _alive_guard = ProxyLivenessGuard::new(alive);
+
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
@@ -1282,7 +1331,9 @@ fn run_auth_proxy_inner(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => return,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(25));
+            }
         }
     }
 }
@@ -1759,6 +1810,38 @@ mod tests {
     }
 
     #[test]
+    fn auth_proxy_survives_aborted_connection_before_authorized_request() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let speculative = TcpStream::connect(("127.0.0.1", proxy_port))
+            .expect("speculative proxy connection should connect");
+        let _ = speculative.shutdown(Shutdown::Both);
+        drop(speculative);
+        thread::sleep(Duration::from_millis(50));
+
+        assert!(
+            proxy.is_alive(),
+            "proxy accept loop should survive an aborted inbound connection"
+        );
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"GET /api/v1/info/status HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: secret\r\nConnection: close\r\n\r\n",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"));
+        assert!(stub
+            .received_request()
+            .expect("stub should receive authorized request")
+            .starts_with("GET /api/v1/info/status HTTP/1.1"));
+    }
+
+    #[test]
     fn auth_proxy_answers_cors_preflight_before_authorized_post() {
         let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
         let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
@@ -1789,6 +1872,60 @@ mod tests {
             .received_request()
             .expect("stub should receive authorized request")
             .starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
+    }
+
+    #[test]
+    fn proxy_handle_reports_not_alive_after_accept_loop_exits() {
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy =
+            start_auth_proxy(proxy_listener, 1, "secret".to_string()).expect("proxy should start");
+        let stopped_proxy = proxy.clone();
+
+        assert!(proxy.is_alive());
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        wait_for_proxy_not_alive(&stopped_proxy);
+
+        assert!(
+            !stopped_proxy.is_alive(),
+            "proxy handle should report not-alive after the accept loop exits"
+        );
+    }
+
+    #[test]
+    fn reap_ready_port_recovers_dead_proxy_without_returning_stale_port() {
+        let manager = SidecarManager::new(enabled_test_config("dead-proxy-reap"));
+        let proxy_port = pick_free_port()
+            .expect("proxy port reservation")
+            .port()
+            .expect("proxy port");
+
+        *manager.state.lock().expect("state lock") = EngineState::ready(proxy_port);
+        *manager.child.lock().expect("child lock") = Some(spawn_sleep_child());
+        *manager.proxy.lock().expect("proxy lock") = Some(ProxyHandle {
+            port: proxy_port,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            alive: Arc::new(AtomicBool::new(false)),
+        });
+
+        let ready_port = manager
+            .reap_and_get_ready_port()
+            .expect("dead proxy should recover without a hard error");
+
+        assert_eq!(ready_port, None);
+        assert!(
+            manager.child.lock().expect("child lock").is_none(),
+            "dead proxy recovery should stop the engine child"
+        );
+        assert!(
+            manager.proxy.lock().expect("proxy lock").is_none(),
+            "dead proxy recovery should clear the stale proxy handle"
+        );
+        let state = manager.state.lock().expect("state lock").clone();
+        assert!(matches!(state.status, EngineStatus::Stopped));
+        assert_eq!(state.port, None);
+
+        manager.shutdown();
     }
 
     #[test]
@@ -2200,6 +2337,22 @@ mod tests {
         ))
     }
 
+    fn enabled_test_config(name: &str) -> SidecarConfig {
+        let root = test_temp_dir(name);
+        let jar = root.join("stirling.jar");
+        touch(&jar);
+        SidecarConfig::from_env_vars_with_roots(
+            vec![(
+                OsString::from("RAIOPDF_ENGINE_JAR"),
+                jar.as_os_str().to_os_string(),
+            )],
+            root.join("app-data"),
+            None,
+            None,
+            None,
+        )
+    }
+
     fn stop_idle(idle: &Arc<(Mutex<IdleShutdownState>, Condvar)>) {
         let (idle_lock, wake_idle) = &**idle;
         let mut idle_state = idle_lock.lock().expect("idle lock");
@@ -2326,6 +2479,13 @@ mod tests {
             .read_to_string(&mut response)
             .expect("proxy response read");
         response
+    }
+
+    fn wait_for_proxy_not_alive(proxy: &ProxyHandle) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while proxy.is_alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn content_length(head: &[u8]) -> usize {

@@ -1,0 +1,158 @@
+<!doctype html>
+<!-- ai-agent (bare) — chrome-stripped primitive for direct landing-page embedding.
+     Core element only: a chat-style prompt bubble typing an AI command, a connector
+     pulse handing it off, and a mini document whose matching lines pick up a
+     highlighter-yellow sweep as the command lands — ending on a small "N highlighted"
+     count chip. No card shell, header, or footer — the page provides its own card
+     frame + caption. Transparent background, uniform 360x300 canvas so it sits flush
+     in the feature-demo grid (and reads fine floated larger on the dark
+     "Equip your AI" band too — see index.html). -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raio · your AI drives it (bare)</title>
+<style>
+:root{
+  --navy-deep:#0B1A2E;
+  --accent:#4AADE0;
+  --text-body:#2D3E56;
+  --gold:#F5B942;
+  --gold-deep:#E0932E;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  min-height:100%;display:grid;place-items:center;
+  background:transparent;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+.frame{position:relative;width:360px;height:300px;display:grid;place-items:center}
+.stage{position:relative;width:320px;height:246px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+
+/* prompt bubble — the command your own AI sends */
+.bubble{position:relative;display:inline-flex;align-items:center;gap:7px;
+  background:#fff;border-radius:14px 14px 14px 4px;padding:9px 13px;
+  box-shadow:0 14px 28px -14px rgba(11,26,46,.4);
+  opacity:0;transform:translateY(6px) scale(.94);
+  animation:bubbleIn 9.6s var(--ease-out) infinite}
+.bubble__icon{width:12px;height:12px;flex:none;color:var(--gold-deep)}
+.bubble__type{display:inline-block;overflow:hidden;white-space:nowrap;vertical-align:top;width:0;
+  animation:typeReveal 9.6s steps(1,end) infinite}
+.bubble__txt{font:600 9.5px/1 ui-monospace,monospace;color:var(--navy-deep);letter-spacing:.1px;white-space:nowrap}
+
+@keyframes bubbleIn{
+  0%,4%{opacity:0;transform:translateY(6px) scale(.94)}
+  8%{opacity:1;transform:translateY(0) scale(1)}
+  86%{opacity:1;transform:translateY(0) scale(1)}
+  92%{opacity:0;transform:translateY(-4px) scale(.97)}
+  100%{opacity:0;transform:translateY(6px) scale(.94)}
+}
+@keyframes typeReveal{
+  0%,8%{width:0ch;animation-timing-function:steps(33,end)}
+  46%{width:33ch;animation-timing-function:steps(1,end)}
+  88%{width:33ch}
+  100%{width:0ch}
+}
+
+/* connector — hands the parsed command off to the document below */
+.connector{width:16px;height:16px;color:var(--accent);opacity:0;transform:translateY(-4px);
+  animation:connectorPulse 9.6s var(--ease-out) infinite}
+.connector svg{width:100%;height:100%}
+@keyframes connectorPulse{
+  0%,44%{opacity:0;transform:translateY(-4px)}
+  47%{opacity:1;transform:translateY(0)}
+  50%{opacity:1;transform:translateY(2px)}
+  56%{opacity:.35;transform:translateY(4px)}
+  60%,100%{opacity:0;transform:translateY(-4px)}
+}
+
+/* mini document */
+.page{position:relative;width:236px;background:#fff;border-radius:4px;
+  box-shadow:0 16px 34px -16px rgba(11,26,46,.4);padding:15px 17px}
+.page h4{margin:0 0 9px;font-size:8.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--navy-deep);font-weight:700}
+.ln{height:5px;border-radius:3px;background:#dfe6f0;margin:8px 0}
+.ln.s{width:55%}.ln.m{width:88%}.ln.l{width:100%}
+
+.hlline{position:relative;height:13px;margin:8px 0;display:flex;align-items:center}
+.hlline .fake{position:relative;z-index:1;font:600 8px ui-monospace,monospace;color:var(--text-body);white-space:nowrap;letter-spacing:.1px}
+.hlline .hl{position:absolute;left:-4px;right:-4px;top:-2px;bottom:-2px;border-radius:2px;
+  background:rgba(255,225,80,.55);mix-blend-mode:multiply;transform-origin:left;transform:scaleX(0);
+  opacity:0;z-index:0;animation:hlSweep1 9.6s var(--ease-out) infinite}
+.hlline--2 .hl{animation-name:hlSweep2}
+.hlline--3 .hl{animation-name:hlSweep3}
+
+@keyframes hlSweep1{
+  0%,50%{transform:scaleX(0);opacity:0}
+  53%{opacity:1}
+  58%{transform:scaleX(1);opacity:1}
+  88%{transform:scaleX(1);opacity:1}
+  94%{transform:scaleX(1);opacity:0}
+  100%{transform:scaleX(0);opacity:0}
+}
+@keyframes hlSweep2{
+  0%,58%{transform:scaleX(0);opacity:0}
+  61%{opacity:1}
+  66%{transform:scaleX(1);opacity:1}
+  88%{transform:scaleX(1);opacity:1}
+  94%{transform:scaleX(1);opacity:0}
+  100%{transform:scaleX(0);opacity:0}
+}
+@keyframes hlSweep3{
+  0%,66%{transform:scaleX(0);opacity:0}
+  69%{opacity:1}
+  74%{transform:scaleX(1);opacity:1}
+  88%{transform:scaleX(1);opacity:1}
+  94%{transform:scaleX(1);opacity:0}
+  100%{transform:scaleX(0);opacity:0}
+}
+
+/* count chip */
+.chip{position:absolute;top:-10px;right:-10px;display:inline-flex;align-items:center;gap:5px;
+  font-size:9.5px;font-weight:700;color:var(--gold-deep);background:#fff;border:1.4px solid var(--gold);
+  border-radius:20px;padding:3px 9px 3px 6px;box-shadow:0 6px 16px -6px rgba(224,147,46,.45);
+  opacity:0;transform:scale(.8);z-index:4;
+  animation:chipPop 9.6s var(--ease-out) infinite}
+.chip__swatch{width:7px;height:7px;border-radius:2px;background:rgba(255,225,80,.95);flex:none}
+@keyframes chipPop{
+  0%,72%{opacity:0;transform:scale(.8)}
+  76%{opacity:1;transform:scale(1.08)}
+  80%{transform:scale(1)}
+  90%{opacity:1;transform:scale(1)}
+  95%{opacity:0;transform:scale(.85)}
+  100%{opacity:0;transform:scale(.8)}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important}
+  .bubble{opacity:1;transform:none}
+  .bubble__type{width:33ch}
+  .connector{opacity:0}
+  .hlline .hl{opacity:1;transform:scaleX(1)}
+  .chip{opacity:1;transform:scale(1)}
+}
+</style></head>
+<body>
+  <div class="frame">
+    <div class="stage">
+      <div class="bubble">
+        <svg class="bubble__icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M11.5 2 5 11h4l-1.5 7L14 9h-4l1.5-7Z"/></svg>
+        <span class="bubble__type"><span class="bubble__txt">highlight every 'indemnification'</span></span>
+      </div>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v13"/><path d="m6 12 6 6 6-6"/></svg></div>
+      <div class="page">
+        <h4>Master Services Agreement</h4>
+        <div class="ln l"></div>
+        <div class="hlline hlline--1"><span class="hl"></span><span class="fake">Section 8.2 — Vendor indemnification</span></div>
+        <div class="ln m"></div>
+        <div class="hlline hlline--2"><span class="hl"></span><span class="fake">Mutual indemnification of losses</span></div>
+        <div class="ln s"></div>
+        <div class="hlline hlline--3"><span class="hl"></span><span class="fake">Client's indemnification duties</span></div>
+        <div class="ln l"></div>
+        <span class="chip"><span class="chip__swatch"></span>3 highlighted</span>
+      </div>
+    </div>
+  </div>
+<script>/* fit-to-width: scale the fixed 360px demo down so it never clips in a narrow (mobile) cell */
+(function(){var f=document.querySelector('.frame');if(!f)return;f.style.transformOrigin='center center';
+function fit(){var w=document.documentElement.clientWidth;f.style.transform='scale('+Math.min(1,(w/360)).toFixed(3)+')';}
+addEventListener('resize',fit,{passive:true});fit();})();</script>
+</body></html>

@@ -494,6 +494,26 @@
   .costlocal__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; line-height:1.15; }
   .costlocal__cap p{ margin-top:12px; color:var(--light-blue); font-size:16px; }
 
+  /* equip-your-AI band: same dark treatment as .costlocal, single larger demo + proof points */
+  .equipai{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
+  .equipai__cap{ text-align:center; max-width:640px; margin:0 auto 34px; }
+  .equipai__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
+  .equipai__cap p{ margin-top:14px; color:rgba(234,242,251,.86); font-size:16px; line-height:1.65; }
+  .equipai__demo{ max-width:440px; margin:0 auto 36px; }
+  .equipai__frame{ aspect-ratio:6/5; }
+  .equipai__frame iframe{ width:100%; height:100%; border:0; display:block; background:transparent; }
+  .equipai__points{
+    display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px;
+    max-width:1000px; margin:0 auto; list-style:none; padding:0;
+  }
+  .equipai__points li{
+    display:flex; gap:10px; align-items:flex-start; text-align:left;
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); border-radius:12px;
+    padding:16px; font-size:13.5px; line-height:1.55; color:rgba(234,242,251,.88);
+  }
+  .equipai__points svg{ width:16px; height:16px; flex:none; color:var(--gold); margin-top:2px; }
+  .equipai__points strong{ color:#fff; font-weight:700; }
+
   /* finale: dawn atmosphere + download CTA */
   .dawn-band{ height:clamp(200px,24vw,300px); overflow:hidden; line-height:0; background:var(--navy-deep); }
   .finale{ position:relative; background:var(--navy-deep); overflow:hidden; padding:0; }
@@ -507,8 +527,15 @@
     .hero__halo{ width:320px; height:320px; top:-90px; left:-90px; }
     .costlocal__grid{ grid-template-columns:1fr; max-width:460px; }
   }
-  @media (max-width:860px){ .feature-demos__grid{ grid-template-columns:1fr 1fr; } }
-  @media (max-width:560px){ .feature-demos__grid{ grid-template-columns:1fr; } }
+  @media (max-width:860px){
+    .feature-demos__grid{ grid-template-columns:1fr 1fr; }
+    .equipai__points{ grid-template-columns:1fr 1fr; }
+  }
+  @media (max-width:560px){
+    .feature-demos__grid{ grid-template-columns:1fr; }
+    .equipai__points{ grid-template-columns:1fr; }
+    .equipai__demo{ max-width:300px; }
+  }
 
   @media (prefers-reduced-motion: reduce){
     /* the embedded primitives each honor reduced-motion internally */
@@ -608,6 +635,11 @@
     </div>
   </section>
 
+  <!-- sunrise divider -->
+  <div class="motion-band motion-band--divider" aria-hidden="true">
+    <iframe class="motion-frame" src="./motion/03-sun-divider.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
+  </div>
+
   <section class="philosophy" id="philosophy">
     <img class="philosophy__glow" src="shared/sun-mark.svg" alt="" aria-hidden="true">
     <div class="container philosophy__inner">
@@ -647,11 +679,6 @@
       </div>
     </div>
   </section>
-
-  <!-- sunrise divider -->
-  <div class="motion-band motion-band--divider" aria-hidden="true">
-    <iframe class="motion-frame" src="./motion/03-sun-divider.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
-  </div>
 
   <section class="inputs" id="inputs">
     <div class="container">
@@ -728,6 +755,10 @@
             <div class="feature-demo__frame"><iframe class="motion-frame" src="./motion/10-exhibit-stack-v2-bare.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
             <div class="feature-demo__cap"><b>Combine with Exhibits</b><span>Assembled in order, auto-stamped Exhibit A / B / C, auto-bookmarked.</span></div>
           </div>
+          <div class="feature-demo">
+            <div class="feature-demo__frame"><iframe class="motion-frame" src="./motion/16-ai-agent-bare.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
+            <div class="feature-demo__cap"><b>Your AI drives it</b><span>Point your own AI at the local connector — "highlight every 'indemnification'" — and it marks up the file. On-device, off by default.</span></div>
+          </div>
         </div>
       </div>
 
@@ -801,6 +832,39 @@
     </div>
   </section>
 
+  <!-- equip-your-AI: RaioPDF ships no AI of its own — the selling point is the
+       off-by-default local MCP connector that lets your own AI drive its tools -->
+  <section class="equipai" id="equip-ai">
+    <div class="container">
+      <div class="equipai__cap">
+        <span class="eyebrow eyebrow--on-dark">No AI inside. Fully AI-drivable.</span>
+        <h2>Equip your AI with Raio</h2>
+        <p>RaioPDF doesn't have an AI built in — on purpose. What it has is a connector: point your own AI at it, Claude or anything else that speaks MCP, and it can drive the same tools you'd use by hand, right down to highlighting every clause that matches a phrase. Off by default. Nothing leaves your machine.</p>
+      </div>
+      <div class="equipai__demo">
+        <div class="equipai__frame"><iframe class="motion-frame" src="./motion/16-ai-agent-bare.html" title="Your own AI drives RaioPDF's local tools: a highlight command lands on a document and marks up every matching line" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
+      </div>
+      <ul class="equipai__points">
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <span><strong>Your own AI</strong> — Claude, or anything that speaks MCP</span>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <span><strong>Twenty local tools</strong> — highlight, redact, Bates, split, OCR…</span>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <span><strong>On-device</strong> — nothing leaves your computer</span>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <span><strong>Off by default</strong> — you flip it on in Preferences</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
   <section class="pullquote">
     <div class="container">
       <div class="pullquote__inner">
@@ -843,16 +907,17 @@
   </section>
 </main>
 
-<!-- sunrise breath + closing download CTA -->
-<div class="dawn-band" aria-hidden="true">
-  <iframe class="motion-frame" src="./motion/06-dawn-atmosphere.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
-</div>
 <section class="finale" aria-label="Download RaioPDF">
   <div class="finale__cta">
     <iframe class="motion-frame" src="./motion/15-download-cta-v2.html" title="Download RaioPDF for Windows — pre-alpha, first installer ships here" tabindex="-1" scrolling="no" loading="lazy"></iframe>
     <a class="finale__hit" href="#top" aria-label="Go to the download panel at the top of the page"></a>
   </div>
 </section>
+
+<!-- dawn atmosphere — closing breath, below the download -->
+<div class="dawn-band" aria-hidden="true">
+  <iframe class="motion-frame" src="./motion/06-dawn-atmosphere.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
+</div>
 
 <footer class="footer">
   <div class="footer__inner">

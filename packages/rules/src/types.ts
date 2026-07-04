@@ -137,6 +137,12 @@ export type PossibleUnappliedRedactions = {
   possiblyPresent: boolean;
 };
 
+export type SignatureDetectionFacts = {
+  standardAcroFormSignatureCount: number;
+  hasByteRangeOrContentsMarkers: boolean;
+  hasCertificationDictionary: boolean;
+};
+
 export type TextLayerCoverage = {
   imageOnlyPages: readonly number[];
   mixedPages: readonly number[];
@@ -203,6 +209,7 @@ export type DocumentFactName =
   | "formFields"
   | "annotationCount"
   | "signatureFieldCount"
+  | "signatureDetection"
   | "possibleUnappliedRedactions"
   | "textLayerCoverage";
 
@@ -224,6 +231,7 @@ export type DocumentFacts = {
   formFields?: FormFieldFacts;
   annotationCount?: number;
   signatureFieldCount?: number;
+  signatureDetection?: SignatureDetectionFacts;
   possibleUnappliedRedactions?: PossibleUnappliedRedactions;
   textLayerCoverage?: TextLayerCoverage;
   pageTextByPage?: PageTextByPage;

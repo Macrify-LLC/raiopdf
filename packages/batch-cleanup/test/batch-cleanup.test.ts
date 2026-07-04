@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import type {
   PdfCompressOptions,
   PdfBytes,
@@ -104,7 +105,7 @@ describe("runBatchCleanup", () => {
     const encrypted = await makePdf("encrypted.pdf", 1);
     const third = await makePdf("third.pdf", 1);
     const outputDir = path.join(dir, "package");
-    const engine = new RecordingEngine();
+    const engine = new RecordingEngine({ unlockPassword: "open-sesame" });
 
     const result = await runBatchCleanup({
       sources: [
@@ -124,6 +125,42 @@ describe("runBatchCleanup", () => {
     expect(result.files.map((file) => file.status)).toEqual(["done", "failed", "done"]);
     expect(result.files[1]!.reason).toMatch(/password/i);
     expect(result.manifest.uploadFiles).toHaveLength(2);
+  });
+
+  it("unlocks owner-restricted files without a password and records signature invalidations", async () => {
+    const signed = await makeSignedPdf("signed.pdf");
+    const outputDir = path.join(dir, "package");
+    const engine = new RecordingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [
+        { path: signed, facts: facts({ pages: 1, encryptionState: "usage_restricted" }) },
+      ],
+      outputDir,
+      operations: {
+        sanitize: false,
+        scrubMetadata: true,
+        ocrMode: "off",
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!).toMatchObject({
+      status: "done",
+      operations: ["remove-encryption", "scrub-metadata"],
+      signatureInvalidated: true,
+      signatureDetection: {
+        hasByteRangeOrContentsMarkers: true,
+      },
+    });
+    expect(engine.operations).toEqual(["remove-encryption"]);
+
+    const report = JSON.parse(await fs.readFile(path.join(outputDir, result.reportJson), "utf8")) as {
+      files: { signatureInvalidated: boolean }[];
+      summary: { signatureInvalidatedFiles: string[] };
+    };
+    expect(report.files[0]!.signatureInvalidated).toBe(true);
+    expect(report.summary.signatureInvalidatedFiles).toContain("signed.pdf");
+    expect(JSON.stringify(result.manifest)).toContain("\"signatureInvalidated\":true");
   });
 
   it("reuses the per-run password for encrypted files without writing it to reports", async () => {
@@ -147,7 +184,7 @@ describe("runBatchCleanup", () => {
 
     expect(result.files[0]!.status).toBe("done");
     expect(result.files[0]!.operations).toEqual(["remove-encryption", "scrub-metadata"]);
-    expect(engine.operations).toEqual(["remove-encryption"]);
+    expect(engine.operations).toEqual(["remove-encryption", "remove-encryption"]);
     expect(result.manifest.uploadFiles).toHaveLength(1);
 
     const manifestText = JSON.stringify(result.manifest);
@@ -403,17 +440,23 @@ class RecordingEngine extends LocalPdfEngine implements BatchCleanupSidecarEngin
   maxActive = 0;
   private active = 0;
   private readonly delayMs: number;
-  private readonly unlockPassword: string | undefined;
+  private readonly unlockPassword: string;
 
   constructor(options: { delayMs?: number; unlockPassword?: string } = {}) {
     super();
     this.delayMs = options.delayMs ?? 0;
-    this.unlockPassword = options.unlockPassword;
+    this.unlockPassword = options.unlockPassword ?? "";
   }
 
   override async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
     return this.record("remove-encryption", async () => {
       if (password !== this.unlockPassword) {
+        if (password === "") {
+          throw new PdfEngineError(
+            "PASSWORD_REQUIRED",
+            "A PDF password is required to remove encryption.",
+          );
+        }
         throw new Error("The PDF password was not accepted.");
       }
       return new Uint8Array(bytes);
@@ -481,6 +524,23 @@ async function makePdf(name: string, pages: number): Promise<string> {
   const filePath = path.join(dir, name);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, await pdf.save());
+  return filePath;
+}
+
+async function makeSignedPdf(name: string): Promise<string> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const page = pdf.addPage([240, 240]);
+  page.drawText(`Signed ${name}`, { x: 12, y: 120, size: 10, font });
+  pdf.context.register(pdf.context.obj({
+    Type: "Sig",
+    SubFilter: "adbe.pkcs7.detached",
+    ByteRange: [0, 20, 40, 60],
+    Contents: "signature-bytes",
+  }));
+  const filePath = path.join(dir, name);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, await pdf.save({ useObjectStreams: true }));
   return filePath;
 }
 

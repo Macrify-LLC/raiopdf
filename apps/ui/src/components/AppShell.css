@@ -1,7 +1,7 @@
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: 3px 42px 42px minmax(0, 1fr) 30px;
+  grid-template-rows: 3px 42px 42px auto minmax(0, 1fr) 30px;
   background: var(--panel);
   color: var(--body);
   font-family: var(--font-ui);
@@ -19,6 +19,10 @@
 .app-shell__body {
   display: grid;
   grid-template-columns: 158px minmax(0, 1fr) 288px;
+  min-height: 0;
+}
+
+.app-shell__document-banner {
   min-height: 0;
 }
 

@@ -18,6 +18,7 @@ export interface BatchCleanupFile {
   ocrDecision?: string | null;
   ocrType?: "skip-text" | "force-ocr" | null;
   facts?: { garbledPages?: number | null } | null;
+  signatureInvalidated?: boolean | undefined;
   outputs: readonly string[];
 }
 
@@ -49,6 +50,7 @@ export interface BatchCleanupRunResult {
     ocrDecision?: string | null | undefined;
     ocrType?: "skip-text" | "force-ocr" | null | undefined;
     facts?: { garbledPages?: number | null } | null | undefined;
+    signatureInvalidated?: boolean | undefined;
     outputs: readonly string[];
   }[];
 }
@@ -166,6 +168,7 @@ export function BatchCleanupWorkspace({
             ocrDecision: fileResult.ocrDecision ?? null,
             ocrType: fileResult.ocrType ?? null,
             facts: fileResult.facts ?? null,
+            signatureInvalidated: fileResult.signatureInvalidated,
             outputs: fileResult.outputs,
           }
         : file;
@@ -173,6 +176,7 @@ export function BatchCleanupWorkspace({
   }
 
   const visibleFiles = progress.result ? applyResult(progress.result) : files;
+  const signatureInvalidatedFiles = visibleFiles.filter((file) => file.signatureInvalidated);
 
   return (
     <section className="batch-workspace" aria-label="Batch Cleanup">
@@ -324,6 +328,12 @@ export function BatchCleanupWorkspace({
               <span className="batch-workspace__result-part-value">{progress.result.reportJson}</span>
             </div>
           </div>
+          {signatureInvalidatedFiles.length > 0 ? (
+            <p className="batch-workspace__signature-summary" role="status">
+              {signatureInvalidatedFiles.length} unlocked file{signatureInvalidatedFiles.length === 1 ? "" : "s"} had digital signatures invalidated:{" "}
+              {signatureInvalidatedFiles.map((file) => file.name).join(", ")}
+            </p>
+          ) : null}
         </section>
       ) : null}
     </section>
@@ -351,6 +361,9 @@ function fileMetaParts(file: BatchCleanupFile): string[] {
   const garbledForceOcrDecision = garbledForceOcrDecisionFor(file);
   if (garbledForceOcrDecision) {
     parts.push(`Force OCR: ${garbledForceOcrDecision}`);
+  }
+  if (file.signatureInvalidated) {
+    parts.push("Digital signature invalidated");
   }
 
   return parts;

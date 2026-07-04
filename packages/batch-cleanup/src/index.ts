@@ -7,17 +7,21 @@ import type {
   PdfSanitizeRemovedItem,
   PdfSplitPart,
 } from "@raiopdf/engine-api";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { createPackage, readPackageManifest, type PackageManifest } from "@raiopdf/package-writer";
 import {
   buildDocumentFacts,
+  detectSignatureFacts,
   getPack,
+  hasEmbeddedSignatureMarkers,
   preflight,
   type BuildDocumentFactsOptions,
   type DocumentFacts,
   type JurisdictionPack,
   type JurisdictionPackId,
   type PreflightCheck,
+  type SignatureDetectionFacts,
 } from "@raiopdf/rules";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
@@ -91,6 +95,8 @@ export interface BatchCleanupFileResult {
   reason: string | null;
   operations: readonly string[];
   ocrDecision: string;
+  signatureInvalidated: boolean;
+  signatureDetection: SignatureDetectionFacts | null;
   warnings: readonly BatchCleanupFileWarning[];
   facts: BatchCleanupReportFacts;
   outputs: readonly BatchCleanupOutputPart[];
@@ -147,6 +153,15 @@ interface ProducedPdf {
 
 type BatchCleanupOcrType = "skip-text" | "force-ocr";
 
+interface BatchUnlockResult {
+  bytes: Uint8Array;
+  signatureDetection: SignatureDetectionFacts | null;
+}
+
+type BatchCleanupFileResultInput =
+  Omit<BatchCleanupFileResult, "signatureInvalidated" | "signatureDetection"> &
+  Partial<Pick<BatchCleanupFileResult, "signatureInvalidated" | "signatureDetection">>;
+
 const DEFAULT_APP_VERSION = "0.0.0";
 const DEFAULT_OCR_MODE: BatchCleanupOcrMode = "auto-image-only";
 const DEFAULT_COMPRESSION_QUALITY = 5;
@@ -195,6 +210,8 @@ export async function runBatchCleanup(
     sourceSha256: file.sourceSha256,
     status: file.status,
     reason: file.reason,
+    signatureInvalidated: file.signatureInvalidated,
+    signatureDetection: file.signatureDetection,
     outputs: file.outputs.map((output) => ({
       outputName: output.outputName,
       packageRelativePath: output.packageRelativePath,
@@ -295,25 +312,13 @@ async function processFile(
   const sourceSha256 = sha256Hex(sourceBytes);
   const facts = source.facts ?? await buildDocumentFacts(sourceBytes, options.factsOptions);
   let workingFacts = facts;
+  let signatureDetection: SignatureDetectionFacts | null = facts.signatureDetection ?? null;
+  let signatureInvalidated = false;
 
   if (isEncrypted(facts)) {
     const encryptedPlan = planFileOperations(facts, options);
     const encryptedWarnings = options.pack ? packWarnings(facts, options.pack) : [];
     const encryptedReportFacts = summarizeFacts(facts, sourceBytes.byteLength);
-    if (!options.password) {
-      return fileResult({
-        sourcePath,
-        sourceFilename,
-        sourceSha256,
-        status: "failed",
-        reason: "Encrypted input requires a password; no valid password was provided for this batch run.",
-        operations: [],
-        ocrDecision: encryptedPlan.ocrDecision,
-        warnings: encryptedWarnings,
-        facts: encryptedReportFacts,
-        outputs: [],
-      });
-    }
     if (!sidecarEngine) {
       return fileResult({
         sourcePath,
@@ -329,15 +334,20 @@ async function processFile(
       });
     }
     try {
-      workingSourceBytes = await sidecarEngine.removeEncryption(sourceBytes, options.password);
+      const unlock = await unlockProtectedPdfForBatch(sourceBytes, sidecarEngine, options.password);
+      workingSourceBytes = unlock.bytes;
+      signatureDetection = unlock.signatureDetection;
+      signatureInvalidated = signatureDetection ? hasEmbeddedSignatureMarkers(signatureDetection) : false;
       workingFacts = await buildDocumentFacts(workingSourceBytes, options.factsOptions);
+      signatureDetection = workingFacts.signatureDetection ?? signatureDetection;
+      signatureInvalidated = signatureDetection ? hasEmbeddedSignatureMarkers(signatureDetection) : signatureInvalidated;
     } catch (error) {
       return fileResult({
         sourcePath,
         sourceFilename,
         sourceSha256,
         status: "failed",
-        reason: `Encrypted input could not be unlocked: ${errorMessage(error)}`,
+        reason: batchUnlockFailureReason(error),
         operations: ["remove-encryption"],
         ocrDecision: encryptedPlan.ocrDecision,
         warnings: encryptedWarnings,
@@ -360,6 +370,8 @@ async function processFile(
       reason: "Encrypted input could not be converted to an unencrypted filing copy.",
       operations: ["remove-encryption"],
       ocrDecision: plan.ocrDecision,
+      signatureInvalidated,
+      signatureDetection,
       warnings,
       facts: reportFacts,
       outputs: [],
@@ -405,6 +417,8 @@ async function processFile(
         sourceFilename,
         sourceSha256,
         operations: plan.operations,
+        signatureInvalidated,
+        signatureDetection,
         ...(item.pageIndexes === undefined ? {} : { pageIndexes: [...item.pageIndexes] }),
         ...(item.oversized === undefined ? {} : { oversized: item.oversized }),
       });
@@ -427,6 +441,8 @@ async function processFile(
       reason: null,
       operations: plan.operations,
       ocrDecision: plan.ocrDecision,
+      signatureInvalidated,
+      signatureDetection,
       warnings,
       facts: reportFacts,
       outputs,
@@ -440,6 +456,8 @@ async function processFile(
       reason: errorMessage(error),
       operations: plan.operations,
       ocrDecision: plan.ocrDecision,
+      signatureInvalidated,
+      signatureDetection,
       warnings,
       facts: reportFacts,
       outputs: [],
@@ -530,6 +548,76 @@ function isImageOnly(facts: DocumentFacts): boolean {
 
 function isEncrypted(facts: DocumentFacts): boolean {
   return facts.encryptionState === "encrypted" || facts.encryptionState === "usage_restricted";
+}
+
+async function unlockProtectedPdfForBatch(
+  bytes: Uint8Array,
+  sidecarEngine: BatchCleanupSidecarEngine,
+  password: string | undefined,
+): Promise<BatchUnlockResult> {
+  try {
+    return await unlockWithPassword(bytes, sidecarEngine, "");
+  } catch (emptyPasswordError) {
+    if (!isPasswordRequiredError(emptyPasswordError)) {
+      throw new Error(
+        `Encrypted input could not be unlocked: ${errorMessage(emptyPasswordError)}`,
+        { cause: emptyPasswordError },
+      );
+    }
+
+    if (!password) {
+      throw new PdfEngineError(
+        "PASSWORD_REQUIRED",
+        "Encrypted input requires a password; no valid password was provided for this batch run.",
+      );
+    }
+  }
+
+  try {
+    return await unlockWithPassword(bytes, sidecarEngine, password);
+  } catch (passwordError) {
+    throw new Error(
+      `Encrypted input could not be unlocked: ${errorMessage(passwordError)}`,
+      { cause: passwordError },
+    );
+  }
+}
+
+async function unlockWithPassword(
+  bytes: Uint8Array,
+  sidecarEngine: BatchCleanupSidecarEngine,
+  password: string,
+): Promise<BatchUnlockResult> {
+  const unlockedBytes = await sidecarEngine.removeEncryption(bytes, password);
+
+  return {
+    bytes: unlockedBytes,
+    signatureDetection: await detectSignatureFactsOrNull(unlockedBytes),
+  };
+}
+
+async function detectSignatureFactsOrNull(
+  bytes: Uint8Array,
+): Promise<SignatureDetectionFacts | null> {
+  try {
+    return await detectSignatureFacts(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function isPasswordRequiredError(error: unknown): boolean {
+  return error instanceof PdfEngineError &&
+    (error.code === "PASSWORD_REQUIRED" || error.code === "ENCRYPTED_DOCUMENT");
+}
+
+function batchUnlockFailureReason(error: unknown): string {
+  if (error instanceof PdfEngineError && error.code === "PASSWORD_REQUIRED") {
+    return error.message;
+  }
+
+  const message = errorMessage(error);
+  return message.startsWith("Encrypted input") ? message : `Encrypted input could not be unlocked: ${message}`;
 }
 
 async function runOperationPipeline(
@@ -697,6 +785,8 @@ function toMachineReport(
       reason: file.reason,
       operations: [...file.operations],
       ocrDecision: file.ocrDecision,
+      signatureInvalidated: file.signatureInvalidated,
+      signatureDetection: file.signatureDetection,
       warnings: file.warnings.map((warning) => ({ ...warning })),
       facts: {
         ...file.facts,
@@ -824,17 +914,31 @@ async function createBatchReportPdf(
     draw("File", margin, bold);
     draw("Status", margin + 210, bold);
     draw("Operations", margin + 275, bold);
-    draw("Warnings", margin + 430, bold);
+    draw("Warnings", margin + 405, bold);
+    draw("Signatures", margin + 470, bold);
     y -= rowHeight;
   };
 
   drawHeader();
+  const signatureFiles = files.filter((file) => file.signatureInvalidated);
+  if (signatureFiles.length > 0) {
+    draw(
+      `${signatureFiles.length} unlocked file${signatureFiles.length === 1 ? "" : "s"} had digital signatures invalidated: ${
+        signatureFiles.map((file) => file.sourceFilename).join(", ")
+      }`,
+      margin,
+      regular,
+      7,
+    );
+    y -= rowHeight;
+  }
   for (const file of files) {
     nextPageIfNeeded();
     draw(file.sourceFilename, margin);
     draw(file.status, margin + 210);
     draw(file.operations.join(", ") || "-", margin + 275);
-    draw(String(file.warnings.length), margin + 430);
+    draw(String(file.warnings.length), margin + 405);
+    draw(file.signatureInvalidated ? "Invalidated" : "-", margin + 470);
     y -= rowHeight;
     if (file.reason) {
       nextPageIfNeeded();
@@ -846,8 +950,12 @@ async function createBatchReportPdf(
   return pdf.save();
 }
 
-function fileResult(result: BatchCleanupFileResult): BatchCleanupFileResult {
-  return result;
+function fileResult(result: BatchCleanupFileResultInput): BatchCleanupFileResult {
+  return {
+    signatureInvalidated: false,
+    signatureDetection: null,
+    ...result,
+  };
 }
 
 function defaultSanitize(pack: JurisdictionPack | null): boolean {
@@ -884,6 +992,8 @@ function summarizeStatuses(files: readonly BatchCleanupFileResult[]) {
     done: 0,
     failed: 0,
     skipped: 0,
+    signatureInvalidated: 0,
+    signatureInvalidatedFiles: [] as string[],
   };
 
   for (const file of files) {
@@ -893,6 +1003,11 @@ function summarizeStatuses(files: readonly BatchCleanupFileResult[]) {
       summary.failed += 1;
     } else if (file.status === "skipped") {
       summary.skipped += 1;
+    }
+
+    if (file.signatureInvalidated) {
+      summary.signatureInvalidated += 1;
+      summary.signatureInvalidatedFiles.push(file.sourceFilename);
     }
   }
 

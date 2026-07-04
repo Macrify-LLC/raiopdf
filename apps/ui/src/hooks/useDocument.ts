@@ -15,7 +15,12 @@ import {
   RESIZE_PRESET_SIZES,
   type ResizePreset,
 } from "../lib/cropResize";
-import type { TextLayerCoverage } from "@raiopdf/rules";
+import type { SignatureDetectionFacts, TextLayerCoverage } from "@raiopdf/rules";
+import {
+  unlockResultHasSignatureWarning,
+  type ProtectedPdfSource,
+  type UnlockResult,
+} from "../lib/protectedPdfResolver";
 
 export interface PageSizeInches {
   width: number;
@@ -36,7 +41,22 @@ export interface DocumentState {
   hasTextLayer: boolean | null;
   textLayerCoverage: TextLayerCoverage | null;
   pageSizeInches: PageSizeInches | null;
+  signatureInvalidationNotice: SignatureInvalidationNotice | null;
   error: string | null;
+}
+
+export interface SignatureInvalidationNotice {
+  source: ProtectedPdfSource;
+  sourceFileNames: readonly string[];
+  sourceFilePath: string | null;
+  signature: SignatureDetectionFacts;
+}
+
+export interface SignatureUnlockPrompt {
+  source: ProtectedPdfSource;
+  sourceFileNames: readonly string[];
+  sourceFilePath: string | null;
+  signature: SignatureDetectionFacts;
 }
 
 const MIN_ZOOM = 0.25;
@@ -56,6 +76,7 @@ const INITIAL_DOCUMENT: DocumentState = {
   hasTextLayer: null,
   textLayerCoverage: null,
   pageSizeInches: null,
+  signatureInvalidationNotice: null,
   error: null,
 };
 
@@ -66,6 +87,7 @@ interface CommitOptions {
   textLayerCoverage?: TextLayerCoverage | null;
   fileName?: string;
   filePath?: string | null;
+  signatureInvalidationNotice?: SignatureInvalidationNotice | null;
 }
 
 interface ReplaceBytesOptions {
@@ -76,6 +98,7 @@ interface ReplaceBytesOptions {
   expectedSourceBytes?: Uint8Array | null;
   fileName?: string;
   filePath?: string | null;
+  signatureInvalidationNotice?: SignatureInvalidationNotice | null;
 }
 
 export type ReplaceBytesResult = "replaced" | "stale" | "failed";
@@ -109,7 +132,20 @@ export interface BinderExhibitInput {
   sourceFileName?: string | undefined;
 }
 
-export function useDocument() {
+export interface UseDocumentOptions {
+  protectedPdf?: {
+    confirmSignatureInvalidation: (prompt: SignatureUnlockPrompt) => Promise<boolean>;
+    resolve: (bytes: Uint8Array) => Promise<UnlockResult>;
+  } | undefined;
+}
+
+interface PreparedDocument {
+  bytes: Uint8Array;
+  engineHandle: PdfDocumentHandle;
+  signatureInvalidationNotice: SignatureInvalidationNotice | null;
+}
+
+export function useDocument(options: UseDocumentOptions = {}) {
   const engine = useMemo<PdfEngine>(() => new LocalPdfEngine(), []);
   const [document, setDocument] = useState<DocumentState>(INITIAL_DOCUMENT);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
@@ -181,6 +217,10 @@ export function useDocument() {
         hasTextLayer: options.hasTextLayer ?? null,
         textLayerCoverage: options.textLayerCoverage ?? null,
         pageSizeInches: null,
+        signatureInvalidationNotice: mergeSignatureInvalidationNotice(
+          current.signatureInvalidationNotice,
+          options.signatureInvalidationNotice,
+        ),
         error: null,
       }));
 
@@ -257,20 +297,81 @@ export function useDocument() {
     [closeHandle, commitHandle, currentOperation, setError],
   );
 
+  const openPreparedDocument = useCallback(
+    async (file: DocumentFileInput): Promise<PreparedDocument | null> => {
+      try {
+        return {
+          bytes: file.bytes,
+          engineHandle: await engine.open(file.bytes),
+          signatureInvalidationNotice: null,
+        };
+      } catch (error) {
+        if (!isProtectedOpenError(error) || !options.protectedPdf) {
+          throw error;
+        }
+
+        const unlockResult = await options.protectedPdf.resolve(file.bytes);
+        if (unlockResult.status !== "unlocked") {
+          throw unlockFailureError(unlockResult);
+        }
+
+        const signatureInvalidationNotice = unlockResultHasSignatureWarning(unlockResult)
+          ? {
+              source: unlockResult.provenance.source,
+              sourceFileNames: [file.name],
+              sourceFilePath: file.path ?? null,
+              signature: unlockResult.provenance.signature,
+            }
+          : null;
+
+        if (signatureInvalidationNotice) {
+          const confirmed = await options.protectedPdf.confirmSignatureInvalidation({
+            source: signatureInvalidationNotice.source,
+            sourceFileNames: signatureInvalidationNotice.sourceFileNames,
+            sourceFilePath: signatureInvalidationNotice.sourceFilePath,
+            signature: signatureInvalidationNotice.signature,
+          });
+
+          if (!confirmed) {
+            return null;
+          }
+        }
+
+        const unlockedBytes = new Uint8Array(unlockResult.bytes);
+        let unlockedHandle: PdfDocumentHandle | null = null;
+
+        try {
+          unlockedHandle = await engine.open(unlockedBytes);
+
+          return {
+            bytes: unlockedBytes,
+            engineHandle: unlockedHandle,
+            signatureInvalidationNotice,
+          };
+        } catch (openUnlockedError) {
+          await closeHandle(unlockedHandle);
+          throw openUnlockedError;
+        }
+      }
+    },
+    [closeHandle, engine, options.protectedPdf],
+  );
+
   const openFile = useCallback(
     async (file: DocumentFileInput) => {
       const token = openTokenRef.current + 1;
       openTokenRef.current = token;
       const previousHandle = activeHandleRef.current;
-      let openedHandle: PdfDocumentHandle | null = null;
-      activeHandleRef.current = null;
-      activeBytesRef.current = null;
-      setDocument(INITIAL_DOCUMENT);
-      await closeHandle(previousHandle);
+      let prepared: PreparedDocument | null = null;
 
       try {
-        const engineHandle = await engine.open(file.bytes);
-        openedHandle = engineHandle;
+        prepared = await openPreparedDocument(file);
+        if (!prepared) {
+          return false;
+        }
+
+        const { bytes, engineHandle, signatureInvalidationNotice } = prepared;
+        const signatureInvalidated = Boolean(signatureInvalidationNotice);
         const pageCount = await engine.pageCount(engineHandle);
 
         if (openTokenRef.current !== token) {
@@ -278,41 +379,39 @@ export function useDocument() {
           return false;
         }
 
+        activeHandleRef.current = null;
+        activeBytesRef.current = null;
+        await closeHandle(previousHandle);
         activeHandleRef.current = engineHandle;
-        activeBytesRef.current = file.bytes;
+        activeBytesRef.current = bytes;
         setDocument({
-          bytes: file.bytes,
+          bytes,
           engineHandle,
           pageCount,
           currentPage: 1,
           zoom: 1,
           fitWidth: true,
-          dirty: false,
+          dirty: signatureInvalidated,
           fileName: file.name,
-          filePath: file.path ?? null,
-          fileSizeBytes: file.bytes.byteLength,
+          filePath: signatureInvalidated ? null : file.path ?? null,
+          fileSizeBytes: bytes.byteLength,
           hasTextLayer: null,
           textLayerCoverage: null,
           pageSizeInches: null,
+          signatureInvalidationNotice,
           error: null,
         });
+        prepared = null;
         return true;
       } catch (error) {
-        await closeHandle(openedHandle);
+        await closeHandle(prepared?.engineHandle ?? null);
 
         if (openTokenRef.current === token) {
-          activeHandleRef.current = null;
-          activeBytesRef.current = null;
-          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-            activeBytesRef.current = file.bytes;
-            setDocument({
-              ...INITIAL_DOCUMENT,
-              bytes: file.bytes,
-              fileName: file.name,
-              filePath: file.path ?? null,
-              fileSizeBytes: file.bytes.byteLength,
+          if (previousHandle) {
+            setDocument((current) => ({
+              ...current,
               error: getEngineErrorMessage(error),
-            });
+            }));
           } else {
             setDocument({
               ...INITIAL_DOCUMENT,
@@ -324,7 +423,7 @@ export function useDocument() {
         return false;
       }
     },
-    [closeHandle, engine],
+    [closeHandle, engine, openPreparedDocument],
   );
 
   const replaceBytes = useCallback(
@@ -349,34 +448,46 @@ export function useDocument() {
           return null;
         }
 
-        let openedHandle: PdfDocumentHandle | null = null;
         const nextBytes = new Uint8Array(bytes);
-
-        try {
-          const engineHandle = await engine.open(nextBytes);
-          openedHandle = engineHandle;
-          const commitOptions: CommitOptions = {
-            dirty: options.dirty,
-            hasTextLayer: options.hasTextLayer ?? null,
-            textLayerCoverage: options.textLayerCoverage ?? null,
-          };
-
-          if (options.fileName !== undefined) {
-            commitOptions.fileName = options.fileName;
-          }
-
-          if (options.filePath !== undefined) {
-            commitOptions.filePath = options.filePath;
-          }
-
-          return {
-            engineHandle,
-            options: commitOptions,
-          };
-        } catch (error) {
-          await closeHandle(openedHandle);
-          throw error;
+        const replacementFile: DocumentFileInput = {
+          bytes: nextBytes,
+          name: options.fileName ?? "Document.pdf",
+        };
+        if (options.filePath !== undefined) {
+          replacementFile.path = options.filePath;
         }
+
+        const prepared = await openPreparedDocument(replacementFile);
+
+        if (!prepared) {
+          return null;
+        }
+
+        const signatureInvalidationNotice = mergeSignatureInvalidationNotice(
+          options.signatureInvalidationNotice ?? null,
+          prepared.signatureInvalidationNotice,
+        );
+        const commitOptions: CommitOptions = {
+          dirty: options.dirty || Boolean(signatureInvalidationNotice),
+          hasTextLayer: options.hasTextLayer ?? null,
+          textLayerCoverage: options.textLayerCoverage ?? null,
+          signatureInvalidationNotice,
+        };
+
+        if (options.fileName !== undefined) {
+          commitOptions.fileName = options.fileName;
+        }
+
+        if (signatureInvalidationNotice) {
+          commitOptions.filePath = null;
+        } else if (options.filePath !== undefined) {
+          commitOptions.filePath = options.filePath;
+        }
+
+        return {
+          engineHandle: prepared.engineHandle,
+          options: commitOptions,
+        };
       }, requestedToken);
 
       if (replaced) {
@@ -385,7 +496,7 @@ export function useDocument() {
 
       return stale ? "stale" : "failed";
     },
-    [closeHandle, engine, enqueueMutation],
+    [enqueueMutation, openPreparedDocument],
   );
 
   const getOpenToken = useCallback(() => openTokenRef.current, []);
@@ -484,10 +595,20 @@ export function useDocument() {
 
       return enqueueMutation("merge", async ({ handle }) => {
         const openedHandles: PdfDocumentHandle[] = [];
+        let signatureInvalidationNotice: SignatureInvalidationNotice | null = null;
 
         try {
           for (const file of files) {
-            openedHandles.push(await engine.open(file.bytes));
+            const prepared = await openPreparedDocument(file);
+            if (!prepared) {
+              return null;
+            }
+
+            openedHandles.push(prepared.engineHandle);
+            signatureInvalidationNotice = mergeSignatureInvalidationNotice(
+              signatureInvalidationNotice,
+              prepared.signatureInvalidationNotice,
+            );
           }
 
           return {
@@ -497,6 +618,7 @@ export function useDocument() {
               currentPage: 1,
               fileName: "Merged.pdf",
               filePath: null,
+              signatureInvalidationNotice,
             },
           };
         } finally {
@@ -504,7 +626,7 @@ export function useDocument() {
         }
       });
     },
-    [engine, enqueueMutation],
+    [engine, enqueueMutation, openPreparedDocument],
   );
 
   const extractPages = useCallback(
@@ -595,7 +717,12 @@ export function useDocument() {
         let insertedHandle: PdfDocumentHandle | null = null;
 
         try {
-          insertedHandle = await engine.open(file.bytes);
+          const prepared = await openPreparedDocument(file);
+          if (!prepared) {
+            return null;
+          }
+
+          insertedHandle = prepared.engineHandle;
 
           return {
             engineHandle: await engine.insertPages(handle, insertAtPageIndex, insertedHandle),
@@ -604,6 +731,7 @@ export function useDocument() {
               currentPage: insertAtPageIndex + 1,
               fileName: "Inserted Pages.pdf",
               filePath: null,
+              signatureInvalidationNotice: prepared.signatureInvalidationNotice,
             },
           };
         } finally {
@@ -611,7 +739,7 @@ export function useDocument() {
         }
       });
     },
-    [closeHandle, engine, enqueueMutation],
+    [closeHandle, engine, enqueueMutation, openPreparedDocument],
   );
 
   const cropResizePages = useCallback(
@@ -676,10 +804,24 @@ export function useDocument() {
 
       return enqueueMutation("build binder", async ({ handle }) => {
         const openedHandles: PdfDocumentHandle[] = [];
+        let signatureInvalidationNotice: SignatureInvalidationNotice | null = null;
 
         try {
           for (const exhibit of exhibits) {
-            openedHandles.push(await engine.open(exhibit.bytes));
+            const prepared = await openPreparedDocument({
+              bytes: exhibit.bytes,
+              name: exhibit.sourceFileName ?? exhibit.label,
+              path: null,
+            });
+            if (!prepared) {
+              return null;
+            }
+
+            openedHandles.push(prepared.engineHandle);
+            signatureInvalidationNotice = mergeSignatureInvalidationNotice(
+              signatureInvalidationNotice,
+              prepared.signatureInvalidationNotice,
+            );
           }
 
           return {
@@ -698,6 +840,7 @@ export function useDocument() {
               currentPage: 1,
               fileName,
               filePath: null,
+              signatureInvalidationNotice,
             },
           };
         } finally {
@@ -705,7 +848,7 @@ export function useDocument() {
         }
       });
     },
-    [engine, enqueueMutation, setError],
+    [engine, enqueueMutation, openPreparedDocument, setError],
   );
 
   const batesStamp = useCallback(
@@ -1034,8 +1177,16 @@ function resolveCurrentPage(
 }
 
 function getEngineErrorMessage(error: unknown): string {
+  if (error instanceof PdfEngineError && error.code === "PASSWORD_REQUIRED") {
+    return "This PDF needs an open password before Raio can unlock it.";
+  }
+
   if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
     return "This PDF is encrypted. Use Legal > Prepare for Filing to remove encryption with the open password.";
+  }
+
+  if (error instanceof PdfEngineError && error.code === "UNSUPPORTED") {
+    return error.message;
   }
 
   if (error instanceof PdfEngineError && error.code === "EMPTY_RESULT") {
@@ -1046,6 +1197,10 @@ function getEngineErrorMessage(error: unknown): string {
 }
 
 function getActionErrorMessage(action: string, error: unknown): string {
+  if (error instanceof PdfEngineError && error.code === "PASSWORD_REQUIRED") {
+    return "This PDF needs an open password before Raio can unlock it.";
+  }
+
   if (error instanceof PdfEngineError && error.code === "EMPTY_RESULT") {
     return "A document must keep at least one page.";
   }
@@ -1095,4 +1250,57 @@ function getActionErrorMessage(action: string, error: unknown): string {
   }
 
   return getEngineErrorMessage(error);
+}
+
+function isProtectedOpenError(error: unknown): boolean {
+  return error instanceof PdfEngineError &&
+    (error.code === "ENCRYPTED_DOCUMENT" || error.code === "PASSWORD_REQUIRED");
+}
+
+function unlockFailureError(result: Exclude<UnlockResult, { status: "unlocked" }>): PdfEngineError {
+  if (result.status === "password_required") {
+    return new PdfEngineError(
+      "PASSWORD_REQUIRED",
+      "This PDF needs an open password before Raio can unlock it.",
+    );
+  }
+
+  return result.error;
+}
+
+function mergeSignatureInvalidationNotice(
+  current: SignatureInvalidationNotice | null | undefined,
+  next: SignatureInvalidationNotice | null | undefined,
+): SignatureInvalidationNotice | null {
+  if (!next) {
+    return current ?? null;
+  }
+
+  if (!current) {
+    return next;
+  }
+
+  return {
+    ...current,
+    sourceFileNames: uniqueStrings([
+      ...current.sourceFileNames,
+      ...next.sourceFileNames,
+    ]),
+    sourceFilePath: current.sourceFilePath ?? next.sourceFilePath,
+    signature: {
+      standardAcroFormSignatureCount:
+        current.signature.standardAcroFormSignatureCount +
+        next.signature.standardAcroFormSignatureCount,
+      hasByteRangeOrContentsMarkers:
+        current.signature.hasByteRangeOrContentsMarkers ||
+        next.signature.hasByteRangeOrContentsMarkers,
+      hasCertificationDictionary:
+        current.signature.hasCertificationDictionary ||
+        next.signature.hasCertificationDictionary,
+    },
+  };
+}
+
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
 }

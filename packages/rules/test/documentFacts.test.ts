@@ -8,7 +8,9 @@ import {
 import {
   buildDocumentFacts,
   detectEncryptionState,
+  detectSignatureFacts,
   deriveTextLayerQuality,
+  hasEmbeddedSignatureMarkers,
 } from "../src/index";
 import {
   extractPageTextByPage,
@@ -80,6 +82,11 @@ describe("document fact extractors", () => {
     expect(facts.embeddedFileCount).toBe(2);
     expect(facts.formFields).toEqual({ count: 2, anyFilled: true });
     expect(facts.signatureFieldCount).toBe(1);
+    expect(facts.signatureDetection).toEqual({
+      standardAcroFormSignatureCount: 1,
+      hasByteRangeOrContentsMarkers: false,
+      hasCertificationDictionary: false,
+    });
     expect(facts.annotationCount).toBe(3);
     expect(facts.possibleUnappliedRedactions).toEqual({
       redactAnnotationCount: 1,
@@ -200,6 +207,28 @@ describe("document fact extractors", () => {
     expect(facts.encryptionState).toBe("encrypted");
     expect(facts.pages).toEqual([]);
     expect(facts.errors?.map((error) => error.fact)).toContain("textLayerCoverage");
+  });
+
+  it("detects embedded signature dictionaries and certification permissions", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]);
+    const signature = pdf.context.obj({
+      Type: "Sig",
+      SubFilter: "adbe.pkcs7.detached",
+      ByteRange: [0, 20, 40, 60],
+      Contents: PDFString.of("signature-bytes"),
+    });
+    const signatureRef = pdf.context.register(signature);
+    pdf.catalog.set(PDFName.of("Perms"), pdf.context.obj({ DocMDP: signatureRef }));
+
+    const signatureFacts = await detectSignatureFacts(await pdf.save({ useObjectStreams: true }));
+
+    expect(signatureFacts).toEqual({
+      standardAcroFormSignatureCount: 0,
+      hasByteRangeOrContentsMarkers: true,
+      hasCertificationDictionary: true,
+    });
+    expect(hasEmbeddedSignatureMarkers(signatureFacts)).toBe(true);
   });
 });
 

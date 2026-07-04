@@ -195,6 +195,49 @@ describe("useDocument streamed mode", () => {
     expect(getHook().document.source?.kind).toBe("rangeFile");
   });
 
+  it("a path-op reconcile reopens the output grant as a NEW identity (generation bump)", async () => {
+    mount();
+
+    // Original streamed document (the op input).
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "grant-input" as FileGrant, sizeBytes: 283_000_000 },
+        name: "appendix.pdf",
+        path: "grant-input",
+      });
+    });
+    const inputToken = getHook().getOpenToken();
+    const inputGeneration = getHook().document.generation;
+
+    // Reconcile [R1-8]: the op's output grant opens as a fresh source — the
+    // same call `openPathOpOutput` makes in App.tsx.
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "grant-output" as FileGrant, sizeBytes: 240_000_000 },
+        name: "appendix-ocr.pdf",
+        path: "grant-output",
+      });
+    });
+
+    const state = getHook().document;
+    expect(getHook().getOpenToken()).toBe(inputToken + 1);
+    expect(state.generation).toBeGreaterThan(inputGeneration);
+    expect(state.source).toEqual({
+      kind: "rangeGrant",
+      grant: "grant-output",
+      sizeBytes: 240_000_000,
+      generation: state.generation,
+    });
+    // In-flight work guarded by the old identity is stale by construction.
+    act(() => {
+      getHook().setStreamedPageCount(2556, { generation: inputGeneration });
+    });
+    expect(getHook().document.pageCount).toBe(0);
+    // Streamed docs stay clean across a reconcile — Save As by grant copy.
+    expect(state.dirty).toBe(false);
+    expect(state.filePath).toBe("grant-output");
+  });
+
   function mount(): void {
     render(<Harness onReady={(value) => { latest = value; }} />);
   }

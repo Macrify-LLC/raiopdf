@@ -125,6 +125,14 @@ impl FileGrants {
             .cloned()
             .ok_or_else(|| "File grant not found".to_string())
     }
+
+    /// Drop a grant (used when a path-op temp output is released). Best-effort:
+    /// a poisoned lock just leaves the entry behind for the startup sweep.
+    fn remove(&self, grant: &str) {
+        if let Ok(mut paths) = self.paths.lock() {
+            paths.remove(grant);
+        }
+    }
 }
 
 #[tauri::command]
@@ -477,6 +485,11 @@ pub fn run() {
             app.manage(diagnostics);
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
+            // Grants are in-memory, so every path-op temp dir left behind by a
+            // previous run is dead on a fresh start — sweep them all, off the
+            // startup path.
+            let stale_path_ops_root = app.path().app_data_dir()?.join(path_ops::PATH_OPS_DIR);
+            std::thread::spawn(move || path_ops::purge_stale_outputs(&stale_path_ops_root));
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -531,7 +544,8 @@ pub fn run() {
             path_ops::path_op_compress,
             path_ops::path_op_sanitize,
             path_ops::path_op_normalize,
-            path_ops::path_op_scrub_metadata
+            path_ops::path_op_scrub_metadata,
+            path_ops::path_op_release_output
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

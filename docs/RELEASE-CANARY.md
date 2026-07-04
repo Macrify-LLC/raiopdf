@@ -130,6 +130,33 @@ The `.gitignore` blocks `fixtures.local/` and `*.local.pdf`; a `git add -n` over
 canary dir stages only source files. These real-fixture tests are maintainer-run
 regressions — contributors without the files still run everything else.
 
+### Streamed large-PDF scenario (synthetic fixture, opt-in)
+
+The large-pdf-handling acceptance (multi-hundred-MB filings that used to OOM on
+open) runs in two opt-in pieces, both driven by a fixture that is **generated,
+never committed**:
+
+```bash
+# 1. Generate the synthetic fixture (~270 pages / ~270 MB of incompressible
+#    noise images + per-page "MARKER-n" text) into smoke/fixtures.local/:
+cd apps/ui && node smoke/generate-large-fixture.mjs
+
+# 2. Browser streamed-open scenario (range transport, lazy search, honest
+#    gates) — part of the regular smoke config, skips when the fixture is
+#    absent:
+pnpm exec playwright test smoke/streamed-large.smoke.ts
+
+# 3. Path-op acceptance (split-by-max-bytes parts pass qpdf --check;
+#    prepare_filing scrub+split with per-part facts preflight):
+RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload \
+RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
+  cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
+```
+
+When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
+disk, point `RAIOPDF_LARGE_FIXTURE` (and the smoke test's env var of the same
+name) at them instead — the synthetic file is the stand-in, not the goal.
+
 ### Covered by the mocked breadth suite (CI, every PR)
 
 These advertised features run in [`app.smoke.ts`](../apps/ui/smoke/app.smoke.ts) against the

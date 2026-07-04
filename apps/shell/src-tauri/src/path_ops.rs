@@ -34,6 +34,9 @@ use crate::FileGrants;
 /// range-read snapshot error so the UI can share the "reopen it" message).
 pub const ERR_FILE_CHANGED: &str = "FILE_CHANGED";
 
+/// Directory name under app data where every per-op temp dir lives.
+pub const PATH_OPS_DIR: &str = "path-ops";
+
 /// All `PrepPlanStepId`s from `packages/rules`, whether or not an op
 /// implements them. The status response maps each one to its registered op
 /// (or null), which is what makes the checklist rule closed-form [R7-1].
@@ -146,6 +149,48 @@ fn discover_toolchain(app: &tauri::AppHandle) -> PathOpsToolchain {
     PathOpsToolchain::discover(resource_dir.as_deref())
 }
 
+fn path_ops_root(app: &tauri::AppHandle) -> OpResult<PathBuf> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| PathOpError {
+            code: "IO_ERROR",
+            message: format!("app data dir unavailable: {error}"),
+        })?
+        .join(PATH_OPS_DIR))
+}
+
+/// Startup sweep (large-pdf-handling housekeeping): file grants live only in
+/// memory, so on a fresh app start EVERY leftover `<app-data>/path-ops/<uuid>/`
+/// dir is unreachable by construction — delete them all. Runs on a background
+/// thread from `setup` so a multi-hundred-MB stale output never delays startup.
+pub fn purge_stale_outputs(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// The per-op temp dir a released output grant should delete: the grant's
+/// parent `<uuid>` dir, but ONLY when that dir sits directly under the
+/// path-ops root. A grant pointing anywhere else (a user's own file) must
+/// never trigger a directory delete.
+fn releasable_output_dir(path: &Path, root: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    if parent.parent() == Some(root) {
+        Some(parent.to_path_buf())
+    } else {
+        None
+    }
+}
+
 /// Per-op working directory under app data. Kept on success (grants reference
 /// files inside it), removed wholesale on failure.
 struct OpWorkDir {
@@ -155,14 +200,7 @@ struct OpWorkDir {
 
 impl OpWorkDir {
     fn create(app: &tauri::AppHandle) -> OpResult<Self> {
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| PathOpError {
-                code: "IO_ERROR",
-                message: format!("app data dir unavailable: {error}"),
-            })?
-            .join("path-ops");
+        let root = path_ops_root(app)?;
         let dir = root.join(Uuid::new_v4().to_string());
         fs::create_dir_all(&dir).map_err(|error| PathOpError {
             code: "IO_ERROR",
@@ -370,6 +408,35 @@ fn split_descriptors(
             })
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Output lifecycle
+// ---------------------------------------------------------------------------
+
+/// Delete one path-op temp output eagerly (the page-range print flow reads
+/// the extracted bytes and has no further use for the file). Only grants that
+/// resolve inside `<app-data>/path-ops/<uuid>/` are releasable; the whole
+/// per-op dir is removed and the grant is dropped.
+#[tauri::command]
+pub fn path_op_release_output(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+) -> Result<(), PathOpError> {
+    let path = resolve_grant(&grants, &grant)?;
+    let root = path_ops_root(&app)?;
+    let Some(dir) = releasable_output_dir(&path, &root) else {
+        return Err(PathOpError {
+            code: "INVALID_INPUT",
+            message: "grant does not reference a path-op output".to_string(),
+        });
+    };
+    grants.remove(&grant);
+    fs::remove_dir_all(&dir).map_err(|error| PathOpError {
+        code: "IO_ERROR",
+        message: format!("failed to delete path-op output: {error}"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -813,4 +880,58 @@ pub async fn path_op_redact_areas(
             ],
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn purge_deletes_every_stale_output_entry() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let stale_a = root.path().join("uuid-a");
+        let stale_b = root.path().join("uuid-b");
+        fs::create_dir_all(&stale_a).expect("create a");
+        fs::create_dir_all(&stale_b).expect("create b");
+        fs::write(stale_a.join("out.pdf"), b"pdf").expect("write a");
+        fs::write(root.path().join("loose.tmp"), b"tmp").expect("write loose");
+
+        purge_stale_outputs(root.path());
+
+        assert!(!stale_a.exists());
+        assert!(!stale_b.exists());
+        assert!(!root.path().join("loose.tmp").exists());
+        // The root itself survives for the next op.
+        assert!(root.path().exists());
+    }
+
+    #[test]
+    fn purge_tolerates_a_missing_root() {
+        purge_stale_outputs(Path::new("/definitely/not/present/path-ops"));
+    }
+
+    #[test]
+    fn releasable_output_dir_only_matches_dirs_directly_under_the_root() {
+        let root = Path::new("/data/path-ops");
+
+        assert_eq!(
+            releasable_output_dir(Path::new("/data/path-ops/uuid-1/out.pdf"), root),
+            Some(PathBuf::from("/data/path-ops/uuid-1")),
+        );
+        // A user file elsewhere must never be deletable through release.
+        assert_eq!(
+            releasable_output_dir(Path::new("/home/user/case.pdf"), root),
+            None,
+        );
+        // A file directly in the root has no per-op dir to delete.
+        assert_eq!(
+            releasable_output_dir(Path::new("/data/path-ops/out.pdf"), root),
+            None
+        );
+        // Nested deeper than one uuid dir is not the op layout either.
+        assert_eq!(
+            releasable_output_dir(Path::new("/data/path-ops/uuid-1/nested/out.pdf"), root),
+            None,
+        );
+    }
 }

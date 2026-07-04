@@ -1,6 +1,22 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isFilingStepEnabled, type PathOpsStatus } from "./pathOps";
+import {
+  isFilingStepEnabled,
+  pathOpErrorMessage,
+  pathOpOcr,
+  pathOpRedactAreas,
+  PathOpsError,
+  PathOpsUnavailableError,
+  type PathOpsFileGrant,
+  type PathOpsStatus,
+} from "./pathOps";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: invokeMock,
+}));
 
 function statusFixture(overrides?: Partial<PathOpsStatus>): PathOpsStatus {
   return {
@@ -62,5 +78,87 @@ describe("isFilingStepEnabled (closed-form checklist rule)", () => {
     // include it — the rule must fail closed, not assume availability.
     const status = statusFixture();
     expect(isFilingStepEnabled(status, "remove-encryption")).toBe(false);
+  });
+});
+
+describe("pathOpErrorMessage", () => {
+  it("maps FILE_CHANGED onto the reopen message", () => {
+    const message = pathOpErrorMessage(
+      new PathOpsError({ code: "FILE_CHANGED", message: "raw drift detail" }),
+      "fallback",
+    );
+    expect(message).toBe("This file changed on disk — reopen it.");
+  });
+
+  it("surfaces VERIFICATION_FAILED and TOOLCHAIN_MISSING verbatim", () => {
+    expect(
+      pathOpErrorMessage(
+        new PathOpsError({ code: "VERIFICATION_FAILED", message: "text survived on page 3" }),
+        "fallback",
+      ),
+    ).toBe("text survived on page 3");
+    expect(
+      pathOpErrorMessage(
+        new PathOpsError({ code: "TOOLCHAIN_MISSING", message: "qpdf not found" }),
+        "fallback",
+      ),
+    ).toBe("qpdf not found");
+  });
+
+  it("uses the caller's fallback for everything else", () => {
+    expect(
+      pathOpErrorMessage(new PathOpsError({ code: "OP_FAILED", message: "stderr soup" }), "fallback"),
+    ).toBe("fallback");
+    expect(pathOpErrorMessage(new Error("boom"), "fallback")).toBe("fallback");
+  });
+
+  it("keeps the desktop-only message for PathOpsUnavailableError", () => {
+    expect(pathOpErrorMessage(new PathOpsUnavailableError(), "fallback")).toBe(
+      "Path-based engine ops are only available in the desktop app.",
+    );
+  });
+});
+
+describe("path op invoke plumbing", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  const grant = "grant-1" as PathOpsFileGrant;
+
+  it("invokes the op command with the grant and returns the payload", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "doc-ocr.pdf",
+      sizeBytes: 10,
+      pageCount: 2,
+      opReport: { op: "ocr", tool: "ocrmypdf", durationMs: 1, inputSizeBytes: 9, outputSizeBytes: 10, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpOcr(grant)).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", { grant: "grant-1" });
+  });
+
+  it("rethrows a serialized PathOpError payload as a typed PathOpsError", async () => {
+    invokeMock.mockRejectedValueOnce({ code: "VERIFICATION_FAILED", message: "still readable" });
+
+    const rejection = pathOpRedactAreas(grant, [{ pageIndex: 0, x: 1, y: 1, w: 2, h: 2 }]);
+    await expect(rejection).rejects.toBeInstanceOf(PathOpsError);
+    await rejection.catch((error: unknown) => {
+      expect((error as PathOpsError).code).toBe("VERIFICATION_FAILED");
+      expect((error as PathOpsError).message).toBe("still readable");
+    });
+  });
+
+  it("throws PathOpsUnavailableError outside the Tauri runtime", async () => {
+    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    await expect(pathOpOcr(grant)).rejects.toBeInstanceOf(PathOpsUnavailableError);
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

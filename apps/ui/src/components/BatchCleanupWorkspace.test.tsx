@@ -1,8 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { getPack } from "@raiopdf/rules";
-import { BatchCleanupWorkspace } from "./BatchCleanupWorkspace";
-import type { OpenedFile } from "../lib/filePort";
+import { BatchCleanupWorkspace, type BatchCleanupSourceFile } from "./BatchCleanupWorkspace";
 
 describe("BatchCleanupWorkspace", () => {
   it("renders human status labels and friendly per-file reasons", () => {
@@ -72,8 +71,9 @@ describe("BatchCleanupWorkspace", () => {
   });
 });
 
-const mockFile: OpenedFile = {
+// No bytes anywhere: the workspace's queue is path-based end-to-end, so a
+// streamed (large) current document seeds the queue exactly like a small one.
+const mockFile: BatchCleanupSourceFile = {
   name: "source.pdf",
   path: "/home/jacob/cases/source.pdf",
-  bytes: new Uint8Array([1]),
 };

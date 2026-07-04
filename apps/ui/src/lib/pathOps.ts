@@ -7,20 +7,17 @@
  * in `filePort.ts`), outputs come back as fresh grants plus metadata. Document
  * bytes never cross into the WebView.
  *
- * This module is intentionally NOT wired into App.tsx or any workspace —
- * integration owns that. It is also Tauri-only: the browser runtime has no
- * file grants, so every call throws `PathOpsUnavailableError` there (callers
- * gate on `isPathOpsRuntime()` first).
+ * This module is Tauri-only: the browser runtime has no file grants, so every
+ * call throws `PathOpsUnavailableError` there (callers gate on
+ * `isPathOpsRuntime()` first).
  */
 
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { PrepPlanStepId } from "@raiopdf/rules";
+import type { FileGrant } from "./filePort";
 
-/**
- * A shell file grant. Integration note: once Lane A's branded `FileGrant`
- * alias lands in `filePort.ts`, this alias should point at it.
- */
-export type PathOpsFileGrant = string;
+/** A shell file grant — the branded `FileGrant` from `filePort.ts` [R1-9]. */
+export type PathOpsFileGrant = FileGrant;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -55,6 +52,32 @@ export class PathOpsUnavailableError extends Error {
     super("Path-based engine ops are only available in the desktop app.");
     this.name = "PathOpsUnavailableError";
   }
+}
+
+/**
+ * Shared user-facing mapping for path-op failures:
+ * - `FILE_CHANGED` → the Phase 1 snapshot message ("reopen it").
+ * - `VERIFICATION_FAILED` → the op's message verbatim (fail-closed redaction
+ *   reports exactly what it found; softening it would hide the finding).
+ * - `TOOLCHAIN_MISSING` → the op's message (it names the missing tool).
+ * - anything else → the caller's fallback copy.
+ */
+export function pathOpErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof PathOpsUnavailableError) {
+    return error.message;
+  }
+
+  if (error instanceof PathOpsError) {
+    if (error.code === "FILE_CHANGED") {
+      return "This file changed on disk — reopen it.";
+    }
+
+    if (error.code === "VERIFICATION_FAILED" || error.code === "TOOLCHAIN_MISSING") {
+      return error.message;
+    }
+  }
+
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,4 +371,13 @@ export function pathOpScrubMetadata(
   grant: PathOpsFileGrant,
 ): Promise<PathOpOutput> {
   return invokePathOp("path_op_scrub_metadata", { grant });
+}
+
+/**
+ * Eagerly delete one path-op temp output (the page-range print flow reads the
+ * extracted bytes and has no further use for the file). The startup sweep
+ * covers anything this misses, so callers may treat it as best-effort.
+ */
+export function pathOpReleaseOutput(grant: PathOpsFileGrant): Promise<void> {
+  return invokePathOp("path_op_release_output", { grant });
 }

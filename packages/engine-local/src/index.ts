@@ -1924,12 +1924,18 @@ function padRect(rect: PdfEditRect, padding: number): PdfEditRect {
 }
 
 function boundingRectForPoints(points: readonly PdfEditPoint[], padding: number): PdfEditRect {
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
+  let minX = points[0]?.x ?? Infinity;
+  let minY = points[0]?.y ?? Infinity;
+  let maxX = points[0]?.x ?? -Infinity;
+  let maxY = points[0]?.y ?? -Infinity;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const point = points[index]!;
+    if (point.x < minX) minX = point.x;
+    if (point.y < minY) minY = point.y;
+    if (point.x > maxX) maxX = point.x;
+    if (point.y > maxY) maxY = point.y;
+  }
 
   return {
     x: minX - padding,

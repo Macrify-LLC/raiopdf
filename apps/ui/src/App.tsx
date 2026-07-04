@@ -24,8 +24,10 @@ import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   buildDocumentFacts,
+  detectSignatureFacts,
   getPack,
   getPackIntegrityBanner,
+  hasEmbeddedSignatureMarkers,
   listPacks,
   preflight,
   resolvePrepPlan,
@@ -106,7 +108,7 @@ import {
   resolveDesktopFileGrantPaths,
 } from "./lib/localPaths";
 import { writeProductionLastUsed } from "./lib/productionHints";
-import { resolveProtectedPdfBytes } from "./lib/protectedPdfResolver";
+import { resolveProtectedPdfBytes, type ProtectedPdfSource } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
 import { recordDiagnosticEvent } from "./lib/diagnostics";
 import {
@@ -269,6 +271,38 @@ export function App() {
         }),
     }),
     [confirmSignatureInvalidation, engineBridge.removeEncryption],
+  );
+  // Decryption strips a document's signature. Callers that decrypt outside the
+  // useDocument open path (the manual password dialog, Prepare for Filing) must
+  // reuse the same signature-invalidation confirmation the open path runs, so a
+  // signed document still warns before we hand back the unlocked bytes. Returns
+  // true to proceed, false if the user declines.
+  const confirmDecryptSignatureInvalidation = useCallback(
+    async (
+      unlockedBytes: Uint8Array,
+      source: ProtectedPdfSource,
+      sourceFileNames: readonly string[],
+      sourceFilePath: string | null,
+    ): Promise<boolean> => {
+      let signature;
+      try {
+        signature = await detectSignatureFacts(unlockedBytes);
+      } catch {
+        // Couldn't inspect the unlocked bytes — don't block a legitimate unlock
+        // over a detection hiccup (mirrors the resolver's "output-unverified").
+        return true;
+      }
+      if (!hasEmbeddedSignatureMarkers(signature)) {
+        return true;
+      }
+      return confirmSignatureInvalidation({
+        source,
+        sourceFileNames,
+        sourceFilePath,
+        signature,
+      });
+    },
+    [confirmSignatureInvalidation],
   );
   const {
     document,
@@ -1408,6 +1442,22 @@ export function App() {
         })
         .then(async (decryptedBytes) => {
           if (!isCurrentUnlock()) {
+            return;
+          }
+
+          // Signed documents: unlocking strips the signature. Warn (and let the
+          // user back out) before opening, matching the automatic open path.
+          const proceed = await confirmDecryptSignatureInvalidation(
+            decryptedBytes,
+            password ? "user-password" : "owner-restricted",
+            [prompt.fileName],
+            prompt.filePath,
+          );
+          if (!isCurrentUnlock()) {
+            return;
+          }
+          if (!proceed) {
+            setPasswordPrompt(null);
             return;
           }
 
@@ -2761,7 +2811,13 @@ export function App() {
         selectedSteps.has("remove-encryption") &&
         (filingFacts?.encryptionState === "encrypted" || filingFacts?.encryptionState === "usage_restricted")
       ) {
-        if (!options.removeEncryptionPassword) {
+        const ownerRestricted = filingFacts?.encryptionState === "usage_restricted";
+        const removeEncryptionPassword = options.removeEncryptionPassword ?? "";
+        // Owner-restricted files carry permission flags but no open password, so
+        // they decrypt with an empty password -- don't force a prompt for
+        // something the user never set. A genuinely encrypted file still needs
+        // its open password.
+        if (!removeEncryptionPassword && !ownerRestricted) {
           setFilingProgress({
             phase: "error",
             message: "Enter the PDF open password to remove encryption before preparing this file.",
@@ -2778,14 +2834,34 @@ export function App() {
 
         setFilingProgress({
           phase: "normalizing",
-          message: "Removing encryption with the password you entered...",
+          message:
+            ownerRestricted && !removeEncryptionPassword
+              ? "Removing owner restrictions from the filing copy..."
+              : "Removing encryption with the password you entered...",
         });
         filingSourceBytes = await engineBridge.removeEncryption(
           sourceBytes,
-          options.removeEncryptionPassword,
+          removeEncryptionPassword,
         );
 
         if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        // Decrypting a signed document invalidates its signature; reuse the same
+        // confirmation the open path runs so the filing copy never strips a
+        // signature silently.
+        const proceed = await confirmDecryptSignatureInvalidation(
+          filingSourceBytes,
+          removeEncryptionPassword ? "user-password" : "owner-restricted",
+          [document.fileName ?? "Document.pdf"],
+          document.filePath ?? null,
+        );
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+        if (!proceed) {
+          setFilingProgress({ phase: "idle", message: null });
           return;
         }
       }

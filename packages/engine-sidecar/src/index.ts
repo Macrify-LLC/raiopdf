@@ -60,6 +60,15 @@ export interface SidecarOcrOptions {
   deskew?: boolean;
 }
 
+export interface SidecarOcrBytesOptions extends SidecarOcrOptions {
+  knownPageCount?: number;
+}
+
+export type SidecarOcrBytesResult = {
+  bytes: Uint8Array;
+  pageCount: number;
+};
+
 type StirlingErrorBody = {
   detail?: unknown;
   error?: unknown;
@@ -653,7 +662,30 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     const storedDocument = this.get(document);
     const pageCount = await this.pageCount(document);
-    const formData = createFormData(storedDocument.bytes);
+    const result = await this.ocrBytes(storedDocument.bytes, {
+      ...options,
+      knownPageCount: pageCount,
+    });
+
+    return this.store(result.bytes, result.pageCount);
+  }
+
+  async ocrBytes(
+    bytes: PdfBytes,
+    options: SidecarOcrBytesOptions = {},
+  ): Promise<SidecarOcrBytesResult> {
+    const normalizedBytes = normalizeBytes(bytes);
+    const pageCount = options.knownPageCount ?? (await this.fetchPageCount(normalizedBytes));
+    const response = await this.postOcr(normalizedBytes, options);
+
+    return {
+      bytes: await readBytes(response),
+      pageCount,
+    };
+  }
+
+  private async postOcr(bytes: Uint8Array, options: SidecarOcrOptions): Promise<Response> {
+    const formData = createFormData(bytes);
     const languages = options.languages?.length ? options.languages : ["eng"];
 
     for (const language of languages) {
@@ -665,9 +697,7 @@ export class SidecarPdfEngine implements PdfEngine {
     formData.append("sidecar", "false");
     formData.append("deskew", String(options.deskew ?? false));
 
-    const response = await this.request("/api/v1/misc/ocr-pdf", formData);
-
-    return this.store(await readBytes(response), pageCount);
+    return this.request("/api/v1/misc/ocr-pdf", formData);
   }
 
   /**

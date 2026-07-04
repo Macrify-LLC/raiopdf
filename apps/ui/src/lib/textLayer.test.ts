@@ -11,11 +11,10 @@ describe("pdfDocumentTextLayerCoverage", () => {
 
     await expect(pdfDocumentHasTextLayer(document)).resolves.toBe(false);
     await expect(pdfDocumentTextLayerCoverage(document)).resolves.toMatchObject({
-      pageCount: 3,
-      pagesWithText: [1, 3],
-      missingTextPages: [2],
-      allPagesHaveText: false,
-      hasAnyText: true,
+      imageOnlyPages: [1],
+      mixedPages: [],
+      textPages: [0, 2],
+      garbledPages: [],
     });
   });
 
@@ -24,11 +23,10 @@ describe("pdfDocumentTextLayerCoverage", () => {
 
     await expect(pdfDocumentHasTextLayer(document)).resolves.toBe(true);
     await expect(pdfDocumentTextLayerCoverage(document)).resolves.toMatchObject({
-      pageCount: 2,
-      pagesWithText: [1, 2],
-      missingTextPages: [],
-      allPagesHaveText: true,
-      hasAnyText: true,
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0, 1],
+      garbledPages: [],
     });
   });
 
@@ -37,11 +35,10 @@ describe("pdfDocumentTextLayerCoverage", () => {
 
     await expect(pdfDocumentHasTextLayer(document)).resolves.toBe(false);
     await expect(pdfDocumentTextLayerCoverage(document)).resolves.toMatchObject({
-      pageCount: 0,
-      pagesWithText: [],
-      missingTextPages: [],
-      allPagesHaveText: false,
-      hasAnyText: false,
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [],
+      garbledPages: [],
     });
   });
 });
@@ -54,6 +51,9 @@ function fakePdfDocument(pageTexts: readonly string[]): PDFDocumentProxy {
       return {
         getTextContent: async () => ({
           items: text.length > 0 ? [{ str: text }] : [],
+        }),
+        getOperatorList: async () => ({
+          fnArray: [],
         }),
       };
     },

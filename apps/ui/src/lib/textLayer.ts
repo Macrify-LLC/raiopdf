@@ -1,65 +1,102 @@
-import { scoreGarbledPage, type GarbledPageInfo } from "@raiopdf/rules";
+import { scoreGarbledPage, type TextLayerCoverage } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "./pdfjs";
 
-export interface TextLayerCoverage {
-  pageCount: number;
-  pagesWithText: number[];
-  missingTextPages: number[];
-  garbledPages: GarbledPageInfo[];
-  allPagesHaveText: boolean;
-  hasAnyText: boolean;
-}
+const PDFJS_IMAGE_OPERATORS = new Set([
+  83, // paintImageMaskXObject
+  84, // paintImageMaskXObjectGroup
+  85, // paintImageXObject
+  86, // paintInlineImageXObject
+  87, // paintInlineImageXObjectGroup
+  88, // paintImageXObjectRepeat
+  89, // paintImageMaskXObjectRepeat
+]);
 
-export async function inspectTextLayer(bytes: Uint8Array): Promise<TextLayerCoverage> {
-  const { loadPdfDocument } = await import("./pdfjs");
-  const pdfDocument = await loadPdfDocument(bytes);
-
-  try {
-    return await pdfDocumentTextLayerCoverage(pdfDocument);
-  } finally {
-    await pdfDocument.loadingTask.destroy();
-  }
+export async function inspectTextLayer(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null = null,
+): Promise<TextLayerCoverage> {
+  return withPdfDocument(bytes, currentPdfDocument, pdfDocumentTextLayerCoverage);
 }
 
 export async function hasExtractableTextLayer(bytes: Uint8Array): Promise<boolean> {
-  return (await inspectTextLayer(bytes)).allPagesHaveText;
+  return hasSearchableTextLayerCoverage(await inspectTextLayer(bytes));
 }
 
 export async function pdfDocumentTextLayerCoverage(
   pdfDocument: PDFDocumentProxy,
 ): Promise<TextLayerCoverage> {
-  const pagesWithText: number[] = [];
-  const missingTextPages: number[] = [];
-  const garbledPages: GarbledPageInfo[] = [];
+  const imageOnlyPages: number[] = [];
+  const mixedPages: number[] = [];
+  const textPages: number[] = [];
+  const garbledPages: TextLayerCoverage["garbledPages"][number][] = [];
 
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item) => "str" in item ? item.str : "").join(" ");
-    const garbleInfo = scoreGarbledPage(pageText, pageNumber - 1);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(textItemString).join(" ");
+    const hasText = pageText.trim().length > 0;
+    const operatorList = await page.getOperatorList();
+    const hasImage = operatorList.fnArray.some(isImageOperator);
+    const pageIndex = pageNumber - 1;
+    const garbleInfo = scoreGarbledPage(pageText, pageIndex);
     if (garbleInfo) {
       garbledPages.push(garbleInfo);
     }
 
-    if (pageText.trim().length > 0) {
-      pagesWithText.push(pageNumber);
+    if (!hasText) {
+      imageOnlyPages.push(pageIndex);
+    } else if (hasImage) {
+      mixedPages.push(pageIndex);
     } else {
-      missingTextPages.push(pageNumber);
+      textPages.push(pageIndex);
     }
   }
 
-  return {
-    pageCount: pdfDocument.numPages,
-    pagesWithText,
-    missingTextPages,
-    garbledPages,
-    allPagesHaveText: pdfDocument.numPages > 0 && missingTextPages.length === 0,
-    hasAnyText: pagesWithText.length > 0,
-  };
+  return { imageOnlyPages, mixedPages, textPages, garbledPages };
 }
 
 export async function pdfDocumentHasTextLayer(
   pdfDocument: PDFDocumentProxy,
 ): Promise<boolean> {
-  return (await pdfDocumentTextLayerCoverage(pdfDocument)).allPagesHaveText;
+  return hasSearchableTextLayerCoverage(await pdfDocumentTextLayerCoverage(pdfDocument));
+}
+
+export function textLayerCoveragePageCount(coverage: TextLayerCoverage): number {
+  return coverage.imageOnlyPages.length + coverage.mixedPages.length + coverage.textPages.length;
+}
+
+export function hasSearchableTextLayerCoverage(coverage: TextLayerCoverage): boolean {
+  return textLayerCoveragePageCount(coverage) > 0 && coverage.imageOnlyPages.length === 0;
+}
+
+async function withPdfDocument<T>(
+  bytes: Uint8Array,
+  currentPdfDocument: PDFDocumentProxy | null,
+  read: (pdfDocument: PDFDocumentProxy) => Promise<T>,
+): Promise<T> {
+  if (currentPdfDocument) {
+    return read(currentPdfDocument);
+  }
+
+  const { loadPdfDocument } = await import("./pdfjs");
+  const pdfDocument = await loadPdfDocument(bytes);
+
+  try {
+    return await read(pdfDocument);
+  } finally {
+    await pdfDocument.loadingTask.destroy();
+  }
+}
+
+function textItemString(item: unknown): string {
+  if (typeof item !== "object" || item === null || !("str" in item)) {
+    return "";
+  }
+
+  const { str } = item as { str?: unknown };
+  return typeof str === "string" ? str : "";
+}
+
+function isImageOperator(fn: number): boolean {
+  return PDFJS_IMAGE_OPERATORS.has(fn);
 }

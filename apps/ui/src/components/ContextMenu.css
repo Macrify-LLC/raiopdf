@@ -32,8 +32,36 @@
   }
 }
 
+/* Quick exit: asymmetric with the entrance above -- 90ms vs 120ms, dismissal
+   should always read faster than arrival. Overrides the entrance animation
+   (still running or already finished, doesn't matter) the instant closing
+   starts. Pointer-events off so a fast second click during the fade can't
+   hit a menu item that's on its way out. */
+.context-menu[data-closing="true"] {
+  pointer-events: none;
+  animation: context-menu-out 90ms ease forwards;
+}
+
+@keyframes context-menu-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .context-menu {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .context-menu[data-closing="true"] {
     animation: none;
     opacity: 1;
     transform: none;

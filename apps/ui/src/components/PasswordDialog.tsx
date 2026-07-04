@@ -57,14 +57,14 @@ export function PasswordDialog({ fileName, phase, error, onSubmit, onCancel }: P
     >
       <form className="password-dialog" data-phase={phase} onSubmit={handleSubmit}>
         {isRunning ? (
-          <div className="password-dialog__progress">
+          <div className="password-dialog__progress" key={phase}>
             <LoadingSun size={30} label="Unlocking the document" />
             <p className="password-dialog__status-line" role="status" aria-live="polite">
               {RUNNING_STATUS_LABEL[phase]}
             </p>
           </div>
         ) : (
-          <>
+          <div className="password-dialog__form">
             <p className="password-dialog__copy">
               &ldquo;{fileName}&rdquo; needs its open password. Enter it below and RaioPDF will
               open an unlocked working copy — the original file on disk is never changed.
@@ -99,7 +99,7 @@ export function PasswordDialog({ fileName, phase, error, onSubmit, onCancel }: P
                 Unlock
               </button>
             </div>
-          </>
+          </div>
         )}
       </form>
     </FloatingDialog>

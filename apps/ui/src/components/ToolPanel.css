@@ -416,10 +416,13 @@
    is the one motion exception item 18 calls out: an instant appearance
    here reads as broken, unlike every other appear-on-demand card in this
    panel. `max-height` is a generous ceiling, not a fixed height -- the box
-   still sizes to its actual (shorter) content once the animation ends. */
+   still sizes to its actual (shorter) content once the animation ends.
+   Shares --duration-medium/--ease-out with AccordionGroup's panel grow-in
+   (AccordionGroup.css) so every "a section just grew open" moment in the
+   tool panel reads as the same motion. */
 .tool-row__expansion {
   overflow: hidden;
-  animation: tool-row-expansion-in 170ms ease-out;
+  animation: tool-row-expansion-in var(--duration-medium) var(--ease-out);
 }
 
 @keyframes tool-row-expansion-in {

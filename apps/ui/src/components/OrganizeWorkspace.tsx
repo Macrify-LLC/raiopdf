@@ -185,6 +185,12 @@ function OrganizePagesGrid({
   const [dragOverPageIndex, setDragOverPageIndex] = useState<number | null>(null);
   const [pageContextMenu, setPageContextMenu] = useState<{ x: number; y: number; pageIndex: number } | null>(null);
   const [reorderPending, setReorderPending] = useState(false);
+  // Drop settle: the grid's cells are positional (0..pageCount-1), not keyed
+  // by page identity, so a reorder never slides a thumbnail across the grid
+  // -- it repaints new content into the cell the drag landed on. Settling
+  // that one cell (rather than teleporting straight to full opacity/scale)
+  // is the honest, cheap stand-in for a real FLIP-style move animation.
+  const [settledPageIndex, setSettledPageIndex] = useState<number | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const pages = Array.from({ length: document.pageCount }, (_, index) => index);
@@ -318,7 +324,14 @@ function OrganizePagesGrid({
     setReorderPending(true);
 
     try {
-      await onReorderPages(nextOrder, nextCurrentPage);
+      const reordered = await onReorderPages(nextOrder, nextCurrentPage);
+
+      if (reordered) {
+        // insertIndex is where the moved page(s) actually land in nextOrder
+        // -- the grid always renders positions 0..pageCount-1, so that's
+        // exactly the cell that will repaint with the moved content.
+        setSettledPageIndex(insertIndex);
+      }
     } finally {
       setReorderPending(false);
     }
@@ -430,6 +443,10 @@ function OrganizePagesGrid({
                   ? "true"
                   : undefined
               }
+              data-drop-settle={settledPageIndex === pageIndex ? "true" : undefined}
+              onAnimationEnd={() => {
+                setSettledPageIndex((current) => (current === pageIndex ? null : current));
+              }}
               aria-pressed={selected}
               aria-label={`Organize page ${pageNumber}`}
               disabled={reorderPending}

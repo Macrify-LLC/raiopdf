@@ -65,6 +65,37 @@
   display: none;
 }
 
+/* Grow-in on open -- same shape and timing as the inline tool expansions in
+   ToolPanel.css (the two are meant to read as one motion language). Only
+   applied for the instant after a genuine closed->open transition, gated by
+   the `data-grow` attribute the component clears once the animation ends.
+   A generous max-height ceiling (never a fixed height): these panels can
+   hold many tool rows plus an inline expansion, so 640px (right for a
+   single tool's expansion) would clip a tall group and "pop" to full size
+   the instant the animation ends and max-height reverts. */
+.accordion-group__panel[data-grow="true"] {
+  overflow: hidden;
+  animation: accordion-panel-grow-in var(--duration-medium) var(--ease-out);
+}
+
+@keyframes accordion-panel-grow-in {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 3200px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accordion-group__panel[data-grow="true"] {
+    animation: none;
+  }
+}
+
 .accordion-group__empty {
   padding: var(--space-1) var(--space-4) var(--space-3) 20px;
   font-size: var(--text-xs);

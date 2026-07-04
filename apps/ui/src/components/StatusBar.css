@@ -107,6 +107,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .status-bar__search-chip--button {
+    animation: none;
+  }
+}
+
 .status-bar__local {
   margin-left: auto;
   display: flex;

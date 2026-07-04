@@ -9,8 +9,14 @@
 }
 
 .edit-layer[data-tool="highlight"],
+.edit-layer[data-tool="underline"],
+.edit-layer[data-tool="strikethrough"],
 .edit-layer[data-tool="textBox"],
-.edit-layer[data-tool="comment"] {
+.edit-layer[data-tool="comment"],
+.edit-layer[data-tool="shapeRect"],
+.edit-layer[data-tool="shapeEllipse"],
+.edit-layer[data-tool="shapeLine"],
+.edit-layer[data-tool="shapeArrow"] {
   cursor: crosshair;
 }
 
@@ -43,6 +49,23 @@
   opacity: 0.25;
   border: 1px dashed var(--primary);
   pointer-events: none;
+}
+
+.edit-layer__text-markup-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.edit-layer__text-markup-hit {
+  position: absolute;
+  background: transparent;
+  pointer-events: none;
+}
+
+.edit-layer__text-markup-hit[data-removable="true"] {
+  pointer-events: auto;
 }
 
 .edit-layer__message {
@@ -369,5 +392,30 @@
 .edit-layer__ink {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+}
+
+/* ---- Shapes ---- */
+
+.edit-layer__shapes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.edit-layer__shape-hit {
+  pointer-events: visiblePainted;
+  cursor: default;
+}
+
+.edit-layer__shape-hit-line {
+  stroke: transparent;
+  stroke-width: 12px;
+  pointer-events: stroke;
+}
+
+.edit-layer__shape-draft {
+  opacity: 0.72;
   pointer-events: none;
 }

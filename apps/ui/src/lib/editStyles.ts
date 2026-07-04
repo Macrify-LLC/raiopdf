@@ -15,6 +15,11 @@ export interface HighlightEditStyle {
   opacity?: number;
 }
 
+export interface TextMarkupEditStyle {
+  color?: PdfEditColor;
+  thicknessPt?: number;
+}
+
 export interface TextBoxEditStyle {
   color?: PdfEditColor;
   fontFamily?: PdfTextBoxFontFamily;
@@ -28,13 +33,23 @@ export interface InkEditStyle {
   strokeWidthPt: number;
 }
 
+export interface ShapeEditStyle {
+  strokeColor?: PdfEditColor;
+  strokeWidthPt: number;
+  fillColor?: PdfEditColor | null;
+}
+
 export const DEFAULT_HIGHLIGHT_COLOR: PdfEditColor = { r: 1, g: 0.9, b: 0.3 };
 export const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
 export const DEFAULT_TEXT_COLOR: PdfEditColor = hexToPdfEditColor("#111111");
+export const DEFAULT_TEXT_MARKUP_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
+export const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
 export const DEFAULT_TEXT_FONT_FAMILY: PdfTextBoxFontFamily = "helvetica";
 export const DEFAULT_TEXT_ALIGN: PdfTextBoxAlign = "left";
 export const DEFAULT_INK_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
+export const DEFAULT_SHAPE_STROKE_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
+export const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
 export const INK_STROKE_WIDTH_OPTIONS = [1, 1.5, 3, 5] as const;
 
 export const HIGHLIGHT_COLOR_OPTIONS: readonly EditColorOption[] = [
@@ -50,6 +65,13 @@ export const INK_TEXT_COLOR_OPTIONS: readonly EditColorOption[] = [
   { id: "red", label: "Red", color: hexToPdfEditColor("#dc2626") },
   { id: "blue", label: "Blue", color: hexToPdfEditColor("#2563eb") },
   { id: "green", label: "Green", color: hexToPdfEditColor("#16a34a") },
+] as const;
+
+export const SHAPE_FILL_COLOR_OPTIONS: readonly EditColorOption[] = [
+  { id: "yellow", label: "Yellow", color: hexToPdfEditColor("#fef08a") },
+  { id: "blue", label: "Blue", color: hexToPdfEditColor("#bfdbfe") },
+  { id: "green", label: "Green", color: hexToPdfEditColor("#bbf7d0") },
+  { id: "pink", label: "Pink", color: hexToPdfEditColor("#fbcfe8") },
 ] as const;
 
 export function hexToPdfEditColor(hex: string): PdfEditColor {

@@ -357,6 +357,24 @@ export type PdfHighlightEdit = {
 };
 
 /**
+ * Text markup drawn from text-line rectangles.
+ *
+ * Underline and strikethrough are baked into page content on apply (not stored
+ * as annotations), matching highlight's save behavior.
+ */
+export type PdfTextMarkupEdit = {
+  type: "underline" | "strikethrough";
+  /** Zero-based page index receiving the markup. */
+  pageIndex: number;
+  /** One rectangle per marked text line, in PDF user-space points. */
+  rects: readonly PdfEditRect[];
+  /** Markup line color. Defaults to near-black ink. */
+  color?: PdfEditColor;
+  /** Markup line thickness in points. Defaults to 1. */
+  thicknessPt?: number;
+};
+
+/**
  * A block of caller-authored text drawn inside a rectangle.
  *
  * Text starts at the visual top-left of `rect` and supports `\n` line breaks.
@@ -421,6 +439,46 @@ export type PdfInkEdit = {
   /** Stroke color. Defaults to near-black (#111111). */
   color?: PdfEditColor;
 };
+
+export type PdfShapeKind = "rect" | "ellipse" | "line" | "arrow";
+
+/**
+ * Geometric shapes baked into page content.
+ *
+ * Shape geometry is orientation-agnostic and drawn verbatim in PDF user-space
+ * points, matching highlights and ink. Rectangle and ellipse edits require a
+ * positive-dimension bounding rectangle; line and arrow edits require distinct
+ * endpoints.
+ */
+export type PdfShapeEdit =
+  | {
+      type: "shape";
+      /** Zero-based page index receiving the shape. */
+      pageIndex: number;
+      shape: "rect" | "ellipse";
+      /** Positive-dimension user-space bounds. */
+      rect: PdfEditRect;
+      /** Stroke thickness in points. Defaults to 1.5. */
+      strokeWidthPt?: number;
+      /** Stroke color. Defaults to near-black (#111111). */
+      strokeColor?: PdfEditColor;
+      /** Optional fill color. Omitted means stroke-only. */
+      fillColor?: PdfEditColor;
+    }
+  | {
+      type: "shape";
+      /** Zero-based page index receiving the shape. */
+      pageIndex: number;
+      shape: "line" | "arrow";
+      /** User-space start point. */
+      from: PdfEditPoint;
+      /** User-space end point. */
+      to: PdfEditPoint;
+      /** Stroke thickness in points. Defaults to 1.5. */
+      strokeWidthPt?: number;
+      /** Stroke color. Defaults to near-black (#111111). */
+      strokeColor?: PdfEditColor;
+    };
 
 /**
  * A sticky-note comment stored as a real PDF `/Text` annotation.
@@ -491,9 +549,11 @@ export type PdfSignatureEdit = {
  */
 export type PdfEdit =
   | PdfHighlightEdit
+  | PdfTextMarkupEdit
   | PdfTextBoxEdit
   | PdfImageEdit
   | PdfInkEdit
+  | PdfShapeEdit
   | PdfCommentEdit
   | PdfFormValuesEdit
   | PdfSignatureEdit;

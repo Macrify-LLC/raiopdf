@@ -38,6 +38,16 @@
     <path class="rp-part" d="M3.5 17.5h13"></path>
   </symbol>
 
+  <symbol id="rp-icon-underline" viewBox="0 0 20 20">
+    <path class="rp-part" d="M6 3.5v6a4 4 0 0 0 8 0v-6"></path>
+    <path class="rp-part g-nudge" style="--ny:1.2px" d="M4.5 17h11"></path>
+  </symbol>
+
+  <symbol id="rp-icon-strikethrough" viewBox="0 0 20 20">
+    <path class="rp-part" d="M14.5 4.5h-5a3 3 0 0 0-1.2 5.75l3.4 1.5a3 3 0 0 1-1.2 5.75h-5"></path>
+    <path class="rp-part g-nudge" style="--nx:1.2px" d="M4 10.5h12"></path>
+  </symbol>
+
   <symbol id="rp-icon-edit" viewBox="0 0 20 20">
     <path class="rp-part g-nudge" style="--nx:-1.2px;--ny:1.2px" d="m12.5 3.5 4 4-9 9h-4v-4l9-9Z"></path>
   </symbol>

@@ -4,10 +4,16 @@ import type {
   PdfEditImageFormat,
   PdfEditPoint,
   PdfEditRect,
+  PdfShapeKind,
   PdfFormFieldValue,
   PdfTextBoxAlign,
   PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
+import {
+  DEFAULT_SHAPE_STROKE_COLOR,
+  DEFAULT_SHAPE_STROKE_WIDTH_PT,
+  DEFAULT_TEXT_COLOR,
+} from "./editStyles";
 import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
 
 /**
@@ -20,11 +26,21 @@ import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
 export type EditToolId =
   | "select"
   | "highlight"
+  | "underline"
+  | "strikethrough"
   | "textBox"
   | "image"
   | "comment"
   | "draw"
+  | "shapeRect"
+  | "shapeEllipse"
+  | "shapeLine"
+  | "shapeArrow"
   | "sign";
+
+export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
+export type ShapeToolId = "shapeRect" | "shapeEllipse" | "shapeLine" | "shapeArrow";
+export type PendingShapeKind = PdfShapeKind;
 
 export interface PendingHighlight {
   kind: "highlight";
@@ -33,6 +49,15 @@ export interface PendingHighlight {
   rects: readonly PdfEditRect[];
   color?: PdfEditColor;
   opacity?: number;
+}
+
+export interface PendingTextMarkup {
+  kind: "underline" | "strikethrough";
+  id: string;
+  pageIndex: number;
+  rects: readonly PdfEditRect[];
+  color?: PdfEditColor;
+  thicknessPt?: number;
 }
 
 export interface PendingTextBox {
@@ -79,12 +104,36 @@ export interface PendingInk {
   color?: PdfEditColor;
 }
 
+export type PendingShape =
+  | {
+      kind: "shape";
+      id: string;
+      pageIndex: number;
+      shape: "rect" | "ellipse";
+      rect: PdfEditRect;
+      strokeWidthPt?: number;
+      strokeColor?: PdfEditColor;
+      fillColor?: PdfEditColor | null;
+    }
+  | {
+      kind: "shape";
+      id: string;
+      pageIndex: number;
+      shape: "line" | "arrow";
+      from: PdfEditPoint;
+      to: PdfEditPoint;
+      strokeWidthPt?: number;
+      strokeColor?: PdfEditColor;
+    };
+
 export type PendingEdit =
   | PendingHighlight
+  | PendingTextMarkup
   | PendingTextBox
   | PendingStamp
   | PendingComment
-  | PendingInk;
+  | PendingInk
+  | PendingShape;
 
 export const TEXT_BOX_FONT_SIZES = [10, 11, 12, 13, 14] as const;
 export const DEFAULT_TEXT_BOX_FONT_SIZE = 12;
@@ -110,6 +159,17 @@ export function toPdfEdits(
           rects: edit.rects,
           ...(edit.color ? { color: edit.color } : {}),
           ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
+        };
+      case "underline":
+      case "strikethrough":
+        return {
+          type: edit.kind,
+          pageIndex: edit.pageIndex,
+          rects: edit.rects,
+          ...(edit.color && !editColorsEqual(edit.color, DEFAULT_TEXT_COLOR)
+            ? { color: edit.color }
+            : {}),
+          ...(edit.thicknessPt !== undefined ? { thicknessPt: edit.thicknessPt } : {}),
         };
       case "textBox":
         return {
@@ -150,6 +210,34 @@ export function toPdfEdits(
           strokeWidthPt: edit.strokeWidthPt ?? INK_STROKE_WIDTH_PT,
           ...(edit.color ? { color: edit.color } : {}),
         };
+      case "shape": {
+        const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
+        const common = {
+          type: "shape" as const,
+          pageIndex: edit.pageIndex,
+          shape: edit.shape,
+          ...(strokeWidthPt !== DEFAULT_SHAPE_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
+          ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_SHAPE_STROKE_COLOR)
+            ? { strokeColor: edit.strokeColor }
+            : {}),
+        };
+
+        if (!isLineShape(edit)) {
+          return {
+            ...common,
+            shape: edit.shape,
+            rect: edit.rect,
+            ...(edit.fillColor ? { fillColor: edit.fillColor } : {}),
+          };
+        }
+
+        return {
+          ...common,
+          shape: edit.shape,
+          from: edit.from,
+          to: edit.to,
+        };
+      }
     }
   });
 
@@ -170,6 +258,16 @@ export function describePendingEdit(edit: PendingEdit): {
         label: "Highlight",
         detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
       };
+    case "underline":
+      return {
+        label: "Underline",
+        detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
+      };
+    case "strikethrough":
+      return {
+        label: "Strikethrough",
+        detail: `${edit.rects.length} ${edit.rects.length === 1 ? "line" : "lines"}`,
+      };
     case "textBox":
       return { label: "Text box", detail: excerpt(edit.text) };
     case "image":
@@ -180,7 +278,56 @@ export function describePendingEdit(edit: PendingEdit): {
       return { label: "Comment", detail: excerpt(edit.text) };
     case "ink":
       return { label: "Drawing", detail: null };
+    case "shape":
+      return { label: shapeLabel(edit.shape), detail: null };
   }
+}
+
+export function normalizePdfRectFromPoints(
+  from: PdfEditPoint,
+  to: PdfEditPoint,
+): PdfEditRect {
+  const x = Math.min(from.x, to.x);
+  const y = Math.min(from.y, to.y);
+
+  return {
+    x,
+    y,
+    w: Math.max(from.x, to.x) - x,
+    h: Math.max(from.y, to.y) - y,
+  };
+}
+
+export function shapeKindFromTool(tool: ShapeToolId): PendingShapeKind {
+  switch (tool) {
+    case "shapeRect":
+      return "rect";
+    case "shapeEllipse":
+      return "ellipse";
+    case "shapeLine":
+      return "line";
+    case "shapeArrow":
+      return "arrow";
+  }
+}
+
+function shapeLabel(shape: PendingShapeKind): string {
+  switch (shape) {
+    case "rect":
+      return "Rectangle";
+    case "ellipse":
+      return "Ellipse";
+    case "line":
+      return "Line";
+    case "arrow":
+      return "Arrow";
+  }
+}
+
+function isLineShape(
+  edit: PendingShape,
+): edit is Extract<PendingShape, { shape: "line" | "arrow" }> {
+  return edit.shape === "line" || edit.shape === "arrow";
 }
 
 export function excerpt(text: string, maxLength = 42): string {
@@ -208,7 +355,7 @@ export interface PageTextBox {
  * axis (`y` for upright pages, `x` for sideways pages); each cluster unions
  * into a single line rect. Returns rects in top-to-bottom reading order.
  */
-export function computeHighlightLineRects(
+export function computeTextMarkupLineRects(
   band: PdfSpaceRect,
   textBoxes: readonly PageTextBox[],
   sideways = false,
@@ -241,6 +388,12 @@ export function computeHighlightLineRects(
   return clusters
     .map((cluster) => unionBoxes(cluster))
     .sort((left, right) => right.y + right.h - (left.y + left.h));
+}
+
+export const computeHighlightLineRects = computeTextMarkupLineRects;
+
+function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {
+  return left.r === right.r && left.g === right.g && left.b === right.b;
 }
 
 function unionBoxes(boxes: readonly PageTextBox[]): PdfEditRect {

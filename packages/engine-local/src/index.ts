@@ -9,6 +9,7 @@ import type {
   PdfDocumentHandle,
   PdfEdit,
   PdfEditColor,
+  PdfEditPoint,
   PdfEditRect,
   PdfEngine,
   PdfFormFieldValue,
@@ -25,6 +26,7 @@ import type {
   PdfRedactionArea,
   PdfSanitizeOptions,
   PdfSanitizeResult,
+  PdfShapeEdit,
   PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
@@ -32,6 +34,7 @@ import type {
   PdfTextBoxAlign,
   PdfTextBoxEdit,
   PdfTextBoxFontFamily,
+  PdfTextMarkupEdit,
   PdfTextRegion,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -114,11 +117,15 @@ const STAMP_COLOR = rgb(0.08, 0.08, 0.08);
 const EDIT_INK_COLOR = rgb(0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff);
 const HIGHLIGHT_COLOR = rgb(1, 0.9, 0.3);
 const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
+const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
 const DEFAULT_TEXT_BOX_FONT_SIZE_PT = 12;
 const DEFAULT_WATERMARK_FONT_SIZE_PT = 48;
 const DEFAULT_WATERMARK_OPACITY = 0.18;
 const TEXT_BOX_LINE_HEIGHT_FACTOR = 1.2;
 const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
+const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
+const ARROW_HEAD_MIN_PT = 8;
+const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
@@ -1259,6 +1266,10 @@ async function applyEditInPlace(
     case "highlight":
       applyHighlightEdit(pdf, edit);
       return;
+    case "underline":
+    case "strikethrough":
+      applyTextMarkupEdit(pdf, edit);
+      return;
     case "textBox":
       applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
       return;
@@ -1268,6 +1279,9 @@ async function applyEditInPlace(
       return;
     case "ink":
       applyInkEdit(pdf, edit);
+      return;
+    case "shape":
+      applyShapeEdit(pdf, edit);
       return;
     case "comment":
       applyCommentEdit(pdf, edit);
@@ -1296,6 +1310,27 @@ function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
       height: rect.h,
       color,
       opacity,
+    });
+  }
+}
+
+/**
+ * Draws text markup using the same line rectangles highlight receives. Rects
+ * are orientation-agnostic user-space coordinates and are drawn verbatim.
+ */
+function applyTextMarkupEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const color = toEditColor(edit.color, EDIT_INK_COLOR);
+  const thickness = edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT;
+
+  for (const rect of edit.rects) {
+    const y = edit.type === "underline" ? rect.y : rect.y + rect.h * 0.5;
+
+    page.drawLine({
+      start: { x: rect.x, y },
+      end: { x: rect.x + rect.w, y },
+      thickness,
+      color,
     });
   }
 }
@@ -1436,6 +1471,93 @@ function applyInkEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
       });
     }
   }
+}
+
+/**
+ * Draws geometric shapes verbatim in user space. Shapes are page marks like
+ * highlights and ink, so rotated pages receive no visual-rect remapping.
+ */
+function applyShapeEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
+  const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
+
+  switch (edit.shape) {
+    case "rect":
+      page.drawRectangle({
+        x: edit.rect.x,
+        y: edit.rect.y,
+        width: edit.rect.w,
+        height: edit.rect.h,
+        borderColor: strokeColor,
+        borderWidth: thickness,
+        ...(edit.fillColor ? { color: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      });
+      return;
+    case "ellipse":
+      page.drawEllipse({
+        x: edit.rect.x + edit.rect.w / 2,
+        y: edit.rect.y + edit.rect.h / 2,
+        xScale: edit.rect.w / 2,
+        yScale: edit.rect.h / 2,
+        borderColor: strokeColor,
+        borderWidth: thickness,
+        ...(edit.fillColor ? { color: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      });
+      return;
+    case "line":
+      page.drawLine({
+        start: edit.from,
+        end: edit.to,
+        thickness,
+        color: strokeColor,
+      });
+      return;
+    case "arrow":
+      page.drawLine({
+        start: edit.from,
+        end: edit.to,
+        thickness,
+        color: strokeColor,
+      });
+      drawArrowHead(page, edit.from, edit.to, thickness, strokeColor);
+      return;
+  }
+}
+
+function drawArrowHead(
+  page: ReturnType<PDFDocument["getPage"]>,
+  from: PdfEditPoint,
+  to: PdfEditPoint,
+  thickness: number,
+  color: ReturnType<typeof rgb>,
+): void {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const length = Math.min(ARROW_HEAD_MAX_PT, Math.max(ARROW_HEAD_MIN_PT, thickness * 7));
+  const halfWidth = length * 0.45;
+  const baseCenter = {
+    x: to.x - Math.cos(angle) * length,
+    y: to.y - Math.sin(angle) * length,
+  };
+  const normal = {
+    x: -Math.sin(angle),
+    y: Math.cos(angle),
+  };
+  const left = {
+    x: baseCenter.x + normal.x * halfWidth,
+    y: baseCenter.y + normal.y * halfWidth,
+  };
+  const right = {
+    x: baseCenter.x - normal.x * halfWidth,
+    y: baseCenter.y - normal.y * halfWidth,
+  };
+  const path = `M ${to.x} ${to.y} L ${left.x} ${left.y} L ${right.x} ${right.y} Z`;
+
+  page.drawSvgPath(path, {
+    color,
+    borderColor: color,
+    borderWidth: 0,
+  });
 }
 
 /**
@@ -1584,6 +1706,10 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
         );
       }
       return;
+    case "underline":
+    case "strikethrough":
+      assertValidTextMarkupEdit(edit);
+      return;
     case "textBox":
       assertEditRect(edit.rect);
       assertNonEmptyEditText(edit.text, "Text box");
@@ -1629,10 +1755,82 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
         assertPositiveNumber(edit.strokeWidthPt, "strokeWidthPt");
       }
       return;
+    case "shape":
+      assertValidShapeEdit(edit);
+      return;
     case "comment":
       assertNonEmptyEditText(edit.text, "Comment");
       return;
   }
+}
+
+function assertValidShapeEdit(edit: PdfShapeEdit): void {
+  if (!["rect", "ellipse", "line", "arrow"].includes(edit.shape)) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Shape edits require rect, ellipse, line, or arrow.",
+    );
+  }
+
+  if (edit.strokeWidthPt !== undefined) {
+    assertPositiveNumber(edit.strokeWidthPt, "strokeWidthPt");
+  }
+
+  if (edit.strokeColor !== undefined) {
+    assertEditColor(edit.strokeColor, "Shape stroke color");
+  }
+
+  if (edit.shape === "rect" || edit.shape === "ellipse") {
+    assertEditRect(edit.rect);
+
+    if (edit.fillColor !== undefined) {
+      assertEditColor(edit.fillColor, "Shape fill color");
+    }
+
+    return;
+  }
+
+  if (edit.shape !== "line" && edit.shape !== "arrow") {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Shape edits require rect, ellipse, line, or arrow.",
+    );
+  }
+
+  assertEditPoint(edit.from, "Shape from");
+  assertEditPoint(edit.to, "Shape to");
+
+  if (edit.from.x === edit.to.x && edit.from.y === edit.to.y) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Line and arrow shape edits require distinct endpoints.",
+    );
+  }
+}
+
+function assertValidTextMarkupEdit(edit: PdfTextMarkupEdit): void {
+  if (edit.rects.length === 0) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `${formatTextMarkupLabel(edit.type)} edits require at least one rectangle.`,
+    );
+  }
+
+  for (const rect of edit.rects) {
+    assertEditRect(rect);
+  }
+
+  if (edit.thicknessPt !== undefined) {
+    assertPositiveNumber(edit.thicknessPt, "thicknessPt");
+  }
+
+  if (edit.color !== undefined) {
+    assertEditColor(edit.color, "Text markup color");
+  }
+}
+
+function formatTextMarkupLabel(type: PdfTextMarkupEdit["type"]): string {
+  return type === "underline" ? "Underline" : "Strikethrough";
 }
 
 function assertEditRect(rect: PdfEditRect): void {
@@ -1644,9 +1842,26 @@ function assertEditRect(rect: PdfEditRect): void {
   assertPositiveNumber(rect.h, "h");
 }
 
+function assertEditPoint(point: PdfEditPoint, label: string): void {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    throw new PdfEngineError("INVALID_DOCUMENT", `${label} point requires finite coordinates.`);
+  }
+}
+
 function assertNonEmptyEditText(text: string, editLabel: string): void {
   if (text.length === 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${editLabel} text must not be empty.`);
+  }
+}
+
+function assertEditColor(color: PdfEditColor, label: string): void {
+  for (const [channel, value] of Object.entries(color)) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `${label} ${channel} channel must be between 0 and 1.`,
+      );
+    }
   }
 }
 

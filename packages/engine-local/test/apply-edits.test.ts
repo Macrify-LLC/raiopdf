@@ -58,6 +58,81 @@ describe("LocalPdfEngine.applyEdits", () => {
     expect(content).toContain("f");
   });
 
+  it("draws underline edits as one baseline line per rect", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "underline",
+        pageIndex: 0,
+        rects: [
+          { x: 40, y: 100, w: 120, h: 14 },
+          { x: 40, y: 84, w: 90, h: 14 },
+        ],
+        color: { r: 0.7, g: 0.1, b: 0.2 },
+        thicknessPt: 2,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(content).toMatch(/\b2 w\b/);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.7, 0.1, 0.2]);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 100 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 160, y: 100 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 84 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 130, y: 84 },
+    );
+  });
+
+  it("draws strikethrough edits through each rect midpoint", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "strikethrough",
+        pageIndex: 0,
+        rects: [
+          { x: 40, y: 100, w: 120, h: 14 },
+          { x: 40, y: 84, w: 90, h: 10 },
+        ],
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    expect(content).toMatch(/\b1 w\b/);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 107 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 160, y: 107 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 40, y: 89 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 130, y: 89 },
+    );
+  });
+
   it("draws text box edits with the first baseline below the rect's top edge", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -362,6 +437,162 @@ describe("LocalPdfEngine.applyEdits", () => {
     );
   });
 
+  it("draws rectangle shape edits with stroke, fill, and custom width", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 80, y: 120, w: 140, h: 60 },
+        strokeWidthPt: 3,
+        strokeColor: { r: 0.1, g: 0.2, b: 0.3 },
+        fillColor: { r: 0.8, g: 0.7, b: 0.2 },
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+
+    expect(content).toMatch(/\b3 w\b/);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.1, 0.2, 0.3]);
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [0.8, 0.7, 0.2]);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "cm").map((values) => ({ x: values[4]!, y: values[5]! })),
+      { x: 80, y: 120 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 140, y: 0 },
+    );
+  });
+
+  it("draws ellipse shape edits from the rect center and radii", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "ellipse",
+        rect: { x: 100, y: 150, w: 80, h: 40 },
+        fillColor: { r: 0.2, g: 0.8, b: 0.4 },
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 100, y: 170 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "c").flatMap((values) => [
+        { x: values[0]!, y: values[1]! },
+        { x: values[2]!, y: values[3]! },
+        { x: values[4]!, y: values[5]! },
+      ]),
+      { x: 140, y: 150 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "c").flatMap((values) => [
+        { x: values[0]!, y: values[1]! },
+        { x: values[2]!, y: values[3]! },
+        { x: values[4]!, y: values[5]! },
+      ]),
+      { x: 180, y: 170 },
+    );
+    expectSomeOperandsWithin(readOperandPairs(content, "rg"), [0.2, 0.8, 0.4]);
+  });
+
+  it("draws line shape edits verbatim in user space", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "line",
+        from: { x: 30, y: 40 },
+        to: { x: 200, y: 220 },
+        strokeColor: { r: 0.9, g: 0.1, b: 0.1 },
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+
+    expect(content).toMatch(/\b1\.5 w\b/);
+    expectSomeOperandsWithin(readOperandPairs(content, "RG"), [0.9, 0.1, 0.1]);
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "m").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 30, y: 40 },
+    );
+    expectSomePointWithin1Pt(
+      readOperandPairs(content, "l").map((values) => ({ x: values[0]!, y: values[1]! })),
+      { x: 200, y: 220 },
+    );
+  });
+
+  it("draws arrow shape edits as a line plus oriented filled triangle", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "arrow",
+        from: { x: 40, y: 40 },
+        to: { x: 140, y: 40 },
+        strokeWidthPt: 2,
+      },
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "arrow",
+        from: { x: 200, y: 80 },
+        to: { x: 200, y: 180 },
+        strokeWidthPt: 2,
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    const moves = readOperandPairs(content, "m").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+    const lines = readOperandPairs(content, "l").map((values) => ({
+      x: values[0]!,
+      y: values[1]!,
+    }));
+
+    expectSomePointWithin1Pt(moves, { x: 40, y: 40 });
+    expectSomePointWithin1Pt(lines, { x: 140, y: 40 });
+    expectSomePointWithin1Pt(moves, { x: 200, y: 80 });
+    expectSomePointWithin1Pt(lines, { x: 200, y: 180 });
+    expectSomePointWithin1Pt(moves, { x: 140, y: 40 });
+    expectSomePointWithin1Pt(lines, { x: 126, y: 46.3 });
+    expectSomePointWithin1Pt(moves, { x: 200, y: 180 });
+    expectSomePointWithin1Pt(lines, { x: 193.7, y: 166 });
+    expect(content).toContain("f");
+  });
+
+  it("draws stroke-only shapes without a fill color", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await engine.applyEdits(document, [
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 40, y: 40, w: 50, h: 30 },
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+
+    expect(content).toMatch(/\bS\b/);
+    expect(content).not.toMatch(/\bB\b/);
+  });
+
   it("renders custom highlight, text, and ink styles into page content", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));
@@ -588,6 +819,101 @@ describe("LocalPdfEngine.applyEdits", () => {
         { type: "comment", pageIndex: 0, at: { x: 10, y: 10 }, text: "" },
       ]),
     ).rejects.toBeInstanceOf(PdfEngineError);
+  });
+
+  it("rejects invalid text markup edits", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(
+      engine.applyEdits(document, [{ type: "underline", pageIndex: 0, rects: [] }]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "strikethrough",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 20, h: 10 }],
+          thicknessPt: 0,
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "underline",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 20, h: 10 }],
+          color: { r: 1.2, g: 0, b: 0 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  });
+
+  it("rejects invalid shape edits", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(
+      engine.applyEdits(document, [
+        { type: "shape", pageIndex: 0, shape: "rect", rect: { x: 10, y: 10, w: 0, h: 20 } },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "ellipse",
+          rect: { x: 10, y: 10, w: 20, h: -1 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "line",
+          from: { x: 20, y: 20 },
+          to: { x: 20, y: 20 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "arrow",
+          from: { x: 10, y: 10 },
+          to: { x: 30, y: 30 },
+          strokeWidthPt: 0,
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "rect",
+          rect: { x: 10, y: 10, w: 20, h: 20 },
+          strokeColor: { r: Number.NaN, g: 0, b: 0 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(
+      engine.applyEdits(document, [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "ellipse",
+          rect: { x: 10, y: 10, w: 20, h: 20 },
+          fillColor: { r: 0, g: 2, b: 0 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
   });
 });
 

@@ -1,11 +1,13 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import type { EditToolId } from "../lib/edits";
+import type { EditToolId, ShapeToolId } from "../lib/edits";
 import type { EditingState } from "../hooks/useEditing";
 import type { PdfTextBoxAlign, PdfTextBoxFontFamily } from "@raiopdf/engine-api";
 import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_INK_COLOR,
+  DEFAULT_SHAPE_STROKE_COLOR,
+  DEFAULT_TEXT_MARKUP_COLOR,
   DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
   DEFAULT_TEXT_FONT_FAMILY,
@@ -13,16 +15,23 @@ import {
   INK_STROKE_WIDTH_OPTIONS,
   INK_TEXT_COLOR_OPTIONS,
   pdfEditColorToHex,
+  SHAPE_FILL_COLOR_OPTIONS,
   type EditColorOption,
 } from "../lib/editStyles";
 import "./LegalModeBar.css";
 
 const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
   highlight: "Highlight mode",
+  underline: "Underline mode",
+  strikethrough: "Strikethrough mode",
   textBox: "Text box mode",
   image: "Image mode",
   comment: "Comment mode",
   draw: "Draw mode",
+  shapeRect: "Rectangle mode",
+  shapeEllipse: "Ellipse mode",
+  shapeLine: "Line mode",
+  shapeArrow: "Arrow mode",
   sign: "Sign mode",
 };
 
@@ -144,6 +153,24 @@ function ToolOptions({ editing }: { editing: EditingState }) {
     );
   }
 
+  if (editing.tool === "underline" || editing.tool === "strikethrough") {
+    const markupTool = editing.tool;
+    const selectedColor =
+      editing.textMarkupStyles[markupTool].color ?? DEFAULT_TEXT_MARKUP_COLOR;
+    const label = markupTool === "underline" ? "Underline" : "Strikethrough";
+
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label={`${label} options`}>
+        <ColorSwatches
+          labelPrefix={`${label} color`}
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={selectedColor}
+          onSelect={(color) => editing.updateTextMarkupStyle(markupTool, { color })}
+        />
+      </span>
+    );
+  }
+
   if (editing.tool === "textBox") {
     return (
       <span className="legal-mode-bar__tool-options" aria-label="Text box options">
@@ -234,6 +261,59 @@ function ToolOptions({ editing }: { editing: EditingState }) {
     );
   }
 
+  if (isShapeTool(editing.tool)) {
+    const shapeTool = editing.tool;
+    const style = editing.shapeStyles[shapeTool];
+    const selectedStrokeColor = style.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR;
+    const selectedFillColor = style.fillColor ?? null;
+    const fallbackFillColor = SHAPE_FILL_COLOR_OPTIONS[0]!.color;
+    const supportsFill = shapeTool === "shapeRect" || shapeTool === "shapeEllipse";
+
+    return (
+      <span className="legal-mode-bar__tool-options" aria-label="Shape options">
+        <ColorSwatches
+          labelPrefix="Shape stroke color"
+          options={INK_TEXT_COLOR_OPTIONS}
+          selectedColor={selectedStrokeColor}
+          onSelect={(strokeColor) => editing.updateShapeStyle(shapeTool, { strokeColor })}
+        />
+        <span className="legal-mode-bar__width-group" aria-label="Stroke width">
+          {INK_STROKE_WIDTH_OPTIONS.map((width) => (
+            <button
+              key={width}
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label={`Set shape stroke width to ${formatStrokeWidth(width)} points`}
+              aria-pressed={style.strokeWidthPt === width}
+              onClick={() => editing.updateShapeStyle(shapeTool, { strokeWidthPt: width })}
+            >
+              {formatStrokeWidth(width)}
+            </button>
+          ))}
+        </span>
+        {supportsFill ? (
+          <>
+            <button
+              type="button"
+              className="legal-mode-bar__width-button"
+              aria-label="Set shape fill to none"
+              aria-pressed={selectedFillColor === null}
+              onClick={() => editing.updateShapeStyle(shapeTool, { fillColor: null })}
+            >
+              None
+            </button>
+            <ColorSwatches
+              labelPrefix="Shape fill color"
+              options={SHAPE_FILL_COLOR_OPTIONS}
+              selectedColor={selectedFillColor ?? fallbackFillColor}
+              onSelect={(fillColor) => editing.updateShapeStyle(shapeTool, { fillColor })}
+            />
+          </>
+        ) : null}
+      </span>
+    );
+  }
+
   return null;
 }
 
@@ -292,6 +372,10 @@ function getToolHint(editing: EditingState): string {
   switch (editing.tool) {
     case "highlight":
       return "Drag over text to highlight. Click a pending highlight to remove it.";
+    case "underline":
+      return "Drag over text to underline. Click a pending underline to remove it.";
+    case "strikethrough":
+      return "Drag over text to strike through. Click a pending strikethrough to remove it.";
     case "textBox":
       return "Click the page to place a text box. Enter commits, Esc cancels.";
     case "image":
@@ -302,6 +386,14 @@ function getToolHint(editing: EditingState): string {
       return "Click the page to drop a note pin.";
     case "draw":
       return "Drag to draw freehand ink.";
+    case "shapeRect":
+      return "Drag to size a rectangle. Click a pending rectangle to remove it.";
+    case "shapeEllipse":
+      return "Drag to size an ellipse. Click a pending ellipse to remove it.";
+    case "shapeLine":
+      return "Drag a straight line. Click a pending line to remove it.";
+    case "shapeArrow":
+      return "Drag an arrow from tail to head. Click a pending arrow to remove it.";
     case "sign":
       return editing.armedSignature
         ? "Click the page to place the signature."
@@ -309,4 +401,13 @@ function getToolHint(editing: EditingState): string {
     default:
       return "";
   }
+}
+
+function isShapeTool(tool: EditToolId): tool is ShapeToolId {
+  return (
+    tool === "shapeRect" ||
+    tool === "shapeEllipse" ||
+    tool === "shapeLine" ||
+    tool === "shapeArrow"
+  );
 }

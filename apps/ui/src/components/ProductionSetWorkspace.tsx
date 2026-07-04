@@ -49,8 +49,19 @@ export interface ProductionSetProgress {
   result: ProductionSetRunResult | null;
 }
 
+/**
+ * Bytes-free descriptor of the currently open document (mirrors
+ * `BatchCleanupSourceFile`): a streamed large doc has no `document.bytes`, but
+ * it has a name and a path/grant — which is all the path-based production
+ * build needs, so it seeds the production order like any small doc.
+ */
+export interface ProductionSetSourceFile {
+  name: string;
+  path: string | null;
+}
+
 export interface ProductionSetWorkspaceProps {
-  currentFile: OpenedFile | null;
+  currentFile: ProductionSetSourceFile | null;
   currentPageCount: number;
   progress: ProductionSetProgress;
   onAddFile: () => Promise<FileAddResult | null>;
@@ -76,7 +87,7 @@ export function ProductionSetWorkspace({
   const mountedRef = useRef(true);
   const addFilePendingRef = useRef(false);
   const [files, setFiles] = useState<ProductionSetFile[]>(() =>
-    currentFile ? [fromOpenedFile(currentFile, currentPageCount)] : [],
+    currentFile ? [fromSourceFile(currentFile, currentPageCount)] : [],
   );
   const [prefix, setPrefix] = useState("SMITH");
   const [start, setStart] = useState(1);
@@ -450,7 +461,7 @@ export function ProductionSetWorkspace({
   );
 }
 
-function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
+function fromSourceFile(file: ProductionSetSourceFile, pages: number): ProductionSetFile {
   return {
     id: productionSetFileId(file.name),
     name: file.name,
@@ -458,6 +469,10 @@ function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
     pages,
     designation: "",
   };
+}
+
+function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
+  return fromSourceFile({ name: file.name, path: file.path }, pages);
 }
 
 function productionSetFileId(name: string): string {

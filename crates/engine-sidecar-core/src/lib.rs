@@ -1593,7 +1593,20 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
         .arg(format!("-dPDFA={level}"))
         .arg("-dBATCH")
         .arg("-dNOPAUSE")
-        .arg("-dNOSAFER")
+        // SAFER sandbox over the untrusted input. `PDFA_def.ps` and `in.pdf`
+        // are command-line operands (auto-permitted read under SAFER) and
+        // `out.pdf` comes from -sOutputFile (auto-permitted write) — their
+        // explicit permits are belt-and-braces. `srgb.icc`, however, is opened
+        // at run time BY `PDFA_def.ps` under its literal relative name, which
+        // SAFER does not auto-permit: without that permit the output intent
+        // fails to load and PDF/A processing aborts (verified against the
+        // bundled gs 10.07.1). Relative permit names match because the process
+        // cwd is the work dir.
+        .arg("-dSAFER")
+        .arg("--permit-file-read=srgb.icc")
+        .arg("--permit-file-read=PDFA_def.ps")
+        .arg("--permit-file-read=in.pdf")
+        .arg("--permit-file-write=out.pdf")
         .arg("-sColorConversionStrategy=RGB")
         .arg("-sDEVICE=pdfwrite")
         .arg(format!("-dPDFACompatibilityPolicy={policy}"))

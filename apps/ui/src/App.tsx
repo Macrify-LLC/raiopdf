@@ -4541,8 +4541,7 @@ export function App() {
           onHelp={() => openHelp("production-set")}
         >
           <ProductionSetWorkspace
-            currentFile={document.bytes ? {
-              bytes: document.bytes,
+            currentFile={document.source ? {
               name: document.fileName ?? "Untitled.pdf",
               path: document.filePath,
             } : null}

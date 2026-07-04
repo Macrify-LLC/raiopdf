@@ -17,7 +17,7 @@
  *   never yield a shell grant [R3-2], so callers surface an honest
  *   "this file is too large to add here" gate.
  *
- * SHELL COMMAND CONTRACTS (Lane A -- graceful fallbacks below until they land):
+ * SHELL COMMAND CONTRACTS:
  * - `pick_pdfs_for_add(multiple)` -> `[{ grant, name, sizeBytes }]` multi-select
  *   picker with NO eager byte read [R5-1].
  * - `read_pdf_range(grant, offset, length)` -> raw binary response; per-call
@@ -26,7 +26,6 @@
  * - `page_count(grant)` -> number (qpdf --show-npages) [R2-3].
  */
 import {
-  filePort,
   isTauriRuntime,
   pickBrowserFile,
   pickPdfsForAdd as pickPdfsForAddPrimitive,
@@ -134,15 +133,13 @@ export async function pickPdfsForAdd(): Promise<PickedPdfForAdd[] | null> {
 
 /**
  * Single-file pick-and-read for the package add flows (Production Set, Batch
- * Cleanup, Filing Packet). Uses `pick_pdfs_for_add` + `readFileForAdd` when the
- * shell command exists. Returns `null` when the user cancels.
+ * Cleanup, Filing Packet). Uses `pick_pdfs_for_add` + `readFileForAdd`.
+ * Returns `null` when the user cancels.
  *
- * FALLBACK (pre-Lane-A, clearly scoped): until `pick_pdfs_for_add` lands, the
- * Tauri branch has no other grant-returning picker than the legacy
- * main-document dialog, so it calls `filePort.openFile()` (eager byte read --
- * today's behavior) and size-gates AFTER the read: above-threshold results are
- * demoted to a grant descriptor (bytes discarded, so no pdf-lib load ever runs
- * on them). Delete this branch when Lane A ships the picker command.
+ * The shell that serves this UI always ships `pick_pdfs_for_add` (UI and shell
+ * are one binary), so `pickPdfsForAdd`'s legacy `null` ("no picker available")
+ * result is unreachable here — it is treated as a cancel rather than falling
+ * back to the main-document dialog.
  */
 export async function pickFileForAdd(): Promise<FileAddResult | null> {
   if (!isTauriRuntime()) {
@@ -152,42 +149,8 @@ export async function pickFileForAdd(): Promise<FileAddResult | null> {
     return file ? readFileForAdd(file) : null;
   }
 
-  const picks = await pickPdfsForAdd();
-
-  if (picks !== null) {
-    const pick = picks[0];
-    return pick ? readFileForAdd(pick) : null;
-  }
-
-  // Legacy-shell fallback: `filePort.openFile()` returns a size-branched
-  // source; map it onto the add-result shape without ever materializing an
-  // above-threshold file.
-  const opened = await filePort.openFile();
-
-  if (!opened) {
-    return null;
-  }
-
-  if (opened.kind === "memory") {
-    return {
-      kind: "bytes",
-      file: { bytes: opened.bytes, name: opened.name, path: opened.path },
-    };
-  }
-
-  if (opened.kind === "rangeGrant") {
-    return {
-      kind: "descriptor",
-      descriptor: {
-        grant: opened.grant,
-        name: opened.name,
-        sizeBytes: opened.sizeBytes,
-        pageCount: await tryPageCountByGrant(opened.grant),
-      },
-    };
-  }
-
-  return { kind: "tooLarge", name: opened.name, sizeBytes: opened.sizeBytes };
+  const pick = (await pickPdfsForAdd())?.[0];
+  return pick ? readFileForAdd(pick) : null;
 }
 
 /** Shared honest-gate copy for above-threshold adds. */

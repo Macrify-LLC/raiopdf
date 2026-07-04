@@ -22,7 +22,7 @@
     "engine:verify": "bash engine/verify-live.sh",
     "canary": "pnpm canary:ui && pnpm canary:mcp",
     "canary:ui": "pnpm --filter @raiopdf/ui test:canary",
-    "canary:mcp": "pnpm --filter @raiopdf/mcp test:canary",
+    "canary:mcp": "pnpm build:mcp-runtime && pnpm --filter @raiopdf/mcp test:canary",
     "prepare": "husky",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

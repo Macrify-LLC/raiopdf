@@ -157,9 +157,13 @@ pnpm canary        # runs the UI canary AND the MCP canary
 pnpm canary:mcp    # just the MCP end-to-end canary
 ```
 
-Prerequisite is the same assembled payload (`pnpm prepare:shell-bundle`) — it contains both
-the engine and the bundled MCP runtime. Point `RAIOPDF_ENGINE_HOST_BIN` / `RAIOPDF_ENGINE_PAYLOAD_DIR`
-at an assembled payload to run it from a worktree.
+`canary:mcp` **rebuilds the bundled connector first** (`pnpm build:mcp-runtime` — tsc + esbuild
+into `payload/mcp/`) so it never tests a stale bundle when `apps/mcp/src` or a bundled workspace
+package changed since the last `prepare:shell-bundle`. That rebuild is cheap (~seconds); the heavy
+**engine** payload (Stirling JAR + OCR toolchain + bundled Node) remains the `prepare:shell-bundle`
+prerequisite. Point `RAIOPDF_ENGINE_HOST_BIN` / `RAIOPDF_ENGINE_PAYLOAD_DIR` at an assembled payload
+to run from a worktree — and set `RAIOPDF_PAYLOAD_DIR` to the same dir so the rebuild lands where the
+canary reads.
 
 | Advertised claim | Pass criteria | Tool |
 |---|---|---|

@@ -245,6 +245,11 @@ pub const OP_DESCRIPTORS: &[OpDescriptor] = &[
         filing_step: None,
     },
     OpDescriptor {
+        name: "insert_pages",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
+    },
+    OpDescriptor {
         name: "split_by_max_bytes",
         requires: &[Tool::Qpdf],
         filing_step: Some("split-by-size"),
@@ -293,6 +298,21 @@ pub const OP_DESCRIPTORS: &[OpDescriptor] = &[
         name: "sanitize",
         requires: &[Tool::Ghostscript],
         filing_step: Some("sanitize-content"),
+    },
+    OpDescriptor {
+        name: "bates_stamp",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
+    },
+    OpDescriptor {
+        name: "page_numbers",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
+    },
+    OpDescriptor {
+        name: "watermark",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
     },
 ];
 
@@ -786,6 +806,45 @@ pub fn merge(toolchain: &PathOpsToolchain, inputs: &[PathBuf], output_path: &Pat
     Ok(())
 }
 
+/// qpdf `--pages` composition that inserts every page of `insert` into
+/// `input` after the first `at_index` pages (`at_index` = number of original
+/// pages that precede the inserted run; `0` prepends, `page_count` appends).
+/// Mirrors the byte engine's `insertPages(handle, insertAtPageIndex, doc)`
+/// semantics, file→file — a one-liner range assembly like `assemble_redacted`.
+pub fn insert_pages(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    insert: &Path,
+    at_index: u32,
+    output_path: &Path,
+) -> OpResult<()> {
+    require_input_file(input)?;
+    require_input_file(insert)?;
+    let total = page_count(toolchain, input)?;
+    if at_index > total {
+        return Err(PathOpError::invalid(format!(
+            "insert index {at_index} out of range (document has {total} pages)"
+        )));
+    }
+
+    let mut arguments = args(&["--warning-exit-0", "--empty", "--pages"]);
+    if at_index > 0 {
+        arguments.push(path_arg(input));
+        arguments.push(OsString::from(format!("1-{at_index}")));
+    }
+    arguments.push(path_arg(insert));
+    arguments.push(OsString::from("1-z"));
+    if at_index < total {
+        arguments.push(path_arg(input));
+        arguments.push(OsString::from(format!("{}-z", at_index + 1)));
+    }
+    arguments.push(OsString::from("--"));
+    arguments.push(path_arg(output_path));
+    run_qpdf(toolchain, arguments)?;
+    require_output("qpdf insert", output_path)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 4. split_by_max_bytes
 // ---------------------------------------------------------------------------
@@ -1089,18 +1148,586 @@ pub fn compress(toolchain: &PathOpsToolchain, input: &Path, output_path: &Path) 
 // 5. OCR
 // ---------------------------------------------------------------------------
 
+/// OCRmyPDF text-layer strategy. `SkipText` keeps any existing text layer
+/// untouched; `ForceOcr` re-renders every page and rebuilds the text layer
+/// from scratch (the garbled-text-layer recovery path).
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OcrMode {
+    #[default]
+    SkipText,
+    ForceOcr,
+}
+
+impl OcrMode {
+    pub const fn flag(self) -> &'static str {
+        match self {
+            OcrMode::SkipText => "--skip-text",
+            OcrMode::ForceOcr => "--force-ocr",
+        }
+    }
+}
+
+/// Pure argument construction for the OCR op (unit-testable without the
+/// toolchain): mode flag first, then the fixed output-type pair.
+fn ocr_arguments(mode: OcrMode) -> Vec<OsString> {
+    args(&[mode.flag(), "--output-type", "pdf"])
+}
+
 /// By-path OCRmyPDF run — skips the sidecar HTTP byte upload entirely. The
 /// bundled `ocrmypdf.cmd` is self-contained for Python but resolves
 /// `tesseract` and `gs` from PATH, so the payload bin dirs are prepended.
+/// Keeps existing text layers (`--skip-text`) — the `prepare_filing`
+/// make-searchable step and the default OCR workflow both want that.
 pub fn ocr(toolchain: &PathOpsToolchain, input: &Path, output_path: &Path) -> OpResult<()> {
+    ocr_with_mode(toolchain, input, output_path, OcrMode::SkipText)
+}
+
+/// `ocr` with an explicit text-layer mode (skip-text | force-ocr).
+pub fn ocr_with_mode(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    output_path: &Path,
+    mode: OcrMode,
+) -> OpResult<()> {
     require_input_file(input)?;
     let ocrmypdf = toolchain.require_ocrmypdf()?;
-    let mut arguments = args(&["--skip-text", "--output-type", "pdf"]);
+    let mut arguments = ocr_arguments(mode);
     arguments.push(path_arg(input));
     arguments.push(path_arg(output_path));
     let output = run_command(ocrmypdf, &arguments, None, &toolchain.path_entries)?;
     expect_success("ocrmypdf", &output)?;
     require_output("ocrmypdf", output_path)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 5b. Stamping ops (bates_stamp / page_numbers / watermark) — the overlay
+// technique: generate an overlay PDF (one page per document page, text at the
+// configured placement, MediaBoxes matched from document_facts), then a
+// single qpdf `--overlay` pass. Option shapes mirror the byte engine's
+// `PdfBatesStampOptions` / `PdfPageNumbersOptions` / `PdfWatermarkOptions`
+// from `@raiopdf/engine-api`.
+// ---------------------------------------------------------------------------
+
+const POINTS_PER_INCH: f64 = 72.0;
+const DEFAULT_STAMP_FONT_SIZE_PT: f64 = 11.0;
+const DEFAULT_STAMP_MARGIN_IN: f64 = 0.5;
+const DEFAULT_WATERMARK_FONT_SIZE_PT: f64 = 48.0;
+const DEFAULT_WATERMARK_OPACITY: f64 = 0.18;
+const WATERMARK_GRAY: f64 = 0.35;
+/// Cap keeping `10^digits` comfortably inside u64 range.
+const MAX_BATES_DIGITS: u32 = 15;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum StampEdge {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum StampAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// Mirrors `PdfStampPlacement` (`{ edge, align }`).
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StampPlacement {
+    pub edge: StampEdge,
+    pub align: StampAlign,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PageSelectionKeyword {
+    All,
+    First,
+}
+
+/// Mirrors `PdfPageSelection` (`readonly number[] | "all" | "first"`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum PageSelection {
+    Keyword(PageSelectionKeyword),
+    Indexes(Vec<u32>),
+}
+
+impl PageSelection {
+    /// Resolve to zero-based page indexes, deduplicated in first-seen order
+    /// (mirrors the byte engine's `resolvePageSelection`). Rejects
+    /// out-of-range indexes.
+    fn resolve(&self, page_count: u32) -> OpResult<Vec<u32>> {
+        match self {
+            PageSelection::Keyword(PageSelectionKeyword::All) => Ok((0..page_count).collect()),
+            PageSelection::Keyword(PageSelectionKeyword::First) => {
+                Ok(if page_count == 0 { Vec::new() } else { vec![0] })
+            }
+            PageSelection::Indexes(indexes) => {
+                let mut seen = Vec::with_capacity(indexes.len());
+                for &index in indexes {
+                    if index >= page_count {
+                        return Err(PathOpError::invalid(format!(
+                            "page index {index} out of range (document has {page_count} pages)"
+                        )));
+                    }
+                    if !seen.contains(&index) {
+                        seen.push(index);
+                    }
+                }
+                if seen.is_empty() {
+                    return Err(PathOpError::invalid("no pages selected"));
+                }
+                Ok(seen)
+            }
+        }
+    }
+}
+
+/// Mirrors `PdfBatesStampOptions`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatesStampOptions {
+    pub prefix: String,
+    pub start: u32,
+    pub digits: u32,
+    pub placement: StampPlacement,
+    #[serde(default)]
+    pub font_size_pt: Option<f64>,
+    #[serde(default)]
+    pub margin_in: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PageNumberFormat {
+    Number,
+    PageOfTotal,
+}
+
+/// Mirrors `PdfPageNumbersOptions`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNumbersOptions {
+    pub start_at: u32,
+    pub page_indexes: PageSelection,
+    pub format: PageNumberFormat,
+    pub placement: StampPlacement,
+    #[serde(default)]
+    pub font_size_pt: Option<f64>,
+    #[serde(default)]
+    pub margin_in: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WatermarkOrientation {
+    Diagonal,
+    Horizontal,
+}
+
+/// Mirrors `PdfWatermarkOptions`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatermarkOptions {
+    pub text: String,
+    pub page_indexes: PageSelection,
+    pub orientation: WatermarkOrientation,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+    #[serde(default)]
+    pub font_size_pt: Option<f64>,
+}
+
+/// Bates-stamp every page: `prefix` + zero-padded `start + pageIndex` at the
+/// configured placement. Fails when the last number would overflow the digit
+/// width (mirrors the byte engine's `assertBatesFitsPageCount`).
+pub fn bates_stamp(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    options: &BatesStampOptions,
+    output_path: &Path,
+    work_dir: &Path,
+) -> OpResult<()> {
+    let facts = document_facts(toolchain, input)?;
+    let overlay_pages = plan_bates_overlay(&facts.pages, options)?;
+    apply_text_overlay(toolchain, input, &overlay_pages, output_path, work_dir)
+}
+
+pub(crate) fn plan_bates_overlay(
+    pages: &[PageFacts],
+    options: &BatesStampOptions,
+) -> OpResult<Vec<MiniPdfPage>> {
+    if options.digits == 0 || options.digits > MAX_BATES_DIGITS {
+        return Err(PathOpError::invalid(format!(
+            "Bates digits must be between 1 and {MAX_BATES_DIGITS}."
+        )));
+    }
+    let (font_size_pt, margin_in) = stamp_defaults(options.font_size_pt, options.margin_in)?;
+    if pages.is_empty() {
+        return Err(PathOpError::invalid("document has no pages"));
+    }
+    let last_number = u64::from(options.start) + pages.len() as u64 - 1;
+    if last_number >= 10u64.pow(options.digits) {
+        return Err(PathOpError::invalid(
+            "Bates numbers exceed the configured digit width.",
+        ));
+    }
+
+    pages
+        .iter()
+        .map(|page| {
+            let number = u64::from(options.start) + u64::from(page.index);
+            let text = format!(
+                "{}{:0width$}",
+                options.prefix,
+                number,
+                width = options.digits as usize
+            );
+            let stamp = plan_edge_stamp(page, &text, options.placement, font_size_pt, margin_in)?;
+            Ok(overlay_page(page, vec![stamp]))
+        })
+        .collect()
+}
+
+/// Number the selected pages: `startAt + offset` in selection order, either
+/// as a bare number or `Page N of M` (M = the document's page count, matching
+/// the byte engine). Unselected pages get an empty overlay page.
+pub fn page_numbers(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    options: &PageNumbersOptions,
+    output_path: &Path,
+    work_dir: &Path,
+) -> OpResult<()> {
+    let facts = document_facts(toolchain, input)?;
+    let overlay_pages = plan_page_numbers_overlay(&facts.pages, options)?;
+    apply_text_overlay(toolchain, input, &overlay_pages, output_path, work_dir)
+}
+
+pub(crate) fn plan_page_numbers_overlay(
+    pages: &[PageFacts],
+    options: &PageNumbersOptions,
+) -> OpResult<Vec<MiniPdfPage>> {
+    let (font_size_pt, margin_in) = stamp_defaults(options.font_size_pt, options.margin_in)?;
+    let page_count = pages.len() as u32;
+    let selected = options.page_indexes.resolve(page_count)?;
+
+    let mut texts_by_page: BTreeMap<u32, MiniPdfText> = BTreeMap::new();
+    for (offset, &page_index) in selected.iter().enumerate() {
+        let page_number = u64::from(options.start_at) + offset as u64;
+        let text = match options.format {
+            PageNumberFormat::Number => page_number.to_string(),
+            PageNumberFormat::PageOfTotal => format!("Page {page_number} of {page_count}"),
+        };
+        let stamp = plan_edge_stamp(
+            &pages[page_index as usize],
+            &text,
+            options.placement,
+            font_size_pt,
+            margin_in,
+        )?;
+        texts_by_page.insert(page_index, stamp);
+    }
+
+    Ok(pages
+        .iter()
+        .map(|page| {
+            overlay_page(
+                page,
+                texts_by_page.remove(&page.index).into_iter().collect(),
+            )
+        })
+        .collect())
+}
+
+/// Watermark the selected pages: Helvetica-Bold gray text, centered, diagonal
+/// (45°) or horizontal, fit-scaled so the rotated bounds stay on the page,
+/// stamped with real transparency (ExtGState `/ca`).
+pub fn watermark(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    options: &WatermarkOptions,
+    output_path: &Path,
+    work_dir: &Path,
+) -> OpResult<()> {
+    let facts = document_facts(toolchain, input)?;
+    let overlay_pages = plan_watermark_overlay(&facts.pages, options)?;
+    apply_text_overlay(toolchain, input, &overlay_pages, output_path, work_dir)
+}
+
+pub(crate) fn plan_watermark_overlay(
+    pages: &[PageFacts],
+    options: &WatermarkOptions,
+) -> OpResult<Vec<MiniPdfPage>> {
+    if options.text.is_empty() {
+        return Err(PathOpError::invalid("Stamp text must not be empty."));
+    }
+    let font_size_pt = options
+        .font_size_pt
+        .unwrap_or(DEFAULT_WATERMARK_FONT_SIZE_PT);
+    if !(font_size_pt.is_finite() && font_size_pt > 0.0) {
+        return Err(PathOpError::invalid(
+            "fontSizePt must be a positive number.",
+        ));
+    }
+    let opacity = options.opacity.unwrap_or(DEFAULT_WATERMARK_OPACITY);
+    if !(opacity.is_finite() && (0.0..=1.0).contains(&opacity)) {
+        return Err(PathOpError::invalid(
+            "Watermark opacity must be between 0 and 1.",
+        ));
+    }
+
+    let page_count = pages.len() as u32;
+    let selected = options.page_indexes.resolve(page_count)?;
+    let selected: std::collections::BTreeSet<u32> = selected.into_iter().collect();
+
+    pages
+        .iter()
+        .map(|page| {
+            if !selected.contains(&page.index) {
+                return Ok(overlay_page(page, Vec::new()));
+            }
+
+            let (page_width, page_height) = page_box_size(page);
+            let rotation = page.rotate as f64;
+            let sideways = is_sideways(page.rotate);
+            let (visual_width, visual_height) = if sideways {
+                (page_height, page_width)
+            } else {
+                (page_width, page_height)
+            };
+            let relative_rotation = match options.orientation {
+                WatermarkOrientation::Diagonal => 45.0,
+                WatermarkOrientation::Horizontal => 0.0,
+            };
+            let base_width = text_width_pt(&options.text, font_size_pt, true);
+            let base_bounds = rotated_text_bounds(base_width, font_size_pt, relative_rotation);
+            let fit_scale = (visual_width / base_bounds.width)
+                .min(visual_height / base_bounds.height)
+                .min(1.0);
+            let fitted_size = font_size_pt * fit_scale;
+            let text_width = text_width_pt(&options.text, fitted_size, true);
+            let bounds = rotated_text_bounds(text_width, fitted_size, relative_rotation);
+            let (x, y) = map_visual_point_to_page_point(
+                (visual_width - bounds.width) / 2.0 - bounds.min_x,
+                (visual_height - bounds.height) / 2.0 - bounds.min_y,
+                page_width,
+                page_height,
+                page.rotate,
+            );
+
+            Ok(overlay_page(
+                page,
+                vec![MiniPdfText {
+                    text: options.text.clone(),
+                    x: x + page.media_box[0],
+                    y: y + page.media_box[1],
+                    size_pt: fitted_size,
+                    rotate_deg: (rotation + relative_rotation).rem_euclid(360.0),
+                    gray: WATERMARK_GRAY,
+                    opacity: Some(opacity),
+                    bold: true,
+                }],
+            ))
+        })
+        .collect()
+}
+
+fn stamp_defaults(font_size_pt: Option<f64>, margin_in: Option<f64>) -> OpResult<(f64, f64)> {
+    let font_size_pt = font_size_pt.unwrap_or(DEFAULT_STAMP_FONT_SIZE_PT);
+    if !(font_size_pt.is_finite() && font_size_pt > 0.0) {
+        return Err(PathOpError::invalid(
+            "fontSizePt must be a positive number.",
+        ));
+    }
+    let margin_in = margin_in.unwrap_or(DEFAULT_STAMP_MARGIN_IN);
+    if !(margin_in.is_finite() && margin_in > 0.0) {
+        return Err(PathOpError::invalid("marginIn must be a positive number."));
+    }
+    Ok((font_size_pt, margin_in))
+}
+
+fn overlay_page(page: &PageFacts, texts: Vec<MiniPdfText>) -> MiniPdfPage {
+    MiniPdfPage {
+        media_box: page.media_box,
+        rects: Vec::new(),
+        text: None,
+        texts,
+    }
+}
+
+fn page_box_size(page: &PageFacts) -> (f64, f64) {
+    (
+        (page.media_box[2] - page.media_box[0]).abs(),
+        (page.media_box[3] - page.media_box[1]).abs(),
+    )
+}
+
+fn is_sideways(rotate: i64) -> bool {
+    rotate == 90 || rotate == 270
+}
+
+/// One header/footer stamp on one page, rotation-aware: the placement is
+/// computed in the upright "visual" space a viewer sees, then mapped back
+/// into page user space and the text rotated with the page (mirrors the byte
+/// engine's `computeStampPosition` + `mapVisualPointToPagePoint`).
+pub(crate) fn plan_edge_stamp(
+    page: &PageFacts,
+    text: &str,
+    placement: StampPlacement,
+    font_size_pt: f64,
+    margin_in: f64,
+) -> OpResult<MiniPdfText> {
+    let (page_width, page_height) = page_box_size(page);
+    let sideways = is_sideways(page.rotate);
+    let (visual_width, visual_height) = if sideways {
+        (page_height, page_width)
+    } else {
+        (page_width, page_height)
+    };
+    let margin_pt = margin_in * POINTS_PER_INCH;
+    let max_text_width = visual_width - 2.0 * margin_pt;
+    if max_text_width <= 0.0 {
+        return Err(PathOpError::invalid(
+            "Stamp margin leaves no room for text.",
+        ));
+    }
+
+    let natural_width = text_width_pt(text, font_size_pt, false);
+    let fitted_size = if natural_width <= max_text_width {
+        font_size_pt
+    } else {
+        font_size_pt * (max_text_width / natural_width)
+    };
+    let text_width = text_width_pt(text, fitted_size, false);
+
+    let visual_x = match placement.align {
+        StampAlign::Left => margin_pt,
+        StampAlign::Center => (visual_width - text_width) / 2.0,
+        StampAlign::Right => visual_width - margin_pt - text_width,
+    };
+    let visual_y = match placement.edge {
+        StampEdge::Header => visual_height - margin_pt - fitted_size,
+        StampEdge::Footer => margin_pt,
+    };
+    let (x, y) =
+        map_visual_point_to_page_point(visual_x, visual_y, page_width, page_height, page.rotate);
+
+    Ok(MiniPdfText {
+        text: text.to_string(),
+        x: x + page.media_box[0],
+        y: y + page.media_box[1],
+        size_pt: fitted_size,
+        rotate_deg: page.rotate as f64,
+        gray: 0.0,
+        opacity: None,
+        bold: false,
+    })
+}
+
+fn map_visual_point_to_page_point(
+    visual_x: f64,
+    visual_y: f64,
+    page_width: f64,
+    page_height: f64,
+    rotate: i64,
+) -> (f64, f64) {
+    match rotate {
+        90 => (page_width - visual_y, visual_x),
+        180 => (page_width - visual_x, page_height - visual_y),
+        270 => (visual_y, page_height - visual_x),
+        _ => (visual_x, visual_y),
+    }
+}
+
+pub(crate) struct RotatedBounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Axis-aligned bounding box of a text run of `text_width` × `font_size`
+/// rotated by `rotation` degrees about its baseline origin.
+pub(crate) fn rotated_text_bounds(text_width: f64, font_size: f64, rotation: f64) -> RotatedBounds {
+    let radians = rotation.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let points = [
+        (0.0, 0.0),
+        (text_width * cos, text_width * sin),
+        (-font_size * sin, font_size * cos),
+        (
+            text_width * cos - font_size * sin,
+            text_width * sin + font_size * cos,
+        ),
+    ];
+    let min_x = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let min_y = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let max_x = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    RotatedBounds {
+        min_x,
+        min_y,
+        width: max_x - min_x,
+        height: max_y - min_y,
+    }
+}
+
+/// Approximate Helvetica advance width in points. Layout guidance only —
+/// alignment and fit-to-width tolerate a few points of drift, so a compact
+/// class-based approximation stands in for a full AFM table. Values are
+/// slightly generous so right-aligned/fitted text never overflows the edge.
+pub(crate) fn text_width_pt(text: &str, size_pt: f64, bold: bool) -> f64 {
+    let em_total: f64 = text.chars().map(approx_helvetica_advance_em).sum();
+    let bold_factor = if bold { 1.1 } else { 1.0 };
+    em_total * bold_factor * size_pt
+}
+
+fn approx_helvetica_advance_em(ch: char) -> f64 {
+    let thousandths: f64 = match ch {
+        ' ' | '.' | ',' | ':' | ';' | '\'' => 300.0,
+        'i' | 'j' | 'l' | 'I' | '!' | '|' => 260.0,
+        'f' | 't' | 'r' | '-' | '(' | ')' | '[' | ']' | '/' => 350.0,
+        'm' | 'M' | 'W' | '@' => 900.0,
+        'w' => 730.0,
+        'A'..='Z' | '&' | '%' => 700.0,
+        '0'..='9' => 570.0,
+        _ => 570.0,
+    };
+    thousandths / 1000.0
+}
+
+/// Shared tail for the stamping ops: write the overlay next to the output in
+/// `work_dir`, then one qpdf `--overlay` pass (overlay page N onto document
+/// page N — MediaBoxes match by construction, so qpdf stamps 1:1).
+fn apply_text_overlay(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    overlay_pages: &[MiniPdfPage],
+    output_path: &Path,
+    work_dir: &Path,
+) -> OpResult<()> {
+    let overlay_path = work_dir.join("stamp-overlay.pdf");
+    write_minimal_pdf(&overlay_path, overlay_pages)
+        .map_err(|error| PathOpError::io("write stamp overlay", error))?;
+
+    let mut arguments = args(&["--warning-exit-0"]);
+    arguments.push(path_arg(input));
+    arguments.push(path_arg(output_path));
+    arguments.push(OsString::from("--overlay"));
+    arguments.push(path_arg(&overlay_path));
+    arguments.push(OsString::from("--to=1-z"));
+    arguments.push(OsString::from("--from=1-z"));
+    arguments.push(OsString::from("--"));
+    let result = run_qpdf(toolchain, arguments);
+    let _ = fs::remove_file(&overlay_path);
+    result?;
+    require_output("qpdf overlay", output_path)?;
     Ok(())
 }
 
@@ -1215,6 +1842,7 @@ pub(crate) fn redact_areas_impl(
                 .map(|area| [area.x, area.y, area.w, area.h])
                 .collect(),
             text: None,
+            texts: Vec::new(),
         })
         .collect();
     write_minimal_pdf(&overlay_path, &overlay_pages)
@@ -1618,26 +2246,77 @@ fn file_len(path: &Path) -> OpResult<u64> {
 // Minimal PDF writer (redaction overlays + test fixtures)
 // ---------------------------------------------------------------------------
 
+/// One placed text run for the minimal PDF writer: absolute user-space
+/// baseline origin, font size, rotation about the origin, gray fill, optional
+/// constant opacity (ExtGState), regular or bold Helvetica.
+#[derive(Clone, Debug)]
+pub(crate) struct MiniPdfText {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub size_pt: f64,
+    pub rotate_deg: f64,
+    /// 0.0 = black … 1.0 = white.
+    pub gray: f64,
+    pub opacity: Option<f64>,
+    pub bold: bool,
+}
+
 /// A page for the minimal PDF writer: raw MediaBox, black filled rectangles
-/// (`[x, y, w, h]` user-space), and optional Helvetica text (test fixtures).
+/// (`[x, y, w, h]` user-space), optional fixed-position Helvetica text (test
+/// fixtures), and placed text runs (stamping overlays).
 #[derive(Clone, Debug)]
 pub(crate) struct MiniPdfPage {
     pub media_box: [f64; 4],
     pub rects: Vec<[f64; 4]>,
     pub text: Option<String>,
+    pub texts: Vec<MiniPdfText>,
 }
 
 /// Hand-rolled, dependency-free PDF writer. Object layout: 1 Catalog, 2 Pages,
-/// 3 Helvetica font, then (Page, Contents) pairs per page.
+/// 3 Helvetica font, then (only when used) a Helvetica-Bold font and one
+/// ExtGState per distinct opacity, then (Page, Contents) pairs per page.
 pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Result<()> {
     let mut buffer: Vec<u8> = Vec::new();
     buffer.extend_from_slice(b"%PDF-1.4\n");
 
-    let total_objects = 3 + pages.len() * 2;
+    let uses_bold = pages
+        .iter()
+        .any(|page| page.texts.iter().any(|text| text.bold));
+    // Distinct opacities in first-seen order, keyed bit-exact.
+    let mut opacity_bits: Vec<u64> = Vec::new();
+    for page in pages {
+        for text in &page.texts {
+            if let Some(opacity) = text.opacity {
+                if !opacity_bits.contains(&opacity.to_bits()) {
+                    opacity_bits.push(opacity.to_bits());
+                }
+            }
+        }
+    }
+
+    let mut next_id = 4usize;
+    let bold_font_id = uses_bold.then(|| {
+        let id = next_id;
+        next_id += 1;
+        id
+    });
+    let gs_first_id = next_id;
+    next_id += opacity_bits.len();
+    let first_page_id = next_id;
+    let gs_name_for = |opacity: f64| -> usize {
+        opacity_bits
+            .iter()
+            .position(|&bits| bits == opacity.to_bits())
+            .expect("opacity registered above")
+            + 1
+    };
+
+    let total_objects = first_page_id - 1 + pages.len() * 2;
     let mut offsets: Vec<usize> = vec![0; total_objects + 1];
 
     let kids: Vec<String> = (0..pages.len())
-        .map(|index| format!("{} 0 R", 4 + index * 2))
+        .map(|index| format!("{} 0 R", first_page_id + index * 2))
         .collect();
 
     let write_object = |buffer: &mut Vec<u8>, offsets: &mut Vec<usize>, id: usize, body: &[u8]| {
@@ -1670,9 +2349,42 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
         3,
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     );
+    if let Some(bold_id) = bold_font_id {
+        write_object(
+            &mut buffer,
+            &mut offsets,
+            bold_id,
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+        );
+    }
+    for (slot, bits) in opacity_bits.iter().enumerate() {
+        let opacity = f64::from_bits(*bits);
+        write_object(
+            &mut buffer,
+            &mut offsets,
+            gs_first_id + slot,
+            format!("<< /Type /ExtGState /ca {opacity:.4} /CA {opacity:.4} >>").as_bytes(),
+        );
+    }
+
+    // Shared resources dict: every page references every font/gs the doc
+    // uses (simple, and harmless for pages that don't).
+    let mut resources = String::from("/Resources << /Font << /F1 3 0 R");
+    if let Some(bold_id) = bold_font_id {
+        resources.push_str(&format!(" /F2 {bold_id} 0 R"));
+    }
+    resources.push_str(" >>");
+    if !opacity_bits.is_empty() {
+        resources.push_str(" /ExtGState <<");
+        for slot in 0..opacity_bits.len() {
+            resources.push_str(&format!(" /GS{} {} 0 R", slot + 1, gs_first_id + slot));
+        }
+        resources.push_str(" >>");
+    }
+    resources.push_str(" >>");
 
     for (index, page) in pages.iter().enumerate() {
-        let page_id = 4 + index * 2;
+        let page_id = first_page_id + index * 2;
         let contents_id = page_id + 1;
         let [llx, lly, urx, ury] = page.media_box;
 
@@ -1684,14 +2396,31 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
             ));
         }
         if let Some(text) = &page.text {
-            let escaped = text
-                .replace('\\', "\\\\")
-                .replace('(', "\\(")
-                .replace(')', "\\)");
             content.push_str(&format!(
-                "BT /F1 12 Tf {:.2} {:.2} Td ({escaped}) Tj ET\n",
+                "BT /F1 12 Tf {:.2} {:.2} Td ({}) Tj ET\n",
                 llx + 100.0,
-                lly + 500.0
+                lly + 500.0,
+                escape_pdf_string(text),
+            ));
+        }
+        for placed in &page.texts {
+            let (sin, cos) = placed.rotate_deg.to_radians().sin_cos();
+            content.push_str("q ");
+            if let Some(opacity) = placed.opacity {
+                content.push_str(&format!("/GS{} gs ", gs_name_for(opacity)));
+            }
+            content.push_str(&format!(
+                "BT /{} {:.4} Tf {:.3} g {:.6} {:.6} {:.6} {:.6} {:.4} {:.4} Tm ({}) Tj ET Q\n",
+                if placed.bold { "F2" } else { "F1" },
+                placed.size_pt,
+                placed.gray,
+                cos,
+                sin,
+                -sin,
+                cos,
+                placed.x,
+                placed.y,
+                escape_pdf_string(&placed.text),
             ));
         }
 
@@ -1701,7 +2430,7 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
             page_id,
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [ {llx:.2} {lly:.2} {urx:.2} {ury:.2} ] \
-                 /Resources << /Font << /F1 3 0 R >> >> /Contents {contents_id} 0 R >>"
+                 {resources} /Contents {contents_id} 0 R >>"
             )
             .as_bytes(),
         );
@@ -1736,6 +2465,12 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
     let mut file = fs::File::create(path)?;
     file.write_all(&buffer)?;
     Ok(())
+}
+
+fn escape_pdf_string(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
 }
 
 // ---------------------------------------------------------------------------
@@ -2038,6 +2773,7 @@ mod tests {
             media_box: [0.0, 0.0, 612.0, 792.0],
             rects: Vec::new(),
             text: text.map(str::to_string),
+            texts: Vec::new(),
         }
     }
 
@@ -2062,6 +2798,7 @@ mod tests {
                     media_box: [0.0, 0.0, 792.0, 612.0],
                     rects: Vec::new(),
                     text: Some("landscape page".to_string()),
+                    texts: Vec::new(),
                 },
                 letter_page(Some("page three")),
             ],
@@ -2214,11 +2951,13 @@ mod tests {
                     media_box: [0.0, 0.0, 792.0, 612.0], // letter landscape
                     rects: Vec::new(),
                     text: Some("landscape".to_string()),
+                    texts: Vec::new(),
                 },
                 MiniPdfPage {
                     media_box: [0.0, 0.0, 612.0, 1008.0], // legal portrait
                     rects: Vec::new(),
                     text: Some("legal".to_string()),
+                    texts: Vec::new(),
                 },
             ],
         );
@@ -2330,6 +3069,7 @@ mod tests {
                     },
                     rects: Vec::new(),
                     text: Some(format!("filing page {i}")),
+                    texts: Vec::new(),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -2403,9 +3143,512 @@ mod tests {
                 media_box: [0.0, 0.0, 612.0, 792.0],
                 rects: vec![[100.0, 100.0, 200.0, 50.0]],
                 text: Some("with (parens) and \\ backslash".to_string()),
+                texts: Vec::new(),
             }],
         );
         // `qpdf --check` exits non-zero on structural errors.
+        let mut arguments = args(&["--check"]);
+        arguments.push(path_arg(&fixture));
+        run_qpdf(&toolchain, arguments).unwrap();
+    }
+
+    // ---- OCR mode (pure) ----
+
+    #[test]
+    fn ocr_arguments_reflect_mode() {
+        let skip = ocr_arguments(OcrMode::SkipText);
+        assert_eq!(skip[0], OsString::from("--skip-text"));
+        let force = ocr_arguments(OcrMode::ForceOcr);
+        assert_eq!(force[0], OsString::from("--force-ocr"));
+        for arguments in [&skip, &force] {
+            assert_eq!(arguments[1], OsString::from("--output-type"));
+            assert_eq!(arguments[2], OsString::from("pdf"));
+        }
+    }
+
+    #[test]
+    fn ocr_mode_deserializes_the_ui_strings() {
+        let skip: OcrMode = serde_json::from_str("\"skip-text\"").unwrap();
+        assert_eq!(skip, OcrMode::SkipText);
+        let force: OcrMode = serde_json::from_str("\"force-ocr\"").unwrap();
+        assert_eq!(force, OcrMode::ForceOcr);
+        assert!(serde_json::from_str::<OcrMode>("\"rebuild\"").is_err());
+    }
+
+    // ---- Stamping option mapping (pure) ----
+
+    fn letter_facts(count: u32) -> Vec<PageFacts> {
+        (0..count)
+            .map(|index| PageFacts {
+                index,
+                media_box: [0.0, 0.0, 612.0, 792.0],
+                rotate: 0,
+                orientation: "portrait",
+                letter_portrait: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stamp_options_deserialize_the_engine_api_shapes() {
+        let bates: BatesStampOptions = serde_json::from_str(
+            r#"{ "prefix": "ABC", "start": 1, "digits": 6,
+                 "placement": { "edge": "footer", "align": "right" },
+                 "fontSizePt": 10, "marginIn": 0.5 }"#,
+        )
+        .unwrap();
+        assert_eq!(bates.prefix, "ABC");
+        assert_eq!(bates.placement.edge, StampEdge::Footer);
+        assert_eq!(bates.placement.align, StampAlign::Right);
+        assert_eq!(bates.font_size_pt, Some(10.0));
+
+        let numbers: PageNumbersOptions = serde_json::from_str(
+            r#"{ "startAt": 1, "pageIndexes": [0, 2], "format": "page-of-total",
+                 "placement": { "edge": "header", "align": "center" } }"#,
+        )
+        .unwrap();
+        assert_eq!(numbers.format, PageNumberFormat::PageOfTotal);
+        assert!(
+            matches!(numbers.page_indexes, PageSelection::Indexes(ref pages) if pages == &[0, 2])
+        );
+        assert_eq!(numbers.font_size_pt, None);
+
+        let watermark: WatermarkOptions = serde_json::from_str(
+            r#"{ "text": "DRAFT", "pageIndexes": "all", "orientation": "diagonal", "opacity": 0.25 }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            watermark.page_indexes,
+            PageSelection::Keyword(PageSelectionKeyword::All)
+        ));
+        assert_eq!(watermark.opacity, Some(0.25));
+
+        let first: PageSelection = serde_json::from_str("\"first\"").unwrap();
+        assert!(matches!(
+            first,
+            PageSelection::Keyword(PageSelectionKeyword::First)
+        ));
+    }
+
+    #[test]
+    fn page_selection_resolves_and_rejects_out_of_range() {
+        assert_eq!(
+            PageSelection::Keyword(PageSelectionKeyword::All)
+                .resolve(3)
+                .unwrap(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            PageSelection::Keyword(PageSelectionKeyword::First)
+                .resolve(3)
+                .unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            PageSelection::Indexes(vec![2, 0, 2]).resolve(3).unwrap(),
+            vec![2, 0],
+            "dedupes in first-seen order"
+        );
+        let error = PageSelection::Indexes(vec![3]).resolve(3).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(PageSelection::Indexes(Vec::new()).resolve(3).is_err());
+    }
+
+    #[test]
+    fn plan_bates_overlay_stamps_every_page_and_matches_dims() {
+        let mut pages = letter_facts(3);
+        pages[1].media_box = [0.0, 0.0, 792.0, 612.0];
+        let options = BatesStampOptions {
+            prefix: "ABC".to_string(),
+            start: 9,
+            digits: 6,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Right,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+
+        let overlay = plan_bates_overlay(&pages, &options).unwrap();
+        assert_eq!(overlay.len(), pages.len());
+        for (page, facts) in overlay.iter().zip(&pages) {
+            assert_eq!(
+                page.media_box, facts.media_box,
+                "overlay MediaBox must match the page"
+            );
+            assert_eq!(page.texts.len(), 1);
+        }
+        assert_eq!(overlay[0].texts[0].text, "ABC000009");
+        assert_eq!(overlay[2].texts[0].text, "ABC000011");
+        // Footer-right lands inside the page box.
+        let stamp = &overlay[0].texts[0];
+        assert!(stamp.y > 0.0 && stamp.y < 100.0);
+        assert!(stamp.x > 0.0 && stamp.x < 612.0);
+    }
+
+    #[test]
+    fn plan_bates_overlay_rejects_digit_overflow() {
+        let pages = letter_facts(3);
+        let options = BatesStampOptions {
+            prefix: String::new(),
+            start: 99,
+            digits: 2,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Left,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+        let error = plan_bates_overlay(&pages, &options).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains("digit width"));
+    }
+
+    #[test]
+    fn plan_page_numbers_overlay_numbers_only_selected_pages() {
+        let pages = letter_facts(3);
+        let options = PageNumbersOptions {
+            start_at: 7,
+            page_indexes: PageSelection::Indexes(vec![1, 2]),
+            format: PageNumberFormat::PageOfTotal,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Center,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+
+        let overlay = plan_page_numbers_overlay(&pages, &options).unwrap();
+        assert_eq!(overlay.len(), 3);
+        assert!(
+            overlay[0].texts.is_empty(),
+            "unselected page gets an empty overlay page"
+        );
+        assert_eq!(overlay[1].texts[0].text, "Page 7 of 3");
+        assert_eq!(overlay[2].texts[0].text, "Page 8 of 3");
+
+        let out_of_range = PageNumbersOptions {
+            page_indexes: PageSelection::Indexes(vec![9]),
+            ..options
+        };
+        assert!(plan_page_numbers_overlay(&pages, &out_of_range).is_err());
+    }
+
+    #[test]
+    fn plan_watermark_overlay_rotates_fits_and_defaults_opacity() {
+        let pages = letter_facts(2);
+        let options = WatermarkOptions {
+            text: "CONFIDENTIAL".to_string(),
+            page_indexes: PageSelection::Indexes(vec![1]),
+            orientation: WatermarkOrientation::Diagonal,
+            opacity: None,
+            font_size_pt: None,
+        };
+
+        let overlay = plan_watermark_overlay(&pages, &options).unwrap();
+        assert!(overlay[0].texts.is_empty());
+        let stamp = &overlay[1].texts[0];
+        assert_eq!(stamp.rotate_deg, 45.0);
+        assert_eq!(stamp.opacity, Some(DEFAULT_WATERMARK_OPACITY));
+        assert!(stamp.bold);
+        // Fit-scaled bounds stay on the page.
+        let bounds = rotated_text_bounds(
+            text_width_pt(&options.text, stamp.size_pt, true),
+            stamp.size_pt,
+            45.0,
+        );
+        assert!(bounds.width <= 612.0 + 1e-6);
+        assert!(bounds.height <= 792.0 + 1e-6);
+
+        let bad_opacity = WatermarkOptions {
+            opacity: Some(1.5),
+            ..options.clone()
+        };
+        assert!(plan_watermark_overlay(&pages, &bad_opacity).is_err());
+        let empty_text = WatermarkOptions {
+            text: String::new(),
+            ..options
+        };
+        assert!(plan_watermark_overlay(&pages, &empty_text).is_err());
+    }
+
+    #[test]
+    fn plan_edge_stamp_is_rotation_aware_and_rejects_oversized_margins() {
+        let page = PageFacts {
+            index: 0,
+            media_box: [0.0, 0.0, 612.0, 792.0],
+            rotate: 90,
+            orientation: "portrait",
+            letter_portrait: false,
+        };
+        let placement = StampPlacement {
+            edge: StampEdge::Footer,
+            align: StampAlign::Left,
+        };
+        let stamp = plan_edge_stamp(&page, "X1", placement, 11.0, 0.5).unwrap();
+        // Visual footer-left on a 90 degree page maps to page coords
+        // (pageWidth - marginPt, marginPt) and the text rotates with the page.
+        assert!((stamp.x - (612.0 - 36.0)).abs() < 1e-6);
+        assert!((stamp.y - 36.0).abs() < 1e-6);
+        assert_eq!(stamp.rotate_deg, 90.0);
+
+        let unrotated = PageFacts { rotate: 0, ..page };
+        let centered = plan_edge_stamp(
+            &unrotated,
+            "X1",
+            StampPlacement {
+                edge: StampEdge::Header,
+                align: StampAlign::Center,
+            },
+            11.0,
+            0.5,
+        )
+        .unwrap();
+        assert!((centered.y - (792.0 - 36.0 - 11.0)).abs() < 1e-6);
+        assert!(centered.x > 0.0 && centered.x < 612.0);
+
+        let error = plan_edge_stamp(&unrotated, "X1", placement, 11.0, 5.0).unwrap_err();
+        assert!(error.message.contains("no room"));
+    }
+
+    // ---- Toolchain-backed stamping + insert tests ----
+
+    /// Ghostscript txtwrite over the whole file (test helper): the extracted
+    /// text is the spot-check that a stamp landed as real text.
+    fn extract_all_text(toolchain: &PathOpsToolchain, pdf: &Path, work_dir: &Path) -> String {
+        let text_path = work_dir.join("extracted.txt");
+        let mut arguments = args(&["-dBATCH", "-dNOPAUSE", "-dNOSAFER", "-sDEVICE=txtwrite"]);
+        arguments.push(OsString::from(format!(
+            "-sOutputFile={}",
+            text_path.display()
+        )));
+        arguments.push(path_arg(pdf));
+        run_ghostscript(toolchain, arguments).unwrap();
+        fs::read_to_string(&text_path).unwrap()
+    }
+
+    #[test]
+    fn bates_stamp_by_path_stamps_every_page() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("bates");
+        let fixture = write_fixture(
+            dir.path(),
+            "in.pdf",
+            &(0..3)
+                .map(|i| letter_page(Some(&format!("body {i}"))))
+                .collect::<Vec<_>>(),
+        );
+        let output = dir.path().join("bates.pdf");
+        let options = BatesStampOptions {
+            prefix: "ABC".to_string(),
+            start: 1,
+            digits: 6,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Right,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+
+        bates_stamp(&toolchain, &fixture, &options, &output, dir.path()).unwrap();
+
+        let facts = document_facts(&toolchain, &output).unwrap();
+        assert_eq!(facts.page_count, 3);
+        assert!(
+            facts.pages.iter().all(|page| page.letter_portrait),
+            "dims preserved"
+        );
+        let text = extract_all_text(&toolchain, &output, dir.path());
+        for expected in ["ABC000001", "ABC000002", "ABC000003", "body 0", "body 2"] {
+            assert!(text.contains(expected), "missing {expected} in: {text}");
+        }
+    }
+
+    #[test]
+    fn page_numbers_by_path_stamps_selected_pages() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("pagenumbers");
+        let fixture = write_fixture(
+            dir.path(),
+            "in.pdf",
+            &(0..3)
+                .map(|i| letter_page(Some(&format!("body {i}"))))
+                .collect::<Vec<_>>(),
+        );
+        let output = dir.path().join("numbered.pdf");
+        let options = PageNumbersOptions {
+            start_at: 7,
+            page_indexes: PageSelection::Indexes(vec![1]),
+            format: PageNumberFormat::PageOfTotal,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Center,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+
+        page_numbers(&toolchain, &fixture, &options, &output, dir.path()).unwrap();
+
+        assert_eq!(page_count(&toolchain, &output).unwrap(), 3);
+        let text = extract_all_text(&toolchain, &output, dir.path());
+        assert!(text.contains("Page 7 of 3"), "missing stamp in: {text}");
+        assert!(
+            !text.contains("Page 8"),
+            "only the selected page is numbered"
+        );
+    }
+
+    #[test]
+    fn watermark_by_path_keeps_dims_and_adds_text() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("watermark");
+        let fixture = write_fixture(
+            dir.path(),
+            "in.pdf",
+            &[
+                letter_page(Some("body page")),
+                letter_page(Some("second page")),
+            ],
+        );
+        let output = dir.path().join("watermarked.pdf");
+        let options = WatermarkOptions {
+            text: "DRAFT".to_string(),
+            page_indexes: PageSelection::Keyword(PageSelectionKeyword::All),
+            orientation: WatermarkOrientation::Diagonal,
+            opacity: None,
+            font_size_pt: None,
+        };
+
+        watermark(&toolchain, &fixture, &options, &output, dir.path()).unwrap();
+
+        let facts = document_facts(&toolchain, &output).unwrap();
+        assert_eq!(facts.page_count, 2);
+        assert!(
+            facts.pages.iter().all(|page| page.letter_portrait),
+            "dims preserved"
+        );
+        let text = extract_all_text(&toolchain, &output, dir.path());
+        // txtwrite may space rotated glyphs apart -- strip whitespace before
+        // the spot-check.
+        let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(squeezed.contains("DRAFT"), "missing watermark in: {text}");
+        assert!(text.contains("body page"), "original text preserved");
+    }
+
+    #[test]
+    fn insert_pages_composes_at_start_middle_and_end() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("insert-pages");
+        let target = write_fixture(
+            dir.path(),
+            "target.pdf",
+            &(0..3)
+                .map(|i| letter_page(Some(&format!("target {i}"))))
+                .collect::<Vec<_>>(),
+        );
+        let insert = write_fixture(
+            dir.path(),
+            "insert.pdf",
+            &(0..2)
+                .map(|i| letter_page(Some(&format!("insert {i}"))))
+                .collect::<Vec<_>>(),
+        );
+
+        for (at_index, expected_order) in [
+            (
+                0u32,
+                vec!["insert 0", "insert 1", "target 0", "target 1", "target 2"],
+            ),
+            (
+                2u32,
+                vec!["target 0", "target 1", "insert 0", "insert 1", "target 2"],
+            ),
+            (
+                3u32,
+                vec!["target 0", "target 1", "target 2", "insert 0", "insert 1"],
+            ),
+        ] {
+            let output = dir.path().join(format!("out-{at_index}.pdf"));
+            insert_pages(&toolchain, &target, &insert, at_index, &output).unwrap();
+            assert_eq!(page_count(&toolchain, &output).unwrap(), 5);
+
+            let text = extract_all_text(&toolchain, &output, dir.path());
+            let mut positions = Vec::new();
+            for marker in &expected_order {
+                let position = text
+                    .find(marker)
+                    .unwrap_or_else(|| panic!("missing {marker} in insert at {at_index}"));
+                positions.push(position);
+            }
+            let mut sorted = positions.clone();
+            sorted.sort_unstable();
+            assert_eq!(
+                positions, sorted,
+                "page order wrong for at_index {at_index}"
+            );
+        }
+
+        let error = insert_pages(
+            &toolchain,
+            &target,
+            &insert,
+            4,
+            &dir.path().join("nope.pdf"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+    }
+
+    #[test]
+    fn minimal_pdf_writer_with_placed_texts_is_qpdf_clean() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("writer-placed");
+        let fixture = write_fixture(
+            dir.path(),
+            "placed.pdf",
+            &[MiniPdfPage {
+                media_box: [0.0, 0.0, 612.0, 792.0],
+                rects: Vec::new(),
+                text: None,
+                texts: vec![
+                    MiniPdfText {
+                        text: "ABC000001".to_string(),
+                        x: 400.0,
+                        y: 36.0,
+                        size_pt: 11.0,
+                        rotate_deg: 0.0,
+                        gray: 0.0,
+                        opacity: None,
+                        bold: false,
+                    },
+                    MiniPdfText {
+                        text: "DRAFT (rotated)".to_string(),
+                        x: 150.0,
+                        y: 300.0,
+                        size_pt: 48.0,
+                        rotate_deg: 45.0,
+                        gray: 0.35,
+                        opacity: Some(0.18),
+                        bold: true,
+                    },
+                ],
+            }],
+        );
         let mut arguments = args(&["--check"]);
         arguments.push(path_arg(&fixture));
         run_qpdf(&toolchain, arguments).unwrap();

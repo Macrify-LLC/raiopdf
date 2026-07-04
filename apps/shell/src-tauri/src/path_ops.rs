@@ -545,13 +545,88 @@ pub async fn path_op_ocr(
     app: tauri::AppHandle,
     grants: tauri::State<'_, FileGrants>,
     grant: String,
+    mode: Option<core_ops::OcrMode>,
+) -> Result<PathOpOutput, PathOpError> {
+    // Older callers omit the mode — default to the text-preserving pass.
+    let mode = mode.unwrap_or_default();
+    let spec = match mode {
+        core_ops::OcrMode::SkipText => OpSpec::new("ocr", "ocrmypdf", "ocr")
+            .note("existing text layers are kept (--skip-text)"),
+        core_ops::OcrMode::ForceOcr => OpSpec::new("ocr", "ocrmypdf", "ocr")
+            .note("text layer rebuilt from scratch (--force-ocr); every page is re-rendered"),
+    };
+    run_single_output_op(
+        app,
+        grants,
+        grant,
+        spec,
+        move |toolchain, input, output, _work_dir| {
+            core_ops::ocr_with_mode(toolchain, input, output, mode)
+        },
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Stamping ops — overlay technique (bates_stamp / page_numbers / watermark)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn path_op_bates_stamp(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    options: core_ops::BatesStampOptions,
 ) -> Result<PathOpOutput, PathOpError> {
     run_single_output_op(
         app,
         grants,
         grant,
-        OpSpec::new("ocr", "ocrmypdf", "ocr").note("existing text layers are kept (--skip-text)"),
-        |toolchain, input, output, _work_dir| core_ops::ocr(toolchain, input, output),
+        OpSpec::new("bates_stamp", "qpdf", "bates")
+            .note("stamped via a generated text overlay + one qpdf --overlay pass"),
+        move |toolchain, input, output, work_dir| {
+            core_ops::bates_stamp(toolchain, input, &options, output, work_dir)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn path_op_page_numbers(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    options: core_ops::PageNumbersOptions,
+) -> Result<PathOpOutput, PathOpError> {
+    run_single_output_op(
+        app,
+        grants,
+        grant,
+        OpSpec::new("page_numbers", "qpdf", "numbered")
+            .note("stamped via a generated text overlay + one qpdf --overlay pass"),
+        move |toolchain, input, output, work_dir| {
+            core_ops::page_numbers(toolchain, input, &options, output, work_dir)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn path_op_watermark(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    options: core_ops::WatermarkOptions,
+) -> Result<PathOpOutput, PathOpError> {
+    run_single_output_op(
+        app,
+        grants,
+        grant,
+        OpSpec::new("watermark", "qpdf", "watermarked")
+            .note("stamped via a generated text overlay + one qpdf --overlay pass"),
+        move |toolchain, input, output, work_dir| {
+            core_ops::watermark(toolchain, input, &options, output, work_dir)
+        },
     )
     .await
 }
@@ -718,6 +793,71 @@ pub async fn path_op_merge(
         page_count,
         op_report: OpReport {
             op: "merge",
+            tool: "qpdf",
+            duration_ms: started.elapsed().as_millis() as u64,
+            input_size_bytes: input_size,
+            output_size_bytes: output_size,
+            notes: Vec::new(),
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// insert_pages
+// ---------------------------------------------------------------------------
+
+/// Insert every page of `insert_grant` into `grant` after its first
+/// `at_index` pages. Two inputs, so it carries the same multi-input
+/// mid-operation drift guard as `path_op_merge`.
+#[tauri::command]
+pub async fn path_op_insert_pages(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    insert_grant: String,
+    at_index: u32,
+) -> Result<PathOpOutput, PathOpError> {
+    let input = resolve_grant(&grants, &grant)?;
+    let insert = resolve_grant(&grants, &insert_grant)?;
+    let toolchain = discover_toolchain(&app);
+    let work_dir = OpWorkDir::create(&app)?;
+    let name = output_name(&input, "inserted");
+    let output_path = work_dir.path().join(&name);
+    let input_before = snapshot(&input)?;
+    let insert_before = snapshot(&insert)?;
+    let input_size = input_before.len + insert_before.len;
+    let started = Instant::now();
+
+    let (page_count, output_size) = {
+        let input = input.clone();
+        let insert = insert.clone();
+        let output_path = output_path.clone();
+        let toolchain = toolchain.clone();
+        on_blocking_pool(move || {
+            core_ops::insert_pages(&toolchain, &input, &insert, at_index, &output_path)?;
+            ensure_unchanged(&input, input_before)?;
+            ensure_unchanged(&insert, insert_before)?;
+            let page_count = core_ops::page_count(&toolchain, &output_path)?;
+            let size = fs::metadata(&output_path)
+                .map(|metadata| metadata.len())
+                .map_err(|error| PathOpError {
+                    code: "IO_ERROR",
+                    message: format!("cannot stat output: {error}"),
+                })?;
+            Ok((page_count, size))
+        })
+        .await?
+    };
+
+    let output_grant = issue_grant(&grants, &output_path)?;
+    work_dir.keep();
+    Ok(PathOpOutput {
+        output_grant,
+        name,
+        size_bytes: output_size,
+        page_count,
+        op_report: OpReport {
+            op: "insert_pages",
             tool: "qpdf",
             duration_ms: started.elapsed().as_millis() as u64,
             input_size_bytes: input_size,

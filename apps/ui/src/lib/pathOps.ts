@@ -12,7 +12,12 @@
  * `isPathOpsRuntime()` first).
  */
 
-import type { PdfRedactionArea } from "@raiopdf/engine-api";
+import type {
+  PdfBatesStampOptions,
+  PdfPageNumbersOptions,
+  PdfRedactionArea,
+  PdfWatermarkOptions,
+} from "@raiopdf/engine-api";
 import type { PrepPlanStepId } from "@raiopdf/rules";
 import type { FileGrant } from "./filePort";
 
@@ -321,6 +326,19 @@ export function pathOpMerge(
   return invokePathOp("path_op_merge", { inputGrants: [...inputGrants] });
 }
 
+/**
+ * Insert every page of `insertGrant` into `grant` after its first `atIndex`
+ * pages (`0` prepends, `pageCount` appends) — qpdf `--pages` composition,
+ * file→file.
+ */
+export function pathOpInsertPages(
+  grant: PathOpsFileGrant,
+  insertGrant: PathOpsFileGrant,
+  atIndex: number,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_insert_pages", { grant, insertGrant, atIndex });
+}
+
 export function pathOpSplitByMaxBytes(
   grant: PathOpsFileGrant,
   maxBytes: number,
@@ -335,8 +353,14 @@ export function pathOpPrepareFiling(
   return invokePathOp("path_op_prepare_filing", { grant, plan });
 }
 
-export function pathOpOcr(grant: PathOpsFileGrant): Promise<PathOpOutput> {
-  return invokePathOp("path_op_ocr", { grant });
+/** OCR text-layer strategy, mirroring the byte engine's `OcrType`. */
+export type PathOpOcrMode = "skip-text" | "force-ocr";
+
+export function pathOpOcr(
+  grant: PathOpsFileGrant,
+  mode: PathOpOcrMode = "skip-text",
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_ocr", { grant, mode });
 }
 
 export function pathOpRepair(grant: PathOpsFileGrant): Promise<PathOpOutput> {
@@ -376,6 +400,32 @@ export function pathOpScrubMetadata(
   grant: PathOpsFileGrant,
 ): Promise<PathOpOutput> {
   return invokePathOp("path_op_scrub_metadata", { grant });
+}
+
+/**
+ * Stamping path ops (overlay technique): a generated text-overlay PDF plus a
+ * single qpdf `--overlay` pass, file→file. Options are the SAME shapes the
+ * byte-based engine API uses, so the existing dialogs feed either path.
+ */
+export function pathOpBatesStamp(
+  grant: PathOpsFileGrant,
+  options: PdfBatesStampOptions,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_bates_stamp", { grant, options });
+}
+
+export function pathOpPageNumbers(
+  grant: PathOpsFileGrant,
+  options: PdfPageNumbersOptions,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_page_numbers", { grant, options });
+}
+
+export function pathOpWatermark(
+  grant: PathOpsFileGrant,
+  options: PdfWatermarkOptions,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_watermark", { grant, options });
 }
 
 /**

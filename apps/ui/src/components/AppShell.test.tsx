@@ -144,6 +144,8 @@ const mockEditing: EditingState = {
     shapeArrow: { strokeWidthPt: 1.5 },
   },
   updateShapeStyle: noop,
+  calloutStyle: { strokeWidthPt: 1.5 },
+  updateCalloutStyle: noop,
   message: null,
   setMessage: noop,
   collectEdits: () => null,

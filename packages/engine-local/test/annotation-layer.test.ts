@@ -156,6 +156,47 @@ describe("annotation-layer foundation", () => {
     expect(readOperandPairs(content, "cm")).toContainEqual([1, 0, 0, 1, 40, 50]);
   });
 
+  it("normalizes pages after baking kept RaioPDF markup annotations into content", async () => {
+    const engine = createLocalPdfEngine();
+    const source = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(
+      source,
+      [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "rect",
+          rect: { x: 80, y: 120, w: 140, h: 60 },
+          strokeWidthPt: 3,
+          strokeColor: { r: 0.1, g: 0.2, b: 0.3 },
+          fillColor: { r: 0.8, g: 0.7, b: 0.2 },
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+
+    expect(readRaioPdfMarkupAnnotations(editedPdf.getPage(0))).toHaveLength(1);
+
+    const normalized = await engine.normalizePages(edited, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const normalizedBytes = await engine.saveToBytes(normalized);
+    const normalizedPdf = await PDFDocument.load(normalizedBytes);
+    const normalizedContent = await readDecodedPageContent(normalizedBytes, 0);
+    const embeddedPageContent = readFlattenedAppearances(normalizedContent)
+      .map(({ name }) => readPageXObjectStream(normalizedPdf, 0, name.replace(/^\//, ""), false))
+      .filter((stream): stream is PDFStream => Boolean(stream))
+      .map((stream) => decodePdfStream(stream))
+      .join("\n");
+
+    expect(readRaioPdfMarkupAnnotations(normalizedPdf.getPage(0))).toHaveLength(0);
+    expect(readPageAnnotations(normalizedPdf, 0)).toHaveLength(0);
+    expect(normalizedContent).toContain(" Do");
+    expect(embeddedPageContent).toContain("/RaioPDFAnnot");
+  });
+
   it("emits markup annotations by default and keeps baked mode reachable", async () => {
     const engine = createLocalPdfEngine();
     const defaultSource = await engine.open(await createPdf([[300, 200]]));

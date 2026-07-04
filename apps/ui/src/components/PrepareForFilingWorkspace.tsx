@@ -111,6 +111,8 @@ export interface FilingImpactState {
   unappliedRedactionMarks: number;
   /** RaioPDF-owned markup annotations in the PDF that need a filing choice. */
   markupAnnotationCount: number;
+  /** Whether Normalize pages was selected for the run that raised this warning. */
+  normalizePagesSelected: boolean;
 }
 
 export interface PrepareForFilingWorkspaceProps {
@@ -695,7 +697,9 @@ function ImpactWarning({
       </ul>
       <p className="filing-impact__hint">
         {hasMarkupChoice
-          ? "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations."
+          ? impact.normalizePagesSelected
+            ? "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations — but Normalize pages will bake kept markup into the filing copy."
+            : "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations."
           : impact.unappliedRedactionMarks > 0
           ? "Apply your redactions first, then run Prepare for Filing again."
           : "If these features are load-bearing — an unsigned form, a signature you need intact — cancel and handle them first."}

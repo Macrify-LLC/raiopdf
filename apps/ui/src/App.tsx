@@ -2812,6 +2812,7 @@ export function App() {
             conversionImpact,
             unappliedRedactionMarks,
             markupAnnotationCount,
+            normalizePagesSelected: selectedSteps.has("normalize-pages"),
           });
           setFilingProgress({ phase: "idle", message: null });
           return;

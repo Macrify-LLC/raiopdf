@@ -181,6 +181,7 @@ describe("PrepareForFilingWorkspace", () => {
           conversionImpact: null,
           unappliedRedactionMarks: 0,
           markupAnnotationCount: 2,
+          normalizePagesSelected: false,
         }}
         pdfAAvailable
         compressAvailable
@@ -201,6 +202,43 @@ describe("PrepareForFilingWorkspace", () => {
       acknowledgeImpact: true,
       markupAnnotations: "flatten",
     });
+  });
+
+  it("warns that normalize pages bakes kept RaioPDF markup", () => {
+    const pack = getPack();
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={{
+          conversionImpact: null,
+          unappliedRedactionMarks: 0,
+          markupAnnotationCount: 1,
+          normalizePagesSelected: true,
+        }}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(document.body.textContent).toContain(
+      "Normalize pages will bake kept markup into the filing copy",
+    );
   });
 
   function render(element: ReactNode) {

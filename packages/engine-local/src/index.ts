@@ -355,6 +355,7 @@ export class LocalPdfEngine implements PdfEngine {
     }
 
     const source = await this.load(document);
+    flattenMarkupAnnotationsInPlace(source);
     const output = await PDFDocument.create();
     const targetWidth = Math.min(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;
     const targetHeight = Math.max(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;

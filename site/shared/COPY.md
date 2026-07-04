@@ -188,7 +188,7 @@ don't isolate it into its own callout box if you're using the full text.
 - **Metadata scrubbing** before production or filing.
 - **Native MCP integration** (added 2026-07-03) — no AI built into RaioPDF
   itself, but it speaks natively to a user's own AI agents and tools: the
-  installer bundles an off-by-default connector exposing twenty local tools
+  installer bundles an off-by-default connector exposing 25 local tools
   (OCR, verified redaction, Bates, binders, production sets, filing
   preflight, and more). Keep the "no AI in the product" claim and the
   "MCP-native" claim next to each other so it doesn't read as a
@@ -199,7 +199,7 @@ don't isolate it into its own callout box if you're using the full text.
 
 (Consistency notes — quoted facts and every surface that repeats them, so a
 change propagates instead of drifting:
-— The MCP tool count ("twenty tools") is canonical in `docs/MCP.md` next to
+— The MCP tool count ("25 tools") is canonical in `docs/MCP.md` next to
   its Tools table; quoted by `README.md`, this file, the landing page, and
   nowhere else.
 — The jurisdiction-pack list (Florida / Federal CM/ECF / Georgia eFileGA +

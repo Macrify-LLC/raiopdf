@@ -43,6 +43,10 @@ export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "underline", label: "Underline", group: "edit", helpArticleId: "underline", description: "Drag over text to create a saved underline mark." },
   { id: "strikethrough", label: "Strikethrough", group: "edit", helpArticleId: "strikethrough", description: "Drag over text to create a saved strikethrough mark." },
   { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw", description: "Draw freehand ink that will be saved with the PDF." },
+  { id: "shapeRect", label: "Rectangle", group: "edit", helpArticleId: "shapes", description: "Drag a rectangle that will be saved with the PDF." },
+  { id: "shapeEllipse", label: "Ellipse", group: "edit", helpArticleId: "shapes", description: "Drag an ellipse that will be saved with the PDF." },
+  { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", description: "Drag a straight line that will be saved with the PDF." },
+  { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", description: "Drag an arrow that will be saved with the PDF." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
 ] as const satisfies readonly (ToolRegistryEntry & {
   id: Exclude<EditToolId, "select" | "comment">;
@@ -62,6 +66,10 @@ export const COMMAND_BAR_EDIT_TOOLS = [
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", tooltip: "Place an image on the current page before saving." },
   { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment", tooltip: "Add a PDF note annotation on the current page." },
   { id: "draw", label: "Draw", group: "edit", helpArticleId: "draw", tooltip: "Draw freehand ink that will be saved with the PDF." },
+  { id: "shapeRect", label: "Rectangle", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved rectangle on the current page." },
+  { id: "shapeEllipse", label: "Ellipse", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved ellipse on the current page." },
+  { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved line on the current page." },
+  { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved arrow on the current page." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", tooltip: "Place a signature image as a visible page edit." },
 ] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 

@@ -217,6 +217,124 @@ export type PdfEditColor = {
   b: number;
 };
 
+export type PdfTextBoxFontFamily = "helvetica" | "times" | "courier";
+
+export type PdfTextBoxAlign = "left" | "center" | "right";
+
+export type PdfTextMeasureFont = {
+  widthOfTextAtSize: (text: string, size: number) => number;
+};
+
+export type PdfTextBoxWrapOptions = {
+  text: string;
+  boxWidthPt: number;
+  fontSizePt: number;
+  font: PdfTextMeasureFont;
+};
+
+/**
+ * Computes the exact lines a text-box edit should draw for a given font and
+ * width. Explicit newlines are hard breaks; long words are split greedily.
+ */
+export function wrapTextBoxLines(options: PdfTextBoxWrapOptions): string[] {
+  const hardLines = options.text.replace(/\r\n/g, "\n").split("\n");
+  const lines = hardLines.flatMap((line) => wrapHardLine(line, options));
+
+  return lines.length > 0 ? lines : [""];
+}
+
+function wrapHardLine(
+  text: string,
+  options: Pick<PdfTextBoxWrapOptions, "boxWidthPt" | "fontSizePt" | "font">,
+): string[] {
+  if (text.length === 0) {
+    return [""];
+  }
+
+  const maxWidth = Math.max(0, options.boxWidthPt);
+
+  if (fitsText(text, maxWidth, options)) {
+    return [text];
+  }
+
+  const tokens = text.match(/\s+|\S+/g) ?? [];
+
+  if (tokens.length === 0) {
+    return [text];
+  }
+
+  const lines: string[] = [];
+  let current = "";
+
+  for (const token of tokens) {
+    const candidate = `${current}${token}`;
+
+    if (fitsText(candidate, maxWidth, options)) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      lines.push(current);
+    }
+
+    if (/^\s+$/.test(token) || fitsText(token, maxWidth, options)) {
+      current = token;
+      continue;
+    }
+
+    const pieces = breakLongWord(token, maxWidth, options);
+    lines.push(...pieces.slice(0, -1));
+    current = pieces.at(-1) ?? "";
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
+
+function breakLongWord(
+  word: string,
+  maxWidth: number,
+  options: Pick<PdfTextBoxWrapOptions, "fontSizePt" | "font">,
+): string[] {
+  const pieces: string[] = [];
+  let current = "";
+
+  for (const char of word) {
+    const candidate = `${current}${char}`;
+
+    if (current && fitsText(candidate, maxWidth, options)) {
+      current = candidate;
+      continue;
+    }
+
+    if (!current) {
+      current = char;
+      continue;
+    }
+
+    pieces.push(current);
+    current = char;
+  }
+
+  if (current) {
+    pieces.push(current);
+  }
+
+  return pieces.length > 0 ? pieces : [word];
+}
+
+function fitsText(
+  text: string,
+  maxWidth: number,
+  options: Pick<PdfTextBoxWrapOptions, "fontSizePt" | "font">,
+): boolean {
+  return options.font.widthOfTextAtSize(text, options.fontSizePt) <= maxWidth;
+}
+
 /** Raster image formats accepted by image-bearing edits. */
 export type PdfEditImageFormat = "png" | "jpeg";
 
@@ -239,6 +357,24 @@ export type PdfHighlightEdit = {
 };
 
 /**
+ * Text markup drawn from text-line rectangles.
+ *
+ * Underline and strikethrough are baked into page content on apply (not stored
+ * as annotations), matching highlight's save behavior.
+ */
+export type PdfTextMarkupEdit = {
+  type: "underline" | "strikethrough";
+  /** Zero-based page index receiving the markup. */
+  pageIndex: number;
+  /** One rectangle per marked text line, in PDF user-space points. */
+  rects: readonly PdfEditRect[];
+  /** Markup line color. Defaults to near-black ink. */
+  color?: PdfEditColor;
+  /** Markup line thickness in points. Defaults to 1. */
+  thicknessPt?: number;
+};
+
+/**
  * A block of caller-authored text drawn inside a rectangle.
  *
  * Text starts at the visual top-left of `rect` and supports `\n` line breaks.
@@ -257,6 +393,14 @@ export type PdfTextBoxEdit = {
   fontSizePt?: number;
   /** Ink color. Defaults to near-black (#111111). */
   color?: PdfEditColor;
+  /** Standard PDF font family. Defaults to Helvetica. */
+  fontFamily?: PdfTextBoxFontFamily;
+  /** Use the bold face of the selected standard font family. Defaults to false. */
+  bold?: boolean;
+  /** Use the italic/oblique face of the selected standard font family. Defaults to false. */
+  italic?: boolean;
+  /** Horizontal alignment for each rendered line. Defaults to left. */
+  align?: PdfTextBoxAlign;
 };
 
 /**
@@ -295,6 +439,46 @@ export type PdfInkEdit = {
   /** Stroke color. Defaults to near-black (#111111). */
   color?: PdfEditColor;
 };
+
+export type PdfShapeKind = "rect" | "ellipse" | "line" | "arrow";
+
+/**
+ * Geometric shapes baked into page content.
+ *
+ * Shape geometry is orientation-agnostic and drawn verbatim in PDF user-space
+ * points, matching highlights and ink. Rectangle and ellipse edits require a
+ * positive-dimension bounding rectangle; line and arrow edits require distinct
+ * endpoints.
+ */
+export type PdfShapeEdit =
+  | {
+      type: "shape";
+      /** Zero-based page index receiving the shape. */
+      pageIndex: number;
+      shape: "rect" | "ellipse";
+      /** Positive-dimension user-space bounds. */
+      rect: PdfEditRect;
+      /** Stroke thickness in points. Defaults to 1.5. */
+      strokeWidthPt?: number;
+      /** Stroke color. Defaults to near-black (#111111). */
+      strokeColor?: PdfEditColor;
+      /** Optional fill color. Omitted means stroke-only. */
+      fillColor?: PdfEditColor;
+    }
+  | {
+      type: "shape";
+      /** Zero-based page index receiving the shape. */
+      pageIndex: number;
+      shape: "line" | "arrow";
+      /** User-space start point. */
+      from: PdfEditPoint;
+      /** User-space end point. */
+      to: PdfEditPoint;
+      /** Stroke thickness in points. Defaults to 1.5. */
+      strokeWidthPt?: number;
+      /** Stroke color. Defaults to near-black (#111111). */
+      strokeColor?: PdfEditColor;
+    };
 
 /**
  * A sticky-note comment stored as a real PDF `/Text` annotation.
@@ -365,9 +549,11 @@ export type PdfSignatureEdit = {
  */
 export type PdfEdit =
   | PdfHighlightEdit
+  | PdfTextMarkupEdit
   | PdfTextBoxEdit
   | PdfImageEdit
   | PdfInkEdit
+  | PdfShapeEdit
   | PdfCommentEdit
   | PdfFormValuesEdit
   | PdfSignatureEdit;

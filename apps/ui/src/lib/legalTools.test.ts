@@ -151,6 +151,28 @@ describe("legalTools", () => {
     });
   });
 
+  it("does not confidently clear redactions when the source page text layer is garbled", async () => {
+    const garbledText = "xqz!@#$ brt%^&* crw+=? plk[]{} mnn<>/ ".repeat(4);
+    const sourcePdf = mockPdf([
+      textItem(garbledText, 36, 220),
+    ]);
+    const areas = [{ pageIndex: 0, x: 30, y: 80, w: 240, h: 40 }];
+
+    const redactedTerms = await collectRedactionAreaTexts(sourcePdf, areas);
+    const outputBytes = await createRedactionFixturePdf({
+      annotationText: "",
+      visibleText: "",
+    });
+    const result = await verifyRedactionAreasClear(outputBytes, areas, redactedTerms);
+
+    expect(result.ok).toBe(false);
+    expect(result.textLayer).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("Text layer garbled on redacted page"),
+    });
+    expect(result.textLayer.detail).toContain("Verify manually");
+  });
+
   it("fails verification when a redacted page keeps text operators in a Form XObject", async () => {
     const term = "Privileged Codename";
     const sourcePdf = mockPdf([

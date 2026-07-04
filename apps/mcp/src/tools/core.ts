@@ -30,6 +30,7 @@ export const ocrOutputSchema = {
   ...outputResultSchema,
   verifiedPages: z.number().optional(),
   missingTextPages: z.array(z.number()).optional(),
+  garbledPages: z.number().optional(),
 };
 export interface OcrInput {
   input: string;
@@ -64,7 +65,7 @@ export async function handleOcr(
 
     const searchableBytes = await engine.saveToBytes(searchable);
     const coverage = summarizeTextLayerCoverage(await extractTextLayerCoverage(searchableBytes));
-    if (!coverage.allPagesHaveText) {
+    if (!coverage.verified) {
       await output.abort();
       const result = errorResult(
         "OCR_UNVERIFIED",
@@ -76,7 +77,8 @@ export async function handleOcr(
         structuredContent: {
           ...result.structuredContent,
           missingTextPages: coverage.missingTextPages,
-          verifiedPages: coverage.pagesWithText.length,
+          garbledPages: coverage.garbledPages,
+          verifiedPages: Math.max(0, coverage.pagesWithText.length - coverage.garbledPages),
         },
       };
     }
@@ -86,7 +88,7 @@ export async function handleOcr(
 
     return successResult(
       `Made searchable via OCR: ${output.outputPath}; verified text on ${coverage.pageCount} page(s).`,
-      { output: output.outputPath, verifiedPages: coverage.pageCount },
+      { output: output.outputPath, verifiedPages: coverage.pageCount, garbledPages: 0 },
     );
   } catch (error) {
     await output.abort();
@@ -107,11 +109,13 @@ function summarizeTextLayerCoverage(layer: {
   imageOnlyPages: readonly number[];
   mixedPages: readonly number[];
   textPages: readonly number[];
+  garbledPages: readonly { pageIndex: number }[];
 }): {
   pageCount: number;
   pagesWithText: number[];
   missingTextPages: number[];
-  allPagesHaveText: boolean;
+  garbledPages: number;
+  verified: boolean;
   hasAnyText: boolean;
 } {
   const pagesWithText = [...layer.mixedPages, ...layer.textPages]
@@ -124,7 +128,8 @@ function summarizeTextLayerCoverage(layer: {
     pageCount,
     pagesWithText,
     missingTextPages,
-    allPagesHaveText: pageCount > 0 && missingTextPages.length === 0,
+    garbledPages: layer.garbledPages.length,
+    verified: pageCount > 0 && missingTextPages.length === 0 && layer.garbledPages.length === 0,
     hasAnyText: pagesWithText.length > 0,
   };
 }
@@ -133,6 +138,7 @@ function formatOcrCoverageFailure(coverage: {
   pageCount: number;
   hasAnyText: boolean;
   missingTextPages: readonly number[];
+  garbledPages: number;
 }): string {
   if (coverage.pageCount === 0) {
     return "OCR verification failed because the output PDF has no pages.";
@@ -140,6 +146,13 @@ function formatOcrCoverageFailure(coverage: {
 
   if (!coverage.hasAnyText) {
     return "OCR verification failed because the output PDF has no extractable page text.";
+  }
+
+  if (coverage.garbledPages > 0) {
+    const missingText = coverage.missingTextPages.length > 0
+      ? ` and page(s) ${coverage.missingTextPages.join(", ")} have no extractable text`
+      : "";
+    return `OCR verification failed because ${coverage.garbledPages} page(s) still have a garbled text layer${missingText}.`;
   }
 
   return `OCR verification failed because page(s) ${coverage.missingTextPages.join(", ")} have no extractable text.`;

@@ -3,7 +3,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  width: min(100%, 620px);
+  width: min(100%, 760px);
   padding: var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-popover);
@@ -35,6 +35,95 @@
   overflow: hidden;
   clip-path: inset(50%);
   border: 0;
+}
+
+.legal-mode-bar__tool-options {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-height: 30px;
+}
+
+.legal-mode-bar__swatches,
+.legal-mode-bar__width-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.legal-mode-bar__swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--tool-swatch-color, var(--edit-ink)), var(--tool-swatch-color, var(--edit-ink))),
+    var(--panel);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+}
+
+.legal-mode-bar__swatch[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow:
+    0 0 0 2px var(--panel),
+    0 0 0 4px var(--primary);
+}
+
+.legal-mode-bar__range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.legal-mode-bar__range input {
+  width: 74px;
+  accent-color: var(--primary);
+}
+
+.legal-mode-bar__range-value {
+  min-width: 30px;
+  color: var(--body);
+  text-align: right;
+}
+
+.legal-mode-bar__width-button {
+  min-width: 28px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  padding: 0 var(--space-1);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+}
+
+.legal-mode-bar__select {
+  height: 24px;
+  max-width: 92px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  box-shadow: var(--shadow-control);
+}
+
+.legal-mode-bar__width-button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
 }
 
 .legal-mode-bar__button,

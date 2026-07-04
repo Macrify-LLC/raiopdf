@@ -9,19 +9,43 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
-  computeHighlightLineRects,
+  computeTextMarkupLineRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
   COMMENT_ICON_SIZE_PT,
-  INK_STROKE_WIDTH_PT,
   type PageTextBox,
   type PendingComment,
   type PendingEdit,
+  type PendingShape,
   type PendingStamp,
   type PendingTextBox,
+  type ShapeToolId,
+  type TextMarkupToolId,
+  normalizePdfRectFromPoints,
+  shapeKindFromTool,
 } from "../lib/edits";
+import {
+  type PdfEditColor,
+  type PdfTextBoxAlign,
+  type PdfTextBoxFontFamily,
+} from "@raiopdf/engine-api";
+import {
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_INK_COLOR,
+  DEFAULT_INK_STROKE_WIDTH_PT,
+  DEFAULT_SHAPE_STROKE_COLOR,
+  DEFAULT_SHAPE_STROKE_WIDTH_PT,
+  DEFAULT_TEXT_MARKUP_COLOR,
+  DEFAULT_TEXT_MARKUP_THICKNESS_PT,
+  DEFAULT_TEXT_ALIGN,
+  DEFAULT_TEXT_COLOR,
+  DEFAULT_TEXT_FONT_FAMILY,
+  pdfEditColorToHex,
+} from "../lib/editStyles";
 import { newEditId, type EditingState } from "../hooks/useEditing";
 import { isTextEntryTarget } from "../lib/domGuards";
 import type { PDFPageProxy } from "../lib/pdfjs";
@@ -38,6 +62,7 @@ import {
   type ViewportPoint,
   type ViewportRect,
 } from "../lib/viewportGeometry";
+import { computeTextBoxPreviewLines } from "../lib/textBoxPreview";
 import { CommentMarkerIcon } from "../icons";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { hasOpenDialogStackEntry } from "./FloatingDialog";
@@ -46,6 +71,9 @@ import "./EditLayer.css";
 /** Rapid re-clicks inside this window never place a second item. */
 const PLACEMENT_GUARD_MS = 350;
 const MIN_ITEM_SIZE_PX = 12;
+const MIN_SHAPE_DRAG_PX = 3;
+const ARROW_HEAD_MIN_PT = 8;
+const ARROW_HEAD_MAX_PT = 32;
 const DEFAULT_TEXT_BOX_WIDTH_PT = 180;
 const TEXT_BOX_PADDING_PT = 4;
 
@@ -55,6 +83,11 @@ interface TextDraft {
   rect: ViewportRect;
   text: string;
   fontSizePt: number;
+  color?: PdfEditColor;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
 }
 
 interface CommentDraft {
@@ -63,7 +96,16 @@ interface CommentDraft {
   text: string;
 }
 
+interface ShapeDraft {
+  tool: ShapeToolId;
+  start: ViewportPoint;
+  end: ViewportPoint;
+}
+
 type ResizeCorner = "nw" | "ne" | "sw" | "se";
+type TextBoxStyleUpdate = Partial<
+  Pick<PendingTextBox, "fontFamily" | "bold" | "italic" | "align">
+>;
 
 interface ItemDrag {
   id: string;
@@ -92,9 +134,10 @@ export interface EditLayerProps {
 export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const [textBoxes, setTextBoxes] = useState<readonly PageTextBox[]>([]);
-  const [highlightDraft, setHighlightDraft] = useState<ViewportRect | null>(null);
+  const [textMarkupDraft, setTextMarkupDraft] = useState<ViewportRect | null>(null);
   const [textLayerError, setTextLayerError] = useState<string | null>(null);
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
+  const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [dragPreview, setDragPreview] = useState<{ id: string; rect: ViewportRect } | null>(
@@ -127,8 +170,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     [pageIndex, pendingEdits],
   );
 
-  // Loaded eagerly per page (not on highlight activation) so the first
-  // highlight drag never races the async text-layer read.
+  // Loaded eagerly per page so the first text-markup drag never races the
+  // async text-layer read.
   useEffect(() => {
     let disposed = false;
 
@@ -145,7 +188,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       .catch(() => {
         if (!disposed) {
           setTextBoxes([]);
-          setTextLayerError("Text could not be read on this page, so highlight drag is unavailable here.");
+          setTextLayerError("Text could not be read on this page, so text markup is unavailable here.");
         }
       });
 
@@ -155,8 +198,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   }, [page]);
 
   useEffect(() => {
-    setHighlightDraft(null);
+    setTextMarkupDraft(null);
     setDrawDraft(null);
+    setShapeDraft(null);
     setTextDraft(null);
     setCommentDraft(null);
     setDragPreview(null);
@@ -179,6 +223,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     placementGuardRef.current = now + PLACEMENT_GUARD_MS;
     return true;
   }, []);
+
+  const placementSuppressed = useCallback(() => Date.now() < placementGuardRef.current, []);
 
   const suppressPlacement = useCallback(() => {
     placementGuardRef.current = Date.now() + PLACEMENT_GUARD_MS;
@@ -259,7 +305,17 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       if (draft.editId) {
         updateEdit(draft.editId, (edit) =>
           edit.kind === "textBox"
-            ? { ...edit, rect, text, fontSizePt: draft.fontSizePt }
+            ? {
+                ...edit,
+                rect,
+                text,
+                fontSizePt: draft.fontSizePt,
+                ...(draft.color ? { color: draft.color } : {}),
+                fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+                bold: Boolean(draft.bold),
+                italic: Boolean(draft.italic),
+                align: draft.align ?? DEFAULT_TEXT_ALIGN,
+              }
             : edit,
         );
       } else {
@@ -270,6 +326,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           rect,
           text,
           fontSizePt: draft.fontSizePt,
+          ...(draft.color ? { color: draft.color } : {}),
+          fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+          bold: Boolean(draft.bold),
+          italic: Boolean(draft.italic),
+          align: draft.align ?? DEFAULT_TEXT_ALIGN,
         });
       }
 
@@ -336,6 +397,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
+    if ((tool === "textBox" || tool === "comment") && placementSuppressed()) {
+      return;
+    }
+
     // An open inline editor absorbs the click: commit it, never also place.
     if (closeDraftsForOutsideClick()) {
       return;
@@ -343,9 +408,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
     setSelectedId(null);
 
-    if (tool === "highlight") {
+    if (isTextMarkupTool(tool)) {
       dragStartRef.current = point;
-      setHighlightDraft({ left: point.x, top: point.y, width: 0, height: 0 });
+      setTextMarkupDraft({ left: point.x, top: point.y, width: 0, height: 0 });
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
@@ -353,6 +418,13 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     if (tool === "draw") {
       drawPointsRef.current = [point];
       setDrawDraft([point]);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (isShapeTool(tool)) {
+      dragStartRef.current = point;
+      setShapeDraft({ tool, start: point, end: point });
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
@@ -375,6 +447,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         },
         text: "",
         fontSizePt: DEFAULT_TEXT_BOX_FONT_SIZE,
+        ...(editing.textBoxStyle.color ? { color: editing.textBoxStyle.color } : {}),
+        fontFamily: editing.textBoxStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+        bold: Boolean(editing.textBoxStyle.bold),
+        italic: Boolean(editing.textBoxStyle.italic),
+        align: editing.textBoxStyle.align ?? DEFAULT_TEXT_ALIGN,
       });
       return;
     }
@@ -446,8 +523,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
-    if (tool === "highlight" && dragStartRef.current) {
-      setHighlightDraft(pointsToViewportRect(dragStartRef.current, point));
+    if (isTextMarkupTool(tool) && dragStartRef.current) {
+      setTextMarkupDraft(pointsToViewportRect(dragStartRef.current, point));
       return;
     }
 
@@ -458,16 +535,22 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         drawPointsRef.current = [...drawPointsRef.current, point];
         setDrawDraft(drawPointsRef.current);
       }
+      return;
+    }
+
+    if (isShapeTool(tool) && dragStartRef.current) {
+      setShapeDraft({ tool, start: dragStartRef.current, end: point });
     }
   }
 
   function handleLayerPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const point = getLayerPoint(event);
 
-    if (tool === "highlight" && dragStartRef.current) {
+    if (isTextMarkupTool(tool) && dragStartRef.current) {
+      const textMarkupTool = tool;
       const start = dragStartRef.current;
       dragStartRef.current = null;
-      setHighlightDraft(null);
+      setTextMarkupDraft(null);
 
       if (!point) {
         return;
@@ -476,23 +559,41 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       const band = pointsToViewportRect(start, point);
 
       if (band.width < 3 && band.height < 3) {
-        removeHighlightAtPoint(point);
+        removeTextMarkupAtPoint(point, textMarkupTool);
         return;
       }
 
-      const rects = computeHighlightLineRects(
+      const rects = computeTextMarkupLineRects(
         viewportRectToPdfRect(band, viewport),
         textBoxes,
         sideways,
       );
 
       if (rects.length === 0) {
-        editing.setMessage("No text under that drag — highlights attach to text lines.");
+        editing.setMessage(
+          `No text under that drag — ${textMarkupPlural(textMarkupTool)} attach to text lines.`,
+        );
         return;
       }
 
       editing.setMessage(null);
-      addEdit({ kind: "highlight", id: newEditId(), pageIndex, rects });
+      if (textMarkupTool === "highlight") {
+        addEdit({
+          kind: "highlight",
+          id: newEditId(),
+          pageIndex,
+          rects,
+          ...editing.highlightStyle,
+        });
+      } else {
+        addEdit({
+          kind: textMarkupTool,
+          id: newEditId(),
+          pageIndex,
+          rects,
+          ...editing.textMarkupStyles[textMarkupTool],
+        });
+      }
       return;
     }
 
@@ -510,6 +611,60 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         id: newEditId(),
         pageIndex,
         strokes: [points.map((strokePoint) => viewportPointToPdfPoint(strokePoint, viewport))],
+        strokeWidthPt: editing.inkStyle.strokeWidthPt,
+        ...(editing.inkStyle.color ? { color: editing.inkStyle.color } : {}),
+      });
+      return;
+    }
+
+    if (isShapeTool(tool) && dragStartRef.current) {
+      const shapeTool = tool;
+      const start = dragStartRef.current;
+      dragStartRef.current = null;
+      setShapeDraft(null);
+
+      if (!point) {
+        return;
+      }
+
+      if (Math.hypot(point.x - start.x, point.y - start.y) < MIN_SHAPE_DRAG_PX) {
+        removeShapeAtPoint(point, shapeKindFromTool(shapeTool));
+        return;
+      }
+
+      const from = viewportPointToPdfPoint(start, viewport);
+      const to = viewportPointToPdfPoint(point, viewport);
+      const style = editing.shapeStyles[shapeTool];
+      const common = {
+        kind: "shape" as const,
+        id: newEditId(),
+        pageIndex,
+        strokeWidthPt: style.strokeWidthPt,
+        ...(style.strokeColor ? { strokeColor: style.strokeColor } : {}),
+      };
+      const shape = shapeKindFromTool(shapeTool);
+
+      if (shape === "rect" || shape === "ellipse") {
+        const rect = normalizePdfRectFromPoints(from, to);
+
+        if (rect.w <= 0 || rect.h <= 0) {
+          return;
+        }
+
+        addEdit({
+          ...common,
+          shape,
+          rect,
+          ...(style.fillColor ? { fillColor: style.fillColor } : {}),
+        });
+        return;
+      }
+
+      addEdit({
+        ...common,
+        shape,
+        from,
+        to,
       });
     }
   }
@@ -517,20 +672,34 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   function handleLayerPointerCancel() {
     dragStartRef.current = null;
     drawPointsRef.current = [];
-    setHighlightDraft(null);
+    setTextMarkupDraft(null);
     setDrawDraft(null);
+    setShapeDraft(null);
   }
 
-  function removeHighlightAtPoint(point: ViewportPoint) {
+  function removeTextMarkupAtPoint(point: ViewportPoint, kind: TextMarkupToolId) {
     const pdfPoint = viewportPointToPdfPoint(point, viewport);
     const hit = pageEdits.find(
       (edit) =>
-        edit.kind === "highlight" &&
+        edit.kind === kind &&
         edit.rects.some((rect) => pdfRectContainsPoint(rect, pdfPoint)),
     );
 
     if (hit) {
       removeEdit(hit.id);
+    }
+  }
+
+  function removeShapeAtPoint(point: ViewportPoint, shape: PendingShape["shape"]) {
+    const pdfPoint = viewportPointToPdfPoint(point, viewport);
+
+    for (let index = pageEdits.length - 1; index >= 0; index -= 1) {
+      const edit = pageEdits[index];
+
+      if (edit?.kind === "shape" && edit.shape === shape && shapeHitTest(edit, pdfPoint)) {
+        removeEdit(edit.id);
+        return;
+      }
     }
   }
 
@@ -634,6 +803,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       rect: pdfRectToViewportRect(edit.rect, viewport),
       text: edit.text,
       fontSizePt: edit.fontSizePt,
+      ...(edit.color ? { color: edit.color } : {}),
+      fontFamily: edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+      bold: Boolean(edit.bold),
+      italic: Boolean(edit.italic),
+      align: edit.align ?? DEFAULT_TEXT_ALIGN,
     });
     suppressPlacement();
   }
@@ -645,6 +819,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   const interactive = tool !== "select";
   const inkEdits = pageEdits.filter((edit) => edit.kind === "ink");
+  const shapeEdits = pageEdits.filter((edit): edit is PendingShape => edit.kind === "shape");
 
   return (
     <div
@@ -658,13 +833,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       onPointerCancel={interactive ? handleLayerPointerCancel : undefined}
     >
       {pageEdits.map((edit) => {
-        if (edit.kind === "highlight") {
+        if (isPendingTextMarkup(edit)) {
           return (
-            <HighlightOverlay
+            <TextMarkupOverlay
               key={edit.id}
               edit={edit}
               viewport={viewport}
-              removable={tool === "highlight"}
+              scale={scale}
+              removable={tool === edit.kind}
             />
           );
         }
@@ -690,6 +866,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onFontSizeChange={(fontSizePt) =>
                 updateEdit(edit.id, (current) =>
                   current.kind === "textBox" ? { ...current, fontSizePt } : current,
+                )
+              }
+              onTextStyleChange={(style) =>
+                updateEdit(edit.id, (current) =>
+                  current.kind === "textBox" ? { ...current, ...style } : current,
                 )
               }
               onRemove={() => removeEdit(edit.id)}
@@ -763,8 +944,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                       })
                       .join(" ")}
                     fill="none"
-                    stroke="var(--edit-ink)"
-                    strokeWidth={INK_STROKE_WIDTH_PT * scale}
+                    stroke={pdfEditColorToHex(edit.color ?? DEFAULT_INK_COLOR)}
+                    strokeWidth={(edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT) * scale}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
@@ -775,8 +956,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
             <polyline
               points={drawDraft.map((strokePoint) => `${strokePoint.x},${strokePoint.y}`).join(" ")}
               fill="none"
-              stroke="var(--edit-ink)"
-              strokeWidth={INK_STROKE_WIDTH_PT * scale}
+              stroke={pdfEditColorToHex(editing.inkStyle.color ?? DEFAULT_INK_COLOR)}
+              strokeWidth={editing.inkStyle.strokeWidthPt * scale}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -784,11 +965,30 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         </svg>
       ) : null}
 
-      {highlightDraft ? (
-        <span className="edit-layer__highlight-draft" style={toOverlayStyle(highlightDraft)} />
+      {shapeEdits.length > 0 || shapeDraft ? (
+        <ShapeSvgOverlay
+          shapes={shapeEdits}
+          draft={shapeDraft}
+          viewport={viewport}
+          scale={scale}
+          activeTool={tool}
+          editing={editing}
+          onRemove={removeEdit}
+        />
       ) : null}
 
-      {tool === "highlight" && textLayerError ? (
+      {textMarkupDraft ? (
+        <span
+          className="edit-layer__highlight-draft"
+          style={highlightStyle(
+            textMarkupDraft,
+            activeTextMarkupDraftColor(tool, editing),
+            activeTextMarkupDraftOpacity(tool, editing),
+          )}
+        />
+      ) : null}
+
+      {isTextMarkupTool(tool) && textLayerError ? (
         <p className="edit-layer__message" role="status">
           {textLayerError}
         </p>
@@ -801,6 +1001,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           onTextChange={(text) => setTextDraft((current) => (current ? { ...current, text } : null))}
           onFontSizeChange={(fontSizePt) =>
             setTextDraft((current) => (current ? { ...current, fontSizePt } : null))
+          }
+          onTextStyleChange={(style) =>
+            setTextDraft((current) => (current ? { ...current, ...style } : null))
           }
           onCommit={commitTextDraft}
           onCancel={() => {
@@ -859,15 +1062,64 @@ function buildItemContextMenuItems(
   ];
 }
 
-function HighlightOverlay({
+function TextMarkupOverlay({
   edit,
   viewport,
+  scale,
   removable,
 }: {
-  edit: Extract<PendingEdit, { kind: "highlight" }>;
+  edit: Extract<PendingEdit, { kind: TextMarkupToolId }>;
   viewport: PageViewport;
+  scale: number;
   removable: boolean;
 }) {
+  if (edit.kind !== "highlight") {
+    const color = pdfEditColorToHex(edit.color ?? DEFAULT_TEXT_MARKUP_COLOR);
+    const strokeWidth = (edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT) * scale;
+
+    return (
+      <>
+        <svg
+          className="edit-layer__text-markup-lines"
+          width={viewport.width}
+          height={viewport.height}
+          viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+          aria-hidden="true"
+        >
+          {edit.rects.map((rect, rectIndex) => {
+            const lineY = edit.kind === "underline" ? rect.y : rect.y + rect.h * 0.5;
+            const [startX, startY] = viewport.convertToViewportPoint(rect.x, lineY);
+            const [endX, endY] = viewport.convertToViewportPoint(rect.x + rect.w, lineY);
+
+            return (
+              <line
+                key={`${edit.id}-${rectIndex}`}
+                x1={startX}
+                y1={startY}
+                x2={endX}
+                y2={endY}
+                stroke={color}
+                strokeWidth={strokeWidth}
+                strokeLinecap="butt"
+              />
+            );
+          })}
+        </svg>
+        {removable
+          ? edit.rects.map((rect, rectIndex) => (
+              <span
+                key={`${edit.id}-hit-${rectIndex}`}
+                className="edit-layer__text-markup-hit"
+                data-removable="true"
+                style={toOverlayStyle(pdfRectToViewportRect(rect, viewport))}
+                title={`Click to remove this ${textMarkupLabel(edit.kind).toLowerCase()}`}
+              />
+            ))
+          : null}
+      </>
+    );
+  }
+
   return (
     <>
       {edit.rects.map((rect, rectIndex) => (
@@ -875,12 +1127,349 @@ function HighlightOverlay({
           key={`${edit.id}-${rectIndex}`}
           className="edit-layer__highlight"
           data-removable={removable ? "true" : undefined}
-          style={toOverlayStyle(pdfRectToViewportRect(rect, viewport))}
+          style={highlightStyle(
+            pdfRectToViewportRect(rect, viewport),
+            edit.color ?? DEFAULT_HIGHLIGHT_COLOR,
+            edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY,
+          )}
           title={removable ? "Click to remove this highlight" : undefined}
         />
       ))}
     </>
   );
+}
+
+function ShapeSvgOverlay({
+  shapes,
+  draft,
+  viewport,
+  scale,
+  activeTool,
+  editing,
+  onRemove,
+}: {
+  shapes: readonly PendingShape[];
+  draft: ShapeDraft | null;
+  viewport: PageViewport;
+  scale: number;
+  activeTool: string;
+  editing: EditingState;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <svg
+      className="edit-layer__shapes"
+      width={viewport.width}
+      height={viewport.height}
+      viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+      aria-hidden="true"
+    >
+      {shapes.map((shape) => (
+        <ShapeElement
+          key={shape.id}
+          shape={shape}
+          viewport={viewport}
+          scale={scale}
+          removable={isShapeTool(activeTool) && shapeKindFromTool(activeTool) === shape.shape}
+          onRemove={() => onRemove(shape.id)}
+        />
+      ))}
+      {draft ? <ShapeDraftElement draft={draft} scale={scale} editing={editing} /> : null}
+    </svg>
+  );
+}
+
+function ShapeElement({
+  shape,
+  viewport,
+  scale,
+  removable,
+  onRemove,
+}: {
+  shape: PendingShape;
+  viewport: PageViewport;
+  scale: number;
+  removable: boolean;
+  onRemove: () => void;
+}) {
+  const stroke = pdfEditColorToHex(shape.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR);
+  const strokeWidth = (shape.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT) * scale;
+  const commonProps = {
+    stroke,
+    strokeWidth,
+    className: removable ? "edit-layer__shape-hit" : undefined,
+    onPointerDown: removable ? (event: ReactPointerEvent<SVGElement>) => event.stopPropagation() : undefined,
+    onClick: removable
+      ? (event: ReactMouseEvent<SVGElement>) => {
+          event.stopPropagation();
+          onRemove();
+        }
+      : undefined,
+  };
+
+  if (shape.shape === "rect" || shape.shape === "ellipse") {
+    const rect = pdfRectToViewportRect(shape.rect, viewport);
+    const fill = shape.fillColor ? pdfEditColorToHex(shape.fillColor) : "none";
+
+    if (shape.shape === "ellipse") {
+      return (
+        <ellipse
+          {...commonProps}
+          cx={rect.left + rect.width / 2}
+          cy={rect.top + rect.height / 2}
+          rx={rect.width / 2}
+          ry={rect.height / 2}
+          fill={fill}
+        />
+      );
+    }
+
+    return (
+      <rect
+        {...commonProps}
+        x={rect.left}
+        y={rect.top}
+        width={rect.width}
+        height={rect.height}
+        fill={fill}
+      />
+    );
+  }
+
+  if (!isLinePendingShape(shape)) {
+    return null;
+  }
+
+  const from = pdfPointToViewport(shape.from, viewport);
+  const to = pdfPointToViewport(shape.to, viewport);
+
+  return (
+    <g {...commonProps} fill="none">
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} />
+      {shape.shape === "arrow" ? (
+        <polygon
+          points={arrowHeadPoints(from, to, shape.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT, scale)}
+          fill={stroke}
+          stroke={stroke}
+          strokeWidth={0}
+        />
+      ) : null}
+      {removable ? (
+        <line
+          className="edit-layer__shape-hit-line"
+          x1={from.x}
+          y1={from.y}
+          x2={to.x}
+          y2={to.y}
+        />
+      ) : null}
+    </g>
+  );
+}
+
+function ShapeDraftElement({
+  draft,
+  scale,
+  editing,
+}: {
+  draft: ShapeDraft;
+  scale: number;
+  editing: EditingState;
+}) {
+  const style = editing.shapeStyles[draft.tool];
+  const shape = shapeKindFromTool(draft.tool);
+  const stroke = pdfEditColorToHex(style.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR);
+  const strokeWidth = style.strokeWidthPt * scale;
+
+  if (shape === "rect" || shape === "ellipse") {
+    const rect = pointsToViewportRect(draft.start, draft.end);
+    const fill = style.fillColor ? pdfEditColorToHex(style.fillColor) : "none";
+
+    if (shape === "ellipse") {
+      return (
+        <ellipse
+          className="edit-layer__shape-draft"
+          cx={rect.left + rect.width / 2}
+          cy={rect.top + rect.height / 2}
+          rx={rect.width / 2}
+          ry={rect.height / 2}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
+      );
+    }
+
+    return (
+      <rect
+        className="edit-layer__shape-draft"
+        x={rect.left}
+        y={rect.top}
+        width={rect.width}
+        height={rect.height}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
+    );
+  }
+
+  return (
+    <g className="edit-layer__shape-draft" fill="none">
+      <line
+        x1={draft.start.x}
+        y1={draft.start.y}
+        x2={draft.end.x}
+        y2={draft.end.y}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
+      {shape === "arrow" ? (
+        <polygon
+          points={arrowHeadPoints(draft.start, draft.end, style.strokeWidthPt, scale)}
+          fill={stroke}
+          stroke={stroke}
+          strokeWidth={0}
+        />
+      ) : null}
+    </g>
+  );
+}
+
+function isPendingTextMarkup(
+  edit: PendingEdit,
+): edit is Extract<PendingEdit, { kind: TextMarkupToolId }> {
+  return isTextMarkupTool(edit.kind);
+}
+
+function isTextMarkupTool(tool: string): tool is TextMarkupToolId {
+  return tool === "highlight" || tool === "underline" || tool === "strikethrough";
+}
+
+function isShapeTool(tool: string): tool is ShapeToolId {
+  return (
+    tool === "shapeRect" ||
+    tool === "shapeEllipse" ||
+    tool === "shapeLine" ||
+    tool === "shapeArrow"
+  );
+}
+
+function isLinePendingShape(
+  shape: PendingShape,
+): shape is Extract<PendingShape, { shape: "line" | "arrow" }> {
+  return shape.shape === "line" || shape.shape === "arrow";
+}
+
+function shapeHitTest(shape: PendingShape, point: PdfSpacePoint): boolean {
+  if (shape.shape === "rect") {
+    return pdfRectContainsPoint(shape.rect, point);
+  }
+
+  if (shape.shape === "ellipse") {
+    const rx = shape.rect.w / 2;
+    const ry = shape.rect.h / 2;
+    const cx = shape.rect.x + rx;
+    const cy = shape.rect.y + ry;
+
+    return ((point.x - cx) ** 2) / rx ** 2 + ((point.y - cy) ** 2) / ry ** 2 <= 1;
+  }
+
+  if (!isLinePendingShape(shape)) {
+    return false;
+  }
+
+  const tolerance = Math.max(6, (shape.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT) * 2);
+
+  return distanceToSegment(point, shape.from, shape.to) <= tolerance;
+}
+
+function distanceToSegment(
+  point: PdfSpacePoint,
+  from: PdfSpacePoint,
+  to: PdfSpacePoint,
+): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const lengthSquared = dx ** 2 + dy ** 2;
+
+  if (lengthSquared === 0) {
+    return Math.hypot(point.x - from.x, point.y - from.y);
+  }
+
+  const t = clamp(((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared, 0, 1);
+  const x = from.x + t * dx;
+  const y = from.y + t * dy;
+
+  return Math.hypot(point.x - x, point.y - y);
+}
+
+function pdfPointToViewport(point: PdfSpacePoint, viewport: PageViewport): ViewportPoint {
+  const [x, y] = viewport.convertToViewportPoint(point.x, point.y);
+
+  return { x, y };
+}
+
+function arrowHeadPoints(
+  from: ViewportPoint,
+  to: ViewportPoint,
+  strokeWidthPt: number,
+  scale: number,
+): string {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const length = Math.min(ARROW_HEAD_MAX_PT, Math.max(ARROW_HEAD_MIN_PT, strokeWidthPt * 7)) * scale;
+  const halfWidth = length * 0.45;
+  const baseCenter = {
+    x: to.x - Math.cos(angle) * length,
+    y: to.y - Math.sin(angle) * length,
+  };
+  const normal = {
+    x: -Math.sin(angle),
+    y: Math.cos(angle),
+  };
+  const left = {
+    x: baseCenter.x + normal.x * halfWidth,
+    y: baseCenter.y + normal.y * halfWidth,
+  };
+  const right = {
+    x: baseCenter.x - normal.x * halfWidth,
+    y: baseCenter.y - normal.y * halfWidth,
+  };
+
+  return `${to.x},${to.y} ${left.x},${left.y} ${right.x},${right.y}`;
+}
+
+function activeTextMarkupDraftColor(tool: string, editing: EditingState): PdfEditColor {
+  if (tool === "highlight") {
+    return editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR;
+  }
+
+  if (tool === "underline" || tool === "strikethrough") {
+    return editing.textMarkupStyles[tool].color ?? DEFAULT_TEXT_MARKUP_COLOR;
+  }
+
+  return DEFAULT_HIGHLIGHT_COLOR;
+}
+
+function activeTextMarkupDraftOpacity(tool: string, editing: EditingState): number {
+  return tool === "highlight"
+    ? editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY
+    : 0.2;
+}
+
+function textMarkupLabel(tool: TextMarkupToolId): string {
+  switch (tool) {
+    case "highlight":
+      return "Highlight";
+    case "underline":
+      return "Underline";
+    case "strikethrough":
+      return "Strikethrough";
+  }
+}
+
+function textMarkupPlural(tool: TextMarkupToolId): string {
+  return tool === "highlight" ? "highlights" : `${textMarkupLabel(tool).toLowerCase()}s`;
 }
 
 function TextBoxOverlay({
@@ -895,6 +1484,7 @@ function TextBoxOverlay({
   onResizeStart,
   onEditRequested,
   onFontSizeChange,
+  onTextStyleChange,
   onRemove,
   onContextMenu,
 }: {
@@ -909,10 +1499,26 @@ function TextBoxOverlay({
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onEditRequested: () => void;
   onFontSizeChange: (fontSizePt: number) => void;
+  onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
   onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const font = useTextBoxPreviewFont(
+    edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(edit.bold),
+    Boolean(edit.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: edit.text,
+        boxWidthPt: rect.width / scale,
+        fontSizePt: edit.fontSizePt,
+        font,
+      }),
+    [edit.fontSizePt, edit.text, font, rect.width, scale],
+  );
 
   return (
     <div
@@ -930,14 +1536,23 @@ function TextBoxOverlay({
     >
       <span
         className="edit-layer__text-content"
-        style={textContentStyle(edit.fontSizePt, scale)}
+        style={textContentStyle(edit, scale, edit.color ?? DEFAULT_TEXT_COLOR)}
       >
-        {edit.text}
+        {lines.map((line, lineIndex) => (
+          <span key={lineIndex} className="edit-layer__text-line">
+            {line}
+          </span>
+        ))}
       </span>
       {selected ? (
         <ItemChrome
           fontSizePt={edit.fontSizePt}
           onFontSizeChange={onFontSizeChange}
+          fontFamily={edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          bold={Boolean(edit.bold)}
+          italic={Boolean(edit.italic)}
+          align={edit.align ?? DEFAULT_TEXT_ALIGN}
+          onTextStyleChange={onTextStyleChange}
           onRemove={onRemove}
         />
       ) : null}
@@ -1034,10 +1649,20 @@ function CommentPin({
 function ItemChrome({
   fontSizePt,
   onFontSizeChange,
+  fontFamily,
+  bold,
+  italic,
+  align,
+  onTextStyleChange,
   onRemove,
 }: {
   fontSizePt?: number;
   onFontSizeChange?: (fontSizePt: number) => void;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  align?: PdfTextBoxAlign;
+  onTextStyleChange?: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
 }) {
   return (
@@ -1056,6 +1681,15 @@ function ItemChrome({
           ))}
         </select>
       ) : null}
+      {fontFamily && align && onTextStyleChange ? (
+        <TextBoxStyleControls
+          fontFamily={fontFamily}
+          bold={Boolean(bold)}
+          italic={Boolean(italic)}
+          align={align}
+          onChange={onTextStyleChange}
+        />
+      ) : null}
       <button
         type="button"
         className="edit-layer__item-remove"
@@ -1065,6 +1699,71 @@ function ItemChrome({
         ×
       </button>
     </span>
+  );
+}
+
+function TextBoxStyleControls({
+  fontFamily,
+  bold,
+  italic,
+  align,
+  onChange,
+}: {
+  fontFamily: PdfTextBoxFontFamily;
+  bold: boolean;
+  italic: boolean;
+  align: PdfTextBoxAlign;
+  onChange: (style: TextBoxStyleUpdate) => void;
+}) {
+  return (
+    <>
+      <select
+        className="edit-layer__font-family"
+        aria-label="Font family"
+        value={fontFamily}
+        onChange={(event) =>
+          onChange({ fontFamily: event.currentTarget.value as PdfTextBoxFontFamily })
+        }
+      >
+        <option value="helvetica">Helvetica</option>
+        <option value="times">Times</option>
+        <option value="courier">Courier</option>
+      </select>
+      <span className="edit-layer__text-toggle-group" aria-label="Text style">
+        <button
+          type="button"
+          className="edit-layer__text-toggle"
+          aria-label="Bold"
+          aria-pressed={bold}
+          onClick={() => onChange({ bold: !bold })}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          className="edit-layer__text-toggle"
+          aria-label="Italic"
+          aria-pressed={italic}
+          onClick={() => onChange({ italic: !italic })}
+        >
+          I
+        </button>
+      </span>
+      <span className="edit-layer__align-group" aria-label="Text alignment">
+        {(["left", "center", "right"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className="edit-layer__align-button"
+            aria-label={`Align ${option}`}
+            aria-pressed={align === option}
+            onClick={() => onChange({ align: option })}
+          >
+            {option === "left" ? "L" : option === "center" ? "C" : "R"}
+          </button>
+        ))}
+      </span>
+    </>
   );
 }
 
@@ -1089,11 +1788,12 @@ function ResizeHandles({
   );
 }
 
-function TextBoxDraftEditor({
+export function TextBoxDraftEditor({
   draft,
   scale,
   onTextChange,
   onFontSizeChange,
+  onTextStyleChange,
   onCommit,
   onCancel,
 }: {
@@ -1101,9 +1801,33 @@ function TextBoxDraftEditor({
   scale: number;
   onTextChange: (text: string) => void;
   onFontSizeChange: (fontSizePt: number) => void;
+  onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onCommit: () => void;
   onCancel: () => void;
 }) {
+  const color = draft.color ?? DEFAULT_TEXT_COLOR;
+  const font = useTextBoxPreviewFont(
+    draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+    Boolean(draft.bold),
+    Boolean(draft.italic),
+  );
+  const lines = useMemo(
+    () =>
+      computeTextBoxPreviewLines({
+        text: draft.text,
+        boxWidthPt: draft.rect.width / scale,
+        fontSizePt: draft.fontSizePt,
+        font,
+      }),
+    [draft.fontSizePt, draft.rect.width, draft.text, font, scale],
+  );
+  const contentStyle = textContentStyle(draft, scale, color);
+  const inputStyle: CSSProperties = {
+    ...contentStyle,
+    color: "transparent",
+    caretColor: pdfEditColorToHex(color),
+  };
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1138,14 +1862,33 @@ function TextBoxDraftEditor({
             </option>
           ))}
         </select>
+        <TextBoxStyleControls
+          fontFamily={draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY}
+          bold={Boolean(draft.bold)}
+          italic={Boolean(draft.italic)}
+          align={draft.align ?? DEFAULT_TEXT_ALIGN}
+          onChange={onTextStyleChange}
+        />
         <span className="edit-layer__chrome-hint">Enter commits · Esc cancels</span>
+      </span>
+      <span
+        className="edit-layer__text-content edit-layer__text-draft-preview"
+        style={contentStyle}
+        aria-hidden="true"
+      >
+        {lines.map((line, lineIndex) => (
+          <span key={lineIndex} className="edit-layer__text-line">
+            {line}
+          </span>
+        ))}
       </span>
       <textarea
         className="edit-layer__text-input"
-        style={textContentStyle(draft.fontSizePt, scale)}
+        style={inputStyle}
         aria-label="Text box content"
         value={draft.text}
         autoFocus
+        spellCheck={false}
         onChange={(event) => onTextChange(event.target.value)}
         onKeyDown={handleKeyDown}
       />
@@ -1231,11 +1974,122 @@ function CommentPopover({
   );
 }
 
-function textContentStyle(fontSizePt: number, scale: number): CSSProperties {
+function highlightStyle(
+  rect: ViewportRect,
+  color: PdfEditColor,
+  opacity: number,
+): CSSProperties {
   return {
-    fontSize: `${fontSizePt * scale}px`,
-    lineHeight: TEXT_BOX_LINE_HEIGHT,
+    ...toOverlayStyle(rect),
+    backgroundColor: pdfEditColorToHex(color),
+    opacity,
   };
+}
+
+function textContentStyle(
+  textStyle: Pick<
+    PendingTextBox | TextDraft,
+    "fontSizePt" | "fontFamily" | "bold" | "italic" | "align"
+  >,
+  scale: number,
+  color: PdfEditColor,
+): CSSProperties {
+  return {
+    fontFamily: cssTextBoxFontFamily(textStyle.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY),
+    fontSize: `${textStyle.fontSizePt * scale}px`,
+    fontWeight: textStyle.bold ? 700 : 400,
+    fontStyle: textStyle.italic ? "italic" : "normal",
+    lineHeight: TEXT_BOX_LINE_HEIGHT,
+    textAlign: textStyle.align ?? DEFAULT_TEXT_ALIGN,
+    color: pdfEditColorToHex(color),
+  };
+}
+
+function cssTextBoxFontFamily(fontFamily: PdfTextBoxFontFamily): string {
+  switch (fontFamily) {
+    case "times":
+      return '"Times New Roman", Times, serif';
+    case "courier":
+      return '"Courier New", Courier, monospace';
+    case "helvetica":
+      return "Helvetica, Arial, sans-serif";
+  }
+}
+
+function useTextBoxPreviewFont(
+  fontFamily: PdfTextBoxFontFamily,
+  bold: boolean,
+  italic: boolean,
+): PDFFont | null {
+  const [font, setFont] = useState<PDFFont | null>(null);
+  const key = textBoxFontKey(fontFamily, bold, italic);
+
+  useEffect(() => {
+    let disposed = false;
+
+    setFont(null);
+    void loadTextBoxPreviewFont(key).then((loadedFont) => {
+      if (!disposed) {
+        setFont(loadedFont);
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [key]);
+
+  return font;
+}
+
+type TextBoxPreviewFontKey =
+  `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
+
+const TEXT_BOX_PREVIEW_STANDARD_FONTS: Record<TextBoxPreviewFontKey, StandardFonts> = {
+  "helvetica:regular": StandardFonts.Helvetica,
+  "helvetica:bold": StandardFonts.HelveticaBold,
+  "helvetica:italic": StandardFonts.HelveticaOblique,
+  "helvetica:boldItalic": StandardFonts.HelveticaBoldOblique,
+  "times:regular": StandardFonts.TimesRoman,
+  "times:bold": StandardFonts.TimesRomanBold,
+  "times:italic": StandardFonts.TimesRomanItalic,
+  "times:boldItalic": StandardFonts.TimesRomanBoldItalic,
+  "courier:regular": StandardFonts.Courier,
+  "courier:bold": StandardFonts.CourierBold,
+  "courier:italic": StandardFonts.CourierOblique,
+  "courier:boldItalic": StandardFonts.CourierBoldOblique,
+};
+const textBoxPreviewFontCache = new Map<TextBoxPreviewFontKey, Promise<PDFFont>>();
+
+function textBoxFontKey(
+  fontFamily: PdfTextBoxFontFamily,
+  bold: boolean,
+  italic: boolean,
+): TextBoxPreviewFontKey {
+  if (bold && italic) {
+    return `${fontFamily}:boldItalic`;
+  }
+
+  if (bold) {
+    return `${fontFamily}:bold`;
+  }
+
+  if (italic) {
+    return `${fontFamily}:italic`;
+  }
+
+  return `${fontFamily}:regular`;
+}
+
+function loadTextBoxPreviewFont(key: TextBoxPreviewFontKey): Promise<PDFFont> {
+  let font = textBoxPreviewFontCache.get(key);
+
+  if (!font) {
+    font = PDFDocument.create().then((pdf) => pdf.embedFont(TEXT_BOX_PREVIEW_STANDARD_FONTS[key]));
+    textBoxPreviewFontCache.set(key, font);
+  }
+
+  return font;
 }
 
 function moveRect(

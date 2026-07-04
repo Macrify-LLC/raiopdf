@@ -358,6 +358,25 @@ describe("Florida jurisdiction pack", () => {
 
     expect(status({
       filename: "Motion to Compel.pdf",
+      searchableText: false,
+      textLayerCoverage: {
+        imageOnlyPages: [],
+        mixedPages: [],
+        textPages: [0],
+        garbledPages: [{
+          pageIndex: 0,
+          confidence: 0.92,
+          reason: "low_alpha_entropy",
+          puaRatio: 0,
+          replacementRatio: 0,
+          alphaRatio: 0.01,
+        }],
+      },
+      pageTextByPage: [{ pageIndex: 0, text: "MOTION TO COMPEL\nNo certificate language." }],
+    })).toBe("unknown");
+
+    expect(status({
+      filename: "Motion to Compel.pdf",
       pageTextByPage: [{ pageIndex: 0, text: "Motion to Compel\nSee Fla. R. Civ. P. 1.202." }],
     })).toBe("pass");
   });

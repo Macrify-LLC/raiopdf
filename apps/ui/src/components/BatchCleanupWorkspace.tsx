@@ -15,6 +15,9 @@ export interface BatchCleanupFile {
   path: string | null;
   status: BatchCleanupStatus;
   reason: string | null;
+  ocrDecision?: string | null;
+  ocrType?: "skip-text" | "force-ocr" | null;
+  facts?: { garbledPages?: number | null } | null;
   outputs: readonly string[];
 }
 
@@ -42,6 +45,10 @@ export interface BatchCleanupRunResult {
     sourceFilename: string;
     status: BatchCleanupStatus;
     reason: string | null;
+    operations?: readonly string[] | undefined;
+    ocrDecision?: string | null | undefined;
+    ocrType?: "skip-text" | "force-ocr" | null | undefined;
+    facts?: { garbledPages?: number | null } | null | undefined;
     outputs: readonly string[];
   }[];
 }
@@ -156,6 +163,9 @@ export function BatchCleanupWorkspace({
             ...file,
             status: fileResult.status,
             reason: fileResult.reason,
+            ocrDecision: fileResult.ocrDecision ?? null,
+            ocrType: fileResult.ocrType ?? null,
+            facts: fileResult.facts ?? null,
             outputs: fileResult.outputs,
           }
         : file;
@@ -199,8 +209,7 @@ export function BatchCleanupWorkspace({
               <div>
                 <p className="batch-workspace__file-name">{file.name}</p>
                 <p className="batch-workspace__file-meta">
-                  {file.path ? "Local file" : "Path unavailable"}
-                  {file.reason ? ` · ${formatBatchFailureReason(file.reason)}` : ""}
+                  {fileMetaParts(file).join(" · ")}
                 </p>
               </div>
               <span
@@ -325,6 +334,39 @@ function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function fileMetaParts(file: BatchCleanupFile): string[] {
+  const parts = [file.path ? "Local file" : "Path unavailable"];
+  const garbledPages = file.facts?.garbledPages ?? 0;
+  const reason = file.reason;
+
+  if (typeof reason === "string" && reason.length > 0) {
+    const formattedReason = formatBatchFailureReason(reason);
+    if (formattedReason) {
+      parts.push(formattedReason);
+    }
+  }
+  if (garbledPages > 0) {
+    parts.push(`${formatCount(garbledPages, "garbled page")} detected`);
+  }
+  const garbledForceOcrDecision = garbledForceOcrDecisionFor(file);
+  if (garbledForceOcrDecision) {
+    parts.push(`Force OCR: ${garbledForceOcrDecision}`);
+  }
+
+  return parts;
+}
+
+function garbledForceOcrDecisionFor(file: BatchCleanupFile): string | null {
+  if (
+    file.ocrDecision?.startsWith("Garbled text layer detected") &&
+    (file.ocrType === undefined || file.ocrType === null || file.ocrType === "force-ocr")
+  ) {
+    return file.ocrDecision;
+  }
+
+  return null;
+}
+
 function Checkbox({
   label,
   title,
@@ -355,6 +397,9 @@ function fromOpenedFile(file: OpenedFile): BatchCleanupFile {
     path: file.path,
     status: "pending",
     reason: null,
+    ocrDecision: null,
+    ocrType: null,
+    facts: null,
     outputs: [],
   };
 }

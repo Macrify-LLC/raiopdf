@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   computeHighlightLineRects,
+  computeTextMarkupLineRects,
   excerpt,
+  normalizePdfRectFromPoints,
   toPdfEdits,
   type PageTextBox,
   type PendingEdit,
@@ -16,6 +18,18 @@ describe("toPdfEdits", () => {
         id: "a",
         pageIndex: 0,
         rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+      },
+      {
+        kind: "underline",
+        id: "u",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 30, w: 80, h: 10 }],
+      },
+      {
+        kind: "strikethrough",
+        id: "s",
+        pageIndex: 0,
+        rects: [{ x: 25, y: 35, w: 75, h: 10 }],
       },
       {
         kind: "textBox",
@@ -57,20 +71,246 @@ describe("toPdfEdits", () => {
           ],
         ],
       },
+      {
+        kind: "shape",
+        id: "g",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 10, y: 20, w: 80, h: 40 },
+      },
+      {
+        kind: "shape",
+        id: "h",
+        pageIndex: 0,
+        shape: "arrow",
+        from: { x: 10, y: 10 },
+        to: { x: 50, y: 30 },
+      },
     ];
 
     const edits = toPdfEdits(pending);
 
     expect(edits.map((edit) => edit.type)).toEqual([
       "highlight",
+      "underline",
+      "strikethrough",
       "textBox",
       "image",
       "signature",
       "comment",
       "ink",
+      "shape",
+      "shape",
     ]);
-    expect(edits[1]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
-    expect(edits[5]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[3]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
+    expect(edits[7]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[8]).toMatchObject({
+      shape: "rect",
+      rect: { x: 10, y: 20, w: 80, h: 40 },
+    });
+    expect(edits[9]).toMatchObject({
+      shape: "arrow",
+      from: { x: 10, y: 10 },
+      to: { x: 50, y: 30 },
+    });
+  });
+
+  it("omits optional edit colors and opacity when they were not set", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "highlight",
+        id: "a",
+        pageIndex: 0,
+        rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+      },
+      {
+        kind: "textBox",
+        id: "b",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "No style",
+        fontSizePt: 12,
+      },
+      {
+        kind: "ink",
+        id: "c",
+        pageIndex: 0,
+        strokes: [
+          [
+            { x: 0, y: 0 },
+            { x: 20, y: 20 },
+          ],
+        ],
+      },
+      {
+        kind: "underline",
+        id: "d",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 30, w: 100, h: 12 }],
+        color: { r: 0x11 / 0xff, g: 0x11 / 0xff, b: 0x11 / 0xff },
+      },
+      {
+        kind: "strikethrough",
+        id: "e",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 50, w: 100, h: 12 }],
+      },
+      {
+        kind: "shape",
+        id: "f",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 10, y: 20, w: 80, h: 40 },
+        strokeColor: { r: 0x11 / 0xff, g: 0x11 / 0xff, b: 0x11 / 0xff },
+        strokeWidthPt: 1.5,
+        fillColor: null,
+      },
+    ]);
+
+    expect(edits[0]).not.toHaveProperty("color");
+    expect(edits[0]).not.toHaveProperty("opacity");
+    expect(edits[1]).not.toHaveProperty("color");
+    expect(edits[2]).not.toHaveProperty("color");
+    expect(edits[2]).toMatchObject({ strokeWidthPt: 1.5 });
+    expect(edits[3]).not.toHaveProperty("color");
+    expect(edits[4]).not.toHaveProperty("color");
+    expect(edits[5]).not.toHaveProperty("strokeColor");
+    expect(edits[5]).not.toHaveProperty("strokeWidthPt");
+    expect(edits[5]).not.toHaveProperty("fillColor");
+  });
+
+  it("emits chosen edit colors, highlight opacity, and ink stroke width", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "highlight",
+        id: "a",
+        pageIndex: 0,
+        rects: [{ x: 10, y: 20, w: 100, h: 12 }],
+        color: { r: 0.2, g: 0.8, b: 0.3 },
+        opacity: 0.55,
+      },
+      {
+        kind: "textBox",
+        id: "b",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Styled",
+        fontSizePt: 12,
+        color: { r: 0.8, g: 0.1, b: 0.2 },
+      },
+      {
+        kind: "ink",
+        id: "c",
+        pageIndex: 0,
+        strokes: [
+          [
+            { x: 0, y: 0 },
+            { x: 20, y: 20 },
+          ],
+        ],
+        strokeWidthPt: 5,
+        color: { r: 0.1, g: 0.2, b: 0.9 },
+      },
+      {
+        kind: "underline",
+        id: "d",
+        pageIndex: 0,
+        rects: [{ x: 30, y: 40, w: 100, h: 12 }],
+        color: { r: 0.7, g: 0.1, b: 0.2 },
+      },
+      {
+        kind: "strikethrough",
+        id: "e",
+        pageIndex: 0,
+        rects: [{ x: 30, y: 60, w: 100, h: 12 }],
+        color: { r: 0.1, g: 0.6, b: 0.3 },
+        thicknessPt: 2,
+      },
+      {
+        kind: "shape",
+        id: "f",
+        pageIndex: 0,
+        shape: "ellipse",
+        rect: { x: 40, y: 50, w: 80, h: 40 },
+        strokeWidthPt: 5,
+        strokeColor: { r: 0.2, g: 0.3, b: 0.4 },
+        fillColor: { r: 0.8, g: 0.9, b: 0.1 },
+      },
+    ]);
+
+    expect(edits[0]).toMatchObject({
+      color: { r: 0.2, g: 0.8, b: 0.3 },
+      opacity: 0.55,
+    });
+    expect(edits[1]).toMatchObject({ color: { r: 0.8, g: 0.1, b: 0.2 } });
+    expect(edits[2]).toMatchObject({
+      color: { r: 0.1, g: 0.2, b: 0.9 },
+      strokeWidthPt: 5,
+    });
+    expect(edits[3]).toMatchObject({
+      type: "underline",
+      rects: [{ x: 30, y: 40, w: 100, h: 12 }],
+      color: { r: 0.7, g: 0.1, b: 0.2 },
+    });
+    expect(edits[4]).toMatchObject({
+      type: "strikethrough",
+      color: { r: 0.1, g: 0.6, b: 0.3 },
+      thicknessPt: 2,
+    });
+    expect(edits[5]).toMatchObject({
+      type: "shape",
+      shape: "ellipse",
+      strokeWidthPt: 5,
+      strokeColor: { r: 0.2, g: 0.3, b: 0.4 },
+      fillColor: { r: 0.8, g: 0.9, b: 0.1 },
+    });
+  });
+
+  it("emits non-default text box font and alignment options", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "textBox",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Styled text",
+        fontSizePt: 12,
+        fontFamily: "times",
+        bold: true,
+        italic: true,
+        align: "center",
+      },
+    ]);
+
+    expect(edits[0]).toMatchObject({
+      type: "textBox",
+      fontFamily: "times",
+      bold: true,
+      italic: true,
+      align: "center",
+    });
+  });
+
+  it("omits default text box font and alignment options", () => {
+    const edits = toPdfEdits([
+      {
+        kind: "textBox",
+        id: "a",
+        pageIndex: 0,
+        rect: { x: 20, y: 30, w: 120, h: 30 },
+        text: "Default text",
+        fontSizePt: 12,
+        fontFamily: "helvetica",
+        bold: false,
+        italic: false,
+        align: "left",
+      },
+    ]);
+
+    expect(edits[0]).not.toHaveProperty("fontFamily");
+    expect(edits[0]).not.toHaveProperty("bold");
+    expect(edits[0]).not.toHaveProperty("italic");
+    expect(edits[0]).not.toHaveProperty("align");
   });
 
   it("appends changed form values as one trailing document-scoped edit", () => {
@@ -86,7 +326,18 @@ describe("toPdfEdits", () => {
   });
 });
 
-describe("computeHighlightLineRects", () => {
+describe("normalizePdfRectFromPoints", () => {
+  it("normalizes any drag direction to positive width and height", () => {
+    expect(normalizePdfRectFromPoints({ x: 100, y: 50 }, { x: 20, y: 130 })).toEqual({
+      x: 20,
+      y: 50,
+      w: 80,
+      h: 80,
+    });
+  });
+});
+
+describe("computeTextMarkupLineRects", () => {
   const line = (y: number, x = 50, w = 200, h = 12): PageTextBox => ({ x, y, w, h });
 
   it("produces one union rect per intersected text line", () => {
@@ -98,7 +349,7 @@ describe("computeHighlightLineRects", () => {
     ];
     const band = { x: 40, y: 675, w: 300, h: 45 };
 
-    const rects = computeHighlightLineRects(band, textBoxes);
+    const rects = computeTextMarkupLineRects(band, textBoxes);
 
     expect(rects).toHaveLength(2);
     // Top-to-bottom reading order: the y=700 line first.
@@ -111,7 +362,7 @@ describe("computeHighlightLineRects", () => {
     const textBoxes = [verticalLine(300), verticalLine(340)];
     const band = { x: 290, y: 90, w: 70, h: 220 };
 
-    const rects = computeHighlightLineRects(band, textBoxes, true);
+    const rects = computeTextMarkupLineRects(band, textBoxes, true);
 
     expect(rects).toHaveLength(2);
   });

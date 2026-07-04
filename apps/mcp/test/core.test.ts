@@ -53,6 +53,29 @@ describe("handleOcr", () => {
     const leftovers = (await fs.readdir(dir)).filter((entry) => entry !== "scan.pdf");
     expect(leftovers).toEqual([]);
   });
+
+  it("returns a structured failure when OCR output still has garbled text", async () => {
+    const input = await writeInput("scan.pdf");
+    const output = path.join(dir, "garbled.pdf");
+    const outputBytes = await pdfWithPageTexts([
+      "xqz!@#$ brt%^&* crw+=? plk[]{} mnn<>/ ".repeat(4),
+    ]);
+    const { handle } = fakeOcrEngine(outputBytes);
+
+    const result = await handleOcr({ input, output }, handle);
+
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "OCR_UNVERIFIED" },
+      garbledPages: 1,
+      verifiedPages: 0,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("garbled text layer"),
+    });
+    await expect(fs.access(output)).rejects.toBeTruthy();
+  });
 });
 
 describe("handleRemoveEncryption", () => {

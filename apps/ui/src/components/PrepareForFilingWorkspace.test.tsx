@@ -136,10 +136,23 @@ describe("PrepareForFilingWorkspace", () => {
     );
 
     expect(html).toContain("Remove encryption");
-    expect(html).toContain("Raio will ask for the password");
-    expect(html).not.toContain("not yet available in Raio");
+    // Item 6/7 collapses each rule's detail paragraph (where "Raio will ask
+    // for the password..." and "not yet available in Raio" used to live)
+    // behind a chevron, default-closed -- so "available" is now asserted at
+    // the always-visible one-line row instead: its `data-disabled` flag.
+    expect(articleContaining(html, "Remove encryption")).toContain('data-disabled="false"');
   });
 });
+
+/** Finds the `<article ...>` opening tag for the row whose text contains `needle`. */
+function articleContaining(html: string, needle: string): string {
+  const needleIndex = html.indexOf(needle);
+  expect(needleIndex).toBeGreaterThan(-1);
+  const articleStart = html.lastIndexOf("<article", needleIndex);
+  expect(articleStart).toBeGreaterThan(-1);
+  const articleTagEnd = html.indexOf(">", articleStart);
+  return html.slice(articleStart, articleTagEnd + 1);
+}
 
 const mockDocument: DocumentState = {
   bytes: new Uint8Array([1]),

@@ -1,5 +1,6 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import {
+  BoltIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CommentIcon,
@@ -69,6 +70,13 @@ export interface CommandBarProps {
   onSearchNext?: (() => void) | undefined;
   onSearchClear?: (() => void) | undefined;
   onHelp?: (() => void) | undefined;
+  /**
+   * Item 6/7: Prepare for Filing gets a persistent, primary-styled entry
+   * point in the main command bar (in addition to the Legal sidebar tool,
+   * which stays) whenever a document is open. Both call the same handler --
+   * this is just a second door into the identical dialog.
+   */
+  onPrepareForFiling?: (() => void) | undefined;
 }
 
 export function CommandBar({
@@ -94,6 +102,7 @@ export function CommandBar({
   onSearchNext,
   onSearchClear,
   onHelp,
+  onPrepareForFiling,
 }: CommandBarProps) {
   function toggleTool(toolId: EditToolId) {
     // Tools are mutually exclusive toggles; re-clicking the active tool
@@ -247,6 +256,21 @@ export function CommandBar({
           </button>
         </div>
       </div>
+
+      {/* Always mounted (like Open/Save/Print above), toggled via `disabled`
+          rather than conditional rendering -- mounting/unmounting this
+          exactly when `hasDocument` flips raced the canvas/edit-layer
+          measurements that also fire off that same transition and made
+          click-to-place tools (comment pins) miss their target. */}
+      <button
+        type="button"
+        className="command-bar__filing-cta"
+        disabled={!hasDocument}
+        onClick={onPrepareForFiling}
+      >
+        <BoltIcon variant="outline" size={14} />
+        Make Filing Ready
+      </button>
     </div>
   );
 }

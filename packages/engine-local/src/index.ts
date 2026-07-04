@@ -66,6 +66,7 @@ import {
   createAnnotationAppearanceTarget,
   createPageDrawTarget,
   drawAnnotationAppearanceOnPage,
+  type AnnotationAppearanceTarget,
   type DrawColor,
   type DrawTarget,
 } from "./drawTarget";
@@ -1441,10 +1442,18 @@ async function applyEditInPlace(
       }
       return;
     case "textBox":
-      applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
+      if (markupMode === "annotation") {
+        applyTextBoxAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit));
+      } else {
+        applyTextBoxEdit(pdf, edit, await resolveTextBoxFont(edit));
+      }
       return;
     case "callout":
-      applyCalloutEdit(pdf, edit, await resolveTextBoxFont(edit));
+      if (markupMode === "annotation") {
+        applyCalloutAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit));
+      } else {
+        applyCalloutEdit(pdf, edit, await resolveTextBoxFont(edit));
+      }
       return;
     case "image":
     case "signature":
@@ -1947,6 +1956,112 @@ function applyTextMarkupAnnotationEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit
     C: colorToPdfArray(edit.color, EDIT_INK_COLOR_COMPONENTS),
     AP: { N: appearanceTarget.finish() },
   });
+}
+
+function applyTextBoxAnnotationEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const pageRotation = normalizePageRotation(page.getRotation().angle);
+  const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
+  const appearanceTarget = createAnnotationAppearanceTarget(pdf, edit.rect, pageRotation);
+
+  drawTextBoxText(pdf, edit, font, appearanceTarget);
+
+  addMarkupAnnotation(page, {
+    Subtype: "FreeText",
+    Rect: rectToPdfArray(appearanceTarget.annotationRect),
+    Contents: PDFString.of(edit.text),
+    DA: PDFString.of(defaultAppearanceString(appearanceTarget, font, fontSize, edit.color)),
+    Q: textAlignToPdfQ(edit.align),
+    AP: { N: appearanceTarget.finish() },
+    C: colorToPdfArray(edit.color),
+  });
+}
+
+function applyCalloutAnnotationEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font: PDFFont): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const thickness = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+  const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
+  const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
+  const anchor = computeCalloutLeaderAnchor(edit.rect, edit.tip);
+  const boundsPoints =
+    edit.arrowhead ?? true
+      ? [anchor, ...computeArrowHeadPoints(anchor, edit.tip, thickness)]
+      : [anchor, edit.tip];
+  const rect = unionRects([edit.rect, boundingRectForPoints(boundsPoints, 0)]);
+  const appearanceTarget = createAnnotationAppearanceTarget(
+    pdf,
+    rect,
+    normalizePageRotation(page.getRotation().angle),
+    { marginPt: appearanceStrokeMargin(thickness) },
+  );
+
+  appearanceTarget.drawLine({
+    from: anchor,
+    to: edit.tip,
+    strokeWidthPt: thickness,
+    strokeColor,
+  });
+
+  if (edit.arrowhead ?? true) {
+    drawArrowHead(appearanceTarget, anchor, edit.tip, thickness, strokeColor);
+  }
+
+  if (edit.boxFill || edit.boxBorder !== false) {
+    appearanceTarget.drawRectangle({
+      rect: edit.rect,
+      ...(edit.boxFill ? { fillColor: toEditColor(edit.boxFill, EDIT_INK_COLOR) } : {}),
+      ...(edit.boxBorder !== false
+        ? {
+            strokeColor,
+            strokeWidthPt: DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT,
+          }
+        : {}),
+    });
+  }
+
+  drawTextBoxText(pdf, edit, font, appearanceTarget);
+
+  addMarkupAnnotation(page, {
+    Subtype: "FreeText",
+    IT: PDFName.of("FreeTextCallout"),
+    Rect: rectToPdfArray(appearanceTarget.annotationRect),
+    Contents: PDFString.of(edit.text),
+    DA: PDFString.of(defaultAppearanceString(appearanceTarget, font, fontSize, edit.color)),
+    Q: textAlignToPdfQ(edit.align),
+    CL: [anchor.x, anchor.y, edit.tip.x, edit.tip.y],
+    C: colorToPdfArray(edit.color),
+    BS: { W: thickness, S: "S" },
+    ...(edit.arrowhead ?? true ? { LE: ["None", "ClosedArrow"] } : {}),
+    AP: { N: appearanceTarget.finish() },
+  });
+}
+
+function textAlignToPdfQ(align: PdfTextBoxAlign | undefined): number {
+  switch (align) {
+    case "center":
+      return 1;
+    case "right":
+      return 2;
+    case "left":
+    case undefined:
+      return 0;
+  }
+}
+
+function defaultAppearanceString(
+  appearanceTarget: AnnotationAppearanceTarget,
+  font: PDFFont,
+  fontSize: number,
+  color: PdfEditColor | undefined,
+): string {
+  const fontName = appearanceTarget.fontResourceName(font).toString();
+  const [r, g, b] = colorToPdfArray(color, EDIT_INK_COLOR_COMPONENTS);
+
+  return `${fontName} ${formatPdfNumber(fontSize)} Tf ${formatPdfNumber(r!)} ${formatPdfNumber(g!)} ${formatPdfNumber(b!)} rg`;
+}
+
+function formatPdfNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(6)));
 }
 
 function addMarkupAnnotation(

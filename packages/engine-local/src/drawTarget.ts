@@ -97,6 +97,7 @@ export type AnnotationAppearanceTarget = DrawTarget & {
   readonly annotationRect: PdfEditRect;
   readonly bbox: PdfEditRect;
   readonly matrix: readonly [number, number, number, number, number, number];
+  fontResourceName(font: PDFFont): PDFName;
   finish(): PDFRef;
 };
 
@@ -357,7 +358,7 @@ class AppearanceDrawTarget implements AnnotationAppearanceTarget {
     this.operators.push(
       ...drawTextOperators(options.font.encodeText(options.text), {
         color: options.color,
-        font: this.fontName(options.font),
+        font: this.fontResourceName(options.font),
         size: options.fontSizePt,
         rotate: pdfDegrees(options.rotateDegrees ?? 0),
         xSkew: pdfDegrees(0),
@@ -401,6 +402,10 @@ class AppearanceDrawTarget implements AnnotationAppearanceTarget {
     });
 
     return this.pdf.context.register(stream);
+  }
+
+  fontResourceName(font: PDFFont): PDFName {
+    return this.fontName(font);
   }
 
   private mapRect(rect: PdfEditRect): PdfEditRect {

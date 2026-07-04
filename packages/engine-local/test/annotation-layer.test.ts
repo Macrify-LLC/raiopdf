@@ -4,10 +4,12 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
   PDFNumber,
   PDFRawStream,
   PDFRef,
+  PDFString,
   PDFStream,
   rgb,
 } from "pdf-lib";
@@ -356,18 +358,12 @@ describe("annotation-layer foundation", () => {
     ]);
   });
 
-  it("keeps non-markup edit types on their existing paths in annotation mode", async () => {
+  it("keeps non-FreeText edit types on their existing paths in annotation mode", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[240, 180]]));
     const edited = await engine.applyEdits(
       document,
       [
-        {
-          type: "textBox",
-          pageIndex: 0,
-          rect: { x: 20, y: 30, w: 70, h: 24 },
-          text: "Baked",
-        },
         {
           type: "comment",
           pageIndex: 0,
@@ -380,7 +376,6 @@ describe("annotation-layer foundation", () => {
     const bytes = await engine.saveToBytes(edited);
     const pdf = await PDFDocument.load(bytes);
 
-    expect(await readDecodedPageContent(bytes, 0)).toContain("Tj");
     expect(readRaioPdfMarkupAnnotations(pdf.getPage(0))).toHaveLength(0);
     expect(readPageAnnotations(pdf, 0).map((annotation) => readName(annotation, "Subtype"))).toEqual([
       "Text",
@@ -455,7 +450,136 @@ describe("annotation-layer foundation", () => {
       }
     },
   );
+
+  it("emits text boxes as marked printable FreeText annotations with coherent appearance fonts", async () => {
+    const engine = createLocalPdfEngine();
+    const edit: PdfEdit = {
+      type: "textBox",
+      pageIndex: 0,
+      rect: { x: 40, y: 600, w: 140, h: 60 },
+      text: "Alpha beta\nGamma",
+      fontSizePt: 14,
+      fontFamily: "times",
+      bold: true,
+      align: "right",
+      color: { r: 0.2, g: 0.3, b: 0.4 },
+    };
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [edit], { markupMode: "annotation" });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const [annotation] = readPageAnnotations(pdf, 0);
+
+    expect(annotation).toBeDefined();
+    expect(readName(annotation!, "Subtype")).toBe("FreeText");
+    expect(readNumberArray(annotation!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
+      40, 600, 180, 660,
+    ]);
+    expect(annotation!.lookup(PDFName.of("F"), PDFNumber).asNumber()).toBe(4);
+    expect(annotation!.lookupMaybe(PDFName.of("RaioPDF"), PDFDict)).toBeInstanceOf(PDFDict);
+    expect(annotation!.get(PDFName.of("T"))).toBeUndefined();
+    expect(annotation!.get(PDFName.of("M"))).toBeUndefined();
+    expect(annotation!.lookup(PDFName.of("Q"), PDFNumber).asNumber()).toBe(2);
+    expect(readString(annotation!, "Contents")).toBe("Alpha beta\nGamma");
+    expectFreeTextAppearanceFontCoherence(pdf, annotation!, 14, [0.2, 0.3, 0.4]);
+  });
+
+  it("emits callouts as FreeText callout annotations with union Rect, CL, arrowhead, and unclipped BBox", async () => {
+    const engine = createLocalPdfEngine();
+    const edit: PdfEdit = {
+      type: "callout",
+      pageIndex: 0,
+      rect: { x: 80, y: 120, w: 100, h: 50 },
+      tip: { x: 240, y: 145 },
+      text: "Callout text",
+      fontSizePt: 12,
+      strokeWidthPt: 3,
+      strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
+      boxFill: { r: 1, g: 0.95, b: 0.65 },
+    };
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [edit], { markupMode: "annotation" });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const [annotation] = readPageAnnotations(pdf, 0);
+    const appearance = readNormalAppearanceStream(pdf, annotation!);
+    const apBBox = readRectArray(appearance.dict.lookup(PDFName.of("BBox"), PDFArray));
+    const apPaths = readPaintedPaths(decodePdfStream(appearance), readStreamExtGStates(pdf, appearance));
+
+    expect(annotation).toBeDefined();
+    expect(readName(annotation!, "Subtype")).toBe("FreeText");
+    expect(readName(annotation!, "IT")).toBe("FreeTextCallout");
+    expect(readNumberArray(annotation!.lookup(PDFName.of("Rect"), PDFArray))).toEqual([
+      78.25, 118.25, 241.75, 171.75,
+    ]);
+    expect(readNumberArray(annotation!.lookup(PDFName.of("CL"), PDFArray))).toEqual([
+      180, 145, 240, 145,
+    ]);
+    expect(readNameArray(annotation!.lookup(PDFName.of("LE"), PDFArray))).toEqual([
+      "None",
+      "ClosedArrow",
+    ]);
+    expect(readNumberArray(appearance.dict.lookup(PDFName.of("BBox"), PDFArray))).toEqual([
+      -1.75, -1.75, 161.75, 51.75,
+    ]);
+    expect(annotation!.lookup(PDFName.of("F"), PDFNumber).asNumber()).toBe(4);
+    expect(annotation!.lookupMaybe(PDFName.of("RaioPDF"), PDFDict)).toBeInstanceOf(PDFDict);
+    expect(annotation!.get(PDFName.of("T"))).toBeUndefined();
+    expect(annotation!.get(PDFName.of("M"))).toBeUndefined();
+    expectPaintedPathsInsideBBox(apPaths, apBBox);
+    expectFreeTextAppearanceFontCoherence(pdf, annotation!, 12, [
+      EDIT_INK_RGB[0],
+      EDIT_INK_RGB[1],
+      EDIT_INK_RGB[2],
+    ]);
+  });
+
+  it.each(freeTextEquivalenceCases)(
+    "flattens annotation-mode $name FreeText equivalent to baked page drawing",
+    async ({ edit }) => {
+      const equivalence = await renderBakedAndFlattenedMark(edit, await createPdf([[612, 792]]));
+
+      expect(readName(equivalence.annotation, "Subtype")).toBe("FreeText");
+      expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
+      expectTransformedBBoxMatchesAnnotationRect(equivalence);
+      expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
+      expectPaintedPathsEquivalent(
+        equivalence.bakedPaths,
+        equivalence.apPaths,
+        equivalence.placementMatrix,
+      );
+      expectTextRunsEquivalent(
+        equivalence.bakedTextRuns,
+        equivalence.apTextRuns,
+        equivalence.placementMatrix,
+      );
+    },
+  );
+
+  it.each([90, 180, 270] as const)(
+    "flattens FreeText text and callout equivalently on %i-degree rotated pages",
+    async (rotation) => {
+      for (const edit of rotatedFreeTextEdits) {
+        const equivalence = await renderBakedAndFlattenedMark(edit, await createRotatedPdf(rotation));
+
+        expect(equivalence.annotationPdf.getPage(0).getRotation().angle).toBe(rotation);
+        expect(readName(equivalence.annotation, "Subtype")).toBe("FreeText");
+        expectTransformedBBoxMatchesAnnotationRect(equivalence);
+        expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
+        expectPaintedPathsEquivalent(
+          equivalence.bakedPaths,
+          equivalence.apPaths,
+          equivalence.placementMatrix,
+        );
+        expectTextRunsEquivalent(
+          equivalence.bakedTextRuns,
+          equivalence.apTextRuns,
+          equivalence.placementMatrix,
+        );
+      }
+    },
+  );
 });
+
+const EDIT_INK_RGB = [0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff] as const;
 
 const markEquivalenceCases: ReadonlyArray<{
   name: string;
@@ -579,6 +703,87 @@ const markEquivalenceCases: ReadonlyArray<{
     },
     expectedRect: [78.75, 578.75, 211.25, 597.25],
     expectedQuadPoints: [80, 596, 210, 596, 80, 580, 210, 580],
+  },
+];
+
+const freeTextEquivalenceCases: ReadonlyArray<{ name: string; edit: PdfEdit }> = [
+  {
+    name: "left-aligned multiline text box",
+    edit: {
+      type: "textBox",
+      pageIndex: 0,
+      rect: { x: 40, y: 610, w: 115, h: 80 },
+      text: "Alpha beta gamma\nDelta epsilon",
+      fontSizePt: 12,
+      align: "left",
+      color: { r: 0.2, g: 0.3, b: 0.4 },
+    },
+  },
+  {
+    name: "center-aligned wrapped text box",
+    edit: {
+      type: "textBox",
+      pageIndex: 0,
+      rect: { x: 180, y: 600, w: 100, h: 90 },
+      text: "Centered words wrap across lines",
+      fontSizePt: 11,
+      fontFamily: "courier",
+      bold: true,
+      align: "center",
+      color: { r: 0.5, g: 0.1, b: 0.7 },
+    },
+  },
+  {
+    name: "right-aligned wrapped text box",
+    edit: {
+      type: "textBox",
+      pageIndex: 0,
+      rect: { x: 300, y: 600, w: 95, h: 90 },
+      text: "Right aligned wrapping text",
+      fontSizePt: 13,
+      fontFamily: "times",
+      italic: true,
+      align: "right",
+    },
+  },
+  {
+    name: "callout with leader arrowhead and centered text",
+    edit: {
+      type: "callout",
+      pageIndex: 0,
+      rect: { x: 80, y: 420, w: 105, h: 70 },
+      tip: { x: 260, y: 445 },
+      text: "Callout wraps text here",
+      fontSizePt: 12,
+      fontFamily: "courier",
+      bold: true,
+      align: "center",
+      color: { r: 0.8, g: 0.1, b: 0.2 },
+      strokeColor: { r: 0.1, g: 0.2, b: 0.9 },
+      strokeWidthPt: 3,
+      boxFill: { r: 1, g: 0.95, b: 0.65 },
+    },
+  },
+];
+
+const rotatedFreeTextEdits: readonly PdfEdit[] = [
+  {
+    type: "textBox",
+    pageIndex: 0,
+    rect: { x: 120, y: 50, w: 30, h: 80 },
+    text: "Rotated text",
+    fontSizePt: 12,
+    align: "right",
+  },
+  {
+    type: "callout",
+    pageIndex: 0,
+    rect: { x: 120, y: 120, w: 45, h: 100 },
+    tip: { x: 240, y: 180 },
+    text: "Rotated callout",
+    fontSizePt: 10,
+    align: "center",
+    strokeWidthPt: 2,
   },
 ];
 
@@ -719,13 +924,23 @@ type PaintedPath = {
   segments: readonly PathSegment[];
 };
 
+type TextRun = {
+  text: string;
+  matrix: Matrix;
+  font: string | undefined;
+  fontSize: number | undefined;
+  fillColor: readonly [number, number, number] | undefined;
+};
+
 type MarkEquivalence = {
   annotation: PDFDict;
   annotationPdf: PDFDocument;
   apBBox: Rect;
   apMatrix: Matrix;
   apPaths: readonly PaintedPath[];
+  apTextRuns: readonly TextRun[];
   bakedPaths: readonly PaintedPath[];
+  bakedTextRuns: readonly TextRun[];
   placementMatrix: Matrix;
 };
 
@@ -774,10 +989,12 @@ async function renderBakedAndFlattenedMark(
     apBBox,
     apMatrix,
     apPaths: readPaintedPaths(decodePdfStream(appearanceStream), readStreamExtGStates(flattenedPdf, appearanceStream)),
+    apTextRuns: readTextRuns(decodePdfStream(appearanceStream)),
     bakedPaths: readPaintedPaths(
       await readDecodedPageContent(bakedBytes, 0),
       readPageExtGStates(await PDFDocument.load(bakedBytes), 0),
     ),
+    bakedTextRuns: readTextRuns(await readDecodedPageContent(bakedBytes, 0)),
     placementMatrix: multiplyMatrices(appearancePlacement.matrix, apMatrix),
   };
 }
@@ -866,6 +1083,35 @@ function readPageXObjectStream(
   }
 
   return undefined;
+}
+
+function readString(dict: PDFDict, key: string): string {
+  const value = dict.lookup(PDFName.of(key), PDFString, PDFHexString);
+
+  return value.decodeText();
+}
+
+function expectFreeTextAppearanceFontCoherence(
+  pdf: PDFDocument,
+  annotation: PDFDict,
+  fontSize: number,
+  color: readonly [number, number, number],
+): void {
+  const da = readString(annotation, "DA");
+  const appearance = readNormalAppearanceStream(pdf, annotation);
+  const content = decodePdfStream(appearance);
+  const resources = appearance.dict.lookup(PDFName.of("Resources"), PDFDict);
+  const fonts = resources.lookup(PDFName.of("Font"), PDFDict);
+  const fontNames = [...fonts.entries()].map(([name]) => name.toString());
+  const daFont = da.match(/(\/\S+)\s+[-+]?(?:\d+\.?\d*|\.\d+)\s+Tf/)?.[1];
+
+  expect(da).toContain(" Tf ");
+  expect(da).toContain(" rg");
+  expect(daFont).toBeDefined();
+  expect(fontNames).toContain(daFont);
+  expect(content).toContain(`${daFont} ${fontSize} Tf`);
+  expect(readTextRuns(content).some((run) => colorsClose(run.fillColor, color))).toBe(true);
+  expect(decodePdfStream(appearance).length).toBeGreaterThan(0);
 }
 
 function readPaintedPaths(
@@ -998,6 +1244,85 @@ function readPaintedPaths(
   return paintedPaths;
 }
 
+function readTextRuns(content: string): TextRun[] {
+  const tokens = tokenizePdfContent(content);
+  const stack: Array<number | string> = [];
+  const textMatrixStack: Matrix[] = [];
+  const ctmStack: Matrix[] = [];
+  let ctm: Matrix = identityMatrix();
+  let textMatrix: Matrix = identityMatrix();
+  let font: string | undefined;
+  let fontSize: number | undefined;
+  let fillColor: readonly [number, number, number] | undefined;
+  const runs: TextRun[] = [];
+
+  for (const token of tokens) {
+    if (isNumberToken(token)) {
+      stack.push(Number(token));
+      continue;
+    }
+
+    if (token.startsWith("/") || isHexTextToken(token)) {
+      stack.push(token);
+      continue;
+    }
+
+    switch (token) {
+      case "q":
+        ctmStack.push(ctm);
+        stack.length = 0;
+        break;
+      case "Q":
+        ctm = ctmStack.pop() ?? identityMatrix();
+        stack.length = 0;
+        break;
+      case "cm":
+        ctm = multiplyMatrices(ctm, popMatrix(stack));
+        stack.length = 0;
+        break;
+      case "BT":
+        textMatrixStack.push(textMatrix);
+        textMatrix = identityMatrix();
+        stack.length = 0;
+        break;
+      case "ET":
+        textMatrix = textMatrixStack.pop() ?? identityMatrix();
+        stack.length = 0;
+        break;
+      case "rg":
+        fillColor = popColor(stack);
+        stack.length = 0;
+        break;
+      case "Tf":
+        fontSize = popNumber(stack);
+        font = popName(stack);
+        stack.length = 0;
+        break;
+      case "Tm":
+        textMatrix = multiplyMatrices(ctm, popMatrix(stack));
+        stack.length = 0;
+        break;
+      case "Tj":
+        runs.push({
+          text: popHexText(stack),
+          matrix: textMatrix,
+          font,
+          fontSize,
+          fillColor,
+        });
+        stack.length = 0;
+        break;
+      default:
+        if (isPdfOperator(token)) {
+          stack.length = 0;
+        }
+        break;
+    }
+  }
+
+  return runs;
+}
+
 function readPageExtGStates(
   pdf: PDFDocument,
   pageIndex: number,
@@ -1051,6 +1376,27 @@ function expectPaintedPathsEquivalent(
   for (let index = 0; index < bakedPaths.length; index += 1) {
     expectPaintedPathClose(mappedApPaths[index]!, bakedPaths[index]!);
   }
+}
+
+function expectTextRunsEquivalent(
+  bakedRuns: readonly TextRun[],
+  apRuns: readonly TextRun[],
+  placementMatrix: Matrix,
+): void {
+  expect(apRuns).toHaveLength(bakedRuns.length);
+
+  const mappedRuns = apRuns.map((run) => transformTextRun(run, placementMatrix));
+
+  for (let index = 0; index < bakedRuns.length; index += 1) {
+    expectTextRunClose(mappedRuns[index]!, bakedRuns[index]!);
+  }
+}
+
+function expectTextRunClose(actual: TextRun, expected: TextRun): void {
+  expect(actual.text).toBe(expected.text);
+  expectOptionalNumberClose(actual.fontSize, expected.fontSize);
+  expectColorClose(actual.fillColor, expected.fillColor);
+  expectNumbersClose(actual.matrix, expected.matrix);
 }
 
 function expectTransformedBBoxMatchesAnnotationRect(equivalence: MarkEquivalence): void {
@@ -1143,6 +1489,17 @@ function expectColorClose(
   expectNumbersClose(actual, expected);
 }
 
+function colorsClose(
+  actual: readonly [number, number, number] | undefined,
+  expected: readonly [number, number, number],
+): boolean {
+  return (
+    actual !== undefined &&
+    actual.length === expected.length &&
+    actual.every((value, index) => Math.abs(value - expected[index]!) <= 0.001)
+  );
+}
+
 function expectOptionalNumberClose(actual: number | undefined, expected: number | undefined): void {
   if (expected === undefined || actual === undefined) {
     expect(actual).toBe(expected);
@@ -1183,6 +1540,13 @@ function transformPaintedPath(path: PaintedPath, matrix: Matrix): PaintedPath {
   };
 }
 
+function transformTextRun(run: TextRun, matrix: Matrix): TextRun {
+  return {
+    ...run,
+    matrix: multiplyMatrices(matrix, run.matrix),
+  };
+}
+
 function transformPathSegment(segment: PathSegment, matrix: Matrix): PathSegment {
   switch (segment.op) {
     case "m":
@@ -1220,6 +1584,10 @@ function isPdfOperator(token: string): boolean {
   return /^[A-Za-z*'"]+$/.test(token);
 }
 
+function isHexTextToken(token: string): boolean {
+  return /^<[0-9A-Fa-f]*>$/.test(token);
+}
+
 function popNumber(stack: Array<number | string>): number {
   const value = stack.pop();
 
@@ -1238,6 +1606,16 @@ function popName(stack: Array<number | string>): string {
   }
 
   return value;
+}
+
+function popHexText(stack: Array<number | string>): string {
+  const value = stack.pop();
+
+  if (typeof value !== "string" || !isHexTextToken(value)) {
+    throw new Error(`Expected hex text PDF operand, saw ${String(value)}.`);
+  }
+
+  return decodeHexText(value.slice(1, -1));
 }
 
 function popColor(stack: Array<number | string>): [number, number, number] {
@@ -1288,6 +1666,16 @@ function popMatrix(stack: Array<number | string>): Matrix {
   const a = popNumber(stack);
 
   return [a, b, c, d, e, f];
+}
+
+function decodeHexText(hex: string): string {
+  const bytes = new Uint8Array(hex.length / 2);
+
+  for (let index = 0; index < hex.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16);
+  }
+
+  return new TextDecoder().decode(bytes);
 }
 
 function readOptionalMatrix(array: PDFArray | undefined): Matrix {

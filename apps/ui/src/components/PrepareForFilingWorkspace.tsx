@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import type {
   ConstraintEntry,
   DocumentFacts,
@@ -12,8 +20,7 @@ import type {
 import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
-import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, HelpIcon, PlusIcon } from "../icons";
-import { IconButton } from "./IconButton";
+import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
 import { LoadingSun } from "./LoadingSun";
 import "./PrepareForFilingWorkspace.css";
 
@@ -132,42 +139,57 @@ export interface PrepareForFilingWorkspaceProps {
   ) => void;
   onDismissImpact: () => void;
   onCompressFirst: () => void;
-  onHelpRequested?: (() => void) | undefined;
 }
 
-export function PrepareForFilingWorkspace({
-  document,
-  pack,
-  availablePacks = [pack],
-  prepPlan,
-  courtProfiles,
-  selectedCourtProfile,
-  facts,
-  report,
-  loadingReport,
-  reportError = null,
-  progress,
-  result,
-  impact,
-  pdfAAvailable,
-  compressAvailable,
-  onPackChange,
-  onCourtProfileSelect,
-  onCourtProfileSave,
-  onPrepare,
-  onAddPacketFile,
-  onBuildPacket,
-  packetProgress = { running: false, message: null, result: null },
-  defaultPacketLayoutMode = "separate-files",
-  defaultPacketPrefixFilenames = true,
-  onPacketPreferencesChange,
-  onDismissImpact,
-  onCompressFirst,
-  onHelpRequested,
-}: PrepareForFilingWorkspaceProps) {
+/**
+ * Imperative bridge for chrome that now lives outside this component. Item 8
+ * flattens Prepare for Filing to one chrome: the "..." overflow menu moved up
+ * into the outer FloatingDialog's header (see `FilingOverflowMenu` below and
+ * App.tsx's `getFloatingDialog`), but the Certificate of Service form it opens
+ * is still this workspace's own state -- this handle is the one method that
+ * bridges the two without lifting the whole form up.
+ */
+export interface PrepareForFilingWorkspaceHandle {
+  openCertificateOfService: () => void;
+}
+
+export const PrepareForFilingWorkspace = forwardRef<
+  PrepareForFilingWorkspaceHandle,
+  PrepareForFilingWorkspaceProps
+>(function PrepareForFilingWorkspace(
+  {
+    document,
+    pack,
+    availablePacks = [pack],
+    prepPlan,
+    courtProfiles,
+    selectedCourtProfile,
+    facts,
+    report,
+    loadingReport,
+    reportError = null,
+    progress,
+    result,
+    impact,
+    pdfAAvailable,
+    compressAvailable,
+    onPackChange,
+    onCourtProfileSelect,
+    onCourtProfileSave,
+    onPrepare,
+    onAddPacketFile,
+    onBuildPacket,
+    packetProgress = { running: false, message: null, result: null },
+    defaultPacketLayoutMode = "separate-files",
+    defaultPacketPrefixFilenames = true,
+    onPacketPreferencesChange,
+    onDismissImpact,
+    onCompressFirst,
+  }: PrepareForFilingWorkspaceProps,
+  ref,
+) {
   const [mode, setMode] = useState<"single" | "packet">("single");
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [overflowOpen, setOverflowOpen] = useState(false);
   const [certificateOpen, setCertificateOpen] = useState(false);
   const [checkedSteps, setCheckedSteps] = useState<Set<PrepPlanStepId>>(() => defaultCheckedSteps(prepPlan));
   const [customSplitMegabytes, setCustomSplitMegabytes] = useState("");
@@ -200,6 +222,7 @@ export function PrepareForFilingWorkspace({
   const latestVerified = useMemo(() => latestDate(pack.constraints), [pack.constraints]);
   const oldestVerified = useMemo(() => oldestPolicyDate(pack), [pack]);
   const activeReport = result?.report ?? report;
+  const hasFilingResult = Boolean(result) || Boolean(packetProgress.result);
   const unavailableSteps = useMemo(
     () => resolveUnavailableSteps(prepPlan, {
       pdfAAvailable,
@@ -222,7 +245,7 @@ export function PrepareForFilingWorkspace({
   const primaryLabel = needsMechanicalWork || !convertsToPdfA
     ? "Make Filing-Ready"
     : "Export PDF/A for ePortal";
-  // Gate on "this pack will convert", not on the report's pdfa status — an input
+  // Gate on "this pack will convert", not on the report's pdfa status -- an input
   // that already passes the PDF/A check still gets converted by the pipeline, so
   // the button must stay disabled wherever the conversion engine is unavailable.
   const canPrepare = Boolean(document.bytes && report) &&
@@ -246,10 +269,13 @@ export function PrepareForFilingWorkspace({
     setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps));
   }, [prepPlan, unavailableSteps]);
 
+  useImperativeHandle(ref, () => ({
+    openCertificateOfService: () => setCertificateOpen(true),
+  }), []);
+
   function submitCertificate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCertificateOpen(false);
-    setOverflowOpen(false);
   }
 
   function runSinglePrepare() {
@@ -326,51 +352,16 @@ export function PrepareForFilingWorkspace({
   return (
     <section className="filing-workspace" aria-label="Prepare for Filing">
       <div className="filing-card">
-        <header className="filing-card__header">
-          {/* The dialog chrome already shows the "Legal / Prepare for Filing"
-              title (see FloatingDialog in App.tsx) -- repeating it here was a
-              second title stacked on the first. This line carries the one
-              thing the dialog title doesn't: which document is in play. */}
-          <p className="filing-card__document-line">
-            <BoltIcon variant="outline" size={14} />
-            <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
-            <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
-          </p>
-          <div className="filing-card__header-actions">
-            {onHelpRequested ? (
-              <IconButton
-                icon={<HelpIcon size={14} />}
-                label="Help: Prepare for Filing"
-                onClick={onHelpRequested}
-              />
-            ) : null}
-            <div className="filing-card__overflow">
-              <button
-                type="button"
-                className="filing-card__icon-button"
-                aria-label="Prepare for Filing menu"
-                aria-expanded={overflowOpen}
-                onClick={() => setOverflowOpen((current) => !current)}
-              >
-                ⋯
-              </button>
-              {overflowOpen ? (
-                <div className="filing-card__menu" role="menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setCertificateOpen(true);
-                      setOverflowOpen(false);
-                    }}
-                  >
-                    Insert Certificate of Service page...
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </header>
+        {/* The dialog chrome (outer FloatingDialog, see App.tsx) already shows
+            the "Legal / Prepare for Filing" title, ? and the (new, item 8)
+            overflow menu -- repeating any of that here was the second chrome
+            item 8 flattens away. This line carries the one thing the dialog
+            title doesn't: which document is in play. */}
+        <p className="filing-card__document-line">
+          <BoltIcon variant="outline" size={14} />
+          <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
+          <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
+        </p>
 
         <div className="filing-mode-toggle" role="tablist" aria-label="Prepare mode">
           <button
@@ -412,6 +403,7 @@ export function PrepareForFilingWorkspace({
           steps={prepPlan}
           checkedSteps={checkedSteps}
           unavailableSteps={unavailableSteps}
+          hasResult={hasFilingResult}
           customSplitMegabytes={customSplitMegabytes}
           onCustomSplitMegabytesChange={setCustomSplitMegabytes}
           onToggle={(stepId) => {
@@ -560,33 +552,13 @@ export function PrepareForFilingWorkspace({
           </form>
         ) : null}
 
-        <section className="filing-checks" aria-label="Preflight checks">
-          <div className="filing-checks__header">
-            <p className="filing-checks__title">Preflight checks</p>
-            <p className="filing-checks__subtitle">
-              What a clerk might flag -- none of it blocks your export.
-            </p>
-          </div>
-          <div className="filing-checks__rows">
-            {loadingReport ? (
-              <p className="filing-card__status" role="status">
-                <LoadingSun size={14} label="Reading document facts" />
-                Reading document facts...
-              </p>
-            ) : null}
-            {reportError ? (
-              <p className="filing-card__status" role="status">
-                {reportError}
-              </p>
-            ) : null}
-            {activeReport?.checks.map((check) => (
-              <PreflightRow key={check.checkId} check={check} />
-            ))}
-            {activeReport?.selectionChecks?.map((check) => (
-              <PreflightRow key={check.checkId} check={check} />
-            ))}
-          </div>
-        </section>
+        <PrefilingCheckSection
+          loadingReport={loadingReport}
+          reportError={reportError}
+          checks={activeReport?.checks}
+          selectionChecks={activeReport?.selectionChecks}
+          defaultOpen={Boolean(result)}
+        />
 
         {!pdfAAvailable && prepPlan.some((step) => step.id === "convert-pdfa" && checkedSteps.has(step.id)) ? (
           <p className="filing-card__unavailable" role="status">
@@ -648,6 +620,51 @@ export function PrepareForFilingWorkspace({
         </footer>
       </div>
     </section>
+  );
+});
+
+export interface FilingOverflowMenuProps {
+  onInsertCertificate: () => void;
+}
+
+/**
+ * Item 8's "gains the ... menu" -- rendered into the outer FloatingDialog's
+ * header via its `actions` slot (see App.tsx's getFloatingDialog), not inside
+ * this workspace, so Prepare for Filing has exactly one chrome. The single
+ * menu action still needs to reach state that lives inside the workspace
+ * (the Certificate of Service form); `onInsertCertificate` is wired to
+ * `PrepareForFilingWorkspaceHandle.openCertificateOfService` for that.
+ */
+export function FilingOverflowMenu({ onInsertCertificate }: FilingOverflowMenuProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="filing-header-menu">
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Prepare for Filing menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        ⋯
+      </button>
+      {open ? (
+        <div className="filing-header-menu__panel" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onInsertCertificate();
+              setOpen(false);
+            }}
+          >
+            Insert Certificate of Service page...
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1031,10 +1048,49 @@ function CourtProfilePrompt({
   );
 }
 
+/**
+ * Which run-outcome chip a checklist row shows -- item 6/7's "will-run /
+ * not-needed / prohibited / done" vocabulary, computed from state that
+ * already exists on the step (nothing new is tracked): a pack-policy or
+ * product-availability block always wins ("prohibited"); an unchecked,
+ * unblocked step is simply not part of this run ("not needed"); a checked
+ * step shows "done" once the workspace already has a completed result and
+ * "will run" before that.
+ */
+type StepRunStatus = "will-run" | "not-needed" | "prohibited" | "done";
+
+const STEP_RUN_STATUS_LABEL: Record<StepRunStatus, string> = {
+  "will-run": "Will run",
+  "not-needed": "Not needed",
+  prohibited: "Prohibited",
+  done: "Done",
+};
+
+function computeStepRunStatus(checked: boolean, blocked: boolean, hasResult: boolean): StepRunStatus {
+  if (blocked) {
+    return "prohibited";
+  }
+
+  if (!checked) {
+    return "not-needed";
+  }
+
+  return hasResult ? "done" : "will-run";
+}
+
+function StepRunStatusChip({ status }: { status: StepRunStatus }) {
+  return (
+    <span className="filing-prep-row__status" data-status={status}>
+      {STEP_RUN_STATUS_LABEL[status]}
+    </span>
+  );
+}
+
 function PrepChecklist({
   steps,
   checkedSteps,
   unavailableSteps,
+  hasResult,
   customSplitMegabytes,
   onCustomSplitMegabytesChange,
   onToggle,
@@ -1042,12 +1098,34 @@ function PrepChecklist({
   steps: readonly PrepPlanStep[];
   checkedSteps: ReadonlySet<PrepPlanStepId>;
   unavailableSteps: ReadonlyMap<PrepPlanStepId, string>;
+  hasResult: boolean;
   customSplitMegabytes: string;
   onCustomSplitMegabytesChange: (value: string) => void;
   onToggle: (stepId: PrepPlanStepId) => void;
 }) {
   const runnableSteps = steps.filter((step) => !step.disabledReason && !unavailableSteps.get(step.id));
   const activeCount = runnableSteps.filter((step) => checkedSteps.has(step.id)).length;
+  // Item 6/7: one line per rule, default collapsed. Independent per-row
+  // state (not a single-open accordion) -- comparing two rules' detail at
+  // once is a reasonable thing to want, and there's no shared real estate
+  // being fought over the way there is with the sidebar's tool groups.
+  const [expandedStepIds, setExpandedStepIds] = useState<ReadonlySet<PrepPlanStepId>>(() => new Set());
+
+  useEffect(() => {
+    setExpandedStepIds(new Set());
+  }, [steps]);
+
+  function toggleExpanded(stepId: PrepPlanStepId) {
+    setExpandedStepIds((current) => {
+      const next = new Set(current);
+      if (next.has(stepId)) {
+        next.delete(stepId);
+      } else {
+        next.add(stepId);
+      }
+      return next;
+    });
+  }
 
   return (
     <section className="filing-prep" aria-label="Preparation checklist">
@@ -1064,6 +1142,9 @@ function PrepChecklist({
             step={step}
             checked={checkedSteps.has(step.id)}
             unavailableReason={unavailableSteps.get(step.id)}
+            hasResult={hasResult}
+            expanded={expandedStepIds.has(step.id)}
+            onToggleExpanded={() => toggleExpanded(step.id)}
             customSplitMegabytes={customSplitMegabytes}
             onCustomSplitMegabytesChange={onCustomSplitMegabytesChange}
             onToggle={() => onToggle(step.id)}
@@ -1078,6 +1159,9 @@ function PrepStepRow({
   step,
   checked,
   unavailableReason,
+  hasResult,
+  expanded,
+  onToggleExpanded,
   customSplitMegabytes,
   onCustomSplitMegabytesChange,
   onToggle,
@@ -1085,6 +1169,9 @@ function PrepStepRow({
   step: PrepPlanStep;
   checked: boolean;
   unavailableReason?: string | undefined;
+  hasResult: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   customSplitMegabytes: string;
   onCustomSplitMegabytesChange: (value: string) => void;
   onToggle: () => void;
@@ -1098,6 +1185,7 @@ function PrepStepRow({
   const disabled = Boolean(blockedReason);
   const descriptionId = `filing-step-${step.id}-body`;
   const showCustomSplit = step.id === "split-by-size" && checked && !disabled;
+  const runStatus = computeStepRunStatus(checked, disabled, hasResult);
 
   return (
     <article
@@ -1105,6 +1193,7 @@ function PrepStepRow({
       role="listitem"
       data-checked={checked ? "true" : "false"}
       data-disabled={disabled ? "true" : "false"}
+      data-expanded={expanded ? "true" : "false"}
     >
       <div className="filing-prep-row__main">
         <label className="filing-prep-row__toggle">
@@ -1112,46 +1201,63 @@ function PrepStepRow({
             type="checkbox"
             checked={checked}
             disabled={disabled}
-            aria-describedby={descriptionId}
+            aria-describedby={expanded ? descriptionId : undefined}
             onChange={onToggle}
           />
           <span className="filing-prep-row__title">{step.label}</span>
         </label>
-        <StepStanceBadge stance={step.stance} />
+        <div className="filing-prep-row__meta">
+          <StepRunStatusChip status={runStatus} />
+          <button
+            type="button"
+            className="filing-prep-row__expand"
+            aria-expanded={expanded}
+            aria-controls={descriptionId}
+            aria-label={`${expanded ? "Hide" : "Show"} details for ${step.label}`}
+            onClick={onToggleExpanded}
+          >
+            <ChevronDownIcon size={14} />
+          </button>
+        </div>
       </div>
 
-      <div id={descriptionId} className="filing-prep-row__body">
-        {step.condition ? <p className="filing-prep-row__condition">{step.condition}</p> : null}
-        {step.note ? <p className="filing-prep-row__note">{step.note}</p> : null}
-        {policyBlockedReason ? (
-          <p className="filing-prep-row__blocked" data-tone="policy">{policyBlockedReason}</p>
-        ) : productUnavailableReason ? (
-          <p className="filing-prep-row__blocked" data-tone="product">{capitalize(productUnavailableReason)}.</p>
-        ) : null}
-        {step.destructive ? (
-          <div className="filing-prep-row__warning" data-tone={checked ? "active" : "quiet"}>
-            <p className="filing-prep-row__warning-label">Detected impact</p>
-            <p className="filing-prep-row__warning-text">{step.impact}</p>
+      {expanded ? (
+        <div id={descriptionId} className="filing-prep-row__body">
+          <div className="filing-prep-row__stance-row">
+            <StepStanceBadge stance={step.stance} />
           </div>
-        ) : (
-          <p className="filing-prep-row__impact">{step.impact}</p>
-        )}
-        {showCustomSplit ? (
-          <label className="filing-prep-row__override">
-            <span>Custom split size</span>
-            <span className="filing-prep-row__override-input">
-              <input
-                inputMode="decimal"
-                value={customSplitMegabytes}
-                placeholder="Pack default"
-                onChange={(event) => onCustomSplitMegabytesChange(event.target.value)}
-              />
-              <span>MB</span>
-            </span>
-          </label>
-        ) : null}
-        <p className="filing-prep-row__authority">{formatStepAuthority(step)}</p>
-      </div>
+          {step.condition ? <p className="filing-prep-row__condition">{step.condition}</p> : null}
+          {step.note ? <p className="filing-prep-row__note">{step.note}</p> : null}
+          {policyBlockedReason ? (
+            <p className="filing-prep-row__blocked" data-tone="policy">{policyBlockedReason}</p>
+          ) : productUnavailableReason ? (
+            <p className="filing-prep-row__blocked" data-tone="product">{capitalize(productUnavailableReason)}.</p>
+          ) : null}
+          {step.destructive ? (
+            <div className="filing-prep-row__warning" data-tone={checked ? "active" : "quiet"}>
+              <p className="filing-prep-row__warning-label">Detected impact</p>
+              <p className="filing-prep-row__warning-text">{step.impact}</p>
+            </div>
+          ) : (
+            <p className="filing-prep-row__impact">{step.impact}</p>
+          )}
+          {showCustomSplit ? (
+            <label className="filing-prep-row__override">
+              <span>Custom split size</span>
+              <span className="filing-prep-row__override-input">
+                <input
+                  inputMode="decimal"
+                  value={customSplitMegabytes}
+                  placeholder="Pack default"
+                  onChange={(event) => onCustomSplitMegabytesChange(event.target.value)}
+                />
+                <span>MB</span>
+              </span>
+            </label>
+          ) : null}
+          <p className="filing-prep-row__authority">{formatStepAuthority(step)}</p>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -1166,6 +1272,83 @@ function StepStanceBadge({ stance }: { stance: PrepPlanStep["stance"] }) {
 
 function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Item 6/7: the preflight report collapses into a "Prefiling check" section,
+ * default-closed so a fresh dialog opens uncluttered. It opens itself once
+ * there's already a completed result (the user just ran Prepare for Filing
+ * and almost certainly wants to see the verification) -- a one-time initial
+ * default, not a live subscription, so a manual collapse afterward sticks.
+ * Loading/error status stays outside the collapse: those are live signals,
+ * not detail to look up on demand.
+ */
+function PrefilingCheckSection({
+  loadingReport,
+  reportError,
+  checks,
+  selectionChecks,
+  defaultOpen,
+}: {
+  loadingReport: boolean;
+  reportError?: string | null;
+  checks: readonly PreflightCheck[] | undefined;
+  selectionChecks: readonly PreflightCheck[] | undefined;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(() => defaultOpen);
+  const panelId = useId();
+  const allChecks = [...(checks ?? []), ...(selectionChecks ?? [])];
+  const flaggedCount = allChecks.filter((check) => check.status !== "pass").length;
+  const summary = allChecks.length === 0
+    ? null
+    : flaggedCount === 0
+      ? "All clear"
+      : `${flaggedCount} to review`;
+
+  return (
+    <section className="filing-checks" aria-label="Preflight checks">
+      <div className="filing-checks__header">
+        <div className="filing-checks__title-row">
+          <button
+            type="button"
+            className="filing-checks__toggle"
+            aria-expanded={open}
+            aria-controls={panelId}
+            onClick={() => setOpen((current) => !current)}
+          >
+            <ChevronDownIcon size={13} />
+            Prefiling check
+          </button>
+          {summary ? <span className="filing-checks__summary">{summary}</span> : null}
+        </div>
+        <p className="filing-checks__subtitle">
+          What a clerk might flag -- none of it blocks your export.
+        </p>
+      </div>
+      {loadingReport ? (
+        <p className="filing-card__status" role="status">
+          <LoadingSun size={14} label="Reading document facts" />
+          Reading document facts...
+        </p>
+      ) : null}
+      {reportError ? (
+        <p className="filing-card__status" role="status">
+          {reportError}
+        </p>
+      ) : null}
+      {open ? (
+        <div id={panelId} className="filing-checks__rows" role="list">
+          {checks?.map((check) => (
+            <PreflightRow key={check.checkId} check={check} />
+          ))}
+          {selectionChecks?.map((check) => (
+            <PreflightRow key={check.checkId} check={check} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function PreflightRow({ check }: { check: PreflightCheck }) {

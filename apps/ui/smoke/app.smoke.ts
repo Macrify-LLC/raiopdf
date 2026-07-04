@@ -641,6 +641,10 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await expect(page.getByText("These checks are guidance only")).toBeVisible();
   await expect(page.getByRole("button", { name: "View the rules applied" })).toBeVisible();
 
+  // Item 6/7: the preflight report is now a collapsed "Prefiling check"
+  // section -- expand it once; it stays open through the run below.
+  await page.getByRole("button", { name: "Prefiling check", exact: true }).click();
+
   const lawRows = page.locator('.filing-row[data-kind="rule"]');
   await expect(lawRows.filter({ hasText: "Letter portrait pages" })).toHaveAttribute("data-status", "warn");
   await expect(lawRows.locator(".filing-row__chip", { hasText: "warning" })).toHaveCount(0);

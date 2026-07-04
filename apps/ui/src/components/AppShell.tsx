@@ -222,6 +222,7 @@ export function AppShell({
         onSearchNext={documentSearch.goToNext}
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
+        onPrepareForFiling={() => onLegalToolSelected("prepare-for-filing")}
       />
       <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">

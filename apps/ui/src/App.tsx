@@ -50,6 +50,7 @@ import {
 } from "./components/OrganizeWorkspace";
 import {
   PrepareForFilingWorkspace,
+  FilingOverflowMenu,
   type CertificateOfServiceDraft,
   type FilingImpactState,
   type FilingPacketBuildInput,
@@ -58,6 +59,7 @@ import {
   type FilingOutputPart,
   type FilingProgressState,
   type FilingResultState,
+  type PrepareForFilingWorkspaceHandle,
   type PrepareOptions,
 } from "./components/PrepareForFilingWorkspace";
 import {
@@ -337,6 +339,11 @@ export function App() {
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
     null,
   );
+  // Item 8: the "..." overflow menu moved out of PrepareForFilingWorkspace
+  // and into the outer FloatingDialog's header (see getFloatingDialog
+  // below), but its one action (insert a Certificate of Service page) is
+  // still state that lives inside the workspace. This ref is the bridge.
+  const filingWorkspaceRef = useRef<PrepareForFilingWorkspaceHandle>(null);
   const [activeEditDialogTool, setActiveEditDialogTool] = useState<EditDialogToolId | null>(
     null,
   );
@@ -3287,8 +3294,14 @@ export function App() {
           width="lg"
           onClose={closeWorkspace}
           onHelp={() => openHelp("prepare-for-filing")}
+          actions={(
+            <FilingOverflowMenu
+              onInsertCertificate={() => filingWorkspaceRef.current?.openCertificateOfService()}
+            />
+          )}
         >
           <PrepareForFilingWorkspace
+            ref={filingWorkspaceRef}
             document={document}
             pack={filingPack}
             availablePacks={AVAILABLE_FILING_PACKS}
@@ -3316,7 +3329,6 @@ export function App() {
             onPacketPreferencesChange={handlePacketPreferencesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
-            onHelpRequested={() => openHelp("prepare-for-filing")}
           />
         </FloatingDialog>
       );

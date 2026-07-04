@@ -1,25 +1,18 @@
+/* The FloatingDialog body (App.tsx's outer chrome) already supplies padding
+   and scroll -- this workspace used to re-add its own centered, fixed-width
+   "card" on top of that, which is exactly the card-in-card look item 8
+   flattens away. It's now a plain flow container, the same pattern
+   BatchCleanupWorkspace/ProductionSetWorkspace already use. */
 .filing-workspace {
   width: 100%;
-  min-height: 100%;
-  padding: var(--space-5);
-  overflow: auto;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
+  color: var(--body);
 }
 
 .filing-card {
-  width: min(780px, 100%);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-popover);
-  background: var(--panel);
-  box-shadow: var(--shadow-popover);
-  padding: var(--space-4);
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
-.filing-card__header,
 .filing-card__button-row,
 .filing-card__footer,
 .filing-result__header,
@@ -28,37 +21,11 @@
   align-items: center;
 }
 
-.filing-card__header {
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.filing-card__header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: 0 0 auto;
-}
-
-.filing-card__header-actions .icon-button {
-  width: 26px;
-  height: 26px;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-}
-
-.filing-card__header-actions .icon-button:hover:not(:disabled),
-.filing-card__header-actions .icon-button:focus-visible {
-  background: var(--hover-ground);
-  border-color: var(--border);
-  color: var(--body);
-}
-
 /* ---- Document identity line (replaces the old icon+eyebrow+h2 block --
    the dialog chrome already renders "Legal / Prepare for Filing", so this
-   line only needs to say which document is loaded). ---- */
+   line only needs to say which document is loaded). A hairline underneath
+   separates identity from the jurisdiction/checklist body that follows --
+   one flat sheet, not a second bordered box. ---- */
 
 .filing-card__document-line {
   display: flex;
@@ -66,8 +33,10 @@
   gap: var(--space-2);
   min-width: 0;
   margin: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
   color: var(--ink);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
@@ -126,11 +95,6 @@
   color: var(--muted);
 }
 
-.filing-card__overflow {
-  position: relative;
-  flex: 0 0 auto;
-}
-
 .filing-card__icon-button {
   width: 30px;
   height: 30px;
@@ -150,7 +114,20 @@
   background: var(--hover-ground);
 }
 
-.filing-card__menu {
+/* ---- Overflow menu (item 8) -- lives in the outer FloatingDialog's header
+   now, not this workspace (see FilingOverflowMenu in the .tsx and the
+   `actions` slot FloatingDialog gained for it). The trigger reuses the
+   shared `.icon-button` look, which the dialog header's own CSS already
+   restyles to a transparent 26px control -- this file only needs the
+   dropdown panel itself. ---- */
+
+.filing-header-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.filing-header-menu__panel {
   position: absolute;
   right: 0;
   top: calc(100% + 4px);
@@ -163,7 +140,7 @@
   padding: var(--space-1);
 }
 
-.filing-card__menu button {
+.filing-header-menu__panel button {
   width: 100%;
   border: 0;
   border-radius: var(--radius-control);
@@ -175,7 +152,7 @@
   padding: var(--space-2);
 }
 
-.filing-card__menu button:hover {
+.filing-header-menu__panel button:hover {
   background: var(--hover-ground);
 }
 
@@ -376,13 +353,16 @@
   gap: var(--space-2);
 }
 
+/* Item 6/7: one line per rule at rest -- name + status chip + a chevron
+   that expands the detail paragraph in place. Padding is tight enough that
+   a checklist of six or seven rules reads as a scannable list, not a stack
+   of cards; the expanded body (below) reopens that breathing room only for
+   the row someone actually asked to look at. */
 .filing-prep-row {
-  display: grid;
-  gap: var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--panel);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
 }
 
 .filing-prep-row[data-disabled="true"] {
@@ -391,9 +371,10 @@
 
 .filing-prep-row__main {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  min-height: 30px;
 }
 
 .filing-prep-row__toggle {
@@ -419,12 +400,101 @@
   color: var(--muted);
 }
 
+.filing-prep-row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* Run-status chip -- item 6/7's will-run / not-needed / prohibited / done
+   vocabulary. Shares the chip shape (radius-chip, uppercase, tight padding)
+   with the preflight report's own chips below, so the two checklist-like
+   areas in this dialog read as one visual language. */
+.filing-prep-row__status {
+  flex: 0 0 auto;
+  min-width: 74px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  text-align: center;
+  padding: 3px var(--space-2);
+  white-space: nowrap;
+}
+
+.filing-prep-row__status[data-status="will-run"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
+}
+
+.filing-prep-row__status[data-status="done"] {
+  border-color: var(--ok-bg);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.filing-prep-row__status[data-status="prohibited"] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.filing-prep-row__expand {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.filing-prep-row__expand:hover {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  color: var(--body);
+}
+
+.filing-prep-row__expand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.filing-prep-row__expand svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.filing-prep-row__expand[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
 /* Body block indents to align under the title, past the 16px checkbox
-   plus its var(--space-2) gap. */
+   plus its var(--space-2) gap. Mounted only while its row is expanded
+   (matching ToolPanel's `.tool-row__expansion` -- see the shared 170ms
+   ease-out keyframe below), so it gets the grow-in on every open. */
 .filing-prep-row__body {
   display: grid;
   gap: 4px;
-  padding-left: 24px;
+  padding: var(--space-2) 0 0 24px;
+  overflow: hidden;
+  animation: filing-row-expansion-in 170ms ease-out;
+}
+
+.filing-prep-row__stance-row {
+  display: flex;
 }
 
 .filing-prep-row__condition,
@@ -676,13 +746,45 @@
 
 .filing-checks__header {
   display: grid;
-  gap: 1px;
+  gap: 2px;
 }
 
-.filing-checks__title {
-  margin: 0;
+/* Item 6/7: "Prefiling check" is a collapsed section, same as each prep-row
+   detail above -- the toggle button carries the fixed, stable accessible
+   name ("Prefiling check"); the flagged-issue count sits beside it as a
+   plain sibling so it doesn't make the button's name a moving target. */
+.filing-checks__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.filing-checks__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 0;
+  background: transparent;
+  padding: 0;
   color: var(--ink);
+  font: inherit;
   font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filing-checks__toggle svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.filing-checks__toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.filing-checks__summary {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--text-2xs);
   font-weight: 700;
 }
 
@@ -695,6 +797,8 @@
 .filing-checks__rows {
   display: grid;
   gap: var(--space-2);
+  overflow: hidden;
+  animation: filing-row-expansion-in 170ms ease-out;
 }
 
 .filing-row {
@@ -1255,6 +1359,23 @@
   }
 }
 
+/* Shared with ToolPanel's `.tool-row__expansion` interaction language --
+   same 170ms ease-out height/opacity grow-in for the checklist row detail
+   and the Prefiling check panel (item 6/7's two progressive-disclosure
+   spots). Kept as its own keyframe (rather than importing ToolPanel's) so
+   this file stays self-contained; the timing/curve match on purpose. */
+@keyframes filing-row-expansion-in {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 640px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .filing-rules,
   .filing-progress,
@@ -1262,13 +1383,14 @@
   .filing-impact {
     animation: none;
   }
+
+  .filing-prep-row__body,
+  .filing-checks__rows {
+    animation: none;
+  }
 }
 
 @media (max-width: 720px) {
-  .filing-workspace {
-    padding: var(--space-3);
-  }
-
   .filing-card__footer {
     align-items: stretch;
     flex-direction: column;

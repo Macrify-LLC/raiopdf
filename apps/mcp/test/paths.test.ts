@@ -44,6 +44,47 @@ describe("resolveInput", () => {
     await fs.writeFile(file, "%PDF-1.4\n");
     const resolved = await resolveInput(file);
     expect(resolved.realPath).toBe(await fs.realpath(file));
+    expect(resolved.sizeBytes).toBe(9);
+  });
+
+  it("rejects inputs above the MCP in-memory size cap", async () => {
+    const previous = process.env.RAIOPDF_MCP_MAX_INPUT_BYTES;
+    process.env.RAIOPDF_MCP_MAX_INPUT_BYTES = "8";
+    const file = path.join(dir, "large.pdf");
+    await fs.writeFile(file, "%PDF-1.4\n");
+
+    try {
+      await expect(resolveInput(file)).rejects.toMatchObject({
+        code: "PATH_POLICY",
+        action: expect.stringContaining("large-document workflows"),
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RAIOPDF_MCP_MAX_INPUT_BYTES;
+      } else {
+        process.env.RAIOPDF_MCP_MAX_INPUT_BYTES = previous;
+      }
+    }
+  });
+
+  it("rejects inputs exactly at the MCP in-memory size cap", async () => {
+    const previous = process.env.RAIOPDF_MCP_MAX_INPUT_BYTES;
+    process.env.RAIOPDF_MCP_MAX_INPUT_BYTES = "9";
+    const file = path.join(dir, "boundary.pdf");
+    await fs.writeFile(file, "%PDF-1.4\n");
+
+    try {
+      await expect(resolveInput(file)).rejects.toMatchObject({
+        code: "PATH_POLICY",
+        action: expect.stringContaining("below 9 B"),
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RAIOPDF_MCP_MAX_INPUT_BYTES;
+      } else {
+        process.env.RAIOPDF_MCP_MAX_INPUT_BYTES = previous;
+      }
+    }
   });
 });
 

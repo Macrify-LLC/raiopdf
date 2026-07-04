@@ -701,6 +701,13 @@ export class SidecarPdfEngine implements PdfEngine {
     );
   }
 
+  async flattenMarkupAnnotations(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Markup annotation flattening is handled by the local pdf-lib engine.",
+    );
+  }
+
   async saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array> {
     return new Uint8Array(this.get(document).bytes);
   }

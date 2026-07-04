@@ -46,18 +46,33 @@ import {
   LineCapStyle,
   PDFArray,
   PDFCheckBox,
+  PDFDict,
   PDFDocument,
   PDFDropdown,
   PDFField,
   PDFFont,
   PDFName,
+  PDFNumber,
   PDFOptionList,
   PDFRadioGroup,
+  PDFRef,
   PDFString,
   PDFTextField,
   rgb,
   StandardFonts,
 } from "pdf-lib";
+import {
+  createPageDrawTarget,
+  drawAnnotationAppearanceOnPage,
+  type DrawColor,
+  type DrawTarget,
+} from "./drawTarget";
+
+export {
+  createAnnotationAppearanceTarget,
+  createPageDrawTarget,
+  drawAnnotationAppearanceOnPage,
+} from "./drawTarget";
 
 type StoredDocument = {
   bytes: Uint8Array;
@@ -106,6 +121,12 @@ export type ExhibitIndexLayoutResult = {
   iterations: number;
 };
 
+export type RaioPdfMarkupAnnotation = {
+  readonly dict: PDFDict;
+  readonly ref: PDFRef | undefined;
+  readonly subtype: string;
+};
+
 const DEFAULT_FONT_SIZE_PT = 11;
 const DEFAULT_MARGIN_IN = 0.5;
 const POINTS_PER_INCH = 72;
@@ -134,6 +155,20 @@ const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
+const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
+const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
+  "Circle",
+  "FreeText",
+  "Highlight",
+  "Ink",
+  "Line",
+  "PolyLine",
+  "Polygon",
+  "Square",
+  "Squiggly",
+  "StrikeOut",
+  "Underline",
+]);
 const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
   "helvetica:regular": StandardFonts.Helvetica,
   "helvetica:bold": StandardFonts.HelveticaBold,
@@ -794,6 +829,14 @@ export class LocalPdfEngine implements PdfEngine {
     return this.store(await output.save());
   }
 
+  async flattenMarkupAnnotations(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+
+    flattenMarkupAnnotationsInPlace(output);
+
+    return this.store(await output.save());
+  }
+
   async saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array> {
     return new Uint8Array(this.get(document).bytes);
   }
@@ -823,6 +866,111 @@ export class LocalPdfEngine implements PdfEngine {
 
 export function createLocalPdfEngine(): PdfEngine {
   return new LocalPdfEngine();
+}
+
+export function stampRaioPdfAnnotation(annotation: PDFDict): void {
+  annotation.set(
+    RAIOPDF_ANNOTATION_MARKER,
+    annotation.context.obj({
+      Version: 1,
+      Kind: "Markup",
+    }),
+  );
+}
+
+export function readRaioPdfMarkupAnnotations(
+  page: ReturnType<PDFDocument["getPage"]>,
+): RaioPdfMarkupAnnotation[] {
+  return readAnnotationEntries(page).filter((entry) => isRaioPdfMarkupAnnotation(entry.dict));
+}
+
+function flattenMarkupAnnotationsInPlace(pdf: PDFDocument): void {
+  for (const page of pdf.getPages()) {
+    const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+    if (!annotations) {
+      continue;
+    }
+
+    for (let index = annotations.size() - 1; index >= 0; index -= 1) {
+      const entry = readAnnotationEntryAt(page, annotations, index);
+
+      if (!entry || !isRaioPdfMarkupAnnotation(entry.dict)) {
+        continue;
+      }
+
+      if (drawAnnotationAppearanceOnPage(page, entry.dict)) {
+        annotations.remove(index);
+      }
+    }
+
+    if (annotations.size() === 0) {
+      page.node.delete(PDFName.of("Annots"));
+    }
+  }
+}
+
+function readAnnotationEntries(page: ReturnType<PDFDocument["getPage"]>): RaioPdfMarkupAnnotation[] {
+  const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+  if (!annotations) {
+    return [];
+  }
+
+  const entries: RaioPdfMarkupAnnotation[] = [];
+
+  for (let index = 0; index < annotations.size(); index += 1) {
+    const entry = readAnnotationEntryAt(page, annotations, index);
+
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+
+  return entries;
+}
+
+function readAnnotationEntryAt(
+  page: ReturnType<PDFDocument["getPage"]>,
+  annotations: PDFArray,
+  index: number,
+): RaioPdfMarkupAnnotation | undefined {
+  const object = annotations.get(index);
+  const dict = object instanceof PDFRef ? page.doc.context.lookupMaybe(object, PDFDict) : object;
+
+  if (!(dict instanceof PDFDict)) {
+    return undefined;
+  }
+
+  const subtype = readAnnotationSubtype(dict);
+
+  if (!subtype) {
+    return undefined;
+  }
+
+  return {
+    dict,
+    ref: object instanceof PDFRef ? object : undefined,
+    subtype,
+  };
+}
+
+function isRaioPdfMarkupAnnotation(annotation: PDFDict): boolean {
+  const marker = annotation.lookupMaybe(RAIOPDF_ANNOTATION_MARKER, PDFDict);
+  const version = marker?.lookupMaybe(PDFName.of("Version"), PDFNumber)?.asNumber();
+  const kind = marker?.lookupMaybe(PDFName.of("Kind"), PDFName)?.toString().replace(/^\//, "");
+  const subtype = readAnnotationSubtype(annotation);
+
+  return (
+    version === 1 &&
+    kind === "Markup" &&
+    subtype !== undefined &&
+    RAIOPDF_MARKUP_ANNOTATION_SUBTYPES.has(subtype)
+  );
+}
+
+function readAnnotationSubtype(annotation: PDFDict): string | undefined {
+  return annotation.lookupMaybe(PDFName.of("Subtype"), PDFName)?.toString().replace(/^\//, "");
 }
 
 export function defaultExhibitDescription(
@@ -1307,18 +1455,12 @@ async function applyEditInPlace(
  */
 function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
   const page = pdf.getPage(edit.pageIndex);
+  const target = createPageDrawTarget(page);
   const color = toEditColor(edit.color, HIGHLIGHT_COLOR);
   const opacity = edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
 
   for (const rect of edit.rects) {
-    page.drawRectangle({
-      x: rect.x,
-      y: rect.y,
-      width: rect.w,
-      height: rect.h,
-      color,
-      opacity,
-    });
+    target.drawRectangle({ rect, fillColor: color, fillAlpha: opacity });
   }
 }
 
@@ -1328,17 +1470,18 @@ function applyHighlightEdit(pdf: PDFDocument, edit: PdfHighlightEdit): void {
  */
 function applyTextMarkupEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
   const page = pdf.getPage(edit.pageIndex);
+  const target = createPageDrawTarget(page);
   const color = toEditColor(edit.color, EDIT_INK_COLOR);
   const thickness = edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT;
 
   for (const rect of edit.rects) {
     const y = edit.type === "underline" ? rect.y : rect.y + rect.h * 0.5;
 
-    page.drawLine({
-      start: { x: rect.x, y },
-      end: { x: rect.x + rect.w, y },
-      thickness,
-      color,
+    target.drawLine({
+      from: { x: rect.x, y },
+      to: { x: rect.x + rect.w, y },
+      strokeWidthPt: thickness,
+      strokeColor: color,
     });
   }
 }
@@ -1349,46 +1492,51 @@ function applyTextMarkupEdit(pdf: PDFDocument, edit: PdfTextMarkupEdit): void {
  * sits one font-size below the rectangle's visual top edge.
  */
 function applyTextBoxEdit(pdf: PDFDocument, edit: PdfTextBoxEdit, font: PDFFont): void {
-  drawTextBoxText(pdf, edit, font);
+  const page = pdf.getPage(edit.pageIndex);
+
+  drawTextBoxText(pdf, edit, font, createPageDrawTarget(page));
 }
 
 function applyCalloutEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font: PDFFont): void {
   const page = pdf.getPage(edit.pageIndex);
+  const target = createPageDrawTarget(page);
   const thickness = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
   const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
   const anchor = computeCalloutLeaderAnchor(edit.rect, edit.tip);
 
-  page.drawLine({
-    start: anchor,
-    end: edit.tip,
-    thickness,
-    color: strokeColor,
+  target.drawLine({
+    from: anchor,
+    to: edit.tip,
+    strokeWidthPt: thickness,
+    strokeColor,
   });
 
   if (edit.arrowhead ?? true) {
-    drawArrowHead(page, anchor, edit.tip, thickness, strokeColor);
+    drawArrowHead(target, anchor, edit.tip, thickness, strokeColor);
   }
 
   if (edit.boxFill || edit.boxBorder !== false) {
-    page.drawRectangle({
-      x: edit.rect.x,
-      y: edit.rect.y,
-      width: edit.rect.w,
-      height: edit.rect.h,
-      ...(edit.boxFill ? { color: toEditColor(edit.boxFill, EDIT_INK_COLOR) } : {}),
+    target.drawRectangle({
+      rect: edit.rect,
+      ...(edit.boxFill ? { fillColor: toEditColor(edit.boxFill, EDIT_INK_COLOR) } : {}),
       ...(edit.boxBorder !== false
         ? {
-            borderColor: strokeColor,
-            borderWidth: DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT,
+            strokeColor,
+            strokeWidthPt: DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT,
           }
         : {}),
     });
   }
 
-  drawTextBoxText(pdf, edit, font);
+  drawTextBoxText(pdf, edit, font, target);
 }
 
-function drawTextBoxText(pdf: PDFDocument, edit: TextRenderableEdit, font: PDFFont): void {
+function drawTextBoxText(
+  pdf: PDFDocument,
+  edit: TextRenderableEdit,
+  font: PDFFont,
+  target: DrawTarget,
+): void {
   const page = pdf.getPage(edit.pageIndex);
   const fontSize = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT;
   const lineHeight = fontSize * TEXT_BOX_LINE_HEIGHT_FACTOR;
@@ -1417,13 +1565,13 @@ function drawTextBoxText(pdf: PDFDocument, edit: TextRenderableEdit, font: PDFFo
       pageRotation,
     });
 
-    page.drawText(line, {
-      x: anchor.x,
-      y: anchor.y,
-      size: fontSize,
+    target.drawText({
+      text: line,
+      at: anchor,
+      fontSizePt: fontSize,
       font,
       color: toEditColor(edit.color, EDIT_INK_COLOR),
-      rotate: pdfDegrees(pageRotation),
+      rotateDegrees: pageRotation,
     });
   });
 }
@@ -1540,22 +1688,16 @@ async function embedImagePage(
  */
 function applyInkEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
   const page = pdf.getPage(edit.pageIndex);
+  const target = createPageDrawTarget(page);
   const thickness = edit.strokeWidthPt ?? DEFAULT_INK_STROKE_WIDTH_PT;
   const color = toEditColor(edit.color, EDIT_INK_COLOR);
 
   for (const stroke of edit.strokes) {
-    for (let pointIndex = 0; pointIndex + 1 < stroke.length; pointIndex += 1) {
-      const start = stroke[pointIndex]!;
-      const end = stroke[pointIndex + 1]!;
-
-      page.drawLine({
-        start: { x: start.x, y: start.y },
-        end: { x: end.x, y: end.y },
-        thickness,
-        color,
-        lineCap: LineCapStyle.Round,
-      });
-    }
+    target.drawPolyline(stroke, {
+      strokeWidthPt: thickness,
+      strokeColor: color,
+      lineCap: LineCapStyle.Round,
+    });
   }
 }
 
@@ -1565,58 +1707,53 @@ function applyInkEdit(pdf: PDFDocument, edit: PdfInkEdit): void {
  */
 function applyShapeEdit(pdf: PDFDocument, edit: PdfShapeEdit): void {
   const page = pdf.getPage(edit.pageIndex);
+  const target = createPageDrawTarget(page);
   const thickness = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
   const strokeColor = toEditColor(edit.strokeColor, EDIT_INK_COLOR);
 
   switch (edit.shape) {
     case "rect":
-      page.drawRectangle({
-        x: edit.rect.x,
-        y: edit.rect.y,
-        width: edit.rect.w,
-        height: edit.rect.h,
-        borderColor: strokeColor,
-        borderWidth: thickness,
-        ...(edit.fillColor ? { color: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      target.drawRectangle({
+        rect: edit.rect,
+        strokeColor,
+        strokeWidthPt: thickness,
+        ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
       });
       return;
     case "ellipse":
-      page.drawEllipse({
-        x: edit.rect.x + edit.rect.w / 2,
-        y: edit.rect.y + edit.rect.h / 2,
-        xScale: edit.rect.w / 2,
-        yScale: edit.rect.h / 2,
-        borderColor: strokeColor,
-        borderWidth: thickness,
-        ...(edit.fillColor ? { color: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
+      target.drawEllipse({
+        rect: edit.rect,
+        strokeColor,
+        strokeWidthPt: thickness,
+        ...(edit.fillColor ? { fillColor: toEditColor(edit.fillColor, EDIT_INK_COLOR) } : {}),
       });
       return;
     case "line":
-      page.drawLine({
-        start: edit.from,
-        end: edit.to,
-        thickness,
-        color: strokeColor,
+      target.drawLine({
+        from: edit.from,
+        to: edit.to,
+        strokeWidthPt: thickness,
+        strokeColor,
       });
       return;
     case "arrow":
-      page.drawLine({
-        start: edit.from,
-        end: edit.to,
-        thickness,
-        color: strokeColor,
+      target.drawLine({
+        from: edit.from,
+        to: edit.to,
+        strokeWidthPt: thickness,
+        strokeColor,
       });
-      drawArrowHead(page, edit.from, edit.to, thickness, strokeColor);
+      drawArrowHead(target, edit.from, edit.to, thickness, strokeColor);
       return;
   }
 }
 
 function drawArrowHead(
-  page: ReturnType<PDFDocument["getPage"]>,
+  target: DrawTarget,
   from: PdfEditPoint,
   to: PdfEditPoint,
   thickness: number,
-  color: ReturnType<typeof rgb>,
+  color: DrawColor,
 ): void {
   const angle = Math.atan2(to.y - from.y, to.x - from.x);
   const length = Math.min(ARROW_HEAD_MAX_PT, Math.max(ARROW_HEAD_MIN_PT, thickness * 7));
@@ -1637,13 +1774,14 @@ function drawArrowHead(
     x: baseCenter.x - normal.x * halfWidth,
     y: baseCenter.y - normal.y * halfWidth,
   };
-  const path = `M ${to.x} ${to.y} L ${left.x} ${left.y} L ${right.x} ${right.y} Z`;
+  const targetTo = target.mapPoint(to);
+  const targetLeft = target.mapPoint(left);
+  const targetRight = target.mapPoint(right);
+  const path =
+    `M ${targetTo.x} ${targetTo.y} L ${targetLeft.x} ${targetLeft.y} ` +
+    `L ${targetRight.x} ${targetRight.y} Z`;
 
-  page.drawSvgPath(path, {
-    color,
-    borderColor: color,
-    borderWidth: 0,
-  });
+  target.drawSvgPath({ path, fillColor: color, strokeColor: color, strokeWidthPt: 0 });
 }
 
 /**

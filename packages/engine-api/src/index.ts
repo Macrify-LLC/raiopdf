@@ -905,6 +905,16 @@ export interface PdfEngine {
    */
   flattenForm(document: PdfDocumentHandle): Promise<PdfDocumentHandle>;
 
+  /**
+   * Creates a new document with RaioPDF-owned markup annotations flattened.
+   *
+   * Only annotations carrying RaioPDF's private annotation marker are touched;
+   * third-party annotations and sticky-note comments remain live. Markup
+   * appearances are painted into page content before the marked annotations are
+   * removed from `/Annots`.
+   */
+  flattenMarkupAnnotations(document: PdfDocumentHandle): Promise<PdfDocumentHandle>;
+
   /** Serializes an opened document handle to PDF bytes. */
   saveToBytes(document: PdfDocumentHandle): Promise<Uint8Array>;
 }

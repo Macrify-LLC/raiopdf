@@ -86,6 +86,7 @@ import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDia
 import { HelpPanel } from "./components/HelpPanel";
 import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
 import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
+import { PrintDialog } from "./components/PrintDialog";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import {
   isEngineBridgeUnavailableError,
@@ -478,12 +479,14 @@ export function App() {
   const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
   /** PathOpsEngine status for the streamed filing checklist rule [R7-1]. */
   const [pathOpsFilingStatus, setPathOpsFilingStatus] = useState<PathOpsStatus | null>(null);
-  /** Page-range print prompt for streamed docs (whole-doc print is gated). */
+  /** Page-range print prompt — the fallback when native printing is out. */
   const [printRangePrompt, setPrintRangePrompt] = useState<{
     value: string;
     message: string | null;
     running: boolean;
   } | null>(null);
+  /** Native print dialog for streamed docs (whole-doc print, un-gated). */
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingReportError, setFilingReportError] = useState<string | null>(null);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
@@ -2432,10 +2435,11 @@ export function App() {
   const printDocument = useCallback(() => {
     if (streamedDocument) {
       if (pathOpsGrant) {
-        // Page-range printing for streamed docs: extract the range to a
-        // temp output (path op), open it as an ordinary small document, and
-        // the existing print path applies. Whole-document print stays gated.
-        setPrintRangePrompt({ value: "", message: null, running: false });
+        // Native streaming print (Lane F): Ghostscript prints straight from
+        // disk, so the whole document is available at any size. The dialog
+        // probes availability itself and offers the #127 page-range
+        // extraction as its fallback when the native pipeline is out.
+        setPrintDialogOpen(true);
         return;
       }
 
@@ -2452,6 +2456,13 @@ export function App() {
 
     window.print();
   }, [document.bytes, pathOpsGrant, setError, streamedDocument]);
+
+  // The print dialog holds the grant it was opened with — close it when the
+  // document changes so it can never print a stale grant (the #127 stale-
+  // guard discipline, applied at the dialog boundary).
+  useEffect(() => {
+    setPrintDialogOpen(false);
+  }, [document.generation]);
 
   const cancelPrintRangePrompt = useCallback(() => {
     setPrintRangePrompt(null);
@@ -4765,6 +4776,18 @@ export function App() {
           error={passwordPrompt.error}
           onSubmit={submitPassword}
           onCancel={cancelPasswordPrompt}
+        />
+      ) : null}
+      {printDialogOpen && pathOpsGrant ? (
+        <PrintDialog
+          grant={pathOpsGrant}
+          pageCount={document.pageCount}
+          fileName={document.fileName}
+          onClose={() => setPrintDialogOpen(false)}
+          onUseRangeFallback={() => {
+            setPrintDialogOpen(false);
+            setPrintRangePrompt({ value: "", message: null, running: false });
+          }}
         />
       ) : null}
       {printRangePrompt ? (

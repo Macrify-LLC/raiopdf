@@ -1,12 +1,14 @@
 /**
  * Page-range printing for streamed (large) documents.
  *
- * Whole-document printing of a streamed doc stays gated in v1; the cheap path
- * is: extract the requested range file-to-file (`path_op_extract_pages`),
- * read the SMALL output into memory with one ranged read, release the temp
- * output, and hand the bytes to the caller — which opens them as an ordinary
- * small document so the EXISTING print path (`window.print()` on the rendered
- * viewer) applies unchanged.
+ * Since v1.1 the native streaming print pipeline (`printPipeline.ts`) is the
+ * primary path — whole-document printing is un-gated there. This flow is the
+ * FALLBACK when native printing is unavailable (no Ghostscript, unsupported
+ * platform): extract the requested range file-to-file
+ * (`path_op_extract_pages`), read the SMALL output into memory with one
+ * ranged read, release the temp output, and hand the bytes to the caller —
+ * which opens them as an ordinary small document so the EXISTING print path
+ * (`window.print()` on the rendered viewer) applies unchanged.
  */
 
 import { readPdfRange } from "./filePort";

@@ -132,6 +132,18 @@ const mockEditing: EditingState = {
   updateTextBoxStyle: noop,
   inkStyle: { strokeWidthPt: 1.5 },
   updateInkStyle: noop,
+  textMarkupStyles: {
+    underline: {},
+    strikethrough: {},
+  },
+  updateTextMarkupStyle: noop,
+  shapeStyles: {
+    shapeRect: { strokeWidthPt: 1.5, fillColor: null },
+    shapeEllipse: { strokeWidthPt: 1.5, fillColor: null },
+    shapeLine: { strokeWidthPt: 1.5 },
+    shapeArrow: { strokeWidthPt: 1.5 },
+  },
+  updateShapeStyle: noop,
   message: null,
   setMessage: noop,
   collectEdits: () => null,

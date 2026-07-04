@@ -23,3 +23,14 @@ pnpm-debug.log*
 
 .DS_Store
 Thumbs.db
+
+# Real-engine canary runtime artifacts
+apps/ui/smoke/real-engine/.engine-endpoint.json
+apps/ui/test-results/
+apps/ui/playwright-report/
+
+# Local canary regression fixtures — REAL, often sensitive client PDFs.
+# NEVER commit these. Maintainer-provided; the tests skip when absent.
+apps/ui/smoke/real-engine/fixtures.local/
+**/fixtures.local/
+*.local.pdf

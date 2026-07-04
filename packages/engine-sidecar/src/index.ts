@@ -188,36 +188,28 @@ export class SidecarPdfEngine implements PdfEngine {
   }
 
   async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
-    const formData = createFormData(normalizeBytes(bytes));
-    formData.append("password", password);
-
+    // Decrypt with the engine's bundled qpdf (lossless — it strips /Encrypt but
+    // keeps the text layer). Stirling's /remove-password is measurably lossy
+    // (drops the text layer) and must NOT be used here. The password travels
+    // hex-encoded in a header so qpdf never sees it on a command line.
     try {
-      return await readBytes(await this.request("/api/v1/security/remove-password", formData));
+      return await readBytes(
+        await this.requestLocal("/local/decrypt", normalizeBytes(bytes), {
+          "X-RaioPDF-Password-Hex": encodePasswordHex(password),
+        }),
+      );
     } catch (error) {
-      if (error instanceof PdfEngineError && error.code === "PASSWORD_REQUIRED") {
-        if (password.length === 0) {
-          throw new PdfEngineError(
-            "PASSWORD_REQUIRED",
-            "A PDF password is required to remove encryption.",
-            { cause: error },
-          );
-        }
-
+      if (error instanceof PdfEngineError) {
+        // qpdf refused: an empty password means the file genuinely needs one;
+        // a supplied password that failed means it was wrong.
         throw new PdfEngineError(
-          "ENCRYPTED_DOCUMENT",
-          "The PDF password was not accepted.",
+          password.length === 0 ? "PASSWORD_REQUIRED" : "ENCRYPTED_DOCUMENT",
+          password.length === 0
+            ? "A PDF password is required to remove encryption."
+            : "The PDF password was not accepted.",
           { cause: error },
         );
       }
-
-      if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
-        throw new PdfEngineError(
-          "ENCRYPTED_DOCUMENT",
-          "The PDF password was not accepted.",
-          { cause: error },
-        );
-      }
-
       throw error;
     }
   }
@@ -845,10 +837,50 @@ export class SidecarPdfEngine implements PdfEngine {
 
     return response;
   }
+
+  /**
+   * POST raw PDF bytes to a local engine-side handler (not Stirling), with
+   * extra headers. Used by the qpdf-backed decrypt path.
+   */
+  private async requestLocal(
+    path: string,
+    bytes: Uint8Array,
+    extraHeaders: Record<string, string>,
+  ): Promise<Response> {
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          ...sidecarHeaders(this.authToken, extraHeaders),
+          "Content-Type": "application/pdf",
+        },
+        body: new Uint8Array(bytes),
+      });
+    } catch (error) {
+      throw new PdfEngineError("INVALID_DOCUMENT", "Local engine request failed.", {
+        cause: error,
+      });
+    }
+
+    if (!response.ok) {
+      await throwResponseError(response);
+    }
+
+    return response;
+  }
 }
 
 export function createSidecarPdfEngine(options: SidecarPdfEngineOptions): PdfEngine {
   return new SidecarPdfEngine(options);
+}
+
+/** Hex-encode a password for the `X-RaioPDF-Password-Hex` header. Empty → "". */
+function encodePasswordHex(password: string): string {
+  return Array.from(new TextEncoder().encode(password))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function sidecarHeaders(

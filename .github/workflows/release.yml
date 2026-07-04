@@ -354,6 +354,17 @@ jobs:
 
           echo "Offline OCR smoke passed: HTTP 200, $input_size bytes -> $output_size bytes"
 
+      - name: Feature-acceptance canary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Drives the real UI against the real payload engine through every
+          # advertised feature. See docs/RELEASE-CANARY.md. The payload
+          # (apps/shell/src-tauri/payload) and engine-host binary were produced
+          # by the "Build Tauri shell" step above.
+          pnpm --filter @raiopdf/ui exec playwright install chromium
+          pnpm canary
+
       - name: Collect installer artifacts
         shell: bash
         run: |

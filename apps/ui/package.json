@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:smoke": "playwright test",
+    "test:canary": "playwright test -c playwright.canary.config.ts",
     "sync:pdfjs-assets": "node scripts/sync-pdfjs-assets.mjs",
     "lint": "eslint ."
   },

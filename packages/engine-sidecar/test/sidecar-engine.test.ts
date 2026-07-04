@@ -56,34 +56,35 @@ describe("SidecarPdfEngine", () => {
     await expectFormFile(calls[0], [1, 2, 3]);
   });
 
-  it("removes encryption through Stirling remove-password without opening first", async () => {
+  it("removes encryption through the lossless local qpdf decrypt without opening first", async () => {
     const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 
     await expect(engine.removeEncryption(bytes(1, 2, 3), "secret")).resolves.toEqual(bytes(9, 8, 7));
 
-    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/security/remove-password");
-    await expectFormFile(calls[0], [1, 2, 3]);
-    expectFormField(calls[0], "password", "secret");
+    // Decrypt goes to the engine's local qpdf interceptor, not Stirling's lossy
+    // /remove-password: raw PDF bytes in the body, the password hex-encoded in a
+    // header so qpdf never sees it on a command line.
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/local/decrypt");
+    expectRawBody(calls[0], [1, 2, 3]);
+    expect(headerValue(calls[0], "Content-Type")).toBe("application/pdf");
+    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBe("736563726574");
   });
 
-  it("tries an empty remove-encryption password for owner-restricted PDFs", async () => {
+  it("tries an empty local decrypt password for owner-restricted PDFs", async () => {
     const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 
     await expect(engine.removeEncryption(bytes(1, 2, 3), "")).resolves.toEqual(bytes(9, 8, 7));
 
-    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/security/remove-password");
-    await expectFormFile(calls[0], [1, 2, 3]);
-    expectFormField(calls[0], "password", "");
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/local/decrypt");
+    expectRawBody(calls[0], [1, 2, 3]);
+    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBe("");
   });
 
-  it("maps empty remove-encryption E004 responses to PASSWORD_REQUIRED", async () => {
+  it("maps an empty-password local decrypt failure to PASSWORD_REQUIRED", async () => {
     const { fetchImpl } = createFetch(
-      jsonResponse({
-        message: "The PDF Document is passworded and either the password was not provided or was incorrect",
-        errorCode: "E004",
-      }, 400),
+      textResponse("qpdf --decrypt failed: invalid password", 422),
     );
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 
@@ -93,12 +94,9 @@ describe("SidecarPdfEngine", () => {
     });
   });
 
-  it("maps wrong remove-encryption passwords to ENCRYPTED_DOCUMENT", async () => {
+  it("maps a wrong-password local decrypt failure to ENCRYPTED_DOCUMENT", async () => {
     const { fetchImpl } = createFetch(
-      jsonResponse({
-        message: "The PDF Document is passworded and either the password was not provided or was incorrect",
-        errorCode: "E004",
-      }, 400),
+      textResponse("qpdf --decrypt failed: invalid password", 422),
     );
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 
@@ -667,6 +665,15 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function textResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/plain",
+    },
+  });
+}
+
 function pdfResponse(...contents: number[]): Response {
   return new Response(arrayBuffer(...contents), {
     status: 200,
@@ -758,6 +765,12 @@ async function expectFormFile(call: FetchCall | undefined, expectedBytes: readon
 
   const fileBytes = new Uint8Array(await (value as Blob).arrayBuffer());
   expect([...fileBytes]).toEqual(expectedBytes);
+}
+
+function expectRawBody(call: FetchCall | undefined, expectedBytes: readonly number[]): void {
+  const body = call?.init?.body;
+  expect(body).toBeInstanceOf(Uint8Array);
+  expect([...(body as Uint8Array)]).toEqual(expectedBytes);
 }
 
 function pathFromUrl(url: string): string {

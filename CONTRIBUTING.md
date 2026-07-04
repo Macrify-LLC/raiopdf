@@ -56,6 +56,29 @@ cargo test --workspace
 - CI (`Web` + `Shell` jobs) must pass before merge — required checks are enforced on `main`.
 - PRs merge as a single squashed commit, so don't worry about tidying up commit-by-commit history within your branch.
 
+## Feature-acceptance canary (touching the app or engine)
+
+RaioPDF's promise is that the **packaged** app does everything it advertises, entirely on
+your machine. To keep that true, there's a prerelease runbook that drives the real app
+against the real bundled engine and confirms each advertised feature — OCR making a scan
+readable, the sensitive-data scanner catching an SSN, filing prep regulating size and
+splitting, the exhibit binder stamping and bookmarking, and so on. See
+[`docs/RELEASE-CANARY.md`](docs/RELEASE-CANARY.md).
+
+**If your PR touches the web UI (`apps/ui`), the engine sidecar/host, or the payload,** run
+it and paste the result into your PR:
+
+```bash
+pnpm prepare:shell-bundle   # once, if you don't already have apps/shell/src-tauri/payload/
+pnpm canary
+```
+
+Paste the summary line (e.g. `10 passed`) into the PR's canary checklist. If a check goes
+red because your change deliberately alters behavior, update the corresponding runbook test
+in the same PR and say so. Docs-only, marketing-site (`site/`), or tooling-only PRs can skip
+it. This is enforced by convention during review, not by a required CI check (the canary
+needs the full payload, which is heavier than the standard CI jobs).
+
 ## Reporting bugs
 
 Open a [GitHub issue](https://github.com/Macrify-LLC/raiopdf/issues/new/choose) with:

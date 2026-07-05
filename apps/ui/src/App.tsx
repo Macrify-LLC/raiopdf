@@ -1560,14 +1560,20 @@ export function App() {
   // to the underlying document (rotate, delete, reorder, apply — each swaps
   // the source and bumps the generation) invalidates them.
   const resetEditingForDocument = editing.resetForDocument;
-  useEffect(() => {
-    resetEditingForDocument();
-  }, [resetEditingForDocument, document.source]);
-
   const loadImportedAnnotations = editing.loadImportedAnnotations;
+  const editingDocumentSourceRef = useRef<typeof document.source | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
+    const sourceChanged = editingDocumentSourceRef.current !== document.source;
+    editingDocumentSourceRef.current = document.source;
 
+    if (sourceChanged) {
+      resetEditingForDocument();
+    }
+
+    // Imported annotations are document-bound pending edits. Keep reset and
+    // import in this flow so a source swap deterministically resets first,
+    // then rehydrates imports without relying on sibling effect order.
     if (document.source === null || document.source.kind !== "memory" || !document.engineHandle) {
       loadImportedAnnotations([]);
       return;
@@ -1593,6 +1599,7 @@ export function App() {
     document.source,
     loadImportedAnnotations,
     readRaioPdfAnnotations,
+    resetEditingForDocument,
   ]);
 
   const selectEditTool = useCallback(

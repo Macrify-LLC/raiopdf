@@ -8,6 +8,8 @@ const REPO = "Macrify-LLC/raiopdf";
 const PLATFORM = "windows-x86_64";
 const LATEST_JSON = "latest.json";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
+const CANONICAL_INSTALLER_RE =
+  /^RaioPDF-([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)-windows-x64-setup\.exe$/;
 const NSIS_DIR = fileURLToPath(
   new URL("../apps/shell/src-tauri/target/release/bundle/nsis/", import.meta.url),
 );
@@ -32,6 +34,18 @@ function normalizeTag(tag) {
   return { tag: normalized, version };
 }
 
+export function canonicalInstallerFilename(version) {
+  requireNonEmptyString("version", version);
+  if (!SEMVER.test(version)) {
+    throw new Error(
+      `generate-latest-json: version must be semver like 1.2.3 (got ${JSON.stringify(
+        version,
+      )}).`,
+    );
+  }
+  return `RaioPDF-${version}-windows-x64-setup.exe`;
+}
+
 function normalizePubDate(pubDate) {
   if (pubDate instanceof Date) {
     if (Number.isNaN(pubDate.getTime())) {
@@ -52,14 +66,12 @@ function normalizePubDate(pubDate) {
 }
 
 function extractInstallerVersion(exeFilename) {
-  const match = /(?:^|_)([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)(?:_|-)/.exec(
-    exeFilename,
-  );
+  const match = CANONICAL_INSTALLER_RE.exec(exeFilename);
   if (!match) {
     throw new Error(
       `generate-latest-json: could not read a version from installer filename ${JSON.stringify(
         exeFilename,
-      )}. Expected a filename like RaioPDF_1.2.3_x64-setup.exe.`,
+      )}. Expected a filename like RaioPDF-1.2.3-windows-x64-setup.exe.`,
     );
   }
   return match[1];
@@ -74,6 +86,12 @@ export function buildLatestJsonManifest({ tag, exeFilename, signature, pubDate }
       `generate-latest-json: exeFilename must be the installer filename, not a path (got ${JSON.stringify(
         exeFilename,
       )}).`,
+    );
+  }
+  if (!CANONICAL_INSTALLER_RE.test(exeFilename)) {
+    throw new Error(
+      `generate-latest-json: installer asset must use the canonical public filename ` +
+        `RaioPDF-<version>-windows-x64-setup.exe (got ${JSON.stringify(exeFilename)}).`,
     );
   }
   const installerVersion = extractInstallerVersion(exeFilename);
@@ -219,7 +237,7 @@ function uploadLatestJson(tag, latestJsonPath) {
     stdio: "inherit",
   });
   console.log(
-    "generate-latest-json: reminder: the release must be published, and be the latest release, for /latest/download/latest.json to serve this manifest.",
+    "generate-latest-json: reminder: the release must be the latest published non-prerelease GitHub Release for /latest/download/latest.json to serve this manifest.",
   );
 }
 
@@ -237,11 +255,13 @@ function main() {
     );
   }
 
-  const { exeFilename, sigPath } = findNsisArtifacts(NSIS_DIR);
+  const resolved = normalizeTag(tag);
+  const { exeFilename: sourceExeFilename, sigPath } = findNsisArtifacts(NSIS_DIR);
+  const publicExeFilename = canonicalInstallerFilename(resolved.version);
   const signature = readFileSync(sigPath, "utf8").trim();
   const manifest = buildLatestJsonManifest({
-    tag,
-    exeFilename,
+    tag: resolved.tag,
+    exeFilename: publicExeFilename,
     signature,
     pubDate: new Date(),
   });
@@ -250,13 +270,14 @@ function main() {
   writeFileSync(latestJsonPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const readBack = JSON.parse(readFileSync(latestJsonPath, "utf8"));
-  validateLatestJsonManifest(readBack, { tag, exeFilename });
+  validateLatestJsonManifest(readBack, { tag: resolved.tag, exeFilename: publicExeFilename });
 
   console.log(`generate-latest-json: wrote ${latestJsonPath}`);
-  console.log(`generate-latest-json: installer asset = ${exeFilename}`);
+  console.log(`generate-latest-json: source installer = ${sourceExeFilename}`);
+  console.log(`generate-latest-json: public installer asset = ${publicExeFilename}`);
 
   if (args.upload) {
-    uploadLatestJson(tag, latestJsonPath);
+    uploadLatestJson(resolved.tag, latestJsonPath);
   }
 }
 

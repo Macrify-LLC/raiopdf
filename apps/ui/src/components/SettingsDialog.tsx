@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AboutMacrifySection } from "./AboutMacrifySection";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import { Switch } from "./Switch";
+import type { AppUpdateStatus } from "../lib/appUpdates";
 import "./SettingsDialog.css";
 
 export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify";
@@ -19,6 +20,10 @@ export interface SettingsDialogProps {
   mcpStatus?: string | null | undefined;
   diagnosticsStatus?: string | null | undefined;
   onExportDiagnostics: () => void;
+  updateStatus: AppUpdateStatus;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
+  onRelaunchForUpdate: () => void;
 }
 
 export function SettingsDialog({
@@ -31,6 +36,10 @@ export function SettingsDialog({
   mcpStatus,
   diagnosticsStatus,
   onExportDiagnostics,
+  updateStatus,
+  onCheckForUpdates,
+  onInstallUpdate,
+  onRelaunchForUpdate,
 }: SettingsDialogProps) {
   const [offerCrashReports, setOfferCrashReports] = useState(true);
   const [crashReportsLoading, setCrashReportsLoading] = useState(isTauriRuntime());
@@ -113,13 +122,44 @@ export function SettingsDialog({
           </button>
         </header>
         <div className="settings-dialog__body">
-          <label className="settings-dialog__row">
+          <section className="settings-dialog__section" aria-labelledby="update-checks-heading">
             <span>
-              <strong>Update checks</strong>
-              <small>Check for signed Windows releases automatically</small>
+              <strong id="update-checks-heading">Update checks</strong>
+              <small>Checks GitHub for signed Windows releases automatically</small>
             </span>
-            <input type="checkbox" checked readOnly disabled />
-          </label>
+            <div className="settings-dialog__actions">
+              <button
+                type="button"
+                className="settings-dialog__button"
+                onClick={onCheckForUpdates}
+                disabled={updateStatus.phase === "checking" || updateStatus.phase === "downloading"}
+              >
+                Check now
+              </button>
+              {updateStatus.phase === "available" || updateStatus.phase === "downloading" ? (
+                <button
+                  type="button"
+                  className="settings-dialog__button settings-dialog__button--primary"
+                  onClick={onInstallUpdate}
+                  disabled={updateStatus.phase === "downloading"}
+                >
+                  Install update
+                </button>
+              ) : null}
+              {updateStatus.phase === "installed" ? (
+                <button
+                  type="button"
+                  className="settings-dialog__button settings-dialog__button--primary"
+                  onClick={onRelaunchForUpdate}
+                >
+                  Restart
+                </button>
+              ) : null}
+            </div>
+            <small className="settings-dialog__status" role="status">
+              {formatUpdateStatus(updateStatus)}
+            </small>
+          </section>
           <label className="settings-dialog__row">
             <span>
               <strong>Default jurisdiction</strong>
@@ -190,4 +230,8 @@ export function SettingsDialog({
 
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
+}
+
+function formatUpdateStatus(status: AppUpdateStatus): string {
+  return status.message;
 }

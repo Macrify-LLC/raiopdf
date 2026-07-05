@@ -26,11 +26,12 @@ leave your computer.
 
 ## No tracking
 
-RaioPDF collects no analytics and sends no usage data. If a future version offers
-to send anonymous error reports — so crashes can be fixed — it will be strictly
-your choice: **off** unless you turn it on, never carrying your documents or
-anything that identifies you. And today, if you export a diagnostics file to
-troubleshoot a problem, it's saved to your computer and not sent anywhere.
+RaioPDF collects no analytics and sends no usage data. After an unclean exit,
+it may ask once whether you want to report the crash. Nothing is sent
+automatically: you can review a pre-filled GitHub issue before submitting it,
+or save a report file and send it yourself. The prompt can be turned off in
+Settings, and diagnostics files are saved to your computer unless you choose
+to share them.
 
 ## "Open Raio to AI" is off unless you turn it on
 

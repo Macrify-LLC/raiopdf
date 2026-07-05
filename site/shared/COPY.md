@@ -228,21 +228,25 @@ paragraph.)
 - Not trying to win a features arms race. This isn't about beating anyone
   spec-for-spec — it's about proving the free, local, and genuinely
   **competitive** alternative can exist at all.
-- Not phoning home. No telemetry, no background analytics — RaioPDF makes no
-  network requests of its own, and nothing is ever sent automatically. If it
-  ever crashes it asks once whether to report it — a pre-filled GitHub issue
-  you review and submit yourself, or a report saved to a file you can email
-  in (no account needed); you choose each time, and you can switch the
-  prompt off.
+- Not phoning home with your files. No telemetry, no background analytics, no
+  document upload. RaioPDF's only automatic internet access is a signed update
+  check against GitHub Releases; everything that touches your PDFs stays on
+  your machine. If it ever crashes it asks once whether to report it — a
+  pre-filled GitHub issue you review and submit yourself, or a report saved to
+  a file you can email in (no account needed); you choose each time, and you
+  can switch the prompt off.
 
 (Consistency note — the "telemetry: none" claim stays exactly as-is; it is
 still literally true because nothing is collected in the background and nothing
-auto-sends. When describing the crash-report feature, do NOT call it "off by
-default" or "opt-in" — the after-crash prompt appears by default (once, and can
-be turned off in Settings); what is genuinely opt-in is the *sending*, since you
-review and submit each report yourself. Lead with "nothing is sent
-automatically." The website "No-telemetry line" below is a separate, narrower
-claim about the marketing page's own analytics/cookies; don't merge the two.)
+auto-sends. Signed update checks are the narrow, explicit exception to "no
+network requests," and they are about the app version only — no file names,
+document bytes, or usage data. When describing the crash-report feature, do NOT
+call it "off by default" or "opt-in" — the after-crash prompt appears by
+default (once, and can be turned off in Settings); what is genuinely opt-in is
+the *sending*, since you review and submit each report yourself. Lead with
+"nothing is sent automatically." The website "No-telemetry line" below is a
+separate, narrower claim about the marketing page's own analytics/cookies;
+don't merge the two.)
 
 ## Download panel copy
 
@@ -256,6 +260,7 @@ claim about the marketing page's own analytics/cookies; don't merge the two.)
   pulled live from GitHub, never hand-typed
 - A secondary link to the SHA-256 checksum for anyone who wants to verify the
   download themselves
+- The app checks GitHub Releases for signed updates after install
 - Windows only today; macOS later
 
 ## Download counter
@@ -267,8 +272,8 @@ count is zero.
 ## No-telemetry line (footer or near the download panel)
 
 This page runs no analytics, sets no tracking cookies, and profiles no one.
-The only thing it fetches on its own is a single anonymous, unauthenticated
-call to GitHub's public API for the current release — the same thing your
+It loads its web fonts from Google Fonts and makes unauthenticated public
+GitHub API requests for release data — the same public release information your
 browser would show if you visited the repo directly.
 
 (Accurate scope: this promise is about analytics/tracking/cookies, not "zero

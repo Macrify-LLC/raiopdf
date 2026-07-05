@@ -16,9 +16,10 @@ that's ready to file goes out the door without a fight.
 ## Why you'd use it
 
 You've finished a motion with exhibits. Before it can go to the portal it needs
-to be letter-size, in the right format, and under the portal's size limit. Doing
-that by hand — resizing pages, re-saving, splitting a big file into labeled
-pieces — is the kind of fiddly work that eats an afternoon. This does it for you.
+to be letter-size portrait, in the right format, and under the portal's size
+limit. Doing that by hand — normalizing page size and orientation, re-saving,
+splitting a big file into labeled pieces — is the kind of fiddly work that eats
+an afternoon. This does it for you.
 
 ## How to do it
 

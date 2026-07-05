@@ -71,11 +71,12 @@ numbering, scrubbing metadata, even OCR — happens on your computer. The steps
 that need a heavier engine run a small helper alongside the app that only your
 own computer can reach. Nothing is sent to an outside server.</p><h2 id="ocr-is-on-your-machine-too">OCR is on your machine too</h2><p>Making a scanned PDF searchable normally means uploading it somewhere. RaioPDF
 does it locally, with a built-in text-recognition toolchain. The pages never
-leave your computer.</p><h2 id="no-tracking">No tracking</h2><p>RaioPDF collects no analytics and sends no usage data. If a future version offers
-to send anonymous error reports — so crashes can be fixed — it will be strictly
-your choice: <strong>off</strong> unless you turn it on, never carrying your documents or
-anything that identifies you. And today, if you export a diagnostics file to
-troubleshoot a problem, it's saved to your computer and not sent anywhere.</p><h2 id="open-raio-to-ai-is-off-unless-you-turn-it-on">"Open Raio to AI" is off unless you turn it on</h2><p>RaioPDF has no AI of its own. There is an optional setting that lets <em>your</em> own
+leave your computer.</p><h2 id="no-tracking">No tracking</h2><p>RaioPDF collects no analytics and sends no usage data. After an unclean exit,
+it may ask once whether you want to report the crash. Nothing is sent
+automatically: you can review a pre-filled GitHub issue before submitting it,
+or save a report file and send it yourself. The prompt can be turned off in
+Settings, and diagnostics files are saved to your computer unless you choose
+to share them.</p><h2 id="open-raio-to-ai-is-off-unless-you-turn-it-on">"Open Raio to AI" is off unless you turn it on</h2><p>RaioPDF has no AI of its own. There is an optional setting that lets <em>your</em> own
 AI assistant use RaioPDF's tools. It's <strong>off</strong> by default, and even when you
 turn it on, it talks only to the AI program you connected — over a direct
 on-device channel, not the internet.</p><h2 id="the-one-thing-that-reaches-out">The one thing that reaches out</h2><p>Your documents never leave your machine. By default, the only reason RaioPDF
@@ -123,10 +124,10 @@ unless you specifically ask it to (see error reports above).</p></div>
     <div class="footer__col">
       <h4>No telemetry, ever</h4>
       <p class="footer__telemetry">
-        This page runs no analytics, sets no tracking cookies, and profiles no one. The only
-        thing it fetches on its own is a single anonymous, unauthenticated call to GitHub's
-        public API for the current release — the same thing your browser would show if you
-        visited the repo directly.
+        This page runs no analytics, sets no tracking cookies, and profiles no one. It loads
+        its web fonts from Google Fonts and makes unauthenticated public GitHub API requests
+        for release data — the same public release information your browser would show if
+        you visited the repo directly.
       </p>
       <div class="footer__support">
         <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>

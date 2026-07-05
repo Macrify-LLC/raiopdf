@@ -83,6 +83,27 @@ function existingEnvFile(key: string, fallbackCommand: string): Record<string, s
   return found ? { [key]: found } : {};
 }
 
+function resolveCanaryTool(envKey: string, payloadRelative: readonly string[], fallbackCommand: string): string {
+  const explicit = process.env[envKey]?.trim();
+  if (explicit) return explicit;
+
+  const bundled = path.join(payloadDir, ...payloadRelative);
+  if (existsSync(bundled)) return bundled;
+
+  return commandPath(fallbackCommand) ?? fallbackCommand;
+}
+
+const canaryGhostscript = resolveCanaryTool(
+  "RAIOPDF_ENGINE_GHOSTSCRIPT",
+  ["ocr", "gs", "bin", isWindows ? "gs.exe" : "gs"],
+  isWindows ? "gs.exe" : "gs",
+);
+const canaryQpdf = resolveCanaryTool(
+  "RAIOPDF_ENGINE_QPDF",
+  ["ocr", "qpdf", "bin", isWindows ? "qpdf.exe" : "qpdf"],
+  isWindows ? "qpdf.exe" : "qpdf",
+);
+
 const DEV_ENGINE_TOOLCHAIN_ENV: Record<string, string> = isWindows
   ? {}
   : {
@@ -254,7 +275,7 @@ async function writeScannedTextPdf(file: string): Promise<void> {
   const textSource = `${file}.text-source.pdf`;
   const pngSource = `${file}.page.png`;
   await writeTextPdf(textSource, ["RAIO CANARY OCR"]);
-  execFileSync("gs", [
+  execFileSync(canaryGhostscript, [
     "-dSAFER",
     "-dBATCH",
     "-dNOPAUSE",
@@ -274,7 +295,7 @@ async function writeScannedTextPdf(file: string): Promise<void> {
 async function createPasswordFixture(source: string, encrypted: string): Promise<boolean> {
   await writeTextPdf(source, ["Password protected canary text"]);
   try {
-    execFileSync("qpdf", [
+    execFileSync(canaryQpdf, [
       "--encrypt",
       "secret",
       "secret",

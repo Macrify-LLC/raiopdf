@@ -40,7 +40,6 @@ const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
 
 export interface EditModeBarProps {
   editing: EditingState;
-  onFlatten: () => void;
 }
 
 /**
@@ -48,7 +47,7 @@ export interface EditModeBarProps {
  * Redact mode bar. Shows the active tool, its next step, the pending count,
  * and the per-tool affordances (image picker, signature card).
  */
-export function EditModeBar({ editing, onFlatten }: EditModeBarProps) {
+export function EditModeBar({ editing }: EditModeBarProps) {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const { tool } = editing;
   const autoPickedRef = useRef(false);
@@ -70,8 +69,6 @@ export function EditModeBar({ editing, onFlatten }: EditModeBarProps) {
   }
 
   const pendingCount = editing.draftEditCount;
-  const overlayCount = editing.pendingEdits.length;
-
   return (
     <div className="legal-mode-bar" role="toolbar" aria-label={TOOL_LABELS[tool]}>
       <span className="legal-mode-bar__status">
@@ -80,21 +77,6 @@ export function EditModeBar({ editing, onFlatten }: EditModeBarProps) {
       </span>
       <span className="legal-mode-bar__hint">{editing.message ?? getToolHint(editing)}</span>
       <ToolOptions editing={editing} />
-      {overlayCount > 0 ? (
-        <>
-          <button
-            type="button"
-            className="legal-mode-bar__button"
-            disabled={pendingCount === 0}
-            onClick={editing.applyPending}
-          >
-            Apply
-          </button>
-          <button type="button" className="legal-mode-bar__button" onClick={onFlatten}>
-            Flatten
-          </button>
-        </>
-      ) : null}
       {tool === "image" ? (
         <>
           <input

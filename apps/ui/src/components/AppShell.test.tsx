@@ -54,6 +54,48 @@ describe("AppShell", () => {
 
     expect(html).not.toContain("canvas-well__engine-starting");
   });
+
+  it("renders annotation actions in select mode when pending annotations exist", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: mockPdfDocument,
+          modeBar: null,
+          editing: {
+            ...mockEditing,
+            tool: "select",
+            pendingEdits: [
+              {
+                kind: "textBox",
+                id: "draft-text",
+                pageIndex: 0,
+                rect: { x: 10, y: 10, w: 100, h: 40 },
+                text: "Draft",
+                fontSizePt: 12,
+                status: "draft",
+              },
+              {
+                kind: "textBox",
+                id: "pinned-text",
+                pageIndex: 0,
+                rect: { x: 20, y: 20, w: 100, h: 40 },
+                text: "Pinned",
+                fontSizePt: 12,
+                status: "applied",
+              },
+            ],
+            draftEditCount: 1,
+            appliedEditCount: 1,
+          },
+        })}
+      />,
+    );
+
+    expect(html).toContain("Pin all (1)");
+    expect(html).toContain("Unpin all");
+    expect(html).toContain("Flatten");
+  });
 });
 
 function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
@@ -197,7 +239,10 @@ const mockEditing: EditingState = {
   clearPending: noop,
   clearPendingEdits: noop,
   draftEditCount: 0,
+  appliedEditCount: 0,
   applyPending: noop,
+  unapplyPending: noop,
+  setEditStatus: noop,
   armedImage: null,
   handleImageFile: noop,
   disarmImage: noop,

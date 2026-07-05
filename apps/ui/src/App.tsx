@@ -5128,7 +5128,7 @@ export function App() {
       onExit={() => setActiveLegalTool(null)}
     />
   ) : editing.tool !== "select" ? (
-    <EditModeBar editing={editingForShell} onFlatten={flattenCurrentMarkup} />
+    <EditModeBar editing={editingForShell} />
   ) : null;
 
   const workspace = activeLegalTool === "combine-exhibits" ? (

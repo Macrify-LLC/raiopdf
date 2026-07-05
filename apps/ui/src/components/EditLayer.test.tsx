@@ -459,6 +459,22 @@ function EditLayerHarness({
           ),
         removeEdit: (id: string) =>
           setPendingEdits((current) => current.filter((edit) => edit.id !== id)),
+        setEditStatus: (id: string, status: NonNullable<PendingEdit["status"]>) =>
+          setPendingEdits((current) =>
+            current.map((edit) => (edit.id === id ? { ...edit, status } : edit)),
+          ),
+        draftEditCount: pendingEdits.filter((edit) => edit.status !== "applied").length,
+        appliedEditCount: pendingEdits.filter((edit) => edit.status === "applied").length,
+        applyPending: () =>
+          setPendingEdits((current) =>
+            current.map((edit) => ({ ...edit, status: "applied" })),
+          ),
+        unapplyPending: () =>
+          setPendingEdits((current) =>
+            current.map((edit) =>
+              edit.status === "applied" ? { ...edit, status: "draft" } : edit,
+            ),
+          ),
         shapeStyles: {
           shapeRect: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT, fillColor: null },
           shapeEllipse: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT, fillColor: null },

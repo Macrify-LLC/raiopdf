@@ -21,6 +21,7 @@ import {
   type PendingCallout,
   type PendingComment,
   type PendingEdit,
+  type PendingEditStatus,
   type PendingShape,
   type PendingStamp,
   type PendingTextBox,
@@ -203,6 +204,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     addEdit,
     updateEdit,
     removeEdit,
+    setEditStatus,
     // Selection is shared editing state (not per-layer) because one
     // EditLayer mounts per visible page in the continuous-scroll viewer.
     selectedEditId: selectedId,
@@ -1074,7 +1076,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         moved: false,
       };
     } else {
-      const rect = edit.kind === "shape" ? edit.rect : edit.rect;
+      const rect = edit.rect;
 
       itemDragRef.current = {
         id: edit.id,
@@ -1264,6 +1266,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                 )
               }
               onRemove={() => removeEdit(edit.id)}
+              onStatusChange={(status) => setEditStatus(edit.id, status)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1304,6 +1307,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onPointerUp={handleItemPointerUp}
               onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
               onRemove={() => removeEdit(edit.id)}
+              onStatusChange={(status) => setEditStatus(edit.id, status)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1386,6 +1390,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           onPointerMove={handleItemPointerMove}
           onPointerUp={handleItemPointerUp}
           onRemove={removeEdit}
+          onContextMenu={(event, edit) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setSelectedId(edit.id);
+            setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
+          }}
         />
       ) : null}
 
@@ -1477,7 +1487,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         <ContextMenu
           x={itemContextMenu.x}
           y={itemContextMenu.y}
-          items={buildItemContextMenuItems(itemContextMenu.editId, removeEdit)}
+          items={buildItemContextMenuItems(itemContextMenu.editId, pendingEdits, removeEdit, setEditStatus)}
           onClose={() => setItemContextMenu(null)}
         />
       ) : null}
@@ -1487,9 +1497,18 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
 function buildItemContextMenuItems(
   editId: string,
+  pendingEdits: readonly PendingEdit[],
   removeEdit: (id: string) => void,
+  setEditStatus: EditingState["setEditStatus"],
 ): ContextMenuItem[] {
+  const edit = pendingEdits.find((candidate) => candidate.id === editId);
+  const isApplied = edit?.status === "applied";
+
   return [
+    {
+      label: isApplied ? "Unpin" : "Pin",
+      onSelect: () => setEditStatus(editId, isApplied ? "draft" : "applied"),
+    },
     {
       label: "Delete",
       danger: true,
@@ -1588,6 +1607,7 @@ function ShapeSvgOverlay({
   onPointerMove,
   onPointerUp,
   onRemove,
+  onContextMenu,
 }: {
   shapes: readonly PendingShape[];
   draft: ShapeDraft | null;
@@ -1601,6 +1621,7 @@ function ShapeSvgOverlay({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: (id: string) => void;
+  onContextMenu: (event: ReactMouseEvent<SVGElement>, edit: PendingShape) => void;
 }) {
   return (
     <svg
@@ -1623,6 +1644,7 @@ function ShapeSvgOverlay({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onRemove={() => onRemove(shape.id)}
+          onContextMenu={(event) => onContextMenu(event, shape)}
         />
       ))}
       {draft ? <ShapeDraftElement draft={draft} scale={scale} editing={editing} /> : null}
@@ -1641,6 +1663,7 @@ function ShapeElement({
   onPointerMove,
   onPointerUp,
   onRemove,
+  onContextMenu,
 }: {
   shape: PendingShape;
   viewport: PageViewport;
@@ -1652,6 +1675,7 @@ function ShapeElement({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: () => void;
+  onContextMenu: (event: ReactMouseEvent<SVGElement>) => void;
 }) {
   const displayShape = shapeWithPreview(shape, preview, viewport);
   const stroke = pdfEditColorToHex(shape.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR);
@@ -1667,6 +1691,7 @@ function ShapeElement({
     onPointerDown,
     onPointerMove,
     onPointerUp,
+    onContextMenu,
     onClick: removable
       ? (event: ReactMouseEvent<SVGElement>) => {
           event.stopPropagation();
@@ -2202,6 +2227,7 @@ function TextBoxOverlay({
   onFontSizeChange,
   onTextStyleChange,
   onRemove,
+  onStatusChange,
   onContextMenu,
 }: {
   edit: PendingTextBox;
@@ -2217,6 +2243,7 @@ function TextBoxOverlay({
   onFontSizeChange: (fontSizePt: number) => void;
   onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
+  onStatusChange: (status: PendingEditStatus) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
@@ -2274,6 +2301,8 @@ function TextBoxOverlay({
           align={edit.align ?? DEFAULT_TEXT_ALIGN}
           onTextStyleChange={onTextStyleChange}
           onRemove={onRemove}
+          onStatusChange={onStatusChange}
+          pinned={edit.status === "applied"}
         />
       ) : null}
       {selected ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
@@ -2291,6 +2320,7 @@ function StampOverlay({
   onPointerUp,
   onResizeStart,
   onRemove,
+  onStatusChange,
   onContextMenu,
 }: {
   edit: PendingStamp;
@@ -2302,6 +2332,7 @@ function StampOverlay({
   onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onRemove: () => void;
+  onStatusChange: (status: PendingEditStatus) => void;
   onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
@@ -2323,7 +2354,13 @@ function StampOverlay({
         alt={edit.kind === "signature" ? "Pending signature" : "Pending image"}
         draggable={false}
       />
-      {selected ? <ItemChrome onRemove={onRemove} /> : null}
+      {selected ? (
+        <ItemChrome
+          onRemove={onRemove}
+          onStatusChange={onStatusChange}
+          pinned={edit.status === "applied"}
+        />
+      ) : null}
       {selected ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
     </div>
   );
@@ -2389,6 +2426,8 @@ function ItemChrome({
   align,
   onTextStyleChange,
   onRemove,
+  onStatusChange,
+  pinned,
 }: {
   fontSizePt?: number;
   onFontSizeChange?: (fontSizePt: number) => void;
@@ -2398,6 +2437,8 @@ function ItemChrome({
   align?: PdfTextBoxAlign;
   onTextStyleChange?: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
+  onStatusChange: (status: PendingEditStatus) => void;
+  pinned: boolean;
 }) {
   return (
     <span className="edit-layer__item-chrome" onPointerDown={(event) => event.stopPropagation()}>
@@ -2424,6 +2465,14 @@ function ItemChrome({
           onChange={onTextStyleChange}
         />
       ) : null}
+      <button
+        type="button"
+        className="edit-layer__item-pin"
+        aria-label={pinned ? "Unpin pending edit" : "Pin pending edit"}
+        onClick={() => onStatusChange(pinned ? "draft" : "applied")}
+      >
+        {pinned ? "Unpin" : "Pin"}
+      </button>
       <button
         type="button"
         className="edit-layer__item-remove"

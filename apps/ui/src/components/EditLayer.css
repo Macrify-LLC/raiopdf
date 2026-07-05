@@ -247,10 +247,10 @@
   padding-right: var(--space-1);
 }
 
+.edit-layer__item-pin,
 .edit-layer__item-remove {
   display: grid;
   place-items: center;
-  width: 20px;
   height: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -263,6 +263,16 @@
   cursor: default;
 }
 
+.edit-layer__item-pin {
+  min-width: 36px;
+  padding: 0 var(--space-1);
+}
+
+.edit-layer__item-remove {
+  width: 20px;
+}
+
+.edit-layer__item-pin:hover,
 .edit-layer__item-remove:hover {
   background: var(--hover-ground);
 }

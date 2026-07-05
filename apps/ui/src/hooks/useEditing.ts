@@ -5,6 +5,7 @@ import {
   toPdfEdits,
   type EditToolId,
   type PendingEdit,
+  type PendingEditStatus,
   type ShapeToolId,
   type TextMarkupToolId,
 } from "../lib/edits";
@@ -52,7 +53,10 @@ export interface EditingState {
   clearPending: () => void;
   clearPendingEdits: () => void;
   draftEditCount: number;
+  appliedEditCount: number;
   applyPending: () => void;
+  unapplyPending: () => void;
+  setEditStatus: (id: string, status: PendingEditStatus) => void;
   /**
    * The one selected placed item (stamp/image/text box) across ALL pages.
    * Shared here rather than per-EditLayer because the continuous-scroll
@@ -217,6 +221,10 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     () => pendingEdits.filter((edit) => edit.status !== "applied").length,
     [pendingEdits],
   );
+  const appliedEditCount = useMemo(
+    () => pendingEdits.filter((edit) => edit.status === "applied").length,
+    [pendingEdits],
+  );
 
   const applyPending = useCallback(() => {
     setPendingEdits((current) =>
@@ -224,6 +232,24 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     );
     setSelectedEditId(null);
     setMessage("Applied edits are cemented for this session. Save writes them to the PDF.");
+  }, []);
+
+  const unapplyPending = useCallback(() => {
+    setPendingEdits((current) =>
+      current.map((edit) => (edit.status === "applied" ? { ...edit, status: "draft" } : edit)),
+    );
+    setMessage("Pinned edits are editable again until you save.");
+  }, []);
+
+  const setEditStatus = useCallback((id: string, status: PendingEditStatus) => {
+    setPendingEdits((current) =>
+      current.map((edit) => (edit.id === id ? { ...edit, status } : edit)),
+    );
+    setMessage(
+      status === "applied"
+        ? "Pinned this edit for this session. Save writes it to the PDF."
+        : "Unpinned this edit so it can be adjusted before saving.",
+    );
   }, []);
 
   const handleImageFile = useCallback((file: File) => {
@@ -382,7 +408,10 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       clearPending,
       clearPendingEdits,
       draftEditCount,
+      appliedEditCount,
       applyPending,
+      unapplyPending,
+      setEditStatus,
       selectedEditId,
       setSelectedEditId,
       armedImage,
@@ -428,7 +457,10 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       clearPending,
       clearPendingEdits,
       draftEditCount,
+      appliedEditCount,
       applyPending,
+      unapplyPending,
+      setEditStatus,
       selectedEditId,
       armedImage,
       handleImageFile,

@@ -169,6 +169,11 @@ export function CommandBar({
 
     const clampedPage = Math.min(Math.max(Number(value), 1), pageCount);
     setPageInputValue(String(clampedPage));
+
+    if (clampedPage === currentPage) {
+      return;
+    }
+
     onGoToPage?.(clampedPage);
   }
 

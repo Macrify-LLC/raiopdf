@@ -32,6 +32,17 @@ describe("CommandBar page input", () => {
     expect(input.value).toBe("7");
   });
 
+  it("does not jump when committing the current page", () => {
+    const onGoToPage = vi.fn();
+    const input = renderCommandBar({ onGoToPage, currentPage: 4 });
+
+    change(input, "04");
+    blur(input);
+
+    expect(onGoToPage).not.toHaveBeenCalled();
+    expect(input.value).toBe("4");
+  });
+
   it("clamps typed pages to the document range", () => {
     const onGoToPage = vi.fn();
     const input = renderCommandBar({ onGoToPage, pageCount: 9 });

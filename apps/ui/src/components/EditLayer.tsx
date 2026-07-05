@@ -313,7 +313,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   }, [removeEdit, selectedIdOnThisPage, setSelectedId]);
 
   const getClientLayerPoint = useCallback(
-    (clientX: number, clientY: number): ViewportPoint | null => {
+    (
+      clientX: number,
+      clientY: number,
+      options: { requireInside?: boolean } = {},
+    ): ViewportPoint | null => {
       const layer = layerRef.current;
 
       if (!layer) {
@@ -323,10 +327,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       const bounds = layer.getBoundingClientRect();
 
       if (
-        clientX < bounds.left ||
-        clientX > bounds.right ||
-        clientY < bounds.top ||
-        clientY > bounds.bottom
+        options.requireInside &&
+        (clientX < bounds.left ||
+          clientX > bounds.right ||
+          clientY < bounds.top ||
+          clientY > bounds.bottom)
       ) {
         return null;
       }
@@ -411,7 +416,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         return;
       }
 
-      const point = getClientLayerPoint(event.clientX, event.clientY);
+      const point = getClientLayerPoint(event.clientX, event.clientY, { requireInside: true });
 
       if (!point) {
         return;

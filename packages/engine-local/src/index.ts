@@ -2666,6 +2666,9 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       return;
     case "textBox":
       assertValidTextRenderableEdit(edit, "Text box");
+      if (edit.backgroundColor) {
+        assertEditColor(edit.backgroundColor, "Text box background color");
+      }
       if (
         edit.backgroundOpacity !== undefined &&
         (!Number.isFinite(edit.backgroundOpacity) ||

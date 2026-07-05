@@ -197,6 +197,24 @@ describe("LocalPdfEngine.applyEdits", () => {
     expect(textIndex).toBeGreaterThan(graphicsStateIndex);
   });
 
+  it("rejects invalid text box background colors", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    await expect(
+      applyBakedEdits(engine, document, [
+        {
+          type: "textBox",
+          pageIndex: 0,
+          rect: { x: 72, y: 700, w: 200, h: 40 },
+          text: "Bad fill",
+          fontSizePt: 12,
+          backgroundColor: { r: Number.NaN, g: 0.9, b: 0.3 },
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  });
+
   it("preserves authored whitespace for text box lines that do not need wrapping", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[300, 200]]));

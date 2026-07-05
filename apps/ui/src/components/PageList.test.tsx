@@ -61,6 +61,35 @@ it("isolates the page stack so edit layers cannot cover the floating mode bar", 
   expect(css).toMatch(/\.page-list\s*{[^}]*isolation:\s*isolate;/s);
 });
 
+it("keeps select-mode edit overlays interactive while markup tools pass through", () => {
+  const css = readFileSync(`${process.cwd()}/src/components/PageList.css`, "utf8");
+
+  expect(css).toMatch(
+    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer\s*{[^}]*pointer-events:\s*none;/s,
+  );
+  expect(css).toMatch(
+    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__item,/,
+  );
+  expect(css).toMatch(
+    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__shape-hit-line,/,
+  );
+  expect(css).toMatch(
+    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__comment-pin,/,
+  );
+  expect(css).not.toContain(
+    '.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer *',
+  );
+  expect(css).toContain(
+    '.page-view[data-text-select="true"][data-edit-tool="highlight"] .edit-layer *',
+  );
+  expect(css).toContain(
+    '.page-view[data-text-select="true"][data-edit-tool="underline"] .edit-layer *',
+  );
+  expect(css).toContain(
+    '.page-view[data-text-select="true"][data-edit-tool="strikethrough"] .edit-layer *',
+  );
+});
+
 interface RenderTaskRecord {
   cancelled: boolean;
 }

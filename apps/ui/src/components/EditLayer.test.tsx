@@ -220,6 +220,28 @@ describe("EditLayer shape removal", () => {
     expect(rects[0]?.getAttribute("x")).toBe("10");
   });
 
+  it("clamps captured shape drags that end past the page edge", async () => {
+    await renderEditLayer([], "shapeRect");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 100, 100);
+      dispatchPointerEvent(layer!, "pointermove", 320, 300);
+      dispatchPointerEvent(layer!, "pointerup", 320, 300);
+      await Promise.resolve();
+    });
+
+    const rect = container?.querySelector<SVGRectElement>("svg.edit-layer__shapes rect");
+    expect(rect).not.toBeNull();
+    expect(rect?.getAttribute("x")).toBe("100");
+    expect(rect?.getAttribute("y")).toBe("100");
+    expect(rect?.getAttribute("width")).toBe("140");
+    expect(rect?.getAttribute("height")).toBe("140");
+  });
+
   it("removes a pending callout as one box-and-leader unit", async () => {
     await renderEditLayer(
       [

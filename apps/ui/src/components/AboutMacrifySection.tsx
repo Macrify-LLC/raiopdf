@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { MacrifyMarkIcon } from "../icons";
 import { useSectionFocus } from "../hooks/useSectionFocus";
 import "./SettingsSectionCard.css";
@@ -17,6 +18,24 @@ export interface AboutMacrifySectionProps {
 
 export function AboutMacrifySection({ focused = false, onFocusHandled }: AboutMacrifySectionProps) {
   const { sectionRef, showFocusRing } = useSectionFocus(focused, onFocusHandled);
+  const [licenseStatus, setLicenseStatus] = useState<string | null>(null);
+
+  function handleOpenSourceLicenses() {
+    setLicenseStatus(null);
+
+    void (async () => {
+      try {
+        if (!isTauriRuntime()) {
+          setLicenseStatus("Open source notices are bundled with installed RaioPDF builds.");
+          return;
+        }
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("open_source_licenses");
+      } catch {
+        setLicenseStatus("Open source notices could not be opened.");
+      }
+    })();
+  }
 
   return (
     <section
@@ -43,19 +62,34 @@ export function AboutMacrifySection({ focused = false, onFocusHandled }: AboutMa
         does for a living.
       </p>
 
-      <a className="about-macrify__cta" href={CONNECT_URL} target="_blank" rel="noreferrer">
-        See what Macrify builds
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-          <path
-            d="M4 12 12 4M6 4h6v6"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </a>
+      <div className="about-macrify__actions">
+        <a className="about-macrify__cta" href={CONNECT_URL} target="_blank" rel="noreferrer">
+          See what Macrify builds
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+            <path
+              d="M4 12 12 4M6 4h6v6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </a>
+        <button type="button" className="about-macrify__cta" onClick={handleOpenSourceLicenses}>
+          Open source licenses
+        </button>
+      </div>
+
+      {licenseStatus ? (
+        <small className="about-macrify__status" role="status">
+          {licenseStatus}
+        </small>
+      ) : null}
     </section>
   );
+}
+
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
 }

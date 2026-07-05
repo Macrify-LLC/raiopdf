@@ -27,6 +27,7 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
@@ -370,6 +371,28 @@ fn save_pdf_to_path(
     write_pdf_bytes_atomic_if_unchanged(&entry, request.body())?;
 
     saved_pdf(&entry.path, file_grants.inner())
+}
+
+#[tauri::command]
+fn open_source_licenses(app: tauri::AppHandle) -> Result<(), String> {
+    let notices = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Could not resolve resource directory: {error}"))?
+        .join("payload")
+        .join("legal")
+        .join("THIRD-PARTY-NOTICES.txt");
+
+    if !notices.is_file() {
+        return Err(format!(
+            "Open source notices are missing from the bundled payload: {}",
+            notices.display()
+        ));
+    }
+
+    app.opener()
+        .open_path(notices.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|error| format!("Could not open open-source notices: {error}"))
 }
 
 fn write_pdf_bytes_atomic(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<(), String> {
@@ -822,6 +845,7 @@ pub fn run() {
             path_ops::path_op_page_numbers,
             path_ops::path_op_watermark,
             path_ops::path_op_release_output,
+            open_source_licenses,
             print::print_status,
             print::print_list_printers,
             print::print_pdf,

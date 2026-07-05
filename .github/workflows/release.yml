@@ -379,6 +379,15 @@ jobs:
           ASSET_DIR="$PWD/release-assets"
           mkdir -p -- "$ASSET_DIR"
 
+          mapfile -t PAYLOAD_LEGAL_DIRS < <(
+            find target/release -type d -path '*/payload/legal' | sort -u
+          )
+          if [[ "${#PAYLOAD_LEGAL_DIRS[@]}" -lt 1 ]]; then
+            echo "No bundled payload legal directory was found under target/release." >&2
+            exit 1
+          fi
+          PAYLOAD_LEGAL_DIR="${PAYLOAD_LEGAL_DIRS[0]}"
+
           mapfile -t EXE_FILES < <(find target/release/bundle/nsis -type f -name '*.exe' | sort)
 
           if [[ "${#EXE_FILES[@]}" -lt 1 ]]; then
@@ -387,10 +396,26 @@ jobs:
           fi
 
           cp -- "${EXE_FILES[0]}" "$ASSET_DIR/RaioPDF-$VERSION-windows-x64-unsigned.exe"
+          cp -- "$PAYLOAD_LEGAL_DIR/THIRD-PARTY-NOTICES.txt" "$ASSET_DIR/RaioPDF-$VERSION-third-party-notices.txt"
+          cp -- "$PAYLOAD_LEGAL_DIR/COMPONENT-MANIFEST.json" "$ASSET_DIR/RaioPDF-$VERSION-component-manifest.json"
+          cp -- "$PAYLOAD_LEGAL_DIR/RELEASE-SOURCE-CORRESPONDENCE.md" "$ASSET_DIR/RaioPDF-$VERSION-source-correspondence.md"
+          cp -- "$PAYLOAD_LEGAL_DIR/source-offers/GHOSTSCRIPT-SOURCE-OFFER.txt" "$ASSET_DIR/RaioPDF-$VERSION-ghostscript-source-offer.txt"
+
+          # shellcheck source=installer/PINS.env
+          source installer/PINS.env
+          curl -fL --retry 3 --retry-delay 2 \
+            -o "$ASSET_DIR/ghostscript-$GHOSTSCRIPT_VERSION-source.tar.xz" \
+            "$GHOSTSCRIPT_SOURCE_URL"
+          (
+            cd "$ASSET_DIR"
+            echo "$GHOSTSCRIPT_SOURCE_SHA256  ghostscript-$GHOSTSCRIPT_VERSION-source.tar.xz" | sha256sum -c -
+          )
 
           (
             cd "$ASSET_DIR"
-            sha256sum "RaioPDF-$VERSION-windows-x64-unsigned.exe" > SHA256SUMS.txt
+            find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%P\n' |
+              sort |
+              xargs sha256sum > SHA256SUMS.txt
           )
 
           echo "Collected release assets:"

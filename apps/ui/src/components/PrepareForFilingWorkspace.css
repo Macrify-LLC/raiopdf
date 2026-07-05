@@ -982,6 +982,8 @@
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--on-primary);
+  --rp-stroke-color: var(--on-primary);
+  --rp-echo-color: var(--on-primary);
 }
 
 .filing-progress__step[data-state="active"] {

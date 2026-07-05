@@ -172,6 +172,8 @@
   border-radius: var(--radius-control);
   background: var(--primary);
   color: var(--on-primary);
+  --rp-stroke-color: var(--on-primary);
+  --rp-echo-color: var(--on-primary);
   font-family: var(--font-ui);
   font-size: var(--text-xs);
   font-weight: 700;

@@ -200,6 +200,8 @@
   border: 1px solid var(--primary);
   background: var(--primary);
   color: #fff;
+  --rp-stroke-color: var(--on-primary);
+  --rp-echo-color: var(--on-primary);
   font-weight: 700;
 }
 

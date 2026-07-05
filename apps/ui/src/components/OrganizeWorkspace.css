@@ -139,6 +139,8 @@
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);
+  --rp-stroke-color: var(--on-primary);
+  --rp-echo-color: var(--on-primary);
   font-weight: 600;
   box-shadow: var(--shadow-primary);
 }

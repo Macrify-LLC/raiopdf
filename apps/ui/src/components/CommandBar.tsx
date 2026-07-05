@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   BoltIcon,
   ChevronLeftIcon,
@@ -61,6 +61,7 @@ export interface CommandBarProps {
   onPrint?: (() => void) | undefined;
   onPreviousPage?: (() => void) | undefined;
   onNextPage?: (() => void) | undefined;
+  onGoToPage?: ((page: number) => void) | undefined;
   onZoomOut?: (() => void) | undefined;
   onZoomIn?: (() => void) | undefined;
   currentPage?: number;
@@ -98,6 +99,7 @@ export function CommandBar({
   onPrint,
   onPreviousPage,
   onNextPage,
+  onGoToPage,
   onZoomOut,
   onZoomIn,
   currentPage = 1,
@@ -118,6 +120,14 @@ export function CommandBar({
   onHelp,
   onPrepareForFiling,
 }: CommandBarProps) {
+  const [pageInputValue, setPageInputValue] = useState(String(currentPage));
+  const skipNextPageBlurCommitRef = useRef(false);
+  const pageInputWidth = `${Math.max(1, String(pageCount).length, pageInputValue.length)}ch`;
+
+  useEffect(() => {
+    setPageInputValue(String(currentPage));
+  }, [currentPage]);
+
   function toggleTool(toolId: EditToolId) {
     // Tools are mutually exclusive toggles; re-clicking the active tool
     // returns to Select, like every other mode toggle in the app.
@@ -146,6 +156,45 @@ export function CommandBar({
       event.stopPropagation();
       onSearchClear?.();
     }
+  }
+
+  function commitPageInput() {
+    skipNextPageBlurCommitRef.current = false;
+    const value = pageInputValue.trim();
+
+    if (!/^\d+$/.test(value) || pageCount <= 0) {
+      setPageInputValue(String(currentPage));
+      return;
+    }
+
+    const clampedPage = Math.min(Math.max(Number(value), 1), pageCount);
+    setPageInputValue(String(clampedPage));
+    onGoToPage?.(clampedPage);
+  }
+
+  function handlePageInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitPageInput();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      skipNextPageBlurCommitRef.current = true;
+      setPageInputValue(String(currentPage));
+    }
+  }
+
+  function handlePageInputBlur() {
+    if (skipNextPageBlurCommitRef.current) {
+      skipNextPageBlurCommitRef.current = false;
+      setPageInputValue(String(currentPage));
+      return;
+    }
+
+    commitPageInput();
   }
 
   return (
@@ -198,7 +247,30 @@ export function CommandBar({
           />
           {hasDocument ? (
             <span className="command-bar__page-label">
-              Page <b>{currentPage}</b> / {pageCount}
+              Page{" "}
+              <input
+                className="command-bar__page-input"
+                type="text"
+                inputMode="numeric"
+                aria-label="Go to page"
+                value={pageInputValue}
+                style={{ width: pageInputWidth }}
+                onFocus={(event) => {
+                  skipNextPageBlurCommitRef.current = false;
+                  event.currentTarget.select();
+                }}
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value;
+
+                  if (/^\d*$/.test(nextValue)) {
+                    skipNextPageBlurCommitRef.current = false;
+                    setPageInputValue(nextValue);
+                  }
+                }}
+                onKeyDown={handlePageInputKeyDown}
+                onBlur={handlePageInputBlur}
+              />{" "}
+              / {pageCount}
             </span>
           ) : (
             <span className="command-bar__page-label">No document</span>

@@ -58,6 +58,7 @@ export interface AppShellProps {
   onPrint: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
+  onGoToPage: (page: number) => void;
   onZoomOut: () => void;
   onZoomIn: () => void;
   onFitZoomResolved: (zoom: number) => void;
@@ -130,6 +131,7 @@ export function AppShell({
   onPrint,
   onPreviousPage,
   onNextPage,
+  onGoToPage,
   onZoomOut,
   onZoomIn,
   onFitZoomResolved,
@@ -232,6 +234,7 @@ export function AppShell({
         onPrint={onPrint}
         onPreviousPage={onPreviousPage}
         onNextPage={onNextPage}
+        onGoToPage={onGoToPage}
         onZoomOut={onZoomOut}
         onZoomIn={onZoomIn}
         currentPage={document.currentPage}

@@ -91,6 +91,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     onPrint: () => undefined,
     onPreviousPage: () => undefined,
     onNextPage: () => undefined,
+    onGoToPage: () => undefined,
     onZoomOut: () => undefined,
     onZoomIn: () => undefined,
     onFitZoomResolved: () => undefined,

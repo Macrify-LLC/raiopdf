@@ -1,0 +1,213 @@
+diff --git a/app/core/src/main/java/stirling/software/SPDF/controller/api/EditTextController.java b/app/core/src/main/java/stirling/software/SPDF/controller/api/EditTextController.java
+index 3a10b14..fce70f9 100644
+--- a/app/core/src/main/java/stirling/software/SPDF/controller/api/EditTextController.java
++++ b/app/core/src/main/java/stirling/software/SPDF/controller/api/EditTextController.java
+@@ -118,7 +118,10 @@ public class EditTextController {
+         boolean wholeWordSearch = Boolean.TRUE.equals(request.getWholeWordSearch());
+         List<CompiledEdit> compiledEdits = compileEdits(edits, wholeWordSearch);
+ 
+-        PdfJsonDocument document = pdfJsonConversionService.convertPdfToJsonDocument(inputFile);
++        // Preserve original image XObject streams so untouched images survive the JSON round
++        // trip byte-for-byte instead of being decoded and re-encoded.
++        PdfJsonDocument document =
++                pdfJsonConversionService.convertPdfToJsonDocument(inputFile, true);
+         Set<Integer> pageFilter = resolvePageFilter(request, document);
+         int modifiedSpans = applyEdits(document, compiledEdits, pageFilter);
+         log.info(
+diff --git a/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java b/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
+index fea3b52..ae10feb 100644
+--- a/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
++++ b/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
+@@ -258,8 +258,19 @@ public class PdfJsonConversionService {
+      * mutate the document in memory before round-tripping it back to PDF.
+      */
+     public PdfJsonDocument convertPdfToJsonDocument(MultipartFile file) throws IOException {
++        return convertPdfToJsonDocument(file, false);
++    }
++
++    /**
++     * Variant of {@link #convertPdfToJsonDocument(MultipartFile)} that can preserve the original
++     * image XObject streams inside the serialized page resources. Callers that round-trip the
++     * model straight back to PDF (e.g. the edit-text endpoint) should pass {@code true} so
++     * untouched images are restored byte-for-byte instead of being decoded and re-encoded.
++     */
++    public PdfJsonDocument convertPdfToJsonDocument(
++            MultipartFile file, boolean preserveImageStreams) throws IOException {
+         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+-        convertPdfToJson(file, null, false, buffer);
++        convertPdfToJson(file, null, false, preserveImageStreams, buffer);
+         return objectMapper.readValue(buffer.toByteArray(), PdfJsonDocument.class);
+     }
+ 
+@@ -282,6 +293,24 @@ public class PdfJsonConversionService {
+             boolean lightweight,
+             OutputStream out)
+             throws IOException {
++        convertPdfToJson(file, progressCallback, lightweight, false, out);
++    }
++
++    /**
++     * Full PDF to JSON conversion. When {@code preserveImageStreams} is {@code true}, image
++     * XObject streams are kept verbatim in the serialized page resources (raw encoded bytes plus
++     * their stream dictionaries) so a subsequent JSON to PDF conversion can restore them
++     * byte-for-byte. When {@code false}, image XObjects are filtered out of the resources and
++     * images travel only as the re-encoded {@code imageElements[].imageData} payload, keeping the
++     * JSON free of duplicated image bytes.
++     */
++    public void convertPdfToJson(
++            MultipartFile file,
++            Consumer<PdfJsonConversionProgress> progressCallback,
++            boolean lightweight,
++            boolean preserveImageStreams,
++            OutputStream out)
++            throws IOException {
+         if (file == null) {
+             throw ExceptionUtils.createNullArgumentException("fileInput");
+         }
+@@ -477,7 +506,8 @@ public class PdfJsonConversionService {
+                                 textByPage,
+                                 imagesByPage,
+                                 annotationsByPage,
+-                                lightweight && useLazyImages));
++                                lightweight && useLazyImages,
++                                preserveImageStreams));
+                 if (lightweight && useLazyImages) {
+                     // Lightweight async editor flow does not use form fields and this payload can
+                     // be
+@@ -2489,7 +2519,8 @@ public class PdfJsonConversionService {
+             Map<Integer, List<PdfJsonTextElement>> textByPage,
+             Map<Integer, List<PdfJsonImageElement>> imagesByPage,
+             Map<Integer, List<PdfJsonAnnotation>> annotationsByPage,
+-            boolean omitResourceStreamData)
++            boolean omitResourceStreamData,
++            boolean preserveImageStreams)
+             throws IOException {
+         List<PdfJsonPage> pages = new ArrayList<>();
+         int pageIndex = 0;
+@@ -2508,10 +2539,14 @@ public class PdfJsonConversionService {
+             pageModel.setImageElements(imagesByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
+             pageModel.setAnnotations(
+                     annotationsByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
+-            // Serialize resources but exclude image XObject streams to avoid duplication with
+-            // imageElements
++            // Serialize resources. Image XObject streams are normally excluded to avoid
++            // duplication with imageElements; preserveImageStreams keeps them verbatim so the
++            // JSON->PDF rebuild can restore the original encoded bytes.
+             COSBase resourcesBase = page.getCOSObject().getDictionaryObject(COSName.RESOURCES);
+-            COSBase filteredResources = filterImageXObjectsFromResources(resourcesBase);
++            COSBase filteredResources =
++                    preserveImageStreams
++                            ? resourcesBase
++                            : filterImageXObjectsFromResources(resourcesBase);
+             if (omitResourceStreamData) {
+                 // In lightweight editor mode, omit heavy resource/content stream payloads entirely.
+                 // Partial export preserves originals from cached PDF when these fields are missing.
+@@ -2957,7 +2992,8 @@ public class PdfJsonConversionService {
+      * Reconstructs image XObjects from imageElements when content streams are preserved. During
+      * serialization, image streams are filtered out from resources to avoid duplication. This
+      * method adds them back by scanning content streams for XObject references and matching them
+-     * with imageElements by objectName.
++     * with imageElements by objectName. Image streams that were preserved verbatim in the page
++     * resources (see preserveImageStreams) are left untouched so their original bytes survive.
+      */
+     private void reconstructImageXObjects(
+             PDDocument document,
+@@ -3007,7 +3043,19 @@ public class PdfJsonConversionService {
+             page.setResources(resources);
+         }
+ 
++        COSBase xobjectBase = resources.getCOSObject().getDictionaryObject(COSName.XOBJECT);
++        COSDictionary existingXObjects =
++                xobjectBase instanceof COSDictionary dictionary ? dictionary : null;
++
+         for (String xobjName : referencedXObjects) {
++            if (existingXObjects != null
++                    && existingXObjects.getDictionaryObject(COSName.getPDFName(xobjName))
++                            instanceof COSStream) {
++                // The original image stream was preserved verbatim in the page resources during
++                // serialization; keep it instead of rebuilding from re-encoded image data.
++                log.debug("Image XObject '{}' preserved from original resources", xobjName);
++                continue;
++            }
+             PdfJsonImageElement imageElement = imageMap.get(xobjName);
+             if (imageElement == null) {
+                 log.warn(
+@@ -3346,7 +3394,7 @@ public class PdfJsonConversionService {
+                         if (element == null) {
+                             continue;
+                         }
+-                        drawImageElement(contentStream, document, element, imageCache);
++                        drawImageElement(contentStream, document, page, element, imageCache);
+                     }
+                 }
+             }
+@@ -5423,10 +5471,11 @@ public class PdfJsonConversionService {
+     private void drawImageElement(
+             PDPageContentStream contentStream,
+             PDDocument document,
++            PDPage page,
+             PdfJsonImageElement element,
+             Map<String, PDImageXObject> cache)
+             throws IOException {
+-        if (element == null || element.getImageData() == null || element.getImageData().isBlank()) {
++        if (element == null) {
+             return;
+         }
+ 
+@@ -5436,7 +5485,12 @@ public class PdfJsonConversionService {
+                         : Integer.toHexString(System.identityHashCode(element));
+         PDImageXObject image = cache.get(cacheKey);
+         if (image == null) {
+-            image = createImageXObject(document, element);
++            // Prefer the original image XObject when it was preserved verbatim in the page
++            // resources; fall back to rebuilding from the re-encoded base64 payload.
++            image = resolveImageXObjectFromResources(page, element);
++            if (image == null) {
++                image = createImageXObject(document, element);
++            }
+             if (image == null) {
+                 return;
+             }
+@@ -5471,8 +5525,42 @@ public class PdfJsonConversionService {
+         contentStream.drawImage(image, left, bottom, width, height);
+     }
+ 
++    private PDImageXObject resolveImageXObjectFromResources(
++            PDPage page, PdfJsonImageElement element) {
++        if (page == null || element == null) {
++            return null;
++        }
++        String objectName = element.getObjectName();
++        if (objectName == null || objectName.isBlank()) {
++            return null;
++        }
++        PDResources resources = page.getResources();
++        if (resources == null) {
++            return null;
++        }
++        COSName name = COSName.getPDFName(objectName);
++        if (!resources.isImageXObject(name)) {
++            return null;
++        }
++        try {
++            PDXObject xObject = resources.getXObject(name);
++            if (xObject instanceof PDImageXObject imageXObject) {
++                return imageXObject;
++            }
++        } catch (IOException ex) {
++            log.debug(
++                    "Failed to resolve image XObject '{}' from page resources: {}",
++                    objectName,
++                    ex.getMessage());
++        }
++        return null;
++    }
++
+     private PDImageXObject createImageXObject(PDDocument document, PdfJsonImageElement element)
+             throws IOException {
++        if (element == null || element.getImageData() == null || element.getImageData().isBlank()) {
++            return null;
++        }
+         byte[] data;
+         try {
+             data = Base64.getDecoder().decode(element.getImageData());

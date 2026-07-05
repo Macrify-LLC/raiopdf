@@ -554,7 +554,9 @@ export function computeTextMarkupLineRects(
   textBoxes: readonly PageTextBox[],
   sideways = false,
 ): PdfEditRect[] {
-  const hits = textBoxes.filter((box) => pdfRectsIntersect(band, box));
+  const hits = textBoxes
+    .map((box) => clipTextMarkupBoxToBand(box, band, sideways))
+    .filter((box): box is PageTextBox => box !== null);
 
   if (hits.length === 0) {
     return [];
@@ -586,38 +588,32 @@ export function computeTextMarkupLineRects(
 
 export const computeHighlightLineRects = computeTextMarkupLineRects;
 
-export function mergeTextMarkupSelectionRects(
-  rects: readonly PdfEditRect[],
-  sideways = false,
-): PdfEditRect[] {
-  const usable = rects.filter((rect) => rect.w > 0.5 && rect.h > 0.5);
-
-  if (usable.length === 0) {
-    return [];
+function clipTextMarkupBoxToBand(
+  box: PageTextBox,
+  band: PdfSpaceRect,
+  sideways: boolean,
+): PageTextBox | null {
+  if (!pdfRectsIntersect(band, box)) {
+    return null;
   }
 
-  const lineKey = (rect: PdfEditRect) => (sideways ? rect.x + rect.w / 2 : rect.y + rect.h / 2);
-  const lineThickness = (rect: PdfEditRect) => (sideways ? rect.w : rect.h);
-  const sorted = [...usable].sort((left, right) => lineKey(left) - lineKey(right));
-  const clusters: PdfEditRect[][] = [];
-
-  for (const rect of sorted) {
-    const lastCluster = clusters.at(-1);
-    const lastRect = lastCluster?.at(-1);
-    const tolerance = lastRect
-      ? Math.max(lineThickness(rect), lineThickness(lastRect), 4) * 0.6
-      : 0;
-
-    if (lastCluster && lastRect && Math.abs(lineKey(rect) - lineKey(lastRect)) <= tolerance) {
-      lastCluster.push(rect);
-    } else {
-      clusters.push([rect]);
-    }
+  if (sideways) {
+    const y = Math.max(box.y, band.y);
+    const maxY = Math.min(box.y + box.h, band.y + band.h);
+    return {
+      ...box,
+      y,
+      h: Math.max(1, maxY - y),
+    };
   }
 
-  return clusters
-    .map((cluster) => unionBoxes(cluster))
-    .sort((left, right) => right.y + right.h - (left.y + left.h));
+  const x = Math.max(box.x, band.x);
+  const maxX = Math.min(box.x + box.w, band.x + band.w);
+  return {
+    ...box,
+    x,
+    w: Math.max(1, maxX - x),
+  };
 }
 
 function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {

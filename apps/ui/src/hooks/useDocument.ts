@@ -291,7 +291,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const tabsRef = useRef<StoredDocumentTab[]>([]);
   const tabIdCounterRef = useRef(0);
   const activeTabIdRef = useRef<string | null>(null);
-  const [pageScrollIntent, setPageScrollIntent] = useState<PageScrollIntent | null>(null);
+  const [pageScrollIntent, setPageScrollIntentState] = useState<PageScrollIntent | null>(null);
+  const pageScrollIntentRef = useRef<PageScrollIntent | null>(null);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
@@ -311,6 +312,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
       tabsRef.current = next;
       return next;
     });
+  }, []);
+  const setPageScrollIntent = useCallback((intent: PageScrollIntent | null) => {
+    pageScrollIntentRef.current = intent;
+    setPageScrollIntentState(intent);
   }, []);
 
   const snapshotActiveTab = useCallback((): StoredDocumentTab | null => {
@@ -332,13 +337,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
       openToken: openTokenRef.current,
       sourceKind: sourceKindRef.current,
       scrollNonce: scrollNonceRef.current,
-      pageScrollIntent,
+      pageScrollIntent: pageScrollIntentRef.current,
       mutationQueue: mutationQueueRef.current,
       busyCount: busyCountRef.current,
     };
-  }, [document, pageScrollIntent]);
+  }, [document]);
 
-  const syncActiveTab = useCallback((nextDocument: DocumentState, nextScrollIntent = pageScrollIntent) => {
+  const syncActiveTab = useCallback((nextDocument: DocumentState, nextScrollIntent = pageScrollIntentRef.current) => {
     const activeTabId = activeTabIdRef.current;
     if (!activeTabId) {
       return;
@@ -360,7 +365,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           }
         : tab
     )));
-  }, [pageScrollIntent, setTabsState]);
+  }, [setTabsState]);
 
   const setDocument = useCallback((update: DocumentState | ((current: DocumentState) => DocumentState)) => {
     setDocumentState((current) => {
@@ -399,7 +404,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           : tab
       )));
     }
-  }, [setTabsState]);
+  }, [setPageScrollIntent, setTabsState]);
 
   const createTabId = useCallback(() => {
     tabIdCounterRef.current += 1;
@@ -417,7 +422,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     busyCountRef.current = tab.busyCount;
     setDocumentState(tab.document);
     setPageScrollIntent(tab.pageScrollIntent);
-  }, []);
+  }, [setPageScrollIntent]);
 
   const createStoredTab = useCallback((
     id: string,
@@ -504,7 +509,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       token,
       newTab: !tabsRef.current.some((tab) => tab.id === id),
     };
-  }, [createTabId, document.source, setDocument, setTabsState, snapshotActiveTab]);
+  }, [createTabId, document.source, setDocument, setPageScrollIntent, setTabsState, snapshotActiveTab]);
 
   const restoreAfterFailedNewTabOpen = useCallback((target: OpenTarget, error?: string) => {
     if (!target.newTab) {
@@ -532,7 +537,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     busyCountRef.current = 0;
     setPageScrollIntent(null);
     setDocumentState(error ? { ...INITIAL_DOCUMENT, error } : INITIAL_DOCUMENT);
-  }, [restoreTab, setDocument]);
+  }, [restoreTab, setDocument, setPageScrollIntent]);
 
   const setError = useCallback((error: string | null) => {
     setDocument((current) => ({ ...current, error }));
@@ -924,7 +929,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, createStoredTab, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
+    [closeHandle, createStoredTab, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
   );
 
   /**
@@ -1802,6 +1807,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return null;
       }
 
+      activeBytesRef.current = bytes;
       let fileName = "Untitled.pdf";
       let filePath: string | null = null;
       setDocument((current) => {
@@ -1811,13 +1817,6 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return {
           ...current,
           bytes,
-          // Fresh source object so the preview reloads from the saved
-          // serialization (the old bytes-ref-change behavior). Generation is
-          // intentionally NOT bumped: a save re-serializes the same content,
-          // and in-flight work guarded by generation must stay valid across
-          // it — mirroring how the engine-side bytes ref was left untouched
-          // here before [R1-8].
-          source: { kind: "memory", bytes },
           fileSizeBytes: bytes.byteLength,
           error: null,
         };
@@ -1928,7 +1927,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }
 
     return true;
-  }, [closeHandle, restoreTab, setError, snapshotActiveTab]);
+  }, [closeHandle, restoreTab, setError, setPageScrollIntent, snapshotActiveTab]);
 
   return {
     document,

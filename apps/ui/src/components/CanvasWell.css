@@ -232,11 +232,8 @@
   text-align: center;
 }
 
-/* `.loading-sun` sizes itself to 1em -- this is the ambient font-size that
-   makes LoadingSun's size={60} prop actually render at 60px here. */
 .canvas-well__engine-starting-sun {
   display: inline-flex;
-  font-size: 60px;
   line-height: 0;
 }
 

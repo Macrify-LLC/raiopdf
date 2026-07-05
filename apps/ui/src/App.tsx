@@ -314,6 +314,18 @@ type OcrType = "skip-text" | "force-ocr";
 
 type ForceOcrConfirmationReason = "garbled" | "manual";
 
+function delegatedOcrProcessingMessage(ocrType: OcrType): string {
+  return ocrType === "force-ocr"
+    ? "Rebuilding the searchable text layer — the local engine re-renders the file itself."
+    : "Making searchable — the local engine works on the file itself.";
+}
+
+function memoryOcrProcessingMessage(ocrType: OcrType): string {
+  return ocrType === "force-ocr"
+    ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
+    : "Making searchable — page-by-page work happens in the engine.";
+}
+
 /** What the password prompt unlocks: the still-encrypted source bytes
  * (small files, engine decrypt) or a shell grant (streamed large files,
  * path-based qpdf decrypt — bytes never enter the WebView). */
@@ -1813,9 +1825,10 @@ export function App() {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
+    const delegatedOcrGrant = streamedDocument ? pathOpsGrant : null;
 
-    if (streamedDocument) {
-      if (!pathOpsGrant) {
+    if (streamedDocument || delegatedOcrGrant) {
+      if (!delegatedOcrGrant) {
         // Browser streamed docs have no shell grant — the gate stays up.
         setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
         return;
@@ -1825,7 +1838,7 @@ export function App() {
       // in either mode (`--skip-text` keeps existing text layers;
       // `--force-ocr` re-renders every page and rebuilds the layer); the
       // output reopens as a new document (generation bump).
-      const grant = pathOpsGrant;
+      const grant = delegatedOcrGrant;
       const runId = ocrRunRef.current + 1;
       ocrRunRef.current = runId;
       ocrActiveRef.current = true;
@@ -1834,10 +1847,8 @@ export function App() {
       );
 
       setOcrState({
-        phase: "processing",
-        message: ocrType === "force-ocr"
-          ? "Rebuilding the searchable text layer — the local engine re-renders the file itself; nothing is loaded into memory."
-          : "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+        phase: "starting-engine",
+        message: "Starting the PDF engine...",
         progress: null,
       });
 
@@ -1851,8 +1862,12 @@ export function App() {
                 return;
               }
               setOcrState((current) => (
-                current.phase === "processing"
-                  ? { ...current, progress }
+                current.phase === "starting-engine" || current.phase === "processing"
+                  ? {
+                      phase: "processing",
+                      message: delegatedOcrProcessingMessage(ocrType),
+                      progress,
+                    }
                   : current
               ));
             });
@@ -1861,6 +1876,7 @@ export function App() {
             // fails in an unusual desktop/runtime state.
           }
 
+          await waitForUiPaint();
           const output = await pathOpOcr(grant, ocrType, jobToken);
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
@@ -1942,21 +1958,25 @@ export function App() {
       progress: null,
     });
 
-    void engineBridge
-      .runOcr(sourceBytes, {
-        ocrType,
-        pageCount: document.pageCount,
-        onEngineReady: () => {
-          if (isCurrentRun()) {
-            setOcrState({
-              phase: "processing",
-              message: ocrType === "force-ocr"
-                ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
-                : "Making searchable — page-by-page work happens in the engine.",
-              progress: null,
-            });
-          }
-        },
+    void waitForUiPaint()
+      .then(() => {
+        if (!isCurrentRun()) {
+          return Promise.reject(new Error("OCR run is stale."));
+        }
+
+        return engineBridge.runOcr(sourceBytes, {
+          ocrType,
+          pageCount: document.pageCount,
+          onEngineReady: () => {
+            if (isCurrentRun()) {
+              setOcrState({
+                phase: "processing",
+                message: memoryOcrProcessingMessage(ocrType),
+                progress: null,
+              });
+            }
+          },
+        });
       })
       .then(async (ocrResult) => {
         if (!isCurrentRun()) {
@@ -2835,6 +2855,10 @@ export function App() {
         }
         return written;
       } catch (error: unknown) {
+        void recordDiagnosticEvent("save.failed", errorMessage(error), [
+          `forceSaveAs=${forceSaveAs}`,
+          `source=${source.kind}`,
+        ]);
         setError(
           error instanceof Error && error.message.includes("changed on disk")
             ? "This file changed on disk — reopen it."
@@ -2894,7 +2918,11 @@ export function App() {
         });
       }
       return written;
-    } catch {
+    } catch (error: unknown) {
+      void recordDiagnosticEvent("save.failed", errorMessage(error), [
+        `forceSaveAs=${forceSaveAs}`,
+        `source=${document.source?.kind ?? "none"}`,
+      ]);
       setError("This PDF could not be saved. Try reopening the document and saving again.");
       return null;
     } finally {
@@ -6758,6 +6786,19 @@ function waitForTestDelay(delayMs: number): Promise<void> {
   });
 }
 
+function waitForUiPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window.requestAnimationFrame !== "function") {
+      window.setTimeout(resolve, 0);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0);
+    });
+  });
+}
+
 function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMessage: string): string[] {
   const absolutePaths: string[] = [];
 
@@ -6769,6 +6810,14 @@ function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMess
   }
 
   return absolutePaths;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function isTauriRuntime(): boolean {

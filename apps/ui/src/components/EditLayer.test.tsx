@@ -20,6 +20,8 @@ import { EditLayer, TextBoxDraftEditor } from "./EditLayer";
 type LocalEngine = ReturnType<typeof createLocalPdfEngine>;
 type ApplyEditsArgs = Parameters<LocalEngine["applyEdits"]>;
 
+let testTextContentItems: unknown[] = [];
+
 function applyBakedEdits(
   engine: LocalEngine,
   document: ApplyEditsArgs[0],
@@ -145,6 +147,7 @@ describe("EditLayer shape removal", () => {
   let originalSvgSetPointerCapture: typeof SVGElement.prototype.setPointerCapture | undefined;
 
   beforeEach(() => {
+    testTextContentItems = [];
     originalSetPointerCapture = HTMLElement.prototype.setPointerCapture;
     originalSvgSetPointerCapture = SVGElement.prototype.setPointerCapture;
     HTMLElement.prototype.setPointerCapture = () => undefined;
@@ -161,6 +164,7 @@ describe("EditLayer shape removal", () => {
     container?.remove();
     root = null;
     container = null;
+    vi.restoreAllMocks();
 
     if (originalSetPointerCapture) {
       HTMLElement.prototype.setPointerCapture = originalSetPointerCapture;
@@ -240,6 +244,65 @@ describe("EditLayer shape removal", () => {
     expect(rect?.getAttribute("y")).toBe("100");
     expect(rect?.getAttribute("width")).toBe("140");
     expect(rect?.getAttribute("height")).toBe("140");
+  });
+
+  it("limits text-markup drags to text boxes under the drag band", async () => {
+    const addEdit = vi.fn();
+    const removeAllRanges = vi.fn();
+    testTextContentItems = [
+      {
+        str: "first line",
+        transform: [1, 0, 0, 12, 10, 20],
+        width: 80,
+        height: 12,
+      },
+      {
+        str: "second line",
+        transform: [1, 0, 0, 12, 10, 90],
+        width: 210,
+        height: 12,
+      },
+    ];
+    await renderEditLayer([], "highlight", { addEdit });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: false,
+      getRangeAt: () => ({
+        getClientRects: () => [
+          {
+            left: 10,
+            top: 20,
+            right: 90,
+            bottom: 32,
+          },
+          {
+            left: 10,
+            top: 90,
+            right: 220,
+            bottom: 102,
+          },
+        ],
+      }),
+      removeAllRanges,
+    } as unknown as Selection);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 10, 17);
+      dispatchPointerEvent(layer!, "pointerup", 90, 36);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(addEdit).toHaveBeenCalledOnce();
+    expect(addEdit.mock.calls[0]?.[0]).toMatchObject({
+      kind: "highlight",
+      pageIndex: 0,
+      rects: [{ x: 10, y: 17, w: 80, h: 15 }],
+    });
+    expect(removeAllRanges).toHaveBeenCalled();
   });
 
   it("removes a pending callout as one box-and-leader unit", async () => {
@@ -517,7 +580,7 @@ function EditLayerHarness({
 }
 
 const testPage = {
-  getTextContent: async () => ({ items: [] }),
+  getTextContent: async () => ({ items: testTextContentItems }),
 } as unknown as PDFPageProxy;
 
 const testViewport = {

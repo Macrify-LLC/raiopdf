@@ -13,7 +13,6 @@ import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
   computeTextMarkupLineRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
-  mergeTextMarkupSelectionRects,
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
   COMMENT_ICON_SIZE_PT,
@@ -351,34 +350,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     [getClientLayerPoint],
   );
 
-  const selectedMarkupRects = useCallback((): PdfSpaceRect[] => {
-    const layer = layerRef.current;
-    const selection = window.getSelection();
-
-    if (!layer || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      return [];
-    }
-
-    const range = selection.getRangeAt(0);
-    const layerBounds = layer.getBoundingClientRect();
-    const pdfRects: PdfSpaceRect[] = [];
-
-    for (const clientRect of Array.from(range.getClientRects())) {
-      const left = clamp(clientRect.left - layerBounds.left, 0, layerBounds.width);
-      const top = clamp(clientRect.top - layerBounds.top, 0, layerBounds.height);
-      const right = clamp(clientRect.right - layerBounds.left, 0, layerBounds.width);
-      const bottom = clamp(clientRect.bottom - layerBounds.top, 0, layerBounds.height);
-      const width = right - left;
-      const height = bottom - top;
-
-      if (width > 0.5 && height > 0.5) {
-        pdfRects.push(viewportRectToPdfRect({ left, top, width, height }, viewport));
-      }
-    }
-
-    return mergeTextMarkupSelectionRects(pdfRects, sideways);
-  }, [sideways, viewport]);
-
   const addTextMarkup = useCallback(
     (textMarkupTool: TextMarkupToolId, rects: readonly PdfSpaceRect[]) => {
       editing.setMessage(null);
@@ -439,15 +410,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       setTextMarkupDraft(null);
 
       window.setTimeout(() => {
-        const selectionRects = selectedMarkupRects();
-
-        if (selectionRects.length > 0) {
-          addTextMarkup(textMarkupTool, selectionRects);
-          window.getSelection()?.removeAllRanges();
-          return;
-        }
-
         if (!end) {
+          window.getSelection()?.removeAllRanges();
           return;
         }
 
@@ -455,6 +419,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
         if (band.width < 3 && band.height < 3) {
           removeTextMarkupAtPoint(end, textMarkupTool);
+          window.getSelection()?.removeAllRanges();
           return;
         }
 
@@ -468,10 +433,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           editing.setMessage(
             `No text under that drag — ${textMarkupPlural(textMarkupTool)} attach to text lines.`,
           );
+          window.getSelection()?.removeAllRanges();
           return;
         }
 
         addTextMarkup(textMarkupTool, rects);
+        window.getSelection()?.removeAllRanges();
       }, 0);
     }
 
@@ -493,7 +460,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     addTextMarkup,
     editing,
     getClientLayerPoint,
-    selectedMarkupRects,
     sideways,
     textBoxes,
     tool,

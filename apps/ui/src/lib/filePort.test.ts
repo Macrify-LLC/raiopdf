@@ -160,6 +160,78 @@ describe("readPickedFileSource", () => {
 });
 
 describe("directory saves", () => {
+  it("Tauri filePort writes Save As bytes as the raw invoke body", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => {
+      if (command === "save_pdf_dialog") {
+        return { fileGrant: "saved-grant", name: "saved.pdf" };
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { filePort } = await import("./filePort");
+    const bytes = new Uint8Array([1, 2, 3]);
+    const saved = await filePort.saveFile(bytes, "saved.pdf", null);
+
+    expect(saved).toEqual({ name: "saved.pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      {
+        command: "save_pdf_dialog",
+        args: bytes,
+        options: {
+          headers: {
+            "x-raio-suggested-name": "saved.pdf",
+          },
+        },
+      },
+    ]);
+    expect(invokeState.calls[0]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[0]!.args)).toBe(false);
+  });
+
+  it("Tauri filePort writes in-place bytes as the raw invoke body", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => {
+      if (command === "save_pdf_to_path") {
+        return { fileGrant: "saved-grant", name: "case.pdf" };
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { filePort } = await import("./filePort");
+    const bytes = new Uint8Array([4, 5, 6]);
+    const saved = await filePort.saveFile(
+      bytes,
+      "case.pdf",
+      "open-grant" as FileGrant,
+    );
+
+    expect(saved).toEqual({ name: "case.pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      {
+        command: "save_pdf_to_path",
+        args: bytes,
+        options: {
+          headers: {
+            "x-raio-file-grant": "open-grant",
+          },
+        },
+      },
+    ]);
+    expect(invokeState.calls[0]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[0]!.args)).toBe(false);
+  });
+
   it("copies a streamed grant into a picked directory without opening another save dialog", async () => {
     invokeState.handler = () => ({ fileGrant: "saved-grant", name: "part (2).pdf" });
 
@@ -202,8 +274,9 @@ describe("directory saves", () => {
 
     const { filePort } = await import("./filePort");
     const directory = await filePort.pickDirectory();
+    const bytes = new Uint8Array([1, 2, 3]);
     const saved = await filePort.saveFileIntoDirectory(
-      new Uint8Array([1, 2, 3]),
+      bytes,
       "part.pdf",
       directory as PickedDirectory,
     );
@@ -214,7 +287,7 @@ describe("directory saves", () => {
       { command: "pick_output_directory", args: undefined },
       {
         command: "save_pdf_into_dir",
-        args: new Uint8Array([1, 2, 3]),
+        args: bytes,
         options: {
           headers: {
             "x-raio-directory-grant": "dir-grant",
@@ -223,5 +296,7 @@ describe("directory saves", () => {
         },
       },
     ]);
+    expect(invokeState.calls[1]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[1]!.args)).toBe(false);
   });
 });

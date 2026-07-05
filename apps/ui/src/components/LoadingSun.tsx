@@ -11,7 +11,12 @@ export function LoadingSun({
   label = "Working",
 }: LoadingSunProps) {
   return (
-    <span className="loading-sun" role="img" aria-label={label}>
+    <span
+      className="loading-sun"
+      role="img"
+      aria-label={label}
+      style={{ width: size, height: size }}
+    >
       <SunMarkIcon size={size} />
     </span>
   );

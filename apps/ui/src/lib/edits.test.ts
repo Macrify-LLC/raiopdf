@@ -5,7 +5,6 @@ import {
   computeHighlightLineRects,
   computeTextMarkupLineRects,
   excerpt,
-  mergeTextMarkupSelectionRects,
   normalizePdfRectFromPoints,
   pendingEditsFromRaioAnnotations,
   toPdfEdits,
@@ -616,6 +615,15 @@ describe("computeTextMarkupLineRects", () => {
     expect(rects[1]).toMatchObject({ x: 50, y: 680 });
   });
 
+  it("clips upright line rects to the drag band instead of the whole text run", () => {
+    const textBoxes = [line(700, 50, 500)];
+    const band = { x: 60, y: 695, w: 120, h: 20 };
+
+    const rects = computeTextMarkupLineRects(band, textBoxes);
+
+    expect(rects).toEqual([{ x: 60, y: 700, w: 120, h: 12 }]);
+  });
+
   it("clusters sideways (rotated page) lines by x instead of y", () => {
     const verticalLine = (x: number): PageTextBox => ({ x, y: 100, w: 12, h: 200 });
     const textBoxes = [verticalLine(300), verticalLine(340)];
@@ -626,25 +634,19 @@ describe("computeTextMarkupLineRects", () => {
     expect(rects).toHaveLength(2);
   });
 
+  it("clips sideways line rects along the rotated reading axis", () => {
+    const textBoxes: PageTextBox[] = [{ x: 300, y: 100, w: 12, h: 260 }];
+    const band = { x: 290, y: 150, w: 40, h: 80 };
+
+    const rects = computeTextMarkupLineRects(band, textBoxes, true);
+
+    expect(rects).toEqual([{ x: 300, y: 150, w: 12, h: 80 }]);
+  });
+
   it("returns nothing when the band misses all text", () => {
     expect(
       computeHighlightLineRects({ x: 0, y: 0, w: 10, h: 10 }, [line(700)]),
     ).toEqual([]);
-  });
-});
-
-describe("mergeTextMarkupSelectionRects", () => {
-  it("merges native selection rect fragments per line without expanding to full rows", () => {
-    const rects = mergeTextMarkupSelectionRects([
-      { x: 70, y: 700, w: 40, h: 12 },
-      { x: 112, y: 700.5, w: 38, h: 12 },
-      { x: 90, y: 680, w: 55, h: 12 },
-    ]);
-
-    expect(rects).toEqual([
-      { x: 70, y: 700, w: 80, h: 12.5 },
-      { x: 90, y: 680, w: 55, h: 12 },
-    ]);
   });
 });
 

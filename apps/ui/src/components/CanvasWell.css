@@ -30,12 +30,30 @@
   right: var(--space-4);
   z-index: 2;
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  gap: var(--space-2);
   pointer-events: none;
 }
 
 .canvas-well__mode-bar-slot > * {
   pointer-events: auto;
+}
+
+.canvas-well__annotation-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: min(100%, 520px);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
 }
 
 .canvas-well__signature-card-slot {

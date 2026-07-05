@@ -44,43 +44,44 @@ export type EditToolId =
 export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
 export type ShapeToolId = "shapeRect" | "shapeEllipse" | "shapeLine" | "shapeArrow";
 export type PendingShapeKind = PdfShapeKind;
+export type PendingEditStatus = "draft" | "applied";
 
-export interface PendingHighlight {
-  kind: "highlight";
+interface PendingEditBase {
   id: string;
   pageIndex: number;
+  status?: PendingEditStatus;
+}
+
+export interface PendingHighlight extends PendingEditBase {
+  kind: "highlight";
   rects: readonly PdfEditRect[];
   color?: PdfEditColor;
   opacity?: number;
 }
 
-export interface PendingTextMarkup {
+export interface PendingTextMarkup extends PendingEditBase {
   kind: "underline" | "strikethrough";
-  id: string;
-  pageIndex: number;
   rects: readonly PdfEditRect[];
   color?: PdfEditColor;
   thicknessPt?: number;
 }
 
-export interface PendingTextBox {
+export interface PendingTextBox extends PendingEditBase {
   kind: "textBox";
-  id: string;
-  pageIndex: number;
   rect: PdfEditRect;
   text: string;
   fontSizePt: number;
   color?: PdfEditColor;
+  backgroundColor?: PdfEditColor | null;
+  backgroundOpacity?: number;
   fontFamily?: PdfTextBoxFontFamily;
   bold?: boolean;
   italic?: boolean;
   align?: PdfTextBoxAlign;
 }
 
-export interface PendingCallout {
+export interface PendingCallout extends PendingEditBase {
   kind: "callout";
-  id: string;
-  pageIndex: number;
   rect: PdfEditRect;
   tip: PdfEditPoint;
   text: string;
@@ -97,10 +98,8 @@ export interface PendingCallout {
   boxFill?: PdfEditColor | null;
 }
 
-export interface PendingStamp {
+export interface PendingStamp extends PendingEditBase {
   kind: "image" | "signature";
-  id: string;
-  pageIndex: number;
   rect: PdfEditRect;
   bytes: Uint8Array;
   format: PdfEditImageFormat;
@@ -110,44 +109,36 @@ export interface PendingStamp {
   aspectRatio: number;
 }
 
-export interface PendingComment {
+export interface PendingComment extends PendingEditBase {
   kind: "comment";
-  id: string;
-  pageIndex: number;
   at: PdfEditPoint;
   text: string;
 }
 
-export interface PendingInk {
+export interface PendingInk extends PendingEditBase {
   kind: "ink";
-  id: string;
-  pageIndex: number;
   strokes: ReadonlyArray<readonly PdfEditPoint[]>;
   strokeWidthPt?: number;
   color?: PdfEditColor;
 }
 
 export type PendingShape =
-  | {
+  | (PendingEditBase & {
       kind: "shape";
-      id: string;
-      pageIndex: number;
       shape: "rect" | "ellipse";
       rect: PdfEditRect;
       strokeWidthPt?: number;
       strokeColor?: PdfEditColor;
       fillColor?: PdfEditColor | null;
-    }
-  | {
+    })
+  | (PendingEditBase & {
       kind: "shape";
-      id: string;
-      pageIndex: number;
       shape: "line" | "arrow";
       from: PdfEditPoint;
       to: PdfEditPoint;
       strokeWidthPt?: number;
       strokeColor?: PdfEditColor;
-    };
+    });
 
 export type PendingEdit =
   | PendingHighlight
@@ -203,6 +194,10 @@ export function toPdfEdits(
           text: edit.text,
           fontSizePt: edit.fontSizePt,
           ...(edit.color ? { color: edit.color } : {}),
+          ...(edit.backgroundColor ? { backgroundColor: edit.backgroundColor } : {}),
+          ...(edit.backgroundOpacity !== undefined
+            ? { backgroundOpacity: edit.backgroundOpacity }
+            : {}),
           ...(edit.fontFamily && edit.fontFamily !== "helvetica"
             ? { fontFamily: edit.fontFamily }
             : {}),
@@ -443,6 +438,40 @@ export function computeTextMarkupLineRects(
 }
 
 export const computeHighlightLineRects = computeTextMarkupLineRects;
+
+export function mergeTextMarkupSelectionRects(
+  rects: readonly PdfEditRect[],
+  sideways = false,
+): PdfEditRect[] {
+  const usable = rects.filter((rect) => rect.w > 0.5 && rect.h > 0.5);
+
+  if (usable.length === 0) {
+    return [];
+  }
+
+  const lineKey = (rect: PdfEditRect) => (sideways ? rect.x + rect.w / 2 : rect.y + rect.h / 2);
+  const lineThickness = (rect: PdfEditRect) => (sideways ? rect.w : rect.h);
+  const sorted = [...usable].sort((left, right) => lineKey(left) - lineKey(right));
+  const clusters: PdfEditRect[][] = [];
+
+  for (const rect of sorted) {
+    const lastCluster = clusters.at(-1);
+    const lastRect = lastCluster?.at(-1);
+    const tolerance = lastRect
+      ? Math.max(lineThickness(rect), lineThickness(lastRect), 4) * 0.6
+      : 0;
+
+    if (lastCluster && lastRect && Math.abs(lineKey(rect) - lineKey(lastRect)) <= tolerance) {
+      lastCluster.push(rect);
+    } else {
+      clusters.push([rect]);
+    }
+  }
+
+  return clusters
+    .map((cluster) => unionBoxes(cluster))
+    .sort((left, right) => right.y + right.h - (left.y + left.h));
+}
 
 function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {
   return left.r === right.r && left.g === right.g && left.b === right.b;

@@ -22,6 +22,8 @@ export interface TextMarkupEditStyle {
 
 export interface TextBoxEditStyle {
   color?: PdfEditColor;
+  backgroundColor?: PdfEditColor | null;
+  backgroundOpacity?: number;
   fontFamily?: PdfTextBoxFontFamily;
   bold?: boolean;
   italic?: boolean;
@@ -51,6 +53,7 @@ export const DEFAULT_TEXT_MARKUP_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_TEXT_MARKUP_THICKNESS_PT = 1;
 export const DEFAULT_TEXT_FONT_FAMILY: PdfTextBoxFontFamily = "helvetica";
 export const DEFAULT_TEXT_ALIGN: PdfTextBoxAlign = "left";
+export const DEFAULT_TEXT_BOX_BACKGROUND_OPACITY = 0.35;
 export const DEFAULT_INK_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;
 export const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 export const DEFAULT_SHAPE_STROKE_COLOR: PdfEditColor = DEFAULT_TEXT_COLOR;

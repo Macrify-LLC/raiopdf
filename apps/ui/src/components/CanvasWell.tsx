@@ -16,6 +16,7 @@ export type { PendingRedactionOverlay } from "./PageView";
 
 /** Height reserved for the floating mode bar above the first page. */
 const MODE_BAR_INSET = 44;
+const STACKED_MODE_BAR_INSET = 88;
 
 export interface CanvasWellProps {
   onOpenRequested?: (() => void) | undefined;
@@ -37,6 +38,7 @@ export interface CanvasWellProps {
   overlay?: ReactNode;
   redactionMode?: boolean;
   modeBar?: ReactNode;
+  onFlattenMarkupAnnotations?: (() => void) | undefined;
   pendingRedactions?: readonly PendingRedactionOverlay[];
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
@@ -77,6 +79,7 @@ export function CanvasWell({
   overlay = null,
   redactionMode = false,
   modeBar = null,
+  onFlattenMarkupAnnotations,
   pendingRedactions = [],
   onRedactionAreaCreated,
   onRedactionAreaRemoved,
@@ -89,6 +92,8 @@ export function CanvasWell({
   const hasDocument = Boolean(pdfDocument);
   const viewerActive = hasDocument && !workspace;
   const showModeBar = Boolean(viewerActive && modeBar);
+  const showAnnotationActions = Boolean(viewerActive && editing && editing.pendingEdits.length > 0);
+  const showFloatingControls = showModeBar || showAnnotationActions;
 
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
@@ -110,14 +115,22 @@ export function CanvasWell({
   return (
     <section
       className="canvas-well"
-      data-mode-bar={showModeBar ? "true" : undefined}
+      data-mode-bar={showFloatingControls ? "true" : undefined}
       data-viewer={viewerActive ? "true" : undefined}
       aria-label="Document canvas"
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
-      {showModeBar ? (
-        <div className="canvas-well__mode-bar-slot">{modeBar}</div>
+      {showFloatingControls ? (
+        <div className="canvas-well__mode-bar-slot">
+          {modeBar}
+          {showAnnotationActions && editing ? (
+            <AnnotationActionBar
+              editing={editing}
+              onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
+            />
+          ) : null}
+        </div>
       ) : null}
       {viewerActive && engineStarting ? (
         <div className="canvas-well__engine-starting" role="status" aria-live="polite">
@@ -162,7 +175,13 @@ export function CanvasWell({
             zoom={zoom}
             fitWidth={fitWidth}
             scrollIntent={scrollIntent}
-            topInset={showModeBar ? MODE_BAR_INSET : 0}
+            topInset={
+              showModeBar && showAnnotationActions
+                ? STACKED_MODE_BAR_INSET
+                : showFloatingControls
+                  ? MODE_BAR_INSET
+                  : 0
+            }
             onVisiblePageChange={onVisiblePageChange}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}
@@ -217,5 +236,46 @@ export function CanvasWell({
       )}
       {overlay}
     </section>
+  );
+}
+
+function AnnotationActionBar({
+  editing,
+  onFlattenMarkupAnnotations,
+}: {
+  editing: EditingState;
+  onFlattenMarkupAnnotations?: (() => void) | undefined;
+}) {
+  const draftCount = editing.draftEditCount;
+  const appliedCount = editing.appliedEditCount;
+
+  return (
+    <div className="canvas-well__annotation-actions" role="toolbar" aria-label="Annotation actions">
+      {draftCount > 0 ? (
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          onClick={editing.applyPending}
+        >
+          Pin all ({draftCount})
+        </button>
+      ) : null}
+      {appliedCount > 0 ? (
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          onClick={editing.unapplyPending}
+        >
+          Unpin all
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="legal-mode-bar__button"
+        onClick={onFlattenMarkupAnnotations}
+      >
+        Flatten
+      </button>
+    </div>
   );
 }

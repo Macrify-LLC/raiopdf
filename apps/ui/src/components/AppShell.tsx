@@ -289,6 +289,7 @@ export function AppShell({
           onRenderError={onRenderError}
           redactionMode={activeLegalTool === "redact"}
           modeBar={modeBar}
+          onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
           editing={editing}
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}

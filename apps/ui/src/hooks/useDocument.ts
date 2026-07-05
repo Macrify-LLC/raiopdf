@@ -1762,6 +1762,14 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }));
   }, []);
 
+  const markDirty = useCallback(() => {
+    setDocument((current) => (current.dirty ? current : { ...current, dirty: true }));
+  }, []);
+
+  const markClean = useCallback(() => {
+    setDocument((current) => (current.dirty ? { ...current, dirty: false } : current));
+  }, []);
+
   const switchTab = useCallback((tabId: string) => {
     if (tabId === activeTabIdRef.current) {
       return true;
@@ -1880,6 +1888,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
     replaceOutline,
     save,
     markSaved,
+    markDirty,
+    markClean,
   };
 
   async function closeHandles(handles: readonly PdfDocumentHandle[]) {

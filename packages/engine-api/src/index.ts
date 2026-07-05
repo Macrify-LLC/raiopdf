@@ -469,6 +469,10 @@ export type PdfTextBoxEdit = {
   fontSizePt?: number;
   /** Ink color. Defaults to near-black (#111111). */
   color?: PdfEditColor;
+  /** Optional background fill color behind the text. Omitted/null means transparent. */
+  backgroundColor?: PdfEditColor | null;
+  /** Background fill opacity in the 0-1 range. Defaults to 1 when a fill is set. */
+  backgroundOpacity?: number;
   /** Standard PDF font family. Defaults to Helvetica. */
   fontFamily?: PdfTextBoxFontFamily;
   /** Use the bold face of the selected standard font family. Defaults to false. */

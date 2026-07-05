@@ -9,6 +9,7 @@ import {
   DEFAULT_CALLOUT_STROKE_COLOR,
   DEFAULT_SHAPE_STROKE_COLOR,
   DEFAULT_TEXT_MARKUP_COLOR,
+  DEFAULT_TEXT_BOX_BACKGROUND_OPACITY,
   DEFAULT_TEXT_ALIGN,
   DEFAULT_TEXT_COLOR,
   DEFAULT_TEXT_FONT_FAMILY,
@@ -67,8 +68,7 @@ export function EditModeBar({ editing }: EditModeBarProps) {
     return null;
   }
 
-  const pendingCount = editing.pendingEdits.length;
-
+  const pendingCount = editing.draftEditCount;
   return (
     <div className="legal-mode-bar" role="toolbar" aria-label={TOOL_LABELS[tool]}>
       <span className="legal-mode-bar__status">
@@ -174,6 +174,11 @@ function ToolOptions({ editing }: { editing: EditingState }) {
   }
 
   if (editing.tool === "textBox") {
+    const selectedFillColor = editing.textBoxStyle.backgroundColor ?? null;
+    const fallbackFillColor = SHAPE_FILL_COLOR_OPTIONS[0]!.color;
+    const fillOpacity =
+      editing.textBoxStyle.backgroundOpacity ?? DEFAULT_TEXT_BOX_BACKGROUND_OPACITY;
+
     return (
       <span className="legal-mode-bar__tool-options" aria-label="Text box options">
         <ColorSwatches
@@ -182,6 +187,39 @@ function ToolOptions({ editing }: { editing: EditingState }) {
           selectedColor={editing.textBoxStyle.color ?? DEFAULT_TEXT_COLOR}
           onSelect={(color) => editing.updateTextBoxStyle({ color })}
         />
+        <button
+          type="button"
+          className="legal-mode-bar__width-button"
+          aria-label="Set text box fill to none"
+          aria-pressed={selectedFillColor === null}
+          onClick={() => editing.updateTextBoxStyle({ backgroundColor: null })}
+        >
+          None
+        </button>
+        <ColorSwatches
+          labelPrefix="Text box fill color"
+          options={SHAPE_FILL_COLOR_OPTIONS}
+          selectedColor={selectedFillColor ?? fallbackFillColor}
+          onSelect={(backgroundColor) => editing.updateTextBoxStyle({ backgroundColor })}
+        />
+        <label className="legal-mode-bar__range">
+          <span className="legal-mode-bar__range-label">Fill</span>
+          <input
+            type="range"
+            min="0.1"
+            max="1"
+            step="0.05"
+            aria-label="Text box fill opacity"
+            disabled={!selectedFillColor}
+            value={fillOpacity}
+            onChange={(event) =>
+              editing.updateTextBoxStyle({
+                backgroundOpacity: Number(event.currentTarget.value),
+              })
+            }
+          />
+          <span className="legal-mode-bar__range-value">{Math.round(fillOpacity * 100)}%</span>
+        </label>
         <select
           className="legal-mode-bar__select"
           aria-label="Text font family"

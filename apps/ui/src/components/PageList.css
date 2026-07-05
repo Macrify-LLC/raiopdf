@@ -10,6 +10,7 @@
   flex: 1;
   min-width: 0;
   position: relative;
+  isolation: isolate;
   overflow: auto;
   background: var(--well);
 }
@@ -163,11 +164,33 @@
   z-index: 4;
 }
 
-/* Select tool: text selection wins over the edit layer and its items.
-   Form inputs deliberately stay live — they are small rects and filling
-   fields is the default-tool workflow. */
-.page-view[data-text-select="true"] .edit-layer,
-.page-view[data-text-select="true"] .edit-layer * {
+/* Select tool: empty edit-layer areas pass through to text selection, while
+   placed edits stay interactive for drag/resize/pin/context-menu workflows.
+   Markup tools keep full passthrough so text selection can create markup. */
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer {
+  pointer-events: none;
+}
+
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item-chrome,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item-chrome *,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__resize-handle,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-item,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-hit,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-hit-line,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__callout-hit-line,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-pin,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-popover,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-popover * {
+  pointer-events: auto;
+}
+
+.page-view[data-text-select="true"][data-edit-tool="highlight"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="highlight"] .edit-layer *,
+.page-view[data-text-select="true"][data-edit-tool="underline"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="underline"] .edit-layer *,
+.page-view[data-text-select="true"][data-edit-tool="strikethrough"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="strikethrough"] .edit-layer * {
   pointer-events: none;
 }
 

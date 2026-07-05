@@ -121,7 +121,14 @@ export function PageList({
   // While a text-selection drag is live, mounted pages are frozen (only
   // ever extended) so the selection anchor's DOM never unmounts mid-drag.
   const [selectionDragActive, setSelectionDragActive] = useState(false);
-  const textSelectable = Boolean(editing && editing.tool === "select" && !redactionMode);
+  const textSelectable = Boolean(
+    editing &&
+      !redactionMode &&
+      (editing.tool === "select" ||
+        editing.tool === "highlight" ||
+        editing.tool === "underline" ||
+        editing.tool === "strikethrough"),
+  );
 
   const sizes = pageSizes?.doc === pdfDocument ? pageSizes : null;
 

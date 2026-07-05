@@ -3,6 +3,7 @@ import {
   computeHighlightLineRects,
   computeTextMarkupLineRects,
   excerpt,
+  mergeTextMarkupSelectionRects,
   normalizePdfRectFromPoints,
   toPdfEdits,
   type PageTextBox,
@@ -38,6 +39,8 @@ describe("toPdfEdits", () => {
         rect: { x: 5, y: 6, w: 80, h: 20 },
         text: "Hello",
         fontSizePt: 11,
+        backgroundColor: { r: 1, g: 0.9, b: 0.3 },
+        backgroundOpacity: 0.45,
       },
       {
         kind: "callout",
@@ -112,7 +115,13 @@ describe("toPdfEdits", () => {
       "shape",
       "shape",
     ]);
-    expect(edits[3]).toMatchObject({ text: "Hello", fontSizePt: 11, pageIndex: 1 });
+    expect(edits[3]).toMatchObject({
+      text: "Hello",
+      fontSizePt: 11,
+      pageIndex: 1,
+      backgroundColor: { r: 1, g: 0.9, b: 0.3 },
+      backgroundOpacity: 0.45,
+    });
     expect(edits[4]).toMatchObject({
       type: "callout",
       rect: { x: 15, y: 16, w: 90, h: 32 },
@@ -186,6 +195,8 @@ describe("toPdfEdits", () => {
     expect(edits[0]).not.toHaveProperty("color");
     expect(edits[0]).not.toHaveProperty("opacity");
     expect(edits[1]).not.toHaveProperty("color");
+    expect(edits[1]).not.toHaveProperty("backgroundColor");
+    expect(edits[1]).not.toHaveProperty("backgroundOpacity");
     expect(edits[2]).not.toHaveProperty("color");
     expect(edits[2]).toMatchObject({ strokeWidthPt: 1.5 });
     expect(edits[3]).not.toHaveProperty("color");
@@ -457,6 +468,21 @@ describe("computeTextMarkupLineRects", () => {
     expect(
       computeHighlightLineRects({ x: 0, y: 0, w: 10, h: 10 }, [line(700)]),
     ).toEqual([]);
+  });
+});
+
+describe("mergeTextMarkupSelectionRects", () => {
+  it("merges native selection rect fragments per line without expanding to full rows", () => {
+    const rects = mergeTextMarkupSelectionRects([
+      { x: 70, y: 700, w: 40, h: 12 },
+      { x: 112, y: 700.5, w: 38, h: 12 },
+      { x: 90, y: 680, w: 55, h: 12 },
+    ]);
+
+    expect(rects).toEqual([
+      { x: 70, y: 700, w: 80, h: 12.5 },
+      { x: 90, y: 680, w: 55, h: 12 },
+    ]);
   });
 });
 

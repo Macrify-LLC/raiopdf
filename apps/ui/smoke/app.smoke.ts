@@ -726,7 +726,7 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   // Retries in case the drag lands before the page's text layer resolves —
   // a miss adds nothing, so retrying cannot double-place.
   await commandBar.getByRole("button", { name: "Highlight", exact: true }).click();
-  await waitForCanvasPointToHitEditLayer(page, canvas, 0.08, 0.06);
+  await waitForCanvasPointToHitTextLayer(page, canvas, 0.08, 0.06);
   await expect(async () => {
     if ((await page.locator(".edit-layer__highlight").count()) === 0) {
       await dragOnCanvas(page, canvas, 0.08, 0.06, 0.92, 0.13);
@@ -786,6 +786,29 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   });
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(0);
   await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(0);
+});
+
+test("flattens pending markup into page content on an annotation-free PDF", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "flatten-pending-markup.pdf", await createPdf([300]));
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = mainCanvas(page);
+  await commandBar.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await dragOnCanvas(page, canvas, 0.2, 0.25, 0.55, 0.45);
+  await expect(page.locator("svg.edit-layer__shapes rect.edit-layer__shape-item")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Flatten RaioPDF markup annotations" }).click();
+  await expect(
+    toolPanel.getByText("Flattened 1 annotation into permanent page content."),
+  ).toBeVisible();
+
+  const saved = await savePdf(page);
+
+  expect(await countPdfAnnotations(saved, 0, "Square")).toBe(0);
+  expect(await readDecodedPageContent(saved, 0)).toContain("/RaioPDFAnnot");
 });
 
 test("places a text box rotation-correctly on a rotated page", async ({ page }) => {
@@ -1393,7 +1416,7 @@ async function dragOnCanvas(
   await page.mouse.up();
 }
 
-async function waitForCanvasPointToHitEditLayer(
+async function waitForCanvasPointToHitTextLayer(
   page: Page,
   canvas: ReturnType<Page["locator"]>,
   xFraction: number,
@@ -1407,7 +1430,8 @@ async function waitForCanvasPointToHitEditLayer(
     }
 
     return page.evaluate(
-      ([x, y]) => document.elementFromPoint(x, y)?.classList.contains("edit-layer") ?? false,
+      ([x, y]) =>
+        Boolean(document.elementFromPoint(x, y)?.closest(".page-view__text-layer")),
       [box.x + box.width * xFraction, box.y + box.height * yFraction],
     );
   }).toBe(true);

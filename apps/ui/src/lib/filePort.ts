@@ -34,6 +34,11 @@ export interface SavedFile {
   path: string | null;
 }
 
+export interface PickedDirectory {
+  grant: FileGrant;
+  path: string | null;
+}
+
 /** Descriptor from the multi-select add picker — no bytes were read. */
 export interface PickedPdfForAdd {
   grant: FileGrant;
@@ -48,15 +53,23 @@ export interface PickedPdfsForAdd {
 
 export interface FilePort {
   openFile: () => Promise<OpenedFileSource | null>;
+  pickDirectory: () => Promise<PickedDirectory | null>;
   saveFile: (
     bytes: Uint8Array,
     suggestedName: string,
     currentPath: string | null,
   ) => Promise<SavedFile | null>;
+  saveFileIntoDirectory: (
+    bytes: Uint8Array,
+    suggestedName: string,
+    directory: PickedDirectory,
+  ) => Promise<SavedFile>;
 }
 
 const HEADER_FILE_GRANT = "x-raio-file-grant";
+const HEADER_DIRECTORY_GRANT = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME = "x-raio-suggested-name";
+const HEADER_FILE_NAME = "x-raio-file-name";
 
 /**
  * The UI-side threshold lives in `largeDocThreshold.ts` (single source of
@@ -236,6 +249,32 @@ export async function saveStreamedCopy(
   return { name: suggestedName, path: null };
 }
 
+export async function saveStreamedCopyIntoDirectory(
+  source:
+    | { kind: "rangeGrant"; grant: FileGrant }
+    | { kind: "rangeFile"; file: File },
+  suggestedName: string,
+  directory: PickedDirectory,
+): Promise<SavedFile> {
+  if (source.kind === "rangeGrant") {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const saved = await invoke<TauriSavedPdf>("save_pdf_copy_into_dir", {
+      sourceGrant: source.grant,
+      directoryGrant: directory.grant,
+      fileName: suggestedName,
+    });
+    return savedFromTauri(saved);
+  }
+
+  const url = URL.createObjectURL(source.file);
+  const anchor = window.document.createElement("a");
+  anchor.href = url;
+  anchor.download = suggestedName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  return { name: suggestedName, path: null };
+}
+
 function createBrowserFilePort(): FilePort {
   return {
     async openFile() {
@@ -247,7 +286,17 @@ function createBrowserFilePort(): FilePort {
 
       return readBrowserFileSource(file);
     },
+    async pickDirectory() {
+      return null;
+    },
     async saveFile(bytes, suggestedName) {
+      downloadBytes(bytes, suggestedName);
+      return {
+        name: suggestedName,
+        path: null,
+      };
+    },
+    async saveFileIntoDirectory(bytes, suggestedName) {
       downloadBytes(bytes, suggestedName);
       return {
         name: suggestedName,
@@ -296,6 +345,17 @@ function createTauriFilePort(): FilePort {
         path: selected.fileGrant,
       };
     },
+    async pickDirectory() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const selected = await invoke<TauriPickedDirectory | null>("pick_output_directory");
+
+      return selected
+        ? {
+          grant: selected.grant as FileGrant,
+          path: selected.path,
+        }
+        : null;
+    },
     async saveFile(bytes, suggestedName, currentPath) {
       const { invoke } = await import("@tauri-apps/api/core");
 
@@ -315,7 +375,22 @@ function createTauriFilePort(): FilePort {
       });
       return saved ? savedFromTauri(saved) : null;
     },
+    async saveFileIntoDirectory(bytes, suggestedName, directory) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const saved = await invoke<TauriSavedPdf>("save_pdf_into_dir", bytes, {
+        headers: {
+          [HEADER_DIRECTORY_GRANT]: encodeURIComponent(directory.grant),
+          [HEADER_FILE_NAME]: encodeURIComponent(suggestedName),
+        },
+      });
+      return savedFromTauri(saved);
+    },
   };
+}
+
+interface TauriPickedDirectory {
+  grant: string;
+  path: string;
 }
 
 interface TauriOpenedPdf {

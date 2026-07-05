@@ -31,7 +31,9 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
+const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
+const HEADER_FILE_NAME: &str = "x-raio-file-name";
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
 
@@ -55,6 +57,11 @@ struct FileGrants {
     paths: Mutex<HashMap<String, FileGrantEntry>>,
 }
 
+#[derive(Default)]
+struct DirectoryGrants {
+    paths: Mutex<HashMap<String, PathBuf>>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenedPdf {
@@ -73,6 +80,13 @@ struct OpenedPdf {
 struct SavedPdf {
     name: String,
     file_grant: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedDirectory {
+    grant: String,
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -136,6 +150,29 @@ impl FileGrants {
         if let Ok(mut paths) = self.paths.lock() {
             paths.remove(grant);
         }
+    }
+}
+
+impl DirectoryGrants {
+    fn grant(&self, path: PathBuf) -> Result<String, String> {
+        let grant = Uuid::new_v4().to_string();
+        let mut paths = self
+            .paths
+            .lock()
+            .map_err(|_| "Directory grant lock poisoned")?;
+        paths.insert(grant.clone(), path);
+        Ok(grant)
+    }
+
+    fn resolve(&self, grant: &str) -> Result<PathBuf, String> {
+        let paths = self
+            .paths
+            .lock()
+            .map_err(|_| "Directory grant lock poisoned")?;
+        paths
+            .get(grant)
+            .cloned()
+            .ok_or_else(|| "Directory grant not found".to_string())
     }
 }
 
@@ -302,6 +339,59 @@ fn save_pdf_copy_dialog(
     Ok(Some(saved_pdf(&destination, file_grants.inner())?))
 }
 
+#[tauri::command]
+fn pick_output_directory(
+    app: tauri::AppHandle,
+    directory_grants: tauri::State<'_, DirectoryGrants>,
+) -> Result<Option<PickedDirectory>, String> {
+    let Some(path) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let path = validate_output_directory(&path)?;
+    let display_path = path
+        .clone()
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "Selected folder path is not valid UTF-8".to_string())?;
+    let grant = directory_grants.grant(path)?;
+
+    Ok(Some(PickedDirectory {
+        grant,
+        path: display_path,
+    }))
+}
+
+#[tauri::command]
+fn save_pdf_into_dir(
+    request: tauri::ipc::Request<'_>,
+    directory_grants: tauri::State<'_, DirectoryGrants>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<SavedPdf, String> {
+    let directory_grant = required_header(&request, HEADER_DIRECTORY_GRANT)?;
+    let file_name = required_header(&request, HEADER_FILE_NAME)?;
+    let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
+    let path = write_pdf_bytes_into_directory(&directory, &file_name, request.body())?;
+
+    saved_pdf(&path, file_grants.inner())
+}
+
+#[tauri::command]
+fn save_pdf_copy_into_dir(
+    source_grant: String,
+    directory_grant: String,
+    file_name: String,
+    directory_grants: tauri::State<'_, DirectoryGrants>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<SavedPdf, String> {
+    let entry = file_grants.resolve_entry(&source_grant)?;
+    let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
+    let path = copy_pdf_grant_into_directory(&entry, &directory, &file_name)?;
+
+    saved_pdf(&path, file_grants.inner())
+}
+
 /// True when both paths refer to the same on-disk file. Canonicalization
 /// resolves case/short-name/symlink differences; when the destination does
 /// not exist yet (the common Save As case) the paths cannot be the same file.
@@ -404,6 +494,39 @@ fn write_pdf_bytes_atomic(path: &Path, body: &tauri::ipc::InvokeBody) -> Result<
         .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
 }
 
+fn write_pdf_bytes_into_directory(
+    directory: &Path,
+    file_name: &str,
+    body: &tauri::ipc::InvokeBody,
+) -> Result<PathBuf, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = body else {
+        return Err("Expected raw PDF bytes".to_string());
+    };
+
+    write_pdf_bytes_into_directory_path(directory, file_name, bytes)
+}
+
+fn write_pdf_bytes_into_directory_path(
+    directory: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let path = collision_free_output_pdf_path(directory, file_name)?;
+    atomic_write_new_file(&path, bytes)
+        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    Ok(path)
+}
+
+fn copy_pdf_grant_into_directory(
+    entry: &FileGrantEntry,
+    directory: &Path,
+    file_name: &str,
+) -> Result<PathBuf, String> {
+    let path = collision_free_output_pdf_path(directory, file_name)?;
+    atomic_copy_grant_if_unchanged_new(entry, &path)?;
+    Ok(path)
+}
+
 fn write_pdf_bytes_atomic_if_unchanged(
     entry: &FileGrantEntry,
     body: &tauri::ipc::InvokeBody,
@@ -438,6 +561,17 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     temp.flush()?;
     temp.as_file().sync_all()?;
     persist_atomic_file(temp, path)?;
+
+    sync_parent_dir(parent)
+}
+
+fn atomic_write_new_file(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = replacement_temp_file(parent, None)?;
+    temp.write_all(bytes)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    persist_atomic_file_noclobber(temp, path)?;
 
     sync_parent_dir(parent)
 }
@@ -575,6 +709,65 @@ fn atomic_copy_grant_if_unchanged(
         })
 }
 
+fn atomic_copy_grant_if_unchanged_new(
+    entry: &FileGrantEntry,
+    destination: &Path,
+) -> Result<(), String> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let mut input = fs::File::open(&entry.path).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    apply_replacement_permissions(&temp, permissions).map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.flush().map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.as_file().sync_all().map_err(|error| {
+        format!(
+            "Failed to save PDF copy at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+
+    ensure_grant_file_unchanged(entry)?;
+    persist_atomic_file_noclobber(temp, destination)
+        .and_then(|_| sync_parent_dir(parent))
+        .map_err(|error| {
+            format!(
+                "Failed to save PDF copy at {}: {error}",
+                destination.to_string_lossy()
+            )
+        })
+}
+
 fn persist_atomic_file(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), std::io::Error> {
     temp.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -683,6 +876,73 @@ fn saved_pdf(path: &Path, file_grants: &FileGrants) -> Result<SavedPdf, String> 
     })
 }
 
+fn validate_output_directory(path: &Path) -> Result<PathBuf, String> {
+    let path = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to resolve output folder at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+    let metadata = fs::metadata(&path).map_err(|error| {
+        format!(
+            "Failed to read output folder at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+
+    if !metadata.is_dir() {
+        return Err("Selected output location is not a folder".to_string());
+    }
+
+    Ok(path)
+}
+
+fn collision_free_output_pdf_path(directory: &Path, file_name: &str) -> Result<PathBuf, String> {
+    let file_name = sanitize_pdf_file_name(file_name);
+    let path = directory.join(&file_name);
+
+    if !path.exists() {
+        return Ok(path);
+    }
+
+    let stem = Path::new(&file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Untitled");
+
+    for suffix in 2..10_000 {
+        let candidate = directory.join(format!("{stem} ({suffix}).pdf"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!(
+        "Could not choose an available filename for {}",
+        file_name
+    ))
+}
+
+fn sanitize_pdf_file_name(file_name: &str) -> String {
+    let mut sanitized = file_name
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+
+    sanitized = sanitized.trim_matches([' ', '.']).to_string();
+
+    if sanitized.is_empty() {
+        sanitized = "Untitled".to_string();
+    }
+
+    ensure_pdf_extension(&sanitized)
+}
+
 fn require_pdf_extension(path: &Path) -> Result<(), String> {
     if path
         .extension()
@@ -779,6 +1039,7 @@ pub fn run() {
             app.manage(diagnostics);
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
+            app.manage(DirectoryGrants::default());
             app.manage(print::PrintJobs::default());
             // Grants are in-memory, so every path-op temp dir left behind by a
             // previous run is dead on a fresh start — sweep them all, off the
@@ -810,6 +1071,9 @@ pub fn run() {
             save_pdf_dialog,
             save_pdf_to_path,
             save_pdf_copy_dialog,
+            pick_output_directory,
+            save_pdf_into_dir,
+            save_pdf_copy_into_dir,
             sidecar::engine_start,
             sidecar::engine_status,
             sidecar::engine_stop,
@@ -958,6 +1222,53 @@ mod tests {
         // baseline, so ranged reads must be refused upstream.
         let entry = grants.resolve_entry(&grant).expect("entry");
         assert!(entry.snapshot.is_none());
+    }
+
+    #[test]
+    fn output_file_name_sanitization_blocks_path_traversal() {
+        assert_eq!(
+            sanitize_pdf_file_name("../nested\\case:part"),
+            "_nested_case_part.pdf"
+        );
+        assert_eq!(sanitize_pdf_file_name(""), "Untitled.pdf");
+        assert_eq!(sanitize_pdf_file_name("already.pdf"), "already.pdf");
+    }
+
+    #[test]
+    fn directory_saves_suffix_collisions_without_overwriting() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let existing = dir.path().join("case.pdf");
+        fs::write(&existing, b"existing").expect("write existing");
+
+        let path = write_pdf_bytes_into_directory_path(dir.path(), "case.pdf", b"new")
+            .expect("write suffixed");
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("case (2).pdf")
+        );
+        assert_eq!(fs::read(existing).expect("read existing"), b"existing");
+        assert_eq!(fs::read(path).expect("read suffixed"), b"new");
+    }
+
+    #[test]
+    fn directory_copy_uses_sanitized_name_and_preserves_source() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.pdf");
+        fs::write(&source, b"source bytes").expect("write source");
+        let grants = FileGrants::default();
+        let grant = grants.grant(source.clone()).expect("grant");
+        let entry = grants.resolve_entry(&grant).expect("entry");
+
+        let path =
+            copy_pdf_grant_into_directory(&entry, dir.path(), "../copy").expect("copy into dir");
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("_copy.pdf")
+        );
+        assert_eq!(fs::read(source).expect("read source"), b"source bytes");
+        assert_eq!(fs::read(path).expect("read copied"), b"source bytes");
     }
 
     #[test]

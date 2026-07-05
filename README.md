@@ -71,6 +71,7 @@ Four ways it fits into an actual day at the firm:
 | Organize pages | Merge, split, reorder, extract, insert, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
+| **Edit document text** | Find and replace the real text in a typed PDF — page-scoped, case-sensitive, optional whole-word. Born-digital documents only (not scans); the text doesn't reflow, and the whole document is rewritten on save |
 | Annotate | Highlight, underline, strikethrough, freehand draw, shapes and arrows, callouts, text boxes, comments, images — with color, opacity, and stroke-width controls |
 | Fill & sign | Fill forms, add text and images, signature stamp + flatten |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |

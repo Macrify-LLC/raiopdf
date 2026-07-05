@@ -196,3 +196,95 @@
   font: inherit;
   font-size: var(--text-xs);
 }
+
+/* Edit Document Text mode bar -- same `.legal-mode-bar` shell as Redact and
+   the add-content tools (border/radius/shadow/background/gap all inherited
+   from the base rules above). These rules only arrange ITS OWN controls
+   (the find/replace pairing, the prev/next stepper, the match count) under
+   scoped `.edit-text-mode-bar__*` class names, so Redact's and the
+   add-content bar's layouts are untouched. */
+.edit-text-mode-bar__fields {
+  display: inline-flex;
+  align-items: stretch;
+  flex: 1 1 260px;
+  min-width: 220px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  box-shadow: var(--shadow-control);
+}
+
+.edit-text-mode-bar__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 50%;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+}
+
+.edit-text-mode-bar__field:first-child {
+  border-right: 1px solid var(--border-soft);
+}
+
+.edit-text-mode-bar__field input {
+  min-width: 0;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.edit-text-mode-bar__field input:disabled {
+  opacity: 0.6;
+}
+
+.edit-text-mode-bar__whole-word {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.edit-text-mode-bar__match-chip {
+  flex: 0 0 auto;
+  min-width: 128px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.edit-text-mode-bar__nav {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.edit-text-mode-bar__nav .legal-mode-bar__button {
+  padding: 0 var(--space-2);
+}
+
+.edit-text-mode-bar__nav .legal-mode-bar__button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.edit-text-mode-bar__nav .legal-mode-bar__button:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-left: -1px;
+}
+
+.edit-text-mode-bar__actions {
+  display: inline-flex;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}

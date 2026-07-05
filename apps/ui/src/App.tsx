@@ -85,6 +85,8 @@ import {
 import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
 import { DocumentBanner } from "./components/DocumentBanner";
 import { EditModeBar } from "./components/EditModeBar";
+import { EditTextModeBar } from "./components/EditTextModeBar";
+import { EditTextReviewDialog } from "./components/EditTextReviewDialog";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
@@ -103,6 +105,7 @@ import {
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
+import { useTextEdit } from "./hooks/useTextEdit";
 import { useEditing } from "./hooks/useEditing";
 import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
@@ -227,6 +230,7 @@ import {
   type RedactionVerificationResult,
   type SensitiveHit,
 } from "./lib/legalTools";
+import type { SignatureInvalidationNotice } from "./hooks/useDocument";
 import {
   assessPdfAConversionImpact,
   assessPdfAConversionImpactFromBytes,
@@ -517,6 +521,58 @@ export function App() {
     textLayerCoverage: document.textLayerCoverage,
     setCurrentPage,
   });
+  const confirmTextEditSignatureInvalidation = useCallback(async (): Promise<SignatureInvalidationNotice | null> => {
+    const sourceBytes = document.bytes;
+    if (!sourceBytes) {
+      return null;
+    }
+
+    let signature: SignatureDetectionFacts;
+    try {
+      signature = await detectSignatureFacts(sourceBytes);
+    } catch {
+      signature = {
+        standardAcroFormSignatureCount: 1,
+        hasByteRangeOrContentsMarkers: false,
+        hasCertificationDictionary: false,
+      };
+    }
+
+    const notice: SignatureInvalidationNotice = {
+      source: "owner-restricted",
+      sourceFileNames: [document.fileName ?? "this PDF"],
+      sourceFilePath: document.filePath,
+      signature,
+    };
+    const confirmed = await confirmSignatureInvalidation(notice);
+    return confirmed ? notice : null;
+  }, [confirmSignatureInvalidation, document.bytes, document.fileName, document.filePath]);
+  const confirmTextEditPdfAIdentificationRemoval = useCallback(
+    () => Promise.resolve(window.confirm(
+      "Editing removes this file's PDF/A marking — you can convert again afterward.",
+    )),
+    [],
+  );
+  const textEditSource = useMemo(
+    () => ({
+      bytes: document.bytes,
+      proxy: pdfDocument,
+    }),
+    [document.bytes, pdfDocument],
+  );
+  const textEdit = useTextEdit({
+    source: textEditSource,
+    documentGeneration: document.generation,
+    sourceOpenToken: getOpenToken(),
+    streamed: streamedDocument,
+    textLayerCoverage: document.textLayerCoverage,
+    engineBridge,
+    replaceBytes,
+    fileName: document.fileName,
+    confirmSignatureInvalidation: confirmTextEditSignatureInvalidation,
+    confirmPdfAIdentificationRemoval: confirmTextEditPdfAIdentificationRemoval,
+    setCurrentPage,
+  });
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
@@ -570,6 +626,8 @@ export function App() {
   const [activeEditDialogTool, setActiveEditDialogTool] = useState<EditDialogToolId | null>(
     null,
   );
+  const [activeTextEdit, setActiveTextEdit] = useState(false);
+  const [textEditAnnotationPrompt, setTextEditAnnotationPrompt] = useState(false);
   const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
     null,
   );
@@ -1183,6 +1241,8 @@ export function App() {
   const resetLegalState = useCallback(() => {
     preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
+    setActiveTextEdit(false);
+    setTextEditAnnotationPrompt(false);
     setRedactionPhase("idle");
     setRedactionMessage(null);
     setRedactionSearchOpen(false);
@@ -1215,6 +1275,8 @@ export function App() {
     scannerRunRef.current += 1;
     filingRunRef.current += 1;
     setPendingRedactions([]);
+    setActiveTextEdit(false);
+    setTextEditAnnotationPrompt(false);
     setScannerState({ scanning: false, message: null, hits: [] });
     setFilingReport(null);
     setFilingReportLoading(false);
@@ -1625,6 +1687,11 @@ export function App() {
 
   const selectEditTool = useCallback(
     (toolId: EditToolId) => {
+      if (toolId !== "select" && activeTextEdit && textEdit.pendingOps.length > 0) {
+        setError("Review or clear queued text replacements before using annotation tools.");
+        return;
+      }
+
       // Streamed mode: pending edits are applied on Save through the engine
       // (byte path), so every non-Select tool is gated [R1-2].
       if (toolId !== "select" && document.source !== null && document.source.kind !== "memory") {
@@ -1636,11 +1703,72 @@ export function App() {
         setActiveLegalTool(null);
       }
 
+      if (toolId !== "select") {
+        setActiveTextEdit(false);
+      }
+
       setActiveEditDialogTool(null);
       editing.setTool(toolId);
     },
-    [activeLegalTool, document.source, editing, setError],
+    [activeLegalTool, activeTextEdit, document.source, editing, setError, textEdit.pendingOps.length],
   );
+
+  const enterTextEditMode = useCallback(() => {
+    setActiveTextEdit(true);
+    setActiveLegalTool(null);
+    setActiveOrganizeTool(null);
+    setActiveEditDialogTool(null);
+    editing.setTool("select");
+  }, [editing]);
+
+  const requestTextEditMode = useCallback(() => {
+    if (activeTextEdit) {
+      setActiveTextEdit(false);
+      return;
+    }
+
+    if (streamedDocument) {
+      setError(textEdit.gate.message ?? "This document is too large for in-app text editing.");
+      return;
+    }
+
+    if (editing.hasUnsavedEdits) {
+      setTextEditAnnotationPrompt(true);
+      return;
+    }
+
+    enterTextEditMode();
+  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, setError, streamedDocument, textEdit.gate.message]);
+
+  const saveAnnotationsAndEnterTextEdit = useCallback(async () => {
+    const pendingApply = editing.collectAnnotationSavePlan();
+
+    if (pendingApply) {
+      const applied = await applyAnnotationSavePlan({
+        appendEdits: pendingApply.plan.appendEdits,
+        updateEdits: pendingApply.plan.updateEdits,
+        deleteAnnotIds: pendingApply.plan.deleteAnnotIds,
+      }, {
+        flatten: pendingApply.flatten,
+        printMarkupAnnotations,
+      });
+
+      if (!applied) {
+        setError("Pending annotations could not be saved. Text editing was not started.");
+        return;
+      }
+      editing.clearPending();
+    }
+
+    setTextEditAnnotationPrompt(false);
+    enterTextEditMode();
+  }, [applyAnnotationSavePlan, editing, enterTextEditMode, printMarkupAnnotations, setError]);
+
+  const discardAnnotationsAndEnterTextEdit = useCallback(() => {
+    editing.clearPendingEdits();
+    setTextEditAnnotationPrompt(false);
+    enterTextEditMode();
+  }, [editing, enterTextEditMode]);
 
   // Esc exits any edit mode. Inline editors (text draft, comment popover)
   // consume their own Escape via stopPropagation before this fires.
@@ -1652,13 +1780,18 @@ export function App() {
 
       if (editing.tool !== "select") {
         editing.setTool("select");
+        return;
+      }
+
+      if (activeTextEdit) {
+        setActiveTextEdit(false);
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [editing]);
+  }, [activeTextEdit, editing]);
 
   useEffect(() => {
     let disposed = false;
@@ -3160,6 +3293,7 @@ export function App() {
       }
 
       setActiveLegalTool(toolId);
+      setActiveTextEdit(false);
       setActiveEditDialogTool(null);
 
       if (toolId === "redact" && editing.tool !== "select") {
@@ -3199,12 +3333,14 @@ export function App() {
     if (toolId === "rotate" || toolId === "compress") {
       setActiveOrganizeTool((current) => (current === toolId ? null : toolId));
       setActiveLegalTool(null);
+      setActiveTextEdit(false);
       setActiveEditDialogTool(null);
       return;
     }
 
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
+    setActiveTextEdit(false);
     setActiveEditDialogTool(null);
   }, [pathOpsGrant, setError, streamedDocument]);
 
@@ -3222,6 +3358,7 @@ export function App() {
     // above.
     setActiveEditDialogTool((current) => (current === toolId ? null : toolId));
     setActiveLegalTool(null);
+    setActiveTextEdit(false);
     setActiveOrganizeTool(null);
     editing.setTool("select");
   }, [editing, pathOpsGrant, setError, streamedDocument]);
@@ -3229,6 +3366,7 @@ export function App() {
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
     setActiveLegalTool(null);
+    setActiveTextEdit(false);
     setActiveEditDialogTool(null);
   }, []);
 
@@ -5365,7 +5503,12 @@ export function App() {
     [editing, selectEditTool],
   );
 
-  const modeBar = activeLegalTool === "redact" ? (
+  const modeBar = activeTextEdit ? (
+    <EditTextModeBar
+      textEdit={textEdit}
+      onExit={() => setActiveTextEdit(false)}
+    />
+  ) : activeLegalTool === "redact" ? (
     <RedactionModeBar
       pendingCount={pendingRedactions.length}
       searchOpen={redactionSearchOpen}
@@ -5418,6 +5561,10 @@ export function App() {
   const overlay = getFloatingDialog();
 
   function getFloatingDialog() {
+    if (activeTextEdit) {
+      return <EditTextReviewDialog textEdit={textEdit} />;
+    }
+
     if (activeLegalTool === "prepare-for-filing") {
       return (
         <FloatingDialog
@@ -5679,9 +5826,11 @@ export function App() {
         workspace={workspace}
         overlay={overlay}
         activeLegalTool={activeLegalTool}
+        activeTextEdit={activeTextEdit}
         activeEditDialogTool={activeEditDialogTool}
         activeOrganizeTool={activeOrganizeTool}
         onEditDialogToolSelected={selectEditDialogTool}
+        onTextEditSelected={requestTextEditMode}
         onLegalToolSelected={selectLegalTool}
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
@@ -5693,6 +5842,7 @@ export function App() {
         compressAvailable={engineBridge.available}
         onCompress={compressDocument}
         redaction={redactionPanel}
+        textEdit={textEdit}
         scanner={scannerState}
         pendingRedactions={pendingRedactions}
         modeBar={modeBar}
@@ -5814,6 +5964,45 @@ export function App() {
         onCancel={() => answerSignatureUnlockPrompt(false)}
         onContinue={() => answerSignatureUnlockPrompt(true)}
       />
+      {textEditAnnotationPrompt ? (
+        <FloatingDialog
+          title="Pending annotations"
+          eyebrow="Edit Document Text"
+          width="sm"
+          onClose={() => setTextEditAnnotationPrompt(false)}
+        >
+          <div className="tool-panel__inline-card">
+            <p className="tool-panel__card-copy">
+              Save or discard pending annotation edits before editing document text.
+            </p>
+            <div className="tool-panel__button-row">
+              <button
+                type="button"
+                className="tool-panel__primary-button"
+                onClick={() => {
+                  void saveAnnotationsAndEnterTextEdit();
+                }}
+              >
+                Save annotations
+              </button>
+              <button
+                type="button"
+                className="tool-panel__secondary-button"
+                onClick={discardAnnotationsAndEnterTextEdit}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                className="tool-panel__secondary-button"
+                onClick={() => setTextEditAnnotationPrompt(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </FloatingDialog>
+      ) : null}
     </>
   );
 }

@@ -37,6 +37,7 @@ export const ORGANIZE_TOOLS = [
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_PANEL_EDIT_TOOLS = [
+  { id: "edit-text", label: "Edit Document Text", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
   { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
   { id: "callout", label: "Callout", group: "edit", helpArticleId: "callout", description: "Place a text box with a leader arrow pointing to a page spot." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", description: "Place an image on the current page before saving." },
@@ -49,9 +50,7 @@ export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", description: "Drag a straight line that will be saved with the PDF." },
   { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", description: "Drag an arrow that will be saved with the PDF." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
-] as const satisfies readonly (ToolRegistryEntry & {
-  id: Exclude<EditToolId, "select" | "comment">;
-})[];
+] as const satisfies readonly ToolRegistryEntry[];
 
 export const EDIT_DIALOG_TOOLS = [
   { id: "page-numbers", label: "Page Numbers...", group: "edit", helpArticleId: "page-numbers", description: "Stamp generated page numbers into selected page positions." },

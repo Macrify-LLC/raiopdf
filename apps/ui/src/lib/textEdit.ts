@@ -1,0 +1,318 @@
+import type { PdfRedactionArea, PdfReplaceTextWarning } from "@raiopdf/engine-api";
+import type { TextLayerCoverage } from "@raiopdf/rules";
+import type { ExtractedPageText } from "./pageTextCache";
+
+export interface PendingTextReplacement {
+  id: string;
+  find: string;
+  replace: string;
+  wholeWord: boolean;
+  pageIndexes: readonly number[] | "all";
+}
+
+export interface TextEditMatch {
+  id: string;
+  operationId: string;
+  pageIndex: number;
+  area: PdfRedactionArea;
+  excerpt: string;
+}
+
+export interface TextEditGate {
+  blocked: boolean;
+  message: string | null;
+  notes: readonly string[];
+}
+
+export interface TextEditOperationReport {
+  operationId: string;
+  find: string;
+  replace: string;
+  foundBefore: readonly number[];
+  foundAfter: readonly number[];
+  replacedEstimate: number;
+  status: "changed" | "not-found" | "unchanged";
+}
+
+export interface TextEditReviewReport {
+  operations: readonly TextEditOperationReport[];
+  changedPageIndexes: readonly number[];
+  zeroChange: boolean;
+  advisory: string | null;
+}
+
+export const TEXT_EDIT_ADVISORY =
+  "Replacements never reflow the page. Longer or shorter text may shift, overlap, or leave extra space.";
+export const TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE =
+  "The whole document is rewritten by this operation. Pages not shown here may shift slightly.";
+export const TEXT_EDIT_ZERO_CHANGE_MESSAGE =
+  "Nothing was replaced — the document was not modified.";
+export const TEXT_EDIT_STREAMED_GATE_MESSAGE =
+  "This document is too large for in-app text editing. Save a smaller copy or split the file first.";
+export const TEXT_EDIT_SCANNED_GATE_MESSAGE =
+  "Text editing isn't available for scanned documents.";
+export const TEXT_EDIT_IMAGE_PAGE_NOTE =
+  "Image-only pages are skipped; matches on those pages are excluded.";
+export const TEXT_EDIT_MULTI_WORD_CAUTION =
+  "Multi-word finds can miss PDFs that place words with positional spacing. Try a single distinctive word if the review shows no replacements.";
+
+export function buildEngineParityPattern(find: string, wholeWord: boolean): RegExp {
+  const literal = escapeRegExp(find);
+  return new RegExp(wholeWord ? String.raw`(?<!\w)(?:${literal})(?!\w)` : literal, "g");
+}
+
+export function findTextMatchesInPages(
+  pages: readonly ExtractedPageText[],
+  operation: PendingTextReplacement,
+  options: { excludedPageIndexes?: ReadonlySet<number> } = {},
+): TextEditMatch[] {
+  const find = operation.find.trim();
+  if (!find) {
+    return [];
+  }
+
+  const selectedPages = operation.pageIndexes === "all"
+    ? null
+    : new Set(operation.pageIndexes);
+  const matches: TextEditMatch[] = [];
+  const pattern = buildEngineParityPattern(find, operation.wholeWord);
+
+  for (const page of pages) {
+    if (selectedPages && !selectedPages.has(page.pageIndex)) {
+      continue;
+    }
+    if (options.excludedPageIndexes?.has(page.pageIndex)) {
+      continue;
+    }
+
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(page.text)) !== null) {
+      const matchedText = match[0] ?? "";
+      if (!matchedText) {
+        pattern.lastIndex += 1;
+        continue;
+      }
+
+      const area = areaForTextRange(page, match.index, match.index + matchedText.length);
+      if (!area) {
+        continue;
+      }
+
+      matches.push({
+        id: `${operation.id}-${page.pageIndex}-${match.index}`,
+        operationId: operation.id,
+        pageIndex: page.pageIndex,
+        area,
+        excerpt: excerpt(page.text, match.index, matchedText.length),
+      });
+    }
+  }
+
+  return matches;
+}
+
+export function detectsPositionalSpaceRisk(
+  pages: readonly ExtractedPageText[],
+  find: string,
+): boolean {
+  const normalizedFind = find.trim();
+  if (!/\S\s+\S/.test(normalizedFind)) {
+    return false;
+  }
+
+  const compactFind = normalizedFind.replace(/\s+/g, "");
+  if (!compactFind) {
+    return false;
+  }
+
+  return pages.some((page) => {
+    const compactPageText = page.text.replace(/\s+/g, "");
+    return compactPageText.includes(compactFind) && !page.text.includes(normalizedFind);
+  });
+}
+
+export function deriveTextEditGate({
+  hasDocument,
+  streamed,
+  textLayerCoverage,
+  engineAvailable,
+  permissionProtected = false,
+}: {
+  hasDocument: boolean;
+  streamed: boolean;
+  textLayerCoverage: TextLayerCoverage | null;
+  engineAvailable: boolean;
+  permissionProtected?: boolean;
+}): TextEditGate {
+  if (!hasDocument) {
+    return { blocked: true, message: "Open a PDF before editing document text.", notes: [] };
+  }
+
+  if (!engineAvailable) {
+    return { blocked: true, message: "This action is available in the desktop app.", notes: [] };
+  }
+
+  if (streamed) {
+    return { blocked: true, message: TEXT_EDIT_STREAMED_GATE_MESSAGE, notes: [] };
+  }
+
+  if (permissionProtected) {
+    return {
+      blocked: true,
+      message: "Text editing isn't available for permissions-protected PDFs in this version.",
+      notes: [],
+    };
+  }
+
+  const totalPages = textLayerCoverage
+    ? textLayerCoverage.imageOnlyPages.length +
+      textLayerCoverage.mixedPages.length +
+      textLayerCoverage.textPages.length
+    : 0;
+
+  if (textLayerCoverage && totalPages > 0 && textLayerCoverage.imageOnlyPages.length === totalPages) {
+    return { blocked: true, message: TEXT_EDIT_SCANNED_GATE_MESSAGE, notes: [] };
+  }
+
+  const notes: string[] = [];
+  if (textLayerCoverage && textLayerCoverage.imageOnlyPages.length > 0) {
+    notes.push(TEXT_EDIT_IMAGE_PAGE_NOTE);
+  }
+  if (textLayerCoverage && textLayerCoverage.garbledPages.length > 0) {
+    notes.push(
+      `Matching may be incomplete - the text layer looks garbled on ${textLayerCoverage.garbledPages.length} page${textLayerCoverage.garbledPages.length === 1 ? "" : "s"}.`,
+    );
+  }
+
+  return { blocked: false, message: null, notes };
+}
+
+export function buildTextEditReviewReport({
+  operations,
+  originalPages,
+  candidatePages,
+}: {
+  operations: readonly PendingTextReplacement[];
+  originalPages: readonly ExtractedPageText[];
+  candidatePages: readonly ExtractedPageText[];
+}): TextEditReviewReport {
+  const reports: TextEditOperationReport[] = operations.map((operation) => {
+    const beforeMatches = findTextMatchesInPages(originalPages, operation);
+    const afterMatches = findTextMatchesInPages(candidatePages, operation);
+    const foundBefore = uniqueSorted(beforeMatches.map((match) => match.pageIndex));
+    const foundAfter = uniqueSorted(afterMatches.map((match) => match.pageIndex));
+    const replacedEstimate = Math.max(0, beforeMatches.length - afterMatches.length);
+
+    return {
+      operationId: operation.id,
+      find: operation.find,
+      replace: operation.replace,
+      foundBefore,
+      foundAfter,
+      replacedEstimate,
+      status: replacedEstimate > 0
+        ? "changed"
+        : foundBefore.length > 0
+          ? "unchanged"
+          : "not-found",
+    };
+  });
+
+  const changedPageIndexes = uniqueSorted(
+    candidatePages
+      .filter((candidate) => {
+        const original = originalPages.find((page) => page.pageIndex === candidate.pageIndex);
+        return original ? original.text !== candidate.text : candidate.text.trim().length > 0;
+      })
+      .map((page) => page.pageIndex),
+  );
+
+  return {
+    operations: reports,
+    changedPageIndexes,
+    zeroChange: changedPageIndexes.length === 0,
+    advisory: lengthDeltaAdvisory(operations),
+  };
+}
+
+export function warningCopy(warning: PdfReplaceTextWarning): string {
+  switch (warning.code) {
+    case "COUNTS_UNAVAILABLE":
+      return "The engine does not return replacement counts; this review re-read the staged PDF.";
+    case "SIGNATURES_INVALIDATED":
+      return "Digital signatures are invalidated in the edited copy.";
+    case "FALLBACK_FONT_POSSIBLE":
+      return "A substitute font may have been used; review the affected pages before applying.";
+    case "PDFA_IDENTIFICATION_REMOVED":
+      return "Editing removes this file's PDF/A marking — you can convert again afterward.";
+    case "IMAGES_REENCODED":
+      return "This engine build may rewrite embedded images while editing text.";
+    case "ATTACHMENTS_REMOVED":
+      return "Embedded attachments may be removed by this edit.";
+    case "TAGS_REMOVED":
+      return "Accessibility tags may be removed by this edit.";
+  }
+}
+
+export function formatReplaceTextResult(report: TextEditReviewReport): string {
+  if (report.zeroChange) {
+    return TEXT_EDIT_ZERO_CHANGE_MESSAGE;
+  }
+
+  const estimate = report.operations.reduce((total, operation) => total + operation.replacedEstimate, 0);
+  const pageCount = report.changedPageIndexes.length;
+  return `${estimate} estimated ${estimate === 1 ? "replacement" : "replacements"} on ${pageCount} ${pageCount === 1 ? "page" : "pages"}.`;
+}
+
+function lengthDeltaAdvisory(operations: readonly PendingTextReplacement[]): string | null {
+  return operations.some((operation) => operation.find.length !== operation.replace.length)
+    ? TEXT_EDIT_ADVISORY
+    : null;
+}
+
+function areaForTextRange(
+  page: ExtractedPageText,
+  start: number,
+  end: number,
+): PdfRedactionArea | null {
+  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
+
+  if (matchingSpans.length === 0) {
+    return null;
+  }
+
+  return matchingSpans
+    .map((span) => span.area)
+    .reduce(unionAreas);
+}
+
+function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedactionArea {
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  const maxX = Math.max(left.x + left.w, right.x + right.w);
+  const maxY = Math.max(left.y + left.h, right.y + right.h);
+
+  return {
+    pageIndex: left.pageIndex,
+    x,
+    y,
+    w: Math.max(1, maxX - x),
+    h: Math.max(1, maxY - y),
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function excerpt(text: string, start: number, length: number): string {
+  const before = text.slice(Math.max(0, start - 32), start).replace(/\s+/g, " ");
+  const match = text.slice(start, start + length).replace(/\s+/g, " ");
+  const after = text.slice(start + length, start + length + 32).replace(/\s+/g, " ");
+  return `${before}${before ? " " : ""}${match}${after ? " " : ""}${after}`.trim();
+}
+
+function uniqueSorted(values: readonly number[]): number[] {
+  return [...new Set(values)].sort((left, right) => left - right);
+}

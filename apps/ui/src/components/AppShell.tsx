@@ -32,6 +32,15 @@ import type { SensitiveHit } from "../lib/legalTools";
 import { deriveTextLayerStatus } from "../lib/textLayerStatus";
 import "./AppShell.css";
 
+function isOcrDialogPhase(phase: OcrUiState["phase"]): boolean {
+  return (
+    phase === "confirm" ||
+    phase === "starting-engine" ||
+    phase === "processing" ||
+    phase === "verifying"
+  );
+}
+
 export interface AppShellProps {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
@@ -173,6 +182,7 @@ export function AppShell({
   const hasDocument = document.source !== null;
   const streamedDocument = document.source !== null && document.source.kind !== "memory";
   const canUndo = editing.pendingEdits.length > 0;
+  const showEngineStartingOverlay = ocrStarting && !isOcrDialogPhase(ocrState.phase);
   const tabs = document.fileName
     ? [
         {
@@ -286,7 +296,7 @@ export function AppShell({
           searchResults={documentSearch.results}
           activeSearchResultId={documentSearch.activeMatch?.id ?? null}
           lazyPageMeasurement={streamedDocument}
-          engineStarting={ocrStarting}
+          engineStarting={showEngineStartingOverlay}
         />
         <ToolPanel
           hasDocument={hasDocument}

@@ -11,86 +11,127 @@ vi.hoisted(() => {
 import type { DocumentState } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
-import { AppShell } from "./AppShell";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
+import { AppShell, type AppShellProps } from "./AppShell";
 
 describe("AppShell", () => {
   it("keeps the document banner grid slot mounted when no banner renders", () => {
-    const html = renderToStaticMarkup(
-      <AppShell
-        document={mockDocument}
-        pdfDocument={null}
-        documentSearch={mockDocumentSearch}
-        selectedPageIndexes={new Set()}
-        onOpenRequested={() => undefined}
-        onFileDropped={() => undefined}
-        onSave={() => undefined}
-        onPrint={() => undefined}
-        onPreviousPage={() => undefined}
-        onNextPage={() => undefined}
-        onZoomOut={() => undefined}
-        onZoomIn={() => undefined}
-        onFitZoomResolved={() => undefined}
-        onPageSizeChange={() => undefined}
-        onRenderError={() => undefined}
-        onThumbnailClick={() => undefined}
-        onRotateSelected={() => undefined}
-        onDeleteSelected={() => undefined}
-        onMoveSelectedUp={() => undefined}
-        onMoveSelectedDown={() => undefined}
-        onBookmarkNavigate={() => undefined}
-        onOutlineChange={() => Promise.resolve(true)}
-        ocrState={{ phase: "idle", message: null }}
-        ocrAvailable={false}
-        ocrStarting={false}
-        documentBanner={null}
-        workspace={null}
-        overlay={null}
-        activeLegalTool={null}
-        activeEditDialogTool={null}
-        activeOrganizeTool={null}
-        onEditDialogToolSelected={() => undefined}
-        onLegalToolSelected={() => undefined}
-        onOrganizeToolSelected={() => undefined}
-        onMakeSearchable={() => undefined}
-        onForceOcr={() => undefined}
-        redaction={{ phase: "idle", message: null, pendingCount: 0, available: true }}
-        scanner={{ scanning: false, message: null, hits: [] }}
-        pendingRedactions={[]}
-        modeBar={null}
-        editing={mockEditing}
-        onRedactionAreaCreated={() => undefined}
-        onRedactionAreaRemoved={() => undefined}
-        onConfirmRedactions={() => undefined}
-        onCancelRedactions={() => undefined}
-        onRunScanner={() => undefined}
-        onMarkScannerHit={() => undefined}
-        onOpenAbout={() => undefined}
-        onHelpRequested={() => undefined}
-        pageScrollIntent={null}
-        onVisiblePageChange={() => undefined}
-        onRotateLeft={() => undefined}
-        onRotateRight={() => undefined}
-        pageCount={0}
-        sidecarStatus={{ running: false, message: null, removed: [], beforeBytes: null, afterBytes: null }}
-        onApplyPageNumbers={() => Promise.resolve(true)}
-        onApplyWatermark={() => Promise.resolve(true)}
-        compressAvailable={false}
-        onCompress={() => Promise.resolve(true)}
-        onConnectToAi={() => undefined}
-        onMenuCommand={() => undefined}
-        printMarkupAnnotations={true}
-        onPrintMarkupAnnotationsChange={() => undefined}
-        onFlattenMarkupAnnotations={() => undefined}
-        markupAnnotationMessage={null}
-      />,
-    );
+    const html = renderToStaticMarkup(<AppShell {...appShellProps()} />);
 
     expect(html).toContain("app-shell__document-banner");
     expect(html.indexOf("app-shell__document-banner")).toBeLessThan(
       html.indexOf("app-shell__body"),
     );
   });
+
+  it("shows the canvas engine-starting overlay outside OCR dialog phases", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: mockPdfDocument,
+          ocrStarting: true,
+          ocrState: { phase: "idle", message: null },
+        })}
+      />,
+    );
+
+    expect(html).toContain("canvas-well__engine-starting");
+    expect(html).toContain("Starting the PDF engine");
+  });
+
+  it("suppresses the canvas engine-starting overlay while the OCR dialog is running", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: mockPdfDocument,
+          ocrStarting: true,
+          ocrState: { phase: "processing", message: "Making searchable..." },
+        })}
+      />,
+    );
+
+    expect(html).not.toContain("canvas-well__engine-starting");
+  });
 });
+
+function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
+  return {
+    document: mockDocument,
+    pdfDocument: null,
+    documentSearch: mockDocumentSearch,
+    selectedPageIndexes: new Set(),
+    onOpenRequested: () => undefined,
+    onFileDropped: () => undefined,
+    onSave: () => undefined,
+    onPrint: () => undefined,
+    onPreviousPage: () => undefined,
+    onNextPage: () => undefined,
+    onZoomOut: () => undefined,
+    onZoomIn: () => undefined,
+    onFitZoomResolved: () => undefined,
+    onPageSizeChange: () => undefined,
+    onRenderError: () => undefined,
+    onThumbnailClick: () => undefined,
+    onRotateSelected: () => undefined,
+    onDeleteSelected: () => undefined,
+    onMoveSelectedUp: () => undefined,
+    onMoveSelectedDown: () => undefined,
+    onBookmarkNavigate: () => undefined,
+    onOutlineChange: () => Promise.resolve(true),
+    ocrState: { phase: "idle", message: null },
+    ocrAvailable: false,
+    ocrStarting: false,
+    documentBanner: null,
+    workspace: null,
+    overlay: null,
+    activeLegalTool: null,
+    activeEditDialogTool: null,
+    activeOrganizeTool: null,
+    onEditDialogToolSelected: () => undefined,
+    onLegalToolSelected: () => undefined,
+    onOrganizeToolSelected: () => undefined,
+    onMakeSearchable: () => undefined,
+    onForceOcr: () => undefined,
+    redaction: { phase: "idle", message: null, pendingCount: 0, available: true },
+    scanner: { scanning: false, message: null, hits: [] },
+    pendingRedactions: [],
+    modeBar: null,
+    editing: mockEditing,
+    onRedactionAreaCreated: () => undefined,
+    onRedactionAreaRemoved: () => undefined,
+    onConfirmRedactions: () => undefined,
+    onCancelRedactions: () => undefined,
+    onRunScanner: () => undefined,
+    onMarkScannerHit: () => undefined,
+    onOpenAbout: () => undefined,
+    onHelpRequested: () => undefined,
+    pageScrollIntent: null,
+    onVisiblePageChange: () => undefined,
+    onRotateLeft: () => undefined,
+    onRotateRight: () => undefined,
+    pageCount: 0,
+    sidecarStatus: {
+      running: false,
+      message: null,
+      removed: [],
+      beforeBytes: null,
+      afterBytes: null,
+    },
+    onApplyPageNumbers: () => Promise.resolve(true),
+    onApplyWatermark: () => Promise.resolve(true),
+    compressAvailable: false,
+    onCompress: () => Promise.resolve(true),
+    onConnectToAi: () => undefined,
+    onMenuCommand: () => undefined,
+    printMarkupAnnotations: true,
+    onPrintMarkupAnnotationsChange: () => undefined,
+    onFlattenMarkupAnnotations: () => undefined,
+    markupAnnotationMessage: null,
+    ...overrides,
+  };
+}
 
 const mockDocument: DocumentState = {
   bytes: null,
@@ -113,6 +154,19 @@ const mockDocument: DocumentState = {
   signatureInvalidationNotice: null,
   error: null,
 };
+
+const openDocument: DocumentState = {
+  ...mockDocument,
+  bytes: new Uint8Array([37, 80, 68, 70]),
+  source: { kind: "memory", bytes: new Uint8Array([37, 80, 68, 70]) },
+  pageCount: 1,
+  fileName: "test.pdf",
+};
+
+const mockPdfDocument = {
+  numPages: 1,
+  getPage: vi.fn(),
+} as unknown as PDFDocumentProxy;
 
 const mockDocumentSearch: DocumentSearchState = {
   query: "",

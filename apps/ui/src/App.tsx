@@ -257,6 +257,7 @@ const FLORIDA_PACK: JurisdictionPack = getPack();
 const AVAILABLE_FILING_PACKS: readonly JurisdictionPack[] = listPacks();
 const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
+const OCR_FAILURE_MESSAGE = "Couldn't make this document searchable.";
 
 declare global {
   interface Window {
@@ -288,6 +289,18 @@ function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
     phase === "processing" ||
     phase === "verifying"
   );
+}
+
+function formatOcrFailureDetail(error: unknown): string | null {
+  const detail = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  if (!detail || detail === OCR_FAILURE_MESSAGE) {
+    return null;
+  }
+
+  return detail;
 }
 
 type OcrType = "skip-text" | "force-ocr";
@@ -1832,7 +1845,7 @@ export function App() {
         });
 
         const textLayerCoverage = await inspectTextLayer(ocrResult.bytes);
-        const verification = verifyOcrTextLayer(textLayerCoverage);
+        const verification = verifyOcrTextLayer(textLayerCoverage, ocrType);
         const workflowResult = {
           ...ocrResult,
           textLayerCoverage,
@@ -1906,14 +1919,17 @@ export function App() {
           return;
         }
 
-        const detail = formatWorkflowError(error, "OCR could not finish. The document was left unchanged.");
+        const detail = formatOcrFailureDetail(error);
+        const message = detail
+          ? `${OCR_FAILURE_MESSAGE} ${detail}`
+          : OCR_FAILURE_MESSAGE;
 
         setOcrState({
           phase: "error",
-          message: "Couldn't make this document searchable.",
+          message,
         });
 
-        void recordDiagnosticEvent("ocr.failed", detail, [
+        void recordDiagnosticEvent("ocr.failed", message, [
           error instanceof Error && error.stack ? error.stack : null,
         ]);
       })
@@ -1921,8 +1937,12 @@ export function App() {
   }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
+    if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {
+      engineBridge.warmEngine();
+    }
+
     setForceOcrConfirmation(reason);
-  }, []);
+  }, [document.bytes, engineBridge, streamedDocument]);
 
   const openOcrDialog = useCallback((ocrType: OcrType) => {
     if (streamedDocument) {
@@ -5322,7 +5342,7 @@ export function App() {
         onOutlineChange={replaceOutline}
         ocrState={ocrState}
         ocrAvailable={engineBridge.ocrAvailable}
-        ocrStarting={engineBridge.starting}
+        ocrStarting={forceOcrConfirmation ? false : engineBridge.starting}
         documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
         workspace={workspace}
         overlay={overlay}

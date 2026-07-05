@@ -19,7 +19,7 @@ describe("verifyOcrTextLayer", () => {
     expect(result.message).toContain("Verified: all 2 pages now have clean searchable text.");
   });
 
-  it("reports garbled output as a failed verification so callers keep the original", () => {
+  it("reports garbled output as a failed verification for normal OCR so callers keep the original", () => {
     const result = verifyOcrTextLayer(coverage({
       imageOnlyPages: [],
       mixedPages: [],
@@ -48,6 +48,38 @@ describe("verifyOcrTextLayer", () => {
     }
 
     expect(replaceDocument).not.toHaveBeenCalled();
+  });
+
+  it("returns a warning for force OCR residual garbled pages so callers still apply the output", () => {
+    const result = verifyOcrTextLayer(coverage({
+      imageOnlyPages: [],
+      mixedPages: [],
+      textPages: [0, 1],
+      garbledPages: [{
+        pageIndex: 1,
+        confidence: 0.91,
+        reason: "low_alpha_entropy",
+        puaRatio: 0,
+        replacementRatio: 0,
+        alphaRatio: 0.01,
+      }],
+    }), "force-ocr");
+
+    expect(result).toMatchObject({
+      status: "warning",
+      pageCount: 2,
+      rebuiltPages: 2,
+      garbledPages: 1,
+      imageOnlyPages: 0,
+    });
+    expect(result.message).toContain("Warning: 1 page may still have imperfect text");
+
+    const replaceDocument = vi.fn();
+    if (result.status !== "failed") {
+      replaceDocument();
+    }
+
+    expect(replaceDocument).toHaveBeenCalledTimes(1);
   });
 
   it("fails verification when OCR produces an empty document", () => {

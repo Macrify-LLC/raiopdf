@@ -130,6 +130,36 @@ describe("force OCR controls", () => {
     expect(getButton("Make Searchable (OCR)").disabled).toBe(false);
   });
 
+  it("surfaces a force-OCR residual text warning after applying the rebuilt output", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{
+          phase: "done",
+          message: "Rebuilt the text layer on 3 pages. Warning: 1 page may still have imperfect text.",
+        }}
+      />,
+    );
+
+    const notice = document.querySelector('.tool-panel__inline-card[data-tone="ok"]');
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Warning: 1 page may still have imperfect text.");
+  });
+
+  it("surfaces OCR engine error details instead of only the generic failure", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{
+          phase: "error",
+          message: "Couldn't make this document searchable. Stirling PDF request failed: connection refused",
+        }}
+      />,
+    );
+
+    const notice = document.querySelector('.tool-panel__inline-card[data-tone="danger"]');
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Stirling PDF request failed: connection refused");
+  });
+
   it("shows OCR errors as a neutral note when the desktop engine is unavailable, not an alarming one", () => {
     render(
       <ToolPanelHarness

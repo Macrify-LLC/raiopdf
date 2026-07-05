@@ -1,10 +1,20 @@
 import { PdfEngineError } from "@raiopdf/engine-api";
 import {
+  PDFBool,
   PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
+  PDFString,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
+import {
+  countEmbeddedFiles,
+  readPdfAIdentificationFromBytes,
+  readPdfOutline,
+  writePdfAIdentificationInPlace,
+  writePdfOutlineInPlace,
+} from "@raiopdf/engine-pdf-lib";
 import { SidecarPdfEngine } from "../src/index";
 
 type FetchCall = {
@@ -307,6 +317,217 @@ describe("SidecarPdfEngine", () => {
       code: "UNSUPPORTED",
     });
     expect(calls).toHaveLength(1);
+  });
+
+  it("replaces text through edit-text with ordered operations and page selection", async () => {
+    const sourceBytes = await createBasicPdf();
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(pdfBytesResponse(serverBytes));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [
+        { find: "Plaintiff", replace: "Petitioner" },
+        { find: "Defendant", replace: "Respondent" },
+      ],
+      wholeWord: true,
+      pageIndexes: [0],
+    });
+
+    expect(await engine.saveToBytes(result.document)).toBeInstanceOf(Uint8Array);
+    expect(result.replacedCounts).toBeNull();
+    expect(result.warnings).toEqual([{
+      code: "COUNTS_UNAVAILABLE",
+      message: expect.stringContaining("does not report replacement counts"),
+    }]);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/general/edit-text");
+    expectFormField(calls[0], "edits", JSON.stringify([
+      { find: "Plaintiff", replace: "Petitioner" },
+      { find: "Defendant", replace: "Respondent" },
+    ]));
+    expectFormField(calls[0], "wholeWordSearch", "true");
+    expectFormField(calls[0], "pageNumbers", "1");
+  });
+
+  it("returns the original document without edit-text when replaceText has an empty page selection", async () => {
+    const sourceBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      pageIndexes: [],
+    });
+
+    expect(await engine.saveToBytes(result.document)).toEqual(sourceBytes);
+    expect(result.replacedCounts).toBeNull();
+    expect(result.warnings).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects empty replacement operation lists before calling edit-text", async () => {
+    const sourceBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    await expect(engine.replaceText(document, { operations: [] })).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects empty find strings before calling edit-text", async () => {
+    const sourceBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    await expect(
+      engine.replaceText(document, {
+        operations: [{ find: "", replace: "Petitioner" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses permissions-protected PDFs before edit-text because the engine strips encryption", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(new TextEncoder().encode("%PDF-1.7\ntrailer\n<< /Encrypt <<>> >>"));
+
+    await expect(
+      engine.replaceText(document, {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "ENCRYPTED_DOCUMENT",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses signed PDFs unless signature invalidation is explicitly allowed", async () => {
+    const sourceBytes = await createPdfWithSignedSignatureField();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    await expect(
+      engine.replaceText(document, {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "SIGNED_DOCUMENT",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("allows signed PDFs with an invalidation warning when opted in", async () => {
+    const sourceBytes = await createPdfWithSignedSignatureField();
+    const { fetchImpl } = createFetch(pdfBytesResponse(await createBasicPdf()));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      allowSignatureInvalidation: true,
+    });
+
+    expect(result.warnings.map((warning) => warning.code)).toContain("SIGNATURES_INVALIDATED");
+  });
+
+  it("refuses PDF/A inputs unless identification removal is explicitly allowed", async () => {
+    const sourceBytes = await createPdfWithPdfAIdentification();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    await expect(
+      engine.replaceText(document, {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("strips stale PDF/A identification from edit-text output when opted in", async () => {
+    const sourceBytes = await createPdfWithPdfAIdentification();
+    const serverBytes = await createPdfWithPdfAIdentification();
+    const { fetchImpl } = createFetch(pdfBytesResponse(serverBytes));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      allowPdfAIdentificationRemoval: true,
+    });
+
+    expect(result.warnings.map((warning) => warning.code)).toContain("PDFA_IDENTIFICATION_REMOVED");
+    await expect(readPdfAIdentificationFromBytes(await engine.saveToBytes(result.document))).resolves.toBeNull();
+  });
+
+  it("restores same-page outlines after edit-text regeneration", async () => {
+    const sourceBytes = await createPdfWithOutline();
+    const { fetchImpl } = createFetch(pdfBytesResponse(await createBasicPdf()));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+    });
+    const outline = readPdfOutline(await PDFDocument.load(await engine.saveToBytes(result.document), {
+      updateMetadata: false,
+    }));
+
+    expect(outline.items[0]?.title).toBe("First page");
+  });
+
+  it("restores embedded files after edit-text regeneration without warning", async () => {
+    const sourceBytes = await createPdfWithEmbeddedFile();
+    const { fetchImpl } = createFetch(pdfBytesResponse(await createBasicPdf()));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+    });
+
+    expect(result.warnings.map((warning) => warning.code)).not.toContain("ATTACHMENTS_REMOVED");
+    await expect(countEmbeddedFiles(await engine.saveToBytes(result.document))).resolves.toBe(1);
+  });
+
+  it("warns when tagged-PDF structure will be removed", async () => {
+    const sourceBytes = await createTaggedPdf();
+    const { fetchImpl } = createFetch(pdfBytesResponse(await createBasicPdf()));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+    });
+
+    expect(result.warnings.map((warning) => warning.code)).toContain("TAGS_REMOVED");
+  });
+
+  it("warns heuristically when edit-text output adds Noto fallback fonts", async () => {
+    const sourceBytes = await createBasicPdf();
+    const serverBytes = await createPdfWithBaseFont("NotoSans-Regular");
+    const { fetchImpl } = createFetch(pdfBytesResponse(serverBytes));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+    });
+
+    expect(result.warnings.map((warning) => warning.code)).toContain("FALLBACK_FONT_POSSIBLE");
+    expect(result.warnings.map((warning) => warning.code)).not.toContain("IMAGES_REENCODED");
   });
 
   it("redacts PDF point areas through the verified local redaction endpoint", async () => {
@@ -751,6 +972,119 @@ async function createPdfWithMetadata(): Promise<Uint8Array> {
   pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(metadataStream));
 
   return pdf.save();
+}
+
+async function createBasicPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+
+  return pdf.save();
+}
+
+async function createPdfWithSignedSignatureField(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const signatureValue = pdf.context.register(pdf.context.obj({
+    Type: "Sig",
+    Filter: "Adobe.PPKLite",
+  }));
+  const signatureField = pdf.context.register(pdf.context.obj({
+    FT: "Sig",
+    T: "attorney-signature",
+    V: signatureValue,
+    Rect: [10, 10, 200, 60],
+  }));
+  const acroForm = pdf.context.obj({
+    Fields: [signatureField],
+  }) as PDFDict;
+  pdf.catalog.set(PDFName.of("AcroForm"), pdf.context.register(acroForm));
+
+  return pdf.save();
+}
+
+async function createPdfWithPdfAIdentification(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  writePdfAIdentificationInPlace(pdf, { part: "2", conformance: "B" });
+
+  return pdf.save();
+}
+
+async function createPdfWithOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  writePdfOutlineInPlace(pdf, {
+    openMode: "outlines",
+    revision: "test",
+    items: [{
+      id: "first",
+      title: "First page",
+      target: { kind: "page", pageIndex: 0 },
+    }],
+  });
+
+  return pdf.save();
+}
+
+async function createPdfWithEmbeddedFile(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  addEmbeddedFile(pdf, "native-exhibit.txt", new Uint8Array([1, 2, 3]));
+
+  return pdf.save();
+}
+
+async function createTaggedPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.catalog.set(PDFName.of("MarkInfo"), pdf.context.obj({
+    Marked: PDFBool.True,
+  }));
+  pdf.catalog.set(PDFName.of("StructTreeRoot"), pdf.context.register(pdf.context.obj({
+    Type: "StructTreeRoot",
+  })));
+
+  return pdf.save();
+}
+
+async function createPdfWithBaseFont(baseFont: string): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([200, 300]);
+  const fontRef = pdf.context.register(pdf.context.obj({
+    Type: "Font",
+    Subtype: "Type1",
+    BaseFont: PDFName.of(baseFont),
+  }));
+  const resources = page.node.lookupMaybe(PDFName.of("Resources"), PDFDict)
+    ?? pdf.context.obj({}) as PDFDict;
+  resources.set(PDFName.of("Font"), pdf.context.obj({
+    F1: fontRef,
+  }));
+  page.node.set(PDFName.of("Resources"), resources);
+
+  return pdf.save();
+}
+
+function addEmbeddedFile(pdf: PDFDocument, fileName: string, contents: Uint8Array): void {
+  const embeddedStreamRef = pdf.context.register(pdf.context.stream(contents, {
+    Type: "EmbeddedFile",
+    Subtype: "text/plain",
+  }));
+  const fileSpecRef = pdf.context.register(pdf.context.obj({
+    Type: "Filespec",
+    F: PDFString.of(fileName),
+    UF: PDFHexString.fromText(fileName),
+    EF: pdf.context.obj({
+      F: embeddedStreamRef,
+      UF: embeddedStreamRef,
+    }),
+  }));
+  const namesRoot = pdf.catalog.lookupMaybe(PDFName.of("Names"), PDFDict)
+    ?? pdf.context.obj({}) as PDFDict;
+  namesRoot.set(PDFName.of("EmbeddedFiles"), pdf.context.obj({
+    Names: [PDFString.of(fileName), fileSpecRef],
+  }));
+  pdf.catalog.set(PDFName.of("Names"), namesRoot);
 }
 
 async function expectNoDocumentMetadata(contents: Uint8Array): Promise<void> {

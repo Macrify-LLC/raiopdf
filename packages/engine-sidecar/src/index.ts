@@ -22,6 +22,9 @@ import type {
   PdfPageSelection,
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
+  PdfReplaceTextOptions,
+  PdfReplaceTextResult,
+  PdfReplaceTextWarning,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
@@ -36,18 +39,27 @@ import type {
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import {
+  countEmbeddedFiles,
   countPdfPages,
+  countSignedSignatureFields,
   createPdfOutlinePageItem,
   mapPdfOutlineItems,
   offsetPdfOutlineItems,
   prefixPdfOutlineItemIds,
   readPdfAIdentificationFromBytes,
   readPdfOutline,
+  restoreEmbeddedFiles,
   scrubPdfMetadataBytes,
+  stripPdfAIdentificationBytes,
   type PdfAIdentification,
   writePdfOutlineInPlace,
 } from "@raiopdf/engine-pdf-lib";
-import { PDFDocument } from "pdf-lib";
+import {
+  PDFBool,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+} from "pdf-lib";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -126,6 +138,14 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  *   rasterize=true. Stirling's auto-redact can fall back to overlay-only output
  *   unless convertPDFToImage=true; rasterization is the guaranteed removal mode
  *   but returns image-based pages without searchable/selectable text.
+ * - replaceText -> POST /api/v1/general/edit-text with ordered literal
+ *   find/replace operations, wholeWordSearch, and optional 1-based pageNumbers.
+ *   Stirling regenerates the whole document, does not reflow text, can miss
+ *   multi-word finds when words are spaced positionally, reports counts only in
+ *   logs, and may re-lay out whole pages when fallback fonts are needed. The
+ *   sidecar preflights encryption/signatures/PDF-A, restores bookmarks and
+ *   embedded files, warns for dropped tags, and relies on the bundled patched
+ *   engine's image-stream passthrough.
  * - redactAreas -> POST /local/redact-areas (engine-local verified raster redaction)
  *   RaioPDF `{pageIndex,x,y,w,h}` maps to Stirling
  *   `{pageIndex,x1:x,y1:y+h,x2:x+w,y2:y}` because Stirling names y1 as the
@@ -626,6 +646,137 @@ export class SidecarPdfEngine implements PdfEngine {
     const response = await this.request("/api/v1/security/auto-redact", formData);
 
     return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
+  }
+
+  async replaceText(
+    document: PdfDocumentHandle,
+    options: PdfReplaceTextOptions,
+  ): Promise<PdfReplaceTextResult> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const pageIndexes = options.pageIndexes ?? "all";
+    assertReplaceTextOptions(options);
+    assertPageSelection(pageIndexes, pageCount);
+
+    if (Array.isArray(pageIndexes) && pageIndexes.length === 0) {
+      return {
+        document: this.store(storedDocument.bytes, pageCount),
+        replacedCounts: null,
+        warnings: [],
+      };
+    }
+
+    const hasEncryption = await hasEncryptionDictionary(storedDocument.bytes);
+
+    if (hasEncryption) {
+      throw new PdfEngineError(
+        "ENCRYPTED_DOCUMENT",
+        "Text editing refuses encrypted or permissions-protected PDFs because the engine would strip document protection.",
+      );
+    }
+
+    const [
+      signedSignatureFields,
+      pdfAIdentification,
+      hasTaggedStructure,
+      sourceAttachmentCount,
+      inputBaseFonts,
+    ] = await Promise.all([
+      countSignedSignatureFields(storedDocument.bytes),
+      readPdfAIdentificationFromBytes(storedDocument.bytes).catch(() => null),
+      hasTaggedPdfStructure(storedDocument.bytes),
+      countEmbeddedFiles(storedDocument.bytes).catch(() => 0),
+      readBaseFontNames(storedDocument.bytes),
+    ]);
+
+    const warnings: PdfReplaceTextWarning[] = [{
+      code: "COUNTS_UNAVAILABLE",
+      message: "The text engine returned edited bytes but does not report replacement counts.",
+    }];
+
+    if (signedSignatureFields > 0) {
+      if (options.allowSignatureInvalidation !== true) {
+        throw new PdfEngineError(
+          "SIGNED_DOCUMENT",
+          "Text editing would invalidate existing PDF signatures.",
+        );
+      }
+
+      warnings.push({
+        code: "SIGNATURES_INVALIDATED",
+        message: "Text editing rewrote the PDF and invalidated existing signatures.",
+      });
+    }
+
+    if (pdfAIdentification) {
+      if (options.allowPdfAIdentificationRemoval !== true) {
+        throw new PdfEngineError(
+          "UNSUPPORTED",
+          "Text editing removes PDF/A conformance; retry only after allowing the PDF/A identification to be removed.",
+        );
+      }
+    }
+
+    if (hasTaggedStructure) {
+      warnings.push({
+        code: "TAGS_REMOVED",
+        message: "Text editing removed tagged-PDF accessibility structure that cannot be restored faithfully.",
+      });
+    }
+
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("edits", JSON.stringify(options.operations));
+    formData.append("wholeWordSearch", String(options.wholeWord ?? false));
+    formData.append("pageNumbers", toSidecarPageNumbers(pageIndexes));
+
+    const response = await this.request("/api/v1/general/edit-text", formData);
+    let outputBytes = await readBytes(response);
+
+    const outline = await preserveSamePageOutline(storedDocument.bytes, outputBytes);
+    outputBytes = outline.bytes;
+
+    const attachmentRestore = await restoreEmbeddedFiles(storedDocument.bytes, outputBytes)
+      .catch((error: unknown) => ({
+        bytes: outputBytes,
+        sourceEmbeddedFileCount: sourceAttachmentCount,
+        restoredEmbeddedFileCount: 0,
+        error,
+      }));
+    outputBytes = attachmentRestore.bytes;
+    if (
+      attachmentRestore.sourceEmbeddedFileCount > 0 &&
+      attachmentRestore.restoredEmbeddedFileCount < attachmentRestore.sourceEmbeddedFileCount
+    ) {
+      warnings.push({
+        code: "ATTACHMENTS_REMOVED",
+        message: "Text editing removed embedded file attachments that could not be fully restored.",
+      });
+    }
+
+    if (pdfAIdentification) {
+      outputBytes = await stripPdfAIdentificationBytes(outputBytes);
+      warnings.push({
+        code: "PDFA_IDENTIFICATION_REMOVED",
+        message: "Text editing removed the file's PDF/A identification because the regenerated PDF no longer claims conformance.",
+      });
+    }
+
+    const outputBaseFonts = await readBaseFontNames(outputBytes).catch(() => new Set<string>());
+    if (hasNewNotoBaseFont(inputBaseFonts, outputBaseFonts)) {
+      warnings.push({
+        code: "FALLBACK_FONT_POSSIBLE",
+        message: "The output references a Noto fallback font that was not present in the input, so affected pages may have been re-laid out.",
+      });
+    }
+
+    // Phase 0 confirmed the bundled engine's image-passthrough patch preserves
+    // image streams byte-identically; IMAGES_REENCODED is reserved for unpatched
+    // engines and is intentionally not emitted here.
+    return {
+      document: this.store(outputBytes, pageCount),
+      replacedCounts: null,
+      warnings,
+    };
   }
 
   async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
@@ -1386,6 +1537,18 @@ function assertRedactTextOptions(options: PdfRedactTextOptions): void {
   }
 }
 
+function assertReplaceTextOptions(options: PdfReplaceTextOptions): void {
+  if (options.operations.length === 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "At least one text replacement operation is required.");
+  }
+
+  for (const operation of options.operations) {
+    if (operation.find.length === 0) {
+      throw new PdfEngineError("INVALID_DOCUMENT", "Replacement find text must not be empty.");
+    }
+  }
+}
+
 function assertRasterizedTextRedaction(options: PdfRedactTextOptions): void {
   if (options.rasterize !== true) {
     throw new PdfEngineError(
@@ -1416,6 +1579,93 @@ function assertPositiveFinite(value: number, fieldName: string): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a positive number.`);
   }
+}
+
+async function hasEncryptionDictionary(bytes: Uint8Array): Promise<boolean> {
+  try {
+    const pdf = await PDFDocument.load(bytes, {
+      updateMetadata: false,
+      ignoreEncryption: true,
+    });
+
+    return pdf.context.trailerInfo.Encrypt !== undefined || bytesContainAscii(bytes, "/Encrypt");
+  } catch {
+    return bytesContainAscii(bytes, "/Encrypt");
+  }
+}
+
+async function hasTaggedPdfStructure(bytes: Uint8Array): Promise<boolean> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+  const structTreeRoot = pdf.catalog.get(PDFName.of("StructTreeRoot"));
+
+  if (structTreeRoot) {
+    return true;
+  }
+
+  const markInfo = pdf.catalog.lookupMaybe(PDFName.of("MarkInfo"), PDFDict);
+  const marked = markInfo?.lookupMaybe(PDFName.of("Marked"), PDFBool);
+
+  return marked === PDFBool.True || bytesContainAscii(bytes, "/Marked true");
+}
+
+async function readBaseFontNames(bytes: Uint8Array): Promise<Set<string>> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+  const fontNames = new Set<string>();
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (!(object instanceof PDFDict)) {
+      continue;
+    }
+
+    const type = object.lookupMaybe(PDFName.of("Type"), PDFName)?.decodeText();
+    if (type !== "Font") {
+      continue;
+    }
+
+    const baseFont = object.lookupMaybe(PDFName.of("BaseFont"), PDFName)?.decodeText();
+    if (baseFont) {
+      fontNames.add(baseFont);
+    }
+  }
+
+  return fontNames;
+}
+
+function hasNewNotoBaseFont(input: ReadonlySet<string>, output: ReadonlySet<string>): boolean {
+  for (const fontName of output) {
+    if (fontName.includes("Noto") && !input.has(fontName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function bytesContainAscii(bytes: Uint8Array, text: string): boolean {
+  const first = text.charCodeAt(0);
+  const limit = bytes.length - text.length;
+
+  outer: for (let index = 0; index <= limit; index += 1) {
+    if (bytes[index] !== first) {
+      continue;
+    }
+
+    for (let offset = 1; offset < text.length; offset += 1) {
+      if (bytes[index + offset] !== text.charCodeAt(offset)) {
+        continue outer;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 // Defaults to a maximal scrub: redaction outputs are rasterized rewrites, so any

@@ -31,6 +31,8 @@ import type {
   PdfPageSelection,
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
+  PdfReplaceTextOptions,
+  PdfReplaceTextResult,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
@@ -510,6 +512,16 @@ export class LocalPdfEngine implements PdfEngine {
     throw new PdfEngineError(
       "UNSUPPORTED",
       "PDF repair requires the desktop sidecar engine; the local pdf-lib engine only opens already-readable PDFs.",
+    );
+  }
+
+  async replaceText(
+    _document: PdfDocumentHandle,
+    _options: PdfReplaceTextOptions,
+  ): Promise<PdfReplaceTextResult> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF text replacement requires the desktop sidecar engine; the local pdf-lib engine cannot re-encode arbitrary glyph runs.",
     );
   }
 

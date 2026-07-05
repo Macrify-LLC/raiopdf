@@ -49,6 +49,46 @@ export type PdfRedactTextOptions = {
   rasterize?: boolean;
 };
 
+export type PdfReplaceTextOperation = {
+  /** Literal text to find. Must be non-empty. Not a regular expression. */
+  find: string;
+  /** Literal replacement. Empty string deletes the matched text. */
+  replace: string;
+};
+
+export type PdfReplaceTextOptions = {
+  /** Ordered ops; each replaces every occurrence on the selected pages. */
+  operations: readonly PdfReplaceTextOperation[];
+  /** Match only on ASCII word boundaries (engine semantics). Defaults to false. */
+  wholeWord?: boolean;
+  /** Zero-based pages to search, or "all" (default). */
+  pageIndexes?: PdfPageSelection;
+  /** Required opt-in when the document has signed signature fields. */
+  allowSignatureInvalidation?: boolean;
+  /** Required opt-in when the document declares PDF/A conformance. */
+  allowPdfAIdentificationRemoval?: boolean;
+};
+
+export type PdfReplaceTextWarning = {
+  code:
+    | "COUNTS_UNAVAILABLE"
+    | "SIGNATURES_INVALIDATED"
+    | "FALLBACK_FONT_POSSIBLE"
+    | "PDFA_IDENTIFICATION_REMOVED"
+    /** Reserved for engines that do not carry RaioPDF's image-passthrough patch. */
+    | "IMAGES_REENCODED"
+    | "ATTACHMENTS_REMOVED"
+    | "TAGS_REMOVED";
+  message: string;
+};
+
+export type PdfReplaceTextResult = {
+  document: PdfDocumentHandle;
+  /** Index-aligned per-op counts when the engine reports them; null otherwise. */
+  replacedCounts: readonly number[] | null;
+  warnings: readonly PdfReplaceTextWarning[];
+};
+
 export type PdfTextRegion = PdfRedactionArea & {
   /** Text extracted from this area, if the engine can perform region extraction. */
   text: string;
@@ -741,6 +781,7 @@ export type PdfEngineErrorCode =
   | "INVALID_DOCUMENT"
   | "INVALID_PAGE_INDEX"
   | "PASSWORD_REQUIRED"
+  | "SIGNED_DOCUMENT"
   | "UNSUPPORTED_ENCRYPTION"
   | "UNSUPPORTED"
   | "UNSUPPORTED_ROTATION";
@@ -927,6 +968,24 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     options: PdfRedactTextOptions,
   ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Creates a new document by replacing literal, case-sensitive text in real PDF
+   * content streams.
+   *
+   * Replacement does not reflow paragraphs or retarget individual occurrences:
+   * each ordered operation replaces every match on the selected pages. The whole
+   * document is regenerated; the bundled engine preserves image streams, while
+   * unpatched engines may re-encode them, and pages with replacement glyphs the
+   * original font cannot encode may be fully re-laid out. PDFs that space words
+   * positionally can defeat multi-word finds because no literal space exists in
+   * the content stream. Engines that cannot rewrite content streams must reject
+   * with `PdfEngineError("UNSUPPORTED", ...)`.
+   */
+  replaceText(
+    document: PdfDocumentHandle,
+    options: PdfReplaceTextOptions,
+  ): Promise<PdfReplaceTextResult>;
 
   /**
    * Creates a new document with document metadata scrubbed.

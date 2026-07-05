@@ -500,20 +500,16 @@ hard cap. Nothing here blocks the plan.
 
 ### Decisions for Jacob (do not silently change scope)
 
-1. **Attachments + tagged structure are silently dropped (new).** v2 does not
-   mitigate either. Embedded-file loss is a genuine data-loss risk (a firm editing
-   text on a PDF that carries a native-format exhibit would lose the exhibit);
-   tag loss degrades accessibility. Options, cheapest first: (a) preflight-detect
-   and warn ("editing text will remove N embedded attachment(s) and accessibility
-   tags — continue?"); (b) restore the `EmbeddedFiles` name tree post-process the
-   same way the outline is restored (feasible; tags are harder to restore
-   faithfully); (c) disclose only. Recommend (a) for both plus (b) for attachments
-   if cheap; needs a call before the sidecar phase since it adds a preflight +
-   warning code.
-2. **Relax the scanned-document gate to *image-only* (not *contains-images*).**
-   Because mixed docs now preserve image bytes, a document with a text layer *and*
-   scanned exhibits is safe to edit. The UI's "scanned-docs-out" gate should key
-   off *no extractable text layer*, not the mere presence of image XObjects.
+1. **RESOLVED - Attachments + tagged structure are silently dropped.** The seam
+   warns and restores embedded file attachments by grafting the source
+   `/Names /EmbeddedFiles` tree back onto the output. If attachment restoration
+   fails or is partial, the sidecar emits `ATTACHMENTS_REMOVED`. Tagged-PDF
+   structure cannot be restored faithfully, so tagged inputs emit
+   `TAGS_REMOVED`.
+2. **RESOLVED - Relax the scanned-document gate to image-only.** Mixed documents
+   are safe for the UI phase because the bundled patched engine preserves image
+   streams byte-identically. The UI phase should gate documents with no
+   extractable text layer, not documents that merely contain images.
 
 ### Copy implications
 

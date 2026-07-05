@@ -1,10 +1,12 @@
 import {
   decodePDFRawStream,
   PDFArray,
+  PDFBool,
   PDFDict,
   PDFDocument,
   PDFHexString,
   PDFName,
+  PDFNull,
   PDFNumber,
   PDFObject,
   PDFRawStream,
@@ -50,6 +52,12 @@ export type ScrubPdfMetadataOptions = {
    *   edit that invalidates conformance anyway.
    */
   preservePdfAIdentification?: boolean | PdfAIdentification;
+};
+
+export type RestoreEmbeddedFilesResult = {
+  bytes: Uint8Array;
+  sourceEmbeddedFileCount: number;
+  restoredEmbeddedFileCount: number;
 };
 
 type RawOutlineTarget = {
@@ -292,6 +300,37 @@ export async function writePdfAIdentificationToBytes(
   return new Uint8Array(await pdf.save());
 }
 
+export function stripPdfAIdentificationInPlace(pdf: PDFDocument): void {
+  const stream = pdf.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+
+  if (!(stream instanceof PDFRawStream)) {
+    return;
+  }
+
+  const xmp = readCatalogXmp(pdf);
+  if (!xmp || !xmp.includes("pdfaid")) {
+    return;
+  }
+
+  const stripped = stripPdfAIdentificationFromXmp(xmp);
+  const replacement = pdf.context.stream(stripped, {
+    Type: "Metadata",
+    Subtype: "XML",
+  });
+
+  pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(replacement));
+}
+
+export async function stripPdfAIdentificationBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+  stripPdfAIdentificationInPlace(pdf);
+
+  return new Uint8Array(await pdf.save());
+}
+
 export function scrubPdfMetadataInPlace(
   pdf: PDFDocument,
   options: ScrubPdfMetadataOptions = {},
@@ -401,15 +440,10 @@ export function assessPdfAConversionImpact(pdf: PDFDocument): PdfAConversionImpa
   }
 
   let formFields = 0;
-  let signedSignatureFields = 0;
 
   try {
-    for (const field of pdf.getForm().getFields()) {
+    for (const _field of pdf.getForm().getFields()) {
       formFields += 1;
-
-      if (field instanceof PDFSignature && field.acroField.dict.has(PDFName.of("V"))) {
-        signedSignatureFields += 1;
-      }
     }
   } catch {
     // A malformed AcroForm fails the form count, not the whole assessment.
@@ -419,7 +453,7 @@ export function assessPdfAConversionImpact(pdf: PDFDocument): PdfAConversionImpa
     pendingRedactionAnnotations,
     overlayAnnotations,
     formFields,
-    signedSignatureFields,
+    signedSignatureFields: countSignedSignatureFieldsInDocument(pdf),
   };
 }
 
@@ -432,6 +466,75 @@ export async function assessPdfAConversionImpactFromBytes(
   });
 
   return assessPdfAConversionImpact(pdf);
+}
+
+export async function countSignedSignatureFields(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+
+  return countSignedSignatureFieldsInDocument(pdf);
+}
+
+export async function countEmbeddedFiles(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+
+  return countEmbeddedFilesInDocument(pdf);
+}
+
+export async function restoreEmbeddedFiles(
+  sourceBytes: Uint8Array,
+  outputBytes: Uint8Array,
+): Promise<RestoreEmbeddedFilesResult> {
+  const source = await PDFDocument.load(sourceBytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+  const sourceEmbeddedFileCount = countEmbeddedFilesInDocument(source);
+
+  if (sourceEmbeddedFileCount === 0) {
+    return {
+      bytes: outputBytes,
+      sourceEmbeddedFileCount,
+      restoredEmbeddedFileCount: 0,
+    };
+  }
+
+  const output = await PDFDocument.load(outputBytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+  const sourceEmbeddedFiles = source.catalog
+    .lookupMaybe(PDFName.of("Names"), PDFDict)
+    ?.get(PDFName.of("EmbeddedFiles"));
+
+  if (!sourceEmbeddedFiles) {
+    return {
+      bytes: outputBytes,
+      sourceEmbeddedFileCount,
+      restoredEmbeddedFileCount: countEmbeddedFilesInDocument(output),
+    };
+  }
+
+  const namesRoot = output.catalog.lookupMaybe(PDFName.of("Names"), PDFDict)
+    ?? output.context.obj({}) as PDFDict;
+  namesRoot.set(
+    PDFName.of("EmbeddedFiles"),
+    clonePdfObjectGraph(source, output, sourceEmbeddedFiles, new Map()),
+  );
+  output.catalog.set(PDFName.of("Names"), namesRoot);
+
+  const bytes = new Uint8Array(await output.save());
+
+  return {
+    bytes,
+    sourceEmbeddedFileCount,
+    restoredEmbeddedFileCount: await countEmbeddedFiles(bytes),
+  };
 }
 
 function readOutlineOpenMode(pdf: PDFDocument): PdfOutlineOpenMode {
@@ -691,6 +794,117 @@ function collectNameTreeDestinations(
       }
     }
   }
+}
+
+function countSignedSignatureFieldsInDocument(pdf: PDFDocument): number {
+  let signedSignatureFields = 0;
+
+  try {
+    for (const field of pdf.getForm().getFields()) {
+      if (field instanceof PDFSignature && field.acroField.dict.has(PDFName.of("V"))) {
+        signedSignatureFields += 1;
+      }
+    }
+  } catch {
+    // A malformed AcroForm fails the signature count, not the caller's full assessment.
+  }
+
+  return signedSignatureFields;
+}
+
+function countEmbeddedFilesInDocument(pdf: PDFDocument): number {
+  const namesRoot = pdf.catalog.lookupMaybe(PDFName.of("Names"), PDFDict);
+  const embeddedFiles = namesRoot?.lookupMaybe(PDFName.of("EmbeddedFiles"), PDFDict);
+
+  return countNameTreeEntries(pdf, embeddedFiles);
+}
+
+function countNameTreeEntries(pdf: PDFDocument, node: PDFDict | undefined, seen = new Set<string>()): number {
+  if (!node) {
+    return 0;
+  }
+
+  const ref = pdf.context.getObjectRef(node);
+  const key = ref ? refKey(ref) : "";
+  if (key && seen.has(key)) {
+    return 0;
+  }
+  if (key) {
+    seen.add(key);
+  }
+
+  let count = 0;
+  const names = node.lookupMaybe(PDFName.of("Names"), PDFArray);
+  if (names) {
+    count += Math.floor(names.size() / 2);
+  }
+
+  const kids = node.lookupMaybe(PDFName.of("Kids"), PDFArray);
+  if (kids) {
+    for (let index = 0; index < kids.size(); index += 1) {
+      const kid = resolvePdfObject(pdf, kids.get(index)).object;
+      if (kid instanceof PDFDict) {
+        count += countNameTreeEntries(pdf, kid, seen);
+      }
+    }
+  }
+
+  return count;
+}
+
+function clonePdfObjectGraph(
+  source: PDFDocument,
+  output: PDFDocument,
+  object: PDFObject,
+  refs: Map<string, PDFRef>,
+): PDFObject {
+  if (object instanceof PDFRef) {
+    const key = refKey(object);
+    const existing = refs.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const clonedRef = output.context.nextRef();
+    refs.set(key, clonedRef);
+    const resolved = source.context.lookup(object);
+    if (!resolved) {
+      output.context.assign(clonedRef, PDFNull);
+      return clonedRef;
+    }
+
+    output.context.assign(clonedRef, clonePdfObjectGraph(source, output, resolved, refs));
+    return clonedRef;
+  }
+
+  if (object instanceof PDFRawStream) {
+    const dict = clonePdfObjectGraph(source, output, object.dict, refs);
+    if (!(dict instanceof PDFDict)) {
+      throw new Error("PDF stream dictionary did not clone to a dictionary.");
+    }
+
+    return PDFRawStream.of(dict, object.contents.slice());
+  }
+
+  if (object instanceof PDFDict) {
+    const dict = PDFDict.withContext(output.context);
+    for (const [key, value] of object.entries()) {
+      dict.set(key, clonePdfObjectGraph(source, output, value, refs));
+    }
+
+    return dict;
+  }
+
+  if (object instanceof PDFArray) {
+    const array = PDFArray.withContext(output.context);
+    for (let index = 0; index < object.size(); index += 1) {
+      array.push(clonePdfObjectGraph(source, output, object.get(index), refs));
+    }
+
+    return array;
+  }
+
+  return object instanceof PDFBool || object === PDFNull ? object : object.clone(output.context);
 }
 
 function readPdfText(value: PDFObject | undefined): string | null {
@@ -1206,6 +1420,13 @@ function matchXmpValue(xmp: string, tag: string, valuePattern: RegExp): string |
   const attribute = new RegExp(`pdfaid:${tag}\\s*=\\s*"(${valuePattern.source})"`).exec(xmp);
 
   return attribute?.[1] ?? null;
+}
+
+function stripPdfAIdentificationFromXmp(xmp: string): string {
+  return xmp
+    .replace(/\s+xmlns:pdfaid="http:\/\/www\.aiim\.org\/pdfa\/ns\/id\/"/g, "")
+    .replace(/\s+pdfaid:(?:part|conformance)\s*=\s*"[^"]*"/g, "")
+    .replace(/\s*<pdfaid:(?:part|conformance)\b[^>]*>[\s\S]*?<\/pdfaid:(?:part|conformance)>\s*/g, "\n");
 }
 
 function buildMinimalPdfAXmp(identification: PdfAIdentification): string {

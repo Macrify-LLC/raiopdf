@@ -4,6 +4,8 @@ import type {
   PdfAFlavor,
   PdfCompressOptions,
   PdfDocumentHandle,
+  PdfReplaceTextOptions,
+  PdfReplaceTextWarning,
   PdfRedactionArea,
   PdfSanitizeOptions,
   PdfSanitizeResult,
@@ -42,6 +44,8 @@ export type RunOcrResult = {
   pageCount: number;
 };
 
+export type ReplaceTextBridgeOptions = PdfReplaceTextOptions;
+
 export interface EngineBridge {
   available: boolean;
   ocrAvailable: boolean;
@@ -66,6 +70,11 @@ export interface EngineBridge {
   sanitize: (bytes: Uint8Array, options?: PdfSanitizeOptions) => Promise<{
     bytes: Uint8Array;
     removed: PdfSanitizeResult["removed"];
+  }>;
+  replaceText: (bytes: Uint8Array, options: ReplaceTextBridgeOptions) => Promise<{
+    bytes: Uint8Array;
+    replacedCounts: readonly number[] | null;
+    warnings: readonly PdfReplaceTextWarning[];
   }>;
   repair: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
@@ -318,6 +327,29 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const replaceText = useCallback(
+    (bytes: Uint8Array, options: ReplaceTextBridgeOptions) =>
+      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+        const sourceHandle = await engine.open(bytes);
+        let outputHandle: PdfDocumentHandle | null = null;
+
+        try {
+          const result = await engine.replaceText(sourceHandle, options);
+          outputHandle = result.document;
+
+          return {
+            bytes: await engine.saveToBytes(outputHandle),
+            replacedCounts: result.replacedCounts,
+            warnings: result.warnings,
+          };
+        } finally {
+          await closeHandle(engine, outputHandle);
+          await closeHandle(engine, sourceHandle);
+        }
+      }),
+    [ensureEngine],
+  );
+
   return {
     available: runtimeAvailable && !disabled,
     ocrAvailable: runtimeAvailable && !disabled && ocrToolchainMissing.length === 0,
@@ -330,6 +362,7 @@ export function useEngineBridge(): EngineBridge {
     compress,
     removeEncryption,
     sanitize,
+    replaceText,
     repair,
   };
 }

@@ -62,6 +62,19 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("reports direct text replacement as unsupported", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(
+      engine.replaceText(document, {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("maps encrypted documents to ENCRYPTED_DOCUMENT", async () => {
     const engine = createLocalPdfEngine();
 

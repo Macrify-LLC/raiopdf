@@ -140,7 +140,7 @@ export function useEngineBridge(): EngineBridge {
 
       const engine = new SidecarPdfEngine({
         authToken: response.token,
-        baseUrl: `http://127.0.0.1:${response.port}`,
+        baseUrl: `http://localhost:${response.port}`,
         ...(window.__RAIOPDF_TEST_ENGINE_FETCH__
           ? { fetch: window.__RAIOPDF_TEST_ENGINE_FETCH__ }
           : {}),

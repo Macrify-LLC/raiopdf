@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { z } from "zod";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import type { EngineHandle } from "../engine.js";
@@ -8,9 +12,11 @@ import {
   successResult,
   type StructuredToolResult,
 } from "../format.js";
-import { resolvePageIndexes, runOutputOp, runSingleOutputOp } from "../ops.js";
+import { resolvePageIndexes, runLocalOutputOp, runOutputOp, runSingleOutputOp } from "../ops.js";
 import { prepareOutput, resolveInput } from "../paths.js";
 import { extractTextLayerCoverage } from "../pdfjs-node.js";
+
+const execFileAsync = promisify(execFile);
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 const absoluteOutput = z
@@ -170,9 +176,9 @@ export interface MergeInput {
 }
 export function handleMerge(
   input: MergeInput,
-  engine: EngineHandle,
+  _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
-  return runOutputOp(engine, input.inputs, input.output, async (e, documents) => {
+  return runLocalOutputOp(input.inputs, input.output, async (e, documents) => {
     const result = await e.merge(documents);
     return { result, summary: `Merged ${documents.length} files into ${input.output}.` };
   });
@@ -235,15 +241,53 @@ export interface CompressInput {
 }
 export function handleCompress(
   input: CompressInput,
-  engine: EngineHandle,
+  _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
-  return runSingleOutputOp(engine, input.input, input.output, async (e, document) => {
-    const result = await e.compress(document, {
-      quality: input.quality ?? 5,
-      ...(input.grayscale === undefined ? {} : { grayscale: input.grayscale }),
-    });
-    return { result, summary: `Compressed into ${input.output}.` };
-  });
+  void input.quality;
+  void input.grayscale;
+  return handleCompressWithQpdf(input);
+}
+
+async function handleCompressWithQpdf(input: CompressInput): Promise<StructuredToolResult> {
+  const source = await resolveInput(input.input);
+  const output = await prepareOutput(input.output);
+
+  try {
+    const compressedBytes = await compressWithQpdf(source.realPath, output.tempPath);
+    await output.write(compressedBytes);
+    await output.commit();
+
+    return successResult("Compressed into a new PDF.", { output: output.outputPath });
+  } catch (error) {
+    await output.abort();
+    throw error;
+  }
+}
+
+async function compressWithQpdf(inputPath: string, outputTempPath: string): Promise<Uint8Array> {
+  const qpdf = await resolveQpdfBinary();
+  const qpdfOutput = `${outputTempPath}.qpdf.pdf`;
+
+  try {
+    await execFileAsync(qpdf, [
+      "--warning-exit-0",
+      "--object-streams=generate",
+      "--compress-streams=y",
+      "--recompress-flate",
+      "--linearize",
+      inputPath,
+      qpdfOutput,
+    ]);
+    const bytes = await fs.readFile(qpdfOutput);
+    if (bytes.byteLength === 0) {
+      throw new Error("qpdf produced an empty compressed PDF.");
+    }
+    return new Uint8Array(bytes);
+  } catch (error) {
+    throw new Error(formatQpdfCompressError(error));
+  } finally {
+    await fs.rm(qpdfOutput, { force: true }).catch(() => undefined);
+  }
 }
 
 // ---- remove_encryption ----
@@ -260,15 +304,13 @@ export interface RemoveEncryptionInput {
 }
 export async function handleRemoveEncryption(
   input: RemoveEncryptionInput,
-  engineHandle: EngineHandle,
+  _engineHandle: EngineHandle,
 ): Promise<StructuredToolResult> {
   const source = await resolveInput(input.input);
   const output = await prepareOutput(input.output);
 
   try {
-    const engine = await engineHandle.getEngine();
-    const sourceBytes = await fs.readFile(source.realPath);
-    const unlockedBytes = await engine.removeEncryption(sourceBytes, input.password);
+    const unlockedBytes = await decryptWithQpdf(source.realPath, input.password, output.tempPath);
     await output.write(unlockedBytes);
     await output.commit();
 
@@ -277,6 +319,96 @@ export async function handleRemoveEncryption(
     await output.abort();
     throw error;
   }
+}
+
+async function decryptWithQpdf(inputPath: string, password: string, outputTempPath: string): Promise<Uint8Array> {
+  const qpdf = await resolveQpdfBinary();
+  const workDir = await fs.mkdtemp(path.join(tmpdir(), "raiopdf-mcp-decrypt-"));
+  const passwordPath = path.join(workDir, "password.txt");
+  const qpdfOutput = `${outputTempPath}.qpdf.pdf`;
+
+  try {
+    await fs.writeFile(passwordPath, password);
+    await execFileAsync(qpdf, [
+      "--warning-exit-0",
+      "--decrypt",
+      `--password-file=${passwordPath}`,
+      inputPath,
+      qpdfOutput,
+    ]);
+    const bytes = await fs.readFile(qpdfOutput);
+    if (bytes.byteLength === 0) {
+      throw new Error("qpdf produced an empty decrypted PDF.");
+    }
+    return new Uint8Array(bytes);
+  } catch (error) {
+    throw new Error(formatQpdfDecryptError(error));
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(qpdfOutput, { force: true }).catch(() => undefined);
+  }
+}
+
+async function resolveQpdfBinary(): Promise<string> {
+  const payloadDir = process.env.RAIOPDF_ENGINE_PAYLOAD_DIR
+    ?? (process.env.RAIOPDF_ENGINE_RESOURCE_DIR
+      ? path.join(process.env.RAIOPDF_ENGINE_RESOURCE_DIR, "payload")
+      : undefined);
+  const candidates = [
+    process.env.RAIOPDF_ENGINE_QPDF,
+    payloadDir
+      ? path.join(
+          payloadDir,
+          "ocr",
+          "qpdf",
+          "bin",
+          process.platform === "win32" ? "qpdf.exe" : "qpdf",
+        )
+      : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next explicit candidate, then fall back to PATH.
+    }
+  }
+
+  return process.platform === "win32" ? "qpdf.exe" : "qpdf";
+}
+
+function formatQpdfDecryptError(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "stderr" in error &&
+    typeof error.stderr === "string" &&
+    error.stderr.trim()
+  ) {
+    return `qpdf decrypt failed: ${error.stderr.trim()}`;
+  }
+  if (error instanceof Error) {
+    return `qpdf decrypt failed: ${error.message}`;
+  }
+  return "qpdf decrypt failed.";
+}
+
+function formatQpdfCompressError(error: unknown): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "stderr" in error &&
+    typeof error.stderr === "string" &&
+    error.stderr.trim()
+  ) {
+    return `qpdf compress failed: ${error.stderr.trim()}`;
+  }
+  if (error instanceof Error) {
+    return `qpdf compress failed: ${error.message}`;
+  }
+  return "qpdf compress failed.";
 }
 
 // ---- sanitize_pdf ----

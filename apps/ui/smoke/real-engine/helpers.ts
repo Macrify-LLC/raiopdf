@@ -298,7 +298,7 @@ function walkFixtures(dir: string, base = ""): string[] {
     const rel = base ? `${base}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       out.push(...walkFixtures(path.join(dir, entry.name), rel));
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() || (entry.isSymbolicLink() && statSync(path.join(dir, entry.name)).isFile())) {
       out.push(rel);
     }
   }
@@ -329,6 +329,13 @@ export function localFixtureNames(pattern: RegExp, maxBytes = BROWSER_OPEN_CAP_B
  * separate-files filing-packet test.
  */
 export function localFixtureSet(folderPattern: RegExp): { name: string; bytes: Uint8Array }[] {
+  return localFixtureSetUnder(folderPattern);
+}
+
+export function localFixtureSetUnder(
+  folderPattern: RegExp,
+  maxBytes = BROWSER_OPEN_CAP_BYTES,
+): { name: string; bytes: Uint8Array }[] {
   const match = walkFixtures(FIXTURES_LOCAL_DIR).find(
     (rel) => folderPattern.test(rel) && rel.toLowerCase().endsWith(".pdf"),
   );
@@ -338,7 +345,7 @@ export function localFixtureSet(folderPattern: RegExp): { name: string; bytes: U
   const folder = path.dirname(match);
   return walkFixtures(FIXTURES_LOCAL_DIR)
     .filter((rel) => path.dirname(rel) === folder && rel.toLowerCase().endsWith(".pdf"))
-    .filter((rel) => statSync(path.join(FIXTURES_LOCAL_DIR, rel)).size <= MAX_FIXTURE_BYTES)
+    .filter((rel) => statSync(path.join(FIXTURES_LOCAL_DIR, rel)).size <= maxBytes)
     .sort()
     .map((rel) => ({ name: path.basename(rel), bytes: new Uint8Array(readFileSync(path.join(FIXTURES_LOCAL_DIR, rel))) }));
 }

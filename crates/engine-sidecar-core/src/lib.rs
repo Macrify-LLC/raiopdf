@@ -1,7 +1,8 @@
 pub mod path_ops;
 pub mod print_ops;
 
-use serde::Serialize;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::OsString,
@@ -33,7 +34,7 @@ pub const ENGINE_LOG_FILE_NAME: &str = "engine.log";
 pub const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 pub const ENGINE_LOG_GENERATIONS: usize = 2;
 pub const AUTH_HEADER_NAME: &str = "x-raiopdf-auth";
-pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex";
+pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas";
 pub const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 pub const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 pub const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
@@ -1387,7 +1388,7 @@ fn proxy_client_with_activity(
     // the bundled, lossless qpdf: Stirling's /remove-password strips /Encrypt but
     // drops the text layer (measured 1298 -> 0 words), so it must never be used.
     if request_method(&request_head) == Some("POST")
-        && request_target(&request_head) == Some("/local/decrypt")
+        && request_path(&request_head) == Some("/local/decrypt")
     {
         let result = handle_local_decrypt(&mut client, &request_head, &buffered_body);
         // Shutdown::Write (not Both): send the queued response + FIN and close the
@@ -1405,10 +1406,33 @@ fn proxy_client_with_activity(
     // engine Stirling would use under the hood, so we convert here and keep the
     // whole path on-device.
     if request_method(&request_head) == Some("POST")
-        && request_target(&request_head) == Some("/local/pdfa")
+        && request_path(&request_head) == Some("/local/pdfa")
     {
         let result = handle_local_pdfa(&mut client, &request_head, &buffered_body);
         // Graceful close (see the decrypt branch above): Shutdown::Write, never Both.
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
+    // Compression is a deterministic, local structural qpdf pass. Stirling's
+    // compress endpoint depends on optional image tooling that is not part of
+    // RaioPDF's payload, so route byte-mode UI calls through the same local
+    // path operation used by streamed documents.
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/compress")
+    {
+        let result = handle_local_compress(&mut client, &request_head, &buffered_body);
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
+    // Area redaction must destroy underlying page text, not just draw black
+    // rectangles. The local path op rasterizes affected pages and verifies the
+    // output fail-closed before returning any PDF bytes.
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/redact-areas")
+    {
+        let result = handle_local_redact_areas(&mut client, &request_head, &buffered_body);
         let _ = client.shutdown(Shutdown::Write);
         return result;
     }
@@ -1417,22 +1441,19 @@ fn proxy_client_with_activity(
     let mut upstream = TcpStream::connect_timeout(&upstream_addr, Duration::from_secs(5))?;
     upstream.set_write_timeout(Some(Duration::from_secs(30)))?;
     upstream.write_all(&request_head)?;
-    if !buffered_body.is_empty() {
-        upstream.write_all(&buffered_body)?;
-    }
+    forward_known_request_body(&mut client, &mut upstream, &request_head, &buffered_body)?;
+    let _ = upstream.shutdown(Shutdown::Write);
     upstream.set_read_timeout(None)?;
     upstream.set_write_timeout(None)?;
 
-    let mut upstream_writer = upstream.try_clone()?;
-    let mut client_reader = client.try_clone()?;
-    let copy_request = thread::spawn(move || {
-        let _ = io::copy(&mut client_reader, &mut upstream_writer);
-        let _ = upstream_writer.shutdown(Shutdown::Write);
-    });
-
+    let (response_head, response_buffered_body) = read_request_head(&mut upstream)?;
+    let response_head = rewrite_proxy_response_cors(&response_head, &request_head);
+    client.write_all(&response_head)?;
+    if !response_buffered_body.is_empty() {
+        client.write_all(&response_buffered_body)?;
+    }
     let _ = io::copy(&mut upstream, &mut client);
     let _ = client.shutdown(Shutdown::Write);
-    let _ = copy_request.join();
 
     Ok(())
 }
@@ -1469,34 +1490,51 @@ fn request_target(request_head: &[u8]) -> Option<&str> {
     request_head.lines().next()?.split_whitespace().nth(1)
 }
 
-/// Handle `POST /local/decrypt`: raw PDF bytes in the body, the password
-/// hex-encoded in `X-RaioPDF-Password-Hex` (empty for owner-restricted files).
-/// Responds with the decrypted PDF (200) or a plain-text error (422).
+fn request_path(request_head: &[u8]) -> Option<&str> {
+    request_target(request_head)
+        .map(|target| target.split_once('?').map_or(target, |(path, _)| path))
+}
+
+/// Handle `POST /local/decrypt`: PDF bytes in the body, optionally base64
+/// encoded when `body_encoding=base64`, and the password hex-encoded in the
+/// loopback query string or legacy header. Responds with the decrypted PDF
+/// (200) or a plain-text error (422).
 fn handle_local_decrypt(
     client: &mut TcpStream,
     request_head: &[u8],
     buffered_body: &[u8],
 ) -> io::Result<()> {
-    let content_length = request_header(request_head, "content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
+    let body = match read_local_pdf_body(client, request_head, buffered_body) {
+        Ok(body) => body,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
 
-    let mut body = buffered_body.to_vec();
-    if content_length > body.len() {
-        client.set_read_timeout(Some(Duration::from_secs(60)))?;
-        let mut remaining = vec![0u8; content_length - body.len()];
-        client.read_exact(&mut remaining)?;
-        body.extend_from_slice(&remaining);
-    }
-
-    let password = request_header(request_head, "x-raiopdf-password-hex")
+    let password = request_query_param(request_head, "password_hex")
+        .or_else(|| request_header(request_head, "x-raiopdf-password-hex"))
         .map(decode_hex)
         .unwrap_or_default();
 
     match run_qpdf_decrypt(&body, &password) {
-        Ok(decrypted) => write_bytes_response(client, 200, "OK", "application/pdf", &decrypted),
-        Err(message) => write_bytes_response(
+        Ok(decrypted) => write_local_bytes_response(
             client,
+            request_head,
+            200,
+            "OK",
+            "application/pdf",
+            &decrypted,
+        ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
             422,
             "Unprocessable Entity",
             "text/plain",
@@ -1505,18 +1543,205 @@ fn handle_local_decrypt(
     }
 }
 
-/// Handle `POST /local/pdfa`: raw PDF bytes in the body, the target conformance
-/// level (`1`, `2`, or `3`) in `X-RaioPDF-PdfA-Level` and, when strict, a
-/// `X-RaioPDF-PdfA-Strict: true` header. Responds with the PDF/A (200) or a
-/// plain-text error (422).
+/// Handle `POST /local/pdfa`: PDF bytes in the body, optionally base64 encoded
+/// when `body_encoding=base64`, and PDF/A options in the loopback query string
+/// or legacy headers. Responds with the PDF/A (200) or a plain-text error
+/// (422).
 fn handle_local_pdfa(
     client: &mut TcpStream,
     request_head: &[u8],
     buffered_body: &[u8],
 ) -> io::Result<()> {
-    let content_length = request_header(request_head, "content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
+    let body = match read_local_pdf_body(client, request_head, buffered_body) {
+        Ok(body) => body,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+
+    let level = request_query_param(request_head, "pdfa_level")
+        .or_else(|| request_header(request_head, "x-raiopdf-pdfa-level"))
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .filter(|level| (1..=3).contains(level))
+        .unwrap_or(2);
+    let strict = request_query_param(request_head, "pdfa_strict")
+        .or_else(|| request_header(request_head, "x-raiopdf-pdfa-strict"))
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    match run_gs_pdfa(&body, level, strict) {
+        Ok(converted) => write_local_bytes_response(
+            client,
+            request_head,
+            200,
+            "OK",
+            "application/pdf",
+            &converted,
+        ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+/// Handle `POST /local/compress`: PDF bytes in the body, optionally base64
+/// encoded when `body_encoding=base64`. Responds with the qpdf-normalized PDF
+/// (200) or a plain-text error (422).
+fn handle_local_compress(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let body = match read_local_pdf_body(client, request_head, buffered_body) {
+        Ok(body) => body,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+
+    match run_path_op_compress(&body) {
+        Ok(compressed) => write_local_bytes_response(
+            client,
+            request_head,
+            200,
+            "OK",
+            "application/pdf",
+            &compressed,
+        ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+/// Handle `POST /local/redact-areas`: raw PDF bytes in the body and
+/// `X-RaioPDF-Redaction-Areas` as camelCase JSON. Responds with a verified
+/// redacted PDF (200) or a plain-text error (422).
+fn handle_local_redact_areas(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let body = read_request_body(client, request_head, buffered_body)?;
+    let (pdf, areas) = match parse_local_redact_request(request_head, &body) {
+        Ok(request) => request,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+
+    match run_path_op_redact_areas(&pdf, &areas) {
+        Ok(redacted) => write_local_bytes_response(
+            client,
+            request_head,
+            200,
+            "OK",
+            "application/pdf",
+            &redacted,
+        ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalRedactArea {
+    page_index: u32,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalRedactRequest {
+    pdf_base64: String,
+    areas: Vec<LocalRedactArea>,
+}
+
+impl From<LocalRedactArea> for path_ops::RedactArea {
+    fn from(area: LocalRedactArea) -> Self {
+        Self {
+            page_index: area.page_index,
+            x: area.x,
+            y: area.y,
+            w: area.w,
+            h: area.h,
+        }
+    }
+}
+
+fn parse_local_redact_request(
+    request_head: &[u8],
+    body: &[u8],
+) -> Result<(Vec<u8>, Vec<path_ops::RedactArea>), String> {
+    if let Some(areas_json) = request_header(request_head, "x-raiopdf-redaction-areas") {
+        let areas = serde_json::from_str::<Vec<LocalRedactArea>>(areas_json)
+            .map_err(|error| format!("invalid redaction areas: {error}"))?
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        return Ok((body.to_vec(), areas));
+    }
+
+    let request = serde_json::from_slice::<LocalRedactRequest>(body)
+        .map_err(|error| format!("invalid redaction request: {error}"))?;
+    let pdf = BASE64_STANDARD
+        .decode(request.pdf_base64)
+        .map_err(|error| format!("invalid redaction PDF payload: {error}"))?;
+    let areas = request
+        .areas
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    Ok((pdf, areas))
+}
+
+fn read_request_body(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<Vec<u8>> {
+    let content_length = request_content_length(request_head);
 
     let mut body = buffered_body.to_vec();
     if content_length > body.len() {
@@ -1525,25 +1750,151 @@ fn handle_local_pdfa(
         client.read_exact(&mut remaining)?;
         body.extend_from_slice(&remaining);
     }
+    Ok(body)
+}
 
-    let level = request_header(request_head, "x-raiopdf-pdfa-level")
-        .and_then(|value| value.trim().parse::<u8>().ok())
-        .filter(|level| (1..=3).contains(level))
-        .unwrap_or(2);
-    let strict = request_header(request_head, "x-raiopdf-pdfa-strict")
-        .map(|value| value.trim().eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    match run_gs_pdfa(&body, level, strict) {
-        Ok(converted) => write_bytes_response(client, 200, "OK", "application/pdf", &converted),
-        Err(message) => write_bytes_response(
-            client,
-            422,
-            "Unprocessable Entity",
-            "text/plain",
-            message.as_bytes(),
-        ),
+fn forward_known_request_body(
+    client: &mut TcpStream,
+    upstream: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let content_length = request_content_length(request_head);
+    if content_length == 0 && request_uses_chunked_transfer(request_head) {
+        return forward_chunked_request_body(client, upstream, buffered_body);
     }
+
+    let buffered_to_forward = buffered_body.len().min(content_length);
+
+    if buffered_to_forward > 0 {
+        upstream.write_all(&buffered_body[..buffered_to_forward])?;
+    }
+
+    let mut remaining = content_length.saturating_sub(buffered_to_forward);
+    if remaining == 0 {
+        return Ok(());
+    }
+
+    client.set_read_timeout(Some(Duration::from_secs(60)))?;
+    let mut chunk = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let read_len = chunk.len().min(remaining);
+        client.read_exact(&mut chunk[..read_len])?;
+        upstream.write_all(&chunk[..read_len])?;
+        remaining -= read_len;
+    }
+
+    Ok(())
+}
+
+fn forward_chunked_request_body(
+    client: &mut TcpStream,
+    upstream: &mut TcpStream,
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    client.set_read_timeout(Some(Duration::from_secs(60)))?;
+    let mut pending = buffered_body.to_vec();
+
+    loop {
+        let size_line = read_chunk_line(client, &mut pending)?;
+        upstream.write_all(&size_line)?;
+
+        let size = parse_chunk_size(&size_line)?;
+        if size == 0 {
+            loop {
+                let trailer_line = read_chunk_line(client, &mut pending)?;
+                let done = trailer_line == b"\r\n";
+                upstream.write_all(&trailer_line)?;
+                if done {
+                    return Ok(());
+                }
+            }
+        }
+
+        forward_chunk_bytes(client, upstream, &mut pending, size + 2)?;
+    }
+}
+
+fn read_chunk_line(client: &mut TcpStream, pending: &mut Vec<u8>) -> io::Result<Vec<u8>> {
+    loop {
+        if let Some(end) = pending.windows(2).position(|window| window == b"\r\n") {
+            let line = pending.drain(..end + 2).collect::<Vec<_>>();
+            return Ok(line);
+        }
+
+        let mut byte = [0u8; 1];
+        client.read_exact(&mut byte)?;
+        pending.push(byte[0]);
+    }
+}
+
+fn forward_chunk_bytes(
+    client: &mut TcpStream,
+    upstream: &mut TcpStream,
+    pending: &mut Vec<u8>,
+    mut remaining: usize,
+) -> io::Result<()> {
+    if !pending.is_empty() {
+        let pending_to_forward = pending.len().min(remaining);
+        upstream.write_all(&pending[..pending_to_forward])?;
+        pending.drain(..pending_to_forward);
+        remaining -= pending_to_forward;
+    }
+
+    let mut chunk = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let read_len = chunk.len().min(remaining);
+        client.read_exact(&mut chunk[..read_len])?;
+        upstream.write_all(&chunk[..read_len])?;
+        remaining -= read_len;
+    }
+
+    Ok(())
+}
+
+fn parse_chunk_size(line: &[u8]) -> io::Result<usize> {
+    let line = std::str::from_utf8(line)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let size = line
+        .trim()
+        .split_once(';')
+        .map_or_else(|| line.trim(), |(size, _)| size.trim());
+    usize::from_str_radix(size, 16).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid chunk size: {error}"),
+        )
+    })
+}
+
+fn request_content_length(request_head: &[u8]) -> usize {
+    request_header(request_head, "content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn request_uses_chunked_transfer(request_head: &[u8]) -> bool {
+    request_header(request_head, "transfer-encoding")
+        .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"))
+}
+
+fn read_local_pdf_body(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let body = read_request_body(client, request_head, buffered_body)
+        .map_err(|error| format!("read request body: {error}"))?;
+
+    if request_query_param(request_head, "body_encoding") != Some("base64") {
+        return Ok(body);
+    }
+
+    let encoded = std::str::from_utf8(&body)
+        .map_err(|error| format!("invalid base64 request body: {error}"))?;
+    BASE64_STANDARD
+        .decode(encoded.trim())
+        .map_err(|error| format!("invalid base64 PDF payload: {error}"))
 }
 
 /// Convert to PDF/A with the bundled Ghostscript. The stock `PDFA_def.ps` opens
@@ -1554,26 +1905,7 @@ fn handle_local_pdfa(
 fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
     let ghostscript = resolve_ghostscript()
         .ok_or_else(|| "ghostscript binary not found in payload".to_string())?;
-    // gs.exe lives at <gs-root>/bin/gs.exe; the profile and definition file hang
-    // off <gs-root>.
-    let gs_root = ghostscript
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| "could not resolve ghostscript root directory".to_string())?;
-    let icc_source = gs_root.join("iccprofiles").join("srgb.icc");
-    let def_source = gs_root.join("lib").join("PDFA_def.ps");
-    if !icc_source.is_file() {
-        return Err(format!(
-            "ghostscript sRGB profile not found at {}",
-            icc_source.display()
-        ));
-    }
-    if !def_source.is_file() {
-        return Err(format!(
-            "ghostscript PDF/A definition not found at {}",
-            def_source.display()
-        ));
-    }
+    let (icc_source, def_source) = resolve_pdfa_resources(&ghostscript)?;
 
     let work_dir = unique_temp_dir("raiopdf-pdfa");
     fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
@@ -1641,6 +1973,46 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
     Ok(converted)
 }
 
+fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
+    let work_dir = unique_temp_dir("raiopdf-compress");
+    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let _cleanup = TempDirGuard(work_dir.clone());
+
+    let in_path = work_dir.join("in.pdf");
+    let out_path = work_dir.join("out.pdf");
+    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
+
+    let toolchain = path_ops::PathOpsToolchain::discover(None);
+    path_ops::compress(&toolchain, &in_path, &out_path).map_err(|error| error.to_string())?;
+
+    let compressed =
+        fs::read(&out_path).map_err(|error| format!("read compressed output: {error}"))?;
+    if compressed.is_empty() {
+        return Err("qpdf produced an empty compressed output".to_string());
+    }
+    Ok(compressed)
+}
+
+fn run_path_op_redact_areas(pdf: &[u8], areas: &[path_ops::RedactArea]) -> Result<Vec<u8>, String> {
+    let work_dir = unique_temp_dir("raiopdf-redact");
+    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let _cleanup = TempDirGuard(work_dir.clone());
+
+    let in_path = work_dir.join("in.pdf");
+    let out_path = work_dir.join("out.pdf");
+    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
+
+    let toolchain = path_ops::PathOpsToolchain::discover(None);
+    path_ops::redact_areas(&toolchain, &in_path, areas, &out_path, &work_dir)
+        .map_err(|error| error.to_string())?;
+
+    let redacted = fs::read(&out_path).map_err(|error| format!("read redacted output: {error}"))?;
+    if redacted.is_empty() {
+        return Err("redaction produced an empty output".to_string());
+    }
+    Ok(redacted)
+}
+
 fn resolve_ghostscript() -> Option<PathBuf> {
     if let Some(path) = env::var_os("RAIOPDF_ENGINE_GHOSTSCRIPT") {
         let path = PathBuf::from(path);
@@ -1654,6 +2026,45 @@ fn resolve_ghostscript() -> Option<PathBuf> {
         .into_iter()
         .map(|name| bin_dir.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+fn resolve_pdfa_resources(ghostscript: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let gs_root = ghostscript
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "could not resolve ghostscript root directory".to_string())?;
+    let share_root = ghostscript_share_root(ghostscript);
+
+    let mut icc_candidates = vec![gs_root.join("iccprofiles").join("srgb.icc")];
+    let mut def_candidates = vec![gs_root.join("lib").join("PDFA_def.ps")];
+    if let Some(root) = share_root {
+        icc_candidates.push(root.join("iccprofiles").join("srgb.icc"));
+        def_candidates.push(root.join("lib").join("PDFA_def.ps"));
+    }
+    icc_candidates.push(PathBuf::from("/usr/share/color/icc/ghostscript/srgb.icc"));
+
+    let icc_source = icc_candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| "ghostscript sRGB profile not found".to_string())?;
+    let def_source = def_candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| "ghostscript PDF/A definition not found".to_string())?;
+
+    Ok((icc_source, def_source))
+}
+
+fn ghostscript_share_root(ghostscript: &Path) -> Option<PathBuf> {
+    let output = Command::new(ghostscript).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from("/usr/share/ghostscript").join(version))
 }
 
 /// Losslessly strip encryption with the bundled qpdf. Input goes via a temp file
@@ -1731,15 +2142,24 @@ impl Drop for TempDirGuard {
     }
 }
 
-fn write_bytes_response(
+fn write_local_bytes_response(
     client: &mut TcpStream,
+    request_head: &[u8],
     status: u16,
     reason: &str,
     content_type: &str,
     body: &[u8],
 ) -> io::Result<()> {
+    let cors = request_header(request_head, "origin")
+        .filter(|origin| is_allowed_cors_origin(origin))
+        .map(|origin| {
+            format!(
+                "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\nVary: Origin\r\n"
+            )
+        })
+        .unwrap_or_default();
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\n{cors}Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     client.write_all(head.as_bytes())?;
@@ -1811,14 +2231,24 @@ pub fn request_has_valid_auth(request_head: &[u8], token: &str) -> bool {
         return false;
     };
 
-    request_head.lines().skip(1).any(|line| {
+    if request_head.lines().skip(1).any(|line| {
         let Some((name, value)) = line.split_once(':') else {
             return false;
         };
 
         name.trim().eq_ignore_ascii_case(AUTH_HEADER_NAME)
             && constant_time_eq(value.trim().as_bytes(), token.as_bytes())
-    })
+    }) {
+        return true;
+    }
+
+    request_head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .filter(|target| target.starts_with("/local/"))
+        .and_then(|_target| request_query_param_from_head(request_head, "raiopdf_auth"))
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
 }
 
 /// Constant-time byte comparison so auth-token checking doesn't leak length or
@@ -1838,7 +2268,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 fn is_cors_preflight(request_head: &[u8]) -> bool {
     request_method(request_head).is_some_and(|method| method.eq_ignore_ascii_case("OPTIONS"))
         && request_header(request_head, "origin").is_some()
-        && request_header(request_head, "access-control-request-method").is_some()
 }
 
 fn write_cors_preflight_response(client: &mut TcpStream, request_head: &[u8]) -> io::Result<()> {
@@ -1858,7 +2287,56 @@ fn write_cors_preflight_response(client: &mut TcpStream, request_head: &[u8]) ->
 
     write!(
         client,
-        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Headers: {CORS_ALLOW_HEADERS}\r\nAccess-Control-Allow-Methods: {CORS_ALLOW_METHODS}\r\nAccess-Control-Max-Age: 600\r\nVary: Origin\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Headers: {CORS_ALLOW_HEADERS}\r\nAccess-Control-Allow-Methods: {CORS_ALLOW_METHODS}\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 0\r\nVary: Origin\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    )
+}
+
+fn rewrite_proxy_response_cors(response_head: &[u8], request_head: &[u8]) -> Vec<u8> {
+    let Some(origin) =
+        request_header(request_head, "origin").filter(|origin| is_allowed_cors_origin(origin))
+    else {
+        return response_head.to_vec();
+    };
+
+    let Ok(response) = std::str::from_utf8(response_head) else {
+        return response_head.to_vec();
+    };
+
+    let mut lines = response.trim_end_matches("\r\n\r\n").split("\r\n");
+    let Some(status_line) = lines.next() else {
+        return response_head.to_vec();
+    };
+
+    let mut rewritten = String::new();
+    rewritten.push_str(status_line);
+    rewritten.push_str("\r\n");
+
+    for line in lines {
+        let Some((name, _value)) = line.split_once(':') else {
+            continue;
+        };
+        if is_cors_response_header(name.trim()) {
+            continue;
+        }
+        rewritten.push_str(line);
+        rewritten.push_str("\r\n");
+    }
+
+    rewritten.push_str(&format!(
+        "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\nAccess-Control-Allow-Headers: {CORS_ALLOW_HEADERS}\r\nAccess-Control-Allow-Methods: {CORS_ALLOW_METHODS}\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 0\r\nVary: Origin\r\n\r\n"
+    ));
+    rewritten.into_bytes()
+}
+
+fn is_cors_response_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "access-control-allow-origin"
+            | "access-control-allow-credentials"
+            | "access-control-allow-headers"
+            | "access-control-allow-methods"
+            | "access-control-allow-private-network"
+            | "access-control-max-age"
     )
 }
 
@@ -1877,6 +2355,20 @@ fn request_header<'a>(request_head: &'a [u8], header_name: &str) -> Option<&'a s
         } else {
             None
         }
+    })
+}
+
+fn request_query_param<'a>(request_head: &'a [u8], key: &str) -> Option<&'a str> {
+    let request_head = std::str::from_utf8(request_head).ok()?;
+    request_query_param_from_head(request_head, key)
+}
+
+fn request_query_param_from_head<'a>(request_head: &'a str, key: &str) -> Option<&'a str> {
+    let target = request_head.lines().next()?.split_whitespace().nth(1)?;
+    let query = target.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name == key).then_some(value)
     })
 }
 
@@ -2142,11 +2634,86 @@ mod tests {
         );
 
         stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
-        assert!(response.ends_with("OK"));
+        assert!(response.ends_with("OK"), "response was {response:?}");
         assert!(stub
             .received_request()
             .expect("stub should receive authorized request")
             .starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
+    }
+
+    #[test]
+    fn auth_proxy_does_not_forward_pipelined_local_request_to_upstream() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /api/v1/misc/ocr-pdf HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:4180\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: keep-alive\r\n\r\nbodyOPTIONS /local/compress?body_encoding=base64 HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:4180\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: content-type,x-raiopdf-auth\r\n\r\n",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"), "response was {response:?}");
+        let upstream_request = stub
+            .received_request()
+            .expect("stub should receive authorized request");
+        assert!(upstream_request.starts_with("POST /api/v1/misc/ocr-pdf HTTP/1.1"));
+        assert!(
+            !upstream_request.contains("OPTIONS /local/compress"),
+            "proxied request forwarding must stop at Content-Length, not drain the next client request"
+        );
+    }
+
+    #[test]
+    fn auth_proxy_forwards_chunked_body_without_draining_next_request() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /api/v1/misc/ocr-pdf HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:4180\r\nX-RaioPDF-Auth: secret\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n4\r\nbody\r\n0\r\n\r\nOPTIONS /local/compress?body_encoding=base64 HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:4180\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: content-type,x-raiopdf-auth\r\n\r\n",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"), "response was {response:?}");
+        let upstream_request = stub
+            .received_request()
+            .expect("stub should receive authorized request");
+        assert!(upstream_request.starts_with("POST /api/v1/misc/ocr-pdf HTTP/1.1"));
+        assert!(upstream_request.contains("4\r\nbody\r\n0\r\n\r\n"));
+        assert!(
+            !upstream_request.contains("OPTIONS /local/compress"),
+            "chunked forwarding must stop at the terminating chunk"
+        );
+    }
+
+    #[test]
+    fn auth_proxy_rewrites_upstream_cors_headers() {
+        let stub = start_stub_http_server(
+            b"HTTP/1.1 400 Bad Request\r\nAccess-Control-Allow-Origin: http://localhost:4180\r\nAccess-Control-Allow-Headers: x-raiopdf-auth\r\nContent-Length: 3\r\n\r\nbad",
+        );
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:4180\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(response.contains(
+            "Access-Control-Allow-Headers: Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas"
+        ));
+        assert_eq!(response.matches("Access-Control-Allow-Headers:").count(), 1);
+        assert!(response.ends_with("bad"));
     }
 
     #[test]
@@ -2783,18 +3350,33 @@ mod tests {
                 .expect("stub read timeout");
             let (head, body) = read_request_head(&mut stream).expect("stub request head");
             let content_length = content_length(&head);
+            let is_chunked = request_uses_chunked_transfer(&head);
             let mut request = head;
-            let mut remaining = content_length.saturating_sub(body.len());
             request.extend_from_slice(&body);
 
-            while remaining > 0 {
-                let mut buffer = vec![0; remaining.min(1024)];
-                let bytes_read = stream.read(&mut buffer).expect("stub body read");
-                if bytes_read == 0 {
-                    break;
+            if is_chunked {
+                while !request
+                    .windows(b"\r\n0\r\n\r\n".len())
+                    .any(|window| window == b"\r\n0\r\n\r\n")
+                {
+                    let mut buffer = vec![0; 1024];
+                    let bytes_read = stream.read(&mut buffer).expect("stub chunked body read");
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..bytes_read]);
                 }
-                request.extend_from_slice(&buffer[..bytes_read]);
-                remaining -= bytes_read;
+            } else {
+                let mut remaining = content_length.saturating_sub(body.len());
+                while remaining > 0 {
+                    let mut buffer = vec![0; remaining.min(1024)];
+                    let bytes_read = stream.read(&mut buffer).expect("stub body read");
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..bytes_read]);
+                    remaining -= bytes_read;
+                }
             }
 
             *received_for_thread

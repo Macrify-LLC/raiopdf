@@ -18,7 +18,7 @@ import type {
   PdfRedactionArea,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
-import type { PrepPlanStepId } from "@raiopdf/rules";
+import type { PrepPlanStepId, SignatureDetectionFacts } from "@raiopdf/rules";
 import type { FileGrant } from "./filePort";
 
 /** A shell file grant — the branded `FileGrant` from `filePort.ts` [R1-9]. */
@@ -129,6 +129,7 @@ export interface PathOpsDocumentFacts {
   pageCount: number;
   sizeBytes: number;
   encrypted: boolean;
+  signatureDetection: SignatureDetectionFacts;
   pages: PathOpsPageFacts[];
 }
 

@@ -64,6 +64,8 @@ export function mapPathOpsFactsToDocumentFacts(
     }),
     fileBytes: facts.sizeBytes,
     ...(options.filename ? { filename: options.filename } : {}),
+    signatureDetection: facts.signatureDetection,
+    signatureFieldCount: facts.signatureDetection.standardAcroFormSignatureCount,
     // A streamed document that RENDERS cannot carry an open password (pdf.js
     // would have demanded it before the first page appeared), so an /Encrypt
     // dictionary here means owner restrictions — decryptable with an empty

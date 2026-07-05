@@ -48,7 +48,11 @@ await copyPdfjsAssetDir(pdfjsRoot, "cmaps");
 await copyPdfjsAssetDir(pdfjsRoot, "standard_fonts");
 await copyPdfjsAssetDir(pdfjsRoot, "wasm");
 await copyNodePackage(pdfjsRequire, "@napi-rs/canvas");
-await copyNodePackage(pdfjsRequire, "@napi-rs/canvas-win32-x64-msvc");
+if (process.platform === "win32") {
+  await copyNodePackage(pdfjsRequire, "@napi-rs/canvas-win32-x64-msvc");
+} else {
+  await copyOptionalNodePackage(pdfjsRequire, "@napi-rs/canvas-win32-x64-msvc");
+}
 
 console.log(`Bundled MCP runtime at ${mcpPayloadDir}`);
 
@@ -66,6 +70,17 @@ async function copyNodePackage(resolver, name) {
   const destination = path.join(nodeModulesDir, ...name.split("/"));
 
   await cp(source, destination, { recursive: true });
+}
+
+async function copyOptionalNodePackage(resolver, name) {
+  try {
+    await copyNodePackage(resolver, name);
+  } catch (error) {
+    if (error?.code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+    console.warn(`Skipping optional MCP package not installed on ${process.platform}: ${name}`);
+  }
 }
 
 async function requireFile(file, label) {

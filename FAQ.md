@@ -224,9 +224,12 @@ file.
 ### I found a bug or want a feature — where do I go?
 
 [GitHub Issues](https://github.com/Macrify-LLC/raiopdf/issues) is the primary
-place for both. If you'd rather email a feature idea, send it to
-features@macrify.me; for help using the app, support@macrify.me (best-effort —
-this is free, community-supported software).
+place for both — but for a bug, it's worth skimming the [pinned Known Issues
+list](https://github.com/Macrify-LLC/raiopdf/issues/158) first, since the rough
+edge you hit may already be tracked (👍 it there to help me prioritize). If you'd
+rather email a feature idea, send it to features@macrify.me; for help using the
+app, support@macrify.me (best-effort — this is free, community-supported
+software).
 
 ### Can I contribute?
 

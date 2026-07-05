@@ -1331,6 +1331,7 @@ fn normalize_gs_args(input: &Path, output_path: &Path) -> Vec<OsString> {
         "-dDEVICEWIDTHPOINTS=612",
         "-dDEVICEHEIGHTPOINTS=792",
         "-dAutoRotatePages=/None",
+        "-dPassThroughJPEGImages=false",
     ]));
     arguments.push(OsString::from(format!(
         "-sOutputFile={}",
@@ -2842,6 +2843,7 @@ mod tests {
             .collect();
 
         assert!(rendered.contains(&"-dSAFER".to_string()));
+        assert!(rendered.contains(&"-dPassThroughJPEGImages=false".to_string()));
         assert!(
             !rendered.iter().any(|argument| argument == "-dNOSAFER"),
             "normalize must not disable the Ghostscript sandbox"
@@ -3147,6 +3149,10 @@ mod tests {
     }
     impl Drop for TestDir {
         fn drop(&mut self) {
+            if env::var_os("RAIOPDF_KEEP_TEST_OUTPUT").is_some() {
+                eprintln!("[testdir] kept {}", self.0.display());
+                return;
+            }
             let _ = fs::remove_dir_all(&self.0);
         }
     }
@@ -4082,103 +4088,208 @@ mod tests {
     }
 
     /// Opt-in acceptance harness for the large-pdf-handling plan: point
-    /// `RAIOPDF_LARGE_FIXTURE` at a multi-hundred-MB PDF (a real canary
-    /// fixture, or the synthetic one from
-    /// `apps/ui/smoke/generate-large-fixture.mjs`) and run:
+    /// `RAIOPDF_LARGE_FIXTURE` at one multi-hundred-MB PDF, or
+    /// `RAIOPDF_LARGE_FIXTURES_DIR` at a folder of real release canary PDFs,
+    /// and run:
     ///
     /// ```text
-    /// RAIOPDF_ENGINE_PAYLOAD_DIR=<payload> RAIOPDF_LARGE_FIXTURE=<pdf>     ///   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
+    /// RAIOPDF_ENGINE_PAYLOAD_DIR=<payload> RAIOPDF_LARGE_FIXTURES_DIR=<dir> \
+    ///   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
     /// ```
     ///
     /// Demonstrates: split-by-max-bytes producing qpdf-valid parts under the
-    /// cap, and `prepare_filing` (scrub + split) with per-part facts
-    /// preflight — the two path-op acceptance items that don't need a UI.
+    /// cap, and `prepare_filing` (normalize + split) with per-part facts
+    /// preflight — the release-blocking large-file page-normalization path.
     #[test]
     #[ignore = "acceptance harness — needs RAIOPDF_LARGE_FIXTURE and the payload toolchain"]
     fn large_fixture_split_and_prepare_filing_acceptance() {
-        let Some(toolchain) = test_toolchain() else {
+        let fixture_env_set = env::var_os("RAIOPDF_LARGE_FIXTURE").is_some()
+            || env::var_os("RAIOPDF_LARGE_FIXTURES_DIR").is_some();
+        let fixtures = large_acceptance_fixtures();
+        if fixtures.is_empty() {
+            if fixture_env_set {
+                panic!(
+                    "RAIOPDF_LARGE_FIXTURE/RAIOPDF_LARGE_FIXTURES_DIR was set but no PDFs met the large-fixture filter"
+                );
+            }
+            eprintln!(
+                "set RAIOPDF_LARGE_FIXTURE or RAIOPDF_LARGE_FIXTURES_DIR to run this acceptance test"
+            );
             return;
         };
-        let Some(fixture) = env::var_os("RAIOPDF_LARGE_FIXTURE") else {
-            eprintln!("set RAIOPDF_LARGE_FIXTURE to a large PDF to run this acceptance test");
-            return;
-        };
-        let fixture = PathBuf::from(fixture);
-        let input_len = fs::metadata(&fixture).expect("fixture must exist").len();
-        let total_pages = page_count(&toolchain, &fixture).unwrap();
-        let dir = TestDir::new("large-acceptance");
+
+        let toolchain = test_toolchain().unwrap_or_else(|| {
+            panic!(
+                "RAIOPDF_LARGE_FIXTURE/RAIOPDF_LARGE_FIXTURES_DIR was set but qpdf/ghostscript were not available"
+            )
+        });
+
         let cap: u64 = 50 * 1024 * 1024;
 
-        // 1. split_by_max_bytes → contiguous, qpdf-valid parts under the cap.
-        let split_dir = dir.path().join("split");
-        fs::create_dir_all(&split_dir).unwrap();
-        let started = std::time::Instant::now();
-        let parts = split_by_max_bytes(&toolchain, &fixture, cap, &split_dir).unwrap();
-        eprintln!(
-            "[acceptance] split_by_max_bytes: {} bytes / {} pages -> {} parts in {:.1?}",
-            input_len,
-            total_pages,
-            parts.len(),
-            started.elapsed(),
-        );
-        assert!(parts.len() >= 2, "a multi-hundred-MB fixture must split");
-        let mut covered_pages = 0u32;
-        for part in &parts {
-            assert!(
-                part.oversized || part.byte_length <= cap,
-                "part {} is {} bytes over a {} cap without an oversized flag",
-                part.path.display(),
-                part.byte_length,
-                cap,
-            );
-            covered_pages += part.last_page_index - part.first_page_index + 1;
-            let mut arguments = args(&["--check"]);
-            arguments.push(path_arg(&part.path));
-            run_qpdf(&toolchain, arguments).expect("every split part must pass qpdf --check");
-        }
-        assert_eq!(
-            covered_pages, total_pages,
-            "split parts must cover every source page"
-        );
+        for fixture in fixtures {
+            let input_len = fs::metadata(&fixture).expect("fixture must exist").len();
+            let total_pages = page_count(&toolchain, &fixture)
+                .unwrap_or_else(|error| panic!("{} page_count failed: {error}", fixture.display()));
+            let dir = TestDir::new("large-acceptance");
 
-        // 2. prepare_filing (scrub-metadata + split) with facts preflight.
-        let stage_dir = dir.path().join("stage");
-        let out_dir = dir.path().join("out");
-        fs::create_dir_all(&stage_dir).unwrap();
-        fs::create_dir_all(&out_dir).unwrap();
-        let plan = PrepareFilingPlan {
-            decrypt_password: None,
-            sanitize: false,
-            normalize: false,
-            ocr: false,
-            scrub: true,
-            split_max_bytes: Some(cap),
-        };
-        let started = std::time::Instant::now();
-        let outcome = prepare_filing(&toolchain, &fixture, &plan, &stage_dir, &out_dir).unwrap();
-        eprintln!(
-            "[acceptance] prepare_filing(scrub+split): {} parts, {} facts rows in {:.1?}",
-            outcome.parts.len(),
-            outcome.facts_report.len(),
-            started.elapsed(),
-        );
-        assert_eq!(
-            outcome
-                .steps
-                .iter()
-                .map(|step| step.step)
-                .collect::<Vec<_>>(),
-            vec!["scrub-metadata", "split-by-size"],
-        );
-        assert_eq!(outcome.parts.len(), outcome.facts_report.len());
-        for preflight in &outcome.facts_report {
-            assert!(!preflight.encrypted);
-            assert_eq!(preflight.within_byte_cap, Some(true));
+            // 1. split_by_max_bytes -> contiguous, qpdf-valid parts under the cap.
+            let split_dir = dir.path().join("split");
+            fs::create_dir_all(&split_dir).unwrap();
+            let started = std::time::Instant::now();
+            let parts = split_by_max_bytes(&toolchain, &fixture, cap, &split_dir)
+                .unwrap_or_else(|error| panic!("{} split failed: {error}", fixture.display()));
+            eprintln!(
+                "[acceptance] split_by_max_bytes {}: {} bytes / {} pages -> {} parts in {:.1?}",
+                fixture.display(),
+                input_len,
+                total_pages,
+                parts.len(),
+                started.elapsed(),
+            );
+            if input_len > cap {
+                assert!(
+                    parts.len() >= 2,
+                    "over-cap large fixture must split: {}",
+                    fixture.display()
+                );
+            } else {
+                assert_eq!(
+                    parts.len(),
+                    1,
+                    "under-cap large fixture should remain one part before normalization: {}",
+                    fixture.display()
+                );
+            }
+            let mut covered_pages = 0u32;
+            for part in &parts {
+                assert!(
+                    part.oversized || part.byte_length <= cap,
+                    "part {} is {} bytes over a {} cap without an oversized flag",
+                    part.path.display(),
+                    part.byte_length,
+                    cap,
+                );
+                covered_pages += part.last_page_index - part.first_page_index + 1;
+                let mut arguments = args(&["--check"]);
+                arguments.push(path_arg(&part.path));
+                run_qpdf(&toolchain, arguments).unwrap_or_else(|error| {
+                    panic!("{} did not pass qpdf --check: {error}", part.path.display())
+                });
+            }
+            assert_eq!(
+                covered_pages,
+                total_pages,
+                "split parts must cover every source page for {}",
+                fixture.display()
+            );
+
+            // 2. prepare_filing (normalize + split) with facts preflight.
+            let stage_dir = dir.path().join("stage");
+            let out_dir = dir.path().join("out");
+            fs::create_dir_all(&stage_dir).unwrap();
+            fs::create_dir_all(&out_dir).unwrap();
+            let plan = PrepareFilingPlan {
+                decrypt_password: None,
+                sanitize: false,
+                normalize: true,
+                ocr: false,
+                scrub: false,
+                split_max_bytes: Some(cap),
+            };
+            let started = std::time::Instant::now();
+            let outcome = prepare_filing(&toolchain, &fixture, &plan, &stage_dir, &out_dir)
+                .unwrap_or_else(|error| {
+                    panic!("{} prepare_filing failed: {error}", fixture.display())
+                });
+            eprintln!(
+                "[acceptance] prepare_filing(normalize+split) {}: {} parts, {} facts rows in {:.1?}",
+                fixture.display(),
+                outcome.parts.len(),
+                outcome.facts_report.len(),
+                started.elapsed(),
+            );
+            assert_eq!(
+                outcome
+                    .steps
+                    .iter()
+                    .map(|step| step.step)
+                    .collect::<Vec<_>>(),
+                vec!["normalize-pages", "split-by-size"],
+            );
+            assert_eq!(outcome.parts.len(), outcome.facts_report.len());
+            for preflight in &outcome.facts_report {
+                assert!(
+                    preflight.all_letter_portrait,
+                    "part {} from {} is not all letter portrait",
+                    preflight.part_index + 1,
+                    fixture.display()
+                );
+                assert!(!preflight.encrypted);
+                assert_eq!(
+                    preflight.within_byte_cap,
+                    Some(true),
+                    "part {} from {} exceeded the byte cap",
+                    preflight.part_index + 1,
+                    fixture.display()
+                );
+            }
+            for part in &outcome.parts {
+                let mut arguments = args(&["--check"]);
+                arguments.push(path_arg(&part.path));
+                run_qpdf(&toolchain, arguments).unwrap_or_else(|error| {
+                    panic!("{} did not pass qpdf --check: {error}", part.path.display())
+                });
+            }
         }
-        for part in &outcome.parts {
-            let mut arguments = args(&["--check"]);
-            arguments.push(path_arg(&part.path));
-            run_qpdf(&toolchain, arguments).expect("every filing part must pass qpdf --check");
+    }
+
+    fn large_acceptance_fixtures() -> Vec<PathBuf> {
+        let min_bytes = env::var("RAIOPDF_LARGE_FIXTURE_MIN_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(40 * 1024 * 1024);
+
+        let mut fixtures = Vec::new();
+        if let Some(list) = env::var_os("RAIOPDF_LARGE_FIXTURE") {
+            fixtures.extend(env::split_paths(&list));
+        }
+        if let Some(dir) = env::var_os("RAIOPDF_LARGE_FIXTURES_DIR") {
+            collect_large_pdfs(&PathBuf::from(dir), min_bytes, &mut fixtures);
+        }
+
+        fixtures.retain(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+                && fs::metadata(path)
+                    .map(|metadata| metadata.len() >= min_bytes)
+                    .unwrap_or(false)
+        });
+        fixtures.sort();
+        fixtures.dedup();
+        fixtures
+    }
+
+    fn collect_large_pdfs(dir: &Path, min_bytes: u64, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_large_pdfs(&path, min_bytes, out);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+                && fs::metadata(&path)
+                    .map(|metadata| metadata.len() >= min_bytes)
+                    .unwrap_or(false)
+            {
+                out.push(path);
+            }
         }
     }
 }

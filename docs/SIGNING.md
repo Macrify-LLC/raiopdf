@@ -11,7 +11,8 @@ cloud HSM (as CA/Browser Forum rules now require) and out of GitHub.
 ## How it fits together
 
 - **CI** (`.github/workflows/release.yml`) builds **unsigned** installers on tag pushes
-  and uploads them as artifacts. Use this for test builds and to validate the packaging.
+  and uploads them as workflow artifacts only. Use these for test builds and to validate
+  packaging, never as public release assets.
 - **Signed releases** are built **locally** with the signing config overlay
   (`apps/shell/src-tauri/tauri.windows.signing.conf.json`), which tells Tauri to run
   `apps/shell/src-tauri/scripts/sign-windows.ps1` for each artifact. Building locally
@@ -74,6 +75,9 @@ a placeholder version.
 
 # 2. Point the build at your certificate (thumbprint from the setup step, no spaces):
 $env:RAIOPDF_SIGN_THUMBPRINT = "PASTE_YOUR_THUMBPRINT_HERE"
+# Release validation pins this same certificate thumbprint by default.
+# Optional: set RAIOPDF_SIGN_EXPECTED_SUBJECT too, but use the exact full
+# SignerCertificate.Subject string if you do.
 # Optional — defaults to http://time.certum.pl:
 # $env:RAIOPDF_SIGN_TIMESTAMP_URL = "http://time.certum.pl"
 
@@ -89,30 +93,60 @@ git tag v0.1.0   # example
 #    sign app + sidecars + installers -> emit updater .sig. The first run is heavy.
 pnpm build:shell:signed
 
-# 6. Upload the signed NSIS installer to the GitHub release.
+# 6. Stage the signed public release assets under canonical names.
 $tag = "v0.1.0"  # same tag as the release commit
-$installer = Get-ChildItem apps\shell\src-tauri\target\release\bundle\nsis\*.exe |
-  Select-Object -First 1
-gh release upload $tag $installer.FullName --clobber
+pnpm prepare:release-assets -- --tag $tag
 
-# 7. Generate latest.json from that signed installer + .sig, then upload it.
-node scripts/generate-latest-json.mjs --tag $tag --upload
+# 7. Validate the exact local asset set before publishing. This also verifies
+#    Authenticode status, signer subject, timestamp, and updater signature.
+pnpm validate:release-assets -- --tag $tag
+
+# 8. Upload the exact signed installer, updater signature, latest.json, and checksum file.
+gh release upload $tag (Get-ChildItem release-assets\signed\* | ForEach-Object { $_.FullName }) --clobber
+
+# 9. After publishing the GitHub release, verify the published assets too.
+#    This rejects draft/prerelease state, confirms /releases/latest resolves to
+#    this tag, downloads the public installer, and checks Authenticode plus the
+#    Tauri updater signature against published bytes.
+pnpm validate:release-assets -- --tag $tag --github
 ```
 
-Output lands in `apps/shell/src-tauri/target/release/bundle/` (`nsis/*.exe`,
-`nsis/*.exe.sig`, and `nsis/latest.json`). The updater endpoint uses GitHub's
-`/releases/latest/download/latest.json` URL, so `latest.json` must be uploaded to the
-latest **published** release; a draft or older release will not serve updates to shipped
-apps.
+The signed Tauri build normally lands in the workspace bundle directory
+`target/release/bundle/nsis/` (`apps/shell/src-tauri/target/release/bundle/nsis/` is
+also searched as a fallback). The release-prep script copies exactly one signed NSIS
+installer and its matching `.sig` into the ignored local staging directory
+`release-assets/signed/`, renaming the installer to the canonical public asset name,
+and stages the release compliance assets from the built payload:
+
+```text
+RaioPDF-<version>-windows-x64-setup.exe
+RaioPDF-<version>-windows-x64-setup.exe.sig
+RaioPDF-<version>-third-party-notices.txt
+RaioPDF-<version>-component-manifest.json
+RaioPDF-<version>-source-correspondence.md
+RaioPDF-<version>-license-notices.txt
+RaioPDF-<version>-ghostscript-source-offer.txt
+ghostscript-<ghostscript-version>-source.tar.xz
+latest.json
+SHA256SUMS.txt
+```
+
+The updater endpoint uses GitHub's `/releases/latest/download/latest.json` URL, so
+`latest.json` must be uploaded to the latest **published, non-prerelease** GitHub
+Release. Product copy can call this an alpha, but do not toggle GitHub's
+"pre-release" state unless the updater endpoint changes; a draft, prerelease, or older
+release will not serve updates to shipped apps.
 
 CI's unsigned draft-release flow (`.github/workflows/release.yml`) intentionally does
-**not** generate `latest.json`. The manifest must point at the locally built, signed
-installer only, because it embeds the updater signature for that exact release asset.
+**not** upload `.exe` release assets and does **not** generate `latest.json`. If the
+release already exists, reruns leave its draft/published state alone. The manifest must
+point at the locally built, signed installer only, because it embeds the updater
+signature for that exact release asset.
 
 ### Verify the signature
 
 ```powershell
-$exe = Get-ChildItem apps\shell\src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+$exe = Get-ChildItem release-assets\signed\RaioPDF-*-windows-x64-setup.exe | Select-Object -First 1
 Get-AuthenticodeSignature $exe.FullName | Format-List Status, SignerCertificate, TimeStamperCertificate
 # Status should be "Valid" and a timestamp should be present.
 ```
@@ -122,6 +156,8 @@ Get-AuthenticodeSignature $exe.FullName | Format-List Status, SignerCertificate,
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `RAIOPDF_SIGN_THUMBPRINT` | yes | — | SHA-1 thumbprint selecting the signing certificate |
+| `RAIOPDF_SIGN_EXPECTED_THUMBPRINT` | no | `RAIOPDF_SIGN_THUMBPRINT` | Thumbprint expected on the signed public installer during validation |
+| `RAIOPDF_SIGN_EXPECTED_SUBJECT` | no | — | Exact full Authenticode signer subject to require in addition to the thumbprint |
 | `RAIOPDF_SIGN_TIMESTAMP_URL` | no | `http://time.certum.pl` | RFC-3161 timestamp server |
 
 If `RAIOPDF_SIGN_THUMBPRINT` is unset, the signing script fails on purpose so a build

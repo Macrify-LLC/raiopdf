@@ -20,6 +20,20 @@ CARVE_OUT_DIRS=(
   "frontend/editor/src/prototypes"
 )
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+
+  echo "Missing SHA-256 tool: install sha256sum or shasum." >&2
+  return 1
+}
+
 if [[ ! -x "$UPSTREAM_DIR/gradlew" ]]; then
   echo "Missing upstream Gradle wrapper. Run engine/vendor.sh first." >&2
   exit 1
@@ -34,7 +48,7 @@ if [[ "$actual_commit" != "$PINNED_COMMIT" ]]; then
   exit 1
 fi
 
-settings_sha=$(sha256sum "$UPSTREAM_DIR/settings.gradle" | awk '{print $1}')
+settings_sha=$(sha256_file "$UPSTREAM_DIR/settings.gradle")
 if [[ "$settings_sha" != "$PINNED_SETTINGS_GRADLE_SHA256" ]]; then
   echo "Refusing to build; patched settings.gradle has an unexpected SHA-256:" >&2
   echo "  expected: $PINNED_SETTINGS_GRADLE_SHA256" >&2
@@ -99,7 +113,7 @@ fi
 DIST_JAR="$DIST_DIR/stirling-pdf-${PINNED_TAG#v}-${PLATFORM}.jar"
 DIST_SOURCE="$DIST_JAR.source"
 cp -- "$JAR_PATH" "$DIST_JAR"
-DIST_SHA=$(sha256sum "$DIST_JAR" | awk '{print $1}')
+DIST_SHA=$(sha256_file "$DIST_JAR")
 cat >"$DIST_SOURCE" <<EOF
 tag=$PINNED_TAG
 commit=$PINNED_COMMIT

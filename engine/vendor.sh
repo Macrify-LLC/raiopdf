@@ -26,6 +26,20 @@ if [[ ! -s "$PATCH_FILE" ]]; then
   exit 1
 fi
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+
+  echo "Missing SHA-256 tool: install sha256sum or shasum." >&2
+  return 1
+}
+
 rm -rf -- "$UPSTREAM_DIR"
 git clone --depth 1 --branch "$PINNED_TAG" "$REMOTE_URL" "$UPSTREAM_DIR"
 
@@ -61,7 +75,7 @@ fi
   git apply "$PATCH_FILE"
 )
 
-settings_sha=$(sha256sum "$UPSTREAM_DIR/settings.gradle" | awk '{print $1}')
+settings_sha=$(sha256_file "$UPSTREAM_DIR/settings.gradle")
 if [[ "$settings_sha" != "$PINNED_SETTINGS_GRADLE_SHA256" ]]; then
   echo "Refusing to continue; patched settings.gradle has an unexpected SHA-256:" >&2
   echo "  expected: $PINNED_SETTINGS_GRADLE_SHA256" >&2

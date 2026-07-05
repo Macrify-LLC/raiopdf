@@ -7,6 +7,8 @@ import type {
   PdfEngine,
   PdfApplyEditsOptions,
   PdfImagePageInput,
+  PdfOutlineState,
+  PdfOutlineWriteResult,
   PdfPageNumbersOptions,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -74,6 +76,8 @@ export interface DocumentState {
   hasTextLayer: boolean | null;
   textLayerCoverage: TextLayerCoverage | null;
   pageSizeInches: PageSizeInches | null;
+  outline: PdfOutlineState | null;
+  outlineStatus: string | null;
   signatureInvalidationNotice: SignatureInvalidationNotice | null;
   error: string | null;
 }
@@ -111,6 +115,8 @@ const INITIAL_DOCUMENT: DocumentState = {
   hasTextLayer: null,
   textLayerCoverage: null,
   pageSizeInches: null,
+  outline: null,
+  outlineStatus: null,
   signatureInvalidationNotice: null,
   error: null,
 };
@@ -123,6 +129,7 @@ interface CommitOptions {
   knownPageCount?: number;
   fileName?: string;
   filePath?: string | null;
+  outlineStatus?: string | null;
   signatureInvalidationNotice?: SignatureInvalidationNotice | null;
 }
 
@@ -295,11 +302,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
       options: CommitOptions,
       operation: OperationContext,
     ) => {
-      const [bytes, pageCount] = await Promise.all([
+      const [bytes, pageCount, outline] = await Promise.all([
         engine.saveToBytes(engineHandle),
         options.knownPageCount !== undefined
           ? Promise.resolve(options.knownPageCount)
           : engine.pageCount(engineHandle),
+        engine.getOutline(engineHandle),
       ]);
 
       if (
@@ -332,6 +340,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
         hasTextLayer: options.hasTextLayer ?? null,
         textLayerCoverage: options.textLayerCoverage ?? null,
         pageSizeInches: null,
+        outline,
+        outlineStatus: options.outlineStatus ?? null,
         signatureInvalidationNotice: mergeSignatureInvalidationNotice(
           current.signatureInvalidationNotice,
           options.signatureInvalidationNotice,
@@ -505,7 +515,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         const { bytes, engineHandle, signatureInvalidationNotice } = prepared;
         const signatureInvalidated = Boolean(signatureInvalidationNotice);
-        const pageCount = await engine.pageCount(engineHandle);
+        const [pageCount, outline] = await Promise.all([
+          engine.pageCount(engineHandle),
+          engine.getOutline(engineHandle),
+        ]);
 
         if (openTokenRef.current !== token) {
           await closeHandle(engineHandle);
@@ -534,6 +547,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
           hasTextLayer: null,
           textLayerCoverage: null,
           pageSizeInches: null,
+          outline,
+          outlineStatus: null,
           signatureInvalidationNotice,
           error: null,
         });
@@ -823,13 +838,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return false;
       }
 
-      return enqueueMutation("delete", async ({ handle }) => ({
-        engineHandle: await engine.deletePages(handle, pageIndexes),
-        options: {
-          dirty: true,
-          currentPage: (current, pageCount) => Math.min(current.currentPage, pageCount),
-        },
-      }));
+      return enqueueMutation("delete", async ({ handle }) => {
+        const result = await engine.deletePages(handle, pageIndexes);
+
+        return {
+          engineHandle: result.document,
+          options: {
+            dirty: true,
+            currentPage: (current, pageCount) => Math.min(current.currentPage, pageCount),
+            outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
+          },
+        };
+      });
     },
     [engine, enqueueMutation],
   );
@@ -846,10 +866,17 @@ export function useDocument(options: UseDocumentOptions = {}) {
         options.currentPage = currentPage;
       }
 
-      return enqueueMutation("reorder", async ({ handle }) => ({
-        engineHandle: await engine.reorderPages(handle, pageIndexes),
-        options,
-      }));
+      return enqueueMutation("reorder", async ({ handle }) => {
+        const result = await engine.reorderPages(handle, pageIndexes);
+
+        return {
+          engineHandle: result.document,
+          options: {
+            ...options,
+            outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
+          },
+        };
+      });
     },
     [engine, enqueueMutation],
   );
@@ -878,13 +905,21 @@ export function useDocument(options: UseDocumentOptions = {}) {
             );
           }
 
+          const result = await engine.merge([handle, ...openedHandles], {
+            labels: [
+              document.fileName ?? "Current document",
+              ...files.map((file) => file.name),
+            ],
+          });
+
           return {
-            engineHandle: await engine.merge([handle, ...openedHandles]),
+            engineHandle: result.document,
             options: {
               dirty: true,
               currentPage: 1,
               fileName: "Merged.pdf",
               filePath: null,
+              outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
               signatureInvalidationNotice,
             },
           };
@@ -893,7 +928,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
       });
     },
-    [engine, enqueueMutation, openPreparedDocument],
+    [document.fileName, engine, enqueueMutation, openPreparedDocument],
   );
 
   const extractPages = useCallback(
@@ -907,13 +942,16 @@ export function useDocument(options: UseDocumentOptions = {}) {
         const extracted = uniqueSortedPageIndexes(pageIndexes, pageCount);
         const deletedPages = complementPageIndexes(extracted, pageCount);
 
+        const result = await extractHandle(engine, handle, deletedPages);
+
         return {
-          engineHandle: await extractHandle(engine, handle, deletedPages),
+          engineHandle: result.document,
           options: {
             dirty: true,
             currentPage: 1,
             fileName: "Extracted Pages.pdf",
             filePath: null,
+            outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
           },
         };
       });
@@ -943,11 +981,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         for (const [index, pageGroup] of pageGroups.entries()) {
           const keptPages = uniqueSortedPageIndexes(pageGroup, pageCount);
-          const outputHandle = await extractHandle(
+          const outputResult = await extractHandle(
             engine,
             handle,
             complementPageIndexes(keptPages, pageCount),
           );
+          const outputHandle = outputResult.document;
           outputHandles.push(outputHandle);
 
           const bytes = await engine.saveToBytes(outputHandle);
@@ -991,13 +1030,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
           insertedHandle = prepared.engineHandle;
 
+          const result = await engine.insertPages(handle, insertAtPageIndex, insertedHandle, {
+            sourceLabel: file.name,
+          });
+
           return {
-            engineHandle: await engine.insertPages(handle, insertAtPageIndex, insertedHandle),
+            engineHandle: result.document,
             options: {
               dirty: true,
               currentPage: insertAtPageIndex + 1,
               fileName: "Inserted Pages.pdf",
               filePath: null,
+              outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
               signatureInvalidationNotice: prepared.signatureInvalidationNotice,
             },
           };
@@ -1290,16 +1334,36 @@ export function useDocument(options: UseDocumentOptions = {}) {
           return null;
         }
 
+        const result = await engine.insertImagePages(handle, insertAtPageIndex, images);
+
         return {
-          engineHandle: await engine.insertImagePages(handle, insertAtPageIndex, images),
+          engineHandle: result.document,
           options: {
             dirty: true,
             currentPage: insertAtPageIndex + 1,
             fileName: "Inserted Images.pdf",
             filePath: null,
+            outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
           },
         };
       }, requestedToken);
+    },
+    [engine, enqueueMutation],
+  );
+
+  const replaceOutline = useCallback(
+    async (outline: PdfOutlineState) => {
+      return enqueueMutation("bookmarks", async ({ handle }) => {
+        const result = await engine.replaceOutline(handle, outline);
+
+        return {
+          engineHandle: result.document,
+          options: {
+            dirty: true,
+            outlineStatus: outlineStatusFromRemovedTargets(result.removedTargets),
+          },
+        };
+      });
     },
     [engine, enqueueMutation],
   );
@@ -1399,6 +1463,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     pageNumbers,
     watermark,
     insertImagePages,
+    replaceOutline,
     save,
     markSaved,
   };
@@ -1412,12 +1477,23 @@ async function extractHandle(
   engine: PdfEngine,
   handle: PdfDocumentHandle,
   deletedPages: readonly number[],
-): Promise<PdfDocumentHandle> {
+): Promise<PdfOutlineWriteResult> {
   if (deletedPages.length === 0) {
-    return engine.open(await engine.saveToBytes(handle));
+    return {
+      document: await engine.open(await engine.saveToBytes(handle)),
+      removedTargets: 0,
+    };
   }
 
   return engine.deletePages(handle, deletedPages);
+}
+
+function outlineStatusFromRemovedTargets(removedTargets: number): string | null {
+  if (removedTargets === 0) {
+    return null;
+  }
+
+  return `Removed ${removedTargets} bookmark${removedTargets === 1 ? "" : "s"} whose target no longer exists.`;
 }
 
 function uniqueSortedPageIndexes(

@@ -37,6 +37,8 @@ describe("AppShell", () => {
         onDeleteSelected={() => undefined}
         onMoveSelectedUp={() => undefined}
         onMoveSelectedDown={() => undefined}
+        onBookmarkNavigate={() => undefined}
+        onOutlineChange={() => Promise.resolve(true)}
         ocrState={{ phase: "idle", message: null }}
         ocrAvailable={false}
         ocrStarting={false}
@@ -106,6 +108,8 @@ const mockDocument: DocumentState = {
   hasTextLayer: null,
   textLayerCoverage: null,
   pageSizeInches: null,
+  outline: null,
+  outlineStatus: null,
   signatureInvalidationNotice: null,
   error: null,
 };

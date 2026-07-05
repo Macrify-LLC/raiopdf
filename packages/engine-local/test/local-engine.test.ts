@@ -16,6 +16,7 @@ import {
   StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
+import { readPdfOutline, writePdfOutlineInPlace } from "@raiopdf/engine-pdf-lib";
 import { createLocalPdfEngine, createStableExhibitIndex } from "../src/index";
 
 describe("LocalPdfEngine", () => {
@@ -23,7 +24,7 @@ describe("LocalPdfEngine", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
 
-    const reordered = await engine.reorderPages(document, [2, 0, 1]);
+    const { document: reordered } = await engine.reorderPages(document, [2, 0, 1]);
     const bytes = await engine.saveToBytes(reordered);
 
     await expectPageWidths(bytes, [220, 200, 210]);
@@ -43,7 +44,7 @@ describe("LocalPdfEngine", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [210, 300], [220, 300]]));
 
-    const deleted = await engine.deletePages(document, [1]);
+    const { document: deleted } = await engine.deletePages(document, [1]);
     const bytes = await engine.saveToBytes(deleted);
 
     await expectPageWidths(bytes, [200, 220]);
@@ -219,7 +220,7 @@ describe("LocalPdfEngine", () => {
     const first = await engine.open(await createPdf([[200, 300], [210, 300]]));
     const second = await engine.open(await createPdf([[300, 400]]));
 
-    const merged = await engine.merge([first, second]);
+    const { document: merged } = await engine.merge([first, second]);
     const bytes = await engine.saveToBytes(merged);
 
     await expectPageWidths(bytes, [200, 210, 300]);
@@ -230,10 +231,285 @@ describe("LocalPdfEngine", () => {
     const target = await engine.open(await createPdf([[200, 300], [220, 300]]));
     const inserted = await engine.open(await createPdf([[210, 300]]));
 
-    const combined = await engine.insertPages(target, 1, inserted);
+    const { document: combined } = await engine.insertPages(target, 1, inserted);
     const bytes = await engine.saveToBytes(combined);
 
     await expectPageWidths(bytes, [200, 210, 220]);
+  });
+
+  it("reads and rewrites nested PDF bookmarks", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    const outline = await engine.getOutline(document);
+
+    expect(outline.openMode).toBe("outlines");
+    expect(outline.items).toHaveLength(2);
+    expect(outline.items[0]).toMatchObject({
+      title: "Main",
+      target: { kind: "page", pageIndex: 0 },
+      children: [
+        {
+          title: "Main child",
+          target: { kind: "page", pageIndex: 1 },
+        },
+      ],
+    });
+
+    const rewritten = await engine.replaceOutline(document, {
+      ...outline,
+      openMode: "default",
+      items: [
+        {
+          ...outline.items[0]!,
+          title: "Renamed main",
+        },
+      ],
+    });
+    const saved = await PDFDocument.load(await engine.saveToBytes(rewritten.document));
+    const savedOutline = readPdfOutline(saved);
+
+    expect(savedOutline.openMode).toBe("default");
+    expect(savedOutline.items).toHaveLength(1);
+    expect(savedOutline.items[0]).toMatchObject({
+      title: "Renamed main",
+      children: [{ title: "Main child" }],
+    });
+  });
+
+  it("removes bookmarks whose deleted page target no longer exists", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithOutline());
+
+    const result = await engine.deletePages(document, [1]);
+    const outline = await engine.getOutline(result.document);
+
+    expect(result.removedTargets).toBe(1);
+    expect(outline.items).toMatchObject([
+      { title: "Main", target: { kind: "page", pageIndex: 0 } },
+      { title: "Appendix", target: { kind: "page", pageIndex: 1 } },
+    ]);
+    expect(outline.items[0]?.children).toBeUndefined();
+  });
+
+  it("preserves view-only URI bookmark targets when rewriting titles", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithUriOutline());
+    const outline = await engine.getOutline(document);
+
+    expect(outline.items[0]).toMatchObject({
+      title: "Source website",
+      target: { kind: "uri", uri: "https://example.test/source" },
+    });
+
+    const result = await engine.replaceOutline(document, {
+      ...outline,
+      items: [
+        {
+          ...outline.items[0]!,
+          title: "Renamed website",
+        },
+      ],
+    });
+    const savedOutline = await engine.getOutline(result.document);
+
+    expect(savedOutline.items[0]).toMatchObject({
+      title: "Renamed website",
+      target: { kind: "uri", uri: "https://example.test/source" },
+    });
+  });
+
+  it("preserves remote view-only bookmarks through page remaps", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithRemoteOutline());
+
+    const result = await engine.reorderPages(document, [1, 0]);
+    const outline = await engine.getOutline(result.document);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+    const action = item.lookup(PDFName.of("A"), PDFDict);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items[0]).toMatchObject({
+      title: "External appendix",
+      target: { kind: "remote" },
+    });
+    expect(action.lookup(PDFName.of("S"), PDFName).decodeText()).toBe("GoToR");
+    expect(readTextValue(action.get(PDFName.of("F")))).toBe("appendix.pdf");
+  });
+
+  it("preserves unresolved named bookmarks through page remaps", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithUnresolvedNamedOutline());
+
+    const result = await engine.deletePages(document, [0]);
+    const outline = await engine.getOutline(result.document);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items[0]).toMatchObject({
+      title: "Unresolved destination",
+      target: { kind: "named", name: "Missing" },
+    });
+    expect(readTextValue(item.get(PDFName.of("Dest")))).toBe("Missing");
+  });
+
+  it("preserves /XYZ page destination view while remapping pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithXyzOutline());
+
+    const result = await engine.reorderPages(document, [1, 0]);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const dest = readFirstOutlineDestination(pdf);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outlineDestinationPageIndex(pdf, dest)).toBe(0);
+    expect(readNameAt(dest, 1)).toBe("XYZ");
+    expect(readNumberAt(dest, 2)).toBe(36);
+    expect(readNumberAt(dest, 3)).toBe(640);
+    expect(readNumberAt(dest, 4)).toBe(1.25);
+  });
+
+  it("preserves GoTo action destination view while remapping pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithGoToActionOutline());
+
+    const result = await engine.reorderPages(document, [1, 0]);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+    const action = item.lookup(PDFName.of("A"), PDFDict);
+    const dest = action.lookup(PDFName.of("D"), PDFArray);
+
+    expect(result.removedTargets).toBe(0);
+    expect(action.lookup(PDFName.of("S"), PDFName).decodeText()).toBe("GoTo");
+    expect(outlineDestinationPageIndex(pdf, dest)).toBe(0);
+    expect(readNameAt(dest, 1)).toBe("FitH");
+    expect(readNumberAt(dest, 2)).toBe(640);
+  });
+
+  it("preserves named destinations as named destinations when rewriting titles", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithNamedDestinationOutline());
+    const outline = await engine.getOutline(document);
+
+    expect(outline.items[0]).toMatchObject({
+      title: "Intro by name",
+      target: { kind: "named", name: "Intro", resolvedPageIndex: 1 },
+    });
+
+    const result = await engine.replaceOutline(document, {
+      ...outline,
+      items: [
+        {
+          ...outline.items[0]!,
+          title: "Renamed intro",
+        },
+      ],
+    });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+    const dest = item.get(PDFName.of("Dest"));
+
+    expect(item.lookup(PDFName.of("Title"), PDFString, PDFHexString).decodeText()).toBe("Renamed intro");
+    expect(readTextValue(dest)).toBe("Intro");
+  });
+
+  it("preserves named destination entries while remapping pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithNamedDestinationOutline());
+
+    const result = await engine.reorderPages(document, [1, 0]);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+    const namedDestination = readNamedDestination(pdf, "Intro");
+
+    expect(result.removedTargets).toBe(0);
+    expect(readTextValue(item.get(PDFName.of("Dest")))).toBe("Intro");
+    expect(outlineDestinationPageIndex(pdf, namedDestination)).toBe(0);
+    expect(readNameAt(namedDestination, 1)).toBe("FitH");
+    expect(readNumberAt(namedDestination, 2)).toBe(640);
+  });
+
+  it("keeps duplicate merged named destinations separate", async () => {
+    const engine = createLocalPdfEngine();
+    const first = await engine.open(await createPdfWithNamedDestinationOutline());
+    const second = await engine.open(await createPdfWithNamedDestinationOutline());
+
+    const result = await engine.merge([first, second], {
+      labels: ["first.pdf", "second.pdf"],
+    });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const outline = readPdfOutline(pdf);
+    const firstNamedDestination = readNamedDestination(pdf, "merged:0:Intro");
+    const secondNamedDestination = readNamedDestination(pdf, "merged:1:Intro");
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items[0]?.children?.[0]).toMatchObject({
+      title: "Intro by name",
+      target: { kind: "named", name: "merged:0:Intro", resolvedPageIndex: 1 },
+    });
+    expect(outline.items[1]?.children?.[0]).toMatchObject({
+      title: "Intro by name",
+      target: { kind: "named", name: "merged:1:Intro", resolvedPageIndex: 3 },
+    });
+    expect(outlineDestinationPageIndex(pdf, firstNamedDestination)).toBe(1);
+    expect(outlineDestinationPageIndex(pdf, secondNamedDestination)).toBe(3);
+  });
+
+  it("keeps nested source bookmarks under filename roots when merging", async () => {
+    const engine = createLocalPdfEngine();
+    const first = await engine.open(await createPdfWithOutline());
+    const second = await engine.open(await createPdfWithOutline());
+
+    const result = await engine.merge([first, second], {
+      labels: ["first.pdf", "second.pdf"],
+    });
+    const outline = await engine.getOutline(result.document);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items).toMatchObject([
+      {
+        title: "first.pdf",
+        target: { kind: "page", pageIndex: 0 },
+        children: [
+          {
+            title: "Main",
+            target: { kind: "page", pageIndex: 0 },
+            children: [
+              {
+                title: "Main child",
+                target: { kind: "page", pageIndex: 1 },
+              },
+            ],
+          },
+          {
+            title: "Appendix",
+            target: { kind: "page", pageIndex: 2 },
+          },
+        ],
+      },
+      {
+        title: "second.pdf",
+        target: { kind: "page", pageIndex: 3 },
+        children: [
+          {
+            title: "Main",
+            target: { kind: "page", pageIndex: 3 },
+            children: [
+              {
+                title: "Main child",
+                target: { kind: "page", pageIndex: 4 },
+              },
+            ],
+          },
+          {
+            title: "Appendix",
+            target: { kind: "page", pageIndex: 5 },
+          },
+        ],
+      },
+    ]);
   });
 
   it("stamps selected pages with text", async () => {
@@ -386,7 +662,7 @@ describe("LocalPdfEngine", () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[200, 300], [220, 300]]));
 
-    const inserted = await engine.insertImagePages(document, 1, [
+    const { document: inserted } = await engine.insertImagePages(document, 1, [
       { bytes: onePixelPng(), format: "png" },
     ]);
     const bytes = await engine.saveToBytes(inserted);
@@ -614,6 +890,296 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+async function createPdfWithOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(await createPdf([[200, 300], [210, 300], [220, 300]]));
+  writePdfOutlineInPlace(pdf, {
+    openMode: "outlines",
+    revision: "test",
+    items: [
+      {
+        id: "main",
+        title: "Main",
+        target: { kind: "page", pageIndex: 0 },
+        expanded: true,
+        children: [
+          {
+            id: "main-child",
+            title: "Main child",
+            target: { kind: "page", pageIndex: 1 },
+          },
+        ],
+      },
+      {
+        id: "appendix",
+        title: "Appendix",
+        target: { kind: "page", pageIndex: 2 },
+      },
+    ],
+  });
+
+  return pdf.save();
+}
+
+async function createPdfWithUriOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Source website"),
+      Parent: rootRef,
+      A: {
+        S: PDFName.of("URI"),
+        URI: PDFString.of("https://example.test/source"),
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithRemoteOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("External appendix"),
+      Parent: rootRef,
+      A: {
+        S: PDFName.of("GoToR"),
+        F: PDFString.of("appendix.pdf"),
+        D: PDFString.of("Intro"),
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithUnresolvedNamedOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Unresolved destination"),
+      Parent: rootRef,
+      Dest: PDFString.of("Missing"),
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithXyzOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const secondPage = pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Second page XYZ"),
+      Parent: rootRef,
+      Dest: [secondPage.ref, PDFName.of("XYZ"), 36, 640, 1.25],
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithGoToActionOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const secondPage = pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Second page FitH"),
+      Parent: rootRef,
+      A: {
+        S: PDFName.of("GoTo"),
+        D: [secondPage.ref, PDFName.of("FitH"), 640],
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithNamedDestinationOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  const secondPage = pdf.addPage([210, 300]);
+
+  const namedDestination = pdf.context.obj([secondPage.ref, PDFName.of("FitH"), 640]);
+  pdf.catalog.set(
+    PDFName.of("Names"),
+    pdf.context.obj({
+      Dests: {
+        Names: [PDFString.of("Intro"), namedDestination],
+      },
+    }),
+  );
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Intro by name"),
+      Parent: rootRef,
+      Dest: PDFName.of("Intro"),
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+function readFirstOutlineItem(pdf: PDFDocument): PDFDict {
+  const outlineRoot = pdf.catalog.lookup(PDFName.of("Outlines"), PDFDict);
+  const first = outlineRoot.get(PDFName.of("First"));
+
+  if (!(first instanceof PDFRef)) {
+    throw new Error("Expected first outline item reference");
+  }
+
+  return pdf.context.lookup(first, PDFDict);
+}
+
+function readFirstOutlineDestination(pdf: PDFDocument): PDFArray {
+  return readFirstOutlineItem(pdf).lookup(PDFName.of("Dest"), PDFArray);
+}
+
+function readNamedDestination(pdf: PDFDocument, name: string): PDFArray {
+  const namesRoot = pdf.catalog.lookup(PDFName.of("Names"), PDFDict);
+  const dests = namesRoot.lookup(PDFName.of("Dests"), PDFDict);
+  const names = dests.lookup(PDFName.of("Names"), PDFArray);
+
+  for (let index = 0; index + 1 < names.size(); index += 2) {
+    if (readTextValue(names.get(index)) === name) {
+      return names.lookup(index + 1, PDFArray);
+    }
+  }
+
+  throw new Error(`Named destination "${name}" was not written.`);
+}
+
+function outlineDestinationPageIndex(pdf: PDFDocument, destination: PDFArray): number {
+  const pageRef = destination.get(0);
+
+  if (!(pageRef instanceof PDFRef)) {
+    throw new Error("Expected outline destination page reference");
+  }
+
+  return pdf.getPages().findIndex((page) => page.ref.toString() === pageRef.toString());
+}
+
+function readTextValue(value: unknown): string | null {
+  if (value instanceof PDFName || value instanceof PDFString || value instanceof PDFHexString) {
+    return value.decodeText();
+  }
+
+  return null;
+}
+
+function readNameAt(array: PDFArray, index: number): string {
+  const value = array.get(index);
+
+  if (!(value instanceof PDFName)) {
+    throw new Error(`Expected PDF name at index ${index}`);
+  }
+
+  return value.decodeText();
+}
+
+function readNumberAt(array: PDFArray, index: number): number {
+  const value = array.get(index);
+
+  if (!(value instanceof PDFNumber)) {
+    throw new Error(`Expected PDF number at index ${index}`);
+  }
+
+  return value.asNumber();
 }
 
 function onePixelPng(): Uint8Array {

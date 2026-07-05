@@ -10,6 +10,7 @@ export interface StatusBarProps {
   pageSizeInches?: { width: number; height: number } | null;
   fileSizeBytes?: number | null;
   textLayerStatus?: TextLayerStatus | null;
+  outlineStatus?: string | null;
   onFixGarbledText?: (() => void) | undefined;
 }
 
@@ -19,6 +20,7 @@ export function StatusBar({
   pageSizeInches = null,
   fileSizeBytes = null,
   textLayerStatus = null,
+  outlineStatus = null,
   onFixGarbledText,
 }: StatusBarProps) {
   const [detailOpen, setDetailOpen] = useState(false);
@@ -34,6 +36,7 @@ export function StatusBar({
           onOpenDetail={() => setDetailOpen(true)}
         />
       ) : null}
+      {outlineStatus ? <span className="status-bar__outline-status">{outlineStatus}</span> : null}
       <span className="status-bar__local">
         <ShieldCheckIcon size={13} checked={false} />
         All processing local — no files leave this computer

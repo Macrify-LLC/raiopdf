@@ -11,7 +11,12 @@ import type {
   PdfEngine,
   PdfEngineErrorCode,
   PdfImagePageInput,
+  PdfInsertPagesOptions,
+  PdfMergeOptions,
   PdfNormalizePagesOptions,
+  PdfOutlineItem,
+  PdfOutlineState,
+  PdfOutlineWriteResult,
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
@@ -29,10 +34,17 @@ import type {
 import { PdfEngineError } from "@raiopdf/engine-api";
 import {
   countPdfPages,
+  createPdfOutlinePageItem,
+  mapPdfOutlineItems,
+  offsetPdfOutlineItems,
+  prefixPdfOutlineItemIds,
   readPdfAIdentificationFromBytes,
+  readPdfOutline,
   scrubPdfMetadataBytes,
   type PdfAIdentification,
+  writePdfOutlineInPlace,
 } from "@raiopdf/engine-pdf-lib";
+import { PDFDocument } from "pdf-lib";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -248,14 +260,18 @@ export class SidecarPdfEngine implements PdfEngine {
   async reorderPages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     const storedDocument = this.get(document);
     const sourcePageCount = await this.pageCount(document);
     assertCompletePageSet(pageIndexes, sourcePageCount);
 
     const bytes = await this.postRearrange(storedDocument.bytes, pageIndexes);
+    const outline = await preserveReorderedOutline(storedDocument.bytes, bytes, pageIndexes);
 
-    return this.store(bytes, sourcePageCount);
+    return {
+      document: this.store(outline.bytes, sourcePageCount),
+      removedTargets: outline.removedTargets,
+    };
   }
 
   async rotatePages(
@@ -276,10 +292,10 @@ export class SidecarPdfEngine implements PdfEngine {
     const selectedPages = new Set(pageIndexes);
 
     if (selectedPages.size === sourcePageCount) {
-      return this.store(
-        await this.postRotate(storedDocument.bytes, normalizeRotation(degrees)),
-        sourcePageCount,
-      );
+      const bytes = await this.postRotate(storedDocument.bytes, normalizeRotation(degrees));
+      const outline = await preserveSamePageOutline(storedDocument.bytes, bytes);
+
+      return this.store(outline.bytes, sourcePageCount);
     }
 
     const pageBytes: Uint8Array[] = [];
@@ -294,13 +310,16 @@ export class SidecarPdfEngine implements PdfEngine {
       pageBytes.push(bytes);
     }
 
-    return this.store(await this.postMerge(pageBytes), sourcePageCount);
+    const bytes = await this.postMerge(pageBytes);
+    const outline = await preserveSamePageOutline(storedDocument.bytes, bytes);
+
+    return this.store(outline.bytes, sourcePageCount);
   }
 
   async deletePages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     const storedDocument = this.get(document);
     const sourcePageCount = await this.pageCount(document);
     assertPageIndexes(pageIndexes, sourcePageCount);
@@ -316,15 +335,23 @@ export class SidecarPdfEngine implements PdfEngine {
     }
 
     if (deletedPages.size === 0) {
-      return this.store(storedDocument.bytes, sourcePageCount);
+      return {
+        document: this.store(storedDocument.bytes, sourcePageCount),
+        removedTargets: 0,
+      };
     }
 
     const formData = createFormData(storedDocument.bytes);
     formData.append("pageNumbers", toOneBasedPageNumbers([...deletedPages]));
 
     const response = await this.request("/api/v1/general/remove-pages", formData);
+    const bytes = await readBytes(response);
+    const outline = await preserveDeletedOutline(storedDocument.bytes, bytes, [...deletedPages]);
 
-    return this.store(await readBytes(response), outputPageCount);
+    return {
+      document: this.store(outline.bytes, outputPageCount),
+      removedTargets: outline.removedTargets,
+    };
   }
 
   async cropPages(
@@ -456,7 +483,8 @@ export class SidecarPdfEngine implements PdfEngine {
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
     fromOtherDocument: PdfDocumentHandle,
-  ): Promise<PdfDocumentHandle> {
+    options: PdfInsertPagesOptions = {},
+  ): Promise<PdfOutlineWriteResult> {
     const target = this.get(document);
     const inserted = this.get(fromOtherDocument);
     const targetPageCount = await this.pageCount(document);
@@ -465,9 +493,21 @@ export class SidecarPdfEngine implements PdfEngine {
 
     const mergedBytes = await this.postMerge([target.bytes, inserted.bytes]);
     const outputPageCount = targetPageCount + insertedPageCount;
+    let bytes = mergedBytes;
 
     if (insertAtPageIndex === targetPageCount) {
-      return this.store(mergedBytes, outputPageCount);
+      const outline = await preserveInsertedOutline(
+        target.bytes,
+        inserted.bytes,
+        bytes,
+        insertAtPageIndex,
+        options.sourceLabel ?? "Inserted document",
+      );
+
+      return {
+        document: this.store(outline.bytes, outputPageCount),
+        removedTargets: outline.removedTargets,
+      };
     }
 
     const mergedPageIndexes = [
@@ -475,11 +515,25 @@ export class SidecarPdfEngine implements PdfEngine {
       ...range(targetPageCount, outputPageCount),
       ...range(insertAtPageIndex, targetPageCount),
     ];
+    bytes = await this.postRearrange(mergedBytes, mergedPageIndexes);
+    const outline = await preserveInsertedOutline(
+      target.bytes,
+      inserted.bytes,
+      bytes,
+      insertAtPageIndex,
+      options.sourceLabel ?? "Inserted document",
+    );
 
-    return this.store(await this.postRearrange(mergedBytes, mergedPageIndexes), outputPageCount);
+    return {
+      document: this.store(outline.bytes, outputPageCount),
+      removedTargets: outline.removedTargets,
+    };
   }
 
-  async merge(documents: readonly PdfDocumentHandle[]): Promise<PdfDocumentHandle> {
+  async merge(
+    documents: readonly PdfDocumentHandle[],
+    options: PdfMergeOptions = {},
+  ): Promise<PdfOutlineWriteResult> {
     if (documents.length === 0) {
       throw new PdfEngineError("EMPTY_INPUT", "At least one document is required.");
     }
@@ -487,10 +541,17 @@ export class SidecarPdfEngine implements PdfEngine {
     const storedDocuments = documents.map((document) => this.get(document));
     const pageCounts = await Promise.all(documents.map((document) => this.pageCount(document)));
 
-    return this.store(
-      await this.postMerge(storedDocuments.map((document) => document.bytes)),
-      sum(pageCounts),
+    const bytes = await this.postMerge(storedDocuments.map((document) => document.bytes));
+    const outline = await preserveMergedOutline(
+      storedDocuments.map((document) => document.bytes),
+      bytes,
+      options.labels,
     );
+
+    return {
+      document: this.store(outline.bytes, sum(pageCounts)),
+      removedTargets: outline.removedTargets,
+    };
   }
 
   async stampText(
@@ -660,11 +721,38 @@ export class SidecarPdfEngine implements PdfEngine {
     _document: PdfDocumentHandle,
     _insertAtPageIndex: number,
     _images: readonly PdfImagePageInput[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
       "Image-page insertion is handled by the local pdf-lib engine.",
     );
+  }
+
+  async getOutline(document: PdfDocumentHandle): Promise<PdfOutlineState> {
+    const storedDocument = this.get(document);
+    const pdf = await PDFDocument.load(storedDocument.bytes, {
+      updateMetadata: false,
+      ignoreEncryption: true,
+    });
+
+    return readPdfOutline(pdf);
+  }
+
+  async replaceOutline(
+    document: PdfDocumentHandle,
+    outline: PdfOutlineState,
+  ): Promise<PdfOutlineWriteResult> {
+    const storedDocument = this.get(document);
+    const pdf = await PDFDocument.load(storedDocument.bytes, {
+      updateMetadata: false,
+      ignoreEncryption: true,
+    });
+    writePdfOutlineInPlace(pdf, outline, { preserveSource: pdf });
+
+    return {
+      document: this.store(new Uint8Array(await pdf.save()), await this.pageCount(document)),
+      removedTargets: 0,
+    };
   }
 
   async ocr(
@@ -945,6 +1033,201 @@ function createFormData(bytes: Uint8Array): FormData {
 
 function createPdfBlob(bytes: Uint8Array): Blob {
   return new Blob([toArrayBuffer(bytes)], { type: "application/pdf" });
+}
+
+async function preserveReorderedOutline(
+  sourceBytes: Uint8Array,
+  outputBytes: Uint8Array,
+  pageIndexes: readonly number[],
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  return preserveOutlineIfReadable(outputBytes, async () => {
+    const source = await loadPdfForOutline(sourceBytes);
+    const output = await loadPdfForOutline(outputBytes);
+    const pageMap = new Map(pageIndexes.map((pageIndex, outputIndex) => [pageIndex, outputIndex]));
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      bytes: new Uint8Array(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
+  });
+}
+
+async function preserveDeletedOutline(
+  sourceBytes: Uint8Array,
+  outputBytes: Uint8Array,
+  deletedPages: readonly number[],
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  return preserveOutlineIfReadable(outputBytes, async () => {
+    const source = await loadPdfForOutline(sourceBytes);
+    const output = await loadPdfForOutline(outputBytes);
+    const deleted = new Set(deletedPages);
+    let outputIndex = 0;
+    const pageMap = new Map<number, number>();
+
+    for (let sourceIndex = 0; sourceIndex < source.getPageCount(); sourceIndex += 1) {
+      if (!deleted.has(sourceIndex)) {
+        pageMap.set(sourceIndex, outputIndex);
+        outputIndex += 1;
+      }
+    }
+
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      bytes: new Uint8Array(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
+  });
+}
+
+async function preserveSamePageOutline(
+  sourceBytes: Uint8Array,
+  outputBytes: Uint8Array,
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  return preserveOutlineIfReadable(outputBytes, async () => {
+    const source = await loadPdfForOutline(sourceBytes);
+    const output = await loadPdfForOutline(outputBytes);
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageIndex);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      bytes: new Uint8Array(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
+  });
+}
+
+async function preserveInsertedOutline(
+  targetBytes: Uint8Array,
+  insertedBytes: Uint8Array,
+  outputBytes: Uint8Array,
+  insertAtPageIndex: number,
+  sourceLabel: string,
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  return preserveOutlineIfReadable(outputBytes, async () => {
+    const target = await loadPdfForOutline(targetBytes);
+    const inserted = await loadPdfForOutline(insertedBytes);
+    const output = await loadPdfForOutline(outputBytes);
+    const targetOutline = readPdfOutline(target);
+    const targetMapped = mapPdfOutlineItems(targetOutline.items, (pageIndex) =>
+      pageIndex < insertAtPageIndex ? pageIndex : pageIndex + inserted.getPageCount());
+    const insertedOutline = readPdfOutline(inserted);
+    const insertedOffset = offsetPdfOutlineItems(insertedOutline.items, insertAtPageIndex);
+    const prefixedInserted = prefixPdfOutlineItemIds(insertedOffset.items, "inserted:");
+    const insertedParent = prefixedInserted.length > 0
+      ? [createPdfOutlinePageItem({
+          id: "inserted:root",
+          title: sourceLabel,
+          pageIndex: insertAtPageIndex,
+          expanded: true,
+          children: prefixedInserted,
+        })]
+      : [];
+
+    writePdfOutlineInPlace(output, {
+      ...targetOutline,
+      items: [
+        ...targetMapped.items,
+        ...insertedParent,
+      ],
+    }, {
+      preserveSources: [
+        { pdf: target },
+        { pdf: inserted, idPrefix: "inserted:" },
+      ],
+    });
+
+    return {
+      bytes: new Uint8Array(await output.save()),
+      removedTargets: targetMapped.removedTargets + insertedOffset.removedTargets,
+    };
+  });
+}
+
+async function preserveMergedOutline(
+  sourceBytes: readonly Uint8Array[],
+  outputBytes: Uint8Array,
+  labels: readonly string[] | undefined,
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  return preserveOutlineIfReadable(outputBytes, async () => {
+    const output = await loadPdfForOutline(outputBytes);
+    const outlineItems: PdfOutlineItem[] = [];
+    const preserveSources: Array<{ pdf: PDFDocument; idPrefix?: string | undefined }> = [];
+    let pageOffset = 0;
+    let removedTargets = 0;
+
+    for (const [index, bytes] of sourceBytes.entries()) {
+      const source = await loadPdfForOutline(bytes);
+      const prefix = `merged:${index}:`;
+      preserveSources.push({ pdf: source, idPrefix: prefix });
+      const outline = readPdfOutline(source);
+      const mapped = offsetPdfOutlineItems(outline.items, pageOffset);
+      removedTargets += mapped.removedTargets;
+      const prefixed = prefixPdfOutlineItemIds(mapped.items, prefix);
+      if (prefixed.length > 0) {
+        outlineItems.push(createPdfOutlinePageItem({
+          id: `${prefix}root`,
+          title: labels?.[index] ?? `Merged document ${index + 1}`,
+          pageIndex: pageOffset,
+          expanded: true,
+          children: prefixed,
+        }));
+      }
+      pageOffset += source.getPageCount();
+    }
+
+    writePdfOutlineInPlace(output, {
+      items: outlineItems,
+      openMode: "default",
+      revision: "merged",
+    }, { preserveSources });
+
+    return {
+      bytes: new Uint8Array(await output.save()),
+      removedTargets,
+    };
+  });
+}
+
+async function preserveOutlineIfReadable(
+  outputBytes: Uint8Array,
+  preserve: () => Promise<{ bytes: Uint8Array; removedTargets: number }>,
+): Promise<{ bytes: Uint8Array; removedTargets: number }> {
+  try {
+    return await preserve();
+  } catch (error) {
+    if (error instanceof PdfOutlineLoadError) {
+      return { bytes: outputBytes, removedTargets: 0 };
+    }
+    throw error;
+  }
+}
+
+async function loadPdfForOutline(bytes: Uint8Array): Promise<PDFDocument> {
+  try {
+    return await PDFDocument.load(bytes, {
+      updateMetadata: false,
+      ignoreEncryption: true,
+    });
+  } catch (error) {
+    throw new PdfOutlineLoadError(error);
+  }
+}
+
+class PdfOutlineLoadError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("Could not parse PDF bytes for outline preservation.");
+    this.name = "PdfOutlineLoadError";
+    this.cause = cause;
+  }
 }
 
 function normalizeBytes(bytes: PdfBytes): Uint8Array {

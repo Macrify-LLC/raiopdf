@@ -416,7 +416,7 @@ function assertManifestChecksums(root: string): void {
   const lines = readFileSyncUtf8(checksumsPath).trim().split(/\n/).filter(Boolean);
   expect(lines.length, "package checksums should not be empty").toBeGreaterThan(0);
   for (const line of lines) {
-    const match = line.match(/^([a-f0-9]{64})  (.+)$/);
+    const match = line.match(/^([a-f0-9]{64}) {2}(.+)$/);
     expect(match, `checksum line should be parseable: ${line}`).not.toBeNull();
     if (!match) continue;
     const [, expected, relativePath] = match;

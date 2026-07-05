@@ -213,7 +213,11 @@ export async function buildFilingPacket(
         documents.push(toDocumentResult(prepared, documentFiles));
       }
     } else {
-      const combined = await localEngine.merge(combinedHandles);
+      const merged = await localEngine.merge(combinedHandles, {
+        labels: preparedDocuments.flatMap((document) =>
+          document.outputs.map((output) => output.outputName)),
+      });
+      const combined = merged.document;
       opened.push({ handle: combined, engine: localEngine });
       const combinedBytes = await localEngine.saveToBytes(combined);
       const combinedPageCount = preparedDocuments.reduce(

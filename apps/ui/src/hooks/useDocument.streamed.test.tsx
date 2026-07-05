@@ -27,6 +27,10 @@ vi.mock("@raiopdf/engine-local", () => {
       return new Uint8Array([String(handle).length]);
     }
 
+    async getOutline() {
+      return { items: [], openMode: "default" as const, revision: "mock" };
+    }
+
     async close() {
       return undefined;
     }

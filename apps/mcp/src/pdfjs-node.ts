@@ -1,7 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 // @ts-expect-error - the pdf.js worker entry ships no type declarations.
 import * as pdfjsWorker from "pdfjs-dist/legacy/build/pdf.worker.min.mjs";
@@ -35,7 +35,10 @@ function assetDir(name: string): string {
 }
 
 function toPdfjsFactoryPath(directory: string): string {
-  return /[\\/]$/.test(directory) ? directory : directory + path.sep;
+  const withTrailingSeparator = /[\\/]$/.test(directory) ? directory : directory + path.sep;
+  const href = pathToFileURL(withTrailingSeparator).href;
+
+  return href.endsWith("/") ? href : `${href}/`;
 }
 
 function assetRootCandidates(): string[] {

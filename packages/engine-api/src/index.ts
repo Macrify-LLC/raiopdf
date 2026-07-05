@@ -145,6 +145,80 @@ export type PdfBinderOptions = {
   marginIn?: number | undefined;
 };
 
+export type PdfOutlineTarget =
+  | {
+      kind: "page";
+      /** Zero-based destination page index. */
+      pageIndex: number;
+      /**
+       * Present for bookmarks read from an existing PDF. Writers use it to
+       * preserve the original destination view mode while remapping the page.
+       */
+      preserveId?: string | undefined;
+    }
+  | {
+      kind: "named";
+      /** The named destination label as stored by the source PDF. */
+      name: string;
+      /** Resolved zero-based page index when the name points inside this PDF. */
+      resolvedPageIndex?: number | undefined;
+      preserveId: string;
+    }
+  | {
+      kind: "uri";
+      uri: string;
+      preserveId: string;
+    }
+  | {
+      kind: "remote";
+      preserveId: string;
+    }
+  | {
+      kind: "unsupported";
+      reason: string;
+      preserveId: string;
+    };
+
+export type PdfOutlineItemStyle = {
+  bold?: boolean | undefined;
+  italic?: boolean | undefined;
+};
+
+export type PdfOutlineItem = {
+  /**
+   * Stable only for the currently opened document snapshot. Newly created
+   * items may use caller-generated ids; source ids are used to preserve
+   * view-only targets when the outline tree is rewritten.
+   */
+  id: string;
+  title: string;
+  target: PdfOutlineTarget;
+  expanded?: boolean | undefined;
+  style?: PdfOutlineItemStyle | undefined;
+  children?: readonly PdfOutlineItem[] | undefined;
+};
+
+export type PdfOutlineOpenMode = "default" | "outlines";
+
+export type PdfOutlineState = {
+  items: readonly PdfOutlineItem[];
+  openMode: PdfOutlineOpenMode;
+  revision: string;
+};
+
+export type PdfOutlineWriteResult = {
+  document: PdfDocumentHandle;
+  removedTargets: number;
+};
+
+export type PdfInsertPagesOptions = {
+  sourceLabel?: string | undefined;
+};
+
+export type PdfMergeOptions = {
+  labels?: readonly string[] | undefined;
+};
+
 export type PdfPageSizePoints = {
   widthPt: number;
   heightPt: number;
@@ -679,7 +753,7 @@ export interface PdfEngine {
   reorderPages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle>;
+  ): Promise<PdfOutlineWriteResult>;
 
   /** Creates a new document with the selected zero-based pages rotated by the given degrees. */
   rotatePages(
@@ -692,7 +766,7 @@ export interface PdfEngine {
   deletePages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle>;
+  ): Promise<PdfOutlineWriteResult>;
 
   /** Creates a new document with crop boxes inset on the selected zero-based pages. */
   cropPages(
@@ -770,10 +844,14 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
     fromOtherDocument: PdfDocumentHandle,
-  ): Promise<PdfDocumentHandle>;
+    options?: PdfInsertPagesOptions,
+  ): Promise<PdfOutlineWriteResult>;
 
   /** Creates a new document by concatenating all pages from the provided documents in order. */
-  merge(documents: readonly PdfDocumentHandle[]): Promise<PdfDocumentHandle>;
+  merge(
+    documents: readonly PdfDocumentHandle[],
+    options?: PdfMergeOptions,
+  ): Promise<PdfOutlineWriteResult>;
 
   /**
    * Creates a new document with text stamped on selected pages.
@@ -878,7 +956,22 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
     images: readonly PdfImagePageInput[],
-  ): Promise<PdfDocumentHandle>;
+  ): Promise<PdfOutlineWriteResult>;
+
+  /** Reads the document's PDF outline/bookmark tree. */
+  getOutline(document: PdfDocumentHandle): Promise<PdfOutlineState>;
+
+  /**
+   * Rewrites the document outline/bookmark tree.
+   *
+   * Implementations must preserve source nodes with non-page targets when the
+   * caller supplies their original `preserveId`; otherwise the write fails
+   * closed instead of silently deleting view-only bookmarks.
+   */
+  replaceOutline(
+    document: PdfDocumentHandle,
+    outline: PdfOutlineState,
+  ): Promise<PdfOutlineWriteResult>;
 
   /**
    * Builds an exhibit binder from a main document and labeled exhibits.

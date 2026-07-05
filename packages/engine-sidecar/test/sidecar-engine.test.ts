@@ -130,7 +130,7 @@ describe("SidecarPdfEngine", () => {
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
 
-    const reordered = await engine.reorderPages(document, [2, 0, 1]);
+    const { document: reordered } = await engine.reorderPages(document, [2, 0, 1]);
 
     expect(await engine.saveToBytes(reordered)).toEqual(bytes(9));
     expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/general/rearrange-pages");
@@ -185,7 +185,7 @@ describe("SidecarPdfEngine", () => {
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
 
-    const deleted = await engine.deletePages(document, [1]);
+    const { document: deleted } = await engine.deletePages(document, [1]);
 
     expect(await engine.saveToBytes(deleted)).toEqual(bytes(8));
     expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/general/remove-pages");
@@ -203,7 +203,7 @@ describe("SidecarPdfEngine", () => {
     const target = await engine.open(bytes(1));
     const inserted = await engine.open(bytes(2));
 
-    const combined = await engine.insertPages(target, 1, inserted);
+    const { document: combined } = await engine.insertPages(target, 1, inserted);
 
     expect(await engine.saveToBytes(combined)).toEqual(bytes(5));
     expect(calls[2]?.url).toBe("http://127.0.0.1:8080/api/v1/general/merge-pdfs");
@@ -221,7 +221,7 @@ describe("SidecarPdfEngine", () => {
     const first = await engine.open(bytes(1));
     const second = await engine.open(bytes(2));
 
-    const merged = await engine.merge([first, second]);
+    const { document: merged } = await engine.merge([first, second]);
 
     expect(await engine.saveToBytes(merged)).toEqual(bytes(6));
     expect(calls[2]?.url).toBe("http://127.0.0.1:8080/api/v1/general/merge-pdfs");
@@ -774,13 +774,6 @@ function getFormData(call: FetchCall | undefined): FormData {
 
 function expectFormField(call: FetchCall | undefined, name: string, value: string): void {
   expect(getFormData(call).get(name)).toBe(value);
-}
-
-function expectJsonFormField(call: FetchCall | undefined, name: string): unknown {
-  const value = getFormData(call).get(name);
-  expect(typeof value).toBe("string");
-
-  return JSON.parse(value as string) as unknown;
 }
 
 async function expectFormFile(call: FetchCall | undefined, expectedBytes: readonly number[]): Promise<void> {

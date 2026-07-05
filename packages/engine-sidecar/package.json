@@ -20,9 +20,8 @@
   },
   "dependencies": {
     "@raiopdf/engine-api": "workspace:*",
-    "@raiopdf/engine-pdf-lib": "workspace:*"
-  },
-  "devDependencies": {
+    "@raiopdf/engine-pdf-lib": "workspace:*",
     "pdf-lib": "^1.17.1"
-  }
+  },
+  "devDependencies": {}
 }

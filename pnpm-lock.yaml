@@ -183,6 +183,9 @@ importers:
 
   packages/engine-pdf-lib:
     dependencies:
+      '@raiopdf/engine-api':
+        specifier: workspace:*
+        version: link:../engine-api
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
@@ -195,7 +198,6 @@ importers:
       '@raiopdf/engine-pdf-lib':
         specifier: workspace:*
         version: link:../engine-pdf-lib
-    devDependencies:
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1

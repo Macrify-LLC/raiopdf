@@ -138,6 +138,7 @@ RaioPDF is licensed under [GPL-3.0](LICENSE). It bundles third-party components 
 
 ## Support
 
+- **Known issues:** skim the [pinned Known Issues list](https://github.com/Macrify-LLC/raiopdf/issues/158) before filing a bug — the rough edge you hit may already be tracked.
 - Bugs and feature requests: [GitHub Issues](https://github.com/Macrify-LLC/raiopdf/issues)
 - Email: support@macrify.me *(best effort — this is free, community-supported software)*
 

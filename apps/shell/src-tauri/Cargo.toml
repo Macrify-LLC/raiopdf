@@ -1,6 +1,6 @@
 [package]
 name = "raiopdf-shell"
-version = "0.0.0"
+version = "0.1.0"
 description = "RaioPDF desktop shell"
 authors = ["Macrify LLC"]
 edition = "2021"

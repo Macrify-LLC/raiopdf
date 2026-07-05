@@ -2,7 +2,8 @@
 // Stamps apps/shell/package.json `version` — the single source of truth that
 // tauri.conf.json reads (`"version": "../package.json"`). Run by BOTH the CI
 // release workflow AND the local signed build (`pnpm build:shell:signed`), so
-// updater artifacts can never ship as 0.0.0 and break client version comparison.
+// updater artifacts can never ship with a placeholder version and break client
+// version comparison.
 //
 // Version resolution:
 //   1. explicit arg:  node scripts/stamp-shell-version.mjs 1.2.3   (CI passes the tag)

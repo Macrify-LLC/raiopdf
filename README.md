@@ -8,7 +8,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-1B3A5C.svg"></a>
   <a href="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-D97706.svg">
+  <img alt="Status: public alpha" src="https://img.shields.io/badge/status-public_alpha-D97706.svg">
   <img alt="Platform: Windows first" src="https://img.shields.io/badge/platform-Windows-2565A0.svg">
   <img alt="Telemetry: none" src="https://img.shields.io/badge/telemetry-none-166534.svg">
 </p>
@@ -30,7 +30,7 @@
 
 <br>
 
-> **Pre-alpha — under active development. Nothing to download yet.** "Watch" this repo (top right) to be notified on the first release, or check [raio.macrify.me](https://raio.macrify.me) — the download button there lights up automatically the moment a build exists.
+> **Public alpha — version 0.1.0.** Download the current Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest published release automatically.
 
 ## The philosophy
 
@@ -94,12 +94,12 @@ Four ways it fits into an actual day at the firm:
 | **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 
-Everything above is implemented and working in the development build today — what's still pre-alpha is the release packaging, not the features. See [Status](#status).
+Everything above is implemented and working in the public alpha today. Expect rough edges, and please report anything that breaks. See [Status](#status).
 
 ## What it is not
 
 - **Not "AI-powered."** No AI features built into RaioPDF — if I wanted an AI summary I could go to a million other more useful places first.
-- **Not released yet.** Pre-alpha, no promised date. But if you want it I'll give it to you.
+- **Not stable software yet.** This is a public alpha: usable, public, and versioned, but still early.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
 - **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
 - **Not phoning home.** No telemetry, no background analytics — RaioPDF makes no network requests of its own, and the content-security policy only lets it reach its own bundled engine. Nothing is ever sent automatically. If it ever crashes, it asks — once — whether to report it, your choice of two ways: open a pre-filled GitHub issue in your browser, or save the report to a file you can email in yourself (no account needed). Either way you review every word before anything is sent, and you can switch the prompt off entirely.
@@ -128,9 +128,9 @@ Optionally, an off-by-default "bring your own AI" connector — bundled right in
 
 ## Status
 
-**Pre-alpha.** Built in the open — the features above are implemented and working in the development build; none of this is a roadmap slide. What's left before the first public build is release engineering: the Windows installer (NSIS) and the maintainer code-signing pipeline already exist, and signed auto-update infrastructure is in place (not yet wired to a user-facing "check for updates"). Windows ships first; macOS is planned with no committed date.
+**Public alpha, version 0.1.0.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide. The Windows installer ships first, with the maintainer signing and update infrastructure in place. macOS is planned with no committed date.
 
-The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically — there's no download link to click until a real build exists behind it.
+The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, and the canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 
 ## License
 

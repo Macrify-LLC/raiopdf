@@ -1,10 +1,10 @@
 # Contributing to RaioPDF
 
-RaioPDF is pre-alpha and solo-maintained, so process is intentionally light. Thanks for taking the time to contribute.
+RaioPDF is public alpha and solo-maintained, so process is intentionally light. Thanks for taking the time to contribute.
 
 ## Before you start
 
-- For anything beyond a small fix (a new feature, a redesign of a workflow, a new dependency), open an issue first to discuss the approach. It's pre-alpha and things are moving fast, so a quick sync avoids wasted work on either side.
+- For anything beyond a small fix (a new feature, a redesign of a workflow, a new dependency), open an issue first to discuss the approach. It's public alpha and things are moving fast, so a quick sync avoids wasted work on either side.
 - Check open issues and PRs first — someone may already be on it.
 - By contributing, you agree your contribution is licensed under the project's [GPL-3.0 license](LICENSE).
 

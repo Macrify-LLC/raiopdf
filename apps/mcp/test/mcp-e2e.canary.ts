@@ -121,7 +121,7 @@ async function connect(configDir: string): Promise<Client> {
     },
   });
 
-  const client = new Client({ name: "raiopdf-mcp-canary", version: "0.0.0" });
+  const client = new Client({ name: "raiopdf-mcp-canary", version: "0.1.0" });
   await client.connect(transport);
   return client;
 }

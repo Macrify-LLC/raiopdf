@@ -98,7 +98,7 @@ interface NormalizedInput {
 
 const DEFAULT_DIGITS = 6;
 const DEFAULT_START = 1;
-const DEFAULT_APP_VERSION = "0.0.0";
+const DEFAULT_APP_VERSION = "0.1.0";
 const BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
 const DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
 

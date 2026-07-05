@@ -3,10 +3,10 @@
 // every value on this page is either static copy or fetched straight from
 // GitHub at load time in the visitor's own browser.
 //
-// Repo is pre-alpha: /releases/latest 404s until the first signed release is
-// published. That 404 IS the launch gate — the page renders a "coming soon"
-// state automatically and starts showing real numbers the moment Jacob
-// publishes a release. No code change needed to "go live."
+// RaioPDF is public alpha. The page reads the public releases list so GitHub
+// prerelease alphas can still power the download button; if GitHub is
+// unavailable, the page falls back to a GitHub Releases link instead of hiding
+// the download path.
 //
 // Plain global (not an ES module) on purpose: a bare `<script src>` tag
 // works when this file is opened straight off disk (file://), where ES
@@ -23,6 +23,15 @@
 
   function pickAsset(assets, pattern) {
     return (assets || []).find((a) => pattern.test(a.name));
+  }
+
+  function hasWindowsInstaller(release) {
+    return Boolean(release && pickAsset(release.assets, /\.exe$/i));
+  }
+
+  function pickDownloadRelease(latest, releases) {
+    const publicReleases = (releases || []).filter((release) => !release.draft);
+    return publicReleases.find(hasWindowsInstaller) || latest || publicReleases[0] || null;
   }
 
   function digestToSha256(digest) {
@@ -45,7 +54,7 @@
 
   /**
    * Resolves the live install info shown in the hero + download panel.
-   * Never throws — a GitHub outage or the pre-release 404 both resolve to
+   * Never throws — a GitHub outage or missing release response resolves to
    * `{ available: false }` rather than breaking the page.
    */
   async function loadReleaseInfo() {
@@ -58,20 +67,22 @@
       0
     );
 
-    if (!latest) {
+    const release = pickDownloadRelease(latest, all);
+
+    if (!release) {
       return { available: false, totalDownloads };
     }
 
-    const exe = pickAsset(latest.assets, /\.exe$/i);
+    const exe = pickAsset(release.assets, /\.exe$/i);
     const primary = exe;
-    const checksums = pickAsset(latest.assets, /SHA256SUMS/i);
+    const checksums = pickAsset(release.assets, /SHA256SUMS/i);
 
     return {
       available: true,
-      version: (latest.tag_name || latest.name || "").replace(/^v/, ""),
-      publishedAt: latest.published_at,
-      releaseUrl: latest.html_url,
-      downloadUrl: primary ? primary.browser_download_url : latest.html_url,
+      version: (release.tag_name || release.name || "").replace(/^v/, ""),
+      publishedAt: release.published_at,
+      releaseUrl: release.html_url,
+      downloadUrl: primary ? primary.browser_download_url : release.html_url,
       downloadName: primary ? primary.name : null,
       sizeBytes: primary ? primary.size : null,
       sha256: primary ? digestToSha256(primary.digest) : null,

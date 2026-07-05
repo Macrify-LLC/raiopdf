@@ -891,7 +891,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine-sidecar-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "serde",
@@ -2736,7 +2736,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raiopdf-engine-host"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "engine-sidecar-core",
  "serde_json",
@@ -2744,11 +2744,11 @@ dependencies = [
 
 [[package]]
 name = "raiopdf-mcp-launcher"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "raiopdf-shell"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "engine-sidecar-core",
  "regex",

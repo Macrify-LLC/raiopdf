@@ -241,7 +241,7 @@ async function packageRoot(): Promise<string> {
 
 function meta() {
   return {
-    appVersion: "0.0.0-test",
+    appVersion: "0.1.0-test",
     createdAt: "2026-07-03T12:00:00.000Z",
   };
 }

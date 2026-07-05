@@ -7,6 +7,8 @@ PINNED_COMMIT=$(<"$SCRIPT_DIR/PINNED_COMMIT")
 PINNED_SETTINGS_GRADLE_SHA256=$(<"$SCRIPT_DIR/PINNED_SETTINGS_GRADLE_SHA256")
 UPSTREAM_DIR="$SCRIPT_DIR/upstream"
 PATCH_FILE="$SCRIPT_DIR/settings-gradle.patch"
+PATCHES_DIR="$SCRIPT_DIR/patches"
+PINNED_PATCHED_FILES="$SCRIPT_DIR/PINNED_PATCHED_FILES_SHA256"
 REMOTE_URL="https://github.com/Stirling-Tools/Stirling-PDF.git"
 
 CARVE_OUT_DIRS=(
@@ -23,6 +25,36 @@ CARVE_OUT_DIRS=(
 
 if [[ ! -s "$PATCH_FILE" ]]; then
   echo "Missing settings.gradle patch: $PATCH_FILE" >&2
+  exit 1
+fi
+
+# Functional patches (engine/patches/*.patch) are applied after the settings
+# patch, in sorted order. Every file they modify must be listed with its
+# post-patch SHA-256 in PINNED_PATCHED_FILES_SHA256 (sha256sum format), which
+# also drives the worktree-status allowlist below. See ADR 0003.
+FUNCTIONAL_PATCHES=()
+if [[ -d "$PATCHES_DIR" ]]; then
+  while IFS= read -r functional_patch; do
+    FUNCTIONAL_PATCHES+=("$functional_patch")
+  done < <(find "$PATCHES_DIR" -maxdepth 1 -type f -name '*.patch' | sort)
+fi
+
+PATCHED_FILE_PATHS=()
+PATCHED_FILE_SHAS=()
+if [[ -s "$PINNED_PATCHED_FILES" ]]; then
+  while read -r pinned_sha pinned_path; do
+    [[ -z "$pinned_sha" || "$pinned_sha" == \#* ]] && continue
+    PATCHED_FILE_SHAS+=("$pinned_sha")
+    PATCHED_FILE_PATHS+=("$pinned_path")
+  done <"$PINNED_PATCHED_FILES"
+fi
+
+if ((${#FUNCTIONAL_PATCHES[@]} > 0)) && ((${#PATCHED_FILE_PATHS[@]} == 0)); then
+  echo "Functional patches exist in $PATCHES_DIR but $PINNED_PATCHED_FILES is missing or empty." >&2
+  exit 1
+fi
+if ((${#FUNCTIONAL_PATCHES[@]} == 0)) && ((${#PATCHED_FILE_PATHS[@]} > 0)); then
+  echo "$PINNED_PATCHED_FILES lists patched files but $PATCHES_DIR has no patches." >&2
   exit 1
 fi
 
@@ -75,6 +107,15 @@ fi
   git apply "$PATCH_FILE"
 )
 
+for functional_patch in "${FUNCTIONAL_PATCHES[@]}"; do
+  (
+    cd "$UPSTREAM_DIR"
+    git apply --check "$functional_patch"
+    git apply "$functional_patch"
+  )
+  echo "Applied functional patch: $(basename "$functional_patch")"
+done
+
 settings_sha=$(sha256_file "$UPSTREAM_DIR/settings.gradle")
 if [[ "$settings_sha" != "$PINNED_SETTINGS_GRADLE_SHA256" ]]; then
   echo "Refusing to continue; patched settings.gradle has an unexpected SHA-256:" >&2
@@ -82,6 +123,18 @@ if [[ "$settings_sha" != "$PINNED_SETTINGS_GRADLE_SHA256" ]]; then
   echo "  actual:   $settings_sha" >&2
   exit 1
 fi
+
+for index in "${!PATCHED_FILE_PATHS[@]}"; do
+  patched_path=${PATCHED_FILE_PATHS[$index]}
+  expected_sha=${PATCHED_FILE_SHAS[$index]}
+  actual_sha=$(sha256_file "$UPSTREAM_DIR/$patched_path")
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    echo "Refusing to continue; patched $patched_path has an unexpected SHA-256:" >&2
+    echo "  expected: $expected_sha" >&2
+    echo "  actual:   $actual_sha" >&2
+    exit 1
+  fi
+done
 
 unexpected_status=()
 while IFS= read -r status_line; do
@@ -95,8 +148,17 @@ while IFS= read -r status_line; do
         break
       fi
     done
-  elif [[ "$status" == " M" && "$path" == "settings.gradle" ]]; then
-    allowed=true
+  elif [[ "$status" == " M" ]]; then
+    if [[ "$path" == "settings.gradle" ]]; then
+      allowed=true
+    else
+      for patched_path in "${PATCHED_FILE_PATHS[@]}"; do
+        if [[ "$path" == "$patched_path" ]]; then
+          allowed=true
+          break
+        fi
+      done
+    fi
   fi
 
   if [[ "$allowed" != true ]]; then

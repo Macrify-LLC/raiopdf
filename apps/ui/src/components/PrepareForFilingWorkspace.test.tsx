@@ -255,6 +255,50 @@ describe("PrepareForFilingWorkspace", () => {
     expect(document.body.textContent).toContain("verified");
   });
 
+  it("treats Florida sanitize guidance as an expected removal action", () => {
+    const pack = getPack("florida");
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    const sanitizeCheckbox = getCheckbox("Sanitize active and embedded content");
+    expect(sanitizeCheckbox.checked).toBe(true);
+    expect(
+      queryButtonByLabel("Pack guidance differs from this selection for Sanitize active and embedded content"),
+    ).toBeNull();
+
+    click(getButtonByLabel("Show details for Sanitize active and embedded content"));
+    expect(rowContaining(document.body.innerHTML, "Sanitize active and embedded content")).toContain("Required");
+    expect(rowContaining(document.body.innerHTML, "Sanitize active and embedded content")).not.toContain("Not preferred");
+
+    click(sanitizeCheckbox);
+    click(getButtonByLabel("Expected by this jurisdiction for Sanitize active and embedded content"));
+
+    expect(document.body.textContent).toContain("This jurisdiction expects this step.");
+    expect(document.body.textContent).toContain("Florida Courts Technology Standards v4.0, adopted May 2025");
+  });
+
   it("shows a red advisory flag when a checked step differs from pack guidance", () => {
     const pack = getPack("florida");
 
@@ -583,6 +627,12 @@ function getButtonByLabel(label: string): HTMLButtonElement {
   }
 
   return button;
+}
+
+function queryButtonByLabel(label: string): HTMLButtonElement | null {
+  return Array.from(document.querySelectorAll("button")).find(
+    (element): element is HTMLButtonElement => element.getAttribute("aria-label") === label,
+  ) ?? null;
 }
 
 function getCheckbox(label: string): HTMLInputElement {

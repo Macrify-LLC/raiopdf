@@ -12,6 +12,7 @@ type PolicyBackedStep = {
   id: PrepPlanStep["id"];
   label: string;
   policy: PolicyConstraint;
+  stanceSlot?: "action" | "property";
   destructive?: boolean;
   impact: (facts: DocumentFacts) => string;
 };
@@ -27,6 +28,7 @@ export function resolvePrepPlan(
       id: "remove-encryption",
       label: "Remove encryption",
       policy: pack.encryption,
+      stanceSlot: "property",
       impact: encryptionImpact,
     }, facts),
     normalizeStep(pack),
@@ -62,16 +64,21 @@ export function resolvePrepPlan(
 }
 
 function policyStep(input: PolicyBackedStep, facts: DocumentFacts): PrepPlanStep {
+  const actionStance = input.stanceSlot === "property"
+    ? actionStanceForProperty(input.policy.stance)
+    : input.policy.stance;
+
   return {
     id: input.id,
     label: input.label,
     stance: input.policy.stance,
+    actionStance,
     ...(input.policy.condition ? { condition: input.policy.condition } : {}),
     authority: input.policy.authority ?? "Unspecified",
     lastVerified: input.policy.lastVerified ?? UNKNOWN_LAST_VERIFIED,
     ...(input.policy.note ? { note: input.policy.note } : {}),
     prepDefault: input.policy.prepDefault,
-    defaultChecked: input.policy.prepDefault === "on" && input.policy.stance !== "prohibited",
+    defaultChecked: input.policy.prepDefault === "on" && actionStance !== "prohibited",
     destructive: input.destructive === true,
     impact: input.impact(facts),
   };
@@ -84,6 +91,7 @@ function normalizeStep(pack: JurisdictionPack): PrepPlanStep {
     id: "normalize-pages",
     label: "Normalize pages",
     stance: "standard",
+    actionStance: "standard",
     condition: `${pack.pageSize.w} x ${pack.pageSize.h} in ${pack.orientation}`,
     authority: constraint.authority,
     lastVerified: constraint.lastVerified,
@@ -97,6 +105,9 @@ function normalizeStep(pack: JurisdictionPack): PrepPlanStep {
 function sanitizeStep(pack: JurisdictionPack, facts: DocumentFacts): PrepPlanStep {
   const policies = [pack.activeContent, pack.embeddedFiles];
   const stance = strongestStance(policies.map((policy) => policy.stance));
+  const actionStance = strongestStance(
+    policies.map((policy) => actionStanceForProperty(policy.stance)),
+  );
   const defaultOn = policies.some((policy) => policy.prepDefault === "on");
   const authority = joinUnique(policies.map((policy) => policy.authority).filter(isString));
   const lastVerified = policies
@@ -110,12 +121,13 @@ function sanitizeStep(pack: JurisdictionPack, facts: DocumentFacts): PrepPlanSte
     id: "sanitize-content",
     label: "Sanitize active and embedded content",
     stance,
+    actionStance,
     ...(conditions ? { condition: conditions } : {}),
     authority: authority || "Unspecified",
     lastVerified,
     ...(notes ? { note: notes } : {}),
     prepDefault: defaultOn ? "on" : "off",
-    defaultChecked: defaultOn,
+    defaultChecked: defaultOn && actionStance !== "prohibited",
     destructive: false,
     impact: sanitizeImpact(facts),
   };
@@ -130,6 +142,7 @@ function splitStep(pack: JurisdictionPack): PrepPlanStep {
     id: "split-by-size",
     label: "Split by upload cap",
     stance: hasConfiguredCap ? "standard" : "unknown",
+    actionStance: hasConfiguredCap ? "standard" : "unknown",
     authority: constraint.authority,
     lastVerified: constraint.lastVerified,
     ...(needsProfile
@@ -254,6 +267,14 @@ function strongestStance(stances: readonly ConstraintStance[]): PrepPlanStance {
   const order: ConstraintStance[] = ["required", "preferred", "prohibited", "accepted", "unknown"];
 
   return order.find((stance) => stances.includes(stance)) ?? "unknown";
+}
+
+function actionStanceForProperty(stance: ConstraintStance): ConstraintStance {
+  if (stance === "prohibited") {
+    return "required";
+  }
+
+  return stance;
 }
 
 function joinUnique(values: readonly string[]): string {

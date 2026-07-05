@@ -1320,7 +1320,7 @@ function PrepStepRow({
       {expanded ? (
         <div id={descriptionId} className="filing-prep-row__body">
           <div className="filing-prep-row__stance-row">
-            <StepStanceBadge stance={step.stance} />
+            <StepStanceBadge stance={step.actionStance} />
           </div>
           {step.condition ? <p className="filing-prep-row__condition">{step.condition}</p> : null}
           {step.note ? <p className="filing-prep-row__note">{step.note}</p> : null}
@@ -1414,7 +1414,7 @@ function StepGuidanceFlag({
 }
 
 function getStepGuidanceFlag(step: PrepPlanStep, checked: boolean): StepGuidanceFlagModel | null {
-  if (checked && step.stance === "prohibited") {
+  if (checked && step.actionStance === "prohibited") {
     return {
       tone: "danger",
       summary: "Pack guidance differs from this selection",
@@ -1422,7 +1422,7 @@ function getStepGuidanceFlag(step: PrepPlanStep, checked: boolean): StepGuidance
     };
   }
 
-  if (!checked && step.stance === "required") {
+  if (!checked && step.actionStance === "required") {
     return {
       tone: "warning",
       summary: "Expected by this jurisdiction",
@@ -1430,7 +1430,7 @@ function getStepGuidanceFlag(step: PrepPlanStep, checked: boolean): StepGuidance
     };
   }
 
-  if (!checked && step.stance === "preferred") {
+  if (!checked && step.actionStance === "preferred") {
     return {
       tone: "warning",
       summary: "Recommended by this jurisdiction",

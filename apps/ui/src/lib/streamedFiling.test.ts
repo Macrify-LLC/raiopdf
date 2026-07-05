@@ -20,6 +20,7 @@ function prepStep(id: PrepPlanStep["id"]): PrepPlanStep {
     id,
     label: id,
     stance: "standard",
+    actionStance: "standard",
     authority: "test",
     lastVerified: "2026-01-01",
     prepDefault: "on",

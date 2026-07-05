@@ -281,7 +281,13 @@ export type PrepPlanStance = ConstraintStance | "standard";
 export type PrepPlanStep = {
   id: PrepPlanStepId;
   label: string;
+  /**
+   * Raw stance from the jurisdiction pack for policy-backed steps. Some pack
+   * slots describe a document property rather than the preparation action.
+   */
   stance: PrepPlanStance;
+  /** Stance normalized to the preparation action represented by this step. */
+  actionStance: PrepPlanStance;
   condition?: string;
   authority: string;
   lastVerified: string;

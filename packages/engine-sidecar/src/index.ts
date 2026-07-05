@@ -150,8 +150,9 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  * - buildBinder is intentionally unsupported for this engine because Stirling
  *   exposes generated merge TOCs but not caller-defined exhibit outline titles
  *   and destinations. Use the local engine for contract-complete binders.
- * - ocr -> POST /api/v1/misc/ocr-pdf with repeated languages, ocrType,
- *   ocrRenderType=sandwich, sidecar=false, and deskew.
+ * - ocr -> POST /local/ocr (engine-local OCRmyPDF) with the raw PDF body
+ *   base64-encoded. This avoids the WebView -> auth proxy -> Stirling
+ *   multipart upload path, which is fragile for force-OCR on large PDFs.
  */
 export class SidecarPdfEngine implements PdfEngine {
   private readonly authToken: string | undefined;
@@ -784,19 +785,13 @@ export class SidecarPdfEngine implements PdfEngine {
   }
 
   private async postOcr(bytes: Uint8Array, options: SidecarOcrOptions): Promise<Response> {
-    const formData = createFormData(bytes);
     const languages = options.languages?.length ? options.languages : ["eng"];
 
-    for (const language of languages) {
-      formData.append("languages", language);
-    }
-
-    formData.append("ocrType", options.ocrType ?? "skip-text");
-    formData.append("ocrRenderType", "sandwich");
-    formData.append("sidecar", "false");
-    formData.append("deskew", String(options.deskew ?? false));
-
-    return this.request("/api/v1/misc/ocr-pdf", formData);
+    return this.requestLocal("/local/ocr", bytes, {
+      ocr_type: normalizeSidecarOcrType(options.ocrType),
+      languages: languages.join(","),
+      deskew: String(options.deskew ?? false),
+    });
   }
 
   /**
@@ -1008,6 +1003,10 @@ function bytesToBase64(bytes: Uint8Array): string {
   }
 
   return btoa(binary);
+}
+
+function normalizeSidecarOcrType(ocrType: SidecarOcrType | undefined): "skip-text" | "force-ocr" {
+  return ocrType === "force-ocr" ? "force-ocr" : "skip-text";
 }
 
 function sidecarHeaders(

@@ -7,15 +7,28 @@ import { PdfEngineError } from "@raiopdf/engine-api";
 import { useDocument } from "./useDocument";
 
 type UseDocumentValue = ReturnType<typeof useDocument>;
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+};
+type OpenBehavior =
+  | "succeed"
+  | "encrypted"
+  | "invalid"
+  | { type: "defer"; deferred: Deferred<PdfDocumentHandle> };
 
 // Behavior for the NEXT open() call, consumed in call order. Lets a test
 // script "the first open fails with ENCRYPTED_DOCUMENT, the second (the
 // decrypted retry) succeeds."
 const engineState = vi.hoisted(() => ({
-  openBehaviors: [] as Array<"succeed" | "encrypted" | "invalid">,
+  openBehaviors: [] as OpenBehavior[],
   openCalls: [] as Uint8Array[],
+  closeCalls: [] as PdfDocumentHandle[],
   applyOptions: [] as PdfApplyEditsOptions[],
   flattenedMarkupHandles: [] as PdfDocumentHandle[],
+  applyEditsDeferred: null as Deferred<PdfDocumentHandle> | null,
+  applyEditsStarted: null as Deferred<void> | null,
 }));
 
 vi.mock("@raiopdf/engine-local", () => {
@@ -30,6 +43,10 @@ vi.mock("@raiopdf/engine-local", () => {
 
       if (behavior === "invalid") {
         throw new PdfEngineError("INVALID_DOCUMENT", "PDF bytes could not be read.");
+      }
+
+      if (typeof behavior === "object" && behavior.type === "defer") {
+        return await behavior.deferred.promise;
       }
 
       return `handle-${engineState.openCalls.length}` as PdfDocumentHandle;
@@ -47,7 +64,8 @@ vi.mock("@raiopdf/engine-local", () => {
       return { items: [], openMode: "default" as const, revision: "mock" };
     }
 
-    async close() {
+    async close(handle: PdfDocumentHandle) {
+      engineState.closeCalls.push(handle);
       return undefined;
     }
 
@@ -57,6 +75,11 @@ vi.mock("@raiopdf/engine-local", () => {
       options: PdfApplyEditsOptions = {},
     ) {
       engineState.applyOptions.push(options);
+      engineState.applyEditsStarted?.resolve(undefined);
+
+      if (engineState.applyEditsDeferred) {
+        return await engineState.applyEditsDeferred.promise;
+      }
 
       return "edited-handle" as PdfDocumentHandle;
     }
@@ -83,8 +106,11 @@ describe("useDocument openFile", () => {
   beforeEach(() => {
     engineState.openBehaviors.length = 0;
     engineState.openCalls.length = 0;
+    engineState.closeCalls.length = 0;
     engineState.applyOptions.length = 0;
     engineState.flattenedMarkupHandles.length = 0;
+    engineState.applyEditsDeferred = null;
+    engineState.applyEditsStarted = null;
     latest = null;
   });
 
@@ -219,6 +245,143 @@ describe("useDocument openFile", () => {
     expect(getHook().document.dirty).toBe(true);
   });
 
+  it("opens, switches, and closes independent document tabs", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "one.pdf" });
+    });
+    const firstTabId = getHook().activeTabId;
+
+    await act(async () => {
+      await getHook().openFile(
+        { bytes: new Uint8Array([2]), name: "two.pdf" },
+        { openMode: "new-tab" },
+      );
+    });
+    const secondTabId = getHook().activeTabId;
+
+    expect(firstTabId).toBeTruthy();
+    expect(secondTabId).toBeTruthy();
+    expect(secondTabId).not.toBe(firstTabId);
+    expect(getHook().tabs.map((tab) => tab.document.fileName)).toEqual([
+      "one.pdf",
+      "two.pdf",
+    ]);
+    expect(getHook().document.fileName).toBe("two.pdf");
+    expect(engineState.closeCalls).toEqual([]);
+
+    act(() => {
+      getHook().switchTab(firstTabId!);
+    });
+
+    expect(getHook().document.fileName).toBe("one.pdf");
+
+    await act(async () => {
+      await getHook().closeTab(firstTabId!);
+    });
+
+    expect(engineState.closeCalls).toEqual(["handle-1"]);
+    expect(getHook().document.fileName).toBe("two.pdf");
+    expect(getHook().tabs).toHaveLength(1);
+
+    await act(async () => {
+      await getHook().closeTab(secondTabId!);
+    });
+
+    expect(engineState.closeCalls).toEqual(["handle-1", "handle-2"]);
+    expect(getHook().tabs).toHaveLength(0);
+    expect(getHook().document.source).toBeNull();
+  });
+
+  it("allocates a fresh open token for a pending new tab so stale old-tab work is discarded", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "one.pdf" });
+    });
+    const firstOpenToken = getHook().getOpenToken();
+    const deferredOpen = createDeferred<PdfDocumentHandle>();
+    engineState.openBehaviors.push({ type: "defer", deferred: deferredOpen });
+
+    let secondOpen: Promise<Awaited<ReturnType<UseDocumentValue["openFile"]>>> | null = null;
+    await act(async () => {
+      secondOpen = getHook().openFile(
+        { bytes: new Uint8Array([2]), name: "two.pdf" },
+        { openMode: "new-tab" },
+      );
+      await Promise.resolve();
+    });
+
+    expect(getHook().getOpenToken()).toBeGreaterThan(firstOpenToken);
+    let staleResult: Awaited<ReturnType<UseDocumentValue["replaceBytes"]>> | undefined;
+    await act(async () => {
+      staleResult = await getHook().replaceBytes(new Uint8Array([9]), {
+        dirty: true,
+        expectedOpenToken: firstOpenToken,
+        fileName: "stale.pdf",
+      });
+    });
+    expect(staleResult).toBe("failed");
+    expect(getHook().document.fileName).toBe("one.pdf");
+
+    await act(async () => {
+      deferredOpen.resolve("handle-2" as PdfDocumentHandle);
+      await secondOpen;
+    });
+
+    expect(getHook().document.fileName).toBe("two.pdf");
+    expect(getHook().tabs.map((tab) => tab.document.fileName)).toEqual([
+      "one.pdf",
+      "two.pdf",
+    ]);
+  });
+
+  it("blocks opening a new tab while the current document has a mutation in flight", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "one.pdf" });
+    });
+
+    engineState.applyEditsDeferred = createDeferred<PdfDocumentHandle>();
+    engineState.applyEditsStarted = createDeferred<void>();
+    let mutation: Promise<boolean> | null = null;
+    act(() => {
+      mutation = getHook().applyEdits([
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 100, h: 12 }],
+        },
+      ], { flatten: false });
+    });
+    await engineState.applyEditsStarted.promise;
+
+    let openResult: Awaited<ReturnType<UseDocumentValue["openFile"]>> | undefined;
+    await act(async () => {
+      openResult = await getHook().openFile(
+        { bytes: new Uint8Array([2]), name: "two.pdf" },
+        { openMode: "new-tab" },
+      );
+    });
+
+    expect(openResult).toEqual({
+      status: "failed",
+      error: "Finish the current document operation before opening another document.",
+    });
+    expect(getHook().document.fileName).toBe("one.pdf");
+    expect(getHook().tabs.map((tab) => tab.document.fileName)).toEqual(["one.pdf"]);
+
+    await act(async () => {
+      engineState.applyEditsDeferred!.resolve("edited-handle" as PdfDocumentHandle);
+      await mutation!;
+    });
+
+    expect(getHook().document.fileName).toBe("one.pdf");
+    expect(getHook().document.dirty).toBe(true);
+  });
+
   function mount(): void {
     render(<Harness onReady={(value) => { latest = value; }} />);
   }
@@ -250,4 +413,15 @@ function Harness({ onReady }: { onReady: (hook: UseDocumentValue) => void }) {
   });
 
   return null;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 }

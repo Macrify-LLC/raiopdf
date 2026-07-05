@@ -64,12 +64,16 @@ export interface MenuBarProps {
 }
 
 export function MenuBar({ hasDocument, canUndo, onCommand, onExit }: MenuBarProps) {
+  const desktopRuntime = isTauriRuntime();
   const menus: readonly MenuDef[] = [
     {
       id: "file",
       label: "File",
       items: [
         item("Open...", "file:open"),
+        ...(desktopRuntime
+          ? [item("Open in New Window...", "file:open-new-window")]
+          : []),
         item("Save", "file:save", !hasDocument),
         item("Save As...", "file:save-as", !hasDocument),
         separator,
@@ -391,4 +395,8 @@ export function MenuBar({ hasDocument, canUndo, onCommand, onExit }: MenuBarProp
       ))}
     </div>
   );
+}
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }

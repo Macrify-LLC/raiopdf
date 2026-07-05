@@ -127,9 +127,12 @@ import {
 import {
   filePort,
   isFileChangedError,
+  openFileInNewWindow,
+  openGrantInNewWindow,
   readBrowserFileSource,
   saveStreamedCopy,
   saveStreamedCopyIntoDirectory,
+  takeStartupFile,
   type FileGrant,
   type OpenedFile,
   type OpenedFileSource,
@@ -428,9 +431,13 @@ export function App() {
   );
   const {
     document,
+    tabs: documentTabs,
+    activeTabId,
     pageScrollIntent,
     openFile: openDocumentFile,
     openStreamedFile,
+    switchTab: switchDocumentTab,
+    closeTab: closeDocumentTab,
     setStreamedPageCount,
     replaceBytes,
     getOpenToken,
@@ -1142,6 +1149,8 @@ export function App() {
   const ocrActiveRef = useRef(false);
   const pendingOcrTypeRef = useRef<OcrType>("skip-text");
   const savingRef = useRef(false);
+  const startupFileTakenRef = useRef(false);
+  const pendingMoveToNewWindowTabIdRef = useRef<string | null>(null);
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
   const documentGenerationRef = useRef<number>(document.generation);
@@ -1208,6 +1217,28 @@ export function App() {
     }
   }, []);
 
+  const resetVisibleDocumentAppState = useCallback((next: "document" | "empty") => {
+    ocrRunRef.current += 1;
+    ocrActiveRef.current = false;
+    setOcrState({ phase: "idle", message: null });
+    setForceOcrConfirmation(null);
+    resetLegalState();
+    setSelectedPageIndexes(next === "document" ? new Set([0]) : new Set());
+    setPageDeleteConfirmation(null);
+    setPasswordPrompt(null);
+    setRepairCandidate(null);
+  }, [resetLegalState]);
+
+  const handleTabSelected = useCallback((tabId: string) => {
+    if (tabId === activeTabId) {
+      return;
+    }
+
+    if (switchDocumentTab(tabId)) {
+      resetVisibleDocumentAppState("document");
+    }
+  }, [activeTabId, resetVisibleDocumentAppState, switchDocumentTab]);
+
   // Document identity is (openToken, generation) [R1-8] — never a
   // Uint8Array reference, which streamed documents don't have.
   const isCurrentDocument = useCallback(
@@ -1220,7 +1251,10 @@ export function App() {
   /** Streamed variant of `openOpenedFile`: same per-open state resets, but
    * the document opens over a range transport — no bytes anywhere. */
   const openStreamedSource = useCallback(
-    (source: Exclude<OpenedFileSource, { kind: "memory" }>) => {
+    (
+      source: Exclude<OpenedFileSource, { kind: "memory" }>,
+      options: { openInNewTab?: boolean } = {},
+    ) => {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
@@ -1240,6 +1274,7 @@ export function App() {
               name: source.name,
               path: null,
             },
+        { openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active" },
       ).then((result) => {
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
@@ -1248,7 +1283,7 @@ export function App() {
         return result;
       });
     },
-    [openStreamedFile, resetLegalState],
+    [document.source, openStreamedFile, resetLegalState],
   );
 
   /**
@@ -2056,14 +2091,16 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
-    (file: OpenedFile) => {
+    (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
       resetLegalState();
       setSelectedPageIndexes(new Set());
       setPasswordPrompt(null);
-      void openDocumentFile(file).then((result) => {
+      void openDocumentFile(file, {
+        openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
+      }).then((result) => {
         if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
@@ -2093,7 +2130,7 @@ export function App() {
         }
       });
     },
-    [openDocumentFile, resetLegalState],
+    [document.source, openDocumentFile, resetLegalState],
   );
 
   const cancelPasswordPrompt = useCallback(() => {
@@ -2253,7 +2290,10 @@ export function App() {
           // renaming doesn't apply here, this is the same document.
           const result = await openDocumentFile(
             { bytes: decryptedBytes, name: prompt.fileName, path: null },
-            { markDirty: true },
+            {
+              markDirty: true,
+              openMode: document.source ? "new-tab" : "replace-active",
+            },
           );
 
           if (!isCurrentUnlock()) {
@@ -2318,13 +2358,38 @@ export function App() {
   const openFileSource = useCallback(
     (source: OpenedFileSource) => {
       if (source.kind === "memory") {
-        openOpenedFile(source);
+        openOpenedFile(source, { openInNewTab: true });
       } else {
-        void openStreamedSource(source);
+        void openStreamedSource(source, { openInNewTab: true });
       }
     },
     [openOpenedFile, openStreamedSource],
   );
+
+  const requestTabClose = useCallback((tabId: string) => {
+    const tab = documentTabs.find((candidate) => candidate.id === tabId);
+    if (!tab) {
+      return;
+    }
+    const closesVisibleDocument = tabId === activeTabId;
+    const nextVisibleState = documentTabs.length > 1 ? "document" : "empty";
+
+    if (tab.document.dirty) {
+      const fileName = tab.document.fileName ?? "this document";
+      const confirmed = window.confirm(
+        `Close ${fileName} and discard unsaved changes?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    void closeDocumentTab(tabId).then((closed) => {
+      if (closed && closesVisibleDocument) {
+        resetVisibleDocumentAppState(nextVisibleState);
+      }
+    });
+  }, [activeTabId, closeDocumentTab, documentTabs, resetVisibleDocumentAppState]);
 
   const openFile = useCallback(() => {
     void filePort
@@ -2338,6 +2403,29 @@ export function App() {
         setError("This PDF could not be opened. The file may be corrupt or unsupported.");
       });
   }, [openFileSource, setError]);
+
+  useEffect(() => {
+    if (startupFileTakenRef.current) {
+      return;
+    }
+
+    startupFileTakenRef.current = true;
+    void takeStartupFile()
+      .then((source) => {
+        if (source) {
+          openFileSource(source);
+        }
+      })
+      .catch(() => {
+        setError("This startup PDF could not be opened. The file may be corrupt or unsupported.");
+      });
+  }, [openFileSource, setError]);
+
+  const openFileInSeparateWindow = useCallback(() => {
+    void openFileInNewWindow().catch(() => {
+      setError("This PDF could not be opened in a new window.");
+    });
+  }, [setError]);
 
   const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
@@ -2664,11 +2752,11 @@ export function App() {
     [reorderPages, selectedIndexes],
   );
 
-  const saveToFile = useCallback((forceSaveAs: boolean) => {
+  const saveToFile = useCallback(async (forceSaveAs: boolean): Promise<SavedFile | null> => {
     // Re-entry guard: rapid double-clicks must not apply the same pending
     // edits twice or start a second file write mid-save.
     if (savingRef.current) {
-      return;
+      return null;
     }
 
     // Streamed documents can't dirty, so Save has nothing to write (the
@@ -2676,38 +2764,38 @@ export function App() {
     // cross into the WebView.
     if (document.source !== null && document.source.kind !== "memory") {
       if (!forceSaveAs) {
-        return;
+        return null;
       }
 
       const source = document.source;
       savingRef.current = true;
-      void saveStreamedCopy(
-        source.kind === "rangeGrant"
-          ? { kind: "rangeGrant", grant: source.grant }
-          : { kind: "rangeFile", file: source.file },
-        document.fileName ?? "Document.pdf",
-      )
-        .then((written) => {
-          if (written) {
-            markSaved({ fileName: written.name, filePath: written.path });
-          }
-        })
-        .catch((error: unknown) => {
-          setError(
-            error instanceof Error && error.message.includes("changed on disk")
-              ? "This file changed on disk — reopen it."
-              : "This PDF could not be saved. Try reopening the document and saving again.",
-          );
-        })
-        .finally(() => {
-          savingRef.current = false;
-        });
-      return;
+      try {
+        const written = await saveStreamedCopy(
+          source.kind === "rangeGrant"
+            ? { kind: "rangeGrant", grant: source.grant }
+            : { kind: "rangeFile", file: source.file },
+          document.fileName ?? "Document.pdf",
+        );
+
+        if (written) {
+          markSaved({ fileName: written.name, filePath: written.path });
+        }
+        return written;
+      } catch (error: unknown) {
+        setError(
+          error instanceof Error && error.message.includes("changed on disk")
+            ? "This file changed on disk — reopen it."
+            : "This PDF could not be saved. Try reopening the document and saving again.",
+        );
+        return null;
+      } finally {
+        savingRef.current = false;
+      }
     }
 
     savingRef.current = true;
 
-    void (async () => {
+    try {
       const pendingApply = editing.collectEdits();
 
       if (pendingApply) {
@@ -2719,7 +2807,7 @@ export function App() {
         if (!applied) {
           // The mutation queue already surfaced the error; the document is
           // unchanged, so the pending list stays for another attempt.
-          return;
+          return null;
         }
 
         editing.clearPending();
@@ -2733,7 +2821,7 @@ export function App() {
       const saved = await saveDocument();
 
       if (!saved) {
-        return;
+        return null;
       }
 
       const written = await filePort.saveFile(
@@ -2748,13 +2836,13 @@ export function App() {
           filePath: written.path,
         });
       }
-    })()
-      .catch(() => {
-        setError("This PDF could not be saved. Try reopening the document and saving again.");
-      })
-      .finally(() => {
-        savingRef.current = false;
-      });
+      return written;
+    } catch {
+      setError("This PDF could not be saved. Try reopening the document and saving again.");
+      return null;
+    } finally {
+      savingRef.current = false;
+    }
   }, [applyEdits, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
 
   const flattenCurrentMarkup = useCallback(() => {
@@ -2820,12 +2908,89 @@ export function App() {
   ]);
 
   const save = useCallback(() => {
-    saveToFile(false);
+    void saveToFile(false);
   }, [saveToFile]);
 
   const saveAs = useCallback(() => {
-    saveToFile(true);
+    void saveToFile(true);
   }, [saveToFile]);
+
+  const moveActiveTabToNewWindow = useCallback(
+    async (tabId: string, fileGrant: FileGrant, dirty: boolean) => {
+      const nextVisibleState = documentTabs.some((candidate) => candidate.id !== tabId)
+        ? "document"
+        : "empty";
+
+      if (dirty) {
+        const saved = await saveToFile(false);
+        if (!saved) {
+          return;
+        }
+      }
+
+      try {
+        await openGrantInNewWindow(fileGrant);
+        const closed = await closeDocumentTab(tabId);
+        if (closed) {
+          resetVisibleDocumentAppState(nextVisibleState);
+        }
+      } catch {
+        setError("This PDF could not be moved to a new window.");
+      }
+    },
+    [closeDocumentTab, documentTabs, resetVisibleDocumentAppState, saveToFile, setError],
+  );
+
+  const requestTabMoveToNewWindow = useCallback((tabId: string) => {
+    const tab = documentTabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !tab.document.filePath) {
+      setError("Save this document before moving it to a new window.");
+      return;
+    }
+
+    if (tab.document.dirty) {
+      const fileName = tab.document.fileName ?? "this document";
+      const confirmed = window.confirm(
+        `Save changes to ${fileName} before moving it to a new window?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    if (tabId !== activeTabId) {
+      const switched = switchDocumentTab(tabId);
+      if (!switched) {
+        return;
+      }
+      resetVisibleDocumentAppState("document");
+      pendingMoveToNewWindowTabIdRef.current = tabId;
+      return;
+    }
+
+    void moveActiveTabToNewWindow(tabId, tab.document.filePath as FileGrant, tab.document.dirty);
+  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, resetVisibleDocumentAppState, setError, switchDocumentTab]);
+
+  useEffect(() => {
+    const pendingTabId = pendingMoveToNewWindowTabIdRef.current;
+    if (!pendingTabId || pendingTabId !== activeTabId) {
+      return;
+    }
+
+    const tab = documentTabs.find((candidate) => candidate.id === pendingTabId);
+    if (!tab || !tab.document.filePath) {
+      pendingMoveToNewWindowTabIdRef.current = null;
+      setError("Save this document before moving it to a new window.");
+      return;
+    }
+
+    pendingMoveToNewWindowTabIdRef.current = null;
+    void moveActiveTabToNewWindow(
+      pendingTabId,
+      tab.document.filePath as FileGrant,
+      tab.document.dirty,
+    );
+  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, setError]);
 
   const printDocument = useCallback(() => {
     if (streamedDocument) {
@@ -4997,6 +5162,9 @@ export function App() {
         case "file:open":
           openFile();
           break;
+        case "file:open-new-window":
+          openFileInSeparateWindow();
+          break;
         case "file:save":
           save();
           break;
@@ -5057,6 +5225,7 @@ export function App() {
       openHelp,
       openAboutMacrify,
       openConnectToAi,
+      openFileInSeparateWindow,
       openFile,
       printDocument,
       save,
@@ -5386,6 +5555,16 @@ export function App() {
       ) : null}
       <AppShell
         document={document}
+        tabs={documentTabs.map((tab) => ({
+          id: tab.id,
+          fileName: tab.document.fileName ?? "Untitled.pdf",
+          dirty: tab.document.dirty,
+          active: tab.id === activeTabId,
+          canMoveToNewWindow: Boolean(tab.document.filePath),
+        }))}
+        onTabSelected={handleTabSelected}
+        onTabCloseRequested={requestTabClose}
+        onTabMoveToNewWindowRequested={requestTabMoveToNewWindow}
         pdfDocument={pdfDocument}
         documentSearch={documentSearch}
         pageScrollIntent={pageScrollIntent}

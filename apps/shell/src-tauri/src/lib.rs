@@ -13,10 +13,10 @@ use range_read::{
 use serde::Serialize;
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process,
+    process::{self, Command},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
@@ -62,7 +62,12 @@ struct DirectoryGrants {
     paths: Mutex<HashMap<String, PathBuf>>,
 }
 
-#[derive(Serialize)]
+#[derive(Default)]
+struct StartupPdf {
+    pending: Mutex<Option<OpenedPdf>>,
+}
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenedPdf {
     name: String,
@@ -176,22 +181,30 @@ impl DirectoryGrants {
     }
 }
 
-#[tauri::command]
-fn open_pdf_dialog(
-    app: tauri::AppHandle,
-    pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
-    file_grants: tauri::State<'_, FileGrants>,
-) -> Result<Option<OpenedPdf>, String> {
-    let Some(path) = app
-        .dialog()
-        .file()
-        .add_filter("PDF", &["pdf"])
-        .blocking_pick_file()
-    else {
-        return Ok(None);
-    };
+impl StartupPdf {
+    fn set(&self, pdf: OpenedPdf) -> Result<(), String> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| "Startup PDF lock poisoned".to_string())?;
+        *pending = Some(pdf);
+        Ok(())
+    }
 
-    let path = path.into_path().map_err(|error| error.to_string())?;
+    fn take(&self) -> Result<Option<OpenedPdf>, String> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| "Startup PDF lock poisoned".to_string())?;
+        Ok(pending.take())
+    }
+}
+
+fn opened_pdf_for_path(
+    path: PathBuf,
+    pending_pdf_bytes: &PendingPdfBytes,
+    file_grants: &FileGrants,
+) -> Result<OpenedPdf, String> {
     require_pdf_extension(&path)?;
 
     // Stat first: the branch between "materialize bytes" and "stream by
@@ -212,13 +225,68 @@ fn open_pdf_dialog(
     };
     let file_grant = file_grants.grant(path.clone())?;
 
-    Ok(Some(OpenedPdf {
+    Ok(OpenedPdf {
         name: file_name(&path),
         file_grant,
         size_bytes,
         bytes_token,
         threshold_bytes,
-    }))
+    })
+}
+
+#[tauri::command]
+fn open_pdf_dialog(
+    app: tauri::AppHandle,
+    pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<OpenedPdf>, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    Ok(Some(opened_pdf_for_path(
+        path,
+        pending_pdf_bytes.inner(),
+        file_grants.inner(),
+    )?))
+}
+
+#[tauri::command]
+fn take_startup_pdf(
+    startup_pdf: tauri::State<'_, StartupPdf>,
+) -> Result<Option<OpenedPdf>, String> {
+    startup_pdf.take()
+}
+
+#[tauri::command]
+fn open_pdf_in_new_window_dialog(app: tauri::AppHandle) -> Result<bool, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .blocking_pick_file()
+    else {
+        return Ok(false);
+    };
+
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    open_in_new_window_path(&path)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn open_in_new_window(
+    file_grant: String,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<(), String> {
+    let path = file_grants.resolve(&file_grant)?;
+    open_in_new_window_path(&path)
 }
 
 /// Multi-select picker for add-file flows (Organize adds, Binder exhibits,
@@ -955,6 +1023,64 @@ fn require_pdf_extension(path: &Path) -> Result<(), String> {
     Err("Selected file is not a PDF".to_string())
 }
 
+fn validate_pdf_file_arg(path: &Path) -> Result<PathBuf, String> {
+    require_pdf_extension(path)?;
+
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "Could not inspect PDF at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err("PDF argument is not a file".to_string());
+    }
+
+    fs::File::open(path)
+        .map_err(|error| format!("Could not read PDF at {}: {error}", path.to_string_lossy()))?;
+    Ok(path.to_path_buf())
+}
+
+fn startup_pdf_arg_from_args<I>(args: I) -> (Option<PathBuf>, Vec<String>)
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut diagnostics = Vec::new();
+
+    for arg in args {
+        match validate_pdf_file_arg(&arg) {
+            Ok(path) => return (Some(path), diagnostics),
+            Err(error) => diagnostics.push(format!(
+                "Ignoring startup file argument {}: {error}",
+                arg.to_string_lossy()
+            )),
+        }
+    }
+
+    (None, diagnostics)
+}
+
+fn open_in_new_window_path(path: &Path) -> Result<(), String> {
+    open_in_new_window_path_with(path, spawn_detached_new_window)
+}
+
+fn open_in_new_window_path_with<F>(path: &Path, spawn: F) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let path = validate_pdf_file_arg(path)?;
+    spawn(&path)
+}
+
+fn spawn_detached_new_window(path: &Path) -> Result<(), String> {
+    let exe = env::current_exe().map_err(|error| format!("Could not find current app: {error}"))?;
+    Command::new(exe)
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open PDF in a new window: {error}"))
+}
+
 fn ensure_pdf_extension(file_name: &str) -> String {
     if file_name.to_ascii_lowercase().ends_with(".pdf") {
         file_name.to_string()
@@ -1040,7 +1166,34 @@ pub fn run() {
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
             app.manage(DirectoryGrants::default());
+            app.manage(StartupPdf::default());
             app.manage(print::PrintJobs::default());
+
+            let (startup_pdf_path, startup_arg_diagnostics) =
+                startup_pdf_arg_from_args(env::args_os().skip(1).map(PathBuf::from));
+            for message in startup_arg_diagnostics {
+                let _ = app
+                    .state::<AppDiagnostics>()
+                    .record_shell_event("startup-arg", &message);
+            }
+            if let Some(path) = startup_pdf_path {
+                match opened_pdf_for_path(
+                    path,
+                    app.state::<PendingPdfBytes>().inner(),
+                    app.state::<FileGrants>().inner(),
+                ) {
+                    Ok(pdf) => {
+                        let _ = app.state::<StartupPdf>().set(pdf);
+                    }
+                    Err(error) => {
+                        let _ = app.state::<AppDiagnostics>().record_shell_event(
+                            "startup-arg",
+                            &format!("Ignoring startup PDF: {error}"),
+                        );
+                    }
+                }
+            }
+
             // Grants are in-memory, so every path-op temp dir left behind by a
             // previous run is dead on a fresh start — sweep them all, off the
             // startup path.
@@ -1064,6 +1217,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf_dialog,
+            take_startup_pdf,
+            open_pdf_in_new_window_dialog,
+            open_in_new_window,
             read_opened_pdf_bytes,
             read_pdf_range,
             pick_pdfs_for_add,
@@ -1138,6 +1294,7 @@ pub fn run() {
 fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let file = SubmenuBuilder::new(app, "File")
         .text("file:open", "Open...")
+        .text("file:open-new-window", "Open in New Window...")
         .text("file:save", "Save")
         .text("file:save-as", "Save As...")
         .separator()
@@ -1222,6 +1379,80 @@ mod tests {
         // baseline, so ranged reads must be refused upstream.
         let entry = grants.resolve_entry(&grant).expect("entry");
         assert!(entry.snapshot.is_none());
+    }
+
+    #[test]
+    fn startup_pdf_arg_accepts_first_readable_pdf() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pdf = dir.path().join("case.PDF");
+        fs::write(&pdf, b"%PDF-1.7").expect("write pdf");
+        let ignored = dir.path().join("notes.txt");
+        fs::write(&ignored, b"not a pdf").expect("write text");
+
+        let (path, diagnostics) = startup_pdf_arg_from_args(vec![ignored, pdf.clone()]);
+
+        assert_eq!(path, Some(pdf));
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn startup_pdf_arg_ignores_bad_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("missing.pdf");
+
+        let (path, diagnostics) = startup_pdf_arg_from_args(vec![missing]);
+
+        assert!(path.is_none());
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn open_in_new_window_rejects_non_pdf_without_spawning() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.txt");
+        fs::write(&path, b"not a pdf").expect("write text");
+        let mut spawned = false;
+
+        let error = open_in_new_window_path_with(&path, |_| {
+            spawned = true;
+            Ok(())
+        })
+        .expect_err("non-PDF should be rejected");
+
+        assert_eq!(error, "Selected file is not a PDF");
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn open_in_new_window_rejects_missing_pdf_without_spawning() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("missing.pdf");
+        let mut spawned = false;
+
+        let error = open_in_new_window_path_with(&path, |_| {
+            spawned = true;
+            Ok(())
+        })
+        .expect_err("missing PDF should be rejected");
+
+        assert!(error.contains("Could not inspect PDF"));
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn open_in_new_window_spawns_readable_pdf() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.pdf");
+        fs::write(&path, b"%PDF-1.7").expect("write pdf");
+        let mut spawned_path: Option<PathBuf> = None;
+
+        open_in_new_window_path_with(&path, |path| {
+            spawned_path = Some(path.to_path_buf());
+            Ok(())
+        })
+        .expect("readable PDF should spawn");
+
+        assert_eq!(spawned_path, Some(path));
     }
 
     #[test]

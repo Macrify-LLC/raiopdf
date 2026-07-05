@@ -10,6 +10,8 @@ import type {
   PdfOutlineState,
   PdfOutlineWriteResult,
   PdfPageNumbersOptions,
+  PdfRaioAnnotationEdit,
+  PdfRaioAnnotationImport,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
@@ -1567,6 +1569,88 @@ export function useDocument(options: UseDocumentOptions = {}) {
     [closeHandle, engine, enqueueMutation],
   );
 
+  const readRaioPdfAnnotations = useCallback(async (): Promise<readonly PdfRaioAnnotationImport[]> => {
+    const handle = activeHandleRef.current;
+
+    if (!handle) {
+      return [];
+    }
+
+    return engine.readRaioPdfAnnotations(handle);
+  }, [engine]);
+
+  const applyAnnotationSavePlan = useCallback(
+    async (
+      plan: {
+        appendEdits: readonly PdfEdit[];
+        updateEdits: readonly { annotId: string; edit: PdfRaioAnnotationEdit }[];
+        deleteAnnotIds: readonly string[];
+      },
+      options: { flatten: boolean; printMarkupAnnotations?: boolean },
+    ) => {
+      const hasChanges = plan.appendEdits.length > 0 ||
+        plan.updateEdits.length > 0 ||
+        plan.deleteAnnotIds.length > 0;
+
+      if (!hasChanges) {
+        return false;
+      }
+
+      return enqueueMutation("apply annotation edits", async ({ handle }) => {
+        const applyOptions: PdfApplyEditsOptions = {
+          markupMode: "annotation",
+          printMarkupAnnotations: options.printMarkupAnnotations ?? true,
+        };
+        const handlesToClose: PdfDocumentHandle[] = [];
+        let currentHandle = handle;
+        let finalHandle: PdfDocumentHandle | null = null;
+
+        try {
+          if (plan.appendEdits.length > 0) {
+            currentHandle = await engine.applyEdits(currentHandle, plan.appendEdits, applyOptions);
+            handlesToClose.push(currentHandle);
+          }
+
+          for (const update of plan.updateEdits) {
+            const nextHandle = await engine.updateAnnotationById(
+              currentHandle,
+              update.annotId,
+              update.edit,
+            );
+            currentHandle = nextHandle;
+            handlesToClose.push(nextHandle);
+          }
+
+          for (const annotId of plan.deleteAnnotIds) {
+            const nextHandle = await engine.deleteAnnotationById(currentHandle, annotId);
+            currentHandle = nextHandle;
+            handlesToClose.push(nextHandle);
+          }
+
+          if (options.flatten) {
+            const flattenedHandle = await engine.flattenForm(currentHandle);
+            currentHandle = flattenedHandle;
+            handlesToClose.push(flattenedHandle);
+          }
+
+          finalHandle = currentHandle;
+
+          return {
+            engineHandle: currentHandle,
+            options: { dirty: true, hasTextLayer: null },
+          };
+        } finally {
+          await Promise.all(
+            handlesToClose
+              .filter((candidate) => candidate !== finalHandle)
+              .map((candidate) => closeHandle(candidate)),
+          );
+        }
+      });
+    },
+    [closeHandle, engine, enqueueMutation],
+  );
+
   const flattenMarkupAnnotations = useCallback(async () => {
     return enqueueMutation("flatten markup", async ({ handle }) => ({
       engineHandle: await engine.flattenMarkupAnnotations(handle),
@@ -1880,6 +1964,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
     buildBinder,
     batesStamp,
     applyEdits,
+    readRaioPdfAnnotations,
+    applyAnnotationSavePlan,
     flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,

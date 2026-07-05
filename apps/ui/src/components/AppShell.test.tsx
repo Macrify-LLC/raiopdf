@@ -266,6 +266,7 @@ const mockEditing: EditingState = {
   applyPending: noop,
   unapplyPending: noop,
   setEditStatus: noop,
+  loadImportedAnnotations: noop,
   armedImage: null,
   handleImageFile: noop,
   disarmImage: noop,
@@ -307,5 +308,7 @@ const mockEditing: EditingState = {
   message: null,
   setMessage: noop,
   collectEdits: () => null,
+  collectAnnotationSavePlan: () => null,
+  hasUnsavedEdits: false,
   resetForDocument: noop,
 };

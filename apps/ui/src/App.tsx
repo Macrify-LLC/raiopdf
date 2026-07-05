@@ -460,6 +460,8 @@ export function App() {
     buildBinder,
     batesStamp,
     applyEdits,
+    readRaioPdfAnnotations,
+    applyAnnotationSavePlan,
     flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,
@@ -517,7 +519,7 @@ export function App() {
   });
 
   useEffect(() => {
-    if (editing.pendingEdits.length > 0) {
+    if (editing.hasUnsavedEdits) {
       if (!overlayDirtyRef.current) {
         overlayDirtyRef.current = {
           generation: document.generation,
@@ -541,7 +543,7 @@ export function App() {
   }, [
     document.dirty,
     document.generation,
-    editing.pendingEdits.length,
+    editing.hasUnsavedEdits,
     markClean,
     markDirty,
   ]);
@@ -1561,6 +1563,37 @@ export function App() {
   useEffect(() => {
     resetEditingForDocument();
   }, [resetEditingForDocument, document.source]);
+
+  const loadImportedAnnotations = editing.loadImportedAnnotations;
+  useEffect(() => {
+    let disposed = false;
+
+    if (document.source === null || document.source.kind !== "memory" || !document.engineHandle) {
+      loadImportedAnnotations([]);
+      return;
+    }
+
+    void readRaioPdfAnnotations()
+      .then((annotations) => {
+        if (!disposed) {
+          loadImportedAnnotations(annotations);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          loadImportedAnnotations([]);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    document.engineHandle,
+    document.source,
+    loadImportedAnnotations,
+    readRaioPdfAnnotations,
+  ]);
 
   const selectEditTool = useCallback(
     (toolId: EditToolId) => {
@@ -2796,10 +2829,14 @@ export function App() {
     savingRef.current = true;
 
     try {
-      const pendingApply = editing.collectEdits();
+      const pendingApply = editing.collectAnnotationSavePlan();
 
       if (pendingApply) {
-        const applied = await applyEdits(pendingApply.edits, {
+        const applied = await applyAnnotationSavePlan({
+          appendEdits: [...pendingApply.plan.appendEdits, ...pendingApply.formEdits],
+          updateEdits: pendingApply.plan.updateEdits,
+          deleteAnnotIds: pendingApply.plan.deleteAnnotIds,
+        }, {
           flatten: pendingApply.flatten,
           printMarkupAnnotations,
         });
@@ -2843,7 +2880,7 @@ export function App() {
     } finally {
       savingRef.current = false;
     }
-  }, [applyEdits, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
+  }, [applyAnnotationSavePlan, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;

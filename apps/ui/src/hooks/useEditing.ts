@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PdfEdit, PdfEditImageFormat, PdfFormFieldValue } from "@raiopdf/engine-api";
+import type {
+  PdfEdit,
+  PdfEditImageFormat,
+  PdfFormFieldValue,
+  PdfRaioAnnotationImport,
+} from "@raiopdf/engine-api";
 import {
+  annotationSavePlanHasChanges,
+  buildAnnotationSavePlan,
   dataUrlToBytes,
+  pendingEditsFromRaioAnnotations,
   toPdfEdits,
+  type AnnotationSavePlan,
   type EditToolId,
   type PendingEdit,
   type PendingEditStatus,
@@ -57,6 +66,7 @@ export interface EditingState {
   applyPending: () => void;
   unapplyPending: () => void;
   setEditStatus: (id: string, status: PendingEditStatus) => void;
+  loadImportedAnnotations: (annotations: readonly PdfRaioAnnotationImport[]) => void;
   /**
    * The one selected placed item (stamp/image/text box) across ALL pages.
    * Shared here rather than per-EditLayer because the continuous-scroll
@@ -107,6 +117,12 @@ export interface EditingState {
    * nothing to apply.
    */
   collectEdits: () => { edits: PdfEdit[]; flatten: boolean } | null;
+  collectAnnotationSavePlan: () => {
+    plan: AnnotationSavePlan;
+    formEdits: PdfEdit[];
+    flatten: boolean;
+  } | null;
+  hasUnsavedEdits: boolean;
   /** Clears all document-bound edit state (pending items + form values). */
   resetForDocument: () => void;
 }
@@ -122,6 +138,7 @@ export function newEditId(): string {
 export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [tool, setToolState] = useState<EditToolId>("select");
   const [pendingEdits, setPendingEdits] = useState<readonly PendingEdit[]>([]);
+  const [importedAnnotIds, setImportedAnnotIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
   const [armedImage, setArmedImage] = useState<ArmedStamp | null>(null);
   const [armedSignature, setArmedSignature] = useState<ArmedStamp | null>(null);
@@ -208,12 +225,14 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
 
   const clearPending = useCallback(() => {
     setPendingEdits([]);
+    setImportedAnnotIds(new Set());
     setFormValues({});
     setSelectedEditId(null);
   }, []);
 
   const clearPendingEdits = useCallback(() => {
     setPendingEdits([]);
+    setImportedAnnotIds(new Set());
     setSelectedEditId(null);
   }, []);
 
@@ -250,6 +269,12 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
         ? "Pinned this edit for this session. Save writes it to the PDF."
         : "Unpinned this edit so it can be adjusted before saving.",
     );
+  }, []);
+
+  const loadImportedAnnotations = useCallback((annotations: readonly PdfRaioAnnotationImport[]) => {
+    setPendingEdits(pendingEditsFromRaioAnnotations(annotations));
+    setImportedAnnotIds(new Set(annotations.map((annotation) => annotation.annotId)));
+    setSelectedEditId(null);
   }, []);
 
   const handleImageFile = useCallback((file: File) => {
@@ -390,8 +415,34 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     };
   }, [flattenOnSave, formValues, pendingEdits]);
 
+  const annotationSavePlan = useMemo(
+    () => buildAnnotationSavePlan(pendingEdits, importedAnnotIds),
+    [importedAnnotIds, pendingEdits],
+  );
+
+  const hasUnsavedEdits = useMemo(() => {
+    return annotationSavePlanHasChanges(annotationSavePlan) || Object.keys(formValues).length > 0;
+  }, [annotationSavePlan, formValues]);
+
+  const collectAnnotationSavePlan = useCallback(() => {
+    const formEdits = Object.keys(formValues).length > 0
+      ? [{ type: "formValues" as const, values: formValues }]
+      : [];
+
+    if (!annotationSavePlanHasChanges(annotationSavePlan) && formEdits.length === 0) {
+      return null;
+    }
+
+    return {
+      plan: annotationSavePlan,
+      formEdits,
+      flatten: flattenOnSave && (annotationSavePlan.hasSignatureEdit || formEdits.length > 0),
+    };
+  }, [annotationSavePlan, flattenOnSave, formValues]);
+
   const resetForDocument = useCallback(() => {
     setPendingEdits([]);
+    setImportedAnnotIds(new Set());
     setFormValues({});
     setMessage(null);
     setSelectedEditId(null);
@@ -412,6 +463,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       applyPending,
       unapplyPending,
       setEditStatus,
+      loadImportedAnnotations,
       selectedEditId,
       setSelectedEditId,
       armedImage,
@@ -445,6 +497,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       message,
       setMessage,
       collectEdits,
+      collectAnnotationSavePlan,
+      hasUnsavedEdits,
       resetForDocument,
     }),
     [
@@ -461,6 +515,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       applyPending,
       unapplyPending,
       setEditStatus,
+      loadImportedAnnotations,
       selectedEditId,
       armedImage,
       handleImageFile,
@@ -490,6 +545,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateShapeStyle,
       message,
       collectEdits,
+      collectAnnotationSavePlan,
+      hasUnsavedEdits,
       resetForDocument,
     ],
   );

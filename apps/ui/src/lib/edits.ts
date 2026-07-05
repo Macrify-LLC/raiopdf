@@ -3,6 +3,8 @@ import type {
   PdfEditColor,
   PdfEditImageFormat,
   PdfEditPoint,
+  PdfRaioAnnotationEdit,
+  PdfRaioAnnotationImport,
   PdfEditRect,
   PdfShapeKind,
   PdfFormFieldValue,
@@ -50,6 +52,9 @@ interface PendingEditBase {
   id: string;
   pageIndex: number;
   status?: PendingEditStatus;
+  annotId?: string;
+  annotSource?: "raio";
+  sourceBaseline?: PdfRaioAnnotationEdit;
 }
 
 export interface PendingHighlight extends PendingEditBase {
@@ -150,6 +155,13 @@ export type PendingEdit =
   | PendingInk
   | PendingShape;
 
+export interface AnnotationSavePlan {
+  appendEdits: PdfEdit[];
+  updateEdits: readonly { annotId: string; edit: PdfRaioAnnotationEdit }[];
+  deleteAnnotIds: readonly string[];
+  hasSignatureEdit: boolean;
+}
+
 export const TEXT_BOX_FONT_SIZES = [10, 11, 12, 13, 14] as const;
 export const DEFAULT_TEXT_BOX_FONT_SIZE = 12;
 export const TEXT_BOX_LINE_HEIGHT = 1.2;
@@ -165,132 +177,288 @@ export function toPdfEdits(
   pending: readonly PendingEdit[],
   formValues: Readonly<Record<string, PdfFormFieldValue>> = {},
 ): PdfEdit[] {
-  const edits: PdfEdit[] = pending.map((edit) => {
-    switch (edit.kind) {
-      case "highlight":
-        return {
-          type: "highlight",
-          pageIndex: edit.pageIndex,
-          rects: edit.rects,
-          ...(edit.color ? { color: edit.color } : {}),
-          ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
-        };
-      case "underline":
-      case "strikethrough":
-        return {
-          type: edit.kind,
-          pageIndex: edit.pageIndex,
-          rects: edit.rects,
-          ...(edit.color && !editColorsEqual(edit.color, DEFAULT_TEXT_COLOR)
-            ? { color: edit.color }
-            : {}),
-          ...(edit.thicknessPt !== undefined ? { thicknessPt: edit.thicknessPt } : {}),
-        };
-      case "textBox":
-        return {
-          type: "textBox",
-          pageIndex: edit.pageIndex,
-          rect: edit.rect,
-          text: edit.text,
-          fontSizePt: edit.fontSizePt,
-          ...(edit.color ? { color: edit.color } : {}),
-          ...(edit.backgroundColor ? { backgroundColor: edit.backgroundColor } : {}),
-          ...(edit.backgroundOpacity !== undefined
-            ? { backgroundOpacity: edit.backgroundOpacity }
-            : {}),
-          ...(edit.fontFamily && edit.fontFamily !== "helvetica"
-            ? { fontFamily: edit.fontFamily }
-            : {}),
-          ...(edit.bold ? { bold: edit.bold } : {}),
-          ...(edit.italic ? { italic: edit.italic } : {}),
-          ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
-        };
-      case "callout": {
-        const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
-
-        return {
-          type: "callout",
-          pageIndex: edit.pageIndex,
-          rect: edit.rect,
-          tip: edit.tip,
-          text: edit.text,
-          fontSizePt: edit.fontSizePt,
-          ...(edit.color ? { color: edit.color } : {}),
-          ...(edit.fontFamily && edit.fontFamily !== "helvetica"
-            ? { fontFamily: edit.fontFamily }
-            : {}),
-          ...(edit.bold ? { bold: edit.bold } : {}),
-          ...(edit.italic ? { italic: edit.italic } : {}),
-          ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
-          ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_CALLOUT_STROKE_COLOR)
-            ? { strokeColor: edit.strokeColor }
-            : {}),
-          ...(strokeWidthPt !== DEFAULT_CALLOUT_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
-          ...(edit.arrowhead === false ? { arrowhead: false } : {}),
-          ...(edit.boxBorder === false ? { boxBorder: false } : {}),
-          ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
-        };
-      }
-      case "image":
-      case "signature":
-        return {
-          type: edit.kind,
-          pageIndex: edit.pageIndex,
-          rect: edit.rect,
-          bytes: edit.bytes,
-          format: edit.format,
-        };
-      case "comment":
-        return {
-          type: "comment",
-          pageIndex: edit.pageIndex,
-          at: edit.at,
-          text: edit.text,
-        };
-      case "ink":
-        return {
-          type: "ink",
-          pageIndex: edit.pageIndex,
-          strokes: edit.strokes,
-          strokeWidthPt: edit.strokeWidthPt ?? INK_STROKE_WIDTH_PT,
-          ...(edit.color ? { color: edit.color } : {}),
-        };
-      case "shape": {
-        const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
-        const common = {
-          type: "shape" as const,
-          pageIndex: edit.pageIndex,
-          shape: edit.shape,
-          ...(strokeWidthPt !== DEFAULT_SHAPE_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
-          ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_SHAPE_STROKE_COLOR)
-            ? { strokeColor: edit.strokeColor }
-            : {}),
-        };
-
-        if (!isLineShape(edit)) {
-          return {
-            ...common,
-            shape: edit.shape,
-            rect: edit.rect,
-            ...(edit.fillColor ? { fillColor: edit.fillColor } : {}),
-          };
-        }
-
-        return {
-          ...common,
-          shape: edit.shape,
-          from: edit.from,
-          to: edit.to,
-        };
-      }
-    }
-  });
+  const edits: PdfEdit[] = pending.map(toPdfEdit);
 
   if (Object.keys(formValues).length > 0) {
     edits.push({ type: "formValues", values: formValues });
   }
 
   return edits;
+}
+
+export function toPdfEdit(edit: PendingEdit): PdfEdit {
+  switch (edit.kind) {
+    case "highlight":
+      return {
+        type: "highlight",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
+        pageIndex: edit.pageIndex,
+        rects: edit.rects,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
+      };
+    case "underline":
+    case "strikethrough":
+      return {
+        type: edit.kind,
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
+        pageIndex: edit.pageIndex,
+        rects: edit.rects,
+        ...(edit.color && !editColorsEqual(edit.color, DEFAULT_TEXT_COLOR)
+          ? { color: edit.color }
+          : {}),
+        ...(edit.thicknessPt !== undefined ? { thicknessPt: edit.thicknessPt } : {}),
+      };
+    case "textBox":
+      return {
+        type: "textBox",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
+        pageIndex: edit.pageIndex,
+        rect: edit.rect,
+        text: edit.text,
+        fontSizePt: edit.fontSizePt,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.backgroundColor ? { backgroundColor: edit.backgroundColor } : {}),
+        ...(edit.backgroundOpacity !== undefined
+          ? { backgroundOpacity: edit.backgroundOpacity }
+          : {}),
+        ...(edit.fontFamily && edit.fontFamily !== "helvetica"
+          ? { fontFamily: edit.fontFamily }
+          : {}),
+        ...(edit.bold ? { bold: edit.bold } : {}),
+        ...(edit.italic ? { italic: edit.italic } : {}),
+        ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
+      };
+    case "callout": {
+      const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+
+      return {
+        type: "callout",
+        pageIndex: edit.pageIndex,
+        rect: edit.rect,
+        tip: edit.tip,
+        text: edit.text,
+        fontSizePt: edit.fontSizePt,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.fontFamily && edit.fontFamily !== "helvetica"
+          ? { fontFamily: edit.fontFamily }
+          : {}),
+        ...(edit.bold ? { bold: edit.bold } : {}),
+        ...(edit.italic ? { italic: edit.italic } : {}),
+        ...(edit.align && edit.align !== "left" ? { align: edit.align } : {}),
+        ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_CALLOUT_STROKE_COLOR)
+          ? { strokeColor: edit.strokeColor }
+          : {}),
+        ...(strokeWidthPt !== DEFAULT_CALLOUT_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
+        ...(edit.arrowhead === false ? { arrowhead: false } : {}),
+        ...(edit.boxBorder === false ? { boxBorder: false } : {}),
+        ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
+      };
+    }
+    case "image":
+    case "signature":
+      return {
+        type: edit.kind,
+        pageIndex: edit.pageIndex,
+        rect: edit.rect,
+        bytes: edit.bytes,
+        format: edit.format,
+      };
+    case "comment":
+      return {
+        type: "comment",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
+        pageIndex: edit.pageIndex,
+        at: edit.at,
+        text: edit.text,
+      };
+    case "ink":
+      return {
+        type: "ink",
+        pageIndex: edit.pageIndex,
+        strokes: edit.strokes,
+        strokeWidthPt: edit.strokeWidthPt ?? INK_STROKE_WIDTH_PT,
+        ...(edit.color ? { color: edit.color } : {}),
+      };
+    case "shape": {
+      const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
+      const common = {
+        type: "shape" as const,
+        pageIndex: edit.pageIndex,
+        shape: edit.shape,
+        ...(strokeWidthPt !== DEFAULT_SHAPE_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
+        ...(edit.strokeColor && !editColorsEqual(edit.strokeColor, DEFAULT_SHAPE_STROKE_COLOR)
+          ? { strokeColor: edit.strokeColor }
+          : {}),
+      };
+
+      if (!isLineShape(edit)) {
+        return {
+          ...common,
+          shape: edit.shape,
+          rect: edit.rect,
+          ...(edit.fillColor ? { fillColor: edit.fillColor } : {}),
+        };
+      }
+
+      return {
+        ...common,
+        shape: edit.shape,
+        from: edit.from,
+        to: edit.to,
+      };
+    }
+  }
+}
+
+export function pendingEditsFromRaioAnnotations(
+  annotations: readonly PdfRaioAnnotationImport[],
+): PendingEdit[] {
+  return annotations.map((annotation) => {
+    const pending = pendingEditFromRaioAnnotation(annotation);
+    const baseline = toPdfEdit(pending);
+
+    return {
+      ...pending,
+      sourceBaseline: isRaioAnnotationPdfEdit(baseline) ? baseline : annotation.edit,
+    };
+  });
+}
+
+export function buildAnnotationSavePlan(
+  pending: readonly PendingEdit[],
+  importedAnnotIds: ReadonlySet<string>,
+): AnnotationSavePlan {
+  const appendEdits: PdfEdit[] = [];
+  const updateEdits: { annotId: string; edit: PdfRaioAnnotationEdit }[] = [];
+  const currentAnnotIds = new Set<string>();
+  let hasSignatureEdit = false;
+
+  for (const edit of pending) {
+    const pdfEdit = toPdfEdit(edit);
+
+    if (edit.kind === "signature") {
+      hasSignatureEdit = true;
+    }
+
+    if (!edit.annotId) {
+      appendEdits.push(pdfEdit);
+      continue;
+    }
+
+    currentAnnotIds.add(edit.annotId);
+
+    if (!isRaioAnnotationPdfEdit(pdfEdit)) {
+      appendEdits.push(pdfEdit);
+      continue;
+    }
+
+    const baseline = edit.sourceBaseline;
+
+    if (baseline && stableJson(pdfEdit) === stableJson(baseline)) {
+      continue;
+    }
+
+    updateEdits.push({ annotId: edit.annotId, edit: pdfEdit });
+  }
+
+  const deleteAnnotIds = [...importedAnnotIds].filter((annotId) => !currentAnnotIds.has(annotId));
+
+  return {
+    appendEdits,
+    updateEdits,
+    deleteAnnotIds,
+    hasSignatureEdit,
+  };
+}
+
+export function annotationSavePlanHasChanges(plan: AnnotationSavePlan): boolean {
+  return plan.appendEdits.length > 0 ||
+    plan.updateEdits.length > 0 ||
+    plan.deleteAnnotIds.length > 0;
+}
+
+function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): PendingEdit {
+  const common = {
+    id: `annot-${annotation.annotId}`,
+    annotId: annotation.annotId,
+    annotSource: "raio" as const,
+    pageIndex: annotation.pageIndex,
+    status: "applied" as const,
+  };
+  const edit = annotation.edit;
+
+  switch (edit.type) {
+    case "highlight":
+      return {
+        ...common,
+        kind: "highlight",
+        rects: edit.rects,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.opacity !== undefined ? { opacity: edit.opacity } : {}),
+      };
+    case "underline":
+    case "strikethrough":
+      return {
+        ...common,
+        kind: edit.type,
+        rects: edit.rects,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.thicknessPt !== undefined ? { thicknessPt: edit.thicknessPt } : {}),
+      };
+    case "textBox":
+      return {
+        ...common,
+        kind: "textBox",
+        rect: edit.rect,
+        text: edit.text,
+        fontSizePt: edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.backgroundColor !== undefined ? { backgroundColor: edit.backgroundColor } : {}),
+        ...(edit.backgroundOpacity !== undefined
+          ? { backgroundOpacity: edit.backgroundOpacity }
+          : {}),
+        ...(edit.fontFamily ? { fontFamily: edit.fontFamily } : {}),
+        ...(edit.bold !== undefined ? { bold: edit.bold } : {}),
+        ...(edit.italic !== undefined ? { italic: edit.italic } : {}),
+        ...(edit.align ? { align: edit.align } : {}),
+      };
+    case "comment":
+      return {
+        ...common,
+        kind: "comment",
+        at: edit.at,
+        text: edit.text,
+      };
+  }
+}
+
+function isRaioAnnotationPdfEdit(edit: PdfEdit): edit is PdfRaioAnnotationEdit {
+  return edit.type === "highlight" ||
+    edit.type === "underline" ||
+    edit.type === "strikethrough" ||
+    edit.type === "textBox" ||
+    edit.type === "comment";
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJson);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entryValue]) => [key, sortJson(entryValue)]),
+    );
+  }
+
+  return value;
 }
 
 export function describePendingEdit(edit: PendingEdit): {

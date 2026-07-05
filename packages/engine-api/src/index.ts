@@ -421,6 +421,8 @@ export type PdfEditImageFormat = "png" | "jpeg";
  */
 export type PdfHighlightEdit = {
   type: "highlight";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the highlight. */
   pageIndex: number;
   /** One rectangle per highlighted text line, in PDF user-space points. */
@@ -440,6 +442,8 @@ export type PdfHighlightEdit = {
  */
 export type PdfTextMarkupEdit = {
   type: "underline" | "strikethrough";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the markup. */
   pageIndex: number;
   /** One rectangle per marked text line, in PDF user-space points. */
@@ -459,6 +463,8 @@ export type PdfTextMarkupEdit = {
  */
 export type PdfTextBoxEdit = {
   type: "textBox";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the text box. */
   pageIndex: number;
   /** User-space bounding box of the text box. */
@@ -633,6 +639,8 @@ export type PdfApplyEditsOptions = {
  */
 export type PdfCommentEdit = {
   type: "comment";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the annotation. */
   pageIndex: number;
   /** Bottom-left anchor of the note icon in PDF user-space points. */
@@ -701,6 +709,18 @@ export type PdfEdit =
   | PdfCommentEdit
   | PdfFormValuesEdit
   | PdfSignatureEdit;
+
+export type PdfRaioAnnotationEdit =
+  | PdfHighlightEdit
+  | PdfTextMarkupEdit
+  | PdfTextBoxEdit
+  | PdfCommentEdit;
+
+export type PdfRaioAnnotationImport = {
+  pageIndex: number;
+  annotId: string;
+  edit: PdfRaioAnnotationEdit;
+};
 
 export type PdfEngineErrorCode =
   | "DOCUMENT_NOT_FOUND"
@@ -1018,6 +1038,29 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     edits: readonly PdfEdit[],
     options?: PdfApplyEditsOptions,
+  ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Reads RaioPDF-authored live annotations that carry RaioPDF source-edit
+   * metadata. Foreign annotations and RaioPDF annotation kinds without a
+   * supported Slice 1 source payload are skipped.
+   */
+  readRaioPdfAnnotations(document: PdfDocumentHandle): Promise<readonly PdfRaioAnnotationImport[]>;
+
+  /**
+   * Replaces one RaioPDF-authored live annotation by stable id, refreshing its
+   * geometry, appearance stream, and source-edit metadata.
+   */
+  updateAnnotationById(
+    document: PdfDocumentHandle,
+    annotId: string,
+    edit: PdfRaioAnnotationEdit,
+  ): Promise<PdfDocumentHandle>;
+
+  /** Removes one RaioPDF-authored live annotation by stable id. */
+  deleteAnnotationById(
+    document: PdfDocumentHandle,
+    annotId: string,
   ): Promise<PdfDocumentHandle>;
 
   /**

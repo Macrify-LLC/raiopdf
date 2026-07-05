@@ -1,7 +1,9 @@
 # Third-Party Notices
 
 This file summarizes third-party components bundled with the RaioPDF Windows engine payload.
-It is not a substitute for the full upstream license texts shipped by each component.
+Release builds generate the comprehensive installed notice set under `payload/legal/`,
+including `THIRD-PARTY-NOTICES.txt`, `COMPONENT-MANIFEST.json`,
+`RELEASE-SOURCE-CORRESPONDENCE.md`, license texts, and the Ghostscript source offer.
 
 ## Eclipse Temurin JRE 25
 
@@ -34,10 +36,15 @@ It is not a substitute for the full upstream license texts shipped by each compo
 ## Ghostscript
 
 - Component: Ghostscript Windows x64
-- License: AGPL-3.0-only or Artifex commercial license
-- Source: https://ghostscript.com/releases/
+- License: AGPL-3.0-only
+- Binary source: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10071/gs10071w64.exe
+- Corresponding source: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10071/ghostscript-10.07.1.tar.xz
 - Use: Ghostscript command-line tools required by OCRmyPDF and Stirling PDF/A flows.
-- Aggregation note: Ghostscript is bundled as a separate executable toolchain component and invoked as an external process by OCR/PDF workflows.
+- Packaging note: Ghostscript is bundled unmodified. `installer/assemble-payload.sh`
+  copies upstream `gswin64c.exe` to `gs.exe` as a byte-identical convenience alias,
+  and `scripts/generate-legal-notices.mjs --check` verifies that alias.
+- Aggregation note: Ghostscript is bundled as a separate executable toolchain
+  component and invoked as an external process by OCR/PDF workflows.
 
 ## qpdf
 

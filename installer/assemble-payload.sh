@@ -36,6 +36,14 @@ REQUIRED_PAYLOAD_FILES=(
   "ocr/gs/bin/gswin64c.exe"
   "ocr/qpdf/LICENSE.txt"
   "ocr/qpdf/bin/qpdf.exe"
+  "legal/THIRD-PARTY-NOTICES.txt"
+  "legal/COMPONENT-MANIFEST.json"
+  "legal/RELEASE-SOURCE-CORRESPONDENCE.md"
+  "legal/RAIOPDF-LICENSE-NOTICES.txt"
+  "legal/source-offers/GHOSTSCRIPT-SOURCE-OFFER.txt"
+  "legal/licenses/GPL-3.0.txt"
+  "legal/licenses/AGPL-3.0.txt"
+  "legal/licenses/MPL-2.0.txt"
 )
 REQUIRED_PAYLOAD_DIRS=(
   "mcp/pdfjs/cmaps"
@@ -653,6 +661,7 @@ PY
 }
 
 verify_payload() {
+  node "$REPO_ROOT/scripts/generate-legal-notices.mjs" --payload-dir "$PAYLOAD_DIR" --check
   verify_payload_manifest
 
   printf 'Payload assembled at %s\n' "$PAYLOAD_DIR"
@@ -661,6 +670,7 @@ verify_payload() {
 
 if [[ "$MODE" == "verify" ]]; then
   PYTHON_CMD=$(find_python)
+  need node
   verify_payload
   exit 0
 fi
@@ -702,5 +712,6 @@ install_tesseract "$tesseract_installer" "$tessdata_eng" "$seven_zip"
 install_ghostscript "$ghostscript_installer" "$seven_zip"
 install_qpdf "$qpdf_zip"
 node "$SCRIPT_DIR/build-mcp-runtime.mjs"
+node "$REPO_ROOT/scripts/generate-legal-notices.mjs" --payload-dir "$PAYLOAD_DIR"
 generate_payload_manifest
 verify_payload

@@ -177,6 +177,20 @@ export interface OpenFileOptions {
    * unlocked working copy), so Save As is the natural next step.
    */
   markDirty?: boolean;
+  /**
+   * User-driven opens use "new-tab" when another document is already open.
+   * Internal reopen flows keep the historical replace-active behavior.
+   */
+  openMode?: "replace-active" | "new-tab";
+}
+
+export interface OpenStreamedFileOptions {
+  openMode?: "replace-active" | "new-tab";
+}
+
+export interface DocumentTabState {
+  id: string;
+  document: DocumentState;
 }
 
 /**
@@ -200,6 +214,31 @@ interface MutationGuards {
   expectedOpenToken?: number;
   expectedGeneration?: number;
 }
+
+interface StoredDocumentTab extends DocumentTabState {
+  engineHandle: PdfDocumentHandle | null;
+  bytes: Uint8Array | null;
+  openToken: number;
+  sourceKind: DocumentSource["kind"] | null;
+  scrollNonce: number;
+  pageScrollIntent: PageScrollIntent | null;
+  mutationQueue: Promise<void>;
+  busyCount: number;
+}
+
+interface OpenTarget {
+  id: string;
+  previousActiveTabId: string | null;
+  previousHandle: PdfDocumentHandle | null;
+  token: number;
+  newTab: boolean;
+}
+
+export const MAX_DOCUMENT_TABS = 8;
+export const NEW_TAB_BUSY_MESSAGE =
+  "Finish the current document operation before opening another document.";
+const MAX_DOCUMENT_TABS_MESSAGE =
+  `RaioPDF can keep up to ${MAX_DOCUMENT_TABS} documents open at once. Close a tab before opening another.`;
 
 export interface DocumentFileInput {
   bytes: Uint8Array;
@@ -245,31 +284,257 @@ interface PreparedDocument {
 
 export function useDocument(options: UseDocumentOptions = {}) {
   const engine = useMemo<PdfEngine>(() => new LocalPdfEngine(), []);
-  const [document, setDocument] = useState<DocumentState>(INITIAL_DOCUMENT);
+  const [document, setDocumentState] = useState<DocumentState>(INITIAL_DOCUMENT);
+  const [tabs, setTabs] = useState<StoredDocumentTab[]>([]);
+  const tabsRef = useRef<StoredDocumentTab[]>([]);
+  const tabIdCounterRef = useRef(0);
+  const activeTabIdRef = useRef<string | null>(null);
   const [pageScrollIntent, setPageScrollIntent] = useState<PageScrollIntent | null>(null);
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
+  const openTokenCounterRef = useRef(0);
+  const prepareOpenErrorRef = useRef<string | null>(null);
   // Never reset: generation is a globally monotonic document identity, so a
   // (generation) capture alone distinguishes documents across opens [R1-8].
   const generationRef = useRef(0);
   const sourceKindRef = useRef<DocumentSource["kind"] | null>(null);
   const scrollNonceRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const busyCountRef = useRef(0);
+
+  const setTabsState = useCallback((update: (current: StoredDocumentTab[]) => StoredDocumentTab[]) => {
+    setTabs((current) => {
+      const next = update(current);
+      tabsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const snapshotActiveTab = useCallback((): StoredDocumentTab | null => {
+    const activeTabId = activeTabIdRef.current;
+    if (!activeTabId) {
+      return null;
+    }
+
+    const current = tabsRef.current.find((tab) => tab.id === activeTabId);
+    if (!current) {
+      return null;
+    }
+
+    return {
+      ...current,
+      document,
+      engineHandle: activeHandleRef.current,
+      bytes: activeBytesRef.current,
+      openToken: openTokenRef.current,
+      sourceKind: sourceKindRef.current,
+      scrollNonce: scrollNonceRef.current,
+      pageScrollIntent,
+      mutationQueue: mutationQueueRef.current,
+      busyCount: busyCountRef.current,
+    };
+  }, [document, pageScrollIntent]);
+
+  const syncActiveTab = useCallback((nextDocument: DocumentState, nextScrollIntent = pageScrollIntent) => {
+    const activeTabId = activeTabIdRef.current;
+    if (!activeTabId) {
+      return;
+    }
+
+    setTabsState((current) => current.map((tab) => (
+      tab.id === activeTabId
+        ? {
+            ...tab,
+            document: nextDocument,
+            engineHandle: activeHandleRef.current,
+            bytes: activeBytesRef.current,
+            openToken: openTokenRef.current,
+            sourceKind: sourceKindRef.current,
+            scrollNonce: scrollNonceRef.current,
+            pageScrollIntent: nextScrollIntent,
+            mutationQueue: mutationQueueRef.current,
+            busyCount: busyCountRef.current,
+          }
+        : tab
+    )));
+  }, [pageScrollIntent, setTabsState]);
+
+  const setDocument = useCallback((update: DocumentState | ((current: DocumentState) => DocumentState)) => {
+    setDocumentState((current) => {
+      const next = typeof update === "function"
+        ? (update as (current: DocumentState) => DocumentState)(current)
+        : update;
+      syncActiveTab(next);
+      return next;
+    });
+  }, [syncActiveTab]);
 
   const nextGeneration = useCallback(() => {
     generationRef.current += 1;
     return generationRef.current;
   }, []);
 
+  const getActiveGenerationValue = useCallback(() => {
+    const activeTabId = activeTabIdRef.current;
+    if (!activeTabId) {
+      return document.generation;
+    }
+
+    return tabsRef.current.find((tab) => tab.id === activeTabId)?.document.generation
+      ?? document.generation;
+  }, [document.generation]);
+
   const requestPageScroll = useCallback((page: number) => {
     scrollNonceRef.current += 1;
-    setPageScrollIntent({ page, nonce: scrollNonceRef.current });
+    const intent = { page, nonce: scrollNonceRef.current };
+    setPageScrollIntent(intent);
+    const activeTabId = activeTabIdRef.current;
+    if (activeTabId) {
+      setTabsState((current) => current.map((tab) => (
+        tab.id === activeTabId
+          ? { ...tab, scrollNonce: scrollNonceRef.current, pageScrollIntent: intent }
+          : tab
+      )));
+    }
+  }, [setTabsState]);
+
+  const createTabId = useCallback(() => {
+    tabIdCounterRef.current += 1;
+    return `document-tab-${tabIdCounterRef.current}`;
   }, []);
+
+  const restoreTab = useCallback((tab: StoredDocumentTab) => {
+    activeTabIdRef.current = tab.id;
+    activeHandleRef.current = tab.engineHandle;
+    activeBytesRef.current = tab.bytes;
+    openTokenRef.current = tab.openToken;
+    sourceKindRef.current = tab.sourceKind;
+    scrollNonceRef.current = tab.scrollNonce;
+    mutationQueueRef.current = tab.mutationQueue;
+    busyCountRef.current = tab.busyCount;
+    setDocumentState(tab.document);
+    setPageScrollIntent(tab.pageScrollIntent);
+  }, []);
+
+  const createStoredTab = useCallback((
+    id: string,
+    nextDocument: DocumentState,
+    overrides: {
+      engineHandle?: PdfDocumentHandle | null;
+      bytes?: Uint8Array | null;
+      openToken?: number;
+      sourceKind?: DocumentSource["kind"] | null;
+    } = {},
+  ): StoredDocumentTab => ({
+    id,
+    document: nextDocument,
+    engineHandle: overrides.engineHandle ?? null,
+    bytes: overrides.bytes ?? null,
+    openToken: overrides.openToken ?? 0,
+    sourceKind: overrides.sourceKind ?? null,
+    scrollNonce: 0,
+    pageScrollIntent: null,
+    mutationQueue: Promise.resolve(),
+    busyCount: 0,
+  }), []);
+
+  const prepareOpenTarget = useCallback((openMode: OpenFileOptions["openMode"] = "replace-active"): OpenTarget | null => {
+    prepareOpenErrorRef.current = null;
+    const hasActiveDocument = document.source !== null;
+    const shouldOpenNewTab = openMode === "new-tab" && hasActiveDocument;
+    const previousActiveTabId = activeTabIdRef.current;
+
+    if (shouldOpenNewTab && tabsRef.current.length >= MAX_DOCUMENT_TABS) {
+      prepareOpenErrorRef.current = MAX_DOCUMENT_TABS_MESSAGE;
+      setDocument((current) => ({
+        ...current,
+        error: MAX_DOCUMENT_TABS_MESSAGE,
+      }));
+      return null;
+    }
+
+    if (shouldOpenNewTab && busyCountRef.current > 0) {
+      prepareOpenErrorRef.current = NEW_TAB_BUSY_MESSAGE;
+      setDocument((current) => ({
+        ...current,
+        error: NEW_TAB_BUSY_MESSAGE,
+      }));
+      return null;
+    }
+
+    if (shouldOpenNewTab) {
+      const activeSnapshot = snapshotActiveTab();
+      if (activeSnapshot) {
+        setTabsState((current) => current.map((tab) => (
+          tab.id === activeSnapshot.id ? activeSnapshot : tab
+        )));
+      }
+
+      const id = createTabId();
+      const token = openTokenCounterRef.current + 1;
+      openTokenCounterRef.current = token;
+      activeTabIdRef.current = id;
+      activeHandleRef.current = null;
+      activeBytesRef.current = null;
+      openTokenRef.current = token;
+      sourceKindRef.current = null;
+      scrollNonceRef.current = 0;
+      mutationQueueRef.current = Promise.resolve();
+      busyCountRef.current = 0;
+      setPageScrollIntent(null);
+      return { id, previousActiveTabId, previousHandle: null, token, newTab: true };
+    }
+
+    let id = activeTabIdRef.current;
+    if (!id) {
+      id = createTabId();
+      activeTabIdRef.current = id;
+    }
+
+    const token = openTokenCounterRef.current + 1;
+    openTokenCounterRef.current = token;
+    openTokenRef.current = token;
+    return {
+      id,
+      previousActiveTabId,
+      previousHandle: activeHandleRef.current,
+      token,
+      newTab: !tabsRef.current.some((tab) => tab.id === id),
+    };
+  }, [createTabId, document.source, setDocument, setTabsState, snapshotActiveTab]);
+
+  const restoreAfterFailedNewTabOpen = useCallback((target: OpenTarget, error?: string) => {
+    if (!target.newTab) {
+      return;
+    }
+
+    const previousTab = tabsRef.current.find((tab) => tab.id === target.previousActiveTabId)
+      ?? tabsRef.current.at(-1)
+      ?? null;
+    if (previousTab) {
+      restoreTab(previousTab);
+      if (error) {
+        setDocument((current) => ({ ...current, error }));
+      }
+      return;
+    }
+
+    activeTabIdRef.current = null;
+    activeHandleRef.current = null;
+    activeBytesRef.current = null;
+    openTokenRef.current = 0;
+    sourceKindRef.current = null;
+    scrollNonceRef.current = 0;
+    mutationQueueRef.current = Promise.resolve();
+    busyCountRef.current = 0;
+    setPageScrollIntent(null);
+    setDocumentState(error ? { ...INITIAL_DOCUMENT, error } : INITIAL_DOCUMENT);
+  }, [restoreTab, setDocument]);
 
   const setError = useCallback((error: string | null) => {
     setDocument((current) => ({ ...current, error }));
-  }, []);
+  }, [setDocument]);
 
   const closeHandle = useCallback(
     async (engineHandle: PdfDocumentHandle | null) => {
@@ -289,10 +554,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
   useEffect(() => {
     return () => {
       openTokenRef.current += 1;
-      const engineHandle = activeHandleRef.current;
+      const handles = new Set<PdfDocumentHandle>();
+      if (activeHandleRef.current) {
+        handles.add(activeHandleRef.current);
+      }
+      for (const tab of tabsRef.current) {
+        if (tab.engineHandle) {
+          handles.add(tab.engineHandle);
+        }
+      }
       activeHandleRef.current = null;
       activeBytesRef.current = null;
-      void closeHandle(engineHandle);
+      void Promise.all([...handles].map((handle) => closeHandle(handle)));
     };
   }, [closeHandle]);
 
@@ -389,44 +662,52 @@ export function useDocument(options: UseDocumentOptions = {}) {
       requestedToken = openTokenRef.current,
     ) => {
       const queued = mutationQueueRef.current.then(async () => {
+        busyCountRef.current += 1;
+        syncActiveTab(document);
+
         // Streamed docs are never mutated in memory: every enqueueMutation
         // op is gated with the message naming what still works [R1-2].
-        if (sourceKindRef.current !== null && sourceKindRef.current !== "memory") {
-          if (openTokenRef.current === requestedToken) {
-            setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+        try {
+          if (sourceKindRef.current !== null && sourceKindRef.current !== "memory") {
+            if (openTokenRef.current === requestedToken) {
+              setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+            }
+
+            return false;
           }
 
-          return false;
-        }
+          const context = currentOperation();
 
-        const context = currentOperation();
-
-        if (!context || context.token !== requestedToken) {
-          return false;
-        }
-
-        try {
-          const result = await operation(context);
-
-          if (!result) {
+          if (!context || context.token !== requestedToken) {
             return false;
           }
 
           try {
-            return await commitHandle(result.engineHandle, result.options, context);
-          } catch (error) {
-            await closeHandle(result.engineHandle);
-            throw error;
-          }
-        } catch (error) {
-          if (
-            openTokenRef.current === context.token &&
-            activeHandleRef.current === context.handle
-          ) {
-            setError(getActionErrorMessage(operationName, error));
-          }
+            const result = await operation(context);
 
-          return false;
+            if (!result) {
+              return false;
+            }
+
+            try {
+              return await commitHandle(result.engineHandle, result.options, context);
+            } catch (error) {
+              await closeHandle(result.engineHandle);
+              throw error;
+            }
+          } catch (error) {
+            if (
+              openTokenRef.current === context.token &&
+              activeHandleRef.current === context.handle
+            ) {
+              setError(getActionErrorMessage(operationName, error));
+            }
+
+            return false;
+          }
+        } finally {
+          busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+          syncActiveTab(document);
         }
       });
 
@@ -437,7 +718,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
       return queued;
     },
-    [closeHandle, commitHandle, currentOperation, setError],
+    [closeHandle, commitHandle, currentOperation, document, setError, syncActiveTab],
   );
 
   const openPreparedDocument = useCallback(
@@ -502,14 +783,20 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
   const openFile = useCallback(
     async (file: DocumentFileInput, options: OpenFileOptions = {}): Promise<OpenFileResult> => {
-      const token = openTokenRef.current + 1;
-      openTokenRef.current = token;
-      const previousHandle = activeHandleRef.current;
+      const target = prepareOpenTarget(options.openMode);
+      if (!target) {
+        return {
+          status: "failed",
+          error: prepareOpenErrorRef.current ?? MAX_DOCUMENT_TABS_MESSAGE,
+        };
+      }
+      const { id, token, previousHandle } = target;
       let prepared: PreparedDocument | null = null;
 
       try {
         prepared = await openPreparedDocument(file);
         if (!prepared) {
+          restoreAfterFailedNewTabOpen(target);
           return { status: "cancelled" };
         }
 
@@ -520,7 +807,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           engine.getOutline(engineHandle),
         ]);
 
-        if (openTokenRef.current !== token) {
+        if (activeTabIdRef.current !== id || openTokenRef.current !== token) {
           await closeHandle(engineHandle);
           return { status: "failed", error: "This document was replaced before it finished opening." };
         }
@@ -531,7 +818,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         activeHandleRef.current = engineHandle;
         activeBytesRef.current = bytes;
         sourceKindRef.current = "memory";
-        setDocument({
+        const nextDocument: DocumentState = {
           bytes,
           source: { kind: "memory", bytes },
           generation: nextGeneration(),
@@ -551,14 +838,26 @@ export function useDocument(options: UseDocumentOptions = {}) {
           outlineStatus: null,
           signatureInvalidationNotice,
           error: null,
+        };
+        setDocument(nextDocument);
+        const storedTab = createStoredTab(id, nextDocument, {
+          engineHandle,
+          bytes,
+          openToken: token,
+          sourceKind: "memory",
         });
+        setTabsState((current) => (
+          current.some((tab) => tab.id === id)
+            ? current.map((tab) => (tab.id === id ? { ...tab, ...storedTab } : tab))
+            : [...current, storedTab]
+        ));
         prepared = null;
         requestPageScroll(1);
         return { status: "opened" };
       } catch (error) {
         await closeHandle(prepared?.engineHandle ?? null);
 
-        if (openTokenRef.current !== token) {
+        if (activeTabIdRef.current !== id || openTokenRef.current !== token) {
           return { status: "failed", error: getEngineErrorMessage(error) };
         }
 
@@ -576,11 +875,22 @@ export function useDocument(options: UseDocumentOptions = {}) {
           // since they're not this hook's concern until they're unlocked.
           // Any previously open document is being replaced by the prompt
           // flow, so release its handle rather than leaking it.
-          activeHandleRef.current = null;
-          activeBytesRef.current = null;
-          sourceKindRef.current = null;
-          await closeHandle(previousHandle);
-          setDocument(INITIAL_DOCUMENT);
+          if (!target.newTab) {
+            activeHandleRef.current = null;
+            activeBytesRef.current = null;
+            sourceKindRef.current = null;
+            await closeHandle(previousHandle);
+            setTabsState((current) => current.filter((tab) => tab.id !== id));
+            activeTabIdRef.current = null;
+            openTokenRef.current = 0;
+            scrollNonceRef.current = 0;
+            mutationQueueRef.current = Promise.resolve();
+            busyCountRef.current = 0;
+            setPageScrollIntent(null);
+            setDocument(INITIAL_DOCUMENT);
+          } else {
+            restoreAfterFailedNewTabOpen(target);
+          }
           return {
             status: "password-required",
             bytes: file.bytes,
@@ -590,12 +900,16 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         const message = getEngineErrorMessage(error);
-        if (previousHandle) {
+        if (previousHandle || target.newTab) {
           // A failed replacement open keeps the current document on screen --
           // and USABLE: the refs must keep pointing at the still-open
           // previous handle or save/rotate/delete on the visible document
           // would find no engine handle (Codex Cloud P1 on #115).
-          setDocument((current) => ({ ...current, error: message }));
+          if (target.newTab) {
+            restoreAfterFailedNewTabOpen(target, message);
+          } else {
+            setDocument((current) => ({ ...current, error: message }));
+          }
         } else {
           activeHandleRef.current = null;
           activeBytesRef.current = null;
@@ -608,7 +922,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, engine, nextGeneration, openPreparedDocument, requestPageScroll],
+    [closeHandle, createStoredTab, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
   );
 
   /**
@@ -618,28 +932,36 @@ export function useDocument(options: UseDocumentOptions = {}) {
    * via `setStreamedPageCount` once the transport delivers the xref tail.
    */
   const openStreamedFile = useCallback(
-    async (input: StreamedFileInput): Promise<OpenFileResult> => {
-      const token = openTokenRef.current + 1;
-      openTokenRef.current = token;
-      const previousHandle = activeHandleRef.current;
+    async (input: StreamedFileInput, options: OpenStreamedFileOptions = {}): Promise<OpenFileResult> => {
+      const target = prepareOpenTarget(options.openMode);
+      if (!target) {
+        return {
+          status: "failed",
+          error: prepareOpenErrorRef.current ?? MAX_DOCUMENT_TABS_MESSAGE,
+        };
+      }
+      const { id, token, previousHandle } = target;
 
       activeHandleRef.current = null;
       activeBytesRef.current = null;
       const generation = nextGeneration();
       sourceKindRef.current = input.source.kind;
-      await closeHandle(previousHandle);
+      if (!target.newTab) {
+        await closeHandle(previousHandle);
+      }
 
       // Same token guard as the memory open path: if another open started
       // while the previous handle was closing, this streamed open is stale
       // and must not replace the newer document (Codex review, PR #124).
-      if (openTokenRef.current !== token) {
+      if (activeTabIdRef.current !== id || openTokenRef.current !== token) {
+        restoreAfterFailedNewTabOpen(target);
         return {
           status: "failed",
           error: "This document was replaced before it finished opening.",
         };
       }
 
-      setDocument({
+      const nextDocument: DocumentState = {
         ...INITIAL_DOCUMENT,
         source: { ...input.source, generation },
         generation,
@@ -648,11 +970,21 @@ export function useDocument(options: UseDocumentOptions = {}) {
         fileName: input.name,
         filePath: input.path,
         fileSizeBytes: input.source.sizeBytes,
+      };
+      setDocument(nextDocument);
+      const storedTab = createStoredTab(id, nextDocument, {
+        openToken: token,
+        sourceKind: input.source.kind,
       });
+      setTabsState((current) => (
+        current.some((tab) => tab.id === id)
+          ? current.map((tab) => (tab.id === id ? { ...tab, ...storedTab } : tab))
+          : [...current, storedTab]
+      ));
       requestPageScroll(1);
       return { status: "opened" };
     },
-    [closeHandle, nextGeneration, requestPageScroll],
+    [closeHandle, createStoredTab, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
   );
 
   /**
@@ -697,7 +1029,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (
           options.expectedGeneration !== undefined &&
-          generationRef.current !== options.expectedGeneration
+          getActiveGenerationValue() !== options.expectedGeneration
         ) {
           stale = true;
           return null;
@@ -758,7 +1090,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   );
 
   const getOpenToken = useCallback(() => openTokenRef.current, []);
-  const getGeneration = useCallback(() => generationRef.current, []);
+  const getGeneration = useCallback(() => getActiveGenerationValue(), [getActiveGenerationValue]);
 
   /**
    * Explicit navigation: updates `currentPage` AND emits a scroll intent so
@@ -1179,7 +1511,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (
           guards.expectedGeneration !== undefined &&
-          generationRef.current !== guards.expectedGeneration
+          getActiveGenerationValue() !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1266,7 +1598,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (
           guards.expectedGeneration !== undefined &&
-          generationRef.current !== guards.expectedGeneration
+          getActiveGenerationValue() !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1297,7 +1629,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (
           guards.expectedGeneration !== undefined &&
-          generationRef.current !== guards.expectedGeneration
+          getActiveGenerationValue() !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1329,7 +1661,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         if (
           guards.expectedGeneration !== undefined &&
-          generationRef.current !== guards.expectedGeneration
+          getActiveGenerationValue() !== guards.expectedGeneration
         ) {
           return null;
         }
@@ -1430,11 +1762,93 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }));
   }, []);
 
+  const switchTab = useCallback((tabId: string) => {
+    if (tabId === activeTabIdRef.current) {
+      return true;
+    }
+
+    if (busyCountRef.current > 0) {
+      setError("Finish the current document operation before switching tabs.");
+      return false;
+    }
+
+    const activeSnapshot = snapshotActiveTab();
+    const nextTab = tabsRef.current.find((tab) => tab.id === tabId);
+    if (!nextTab) {
+      return false;
+    }
+
+    const nextTabs = tabsRef.current.map((tab) => (
+      activeSnapshot && tab.id === activeSnapshot.id ? activeSnapshot : tab
+    ));
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    restoreTab(nextTab);
+    return true;
+  }, [restoreTab, setError, snapshotActiveTab]);
+
+  const closeTab = useCallback(async (tabId: string) => {
+    const isActive = tabId === activeTabIdRef.current;
+    const tab = isActive
+      ? snapshotActiveTab()
+      : tabsRef.current.find((candidate) => candidate.id === tabId) ?? null;
+
+    if (!tab) {
+      return false;
+    }
+
+    if ((isActive ? busyCountRef.current : tab.busyCount) > 0) {
+      setError("Finish the current document operation before closing this tab.");
+      return false;
+    }
+
+    const currentTabs = isActive && tab
+      ? tabsRef.current.map((candidate) => (candidate.id === tab.id ? tab : candidate))
+      : tabsRef.current;
+    const closingIndex = currentTabs.findIndex((candidate) => candidate.id === tabId);
+    const nextTabs = currentTabs.filter((candidate) => candidate.id !== tabId);
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+
+    if (isActive) {
+      openTokenRef.current += 1;
+      activeHandleRef.current = null;
+      activeBytesRef.current = null;
+      sourceKindRef.current = null;
+      mutationQueueRef.current = Promise.resolve();
+      busyCountRef.current = 0;
+      setPageScrollIntent(null);
+    }
+
+    await closeHandle(tab.engineHandle);
+
+    if (isActive) {
+      const nextActive = nextTabs[Math.min(closingIndex, nextTabs.length - 1)] ?? null;
+      if (nextActive) {
+        restoreTab(nextActive);
+      } else {
+        activeTabIdRef.current = null;
+        openTokenRef.current = 0;
+        scrollNonceRef.current = 0;
+        setDocumentState(INITIAL_DOCUMENT);
+      }
+    }
+
+    return true;
+  }, [closeHandle, restoreTab, setError, snapshotActiveTab]);
+
   return {
     document,
+    tabs: tabs.map((tab) => ({
+      id: tab.id,
+      document: tab.id === activeTabIdRef.current ? document : tab.document,
+    })),
+    activeTabId: activeTabIdRef.current,
     pageScrollIntent,
     openFile,
     openStreamedFile,
+    switchTab,
+    closeTab,
     setStreamedPageCount,
     replaceBytes,
     getOpenToken,

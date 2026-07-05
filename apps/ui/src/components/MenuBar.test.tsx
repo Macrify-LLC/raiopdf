@@ -15,6 +15,7 @@ describe("MenuBar", () => {
       });
     }
     container?.remove();
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     root = null;
     container = null;
   });
@@ -44,6 +45,17 @@ describe("MenuBar", () => {
     // Selecting an item closes the dropdown and returns focus to its trigger.
     expect(getTrigger("File").getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(getTrigger("File"));
+  });
+
+  it("dispatches the desktop-only Open in New Window command", () => {
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const onCommand = vi.fn();
+    render({ hasDocument: false, canUndo: false, onCommand });
+
+    click(getTrigger("File"));
+    click(getMenuItem("Open in New Window..."));
+
+    expect(onCommand).toHaveBeenCalledWith("file:open-new-window");
   });
 
   it("disables document-scoped File items when there is no open document, and leaves app-level items enabled", () => {

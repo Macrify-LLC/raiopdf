@@ -350,6 +350,23 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[0], "pageNumbers", "1");
   });
 
+  it("returns the original document without edit-text when replaceText has an empty page selection", async () => {
+    const sourceBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+      pageIndexes: [],
+    });
+
+    expect(await engine.saveToBytes(result.document)).toEqual(sourceBytes);
+    expect(result.replacedCounts).toBeNull();
+    expect(result.warnings).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
   it("rejects empty replacement operation lists before calling edit-text", async () => {
     const sourceBytes = await createBasicPdf();
     const { calls, fetchImpl } = createFetch();

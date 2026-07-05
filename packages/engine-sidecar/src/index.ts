@@ -658,6 +658,14 @@ export class SidecarPdfEngine implements PdfEngine {
     assertReplaceTextOptions(options);
     assertPageSelection(pageIndexes, pageCount);
 
+    if (Array.isArray(pageIndexes) && pageIndexes.length === 0) {
+      return {
+        document: this.store(storedDocument.bytes, pageCount),
+        replacedCounts: null,
+        warnings: [],
+      };
+    }
+
     const hasEncryption = await hasEncryptionDictionary(storedDocument.bytes);
 
     if (hasEncryption) {

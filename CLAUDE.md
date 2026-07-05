@@ -66,9 +66,9 @@ Read `docs/ARCHITECTURE.md` first. The short version:
 - **MCP** (`docs/MCP.md`): off-by-default stdio connector, gated by an enable flag the
   app writes to the user config dir. On first tool call it spawns its own
   `raiopdf-engine-host`, so the app doesn't need to be running. The tool count and
-  canonical tool table live in `docs/MCP.md` — the README, landing page, and macrify.me
-  product card all quote the count from there. **Only edit the count in `docs/MCP.md`
-  and sync the quoting copies in the same PR** (this has drifted before — see PR #134).
+  canonical tool table live in `docs/MCP.md` — the README and landing page quote the
+  count from there. **Only edit the count in `docs/MCP.md` and sync the quoting copies
+  in the same PR** (this has drifted before — see PR #134).
 
 ## Dev workflow
 
@@ -112,16 +112,19 @@ Playwright smoke suite (`--no-verify` in emergencies).
 5. **Signing is maintainer-local.** CI builds unsigned installers as artifacts only;
    signed releases are built locally with the Certum/SimplySign pipeline
    (`docs/SIGNING.md`). Never move signing credentials into CI.
+6. **This is a public repo — internal work-process knowledge never gets committed.**
+   No internal playbooks, business strategy, client or prospect information, private
+   infrastructure details, credentials, or references to private repos, drives, or
+   internal tooling — in code, docs, comments, commit messages, or PR bodies. Repo
+   content is limited to what RaioPDF itself needs. If guidance lives in an internal
+   doc, keep it there; don't mirror or link it here.
 
-## Voice & positioning
+## Copy & naming
 
-Marketing/landing copy derives from `site/shared/COPY.md` (source of truth — "do not add
-claims not listed here") and the org rules on the Macrify Drive
-(`.claude/rules/sales-positioning.md`, RaioPDF section). The voice is Jacob's
-personal-protest voice — a practicing attorney griping about specific, lived annoyances
-and building the fix — never corporate competitive positioning. The README's
-"philosophy" section is the canonical sample. Landing-page body copy always says
-"RaioPDF", never bare "Raio".
+Landing/marketing copy derives from `site/shared/COPY.md` (source of truth — "do not
+add claims not listed here"). The README's "philosophy" section is the canonical voice
+sample: first-person, plainspoken, never corporate press-release tone. Landing-page
+body copy always says "RaioPDF", never bare "Raio".
 
 ## Keep the docs honest
 

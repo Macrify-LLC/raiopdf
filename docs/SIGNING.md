@@ -111,11 +111,12 @@ gh release upload $tag (Get-ChildItem release-assets\signed\* | ForEach-Object {
 pnpm validate:release-assets -- --tag $tag --github
 ```
 
-The signed Tauri build lands in `apps/shell/src-tauri/target/release/bundle/nsis/`.
-The release-prep script copies exactly one signed NSIS installer and its matching
-`.sig` into the ignored local staging directory `release-assets/signed/`, renaming the
-installer to the canonical public asset name, and stages the release compliance assets
-from the built payload:
+The signed Tauri build normally lands in the workspace bundle directory
+`target/release/bundle/nsis/` (`apps/shell/src-tauri/target/release/bundle/nsis/` is
+also searched as a fallback). The release-prep script copies exactly one signed NSIS
+installer and its matching `.sig` into the ignored local staging directory
+`release-assets/signed/`, renaming the installer to the canonical public asset name,
+and stages the release compliance assets from the built payload:
 
 ```text
 RaioPDF-<version>-windows-x64-setup.exe

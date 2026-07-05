@@ -22,14 +22,17 @@ import { verifyAuthenticodeSignature } from "./authenticode.mjs";
 import { verifyTauriUpdaterSignature } from "./minisign.mjs";
 
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
-const DEFAULT_NSIS_DIR = fileURLToPath(
-  new URL("../apps/shell/src-tauri/target/release/bundle/nsis/", import.meta.url),
-);
+const DEFAULT_NSIS_SEARCH_DIRS = [
+  fileURLToPath(new URL("../target/release/bundle/nsis/", import.meta.url)),
+  fileURLToPath(new URL("../apps/shell/src-tauri/target/release/bundle/nsis/", import.meta.url)),
+];
 const DEFAULT_ASSET_DIR = fileURLToPath(new URL("../release-assets/signed/", import.meta.url));
 const DEFAULT_PINS_PATH = fileURLToPath(new URL("../installer/PINS.env", import.meta.url));
-const DEFAULT_PAYLOAD_SEARCH_ROOTS = [
+const DEFAULT_BUILT_PAYLOAD_SEARCH_ROOTS = [
   fileURLToPath(new URL("../target/release/", import.meta.url)),
   fileURLToPath(new URL("../apps/shell/src-tauri/target/release/", import.meta.url)),
+];
+const DEFAULT_SOURCE_PAYLOAD_SEARCH_ROOTS = [
   fileURLToPath(new URL("../apps/shell/src-tauri/payload/", import.meta.url)),
 ];
 const REQUIRED_LEGAL_FILES = [
@@ -53,7 +56,7 @@ function requireValue(name, value) {
 function parseArgs(argv) {
   const args = {
     tag: undefined,
-    nsisDir: DEFAULT_NSIS_DIR,
+    nsisDir: undefined,
     outDir: DEFAULT_ASSET_DIR,
     payloadDir: undefined,
     pinsPath: DEFAULT_PINS_PATH,
@@ -108,8 +111,8 @@ Copies the locally signed NSIS installer and updater signature into canonical
 public release asset names, stages release legal/source-correspondence assets,
 writes latest.json, and writes SHA256SUMS.txt.
 
-Default NSIS input: apps/shell/src-tauri/target/release/bundle/nsis
-Default payload search: target/release, apps/shell/src-tauri/target/release
+Default NSIS search: target/release/bundle/nsis, apps/shell/src-tauri/target/release/bundle/nsis
+Default payload search: target/release, apps/shell/src-tauri/target/release; source payload fallback
 Default output: release-assets/signed
 
 Requires RAIOPDF_SIGN_EXPECTED_THUMBPRINT, RAIOPDF_SIGN_THUMBPRINT, or exact
@@ -189,6 +192,26 @@ function findSignedInstaller(nsisDir, version) {
   return { sourceExe, sourceSig };
 }
 
+function findSignedInstallerFromDefaults(searchDirs, version) {
+  const errors = [];
+  for (const candidate of searchDirs) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      return { nsisDir: candidate, ...findSignedInstaller(candidate, version) };
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const searched = searchDirs.join(", ");
+  throw new Error(
+    `prepare-signed-release-assets: no signed NSIS installer for ${version} found in default search dirs: ${searched}` +
+      (errors.length ? `; errors: ${errors.join(" | ")}` : ""),
+  );
+}
+
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
@@ -214,19 +237,43 @@ function parsePins(pinsPath) {
   return pins;
 }
 
-function findPayloadLegalDir(payloadDir) {
+function findPayloadLegalDir(payloadDir, {
+  builtSearchRoots = DEFAULT_BUILT_PAYLOAD_SEARCH_ROOTS,
+  sourceSearchRoots = DEFAULT_SOURCE_PAYLOAD_SEARCH_ROOTS,
+} = {}) {
   const explicit = payloadDir ? path.resolve(payloadDir) : null;
-  const candidates = explicit
-    ? [explicit.endsWith(`${path.sep}legal`) ? explicit : path.join(explicit, "legal")]
-    : DEFAULT_PAYLOAD_SEARCH_ROOTS.flatMap((root) => collectPayloadLegalDirs(root));
+  if (explicit) {
+    const candidates = [explicit.endsWith(`${path.sep}legal`) ? explicit : path.join(explicit, "legal")];
+    return selectSingleLegalDir(candidates, "explicit payload legal directory");
+  }
+
+  const built = selectSingleLegalDir(
+    builtSearchRoots.flatMap((root) => collectPayloadLegalDirs(root)),
+    "built payload legal directory",
+    { allowNone: true },
+  );
+  if (built) {
+    return built;
+  }
+
+  return selectSingleLegalDir(
+    sourceSearchRoots.flatMap((root) => collectPayloadLegalDirs(root)),
+    "source payload legal directory",
+  );
+}
+
+function selectSingleLegalDir(candidates, label, { allowNone = false } = {}) {
   const existing = candidates
     .filter((candidate, index, list) => list.indexOf(candidate) === index)
     .filter((candidate) => existsSync(candidate) && statSync(candidate).isDirectory())
     .sort((a, b) => a.localeCompare(b));
 
+  if (allowNone && existing.length === 0) {
+    return null;
+  }
   if (existing.length !== 1) {
     throw new Error(
-      `prepare-signed-release-assets: expected exactly one payload legal directory, found ${existing.length}: ${existing.join(
+      `prepare-signed-release-assets: expected exactly one ${label}, found ${existing.length}: ${existing.join(
         ", ",
       )}. Pass --payload-dir to disambiguate.`,
     );
@@ -368,9 +415,12 @@ function uploadAssets(tag, outDir, assetNames) {
 
 export function prepareSignedReleaseAssets({
   tag,
-  nsisDir = DEFAULT_NSIS_DIR,
+  nsisDir,
+  nsisSearchDirs = DEFAULT_NSIS_SEARCH_DIRS,
   outDir = DEFAULT_ASSET_DIR,
   payloadDir,
+  builtPayloadSearchRoots = DEFAULT_BUILT_PAYLOAD_SEARCH_ROOTS,
+  sourcePayloadSearchRoots = DEFAULT_SOURCE_PAYLOAD_SEARCH_ROOTS,
   pinsPath = DEFAULT_PINS_PATH,
   ghostscriptSource,
   skipAuthenticode = false,
@@ -381,19 +431,26 @@ export function prepareSignedReleaseAssets({
   const releaseTag = resolveTag(tag);
   const version = versionFromTag(releaseTag);
   const pins = parsePins(pinsPath);
-  const legalDir = findPayloadLegalDir(payloadDir);
+  const legalDir = findPayloadLegalDir(payloadDir, {
+    builtSearchRoots: builtPayloadSearchRoots,
+    sourceSearchRoots: sourcePayloadSearchRoots,
+  });
   if (!skipLegalCheck) {
     runLegalPayloadCheck({ legalDir, releaseTag });
   }
   validateComponentManifest({ legalDir, version, pins });
-  const { sourceExe, sourceSig } = findSignedInstaller(nsisDir, version);
+  const resolvedInstaller = nsisDir
+    ? { nsisDir, ...findSignedInstaller(nsisDir, version) }
+    : findSignedInstallerFromDefaults(nsisSearchDirs, version);
+  const { sourceExe, sourceSig } = resolvedInstaller;
+  const resolvedNsisDir = resolvedInstaller.nsisDir;
   if (!skipAuthenticode) {
-    verifyAuthenticodeSignature(path.join(nsisDir, sourceExe), {
+    verifyAuthenticodeSignature(path.join(resolvedNsisDir, sourceExe), {
       label: `signed NSIS installer ${sourceExe}`,
     });
   }
   if (!skipUpdaterSignature) {
-    verifyTauriUpdaterSignature(path.join(nsisDir, sourceExe), path.join(nsisDir, sourceSig), {
+    verifyTauriUpdaterSignature(path.join(resolvedNsisDir, sourceExe), path.join(resolvedNsisDir, sourceSig), {
       pubkey: updaterPubkey,
       label: `updater signature ${sourceSig}`,
     });
@@ -405,8 +462,8 @@ export function prepareSignedReleaseAssets({
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
-  copyFileSync(path.join(nsisDir, sourceExe), path.join(outDir, canonicalExe));
-  copyFileSync(path.join(nsisDir, sourceSig), path.join(outDir, canonicalSig));
+  copyFileSync(path.join(resolvedNsisDir, sourceExe), path.join(outDir, canonicalExe));
+  copyFileSync(path.join(resolvedNsisDir, sourceSig), path.join(outDir, canonicalSig));
   assetNames.push(...stageLegalAssets({ legalDir, outDir, version }));
   assetNames.push(stageGhostscriptSource({ pins, sourceArchive: ghostscriptSource, outDir }));
 
@@ -422,7 +479,7 @@ export function prepareSignedReleaseAssets({
   writeSha256Sums(outDir, assetNames);
   assetNames.push("SHA256SUMS.txt");
 
-  return { releaseTag, version, outDir, legalDir, assetNames };
+  return { releaseTag, version, outDir, nsisDir: resolvedNsisDir, legalDir, assetNames };
 }
 
 const invokedUrl = process.argv[1]

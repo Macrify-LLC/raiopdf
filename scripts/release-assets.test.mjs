@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -169,8 +169,113 @@ describe("signed release asset preparation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("defaults to the workspace NSIS bundle and built payload legal assets", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-release-defaults-"));
+    try {
+      const workspaceNsisDir = path.join(root, "target", "release", "bundle", "nsis");
+      const shellNsisDir = path.join(root, "apps", "shell", "src-tauri", "target", "release", "bundle", "nsis");
+      const builtRoot = path.join(root, "target", "release");
+      const shellBuildRoot = path.join(root, "apps", "shell", "src-tauri", "target", "release");
+      const builtLegalDir = path.join(builtRoot, "resources", "payload", "legal");
+      const sourcePayloadRoot = path.join(root, "apps", "shell", "src-tauri", "payload");
+      const sourceLegalDir = path.join(sourcePayloadRoot, "legal");
+      const outDir = path.join(root, "signed");
+      const pinsPath = path.join(root, "PINS.env");
+      const ghostscriptSource = path.join(root, "ghostscript-source.tar.xz");
+      const installer = path.join(workspaceNsisDir, "RaioPDF_0.1.2_x64-setup.exe");
+      const signature = `${installer}.sig`;
+      const ghostscriptSourceBytes = "fake ghostscript source archive";
+      const ghostscriptSourceSha = sha256Text(ghostscriptSourceBytes);
+
+      mkdirSync(workspaceNsisDir, { recursive: true });
+      mkdirSync(shellNsisDir, { recursive: true });
+      writeFileSync(installer, "test");
+      writeFileSync(signature, `${TEST_TAURI_SIGNATURE}\n`);
+      writeLegalPayload({
+        legalDir: builtLegalDir,
+        version: "0.1.2",
+        ghostscriptSourceSha,
+        thirdPartyNotices: "built third party notices",
+      });
+      writeLegalPayload({
+        legalDir: sourceLegalDir,
+        version: "0.1.2",
+        ghostscriptSourceSha,
+        thirdPartyNotices: "source third party notices",
+      });
+      writeFileSync(ghostscriptSource, ghostscriptSourceBytes);
+      writePins(pinsPath, ghostscriptSourceSha);
+
+      const prepared = prepareSignedReleaseAssets({
+        tag: "v0.1.2",
+        nsisSearchDirs: [workspaceNsisDir, shellNsisDir],
+        builtPayloadSearchRoots: [builtRoot, shellBuildRoot],
+        sourcePayloadSearchRoots: [sourcePayloadRoot],
+        outDir,
+        pinsPath,
+        ghostscriptSource,
+        skipAuthenticode: true,
+        skipLegalCheck: true,
+        updaterPubkey: TEST_UPDATER_PUBKEY,
+      });
+
+      assert.equal(prepared.nsisDir, workspaceNsisDir);
+      assert.equal(prepared.legalDir, builtLegalDir);
+      assert.equal(
+        readFileSync(path.join(outDir, "RaioPDF-0.1.2-third-party-notices.txt"), "utf8"),
+        "built third party notices",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function sha256Text(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function writePins(pinsPath, ghostscriptSourceSha) {
+  writeFileSync(
+    pinsPath,
+    [
+      "GHOSTSCRIPT_VERSION=10.07.1",
+      "GHOSTSCRIPT_SOURCE_URL=https://example.invalid/ghostscript.tar.xz",
+      `GHOSTSCRIPT_SOURCE_SHA256=${ghostscriptSourceSha}`,
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeLegalPayload({ legalDir, version, ghostscriptSourceSha, thirdPartyNotices }) {
+  const sourceOffersDir = path.join(legalDir, "source-offers");
+  mkdirSync(sourceOffersDir, { recursive: true });
+  writeFileSync(path.join(legalDir, "THIRD-PARTY-NOTICES.txt"), thirdPartyNotices);
+  writeFileSync(
+    path.join(legalDir, "COMPONENT-MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        product: "RaioPDF",
+        releaseVersion: version,
+        components: [
+          { name: "RaioPDF", version, license: "GPL-3.0-only" },
+          {
+            name: "Ghostscript",
+            version: "10.07.1",
+            license: "AGPL-3.0-only",
+            source: {
+              url: "https://example.invalid/ghostscript.tar.xz",
+              sha256: ghostscriptSourceSha,
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(path.join(legalDir, "RELEASE-SOURCE-CORRESPONDENCE.md"), "# source\n");
+  writeFileSync(path.join(legalDir, "RAIOPDF-LICENSE-NOTICES.txt"), "license notices");
+  writeFileSync(path.join(sourceOffersDir, "GHOSTSCRIPT-SOURCE-OFFER.txt"), "ghostscript source offer");
 }

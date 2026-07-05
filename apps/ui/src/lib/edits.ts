@@ -407,7 +407,9 @@ export function computeTextMarkupLineRects(
   textBoxes: readonly PageTextBox[],
   sideways = false,
 ): PdfEditRect[] {
-  const hits = textBoxes.filter((box) => pdfRectsIntersect(band, box));
+  const hits = textBoxes
+    .map((box) => clipTextMarkupBoxToBand(box, band, sideways))
+    .filter((box): box is PageTextBox => box !== null);
 
   if (hits.length === 0) {
     return [];
@@ -438,6 +440,34 @@ export function computeTextMarkupLineRects(
 }
 
 export const computeHighlightLineRects = computeTextMarkupLineRects;
+
+function clipTextMarkupBoxToBand(
+  box: PageTextBox,
+  band: PdfSpaceRect,
+  sideways: boolean,
+): PageTextBox | null {
+  if (!pdfRectsIntersect(band, box)) {
+    return null;
+  }
+
+  if (sideways) {
+    const y = Math.max(box.y, band.y);
+    const maxY = Math.min(box.y + box.h, band.y + band.h);
+    return {
+      ...box,
+      y,
+      h: Math.max(1, maxY - y),
+    };
+  }
+
+  const x = Math.max(box.x, band.x);
+  const maxX = Math.min(box.x + box.w, band.x + band.w);
+  return {
+    ...box,
+    x,
+    w: Math.max(1, maxX - x),
+  };
+}
 
 export function mergeTextMarkupSelectionRects(
   rects: readonly PdfEditRect[],

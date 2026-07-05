@@ -245,6 +245,50 @@ describe("useDocument openFile", () => {
     expect(getHook().document.dirty).toBe(true);
   });
 
+  it("saves bytes without swapping the preview source or generation", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({
+        bytes: new Uint8Array([7, 8, 9]),
+        name: "save-preview.pdf",
+      });
+    });
+
+    const beforeSource = getHook().document.source;
+    const beforeGeneration = getHook().document.generation;
+    const saved = await act(async () => await getHook().save());
+
+    expect(saved).not.toBeNull();
+    expect(saved!.bytes).toEqual(new Uint8Array([8]));
+    expect(getHook().document.bytes).toEqual(new Uint8Array([8]));
+    expect(getHook().document.source).toBe(beforeSource);
+    expect(getHook().document.generation).toBe(beforeGeneration);
+    expect(getHook().document.fileSizeBytes).toBe(1);
+  });
+
+  it("keeps preview-loading callbacks stable across page navigation", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({
+        bytes: new Uint8Array([1, 2, 3]),
+        name: "navigation-preview.pdf",
+      });
+    });
+
+    const beforeSetError = getHook().setError;
+    const beforeSetStreamedPageCount = getHook().setStreamedPageCount;
+
+    act(() => {
+      getHook().setCurrentPage(2);
+    });
+
+    expect(getHook().document.currentPage).toBe(2);
+    expect(getHook().setError).toBe(beforeSetError);
+    expect(getHook().setStreamedPageCount).toBe(beforeSetStreamedPageCount);
+  });
+
   it("opens, switches, and closes independent document tabs", async () => {
     mount();
 

@@ -326,19 +326,18 @@ function createTauriFilePort(): FilePort {
     },
     async saveFile(bytes, suggestedName, currentPath) {
       const { invoke } = await import("@tauri-apps/api/core");
-      const pdfBytes = Array.from(bytes);
 
       if (currentPath) {
         const saved = await invoke<TauriSavedPdf>("save_pdf_to_path", {
           fileGrant: currentPath,
-          bytes: pdfBytes,
+          bytes,
         });
         return savedFromTauri(saved);
       }
 
       const saved = await invoke<TauriSavedPdf | null>("save_pdf_dialog", {
         suggestedName,
-        bytes: pdfBytes,
+        bytes,
       });
       return saved ? savedFromTauri(saved) : null;
     },
@@ -347,7 +346,7 @@ function createTauriFilePort(): FilePort {
       const saved = await invoke<TauriSavedPdf>("save_pdf_into_dir", {
         directoryGrant: directory.grant,
         fileName: suggestedName,
-        bytes: Array.from(bytes),
+        bytes,
       });
       return savedFromTauri(saved);
     },

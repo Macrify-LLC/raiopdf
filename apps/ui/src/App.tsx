@@ -311,6 +311,18 @@ type OcrType = "skip-text" | "force-ocr";
 
 type ForceOcrConfirmationReason = "garbled" | "manual";
 
+function delegatedOcrProcessingMessage(ocrType: OcrType): string {
+  return ocrType === "force-ocr"
+    ? "Rebuilding the searchable text layer — the local engine re-renders the file itself."
+    : "Making searchable — the local engine works on the file itself.";
+}
+
+function memoryOcrProcessingMessage(ocrType: OcrType): string {
+  return ocrType === "force-ocr"
+    ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
+    : "Making searchable — page-by-page work happens in the engine.";
+}
+
 /** What the password prompt unlocks: the still-encrypted source bytes
  * (small files, engine decrypt) or a shell grant (streamed large files,
  * path-based qpdf decrypt — bytes never enter the WebView). */
@@ -1760,11 +1772,7 @@ export function App() {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
-    const cleanFileOcrGrant =
-      !streamedDocument && !document.dirty && document.filePath && isPathOpsRuntime()
-        ? document.filePath as FileGrant
-        : null;
-    const delegatedOcrGrant = streamedDocument ? pathOpsGrant : cleanFileOcrGrant;
+    const delegatedOcrGrant = streamedDocument ? pathOpsGrant : null;
 
     if (streamedDocument || delegatedOcrGrant) {
       if (!delegatedOcrGrant) {
@@ -1786,10 +1794,8 @@ export function App() {
       );
 
       setOcrState({
-        phase: "processing",
-        message: ocrType === "force-ocr"
-          ? "Rebuilding the searchable text layer — the local engine re-renders the file itself."
-          : "Making searchable — the local engine works on the file itself.",
+        phase: "starting-engine",
+        message: "Starting the PDF engine...",
         progress: null,
       });
 
@@ -1803,8 +1809,12 @@ export function App() {
                 return;
               }
               setOcrState((current) => (
-                current.phase === "processing"
-                  ? { ...current, progress }
+                current.phase === "starting-engine" || current.phase === "processing"
+                  ? {
+                      phase: "processing",
+                      message: delegatedOcrProcessingMessage(ocrType),
+                      progress,
+                    }
                   : current
               ));
             });
@@ -1813,6 +1823,7 @@ export function App() {
             // fails in an unusual desktop/runtime state.
           }
 
+          await waitForUiPaint();
           const output = await pathOpOcr(grant, ocrType, jobToken);
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
@@ -1894,21 +1905,25 @@ export function App() {
       progress: null,
     });
 
-    void engineBridge
-      .runOcr(sourceBytes, {
-        ocrType,
-        pageCount: document.pageCount,
-        onEngineReady: () => {
-          if (isCurrentRun()) {
-            setOcrState({
-              phase: "processing",
-              message: ocrType === "force-ocr"
-                ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
-                : "Making searchable — page-by-page work happens in the engine.",
-              progress: null,
-            });
-          }
-        },
+    void waitForUiPaint()
+      .then(() => {
+        if (!isCurrentRun()) {
+          return Promise.reject(new Error("OCR run is stale."));
+        }
+
+        return engineBridge.runOcr(sourceBytes, {
+          ocrType,
+          pageCount: document.pageCount,
+          onEngineReady: () => {
+            if (isCurrentRun()) {
+              setOcrState({
+                phase: "processing",
+                message: memoryOcrProcessingMessage(ocrType),
+                progress: null,
+              });
+            }
+          },
+        });
       })
       .then(async (ocrResult) => {
         if (!isCurrentRun()) {
@@ -2011,7 +2026,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.dirty, document.filePath, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {
@@ -6707,6 +6722,19 @@ function waitForTestDelay(delayMs: number): Promise<void> {
 
   return new Promise((resolve) => {
     window.setTimeout(resolve, delayMs);
+  });
+}
+
+function waitForUiPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window.requestAnimationFrame !== "function") {
+      window.setTimeout(resolve, 0);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0);
+    });
   });
 }
 

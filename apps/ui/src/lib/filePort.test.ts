@@ -175,7 +175,8 @@ describe("directory saves", () => {
     };
 
     const { filePort } = await import("./filePort");
-    const saved = await filePort.saveFile(new Uint8Array([1, 2, 3]), "saved.pdf", null);
+    const bytes = new Uint8Array([1, 2, 3]);
+    const saved = await filePort.saveFile(bytes, "saved.pdf", null);
 
     expect(saved).toEqual({ name: "saved.pdf", path: "saved-grant" });
     expect(invokeState.calls).toEqual([
@@ -183,10 +184,12 @@ describe("directory saves", () => {
         command: "save_pdf_dialog",
         args: {
           suggestedName: "saved.pdf",
-          bytes: [1, 2, 3],
+          bytes,
         },
       },
     ]);
+    expect((invokeState.calls[0]!.args as { bytes: unknown }).bytes).toBe(bytes);
+    expect(Array.isArray((invokeState.calls[0]!.args as { bytes: unknown }).bytes)).toBe(false);
   });
 
   it("Tauri filePort writes in-place bytes through typed grant arguments", async () => {
@@ -204,8 +207,9 @@ describe("directory saves", () => {
     };
 
     const { filePort } = await import("./filePort");
+    const bytes = new Uint8Array([4, 5, 6]);
     const saved = await filePort.saveFile(
-      new Uint8Array([4, 5, 6]),
+      bytes,
       "case.pdf",
       "open-grant" as FileGrant,
     );
@@ -216,10 +220,12 @@ describe("directory saves", () => {
         command: "save_pdf_to_path",
         args: {
           fileGrant: "open-grant",
-          bytes: [4, 5, 6],
+          bytes,
         },
       },
     ]);
+    expect((invokeState.calls[0]!.args as { bytes: unknown }).bytes).toBe(bytes);
+    expect(Array.isArray((invokeState.calls[0]!.args as { bytes: unknown }).bytes)).toBe(false);
   });
 
   it("copies a streamed grant into a picked directory without opening another save dialog", async () => {
@@ -264,8 +270,9 @@ describe("directory saves", () => {
 
     const { filePort } = await import("./filePort");
     const directory = await filePort.pickDirectory();
+    const bytes = new Uint8Array([1, 2, 3]);
     const saved = await filePort.saveFileIntoDirectory(
-      new Uint8Array([1, 2, 3]),
+      bytes,
       "part.pdf",
       directory as PickedDirectory,
     );
@@ -279,9 +286,11 @@ describe("directory saves", () => {
         args: {
           directoryGrant: "dir-grant",
           fileName: "part.pdf",
-          bytes: [1, 2, 3],
+          bytes,
         },
       },
     ]);
+    expect((invokeState.calls[1]!.args as { bytes: unknown }).bytes).toBe(bytes);
+    expect(Array.isArray((invokeState.calls[1]!.args as { bytes: unknown }).bytes)).toBe(false);
   });
 });

@@ -10,6 +10,7 @@
   flex: 1;
   min-width: 0;
   position: relative;
+  isolation: isolate;
   overflow: auto;
   background: var(--well);
 }
@@ -166,8 +167,14 @@
 /* Select tool: text selection wins over the edit layer and its items.
    Form inputs deliberately stay live — they are small rects and filling
    fields is the default-tool workflow. */
-.page-view[data-text-select="true"] .edit-layer,
-.page-view[data-text-select="true"] .edit-layer * {
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer *,
+.page-view[data-text-select="true"][data-edit-tool="highlight"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="highlight"] .edit-layer *,
+.page-view[data-text-select="true"][data-edit-tool="underline"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="underline"] .edit-layer *,
+.page-view[data-text-select="true"][data-edit-tool="strikethrough"] .edit-layer,
+.page-view[data-text-select="true"][data-edit-tool="strikethrough"] .edit-layer * {
   pointer-events: none;
 }
 

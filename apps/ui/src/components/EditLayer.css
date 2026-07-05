@@ -101,6 +101,12 @@
   cursor: move;
 }
 
+.edit-layer__text-box[data-status="applied"],
+.edit-layer__stamp[data-status="applied"] {
+  border-style: solid;
+  border-color: transparent;
+}
+
 .edit-layer__text-box[data-selected="true"],
 .edit-layer__stamp[data-selected="true"] {
   border: 1px solid var(--primary);
@@ -161,6 +167,13 @@
   width: 100%;
   height: 100%;
   user-select: none;
+}
+
+.edit-layer__stamp-ghost {
+  position: absolute;
+  border: 1px dashed var(--primary);
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 /* ---- Selection chrome ---- */
@@ -436,15 +449,25 @@
   overflow: visible;
 }
 
+.edit-layer__shape-item {
+  pointer-events: visiblePainted;
+  cursor: move;
+}
+
 .edit-layer__shape-hit {
   pointer-events: visiblePainted;
   cursor: default;
+}
+
+.edit-layer__shape-selected {
+  stroke-dasharray: 4 3;
 }
 
 .edit-layer__shape-hit-line {
   stroke: transparent;
   stroke-width: 12px;
   pointer-events: stroke;
+  cursor: move;
 }
 
 .edit-layer__shape-draft {

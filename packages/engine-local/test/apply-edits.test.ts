@@ -174,6 +174,29 @@ describe("LocalPdfEngine.applyEdits", () => {
     expectWithin1Pt(matrix[5]!, 700 + 40 - 12);
   });
 
+  it("draws text box background fills before the text", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 72, y: 700, w: 200, h: 40 },
+        text: "Filled box",
+        fontSizePt: 12,
+        backgroundColor: { r: 1, g: 0.9, b: 0.3 },
+        backgroundOpacity: 0.45,
+      },
+    ]);
+    const content = await readDecodedPageContent(await engine.saveToBytes(edited), 0);
+    const graphicsStateIndex = content.search(/\/GS\S* gs/);
+    const textIndex = content.indexOf(encodeTextAsHex("Filled box"));
+
+    expect(content).toMatch(/\/GS\S* gs/);
+    expect(textIndex).toBeGreaterThan(graphicsStateIndex);
+  });
+
   it("preserves authored whitespace for text box lines that do not need wrapping", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[300, 200]]));

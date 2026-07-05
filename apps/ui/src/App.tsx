@@ -101,7 +101,7 @@ import {
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
-import type { EditToolId } from "./lib/edits";
+import { toPdfEdits, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
   checkForSignedUpdate,
@@ -461,6 +461,8 @@ export function App() {
     replaceOutline,
     save: saveDocument,
     markSaved,
+    markDirty,
+    markClean,
   } = useDocument({ protectedPdf });
   const answerSignatureUnlockPrompt = useCallback((confirmed: boolean) => {
     setSignatureUnlockPrompt((current) => {
@@ -489,6 +491,7 @@ export function App() {
       ? document.source.grant
       : null;
   const editing = useEditing(pdfDocument);
+  const overlayDirtyRef = useRef<{ generation: number; marked: boolean } | null>(null);
   const documentSearch = useDocumentSearch({
     pdfDocumentState: currentPdfDocumentState,
     documentGeneration: document.generation,
@@ -505,6 +508,36 @@ export function App() {
     phase: "idle",
     message: null,
   });
+
+  useEffect(() => {
+    if (editing.pendingEdits.length > 0) {
+      if (!overlayDirtyRef.current) {
+        overlayDirtyRef.current = {
+          generation: document.generation,
+          marked: !document.dirty,
+        };
+
+        if (!document.dirty) {
+          markDirty();
+        }
+      }
+
+      return;
+    }
+
+    const overlayDirty = overlayDirtyRef.current;
+    overlayDirtyRef.current = null;
+
+    if (overlayDirty?.marked && document.generation === overlayDirty.generation) {
+      markClean();
+    }
+  }, [
+    document.dirty,
+    document.generation,
+    editing.pendingEdits.length,
+    markClean,
+    markDirty,
+  ]);
   const [forceOcrConfirmation, setForceOcrConfirmation] =
     useState<ForceOcrConfirmationReason | null>(null);
   const [activeLegalTool, setActiveLegalTool] = useState<LegalToolId | null>(
@@ -2726,8 +2759,9 @@ export function App() {
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;
+    const overlayEdits = toPdfEdits(editing.pendingEdits);
 
-    if (!sourceBytes) {
+    if (!sourceBytes && overlayEdits.length === 0) {
       setMarkupAnnotationMessage(
         streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before flattening markup.",
       );
@@ -2735,10 +2769,34 @@ export function App() {
     }
 
     void (async () => {
-      const annotationCount = await countRaioPdfMarkupAnnotations(sourceBytes);
+      let flattenedOverlayCount = 0;
+
+      if (overlayEdits.length > 0) {
+        setMarkupAnnotationMessage("Flattening pending annotations...");
+        const applied = await applyEdits(overlayEdits, {
+          flatten: true,
+          printMarkupAnnotations,
+        });
+
+        if (!applied) {
+          setMarkupAnnotationMessage("Pending annotations were not flattened.");
+          return;
+        }
+
+        flattenedOverlayCount = editing.pendingEdits.length;
+        editing.clearPendingEdits();
+      }
+
+      const annotationCount = sourceBytes
+        ? await countRaioPdfMarkupAnnotations(sourceBytes)
+        : 0;
 
       if (annotationCount === 0) {
-        setMarkupAnnotationMessage("No RaioPDF markup annotations were found.");
+        setMarkupAnnotationMessage(
+          flattenedOverlayCount > 0
+            ? `Flattened ${flattenedOverlayCount} pending ${flattenedOverlayCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+            : "No RaioPDF markup annotations were found.",
+        );
         return;
       }
 
@@ -2746,13 +2804,20 @@ export function App() {
       const flattened = await flattenMarkupAnnotations();
       setMarkupAnnotationMessage(
         flattened
-          ? `Flattened ${annotationCount} RaioPDF markup ${annotationCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+          ? `Flattened ${annotationCount + flattenedOverlayCount} ${annotationCount + flattenedOverlayCount === 1 ? "annotation" : "annotations"} into permanent page content.`
           : "Markup annotations were not flattened.",
       );
     })().catch(() => {
       setMarkupAnnotationMessage("Markup annotations could not be flattened.");
     });
-  }, [document.bytes, flattenMarkupAnnotations, streamedDocument]);
+  }, [
+    applyEdits,
+    document.bytes,
+    editing,
+    flattenMarkupAnnotations,
+    printMarkupAnnotations,
+    streamedDocument,
+  ]);
 
   const save = useCallback(() => {
     saveToFile(false);
@@ -5063,7 +5128,7 @@ export function App() {
       onExit={() => setActiveLegalTool(null)}
     />
   ) : editing.tool !== "select" ? (
-    <EditModeBar editing={editingForShell} />
+    <EditModeBar editing={editingForShell} onFlatten={flattenCurrentMarkup} />
   ) : null;
 
   const workspace = activeLegalTool === "combine-exhibits" ? (

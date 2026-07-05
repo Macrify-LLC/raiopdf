@@ -726,7 +726,7 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   // Retries in case the drag lands before the page's text layer resolves —
   // a miss adds nothing, so retrying cannot double-place.
   await commandBar.getByRole("button", { name: "Highlight", exact: true }).click();
-  await waitForCanvasPointToHitEditLayer(page, canvas, 0.08, 0.06);
+  await waitForCanvasPointToHitTextLayer(page, canvas, 0.08, 0.06);
   await expect(async () => {
     if ((await page.locator(".edit-layer__highlight").count()) === 0) {
       await dragOnCanvas(page, canvas, 0.08, 0.06, 0.92, 0.13);
@@ -1384,7 +1384,7 @@ async function dragOnCanvas(
   await page.mouse.up();
 }
 
-async function waitForCanvasPointToHitEditLayer(
+async function waitForCanvasPointToHitTextLayer(
   page: Page,
   canvas: ReturnType<Page["locator"]>,
   xFraction: number,
@@ -1398,7 +1398,8 @@ async function waitForCanvasPointToHitEditLayer(
     }
 
     return page.evaluate(
-      ([x, y]) => document.elementFromPoint(x, y)?.classList.contains("edit-layer") ?? false,
+      ([x, y]) =>
+        Boolean(document.elementFromPoint(x, y)?.closest(".page-view__text-layer")),
       [box.x + box.width * xFraction, box.y + box.height * yFraction],
     );
   }).toBe(true);

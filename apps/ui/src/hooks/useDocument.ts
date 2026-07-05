@@ -1430,6 +1430,14 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }));
   }, []);
 
+  const markDirty = useCallback(() => {
+    setDocument((current) => (current.dirty ? current : { ...current, dirty: true }));
+  }, []);
+
+  const markClean = useCallback(() => {
+    setDocument((current) => (current.dirty ? { ...current, dirty: false } : current));
+  }, []);
+
   return {
     document,
     pageScrollIntent,
@@ -1466,6 +1474,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
     replaceOutline,
     save,
     markSaved,
+    markDirty,
+    markClean,
   };
 
   async function closeHandles(handles: readonly PdfDocumentHandle[]) {

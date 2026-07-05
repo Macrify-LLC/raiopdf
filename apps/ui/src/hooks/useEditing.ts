@@ -50,6 +50,9 @@ export interface EditingState {
   updateEdit: (id: string, update: (edit: PendingEdit) => PendingEdit) => void;
   removeEdit: (id: string) => void;
   clearPending: () => void;
+  clearPendingEdits: () => void;
+  draftEditCount: number;
+  applyPending: () => void;
   /**
    * The one selected placed item (stamp/image/text box) across ALL pages.
    * Shared here rather than per-EditLayer because the continuous-scroll
@@ -182,7 +185,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }, []);
 
   const addEdit = useCallback((edit: PendingEdit) => {
-    setPendingEdits((current) => [...current, edit]);
+    setPendingEdits((current) => [...current, { ...edit, status: edit.status ?? "draft" }]);
   }, []);
 
   const updateEdit = useCallback(
@@ -203,6 +206,24 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setPendingEdits([]);
     setFormValues({});
     setSelectedEditId(null);
+  }, []);
+
+  const clearPendingEdits = useCallback(() => {
+    setPendingEdits([]);
+    setSelectedEditId(null);
+  }, []);
+
+  const draftEditCount = useMemo(
+    () => pendingEdits.filter((edit) => edit.status !== "applied").length,
+    [pendingEdits],
+  );
+
+  const applyPending = useCallback(() => {
+    setPendingEdits((current) =>
+      current.map((edit) => (edit.status === "applied" ? edit : { ...edit, status: "applied" })),
+    );
+    setSelectedEditId(null);
+    setMessage("Applied edits are cemented for this session. Save writes them to the PDF.");
   }, []);
 
   const handleImageFile = useCallback((file: File) => {
@@ -359,6 +380,9 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateEdit,
       removeEdit,
       clearPending,
+      clearPendingEdits,
+      draftEditCount,
+      applyPending,
       selectedEditId,
       setSelectedEditId,
       armedImage,
@@ -402,6 +426,9 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       updateEdit,
       removeEdit,
       clearPending,
+      clearPendingEdits,
+      draftEditCount,
+      applyPending,
       selectedEditId,
       armedImage,
       handleImageFile,

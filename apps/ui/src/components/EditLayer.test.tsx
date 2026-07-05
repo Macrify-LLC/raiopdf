@@ -8,7 +8,7 @@ import {
   PDFRawStream,
   PDFStream,
 } from "pdf-lib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { DEFAULT_SHAPE_STROKE_WIDTH_PT } from "../lib/editStyles";
 import type { PendingEdit } from "../lib/edits";
@@ -142,10 +142,13 @@ describe("EditLayer shape removal", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
   let originalSetPointerCapture: typeof HTMLElement.prototype.setPointerCapture | undefined;
+  let originalSvgSetPointerCapture: typeof SVGElement.prototype.setPointerCapture | undefined;
 
   beforeEach(() => {
     originalSetPointerCapture = HTMLElement.prototype.setPointerCapture;
+    originalSvgSetPointerCapture = SVGElement.prototype.setPointerCapture;
     HTMLElement.prototype.setPointerCapture = () => undefined;
+    SVGElement.prototype.setPointerCapture = () => undefined;
   });
 
   afterEach(() => {
@@ -163,6 +166,12 @@ describe("EditLayer shape removal", () => {
       HTMLElement.prototype.setPointerCapture = originalSetPointerCapture;
     } else {
       delete (HTMLElement.prototype as Partial<HTMLElement>).setPointerCapture;
+    }
+
+    if (originalSvgSetPointerCapture) {
+      SVGElement.prototype.setPointerCapture = originalSvgSetPointerCapture;
+    } else {
+      delete (SVGElement.prototype as Partial<SVGElement>).setPointerCapture;
     }
   });
 
@@ -287,16 +296,136 @@ describe("EditLayer shape removal", () => {
     }
   });
 
+  it("moves line shapes as a whole item", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "shape",
+          id: "line-1",
+          pageIndex: 0,
+          shape: "line",
+          from: { x: 20, y: 20 },
+          to: { x: 80, y: 80 },
+        },
+      ],
+      "select",
+    );
+
+    const hitLine = container?.querySelector<SVGLineElement>(".edit-layer__shape-hit-line");
+    expect(hitLine).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(hitLine!, "pointerdown", 30, 30);
+      dispatchPointerEvent(hitLine!, "pointermove", 45, 40);
+      dispatchPointerEvent(hitLine!, "pointerup", 45, 40);
+      await Promise.resolve();
+    });
+
+    const visibleLine = [...(container?.querySelectorAll("svg.edit-layer__shapes line") ?? [])]
+      .find((line) => !line.classList.contains("edit-layer__shape-hit-line"));
+
+    expect(visibleLine?.getAttribute("x1")).toBe("35");
+    expect(visibleLine?.getAttribute("y1")).toBe("30");
+    expect(visibleLine?.getAttribute("x2")).toBe("95");
+    expect(visibleLine?.getAttribute("y2")).toBe("90");
+  });
+
+  it("keeps applied overlay items movable", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "textBox",
+          id: "applied-text",
+          pageIndex: 0,
+          status: "applied",
+          rect: { x: 20, y: 20, w: 80, h: 30 },
+          text: "Applied",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const textBox = container?.querySelector<HTMLElement>(".edit-layer__text-box");
+    expect(textBox).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(textBox!, "pointerdown", 25, 25);
+      dispatchPointerEvent(textBox!, "pointermove", 45, 35);
+      dispatchPointerEvent(textBox!, "pointerup", 45, 35);
+      await Promise.resolve();
+    });
+
+    expect(textBox?.style.left).toBe("40px");
+    expect(textBox?.style.top).toBe("30px");
+  });
+
+  it("shows an armed image ghost at the pointer before placement", async () => {
+    await renderEditLayer([], "image", {
+      armedImage: {
+        bytes: new Uint8Array([1]),
+        format: "png",
+        dataUrl: "data:image/png;base64,AA==",
+        width: 80,
+        height: 40,
+      },
+    });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointermove", 120, 120);
+      await Promise.resolve();
+    });
+
+    const ghost = container?.querySelector<HTMLElement>(".edit-layer__stamp-ghost");
+    expect(ghost).not.toBeNull();
+    expect(ghost?.style.left).toBe("90px");
+    expect(ghost?.style.top).toBe("105px");
+  });
+
+  it("disarms and selects a placed signature", async () => {
+    const disarmSignature = vi.fn();
+
+    await renderEditLayer([], "sign", {
+      armedSignature: {
+        bytes: new Uint8Array([1]),
+        format: "png",
+        dataUrl: "data:image/png;base64,AA==",
+        width: 80,
+        height: 40,
+      },
+      disarmSignature,
+    });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 120, 120);
+      await Promise.resolve();
+    });
+
+    expect(disarmSignature).toHaveBeenCalledOnce();
+    expect(container?.querySelector(".edit-layer__stamp[data-selected='true']")).not.toBeNull();
+  });
+
   async function renderEditLayer(
     initialEdits: readonly PendingEdit[],
     tool: EditingState["tool"] = "shapeRect",
+    overrides: Partial<EditingState> = {},
   ): Promise<void> {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
 
     await act(async () => {
-      root?.render(<EditLayerHarness initialEdits={initialEdits} tool={tool} />);
+      root?.render(
+        <EditLayerHarness initialEdits={initialEdits} tool={tool} overrides={overrides} />,
+      );
       await Promise.resolve();
     });
   }
@@ -305,11 +434,14 @@ describe("EditLayer shape removal", () => {
 function EditLayerHarness({
   initialEdits,
   tool,
+  overrides,
 }: {
   initialEdits: readonly PendingEdit[];
   tool: EditingState["tool"];
+  overrides: Partial<EditingState>;
 }) {
   const [pendingEdits, setPendingEdits] = useState(initialEdits);
+  const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
   const editing = useMemo<EditingState>(
     () =>
       ({
@@ -318,8 +450,13 @@ function EditLayerHarness({
         // Shared selection lives on EditingState since the continuous-scroll
         // viewer mounts one EditLayer per page; the layer destructures these
         // at runtime, so the partial mock must provide them.
-        selectedEditId: null,
-        setSelectedEditId: () => undefined,
+        selectedEditId,
+        setSelectedEditId,
+        addEdit: (edit: PendingEdit) => setPendingEdits((current) => [...current, edit]),
+        updateEdit: (id: string, update: (edit: PendingEdit) => PendingEdit) =>
+          setPendingEdits((current) =>
+            current.map((edit) => (edit.id === id ? update(edit) : edit)),
+          ),
         removeEdit: (id: string) =>
           setPendingEdits((current) => current.filter((edit) => edit.id !== id)),
         shapeStyles: {
@@ -329,8 +466,13 @@ function EditLayerHarness({
           shapeArrow: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
         },
         calloutStyle: { strokeWidthPt: DEFAULT_SHAPE_STROKE_WIDTH_PT },
+        disarmImage: () => undefined,
+        disarmSignature: () => undefined,
+        setTool: () => undefined,
+        setMessage: () => undefined,
+        ...overrides,
       }) as unknown as EditingState,
-    [pendingEdits, tool],
+    [overrides, pendingEdits, selectedEditId, tool],
   );
 
   return <EditLayer page={testPage} viewport={testViewport} pageIndex={0} editing={editing} />;
@@ -351,7 +493,7 @@ const testViewport = {
 
 function dispatchPointerEvent(
   target: Element,
-  type: "pointerdown" | "pointerup",
+  type: "pointerdown" | "pointermove" | "pointerup",
   clientX: number,
   clientY: number,
 ): void {
@@ -364,6 +506,21 @@ function dispatchPointerEvent(
 
   Object.defineProperty(event, "pointerId", { value: 1 });
   target.dispatchEvent(event);
+}
+
+function stubLayerBounds(layer: HTMLElement): void {
+  layer.getBoundingClientRect = () =>
+    ({
+      left: 0,
+      top: 0,
+      width: 240,
+      height: 240,
+      right: 240,
+      bottom: 240,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }
 
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {

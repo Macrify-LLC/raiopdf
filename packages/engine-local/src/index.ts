@@ -1818,6 +1818,14 @@ function drawTextBoxText(
     font,
   });
 
+  if (edit.type === "textBox" && edit.backgroundColor) {
+    target.drawRectangle({
+      rect: edit.rect,
+      fillColor: toEditColor(edit.backgroundColor, EDIT_INK_COLOR),
+      fillAlpha: edit.backgroundOpacity ?? 1,
+    });
+  }
+
   lines.forEach((line, lineIndex) => {
     const lineWidth = font.widthOfTextAtSize(line, fontSize);
     const anchor = mapVisualPointToPagePoint({
@@ -2658,6 +2666,17 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       return;
     case "textBox":
       assertValidTextRenderableEdit(edit, "Text box");
+      if (
+        edit.backgroundOpacity !== undefined &&
+        (!Number.isFinite(edit.backgroundOpacity) ||
+          edit.backgroundOpacity < 0 ||
+          edit.backgroundOpacity > 1)
+      ) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Text box background opacity must be between 0 and 1.",
+        );
+      }
       return;
     case "callout":
       assertValidTextRenderableEdit(edit, "Callout");

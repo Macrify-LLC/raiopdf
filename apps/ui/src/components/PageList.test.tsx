@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +53,12 @@ vi.mock("../lib/pdfjs", () => {
   }
 
   return { TextLayer: MockTextLayer, OPS: {} };
+});
+
+it("isolates the page stack so edit layers cannot cover the floating mode bar", () => {
+  const css = readFileSync(`${process.cwd()}/src/components/PageList.css`, "utf8");
+
+  expect(css).toMatch(/\.page-list\s*{[^}]*isolation:\s*isolate;/s);
 });
 
 interface RenderTaskRecord {

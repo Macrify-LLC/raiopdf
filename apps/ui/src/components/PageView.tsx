@@ -333,6 +333,7 @@ export function PageView({
       style={frameStyle}
       data-redaction-mode={redactionMode ? "true" : undefined}
       data-text-select={textSelectable ? "true" : undefined}
+      data-edit-tool={editing?.tool}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

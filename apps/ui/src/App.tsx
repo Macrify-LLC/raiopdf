@@ -2852,6 +2852,10 @@ export function App() {
 
   const moveActiveTabToNewWindow = useCallback(
     async (tabId: string, fileGrant: FileGrant, dirty: boolean) => {
+      const nextVisibleState = documentTabs.some((candidate) => candidate.id !== tabId)
+        ? "document"
+        : "empty";
+
       if (dirty) {
         const saved = await saveToFile(false);
         if (!saved) {
@@ -2861,12 +2865,15 @@ export function App() {
 
       try {
         await openGrantInNewWindow(fileGrant);
-        await closeDocumentTab(tabId);
+        const closed = await closeDocumentTab(tabId);
+        if (closed) {
+          resetVisibleDocumentAppState(nextVisibleState);
+        }
       } catch {
         setError("This PDF could not be moved to a new window.");
       }
     },
-    [closeDocumentTab, saveToFile, setError],
+    [closeDocumentTab, documentTabs, resetVisibleDocumentAppState, saveToFile, setError],
   );
 
   const requestTabMoveToNewWindow = useCallback((tabId: string) => {
@@ -2891,12 +2898,13 @@ export function App() {
       if (!switched) {
         return;
       }
+      resetVisibleDocumentAppState("document");
       pendingMoveToNewWindowTabIdRef.current = tabId;
       return;
     }
 
     void moveActiveTabToNewWindow(tabId, tab.document.filePath as FileGrant, tab.document.dirty);
-  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, setError, switchDocumentTab]);
+  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, resetVisibleDocumentAppState, setError, switchDocumentTab]);
 
   useEffect(() => {
     const pendingTabId = pendingMoveToNewWindowTabIdRef.current;

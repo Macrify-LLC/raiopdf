@@ -183,10 +183,6 @@ import {
   mapPathOpsFactsToDocumentFacts,
 } from "./lib/streamedFiling";
 import { extractPrintableRange } from "./lib/printRange";
-import {
-  looksLikeAbsolutePath,
-  resolveDesktopFileGrantPaths,
-} from "./lib/localPaths";
 import { writeProductionLastUsed } from "./lib/productionHints";
 import { resolveProtectedPdfBytes, type ProtectedPdfSource } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
@@ -1008,8 +1004,8 @@ export function App() {
     });
 
     try {
-      const sourcePaths = requireAbsoluteSourcePaths(
-        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+      const sourceGrants = requireFileGrants(
+        input.files.map((file) => file.path),
         "Production package output needs PDFs opened from local desktop paths.",
       );
 
@@ -1021,13 +1017,13 @@ export function App() {
         fileCount: number;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
-          const sourcePath = sourcePaths[index];
-          if (!sourcePath) {
+          const grant = sourceGrants[index];
+          if (!grant) {
             throw new Error("Production package output needs PDFs opened from local desktop paths.");
           }
 
           return {
-            path: sourcePath,
+            grant,
             designation: file.designation || undefined,
           };
         }),
@@ -1065,8 +1061,8 @@ export function App() {
     });
 
     try {
-      const sourcePaths = requireAbsoluteSourcePaths(
-        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+      const inputGrants = requireFileGrants(
+        input.files.map((file) => file.path),
         "Batch cleanup needs PDFs opened from local desktop paths.",
       );
 
@@ -1083,7 +1079,7 @@ export function App() {
           outputs: string[];
         }[];
       }>("batch_cleanup", {
-        inputs: sourcePaths,
+        inputGrants,
         outputDir: input.outputDir,
         packId: input.packId ?? undefined,
         operations: input.operations,
@@ -1111,8 +1107,8 @@ export function App() {
     });
 
     try {
-      const sourcePaths = requireAbsoluteSourcePaths(
-        await resolveDesktopFileGrantPaths(input.files.map((file) => file.path)),
+      const sourceGrants = requireFileGrants(
+        input.files.map((file) => file.path),
         "Filing packet needs PDFs opened from local desktop paths.",
       );
 
@@ -1125,13 +1121,13 @@ export function App() {
         combinedPdf: string | null;
       }>("build_filing_packet", {
         sources: input.files.map((file, index) => {
-          const sourcePath = sourcePaths[index];
-          if (!sourcePath) {
+          const grant = sourceGrants[index];
+          if (!grant) {
             throw new Error("Filing packet needs PDFs opened from local desktop paths.");
           }
 
           return {
-            path: sourcePath,
+            grant,
             displayName: file.name,
           };
         }),
@@ -6799,17 +6795,22 @@ function waitForUiPaint(): Promise<void> {
   });
 }
 
-function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMessage: string): string[] {
-  const absolutePaths: string[] = [];
-
-  for (const filePath of paths) {
-    if (!looksLikeAbsolutePath(filePath)) {
+/**
+ * Files opened from the desktop carry an opaque shell-issued grant in their
+ * `path` field (never a real filesystem path -- see `filePort.ts` [R1-9]).
+ * These path-based workflows (production sets, batch cleanup, filing
+ * packets) hand that grant straight to the corresponding Tauri command,
+ * which resolves it to a real path itself; the renderer never sees or
+ * transmits the resolved path. Files with no grant (e.g. opened in-memory in
+ * the browser) can't be used here.
+ */
+function requireFileGrants(grants: readonly (string | null)[], errorMessage: string): string[] {
+  return grants.map((grant) => {
+    if (!grant) {
       throw new Error(errorMessage);
     }
-    absolutePaths.push(filePath);
-  }
-
-  return absolutePaths;
+    return grant;
+  });
 }
 
 function errorMessage(error: unknown): string {

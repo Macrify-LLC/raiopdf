@@ -4,9 +4,11 @@
  *
  * Grant vs path discipline [R1-9]: UI-side file identifiers in the Tauri
  * runtime are ALWAYS opaque grants — resolution to real paths happens only in
- * the shell (or via `resolve_file_grants` for the MCP flows that legitimately
- * need paths). The branded `FileGrant` type makes passing a grant where a
- * path is expected (or vice versa) a type error in new code.
+ * the shell, including for the MCP-workflow commands (`build_production_set`,
+ * `batch_cleanup`, `build_filing_packet`), which take the grant itself and
+ * resolve it to a path in Rust rather than accepting a resolved path from the
+ * renderer. The branded `FileGrant` type makes passing a grant where a path
+ * is expected (or vice versa) a type error in new code.
  */
 
 /** Opaque shell-issued file grant. Never a real filesystem path. */

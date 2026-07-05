@@ -554,6 +554,22 @@ describe("SidecarPdfEngine", () => {
     expect(queryValue(calls[0], "ocr_type")).toBe("force-ocr");
   });
 
+  it("normalizes legacy Normal OCR mode to skip-text for the local interceptor", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(42));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.ocrBytes(bytes(1), {
+      ocrType: "Normal",
+      knownPageCount: 1,
+    })).resolves.toMatchObject({
+      bytes: bytes(42),
+      pageCount: 1,
+    });
+
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/ocr");
+    expect(queryValue(calls[0], "ocr_type")).toBe("skip-text");
+  });
+
   it("closes document handles and ignores unknown handles", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

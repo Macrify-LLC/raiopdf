@@ -788,7 +788,7 @@ export class SidecarPdfEngine implements PdfEngine {
     const languages = options.languages?.length ? options.languages : ["eng"];
 
     return this.requestLocal("/local/ocr", bytes, {
-      ocr_type: options.ocrType ?? "skip-text",
+      ocr_type: normalizeSidecarOcrType(options.ocrType),
       languages: languages.join(","),
       deskew: String(options.deskew ?? false),
     });
@@ -1003,6 +1003,10 @@ function bytesToBase64(bytes: Uint8Array): string {
   }
 
   return btoa(binary);
+}
+
+function normalizeSidecarOcrType(ocrType: SidecarOcrType | undefined): "skip-text" | "force-ocr" {
+  return ocrType === "force-ocr" ? "force-ocr" : "skip-text";
 }
 
 function sidecarHeaders(

@@ -1673,8 +1673,8 @@ fn handle_local_ocr(
         }
     };
 
-    let mode = match local_ocr_mode(request_head) {
-        Ok(mode) => mode,
+    let options = match local_ocr_options(request_head) {
+        Ok(options) => options,
         Err(message) => {
             return write_local_bytes_response(
                 client,
@@ -1687,7 +1687,7 @@ fn handle_local_ocr(
         }
     };
 
-    match run_path_op_ocr(&body, mode) {
+    match run_path_op_ocr(&body, &options) {
         Ok(ocr) => {
             write_local_bytes_response(client, request_head, 200, "OK", "application/pdf", &ocr)
         }
@@ -1800,14 +1800,52 @@ fn parse_local_redact_request(
     Ok((pdf, areas))
 }
 
+fn local_ocr_options(request_head: &[u8]) -> Result<path_ops::OcrOptions, String> {
+    Ok(path_ops::OcrOptions {
+        mode: local_ocr_mode(request_head)?,
+        languages: local_ocr_languages(request_head),
+        deskew: local_ocr_deskew(request_head)?,
+    })
+}
+
 fn local_ocr_mode(request_head: &[u8]) -> Result<path_ops::OcrMode, String> {
-    match request_query_param(request_head, "ocr_type")
-        .or_else(|| request_query_param(request_head, "ocrType"))
-        .unwrap_or("skip-text")
-    {
+    let mode = request_query_param_decoded(request_head, "ocr_type")
+        .or_else(|| request_query_param_decoded(request_head, "ocrType"))
+        .unwrap_or_else(|| "skip-text".to_string());
+
+    match mode.as_str() {
+        "Normal" | "normal" => Ok(path_ops::OcrMode::SkipText),
         "skip-text" | "skip_text" | "skip" => Ok(path_ops::OcrMode::SkipText),
         "force-ocr" | "force_ocr" | "force" => Ok(path_ops::OcrMode::ForceOcr),
         other => Err(format!("unsupported OCR mode: {other}")),
+    }
+}
+
+fn local_ocr_languages(request_head: &[u8]) -> Vec<String> {
+    let raw = request_query_param_decoded(request_head, "languages")
+        .or_else(|| request_query_param_decoded(request_head, "language"))
+        .unwrap_or_else(|| "eng".to_string());
+    let languages = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if languages.is_empty() {
+        vec!["eng".to_string()]
+    } else {
+        languages
+    }
+}
+
+fn local_ocr_deskew(request_head: &[u8]) -> Result<bool, String> {
+    let raw = request_query_param_decoded(request_head, "deskew")
+        .unwrap_or_else(|| "false".to_string())
+        .to_ascii_lowercase();
+    match raw.as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        other => Err(format!("unsupported OCR deskew value: {other}")),
     }
 }
 
@@ -2068,7 +2106,7 @@ fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
     Ok(compressed)
 }
 
-fn run_path_op_ocr(pdf: &[u8], mode: path_ops::OcrMode) -> Result<Vec<u8>, String> {
+fn run_path_op_ocr(pdf: &[u8], options: &path_ops::OcrOptions) -> Result<Vec<u8>, String> {
     let work_dir = unique_temp_dir("raiopdf-ocr");
     fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
     let _cleanup = TempDirGuard(work_dir.clone());
@@ -2078,7 +2116,7 @@ fn run_path_op_ocr(pdf: &[u8], mode: path_ops::OcrMode) -> Result<Vec<u8>, Strin
     fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
 
     let toolchain = path_ops::PathOpsToolchain::discover(None);
-    path_ops::ocr_with_mode(&toolchain, &in_path, &out_path, mode)
+    path_ops::ocr_with_options(&toolchain, &in_path, &out_path, options)
         .map_err(|error| error.to_string())?;
 
     let ocr = fs::read(&out_path).map_err(|error| format!("read OCR output: {error}"))?;
@@ -2458,6 +2496,10 @@ fn request_query_param<'a>(request_head: &'a [u8], key: &str) -> Option<&'a str>
     request_query_param_from_head(request_head, key)
 }
 
+fn request_query_param_decoded(request_head: &[u8], key: &str) -> Option<String> {
+    request_query_param(request_head, key).map(percent_decode_query_value)
+}
+
 fn request_query_param_from_head<'a>(request_head: &'a str, key: &str) -> Option<&'a str> {
     let target = request_head.lines().next()?.split_whitespace().nth(1)?;
     let query = target.split_once('?')?.1;
@@ -2465,6 +2507,38 @@ fn request_query_param_from_head<'a>(request_head: &'a str, key: &str) -> Option
         let (name, value) = pair.split_once('=')?;
         (name == key).then_some(value)
     })
+}
+
+fn percent_decode_query_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) =
+                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+                {
+                    decoded.push((high << 4) | low);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn is_allowed_cors_origin(origin: &str) -> bool {
@@ -2804,6 +2878,21 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 422 Unprocessable Entity"));
         assert!(response.contains("unsupported OCR mode: bogus"));
         assert_eq!(stub.received_request(), None);
+    }
+
+    #[test]
+    fn local_ocr_options_decode_normal_mode_languages_and_deskew() {
+        let options = local_ocr_options(
+            b"POST /local/ocr?ocr_type=Normal&languages=eng%2Cspa&deskew=true HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+        .expect("OCR options should parse");
+
+        assert_eq!(options.mode, path_ops::OcrMode::SkipText);
+        assert_eq!(
+            options.languages,
+            vec!["eng".to_string(), "spa".to_string()]
+        );
+        assert!(options.deskew);
     }
 
     #[test]

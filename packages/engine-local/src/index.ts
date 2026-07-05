@@ -29,6 +29,8 @@ import type {
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
+  PdfRaioAnnotationEdit,
+  PdfRaioAnnotationImport,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
@@ -42,6 +44,7 @@ import type {
   PdfTextBoxEdit,
   PdfTextBoxFontFamily,
   PdfTextMarkupEdit,
+  PdfUpdateAnnotationOptions,
   PdfTextRegion,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -64,6 +67,7 @@ import {
   PDFDocument,
   PDFDropdown,
   PDFField,
+  PDFHexString,
   PDFFont,
   PDFName,
   PDFNumber,
@@ -171,9 +175,12 @@ const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
 const EDIT_INK_COLOR_COMPONENTS = [0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff] as const;
 const HIGHLIGHT_COLOR_COMPONENTS = [1, 0.9, 0.3] as const;
+/** PDF annotation flag bit 2 (value 2): do not display or print the annotation. */
+const ANNOTATION_FLAG_HIDDEN = 2;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
 const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
+const RAIOPDF_ANNOTATION_MARKER_VERSION = 2;
 const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
   "Circle",
   "FreeText",
@@ -187,6 +194,13 @@ const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
   "StrikeOut",
   "Underline",
 ]);
+const RAIO_ROUNDTRIP_SUBTYPE_BY_KIND = {
+  highlight: "Highlight",
+  underline: "Underline",
+  strikethrough: "StrikeOut",
+  textBox: "FreeText",
+  comment: "Text",
+} satisfies Record<PdfRaioAnnotationEdit["type"], string>;
 const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
   "helvetica:regular": StandardFonts.Helvetica,
   "helvetica:bold": StandardFonts.HelveticaBold,
@@ -941,6 +955,67 @@ export class LocalPdfEngine implements PdfEngine {
     return this.store(await output.save());
   }
 
+  async readRaioPdfAnnotations(
+    document: PdfDocumentHandle,
+  ): Promise<readonly PdfRaioAnnotationImport[]> {
+    const pdf = await this.load(document);
+
+    return readRaioPdfAnnotationImports(pdf);
+  }
+
+  async updateAnnotationById(
+    document: PdfDocumentHandle,
+    annotId: string,
+    edit: PdfRaioAnnotationEdit,
+    options: PdfUpdateAnnotationOptions = {},
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+
+    assertValidAnnotationId(annotId);
+    assertValidEdit(edit, output.getPageCount());
+
+    // Slice 1 can remove+re-emit self-contained kinds, but this moves the
+    // annotation to the end of /Annots and drops references like Popup/IRT.
+    // Later threaded/foreign annotation slices need true in-place mutation.
+    if (!removeAnnotationByIdInPlace(output, annotId)) {
+      throw new PdfEngineError("INVALID_DOCUMENT", `RaioPDF annotation "${annotId}" was not found.`);
+    }
+
+    const textBoxFonts = new Map<TextBoxFontKey, PDFFont>();
+    const resolveTextBoxFont: TextBoxFontResolver = async (textEdit) => {
+      const key = textBoxFontKey(textEdit);
+      let font = textBoxFonts.get(key);
+
+      if (!font) {
+        font = await output.embedFont(TEXT_BOX_STANDARD_FONTS[key]);
+        textBoxFonts.set(key, font);
+      }
+
+      return font;
+    };
+
+    await applyRaioAnnotationEditInPlace(output, { ...edit, annotId }, resolveTextBoxFont, {
+      print: options.printMarkupAnnotations ?? true,
+    });
+
+    return this.store(await output.save());
+  }
+
+  async deleteAnnotationById(
+    document: PdfDocumentHandle,
+    annotId: string,
+  ): Promise<PdfDocumentHandle> {
+    const output = await this.load(document);
+
+    assertValidAnnotationId(annotId);
+
+    if (!removeAnnotationByIdInPlace(output, annotId)) {
+      throw new PdfEngineError("INVALID_DOCUMENT", `RaioPDF annotation "${annotId}" was not found.`);
+    }
+
+    return this.store(await output.save());
+  }
+
   /**
    * Flattens AcroForm fields with pdf-lib's `form.flatten()`: current field
    * appearances are painted into page content and the interactive fields are
@@ -1002,20 +1077,144 @@ export function createLocalPdfEngine(): PdfEngine {
   return new LocalPdfEngine();
 }
 
-export function stampRaioPdfAnnotation(annotation: PDFDict): void {
+function createRaioPdfAnnotationId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+
+  if (randomUUID) {
+    return randomUUID.call(globalThis.crypto);
+  }
+
+  return `raiopdf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function stampRaioPdfAnnotation(
+  annotation: PDFDict,
+  sourceEdit?: PdfRaioAnnotationEdit,
+  annotId = sourceEdit?.annotId ?? createRaioPdfAnnotationId(),
+): string {
   annotation.set(
     RAIOPDF_ANNOTATION_MARKER,
     annotation.context.obj({
-      Version: 1,
-      Kind: "Markup",
+      Version: RAIOPDF_ANNOTATION_MARKER_VERSION,
+      Kind: PDFName.of("Markup"),
+      Id: PDFString.of(annotId),
+      ...(sourceEdit ? { SourceEdit: PDFString.of(JSON.stringify(sourceEdit)) } : {}),
     }),
   );
+  annotation.set(PDFName.of("NM"), PDFString.of(annotId));
+
+  return annotId;
 }
 
 export function readRaioPdfMarkupAnnotations(
   page: ReturnType<PDFDocument["getPage"]>,
 ): RaioPdfMarkupAnnotation[] {
   return readAnnotationEntries(page).filter((entry) => isRaioPdfMarkupAnnotation(entry.dict));
+}
+
+/**
+ * Builds a viewer-only copy whose re-importable RaioPDF annotations are hidden
+ * from pdf.js canvas rendering. The source bytes are not mutated; the engine
+ * should keep using the original annotations for update/delete/save.
+ */
+export async function hideRaioPdfImportedAnnotationsForDisplay(
+  bytes: PdfBytes,
+): Promise<Uint8Array> {
+  const normalizedBytes = normalizeBytes(bytes);
+  const pdf = await loadPdf(normalizedBytes);
+  let changed = false;
+
+  pdf.getPages().forEach((page, pageIndex) => {
+    for (const entry of readAnnotationEntries(page)) {
+      if (!readRaioPdfAnnotationImport(entry.dict, pageIndex)) {
+        continue;
+      }
+
+      const flags = entry.dict.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0;
+      const hiddenFlags = flags | ANNOTATION_FLAG_HIDDEN;
+
+      if (hiddenFlags !== flags) {
+        entry.dict.set(PDFName.of("F"), PDFNumber.of(hiddenFlags));
+        changed = true;
+      }
+    }
+  });
+
+  return changed ? pdf.save() : normalizedBytes;
+}
+
+function readRaioPdfAnnotationImports(pdf: PDFDocument): PdfRaioAnnotationImport[] {
+  const imports: PdfRaioAnnotationImport[] = [];
+
+  pdf.getPages().forEach((page, pageIndex) => {
+    for (const entry of readAnnotationEntries(page)) {
+      const imported = readRaioPdfAnnotationImport(entry.dict, pageIndex);
+
+      if (imported) {
+        imports.push(imported);
+      }
+    }
+  });
+
+  return imports;
+}
+
+function readRaioPdfAnnotationImport(
+  annotation: PDFDict,
+  pageIndex: number,
+): PdfRaioAnnotationImport | null {
+  const marker = annotation.lookupMaybe(RAIOPDF_ANNOTATION_MARKER, PDFDict);
+  const version = marker?.lookupMaybe(PDFName.of("Version"), PDFNumber)?.asNumber();
+
+  if (!marker || version !== RAIOPDF_ANNOTATION_MARKER_VERSION) {
+    return null;
+  }
+
+  const kind = readPdfTextObject(marker.get(PDFName.of("Kind")));
+  const subtype = readAnnotationSubtype(annotation);
+
+  if (
+    kind !== "Markup" ||
+    !subtype ||
+    !Object.values(RAIO_ROUNDTRIP_SUBTYPE_BY_KIND).includes(subtype)
+  ) {
+    return null;
+  }
+
+  const annotId = readAnnotationId(annotation);
+  const sourceEditText = readPdfText(
+    marker.lookupMaybe(PDFName.of("SourceEdit"), PDFString, PDFHexString),
+  );
+
+  if (!annotId || !sourceEditText) {
+    return null;
+  }
+
+  const edit = parseRaioPdfSourceEdit(sourceEditText);
+
+  if (!edit || RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type] !== subtype) {
+    return null;
+  }
+
+  return {
+    pageIndex,
+    annotId,
+    edit: { ...edit, pageIndex, annotId },
+  };
+}
+
+function parseRaioPdfSourceEdit(sourceEditText: string): PdfRaioAnnotationEdit | null {
+  try {
+    const parsed = JSON.parse(sourceEditText) as unknown;
+
+    if (!isRaioAnnotationEdit(parsed)) {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function flattenMarkupAnnotationsInPlace(pdf: PDFDocument): void {
@@ -1092,19 +1291,116 @@ function readAnnotationEntryAt(
 function isRaioPdfMarkupAnnotation(annotation: PDFDict): boolean {
   const marker = annotation.lookupMaybe(RAIOPDF_ANNOTATION_MARKER, PDFDict);
   const version = marker?.lookupMaybe(PDFName.of("Version"), PDFNumber)?.asNumber();
-  const kind = marker?.lookupMaybe(PDFName.of("Kind"), PDFName)?.toString().replace(/^\//, "");
+  const kind = marker ? readPdfTextObject(marker.get(PDFName.of("Kind"))) : undefined;
   const subtype = readAnnotationSubtype(annotation);
 
   return (
-    version === 1 &&
+    (version === 1 || version === RAIOPDF_ANNOTATION_MARKER_VERSION) &&
     kind === "Markup" &&
     subtype !== undefined &&
     RAIOPDF_MARKUP_ANNOTATION_SUBTYPES.has(subtype)
   );
 }
 
+function removeAnnotationByIdInPlace(pdf: PDFDocument, annotId: string): boolean {
+  let removed = false;
+
+  for (const page of pdf.getPages()) {
+    const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
+
+    if (!annotations) {
+      continue;
+    }
+
+    for (let index = annotations.size() - 1; index >= 0; index -= 1) {
+      const entry = readAnnotationEntryAt(page, annotations, index);
+
+      if (!entry || readAnnotationId(entry.dict) !== annotId) {
+        continue;
+      }
+
+      annotations.remove(index);
+      removed = true;
+    }
+
+    if (annotations.size() === 0) {
+      page.node.delete(PDFName.of("Annots"));
+    }
+  }
+
+  return removed;
+}
+
+function readAnnotationId(annotation: PDFDict): string | null {
+  const marker = annotation.lookupMaybe(RAIOPDF_ANNOTATION_MARKER, PDFDict);
+  const markerId = readPdfText(marker?.lookupMaybe(PDFName.of("Id"), PDFString, PDFHexString));
+  const nm = readPdfText(annotation.lookupMaybe(PDFName.of("NM"), PDFString, PDFHexString));
+
+  return markerId || nm || null;
+}
+
+function readPdfText(
+  value: PDFName | PDFString | PDFHexString | undefined,
+): string | undefined {
+  return value?.decodeText();
+}
+
+function readPdfTextObject(value: unknown): string | undefined {
+  if (value instanceof PDFName || value instanceof PDFString || value instanceof PDFHexString) {
+    return value.decodeText();
+  }
+
+  return undefined;
+}
+
+function isRaioAnnotationEdit(value: unknown): value is PdfRaioAnnotationEdit {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const edit = value as Record<string, unknown>;
+
+  switch (edit.type) {
+    case "highlight":
+      return typeof edit.pageIndex === "number" && Array.isArray(edit.rects);
+    case "underline":
+    case "strikethrough":
+      return typeof edit.pageIndex === "number" && Array.isArray(edit.rects);
+    case "textBox":
+      return typeof edit.pageIndex === "number" &&
+        isEditRectLike(edit.rect) &&
+        typeof edit.text === "string";
+    case "comment":
+      return typeof edit.pageIndex === "number" &&
+        isEditPointLike(edit.at) &&
+        typeof edit.text === "string";
+    default:
+      return false;
+  }
+}
+
+function isEditRectLike(value: unknown): value is PdfEditRect {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as PdfEditRect).x === "number" &&
+      typeof (value as PdfEditRect).y === "number" &&
+      typeof (value as PdfEditRect).w === "number" &&
+      typeof (value as PdfEditRect).h === "number",
+  );
+}
+
+function isEditPointLike(value: unknown): value is PdfEditPoint {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as PdfEditPoint).x === "number" &&
+      typeof (value as PdfEditPoint).y === "number",
+  );
+}
+
 function readAnnotationSubtype(annotation: PDFDict): string | undefined {
-  return annotation.lookupMaybe(PDFName.of("Subtype"), PDFName)?.toString().replace(/^\//, "");
+  return annotation.lookupMaybe(PDFName.of("Subtype"), PDFName)?.decodeText();
 }
 
 export function defaultExhibitDescription(
@@ -1711,6 +2007,34 @@ async function applyEditInPlace(
   }
 }
 
+async function applyRaioAnnotationEditInPlace(
+  pdf: PDFDocument,
+  edit: PdfRaioAnnotationEdit,
+  resolveTextBoxFont: TextBoxFontResolver,
+  markupAnnotationOptions: MarkupAnnotationOptions,
+): Promise<void> {
+  switch (edit.type) {
+    case "highlight":
+      applyHighlightAnnotationEdit(pdf, edit, markupAnnotationOptions);
+      return;
+    case "underline":
+    case "strikethrough":
+      applyTextMarkupAnnotationEdit(pdf, edit, markupAnnotationOptions);
+      return;
+    case "textBox":
+      applyTextBoxAnnotationEdit(
+        pdf,
+        edit,
+        await resolveTextBoxFont(edit),
+        markupAnnotationOptions,
+      );
+      return;
+    case "comment":
+      applyCommentEdit(pdf, edit);
+      return;
+  }
+}
+
 /**
  * Draws translucent rectangles for each highlighted line. Rectangles are
  * orientation-agnostic, so user-space coordinates are drawn verbatim with no
@@ -2218,7 +2542,7 @@ function applyHighlightAnnotationEdit(
     QuadPoints: rectsToQuadPoints(edit.rects),
     C: colorToPdfArray(edit.color, HIGHLIGHT_COLOR_COMPONENTS),
     AP: { N: appearanceTarget.finish() },
-  });
+  }, edit);
 }
 
 function applyTextMarkupAnnotationEdit(
@@ -2254,7 +2578,7 @@ function applyTextMarkupAnnotationEdit(
     QuadPoints: rectsToQuadPoints(edit.rects),
     C: colorToPdfArray(edit.color, EDIT_INK_COLOR_COMPONENTS),
     AP: { N: appearanceTarget.finish() },
-  });
+  }, edit);
 }
 
 function applyTextBoxAnnotationEdit(
@@ -2279,7 +2603,7 @@ function applyTextBoxAnnotationEdit(
     Q: textAlignToPdfQ(edit.align),
     AP: { N: appearanceTarget.finish() },
     C: colorToPdfArray(edit.color),
-  });
+  }, edit);
 }
 
 function applyCalloutAnnotationEdit(
@@ -2392,6 +2716,7 @@ function addMarkupAnnotation(
   page: ReturnType<PDFDocument["getPage"]>,
   options: MarkupAnnotationOptions,
   values: Record<string, unknown>,
+  sourceEdit?: PdfRaioAnnotationEdit,
 ): void {
   const annotation = page.doc.context.obj({
     Type: "Annot",
@@ -2399,7 +2724,7 @@ function addMarkupAnnotation(
     ...values,
   }) as PDFDict;
 
-  stampRaioPdfAnnotation(annotation);
+  stampRaioPdfAnnotation(annotation, sourceEdit);
   addAnnotationToPage(page, annotation);
 }
 
@@ -2544,6 +2869,7 @@ function applyCommentEdit(pdf: PDFDocument, edit: PdfCommentEdit): void {
     ...(edit.author !== undefined ? { T: PDFString.of(edit.author) } : {}),
   }) as PDFDict;
 
+  stampRaioPdfAnnotation(annotation, edit);
   addAnnotationToPage(page, annotation);
 }
 
@@ -2723,6 +3049,12 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
     case "comment":
       assertNonEmptyEditText(edit.text, "Comment");
       return;
+  }
+}
+
+function assertValidAnnotationId(annotId: string): void {
+  if (annotId.trim().length === 0) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Annotation id must not be empty.");
   }
 }
 

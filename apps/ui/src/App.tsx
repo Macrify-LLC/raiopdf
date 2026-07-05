@@ -20,7 +20,10 @@ import type {
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
-import { LocalPdfEngine } from "@raiopdf/engine-local";
+import {
+  LocalPdfEngine,
+  hideRaioPdfImportedAnnotationsForDisplay,
+} from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   buildDocumentFacts,
@@ -101,7 +104,7 @@ import {
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
-import { toPdfEdits, type EditToolId } from "./lib/edits";
+import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
   checkForSignedUpdate,
@@ -459,7 +462,8 @@ export function App() {
     cropResizePages,
     buildBinder,
     batesStamp,
-    applyEdits,
+    readRaioPdfAnnotations,
+    applyAnnotationSavePlan,
     flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,
@@ -517,7 +521,7 @@ export function App() {
   });
 
   useEffect(() => {
-    if (editing.pendingEdits.length > 0) {
+    if (editing.hasUnsavedEdits) {
       if (!overlayDirtyRef.current) {
         overlayDirtyRef.current = {
           generation: document.generation,
@@ -541,7 +545,7 @@ export function App() {
   }, [
     document.dirty,
     document.generation,
-    editing.pendingEdits.length,
+    editing.hasUnsavedEdits,
     markClean,
     markDirty,
   ]);
@@ -1384,7 +1388,8 @@ export function App() {
     if (source.kind === "memory") {
       const sourceBytes = source.bytes;
 
-      void loadPdfDocument(sourceBytes)
+      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes)
+        .then((displayBytes) => loadPdfDocument(displayBytes))
         .then((loaded) => {
           loadedDocument = loaded;
 
@@ -1554,13 +1559,61 @@ export function App() {
     clearDocumentBoundLegalState(previousGeneration);
   }, [clearDocumentBoundLegalState, document.generation, document.source]);
 
-  // Pending edits and form values are geometry- and page-bound, so any change
-  // to the underlying document (rotate, delete, reorder, apply — each swaps
-  // the source and bumps the generation) invalidates them.
+  // Pending edits and form values are geometry- and page-bound, so source
+  // swaps reset and re-import annotations. Engine-handle churn for the same
+  // source must not force a full annotation re-parse.
   const resetEditingForDocument = editing.resetForDocument;
+  const loadImportedAnnotations = editing.loadImportedAnnotations;
+  const editingDocumentSourceRef = useRef<typeof document.source | undefined>(undefined);
+  const importedAnnotationsSourceRef = useRef<typeof document.source | undefined>(undefined);
   useEffect(() => {
-    resetEditingForDocument();
-  }, [resetEditingForDocument, document.source]);
+    let disposed = false;
+    const sourceChanged = editingDocumentSourceRef.current !== document.source;
+    editingDocumentSourceRef.current = document.source;
+
+    if (sourceChanged) {
+      resetEditingForDocument();
+      importedAnnotationsSourceRef.current = undefined;
+    }
+
+    // Imported annotations are document-bound pending edits. Keep reset and
+    // import in this flow so a source swap deterministically resets first,
+    // then rehydrates imports without relying on sibling effect order.
+    if (document.source === null || document.source.kind !== "memory" || !document.engineHandle) {
+      if (sourceChanged) {
+        loadImportedAnnotations([]);
+      }
+      return;
+    }
+
+    if (importedAnnotationsSourceRef.current === document.source) {
+      return;
+    }
+
+    void readRaioPdfAnnotations()
+      .then((annotations) => {
+        if (!disposed) {
+          importedAnnotationsSourceRef.current = document.source;
+          loadImportedAnnotations(annotations);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          importedAnnotationsSourceRef.current = document.source;
+          loadImportedAnnotations([]);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    document.engineHandle,
+    document.source,
+    loadImportedAnnotations,
+    readRaioPdfAnnotations,
+    resetEditingForDocument,
+  ]);
 
   const selectEditTool = useCallback(
     (toolId: EditToolId) => {
@@ -2796,10 +2849,14 @@ export function App() {
     savingRef.current = true;
 
     try {
-      const pendingApply = editing.collectEdits();
+      const pendingApply = editing.collectAnnotationSavePlan();
 
       if (pendingApply) {
-        const applied = await applyEdits(pendingApply.edits, {
+        const applied = await applyAnnotationSavePlan({
+          appendEdits: pendingApply.plan.appendEdits,
+          updateEdits: pendingApply.plan.updateEdits,
+          deleteAnnotIds: pendingApply.plan.deleteAnnotIds,
+        }, {
           flatten: pendingApply.flatten,
           printMarkupAnnotations,
         });
@@ -2843,13 +2900,13 @@ export function App() {
     } finally {
       savingRef.current = false;
     }
-  }, [applyEdits, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
+  }, [applyAnnotationSavePlan, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;
-    const overlayEdits = toPdfEdits(editing.pendingEdits);
+    const savePlan = editing.collectMarkupAnnotationSavePlan();
 
-    if (!sourceBytes && overlayEdits.length === 0) {
+    if (!sourceBytes && !annotationSavePlanHasChanges(savePlan)) {
       setMarkupAnnotationMessage(
         streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before flattening markup.",
       );
@@ -2857,15 +2914,20 @@ export function App() {
     }
 
     void (async () => {
-      let flattenedOverlayCount = 0;
       const annotationCount = sourceBytes
         ? await countRaioPdfMarkupAnnotations(sourceBytes)
         : 0;
+      const targetAnnotationCount = Math.max(0, annotationCount - savePlan.deleteAnnotIds.length) +
+        savePlan.appendEdits.length;
 
-      if (overlayEdits.length > 0) {
+      if (annotationSavePlanHasChanges(savePlan)) {
         setMarkupAnnotationMessage("Flattening pending annotations...");
-        const applied = await applyEdits(overlayEdits, {
-          flatten: true,
+        const applied = await applyAnnotationSavePlan({
+          appendEdits: savePlan.appendEdits,
+          updateEdits: savePlan.updateEdits,
+          deleteAnnotIds: savePlan.deleteAnnotIds,
+        }, {
+          flatten: false,
           printMarkupAnnotations,
         });
 
@@ -2873,29 +2935,28 @@ export function App() {
           setMarkupAnnotationMessage("Pending annotations were not flattened.");
           return;
         }
-
-        flattenedOverlayCount = editing.pendingEdits.length;
-        editing.clearPendingEdits();
       }
 
-      if (annotationCount === 0 && flattenedOverlayCount === 0) {
+      if (targetAnnotationCount === 0) {
         setMarkupAnnotationMessage("No RaioPDF markup annotations were found.");
         return;
       }
 
       setMarkupAnnotationMessage("Flattening markup annotations...");
       const flattened = await flattenMarkupAnnotations();
-      const flattenedCount = annotationCount + flattenedOverlayCount;
       setMarkupAnnotationMessage(
         flattened
-          ? `Flattened ${flattenedCount} ${flattenedCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+          ? `Flattened ${targetAnnotationCount} ${targetAnnotationCount === 1 ? "annotation" : "annotations"} into permanent page content.`
           : "Markup annotations were not flattened.",
       );
+      if (flattened) {
+        editing.clearPendingEdits();
+      }
     })().catch(() => {
       setMarkupAnnotationMessage("Markup annotations could not be flattened.");
     });
   }, [
-    applyEdits,
+    applyAnnotationSavePlan,
     document.bytes,
     editing,
     flattenMarkupAnnotations,

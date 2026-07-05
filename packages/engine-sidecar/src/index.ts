@@ -20,6 +20,8 @@ import type {
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
+  PdfRaioAnnotationEdit,
+  PdfRaioAnnotationImport,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
@@ -29,6 +31,7 @@ import type {
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextRegion,
+  PdfUpdateAnnotationOptions,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
@@ -810,6 +813,37 @@ export class SidecarPdfEngine implements PdfEngine {
     throw new PdfEngineError(
       "UNSUPPORTED",
       "Add-content edits are applied by the local pdf-lib engine; the sidecar round-trip adds nothing.",
+    );
+  }
+
+  async readRaioPdfAnnotations(
+    _document: PdfDocumentHandle,
+  ): Promise<readonly PdfRaioAnnotationImport[]> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "RaioPDF annotation read-back is handled by the local pdf-lib engine.",
+    );
+  }
+
+  async updateAnnotationById(
+    _document: PdfDocumentHandle,
+    _annotId: string,
+    _edit: PdfRaioAnnotationEdit,
+    _options?: PdfUpdateAnnotationOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "RaioPDF annotation updates are handled by the local pdf-lib engine.",
+    );
+  }
+
+  async deleteAnnotationById(
+    _document: PdfDocumentHandle,
+    _annotId: string,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "RaioPDF annotation deletes are handled by the local pdf-lib engine.",
     );
   }
 

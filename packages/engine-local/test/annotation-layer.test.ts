@@ -19,6 +19,7 @@ import {
   createAnnotationAppearanceTarget,
   createLocalPdfEngine,
   createPageDrawTarget,
+  hideRaioPdfImportedAnnotationsForDisplay,
   readRaioPdfMarkupAnnotations,
   stampRaioPdfAnnotation,
 } from "../src/index";
@@ -117,6 +118,217 @@ describe("annotation-layer foundation", () => {
     expect(readRaioPdfMarkupAnnotations(page)).toHaveLength(1);
     expect(entry?.dict).toBe(square);
     expect(entry?.subtype).toBe("Square");
+  });
+
+  it("serializes Slice 1 source metadata into the RaioPDF marker and reads it back", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 220]]));
+    const edits = [
+      {
+        type: "highlight",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+        color: { r: 1, g: 0.8, b: 0.1 },
+        opacity: 0.5,
+      },
+      {
+        type: "underline",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 125, w: 70, h: 10 }],
+        color: { r: 0.2, g: 0.3, b: 0.4 },
+        thicknessPt: 2,
+      },
+      {
+        type: "strikethrough",
+        pageIndex: 0,
+        rects: [{ x: 20, y: 100, w: 90, h: 10 }],
+        thicknessPt: 1.5,
+      },
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 130, y: 95, w: 100, h: 40 },
+        text: "Box text",
+        fontSizePt: 13,
+        color: { r: 0.1, g: 0.2, b: 0.3 },
+        backgroundColor: { r: 0.9, g: 0.9, b: 0.7 },
+        backgroundOpacity: 0.6,
+        fontFamily: "times",
+        bold: true,
+        italic: true,
+        align: "center",
+      },
+      {
+        type: "comment",
+        pageIndex: 0,
+        at: { x: 210, y: 160 },
+        text: "Comment text",
+        author: "Raio",
+      },
+    ] satisfies PdfEdit[];
+
+    const edited = await engine.applyEdits(document, edits, { markupMode: "annotation" });
+    const imports = await engine.readRaioPdfAnnotations(edited);
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const annotations = readPageAnnotations(editedPdf, 0);
+
+    expect(imports.map((entry) => entry.edit.type)).toEqual([
+      "highlight",
+      "underline",
+      "strikethrough",
+      "textBox",
+      "comment",
+    ]);
+    expect(new Set(imports.map((entry) => entry.annotId)).size).toBe(5);
+    expect(imports.map((entry) => entry.pageIndex)).toEqual([0, 0, 0, 0, 0]);
+    expect(imports[0]!.edit).toMatchObject(edits[0]!);
+    expect(imports[3]!.edit).toMatchObject(edits[3]!);
+    expect(imports[4]!.edit).toMatchObject(edits[4]!);
+
+    for (const annotation of annotations) {
+      const marker = annotation.lookup(PDFName.of("RaioPDF"), PDFDict);
+      const sourceEdit = JSON.parse(readString(marker, "SourceEdit")) as PdfEdit;
+      const markerId = readString(marker, "Id");
+
+      expect(marker.lookup(PDFName.of("Version"), PDFNumber).asNumber()).toBe(2);
+      expect(readName(marker, "Kind")).toBe("Markup");
+      expect(readString(annotation, "NM")).toBe(markerId);
+      expect(sourceEdit.type).toBe(imports.find((entry) => entry.annotId === markerId)?.edit.type);
+    }
+  });
+
+  it("re-imports moved annotations with the current containing page index", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 220], [310, 220], [320, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "highlight",
+          pageIndex: 1,
+          rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+          opacity: 0.5,
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+
+    const { document: reordered } = await engine.reorderPages(edited, [1, 2, 0]);
+    const { document: moved } = await engine.deletePages(reordered, [1]);
+    const imports = await engine.readRaioPdfAnnotations(moved);
+    const movedPdf = await PDFDocument.load(await engine.saveToBytes(moved));
+    const marker = readPageAnnotations(movedPdf, 0)[0]?.lookup(PDFName.of("RaioPDF"), PDFDict);
+    const storedSourceEdit = marker
+      ? JSON.parse(readString(marker, "SourceEdit")) as PdfEdit
+      : null;
+
+    expect(storedSourceEdit).toMatchObject({ type: "highlight", pageIndex: 1 });
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.pageIndex).toBe(0);
+    expect(imports[0]?.edit).toMatchObject({
+      type: "highlight",
+      pageIndex: 0,
+      rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+      opacity: 0.5,
+    });
+  });
+
+  it("hides only re-importable RaioPDF annotations in viewer display bytes", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+        },
+        {
+          type: "comment",
+          pageIndex: 0,
+          at: { x: 210, y: 160 },
+          text: "Imported note",
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const sourceBytes = await engine.saveToBytes(edited);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const sourcePage = sourcePdf.getPage(0);
+    const foreignAnnotation = sourcePdf.context.obj({
+      Type: "Annot",
+      Subtype: "Text",
+      Rect: [40, 40, 60, 60],
+      Contents: PDFString.of("Foreign note"),
+      F: 0,
+    }) as PDFDict;
+    const annotations = sourcePage.node.lookup(PDFName.of("Annots"), PDFArray);
+    annotations.push(sourcePdf.context.register(foreignAnnotation));
+    const withForeignBytes = await sourcePdf.save();
+
+    const displayBytes = await hideRaioPdfImportedAnnotationsForDisplay(withForeignBytes);
+    const original = await PDFDocument.load(withForeignBytes);
+    const display = await PDFDocument.load(displayBytes);
+    const originalAnnotations = readPageAnnotations(original, 0);
+    const displayAnnotations = readPageAnnotations(display, 0);
+
+    expect(originalAnnotations.map((annotation) =>
+      annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0
+    )).toEqual([4, 4, 0]);
+    expect(displayAnnotations.map((annotation) =>
+      annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0
+    )).toEqual([6, 6, 0]);
+  });
+
+  it("updates and deletes RaioPDF annotations by id without duplicating them", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+          opacity: 0.4,
+        },
+        {
+          type: "comment",
+          pageIndex: 0,
+          at: { x: 210, y: 160 },
+          text: "Delete me",
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const [highlightImport, commentImport] = await engine.readRaioPdfAnnotations(edited);
+
+    if (!highlightImport || !commentImport) {
+      throw new Error("Expected imported highlight and comment annotations.");
+    }
+
+    const updated = await engine.updateAnnotationById(edited, highlightImport.annotId, {
+      type: "highlight",
+      pageIndex: 0,
+      annotId: highlightImport.annotId,
+      rects: [{ x: 55, y: 130, w: 90, h: 14 }],
+      opacity: 0.7,
+    });
+    const deleted = await engine.deleteAnnotationById(updated, commentImport.annotId);
+    const imports = await engine.readRaioPdfAnnotations(deleted);
+    const outputPdf = await PDFDocument.load(await engine.saveToBytes(deleted));
+    const ids = readPageAnnotations(outputPdf, 0).map((annotation) => readString(annotation, "NM"));
+
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.annotId).toBe(highlightImport.annotId);
+    expect(imports[0]?.edit).toMatchObject({
+      type: "highlight",
+      rects: [{ x: 55, y: 130, w: 90, h: 14 }],
+      opacity: 0.7,
+    });
+    expect(ids).toEqual([highlightImport.annotId]);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("flattens a marked markup annotation appearance into page content and removes it", async () => {
@@ -281,6 +493,44 @@ describe("annotation-layer foundation", () => {
     ).toBe(4);
     expect(
       readRaioPdfMarkupAnnotations(nonPrintablePdf.getPage(0))[0]?.dict
+        .lookup(PDFName.of("F"), PDFNumber)
+        .asNumber(),
+    ).toBe(0);
+  });
+
+  it("preserves printMarkupAnnotations=false when updating a saved annotation", async () => {
+    const engine = createLocalPdfEngine();
+    const source = await engine.open(await createPdf([[300, 200]]));
+    const edited = await engine.applyEdits(
+      source,
+      [
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 40, y: 50, w: 80, h: 12 }],
+        },
+      ],
+      { markupMode: "annotation", printMarkupAnnotations: true },
+    );
+    const [imported] = await engine.readRaioPdfAnnotations(edited);
+
+    if (!imported || imported.edit.type !== "highlight") {
+      throw new Error("Expected imported highlight annotation.");
+    }
+
+    const updated = await engine.updateAnnotationById(
+      edited,
+      imported.annotId,
+      {
+        ...imported.edit,
+        rects: [{ x: 60, y: 70, w: 90, h: 14 }],
+      },
+      { printMarkupAnnotations: false },
+    );
+    const updatedPdf = await PDFDocument.load(await engine.saveToBytes(updated));
+
+    expect(
+      readRaioPdfMarkupAnnotations(updatedPdf.getPage(0))[0]?.dict
         .lookup(PDFName.of("F"), PDFNumber)
         .asNumber(),
     ).toBe(0);

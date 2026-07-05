@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  annotationSavePlanHasChanges,
+  buildAnnotationSavePlan,
   computeHighlightLineRects,
   computeTextMarkupLineRects,
   excerpt,
   mergeTextMarkupSelectionRects,
   normalizePdfRectFromPoints,
+  pendingEditsFromRaioAnnotations,
   toPdfEdits,
   type PageTextBox,
   type PendingEdit,
@@ -431,6 +434,165 @@ describe("normalizePdfRectFromPoints", () => {
       w: 80,
       h: 80,
     });
+  });
+});
+
+describe("buildAnnotationSavePlan", () => {
+  it("skips unchanged imports, updates changed imports, deletes removed imports, and appends new edits", () => {
+    const imported = pendingEditsFromRaioAnnotations([
+      {
+        pageIndex: 0,
+        annotId: "keep",
+        edit: {
+          type: "highlight",
+          annotId: "keep",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 20, w: 60, h: 12 }],
+          opacity: 0.4,
+        },
+      },
+      {
+        pageIndex: 0,
+        annotId: "move",
+        edit: {
+          type: "comment",
+          annotId: "move",
+          pageIndex: 0,
+          at: { x: 80, y: 90 },
+          text: "Move me",
+        },
+      },
+      {
+        pageIndex: 0,
+        annotId: "delete",
+        edit: {
+          type: "underline",
+          annotId: "delete",
+          pageIndex: 0,
+          rects: [{ x: 15, y: 40, w: 70, h: 10 }],
+        },
+      },
+    ]);
+    const moved = imported.map((edit) =>
+      edit.annotId === "move" && edit.kind === "comment"
+        ? { ...edit, at: { x: 100, y: 110 } }
+        : edit,
+    );
+    const pending: PendingEdit[] = [
+      moved[0]!,
+      moved[1]!,
+      {
+        kind: "textBox",
+        id: "new-box",
+        pageIndex: 0,
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+        text: "New",
+        fontSizePt: 12,
+      },
+    ];
+
+    const plan = buildAnnotationSavePlan(pending, new Set(["keep", "move", "delete"]));
+
+    expect(annotationSavePlanHasChanges(plan)).toBe(true);
+    expect(plan.appendEdits).toEqual([
+      {
+        type: "textBox",
+        pageIndex: 0,
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+        text: "New",
+        fontSizePt: 12,
+      },
+    ]);
+    expect(plan.updateEdits).toEqual([
+      {
+        annotId: "move",
+        edit: {
+          type: "comment",
+          annotId: "move",
+          pageIndex: 0,
+          at: { x: 100, y: 110 },
+          text: "Move me",
+        },
+      },
+    ]);
+    expect(plan.deleteAnnotIds).toEqual(["delete"]);
+  });
+
+  it("reports no changes for unchanged imported annotations", () => {
+    const pending = pendingEditsFromRaioAnnotations([
+      {
+        pageIndex: 0,
+        annotId: "same",
+        edit: {
+          type: "strikethrough",
+          annotId: "same",
+          pageIndex: 0,
+          rects: [{ x: 15, y: 40, w: 70, h: 10 }],
+          thicknessPt: 2,
+        },
+      },
+    ]);
+    const plan = buildAnnotationSavePlan(pending, new Set(["same"]));
+
+    expect(annotationSavePlanHasChanges(plan)).toBe(false);
+    expect(plan).toMatchObject({
+      appendEdits: [],
+      updateEdits: [],
+      deleteAnnotIds: [],
+    });
+  });
+
+  it("plans flattening without re-appending unchanged imported annotations", () => {
+    const imported = pendingEditsFromRaioAnnotations([
+      {
+        pageIndex: 0,
+        annotId: "existing-highlight",
+        edit: {
+          type: "highlight",
+          annotId: "existing-highlight",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 20, w: 60, h: 12 }],
+          opacity: 0.4,
+        },
+      },
+      {
+        pageIndex: 0,
+        annotId: "existing-comment",
+        edit: {
+          type: "comment",
+          annotId: "existing-comment",
+          pageIndex: 0,
+          at: { x: 80, y: 90 },
+          text: "Already saved",
+        },
+      },
+    ]);
+    const pending: PendingEdit[] = [
+      ...imported,
+      {
+        kind: "shape",
+        id: "new-rect",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+      },
+    ];
+
+    const plan = buildAnnotationSavePlan(
+      pending,
+      new Set(["existing-highlight", "existing-comment"]),
+    );
+
+    expect(plan.appendEdits).toEqual([
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+      },
+    ]);
+    expect(plan.updateEdits).toEqual([]);
+    expect(plan.deleteAnnotIds).toEqual([]);
   });
 });
 

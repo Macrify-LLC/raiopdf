@@ -5572,6 +5572,7 @@ export function App() {
         onPrint={printDocument}
         onPreviousPage={() => setCurrentPage(document.currentPage - 1)}
         onNextPage={() => setCurrentPage(document.currentPage + 1)}
+        onGoToPage={setCurrentPage}
         onZoomOut={() => setZoom(document.zoom - ZOOM_STEP)}
         onZoomIn={() => setZoom(document.zoom + ZOOM_STEP)}
         onFitZoomResolved={setFitZoom}

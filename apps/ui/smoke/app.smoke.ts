@@ -170,7 +170,7 @@ test("renders the Word-generated DCM order fixture", async ({ page }) => {
   await searchInput.fill("Uniform Order Setting Trial");
   await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
   await expect.poll(() => searchResultCount(page)).toBeGreaterThan(0);
-  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+  await expectCommandBarPage(page, 2, 7);
   // Continuous scroll keeps neighboring pages mounted, so highlights on
   // adjacent pages can coexist — exactly one is ever the ACTIVE hit.
   await expect(
@@ -179,19 +179,19 @@ test("renders the Word-generated DCM order fixture", async ({ page }) => {
 
   await page.getByRole("button", { name: "Next search result" }).click();
   await expect(page.locator(".command-bar__search-count")).toHaveText(/2 of [1-9]\d*/);
-  await expect(page.getByText("Page 3 / 7")).toBeVisible();
+  await expectCommandBarPage(page, 3, 7);
 
   await page.getByRole("button", { name: "Previous search result" }).click();
   await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
-  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+  await expectCommandBarPage(page, 2, 7);
 
   await searchInput.press("Enter");
   await expect(page.locator(".command-bar__search-count")).toHaveText(/2 of [1-9]\d*/);
-  await expect(page.getByText("Page 3 / 7")).toBeVisible();
+  await expectCommandBarPage(page, 3, 7);
 
   await searchInput.press("Shift+Enter");
   await expect(page.locator(".command-bar__search-count")).toHaveText(/1 of [1-9]\d*/);
-  await expect(page.getByText("Page 2 / 7")).toBeVisible();
+  await expectCommandBarPage(page, 2, 7);
 
   await searchInput.press("Escape");
   await expect(searchInput).toHaveValue("");
@@ -211,7 +211,7 @@ test("queues rapid rotate and delete clicks without losing the delete", async ({
   await Promise.all([firstRotate, secondRotate, deleteClick]);
   await page.getByRole("button", { name: "Delete Page", exact: true }).click();
 
-  await expect(page.getByText("Page 1 / 2")).toBeVisible();
+  await expectCommandBarPage(page, 1, 2);
   const saved = await savePdf(page);
   await expectPdf(saved, {
     widths: [210, 220],
@@ -296,7 +296,7 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   await combine.focus();
   await page.keyboard.press("Enter");
 
-  await expect(page.getByText("Page 1 / 2")).toBeVisible();
+  await expectCommandBarPage(page, 1, 2);
   await expect(page.getByText("Page 1 of 2")).toBeVisible();
   await expect(page.getByText(/Page 0/)).toHaveCount(0);
   await expect(page.getByText("0 x 0 in")).toHaveCount(0);
@@ -576,7 +576,7 @@ test("organize page grid multi-select extracts selected pages round trip", async
   await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
 
   await page.getByRole("button", { name: "Extract", exact: true }).click();
-  await expect(page.getByText("Page 1 / 2")).toBeVisible();
+  await expectCommandBarPage(page, 1, 2);
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
   const saved = await savePdf(page);
@@ -899,6 +899,11 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
   await expect(mainCanvas(page)).toBeVisible();
+}
+
+async function expectCommandBarPage(page: Page, currentPage: number, pageCount: number): Promise<void> {
+  await expect(page.getByLabel("Go to page")).toHaveValue(String(currentPage));
+  await expect(page.locator(".command-bar__page-label")).toContainText(`/ ${pageCount}`);
 }
 
 function mainCanvas(page: Page): ReturnType<Page["locator"]> {

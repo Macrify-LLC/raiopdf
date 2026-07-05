@@ -44,6 +44,25 @@
   color: var(--ink);
 }
 
+.command-bar__page-input {
+  min-width: 1ch;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.command-bar__page-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
 .command-bar__zoom-label {
   min-width: 34px;
   text-align: center;

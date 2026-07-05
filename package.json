@@ -23,6 +23,7 @@
     "canary": "pnpm canary:ui && pnpm canary:mcp",
     "canary:ui": "pnpm --filter @raiopdf/ui test:canary",
     "canary:mcp": "pnpm build:mcp-runtime && pnpm --filter @raiopdf/mcp test:canary",
+    "smoke:ocr-progress-wrapper": "node scripts/smoke-ocr-progress-wrapper.mjs",
     "prepare": "husky",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Instant, SystemTime},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::FileGrants;
@@ -36,6 +36,8 @@ pub const ERR_FILE_CHANGED: &str = "FILE_CHANGED";
 
 /// Directory name under app data where every per-op temp dir lives.
 pub const PATH_OPS_DIR: &str = "path-ops";
+
+pub const OCR_PROGRESS_EVENT: &str = "raiopdf-ocr-progress";
 
 /// All `PrepPlanStepId`s from `packages/rules`, whether or not an op
 /// implements them. The status response maps each one to its registered op
@@ -74,6 +76,17 @@ pub struct PathOpOutput {
     pub size_bytes: u64,
     pub page_count: u32,
     pub op_report: OpReport,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrProgressPayload {
+    job_token: String,
+    phase: String,
+    description: Option<String>,
+    completed: f64,
+    total: Option<f64>,
+    unit: String,
 }
 
 #[derive(Serialize)]
@@ -546,6 +559,7 @@ pub async fn path_op_ocr(
     grants: tauri::State<'_, FileGrants>,
     grant: String,
     mode: Option<core_ops::OcrMode>,
+    job_token: Option<String>,
 ) -> Result<PathOpOutput, PathOpError> {
     // Older callers omit the mode — default to the text-preserving pass.
     let mode = mode.unwrap_or_default();
@@ -555,13 +569,37 @@ pub async fn path_op_ocr(
         core_ops::OcrMode::ForceOcr => OpSpec::new("ocr", "ocrmypdf", "ocr")
             .note("text layer rebuilt from scratch (--force-ocr); every page is re-rendered"),
     };
+    let progress_app = app.clone();
     run_single_output_op(
         app,
         grants,
         grant,
         spec,
         move |toolchain, input, output, _work_dir| {
-            core_ops::ocr_with_mode(toolchain, input, output, mode)
+            if let Some(job_token) = job_token {
+                let app = progress_app.clone();
+                core_ops::ocr_with_mode_and_progress(
+                    toolchain,
+                    input,
+                    output,
+                    mode,
+                    move |progress| {
+                        let _ = app.emit(
+                            OCR_PROGRESS_EVENT,
+                            OcrProgressPayload {
+                                job_token: job_token.clone(),
+                                phase: progress.phase,
+                                description: progress.description,
+                                completed: progress.completed,
+                                total: progress.total,
+                                unit: progress.unit,
+                            },
+                        );
+                    },
+                )
+            } else {
+                core_ops::ocr_with_mode(toolchain, input, output, mode)
+            }
         },
     )
     .await

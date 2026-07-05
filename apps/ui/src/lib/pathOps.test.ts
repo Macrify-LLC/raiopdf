@@ -145,6 +145,24 @@ describe("path op invoke plumbing", () => {
     expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", { grant: "grant-1", mode: "skip-text" });
   });
 
+  it("passes an OCR job token when progress is requested", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "doc-ocr.pdf",
+      sizeBytes: 10,
+      pageCount: 2,
+      opReport: { op: "ocr", tool: "ocrmypdf", durationMs: 1, inputSizeBytes: 9, outputSizeBytes: 10, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpOcr(grant, "force-ocr", "job-1")).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", {
+      grant: "grant-1",
+      mode: "force-ocr",
+      jobToken: "job-1",
+    });
+  });
+
   it("rethrows a serialized PathOpError payload as a typed PathOpsError", async () => {
     invokeMock.mockRejectedValueOnce({ code: "VERIFICATION_FAILED", message: "still readable" });
 

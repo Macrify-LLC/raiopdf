@@ -130,6 +130,11 @@ import {
   type FileAddResult,
 } from "./lib/readFileForAdd";
 import {
+  listenOcrProgress,
+  newOcrJobToken,
+  type OcrProgressEvent,
+} from "./lib/ocrProgress";
+import {
   isPathOpsRuntime,
   pathOpBatesStamp,
   pathOpCompress,
@@ -261,6 +266,7 @@ export type OcrPhase =
 export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
+  progress?: OcrProgressEvent | null;
 }
 
 function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
@@ -1558,11 +1564,32 @@ export function App() {
         message: ocrType === "force-ocr"
           ? "Rebuilding the searchable text layer — the local engine re-renders the file itself; nothing is loaded into memory."
           : "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+        progress: null,
       });
 
-      void pathOpOcr(grant, ocrType)
-        .then(async (output) => {
+      void (async () => {
+        const jobToken = newOcrJobToken();
+        let unlisten: (() => void) | null = null;
+        try {
+          try {
+            unlisten = await listenOcrProgress(jobToken, (progress) => {
+              if (!isCurrentStreamedRun()) {
+                return;
+              }
+              setOcrState((current) => (
+                current.phase === "processing"
+                  ? { ...current, progress }
+                  : current
+              ));
+            });
+          } catch {
+            // Progress is additive. OCR should still run if event subscription
+            // fails in an unusual desktop/runtime state.
+          }
+
+          const output = await pathOpOcr(grant, ocrType, jobToken);
           if (!isCurrentStreamedRun()) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return;
           }
 
@@ -1578,8 +1605,7 @@ export function App() {
             phase: "done",
             message: "Searchable copy ready — it opened as a new document. Use Save As to keep it.",
           });
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (!isCurrentStreamedRun()) {
             return;
           }
@@ -1588,12 +1614,13 @@ export function App() {
             phase: "error",
             message: pathOpErrorMessage(error, "OCR could not finish. The document was left unchanged."),
           });
-        })
-        .finally(() => {
+        } finally {
+          unlisten?.();
           if (ocrRunRef.current === runId) {
             ocrActiveRef.current = false;
           }
-        });
+        }
+      })();
       return;
     }
 
@@ -1638,6 +1665,7 @@ export function App() {
     setOcrState({
       phase: "starting-engine",
       message: "Starting the PDF engine...",
+      progress: null,
     });
 
     void engineBridge
@@ -1651,6 +1679,7 @@ export function App() {
               message: ocrType === "force-ocr"
                 ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
                 : "Making searchable — page-by-page work happens in the engine.",
+              progress: null,
             });
           }
         },
@@ -1663,6 +1692,7 @@ export function App() {
         setOcrState({
           phase: "verifying",
           message: "Verifying the text layer...",
+          progress: null,
         });
 
         const textLayerCoverage = await inspectTextLayer(ocrResult.bytes);
@@ -5217,6 +5247,7 @@ export function App() {
         <OcrDialog
           phase={ocrState.phase}
           pageCount={document.pageCount}
+          progress={ocrState.progress ?? null}
           onConfirm={confirmOcrDialog}
           onCancel={cancelOcrDialog}
         />

@@ -20,9 +20,11 @@ use std::{
     env,
     ffi::OsString,
     fmt, fs, io,
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::{Arc, Mutex},
+    thread,
 };
 
 use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_entries};
@@ -95,6 +97,8 @@ pub struct PathOpsToolchain {
     pub qpdf: Option<PathBuf>,
     pub ghostscript: Option<PathBuf>,
     pub ocrmypdf: Option<PathBuf>,
+    /// RaioPDF-owned OCRmyPDF API wrapper that emits bounded NDJSON progress.
+    pub ocr_progress: Option<PathBuf>,
     /// Payload bin dirs prepended to PATH when spawning OCRmyPDF (it invokes
     /// `tesseract` and `gs` by name).
     pub path_entries: Vec<PathBuf>,
@@ -130,6 +134,13 @@ impl PathOpsToolchain {
         }
         if let Some(path) = env_file("RAIOPDF_ENGINE_OCRMYPDF") {
             toolchain.ocrmypdf = Some(path);
+            // A caller-provided OCRmyPDF binary is only known to speak the
+            // plain CLI contract. Disable the bundled progress wrapper unless
+            // the caller also explicitly points at a compatible wrapper.
+            toolchain.ocr_progress = None;
+        }
+        if let Some(path) = env_file("RAIOPDF_ENGINE_OCR_PROGRESS") {
+            toolchain.ocr_progress = Some(path);
         }
 
         toolchain
@@ -147,6 +158,10 @@ impl PathOpsToolchain {
             ),
             ocrmypdf: {
                 let candidate = payload_dir.join("ocr").join("ocrmypdf.cmd");
+                candidate.is_file().then_some(candidate)
+            },
+            ocr_progress: {
+                let candidate = payload_dir.join("ocr").join("raiopdf-ocr-progress.cmd");
                 candidate.is_file().then_some(candidate)
             },
             path_entries: payload_path_entries(payload_dir),
@@ -356,6 +371,29 @@ pub fn registry(toolchain: &PathOpsToolchain) -> Vec<PathOpStatus> {
 // Process helpers
 // ---------------------------------------------------------------------------
 
+const OCR_PROGRESS_PREFIX: &str = "@@RAIOPDF_OCR_PROGRESS@@ ";
+const COMMAND_DIAGNOSTIC_LIMIT: usize = 32 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrProgress {
+    pub phase: String,
+    pub description: Option<String>,
+    pub completed: f64,
+    pub total: Option<f64>,
+    pub unit: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrProgressWire {
+    phase: Option<String>,
+    description: Option<String>,
+    completed: f64,
+    total: Option<f64>,
+    unit: Option<String>,
+}
+
 pub(crate) fn run_command(
     program: &Path,
     args: &[OsString],
@@ -385,6 +423,190 @@ pub(crate) fn run_command(
     command.output().map_err(|error| {
         PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
     })
+}
+
+fn run_command_with_ocr_progress<F>(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    on_progress: F,
+) -> OpResult<()>
+where
+    F: FnMut(OcrProgress) + Send + 'static,
+{
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    if !prepend_path.is_empty() {
+        let mut entries = prepend_path.to_vec();
+        if let Some(inherited) = env::var_os("PATH") {
+            entries.extend(env::split_paths(&inherited));
+        }
+        if let Ok(joined) = env::join_paths(entries) {
+            command.env("PATH", joined);
+        }
+    }
+    crate::apply_platform_spawn_flags(&mut command);
+
+    let mut child = command.spawn().map_err(|error| {
+        PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
+    })?;
+
+    let diagnostics = Arc::new(Mutex::new(String::new()));
+    let stdout_thread = child
+        .stdout
+        .take()
+        .map(|stdout| drain_plain_output(stdout, Arc::clone(&diagnostics)));
+    let stderr_thread = child
+        .stderr
+        .take()
+        .map(|stderr| drain_ocr_progress_output(stderr, Arc::clone(&diagnostics), on_progress));
+
+    let status = child.wait().map_err(|error| {
+        PathOpError::failed(format!("{} wait failed: {error}", program.display()))
+    })?;
+
+    if let Some(handle) = stdout_thread {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_thread {
+        let _ = handle.join();
+    }
+
+    if status.success() {
+        return Ok(());
+    }
+
+    let detail = diagnostics
+        .lock()
+        .map(|buffer| buffer.trim().to_string())
+        .unwrap_or_default();
+    let detail = if detail.is_empty() {
+        "no diagnostics captured".to_string()
+    } else {
+        detail
+    };
+    Err(PathOpError::failed(format!(
+        "ocrmypdf failed ({status}): {detail}"
+    )))
+}
+
+fn drain_plain_output<R>(reader: R, diagnostics: Arc<Mutex<String>>) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => push_capped_diagnostic(&diagnostics, &line),
+                Err(error) => {
+                    push_capped_diagnostic(&diagnostics, &format!("output read failed: {error}\n"));
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn drain_ocr_progress_output<R, F>(
+    reader: R,
+    diagnostics: Arc<Mutex<String>>,
+    mut on_progress: F,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+    F: FnMut(OcrProgress) + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Some(progress) = parse_ocr_progress_line(line.trim_end()) {
+                        on_progress(progress);
+                    } else {
+                        push_capped_diagnostic(&diagnostics, &line);
+                    }
+                }
+                Err(error) => {
+                    push_capped_diagnostic(
+                        &diagnostics,
+                        &format!("error output read failed: {error}\n"),
+                    );
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn parse_ocr_progress_line(line: &str) -> Option<OcrProgress> {
+    let json = line.strip_prefix(OCR_PROGRESS_PREFIX)?;
+    let wire: OcrProgressWire = serde_json::from_str(json).ok()?;
+    if !wire.completed.is_finite() || wire.completed < 0.0 {
+        return None;
+    }
+    let total = match wire.total {
+        Some(total) if total.is_finite() && total > 0.0 => Some(total),
+        Some(total) if total.is_finite() && total == 0.0 => None,
+        Some(_) => return None,
+        None => None,
+    };
+    Some(OcrProgress {
+        phase: non_empty_or(wire.phase, "ocr"),
+        description: wire.description.and_then(non_empty_string),
+        completed: wire.completed,
+        total,
+        unit: non_empty_or(wire.unit, "unit"),
+    })
+}
+
+fn non_empty_or(value: Option<String>, fallback: &str) -> String {
+    value
+        .and_then(non_empty_string)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn push_capped_diagnostic(diagnostics: &Arc<Mutex<String>>, text: &str) {
+    let Ok(mut buffer) = diagnostics.lock() else {
+        return;
+    };
+    if buffer.len() >= COMMAND_DIAGNOSTIC_LIMIT {
+        return;
+    }
+    let remaining = COMMAND_DIAGNOSTIC_LIMIT - buffer.len();
+    if text.len() <= remaining {
+        buffer.push_str(text);
+        return;
+    }
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let next = used + ch.len_utf8();
+        if next > remaining {
+            break;
+        }
+        buffer.push(ch);
+        used = next;
+    }
 }
 
 pub(crate) fn expect_success(tool: &str, output: &Output) -> OpResult<()> {
@@ -1248,12 +1470,23 @@ impl OcrMode {
             OcrMode::ForceOcr => "--force-ocr",
         }
     }
+
+    pub const fn wrapper_mode(self) -> &'static str {
+        match self {
+            OcrMode::SkipText => "skip",
+            OcrMode::ForceOcr => "force",
+        }
+    }
 }
 
 /// Pure argument construction for the OCR op (unit-testable without the
 /// toolchain): mode flag first, then the fixed output-type pair.
 fn ocr_arguments(mode: OcrMode) -> Vec<OsString> {
     args(&[mode.flag(), "--output-type", "pdf"])
+}
+
+fn ocr_progress_arguments(mode: OcrMode) -> Vec<OsString> {
+    args(&["--mode", mode.wrapper_mode(), "--output-type", "pdf"])
 }
 
 /// By-path OCRmyPDF run — skips the sidecar HTTP byte upload entirely. The
@@ -1279,6 +1512,37 @@ pub fn ocr_with_mode(
     arguments.push(path_arg(output_path));
     let output = run_command(ocrmypdf, &arguments, None, &toolchain.path_entries)?;
     expect_success("ocrmypdf", &output)?;
+    require_output("ocrmypdf", output_path)?;
+    Ok(())
+}
+
+/// OCR through RaioPDF's bundled OCRmyPDF API wrapper. When the wrapper is not
+/// available (for example an external `RAIOPDF_ENGINE_OCRMYPDF` override), the
+/// operation falls back to the plain CLI path with no progress events.
+pub fn ocr_with_mode_and_progress<F>(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    output_path: &Path,
+    mode: OcrMode,
+    on_progress: F,
+) -> OpResult<()>
+where
+    F: FnMut(OcrProgress) + Send + 'static,
+{
+    require_input_file(input)?;
+    let Some(progress_runner) = toolchain.ocr_progress.as_deref() else {
+        return ocr_with_mode(toolchain, input, output_path, mode);
+    };
+    let mut arguments = ocr_progress_arguments(mode);
+    arguments.push(path_arg(input));
+    arguments.push(path_arg(output_path));
+    run_command_with_ocr_progress(
+        progress_runner,
+        &arguments,
+        None,
+        &toolchain.path_entries,
+        on_progress,
+    )?;
     require_output("ocrmypdf", output_path)?;
     Ok(())
 }
@@ -3283,6 +3547,50 @@ mod tests {
             assert_eq!(arguments[1], OsString::from("--output-type"));
             assert_eq!(arguments[2], OsString::from("pdf"));
         }
+    }
+
+    #[test]
+    fn ocr_progress_arguments_reflect_mode() {
+        let skip = ocr_progress_arguments(OcrMode::SkipText);
+        assert_eq!(skip[0], OsString::from("--mode"));
+        assert_eq!(skip[1], OsString::from("skip"));
+        let force = ocr_progress_arguments(OcrMode::ForceOcr);
+        assert_eq!(force[0], OsString::from("--mode"));
+        assert_eq!(force[1], OsString::from("force"));
+        for arguments in [&skip, &force] {
+            assert_eq!(arguments[2], OsString::from("--output-type"));
+            assert_eq!(arguments[3], OsString::from("pdf"));
+        }
+    }
+
+    #[test]
+    fn parse_ocr_progress_line_accepts_only_prefixed_ndjson() {
+        let progress = parse_ocr_progress_line(
+            r#"@@RAIOPDF_OCR_PROGRESS@@ {"phase":"ocr","description":"OCR","completed":2.5,"total":5,"unit":"page"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            progress,
+            OcrProgress {
+                phase: "ocr".to_string(),
+                description: Some("OCR".to_string()),
+                completed: 2.5,
+                total: Some(5.0),
+                unit: "page".to_string(),
+            }
+        );
+
+        assert!(parse_ocr_progress_line("    1 Rasterizing page 1").is_none());
+        assert!(parse_ocr_progress_line("@@RAIOPDF_OCR_PROGRESS@@ not-json").is_none());
+        let indeterminate = parse_ocr_progress_line(
+            r#"@@RAIOPDF_OCR_PROGRESS@@ {"phase":"postprocess","description":"Recompressing","completed":0,"total":0,"unit":"image"}"#,
+        )
+        .unwrap();
+        assert_eq!(indeterminate.total, None);
+        assert!(parse_ocr_progress_line(
+            r#"@@RAIOPDF_OCR_PROGRESS@@ {"phase":"ocr","completed":0,"total":-1}"#
+        )
+        .is_none());
     }
 
     #[test]

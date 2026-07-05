@@ -273,6 +273,16 @@
   }
   .btn--outline:hover{ border-color:var(--gold); color:var(--gold); }
 
+  .btn--ghost{
+    background:transparent; color:rgba(255,255,255,.6);
+    border:1px solid rgba(255,255,255,.16);
+    padding:9px 18px; font-size:12.5px; font-weight:600; border-radius:999px;
+  }
+  .btn--ghost:hover{ border-color:rgba(245,185,66,.5); color:var(--gold); background:rgba(245,185,66,.06); }
+  .btn--ghost:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
+
+  .hero__aux{ display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+
   .download-loading{ font-size:14px; color:rgba(255,255,255,.65); }
   .download-loading::before{
     content:""; display:inline-block; width:9px; height:9px; margin-right:8px;
@@ -428,6 +438,7 @@
   .footer__support{ margin-top:20px; display:flex; flex-direction:column; gap:8px; font-size:13.5px; }
   .footer__support a{ color:rgba(234,242,251,.85); text-decoration:underline; text-underline-offset:2px; }
   .footer__support a:hover{ color:var(--gold); }
+  .footer__project-label{ margin-top:24px; }
 
   .footer__bottom{
     max-width:1120px; margin:40px auto 0; padding-top:24px; border-top:1px solid rgba(255,255,255,.08);
@@ -473,8 +484,61 @@
 
   /* full-width motion bands */
   .motion-band{ padding:0; line-height:0; overflow:hidden; }
-  .motion-band--divider{ height:clamp(180px,20vw,240px); background:linear-gradient(180deg, var(--bg-alt), var(--surface)); }
+  .motion-band--divider{
+    height:clamp(180px,20vw,240px); position:relative;
+    /* dark hero above -> light section below: sky fades out of the hero's own
+       bottom tone (--muted-blend), fully resolved to --bg-alt by the horizon
+       so the ground-cover below reads as one continuous surface, not a seam. */
+    background:linear-gradient(180deg, var(--muted-blend) 0%, var(--bg-alt) 55%);
+  }
   .motion-band--marquee{ height:128px; background:var(--surface); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+
+  /* sun-divider scene (inlined, was motion/03-sun-divider.html) — namespaced sundiv- */
+  .sundiv-glow-wash{
+    position:absolute;left:50%;top:50%;width:64%;height:170%;
+    transform:translate(-50%,-50%);
+    background:radial-gradient(ellipse at center, rgba(245,185,66,.38), rgba(245,185,66,.10) 45%, transparent 70%);
+    filter:blur(14px);
+    animation:sundiv-wash-breathe 7s ease-in-out infinite;
+  }
+  @keyframes sundiv-wash-breathe{
+    0%,100%{ opacity:.6; transform:translate(-50%,-50%) scale(1); }
+    50%{ opacity:1; transform:translate(-50%,-50%) scale(1.06); }
+  }
+  .sundiv-sun-pos{
+    position:absolute;left:50%;top:56%;width:11.4%;aspect-ratio:1;
+    animation:sundiv-bob 8s ease-in-out infinite;
+  }
+  @keyframes sundiv-bob{
+    0%,100%{ transform:translate(-50%,-50%) translateY(0); }
+    50%{ transform:translate(-50%,-50%) translateY(-7px); }
+  }
+  .sundiv-suncore{
+    position:absolute;inset:0;margin:auto;width:46%;height:46%;border-radius:50%;
+    background:radial-gradient(circle at 50% 42%, var(--gold-pale), var(--gold) 55%, var(--gold-deep) 88%);
+    box-shadow:0 0 30px 10px rgba(245,185,66,.5);
+  }
+  .sundiv-rays{ position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 4px 16px rgba(224,147,46,.35)); }
+  .sundiv-rays #sundiv-rays-group{ transform-origin:100px 100px; animation:sundiv-spin 26s linear infinite; }
+  @keyframes sundiv-spin{ to{ transform:rotate(360deg); } }
+  .sundiv-ground-cover{
+    position:absolute;left:0;right:0;top:50%;bottom:0;
+    background:var(--bg-alt);
+  }
+  .sundiv-horizon-glow-bar{
+    position:absolute;left:50%;top:50%;width:58%;height:36px;transform:translate(-50%,-50%);
+    background:radial-gradient(ellipse at center, rgba(245,185,66,.55), rgba(245,185,66,.12) 55%, transparent 80%);
+    filter:blur(6px);
+  }
+  .sundiv-horizon-line{
+    position:absolute;left:0;right:0;top:50%;height:1.5px;
+    background:linear-gradient(90deg,transparent,var(--gold-deep) 12%,var(--gold) 50%,var(--gold-deep) 88%,transparent);
+    box-shadow:0 0 8px 1px rgba(245,185,66,.6);
+  }
+  @media (prefers-reduced-motion:reduce){
+    .sundiv-glow-wash, .sundiv-sun-pos, .sundiv-rays #sundiv-rays-group{ animation:none!important; }
+    .sundiv-sun-pos{ transform:translate(-50%,-50%); }
+  }
 
   /* feature-demo grid — one uniform card each: bare (transparent) animation + native caption */
   .feature-demos__grid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; margin-bottom:44px; }
@@ -515,11 +579,69 @@
   .equipai__points strong{ color:#fff; font-weight:700; }
 
   /* finale: dawn atmosphere + download CTA */
-  .dawn-band{ height:clamp(200px,24vw,300px); overflow:hidden; line-height:0; background:var(--navy-deep); }
   .finale{ position:relative; background:var(--navy-deep); overflow:hidden; padding:0; }
   .finale__cta{ position:relative; height:clamp(340px,40vw,440px); }
   .finale__hit{ position:absolute; inset:0; z-index:3; display:block; }
   .finale__hit:focus-visible{ outline:3px solid var(--gold); outline-offset:-6px; border-radius:12px; }
+  /* soft flat-navy feather at the very bottom edge only: the download-CTA
+     iframe's own radial-vignette background (motion/15-download-cta-v2.html,
+     left as an iframe — see build notes) reads slightly darker than
+     --navy-deep at its lower corners, which showed as a hairline seam
+     against the dawn-band beneath it. The top edge isn't feathered — that
+     boundary is the page's own light->dark section break (.honest is
+     --surface) and is meant to read as a hard block. */
+  .finale__cta::after{
+    content:""; position:absolute; left:0; right:0; bottom:0; height:15%; z-index:1;
+    pointer-events:none; background:linear-gradient(0deg, var(--navy-deep), transparent);
+  }
+
+  /* dawn-band scene (inlined, was motion/06-dawn-atmosphere.html) — namespaced dawn-.
+     container-type:size lets the cq* units below scale to this band's own box,
+     exactly mirroring the vh/vw math the source file wrote for its own iframe
+     viewport (which was always sized to this same band). */
+  .dawn-band{
+    height:clamp(200px,24vw,300px); overflow:hidden; line-height:0; position:relative;
+    container-type:size; container-name:dawnband;
+    /* flat --navy-deep at both edges so it melts into .finale above and .footer
+       below with no boxed seam; the lift to #123056 mid-band is the "dawn" warmth. */
+    background:linear-gradient(180deg, var(--navy-deep) 0%, #123056 48%, var(--navy-deep) 100%);
+  }
+  .dawn-scene{ position:absolute; inset:0; overflow:hidden; }
+  .dawn-glow{
+    position:absolute;left:50%;bottom:-38%;translate:-50% 0;width:120cqw;height:90cqh;border-radius:50%;
+    background:radial-gradient(circle,rgba(245,185,66,.55),rgba(245,185,66,.18) 38%,transparent 62%);
+    filter:blur(8px);animation:dawn-rise 12s ease-in-out infinite;
+  }
+  @keyframes dawn-rise{ 0%,100%{ transform:translateY(4%) scale(1); } 50%{ transform:translateY(-3%) scale(1.05); } }
+  .dawn-suncore{
+    position:absolute;left:50%;bottom:6%;translate:-50% 0;width:26cqmin;height:26cqmin;border-radius:50%;
+    background:radial-gradient(circle at 50% 45%,#FFE7B3,#F5B942 55%,#E0932E 80%);
+    box-shadow:0 0 90px 30px rgba(245,185,66,.5);animation:dawn-bob 12s ease-in-out infinite;
+  }
+  @keyframes dawn-bob{ 0%,100%{ transform:translateY(6px); } 50%{ transform:translateY(-10px); } }
+  .dawn-beams{ position:absolute;left:50%;bottom:0;translate:-50% 0;width:1px;height:100%;transform-origin:bottom center; }
+  .dawn-beam{
+    position:absolute;bottom:0;left:0;width:22cqmin;height:130cqh;transform-origin:bottom center;
+    background:linear-gradient(180deg,transparent,rgba(122,200,240,.14) 55%,rgba(245,185,66,.20));
+    filter:blur(3px);mix-blend-mode:screen;animation:dawn-flick 9s ease-in-out infinite alternate;
+  }
+  .dawn-beam--1{ transform:rotate(-34deg); }
+  .dawn-beam--2{ transform:rotate(-16deg); animation-delay:-2s; }
+  .dawn-beam--3{ transform:rotate(0deg); animation-delay:-4s; opacity:.8; }
+  .dawn-beam--4{ transform:rotate(16deg); animation-delay:-1s; }
+  .dawn-beam--5{ transform:rotate(34deg); animation-delay:-3s; }
+  @keyframes dawn-flick{ from{ opacity:.35; } to{ opacity:.85; } }
+  .dawn-cloud{ position:absolute;border-radius:50%;filter:blur(26px);opacity:.5;background:radial-gradient(circle,rgba(30,63,110,.9),transparent 70%); }
+  .dawn-cloud--1{ width:52cqw;height:22cqh;top:14%;left:-20%;animation:dawn-drift1 42s linear infinite; }
+  .dawn-cloud--2{ width:40cqw;height:18cqh;top:30%;left:60%;background:radial-gradient(circle,rgba(11,26,46,.9),transparent 70%);animation:dawn-drift2 55s linear infinite; }
+  .dawn-cloud--3{ width:60cqw;height:24cqh;top:4%;left:30%;animation:dawn-drift1 68s linear infinite;opacity:.35; }
+  .dawn-cloud--4{ width:34cqw;height:16cqh;top:44%;left:-10%;background:radial-gradient(circle,rgba(18,48,86,.8),transparent 70%);animation:dawn-drift2 48s linear infinite; }
+  @keyframes dawn-drift1{ from{ transform:translateX(-10cqw); } to{ transform:translateX(120cqw); } }
+  @keyframes dawn-drift2{ from{ transform:translateX(10cqw); } to{ transform:translateX(-120cqw); } }
+  .dawn-vignette{ position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(4,10,18,.7));pointer-events:none; }
+  @media (prefers-reduced-motion:reduce){
+    .dawn-glow, .dawn-suncore, .dawn-beam, .dawn-cloud{ animation:none!important; }
+  }
 
   @media (max-width:980px){
     .hero__content{ grid-template-columns:1fr; }
@@ -627,6 +749,11 @@
       </div>
 
       <p class="hero__meta-note">Windows only today. macOS later — no date promised.</p>
+
+      <div class="hero__aux">
+        <a class="btn btn--ghost" href="https://github.com/Macrify-LLC/raiopdf/blob/main/FAQ.md" target="_blank" rel="noopener">FAQ</a>
+        <a class="btn btn--ghost" href="https://github.com/Macrify-LLC/raiopdf/blob/main/ROADMAP.md" target="_blank" rel="noopener">Roadmap</a>
+      </div>
       </div><!-- /.hero__copy -->
 
       <div class="hero__showcase" aria-hidden="true">
@@ -635,9 +762,46 @@
     </div>
   </section>
 
-  <!-- sunrise divider -->
+  <!-- sunrise divider (inlined scene, was an iframe onto motion/03-sun-divider.html) -->
   <div class="motion-band motion-band--divider" aria-hidden="true">
-    <iframe class="motion-frame" src="./motion/03-sun-divider.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
+    <div class="sundiv-glow-wash"></div>
+    <div class="sundiv-sun-pos">
+      <div class="sundiv-suncore"></div>
+      <svg class="sundiv-rays" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <g id="sundiv-rays-group">
+          <path d="M141.80,95.91 L191.56,91.03 L191.00,86.48 L141.54,93.83 Z" fill="var(--gold-deep)"/>
+          <path d="M139.67,86.20 L186.89,69.77 L185.35,65.66 L138.96,84.32 Z" fill="var(--gold)"/>
+          <path d="M135.70,77.87 L178.19,51.52 L173.27,44.36 L133.45,74.60 Z" fill="var(--gold-deep)"/>
+          <path d="M129.10,69.71 L163.74,33.66 L158.28,28.81 L126.61,67.50 Z" fill="var(--gold)"/>
+          <path d="M120.04,63.09 L143.90,19.15 L141.04,17.66 L118.74,62.41 Z" fill="var(--gold-deep)"/>
+          <path d="M111.15,59.51 L124.42,11.30 L120.59,10.33 L109.40,59.07 Z" fill="var(--gold)"/>
+          <path d="M101.60,58.03 L103.51,8.07 L97.30,8.04 L98.77,58.02 Z" fill="var(--gold-deep)"/>
+          <path d="M91.60,58.85 L81.61,9.86 L75.25,11.39 L88.70,59.55 Z" fill="var(--gold)"/>
+          <path d="M81.98,62.06 L60.52,16.90 L54.65,19.95 L79.30,63.46 Z" fill="var(--gold-deep)"/>
+          <path d="M73.28,67.59 L41.48,29.01 L36.06,33.85 L70.81,69.80 Z" fill="var(--gold)"/>
+          <path d="M65.83,75.57 L25.16,46.49 L23.04,49.59 L64.87,76.98 Z" fill="var(--gold-deep)"/>
+          <path d="M61.18,83.98 L14.96,64.90 L12.93,70.28 L60.25,86.43 Z" fill="var(--gold)"/>
+          <path d="M58.45,93.88 L8.98,86.59 L8.55,89.97 L58.25,95.42 Z" fill="var(--gold-deep)"/>
+          <path d="M58.17,103.78 L8.37,108.27 L9.11,114.23 L58.51,106.49 Z" fill="var(--gold)"/>
+          <path d="M60.29,113.69 L13.03,129.99 L14.69,134.44 L61.05,115.72 Z" fill="var(--gold-deep)"/>
+          <path d="M65.05,123.29 L23.45,151.03 L25.62,154.14 L66.04,124.72 Z" fill="var(--gold)"/>
+          <path d="M71.49,130.84 L37.54,167.55 L40.07,169.81 L72.64,131.87 Z" fill="var(--gold-deep)"/>
+          <path d="M79.38,136.59 L54.84,180.15 L59.22,182.47 L81.38,137.65 Z" fill="var(--gold)"/>
+          <path d="M88.61,140.43 L75.04,188.55 L80.01,189.80 L90.88,141.00 Z" fill="var(--gold-deep)"/>
+          <path d="M99.04,141.99 L97.91,191.98 L101.78,191.98 L100.81,141.99 Z" fill="var(--gold)"/>
+          <path d="M108.48,141.14 L118.57,190.11 L124.21,188.76 L111.05,140.52 Z" fill="var(--gold-deep)"/>
+          <path d="M117.63,138.12 L138.62,183.50 L145.79,179.80 L120.90,136.43 Z" fill="var(--gold)"/>
+          <path d="M127.33,131.89 L159.86,169.86 L162.36,167.64 L128.47,130.88 Z" fill="var(--gold-deep)"/>
+          <path d="M133.58,125.22 L173.56,155.25 L177.22,150.01 L135.25,122.83 Z" fill="var(--gold)"/>
+          <path d="M138.51,116.77 L184.35,136.73 L187.30,129.02 L139.86,113.25 Z" fill="var(--gold-deep)"/>
+          <path d="M141.49,106.53 L190.88,114.30 L191.59,108.64 L141.81,103.94 Z" fill="var(--gold)"/>
+        </g>
+        <g id="sundiv-sun-ring"><circle cx="100" cy="100" r="42" fill="none" stroke="var(--navy-deep)" stroke-width="5"/></g>
+      </svg>
+    </div>
+    <div class="sundiv-ground-cover"></div>
+    <div class="sundiv-horizon-glow-bar"></div>
+    <div class="sundiv-horizon-line"></div>
   </div>
 
   <section class="philosophy" id="philosophy">
@@ -914,9 +1078,19 @@
   </div>
 </section>
 
-<!-- dawn atmosphere — closing breath, below the download -->
+<!-- dawn atmosphere — closing breath, below the download (inlined scene, was an
+     iframe onto motion/06-dawn-atmosphere.html) -->
 <div class="dawn-band" aria-hidden="true">
-  <iframe class="motion-frame" src="./motion/06-dawn-atmosphere.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
+  <div class="dawn-scene">
+    <div class="dawn-cloud dawn-cloud--3"></div>
+    <div class="dawn-beams">
+      <span class="dawn-beam dawn-beam--1"></span><span class="dawn-beam dawn-beam--2"></span><span class="dawn-beam dawn-beam--3"></span><span class="dawn-beam dawn-beam--4"></span><span class="dawn-beam dawn-beam--5"></span>
+    </div>
+    <div class="dawn-glow"></div>
+    <div class="dawn-suncore"></div>
+    <div class="dawn-cloud dawn-cloud--1"></div><div class="dawn-cloud dawn-cloud--2"></div><div class="dawn-cloud dawn-cloud--4"></div>
+    <div class="dawn-vignette"></div>
+  </div>
 </div>
 
 <footer class="footer">
@@ -943,6 +1117,11 @@
       <div class="footer__support">
         <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>
         <a href="mailto:support@macrify.me">support@macrify.me (best-effort, community-supported)</a>
+      </div>
+      <h4 class="footer__project-label">Project</h4>
+      <div class="footer__support">
+        <a href="https://github.com/Macrify-LLC/raiopdf/blob/main/FAQ.md" target="_blank" rel="noopener">FAQ</a>
+        <a href="https://github.com/Macrify-LLC/raiopdf/blob/main/ROADMAP.md" target="_blank" rel="noopener">Roadmap</a>
       </div>
     </div>
   </div>

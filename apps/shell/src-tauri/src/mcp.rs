@@ -9,10 +9,12 @@ use std::fs;
 use std::io::Write;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
+
+use crate::FileGrants;
 
 const FLAG_DIR: &str = "me.macrify.raiopdf";
 const FLAG_FILE: &str = "mcp-enabled";
@@ -32,6 +34,17 @@ pub struct McpStatus {
 pub struct ProductionSetSource {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    designation: Option<String>,
+}
+
+/// What the renderer actually sends: an opaque grant, never a real path. The
+/// grant is resolved to a filesystem path only here in Rust, immediately
+/// before it's handed to the one-shot subprocess -- the resolved path never
+/// crosses back over IPC to the renderer.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionSetSourceGrant {
+    grant: String,
     designation: Option<String>,
 }
 
@@ -83,6 +96,15 @@ pub struct ProductionSetShellOutput {
 pub struct FilingPacketSource {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+}
+
+/// Renderer-facing counterpart to `FilingPacketSource` -- carries an opaque
+/// grant instead of a path. See `ProductionSetSourceGrant` for why.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilingPacketSourceGrant {
+    grant: String,
     display_name: Option<String>,
 }
 
@@ -259,7 +281,7 @@ pub fn mcp_set_enabled(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn build_production_set(
-    sources: Vec<ProductionSetSource>,
+    sources: Vec<ProductionSetSourceGrant>,
     output_dir: String,
     prefix: String,
     start: Option<u32>,
@@ -268,7 +290,19 @@ pub fn build_production_set(
     include_index: bool,
     combined_pdf: bool,
     volume_size_mb: Option<f64>,
+    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
+    let output_dir = resolve_output_dir(&output_dir)?;
+    let sources = sources
+        .into_iter()
+        .map(|source| {
+            Ok(ProductionSetSource {
+                path: resolve_source_path(&file_grants, &source.grant)?,
+                designation: source.designation,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let input = ProductionSetOneShotInput {
         sources,
         output_dir,
@@ -306,11 +340,18 @@ pub fn build_production_set(
 
 #[tauri::command]
 pub fn batch_cleanup(
-    inputs: Vec<String>,
+    input_grants: Vec<String>,
     output_dir: String,
     pack_id: Option<String>,
     operations: BatchCleanupOperations,
+    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<BatchCleanupShellOutput, String> {
+    let output_dir = resolve_output_dir(&output_dir)?;
+    let inputs = input_grants
+        .iter()
+        .map(|grant| resolve_source_path(&file_grants, grant))
+        .collect::<Result<Vec<_>, String>>()?;
+
     let input = BatchCleanupOneShotInput {
         inputs,
         output_dir,
@@ -342,7 +383,7 @@ pub fn batch_cleanup(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn build_filing_packet(
-    sources: Vec<FilingPacketSource>,
+    sources: Vec<FilingPacketSourceGrant>,
     output_dir: String,
     pack: String,
     layout_mode: String,
@@ -351,7 +392,19 @@ pub fn build_filing_packet(
     max_envelope_bytes: Option<u64>,
     selected_step_ids: Vec<String>,
     split_size_mb: Option<f64>,
+    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<FilingPacketShellOutput, String> {
+    let output_dir = resolve_output_dir(&output_dir)?;
+    let sources = sources
+        .into_iter()
+        .map(|source| {
+            Ok(FilingPacketSource {
+                path: resolve_source_path(&file_grants, &source.grant)?,
+                display_name: source.display_name,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let input = FilingPacketOneShotInput {
         sources,
         output_dir,
@@ -384,6 +437,30 @@ pub fn build_filing_packet(
             .ok_or_else(|| "build_filing_packet result did not include packetJson".to_string())?,
         combined_pdf: output.combined_pdf,
     })
+}
+
+fn path_to_utf8_string(path: PathBuf, what: &str) -> Result<String, String> {
+    path.into_os_string()
+        .into_string()
+        .map_err(|_| format!("{what} path is not valid UTF-8"))
+}
+
+/// Resolves a renderer-supplied grant to a real filesystem path. The grant
+/// registry is the same one backing every other file operation (open, save,
+/// range reads) -- an unrecognized or expired grant fails closed rather than
+/// falling back to treating the input as a literal path.
+fn resolve_source_path(file_grants: &FileGrants, grant: &str) -> Result<String, String> {
+    path_to_utf8_string(file_grants.resolve(grant)?, "File grant")
+}
+
+/// Canonicalizes and validates the output folder in Rust before it's used by
+/// any of the one-shot subprocess commands, mirroring `validate_output_directory`
+/// used by the other save/export flows in `lib.rs`.
+fn resolve_output_dir(output_dir: &str) -> Result<String, String> {
+    path_to_utf8_string(
+        crate::validate_output_directory(Path::new(output_dir))?,
+        "Selected output folder",
+    )
 }
 
 fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>, String> {

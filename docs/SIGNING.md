@@ -64,9 +64,10 @@ read from an environment variable.
 The signing overlay enables `createUpdaterArtifacts`, so a signed build also produces the
 Tauri **updater signatures** (`*-setup.exe.sig`). That step needs the **minisign updater
 key** — separate from the Certum Authenticode cert — supplied via `TAURI_SIGNING_PRIVATE_KEY`
-+ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Both live in 1Password (Macrify vault, item
-*"Raio Tauri Private Signing Key 7/3"*: `credential` field = private key, `password` field =
-password). The build also stamps the app version from the **git tag on the current commit**,
++ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Both live in your organization's secret manager
+(the `credential` field is the private key, the `password` field is its password) — see
+your private release runbook for the exact vault/item reference. The build also stamps
+the app version from the **git tag on the current commit**,
 so tag the release before building — an untagged commit fails the stamp rather than shipping
 a placeholder version.
 
@@ -81,9 +82,11 @@ $env:RAIOPDF_SIGN_THUMBPRINT = "PASTE_YOUR_THUMBPRINT_HERE"
 # Optional — defaults to http://time.certum.pl:
 # $env:RAIOPDF_SIGN_TIMESTAMP_URL = "http://time.certum.pl"
 
-# 3. Supply the minisign updater key (from 1Password) so updater .sig files are produced:
-$env:TAURI_SIGNING_PRIVATE_KEY = op read "op://Macrify/Raio Tauri Private Signing Key 7/3/credential"
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = op read "op://Macrify/Raio Tauri Private Signing Key 7/3/password"
+# 3. Supply the minisign updater key (from your secret manager) so updater .sig files
+#    are produced. Example using the 1Password CLI against a private vault/item you've
+#    set up yourself:
+$env:TAURI_SIGNING_PRIVATE_KEY = op read "op://<vault>/<item>/credential"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = op read "op://<vault>/<item>/password"
 
 # 4. Tag the release commit (the build stamps the version from this tag):
 git tag v0.1.0   # example

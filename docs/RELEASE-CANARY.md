@@ -58,8 +58,8 @@ MB, cached under `installer/.payload-cache/`). It only needs to run when the pay
 missing or the pins change.
 
 > **Windows / disk note.** Playwright installs Chromium to `PLAYWRIGHT_BROWSERS_PATH` if
-> set, otherwise to `%LOCALAPPDATA%\ms-playwright` (the C drive). On the maintainer's
-> machine `PLAYWRIGHT_BROWSERS_PATH` is set to `D:\ms-playwright` to keep browsers off C.
+> set, otherwise to `%LOCALAPPDATA%\ms-playwright` (the C drive). If C: space is tight,
+> set `PLAYWRIGHT_BROWSERS_PATH` to a directory on another drive to keep browsers off C.
 
 ## Running it
 
@@ -159,18 +159,18 @@ RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
 ```
 
 When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
-disk, point `RAIOPDF_LARGE_FIXTURES_DIR` at the local-only fixture folder instead
-— the synthetic file is the stand-in, not the goal:
+disk, point `RAIOPDF_LARGE_FIXTURES_DIR` at your own local, private fixture folder
+instead — the synthetic file is the stand-in, not the goal:
 
 ```powershell
-$env:RAIOPDF_ENGINE_PAYLOAD_DIR = "D:\Macrify\raiopdf\apps\shell\src-tauri\payload"
-$env:RAIOPDF_LARGE_FIXTURES_DIR = "H:\Shared drives\Macrify\RaioPDF\Canary\test-objects"
+$env:RAIOPDF_ENGINE_PAYLOAD_DIR = "<repo>\apps\shell\src-tauri\payload"
+$env:RAIOPDF_LARGE_FIXTURES_DIR = "<private-fixtures-dir>"
 pnpm canary:large
 ```
 
 `canary:large` scans the folder recursively for PDFs at least 40 MB by default,
 then runs the path-based filing pipeline (`normalize-pages` + `split-by-size`)
-against each one. That folder is Drive-local, contains real legal examples, and
+against each one. That folder is maintainer-local, contains real legal examples, and
 must never be committed. If `RAIOPDF_LARGE_FIXTURE` or
 `RAIOPDF_LARGE_FIXTURES_DIR` is set but no matching PDFs are found, the canary
 fails instead of silently passing.

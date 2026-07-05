@@ -235,18 +235,39 @@ copy_single_root_contents() {
 
 copy_engine_jar() {
   local dest="$PAYLOAD_DIR/engine/stirling.jar"
-  local dist_jar
+  local pinned_tag dist_jar
 
-  dist_jar=$(find "$REPO_ROOT/engine/dist" -maxdepth 1 -type f -name "*-${TARGET_PLATFORM}.jar" -print -quit 2>/dev/null || true)
-  if [[ -z "$dist_jar" ]]; then
-    configure_build_jdk "$BUILD_JDK_ZIP"
-    bash "$REPO_ROOT/engine/vendor.sh"
-    PLATFORM="$TARGET_PLATFORM" bash "$REPO_ROOT/engine/build.sh"
-    dist_jar=$(find "$REPO_ROOT/engine/dist" -maxdepth 1 -type f -name "*-${TARGET_PLATFORM}.jar" -print -quit)
+  pinned_tag=$(<"$REPO_ROOT/engine/PINNED_TAG")
+  dist_jar="$REPO_ROOT/engine/dist/stirling-pdf-${pinned_tag#v}-${TARGET_PLATFORM}.jar"
+
+  configure_build_jdk "$BUILD_JDK_ZIP"
+  bash "$REPO_ROOT/engine/vendor.sh"
+  PLATFORM="$TARGET_PLATFORM" bash "$REPO_ROOT/engine/build.sh"
+  if ! verify_engine_dist_jar "$dist_jar"; then
+    echo "Could not find a verified engine dist JAR for $TARGET_PLATFORM." >&2
+    exit 1
   fi
 
   mkdir -p -- "$(dirname -- "$dest")"
   cp -- "$dist_jar" "$dest"
+}
+
+verify_engine_dist_jar() {
+  local dist_jar=$1
+  local manifest="$dist_jar.source"
+  local expected_tag expected_commit actual_sha
+
+  expected_tag=$(<"$REPO_ROOT/engine/PINNED_TAG")
+  expected_commit=$(<"$REPO_ROOT/engine/PINNED_COMMIT")
+  if [[ ! -f "$dist_jar" || ! -f "$manifest" ]]; then
+    return 1
+  fi
+
+  actual_sha=$(sha256_file "$dist_jar")
+  grep -Fx "tag=$expected_tag" "$manifest" >/dev/null &&
+    grep -Fx "commit=$expected_commit" "$manifest" >/dev/null &&
+    grep -Fx "platform=$TARGET_PLATFORM" "$manifest" >/dev/null &&
+    grep -Fx "sha256=$actual_sha" "$manifest" >/dev/null
 }
 
 configure_build_jdk() {

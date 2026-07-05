@@ -1,12 +1,13 @@
 # Engine Vendoring — Stirling-PDF MIT-Core Backend
 
-> Verified 2026-07-02 against a shallow clone at tag **v2.14.0**, including a successful
+> Verified 2026-07-02 against a shallow clone at tag **v2.14.0** / commit
+> **41f1cb2c22b8b117eb07f4cc0cf88c8a782c4a50**, including a successful
 > local build of the core-flavor JAR and a live endpoint smoke test. This document drives
 > the engine-bundling phase; re-verify on every version bump.
 
 ## Recommendation
 
-**Pin `v2.14.0` and build with `STIRLING_FLAVOR=core`. Do NOT pin a v1.x tag.**
+**Pin `v2.14.0` and commit `41f1cb2c22b8b117eb07f4cc0cf88c8a782c4a50`, and build with `STIRLING_FLAVOR=core`. Do NOT pin a v1.x tag.**
 
 - v2 has a first-class three-way flavor switch in `settings.gradle` — `core | proprietary
   (default) | saas` — via the `STIRLING_FLAVOR` env var. `core` sets
@@ -43,7 +44,11 @@ if (!disableAdditional) {
 }
 ```
 
-Keep the patch as a committed patch file + scrub script; reapply on every upstream bump.
+Keep the patch as a committed patch file + scrub script; reapply on every upstream bump. Update `engine/PINNED_TAG`, `engine/PINNED_COMMIT`, and `engine/PINNED_SETTINGS_GRADLE_SHA256`; resolve annotated tags with the peeled `refs/tags/<tag>^{}` commit when present, otherwise use the tag ref SHA:
+
+```bash
+git ls-remote https://github.com/Stirling-Tools/Stirling-PDF.git "refs/tags/v2.14.0" "refs/tags/v2.14.0^{}"
+```
 
 **Footgun:** never build a scrubbed tree with the legacy `DISABLE_ADDITIONAL_FEATURES=true`
 flag — an inverted legacy condition in the root `build.gradle` (~line 608) wires
@@ -53,13 +58,9 @@ flag — an inverted legacy condition in the root `build.gradle` (~line 608) wir
 ## Build recipe (verified end-to-end)
 
 ```bash
-git clone --depth 1 --branch v2.14.0 https://github.com/Stirling-Tools/Stirling-PDF.git
-cd Stirling-PDF
-# scrub + patch per above, then:
-STIRLING_FLAVOR=core ./gradlew :stirling-pdf:bootJar \
-  -PjpdfiumPlatforms=windows-x64 \
-  -x test -x spotlessCheck
-# → app/core/build/libs/stirling-pdf-2.14.0.jar
+pnpm engine:vendor
+PLATFORM=windows-x64 pnpm engine:build
+# -> engine/dist/stirling-pdf-2.14.0-windows-x64.jar
 ```
 
 - **JDK:** any JDK launches Gradle (21 verified); the toolchain auto-downloads Temurin 25
@@ -73,6 +74,12 @@ STIRLING_FLAVOR=core ./gradlew :stirling-pdf:bootJar \
 - **Runtime:** starts in ~7–10 s; RSS ~860 MB under `-Xmx1g` after processing jobs.
   Verified flags: `--server.port=<p> --server.address=127.0.0.1`,
   `STIRLING_BASE_PATH=<dir>` (relocates configs/logs/pipeline/customFiles).
+- **Release provenance:** `engine/build.sh` refuses to build if `engine/upstream` is not at
+  `engine/PINNED_COMMIT`, if patched `settings.gradle` does not match
+  `engine/PINNED_SETTINGS_GRADLE_SHA256`, or if the worktree contains anything beyond the
+  documented scrub deletions and settings patch. Each copied `engine/dist/*.jar` gets a
+  `.source` manifest with tag, commit, platform, and SHA-256; payload assembly always
+  refreshes the verified upstream checkout and rebuilds before copying `engine/stirling.jar`.
 
 ## REST API contract (verified live against the built core JAR)
 

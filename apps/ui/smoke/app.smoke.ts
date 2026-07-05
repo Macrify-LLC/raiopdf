@@ -1051,15 +1051,16 @@ async function installOcrBridgeMock(
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
       const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
 
-      if (url.endsWith("/api/v1/analysis/basic-info")) {
+      if (pathname === "/api/v1/analysis/basic-info") {
         return new Response(JSON.stringify({ pageCount: 1 }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
 
-      if (url.endsWith("/api/v1/misc/ocr-pdf")) {
+      if (pathname === "/api/v1/misc/ocr-pdf" || pathname === "/local/ocr") {
         testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_OCR_CALL_COUNT__ ?? 0) + 1;
         await new Promise((resolve) => {
@@ -1172,7 +1173,11 @@ async function installFilingBridgeMock(
         });
       }
 
-      if (pathname === "/api/v1/security/sanitize-pdf" || pathname === "/api/v1/misc/ocr-pdf") {
+      if (
+        pathname === "/api/v1/security/sanitize-pdf" ||
+        pathname === "/api/v1/misc/ocr-pdf" ||
+        pathname === "/local/ocr"
+      ) {
         return new Response(new Uint8Array(convertedContents), {
           status: 200,
           headers: { "content-type": "application/pdf" },
@@ -1244,7 +1249,11 @@ async function installFilingAndCompressBridgeMock(
         });
       }
 
-      if (pathname === "/api/v1/security/sanitize-pdf" || pathname === "/api/v1/misc/ocr-pdf") {
+      if (
+        pathname === "/api/v1/security/sanitize-pdf" ||
+        pathname === "/api/v1/misc/ocr-pdf" ||
+        pathname === "/local/ocr"
+      ) {
         return new Response(new Uint8Array(convertedContents), {
           status: 200,
           headers: { "content-type": "application/pdf" },

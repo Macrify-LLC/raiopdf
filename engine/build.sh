@@ -7,6 +7,7 @@ PINNED_COMMIT=$(<"$SCRIPT_DIR/PINNED_COMMIT")
 PINNED_SETTINGS_GRADLE_SHA256=$(<"$SCRIPT_DIR/PINNED_SETTINGS_GRADLE_SHA256")
 UPSTREAM_DIR="$SCRIPT_DIR/upstream"
 DIST_DIR="$SCRIPT_DIR/dist"
+PINNED_PATCHED_FILES="$SCRIPT_DIR/PINNED_PATCHED_FILES_SHA256"
 PLATFORM=${PLATFORM:-windows-x64}
 CARVE_OUT_DIRS=(
   "app/proprietary"
@@ -57,6 +58,24 @@ if [[ "$settings_sha" != "$PINNED_SETTINGS_GRADLE_SHA256" ]]; then
   exit 1
 fi
 
+# Files modified by functional patches (engine/patches/) must match their
+# pinned post-patch hashes, mirroring the settings.gradle check. See ADR 0003.
+PATCHED_FILE_PATHS=()
+if [[ -s "$PINNED_PATCHED_FILES" ]]; then
+  while read -r pinned_sha pinned_path; do
+    [[ -z "$pinned_sha" || "$pinned_sha" == \#* ]] && continue
+    PATCHED_FILE_PATHS+=("$pinned_path")
+    actual_sha=$(sha256_file "$UPSTREAM_DIR/$pinned_path")
+    if [[ "$actual_sha" != "$pinned_sha" ]]; then
+      echo "Refusing to build; patched $pinned_path has an unexpected SHA-256:" >&2
+      echo "  expected: $pinned_sha" >&2
+      echo "  actual:   $actual_sha" >&2
+      echo "Run engine/vendor.sh to refresh the verified upstream checkout." >&2
+      exit 1
+    fi
+  done <"$PINNED_PATCHED_FILES"
+fi
+
 unexpected_status=()
 while IFS= read -r status_line; do
   status=${status_line:0:2}
@@ -69,8 +88,17 @@ while IFS= read -r status_line; do
         break
       fi
     done
-  elif [[ "$status" == " M" && "$path" == "settings.gradle" ]]; then
-    allowed=true
+  elif [[ "$status" == " M" ]]; then
+    if [[ "$path" == "settings.gradle" ]]; then
+      allowed=true
+    else
+      for patched_path in "${PATCHED_FILE_PATHS[@]}"; do
+        if [[ "$path" == "$patched_path" ]]; then
+          allowed=true
+          break
+        fi
+      done
+    fi
   fi
 
   if [[ "$allowed" != true ]]; then

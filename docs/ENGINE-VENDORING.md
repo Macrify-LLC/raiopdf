@@ -46,6 +46,28 @@ if (!disableAdditional) {
 
 Keep the patch as a committed patch file + scrub script; reapply on every upstream bump. Update `engine/PINNED_TAG`, `engine/PINNED_COMMIT`, and `engine/PINNED_SETTINGS_GRADLE_SHA256`; resolve annotated tags with the peeled `refs/tags/<tag>^{}` commit when present, otherwise use the tag ref SHA:
 
+### Functional patches (`engine/patches/`)
+
+Beyond the settings-plumbing patch, the pipeline can carry **functional patches**
+to upstream behavior, governed by `docs/decisions/0003-functional-engine-patches.md`.
+The short rules: every functional patch is an upstream candidate destined for
+deletion once a pinned release contains the fix; MIT-core files only; git-diff
+format in `engine/patches/*.patch`, applied in sorted order after
+`settings-gradle.patch`; every modified file pinned by post-patch SHA-256 in
+`engine/PINNED_PATCHED_FILES_SHA256` (which also drives the worktree-status
+allowlists in `vendor.sh`/`build.sh`); and every patch exercised by an
+`engine/verify-live.sh` check that fails on an unpatched engine.
+
+Current functional patches:
+
+| Patch | What it fixes | verify-live check | Upstream status |
+|---|---|---|---|
+| `pdfjson-image-passthrough.patch` | `/edit-text`'s PDF→JSON→PDF round trip decodes and re-encodes every image XObject (`encodeImage` → `ImageIO`), causing JPEG generational loss and CCITT/JBIG2 format swaps even on zero-match edits. The patch threads a `preserveImageStreams` flag so the internal edit-text round trip keeps raw image streams byte-identical; base64 reconstruction remains the fallback for the public JSON endpoints. | `edit-text-image-passthrough` | To be filed (issue-first per upstream CONTRIBUTING) |
+
+On every pin bump: re-`git apply --check` each patch against the new tag,
+regenerate if drifted, re-pin the hashes, and first check whether upstream has
+landed the fix — if so, delete the patch and its manifest entries.
+
 ```bash
 git ls-remote https://github.com/Stirling-Tools/Stirling-PDF.git "refs/tags/v2.14.0" "refs/tags/v2.14.0^{}"
 ```
@@ -76,8 +98,10 @@ PLATFORM=windows-x64 pnpm engine:build
   `STIRLING_BASE_PATH=<dir>` (relocates configs/logs/pipeline/customFiles).
 - **Release provenance:** `engine/build.sh` refuses to build if `engine/upstream` is not at
   `engine/PINNED_COMMIT`, if patched `settings.gradle` does not match
-  `engine/PINNED_SETTINGS_GRADLE_SHA256`, or if the worktree contains anything beyond the
-  documented scrub deletions and settings patch. Each copied `engine/dist/*.jar` gets a
+  `engine/PINNED_SETTINGS_GRADLE_SHA256`, if any file listed in
+  `engine/PINNED_PATCHED_FILES_SHA256` does not match its pinned post-patch hash, or if
+  the worktree contains anything beyond the documented scrub deletions, the settings
+  patch, and the enumerated functional-patch files. Each copied `engine/dist/*.jar` gets a
   `.source` manifest with tag, commit, platform, and SHA-256; payload assembly always
   refreshes the verified upstream checkout and rebuilds before copying `engine/stirling.jar`.
 
@@ -104,6 +128,7 @@ pinned tag as the contract fixture.
 | Stamp | `/api/v1/misc/add-stamp` | `pageNumbers`, `stampType` (`text`\|`image`), `stampText`/`stampImage`, `fontSize`, `rotation`, `opacity`, `position` 1–9, **`customMargin` (de-facto REQUIRED — NPE→500 if omitted, upstream bug v2.14.0)**, `customColor` | 200 |
 | Remove password | `/api/v1/security/remove-password` | `fileInput`, `password` (empty string works for owner-restricted PDFs; password-required failures return `errorCode: "E004"`) | 200 / E004 |
 | Redaction | `/api/v1/security/auto-redact` (`listOfText`, `useRegex`, `wholeWordSearch`, `redactColor`, `convertPDFToImage`); `.../redact` (manual boxes); `.../redact-execute` | Auto-redact only guarantees unrecoverable text when `convertPDFToImage=true`, which rasterizes pages and loses searchable/selectable text. `redact-execute` supports `strategy=IMAGE_FINALIZE`/`convertToImage=true`; its `ImageBox` model names `y1` as top and `y2` as bottom. | 200 (auto-redact) |
+| Edit text | `/api/v1/general/edit-text` | `edits` (JSON array text part `[{"find":"…","replace":"…"}]`, ordered, literal, case-sensitive), `wholeWordSearch`, `pageNumbers` (1-based). Full PDF→JSON→PDF regeneration even on zero matches; response is PDF bytes only (counts are log-only); bookmarks dropped (sidecar restores); raw image streams preserved only via `pdfjson-image-passthrough.patch`. | 200 + text & image-passthrough asserts |
 
 ## OCR invocation & config
 
@@ -142,7 +167,9 @@ Config keys (`{STIRLING_BASE_PATH}/configs/settings.yml`, generated from
 5. **`add-stamp` NPE** — always send `customMargin` (e.g. `medium`).
 6. **No auth in core flavor** — API is unauthenticated; bind 127.0.0.1 (shell already
    does), disable springdoc, trim unused endpoints.
-7. **Patch maintenance** — scrub script + settings.gradle patch reapplied per bump;
+7. **Patch maintenance** — scrub script + settings.gradle patch + `engine/patches/*`
+   functional patches reapplied per bump (see ADR 0003: check upstream first, delete
+   patches upstream has landed, re-pin `PINNED_PATCHED_FILES_SHA256`);
    contract-test the endpoint table against the vendored `SwaggerDoc.json`.
 8. **Test-fixture gotcha** — upstream's `test_globalsign.pdf` is intentionally corrupt;
    don't use it for smoke tests.

@@ -164,6 +164,118 @@ with open(out, "wb") as handle:
 PY
 }
 
+create_image_test_pdf() {
+  local output=$1
+  local image_stream_out=$2
+  python3 - "$output" "$image_stream_out" <<'PY'
+import sys
+import zlib
+
+out = sys.argv[1]
+image_stream_out = sys.argv[2]
+
+# 8x8 grayscale gradient, Flate-compressed: a decodable image whose raw
+# encoded stream bytes must survive edit-text byte-identically.
+pixels = bytes((x * 8 + y * 24) % 256 for x in range(8) for y in range(8))
+image_data = zlib.compress(pixels, 9)
+
+with open(image_stream_out, "wb") as handle:
+    handle.write(image_data)
+
+content = b"q 100 0 0 100 50 60 cm /Im1 Do Q BT /F1 18 Tf 20 20 Td (Exhibit) Tj ET"
+image_dict = (
+    b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8"
+    b" /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"
+    b" /Length " + str(len(image_data)).encode("ascii") + b" >>"
+)
+# /Resources deliberately lives on the Pages node, not the page: inherited
+# resources are a common real-world layout, and the passthrough must
+# materialize the inheritance rather than only reading the page's own dict.
+objects = [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1"
+    b" /Resources << /Font << /F1 6 0 R >> /XObject << /Im1 5 0 R >> >> >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+    b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+    image_dict + b"\nstream\n" + image_data + b"\nendstream",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+]
+
+pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+offsets = [0]
+for index, body in enumerate(objects, start=1):
+    offsets.append(len(pdf))
+    pdf.extend(f"{index} 0 obj\n".encode("ascii"))
+    pdf.extend(body)
+    pdf.extend(b"\nendobj\n")
+
+xref_offset = len(pdf)
+pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+pdf.extend(b"0000000000 65535 f \n")
+for offset in offsets[1:]:
+    pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+pdf.extend(
+    f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+)
+
+with open(out, "wb") as handle:
+    handle.write(pdf)
+PY
+}
+
+assert_pdf_text() {
+  local label=$1
+  local pdf=$2
+  local required=$3
+  local forbidden=$4
+  python3 - "$pdf" "$required" "$forbidden" <<'PY' || { echo "$1 text assertion failed" >&2; exit 1; }
+import re
+import sys
+import zlib
+
+pdf_path, required, forbidden = sys.argv[1], sys.argv[2], sys.argv[3]
+data = open(pdf_path, "rb").read()
+
+haystacks = [data]
+for match in re.finditer(rb"stream\r?\n", data):
+    start = match.end()
+    end = data.find(b"endstream", start)
+    if end < 0:
+        continue
+    try:
+        haystacks.append(zlib.decompress(data[start:end].rstrip(b"\r\n")))
+    except zlib.error:
+        continue
+
+blob = b"\n".join(haystacks)
+if required.encode("latin-1") not in blob:
+    sys.exit(f"expected text not found in {pdf_path}: {required!r}")
+if forbidden and forbidden.encode("latin-1") in blob:
+    sys.exit(f"forbidden text still present in {pdf_path}: {forbidden!r}")
+PY
+  printf '%s: output text verified\n' "$label"
+}
+
+assert_bytes_present() {
+  local label=$1
+  local pdf=$2
+  local needle_file=$3
+  python3 - "$pdf" "$needle_file" <<'PY' || { echo "$1 byte-passthrough assertion failed" >&2; exit 1; }
+import sys
+
+data = open(sys.argv[1], "rb").read()
+needle = open(sys.argv[2], "rb").read()
+if not needle:
+    sys.exit("empty needle")
+if needle not in data:
+    sys.exit(
+        f"original stream bytes ({len(needle)} bytes) were not preserved in {sys.argv[1]};"
+        " the image was re-encoded"
+    )
+PY
+  printf '%s: original image stream preserved byte-identically\n' "$label"
+}
+
 curl_ok() {
   local label=$1
   local endpoint=$2
@@ -269,5 +381,27 @@ curl_ok "rearrange-pages" "$BASE_URL/api/v1/general/rearrange-pages" "$TMP_DIR/r
   -F "fileInput=@$INPUT_PDF;type=application/pdf" \
   -F "pageNumbers=2,1" \
   -F "customMode=CUSTOM"
+
+# Match the paren-prefixed literal-string form: bare "Page" would false-positive
+# on PDF dictionary tokens like "/Type /Page /Parent" in the raw bytes.
+curl_ok "edit-text" "$BASE_URL/api/v1/general/edit-text" "$TMP_DIR/edit-text.pdf" \
+  -F "fileInput=@$INPUT_PDF;type=application/pdf" \
+  -F 'edits=[{"find":"Page","replace":"Sheet"}]' \
+  -F "wholeWordSearch=false" \
+  -F "pageNumbers=all"
+assert_pdf_text "edit-text" "$TMP_DIR/edit-text.pdf" "(Sheet" "(Page"
+
+IMAGE_PDF="$TMP_DIR/image-input.pdf"
+IMAGE_STREAM="$TMP_DIR/image-stream.bin"
+create_image_test_pdf "$IMAGE_PDF" "$IMAGE_STREAM"
+
+# Zero-match edit: the round trip must not re-encode the embedded image
+# (requires the pdfjson image-passthrough functional patch; see ADR 0003).
+curl_ok "edit-text-image-passthrough" "$BASE_URL/api/v1/general/edit-text" "$TMP_DIR/edit-text-image.pdf" \
+  -F "fileInput=@$IMAGE_PDF;type=application/pdf" \
+  -F 'edits=[{"find":"zz-no-such-text-zz","replace":"x"}]' \
+  -F "wholeWordSearch=false" \
+  -F "pageNumbers=all"
+assert_bytes_present "edit-text-image-passthrough" "$TMP_DIR/edit-text-image.pdf" "$IMAGE_STREAM"
 
 echo "Live engine contract test passed for $JAR_PATH"

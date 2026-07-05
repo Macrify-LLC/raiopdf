@@ -12,7 +12,9 @@ pnpm engine:build
 pnpm engine:verify
 ```
 
-`engine/vendor.sh` clones Stirling-PDF at the tag in `engine/PINNED_TAG`, verifies the checkout resolves to the commit in `engine/PINNED_COMMIT`, removes the documented proprietary/SaaS carve-outs, applies `engine/settings-gradle.patch`, verifies the patched `settings.gradle` hash in `engine/PINNED_SETTINGS_GRADLE_SHA256`, and fails if any carve-out directory still exists.
+`engine/vendor.sh` clones Stirling-PDF at the tag in `engine/PINNED_TAG`, verifies the checkout resolves to the commit in `engine/PINNED_COMMIT`, removes the documented proprietary/SaaS carve-outs, applies `engine/settings-gradle.patch` followed by any functional patches in `engine/patches/*.patch` (sorted order), verifies the patched `settings.gradle` hash in `engine/PINNED_SETTINGS_GRADLE_SHA256` and every functional-patch file hash in `engine/PINNED_PATCHED_FILES_SHA256`, and fails if any carve-out directory still exists or the worktree differs in any other way.
+
+Functional patches are governed by `docs/decisions/0003-functional-engine-patches.md`: MIT-core files only, every patch an upstream candidate slated for deletion once upstream lands the fix, and every patch exercised by a `verify-live.sh` check that fails on an unpatched engine.
 
 `engine/build.sh` builds the core-flavor boot JAR:
 
@@ -22,7 +24,7 @@ STIRLING_FLAVOR=core ./gradlew :stirling-pdf:bootJar -PjpdfiumPlatforms="${PLATF
 
 Set `PLATFORM` to override the JPDFium native platform, for example `linux-x64`, `linux-arm64`, `darwin-x64`, or `darwin-arm64`. The script refuses to build from an upstream checkout whose commit, patched settings hash, or worktree status does not match the pinned vendoring shape, verifies the built JAR contains no entries matching `proprietary` or `saas`, prints the path and size, then copies it to `engine/dist` with a `.source` manifest recording the tag, commit, platform, and JAR hash. Installer payload assembly refreshes the verified upstream checkout and rebuilds the engine before copying `engine/stirling.jar`.
 
-`engine/verify-live.sh` starts the built JAR on a free `127.0.0.1` port with a temporary `STIRLING_BASE_PATH`, waits for `/api/v1/info/status`, and checks the core endpoints RaioPDF relies on: merge, split, rotate, remove pages, and rearrange pages. Runtime requires Java 25 or newer; set `JAVA_BIN` if the Gradle-downloaded toolchain is not auto-detected.
+`engine/verify-live.sh` starts the built JAR on a free `127.0.0.1` port with a temporary `STIRLING_BASE_PATH`, waits for `/api/v1/info/status`, and checks the core endpoints RaioPDF relies on: merge, split, rotate, remove pages, rearrange pages, and edit-text (asserting replaced output text and byte-identical image-stream passthrough — the latter fails on an engine built without `engine/patches/pdfjson-image-passthrough.patch`). Runtime requires Java 25 or newer; set `JAVA_BIN` if the Gradle-downloaded toolchain is not auto-detected.
 
 Live verification must use a JAR built for the host platform because PDF operations load JPDFium natives. On Linux, run `PLATFORM=linux-x64 pnpm engine:build` before `pnpm engine:verify`.
 
@@ -46,7 +48,8 @@ STIRLING_FLAVOR=core
 2. Re-read `docs/ENGINE-VENDORING.md` and re-check the upstream license, flavor wiring, scrub list, and endpoint contract.
 3. Run `pnpm engine:vendor`.
 4. If `engine/settings-gradle.patch` no longer applies, regenerate it so the final `settings.gradle` includes only `stirling-pdf` and `common` by default and includes `proprietary` only inside `if (!disableAdditional)`.
-5. Update `engine/PINNED_SETTINGS_GRADLE_SHA256` to the SHA-256 of `engine/upstream/settings.gradle` after a successful vendor run.
-6. Run `pnpm engine:build` for the target `PLATFORM`.
-7. Run `pnpm engine:verify`.
-8. Run the repo gates before pushing.
+5. For each functional patch in `engine/patches/`: first check whether upstream has landed the fix (delete the patch and its `engine/PINNED_PATCHED_FILES_SHA256` entries if so); otherwise re-apply against the new tag, regenerate if drifted, and update the pinned per-file hashes from the vendored tree after a successful run.
+6. Update `engine/PINNED_SETTINGS_GRADLE_SHA256` to the SHA-256 of `engine/upstream/settings.gradle` after a successful vendor run.
+7. Run `pnpm engine:build` for the target `PLATFORM`.
+8. Run `pnpm engine:verify`.
+9. Run the repo gates before pushing.

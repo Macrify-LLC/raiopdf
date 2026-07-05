@@ -7,6 +7,7 @@ on:
       - docs/ENGINE-VENDORING.md
   schedule:
     - cron: "0 8 * * 1"
+  workflow_dispatch:
 
 # Engine verification reads public source only; no token write scope or secrets.
 permissions:

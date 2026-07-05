@@ -66,11 +66,6 @@ export interface FilePort {
   ) => Promise<SavedFile>;
 }
 
-const HEADER_FILE_GRANT = "x-raio-file-grant";
-const HEADER_DIRECTORY_GRANT = "x-raio-directory-grant";
-const HEADER_SUGGESTED_NAME = "x-raio-suggested-name";
-const HEADER_FILE_NAME = "x-raio-file-name";
-
 /**
  * The UI-side threshold lives in `largeDocThreshold.ts` (single source of
  * truth); re-exported here for existing consumers. The shell owns the real
@@ -331,30 +326,28 @@ function createTauriFilePort(): FilePort {
     },
     async saveFile(bytes, suggestedName, currentPath) {
       const { invoke } = await import("@tauri-apps/api/core");
+      const pdfBytes = Array.from(bytes);
 
       if (currentPath) {
-        const saved = await invoke<TauriSavedPdf>("save_pdf_to_path", bytes, {
-          headers: {
-            [HEADER_FILE_GRANT]: encodeURIComponent(currentPath),
-          },
+        const saved = await invoke<TauriSavedPdf>("save_pdf_to_path", {
+          fileGrant: currentPath,
+          bytes: pdfBytes,
         });
         return savedFromTauri(saved);
       }
 
-      const saved = await invoke<TauriSavedPdf | null>("save_pdf_dialog", bytes, {
-        headers: {
-          [HEADER_SUGGESTED_NAME]: encodeURIComponent(suggestedName),
-        },
+      const saved = await invoke<TauriSavedPdf | null>("save_pdf_dialog", {
+        suggestedName,
+        bytes: pdfBytes,
       });
       return saved ? savedFromTauri(saved) : null;
     },
     async saveFileIntoDirectory(bytes, suggestedName, directory) {
       const { invoke } = await import("@tauri-apps/api/core");
-      const saved = await invoke<TauriSavedPdf>("save_pdf_into_dir", bytes, {
-        headers: {
-          [HEADER_DIRECTORY_GRANT]: encodeURIComponent(directory.grant),
-          [HEADER_FILE_NAME]: encodeURIComponent(suggestedName),
-        },
+      const saved = await invoke<TauriSavedPdf>("save_pdf_into_dir", {
+        directoryGrant: directory.grant,
+        fileName: suggestedName,
+        bytes: Array.from(bytes),
       });
       return savedFromTauri(saved);
     },

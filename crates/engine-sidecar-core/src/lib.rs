@@ -1854,6 +1854,10 @@ fn read_request_body(
     request_head: &[u8],
     buffered_body: &[u8],
 ) -> io::Result<Vec<u8>> {
+    if request_uses_chunked_transfer(request_head) {
+        return read_chunked_request_body(client, buffered_body);
+    }
+
     let content_length = request_content_length(request_head);
 
     let mut body = buffered_body.to_vec();
@@ -1960,6 +1964,79 @@ fn forward_chunk_bytes(
         client.read_exact(&mut chunk[..read_len])?;
         upstream.write_all(&chunk[..read_len])?;
         remaining -= read_len;
+    }
+
+    Ok(())
+}
+
+fn read_chunked_request_body(client: &mut TcpStream, buffered_body: &[u8]) -> io::Result<Vec<u8>> {
+    client.set_read_timeout(Some(Duration::from_secs(60)))?;
+    let mut pending = buffered_body.to_vec();
+    let mut body = Vec::new();
+
+    loop {
+        let size_line = read_chunk_line(client, &mut pending)?;
+        let size = parse_chunk_size(&size_line)?;
+        if size == 0 {
+            loop {
+                let trailer_line = read_chunk_line(client, &mut pending)?;
+                if trailer_line == b"\r\n" {
+                    return Ok(body);
+                }
+            }
+        }
+
+        read_chunk_payload(client, &mut pending, size, &mut body)?;
+        let mut terminator = [0u8; 2];
+        read_exact_from_pending(client, &mut pending, &mut terminator)?;
+        if terminator != *b"\r\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunk terminator",
+            ));
+        }
+    }
+}
+
+fn read_chunk_payload(
+    client: &mut TcpStream,
+    pending: &mut Vec<u8>,
+    mut remaining: usize,
+    body: &mut Vec<u8>,
+) -> io::Result<()> {
+    if !pending.is_empty() {
+        let pending_to_read = pending.len().min(remaining);
+        body.extend_from_slice(&pending[..pending_to_read]);
+        pending.drain(..pending_to_read);
+        remaining -= pending_to_read;
+    }
+
+    let mut chunk = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let read_len = chunk.len().min(remaining);
+        client.read_exact(&mut chunk[..read_len])?;
+        body.extend_from_slice(&chunk[..read_len]);
+        remaining -= read_len;
+    }
+
+    Ok(())
+}
+
+fn read_exact_from_pending(
+    client: &mut TcpStream,
+    pending: &mut Vec<u8>,
+    buffer: &mut [u8],
+) -> io::Result<()> {
+    let mut filled = 0;
+    if !pending.is_empty() {
+        let pending_to_read = pending.len().min(buffer.len());
+        buffer[..pending_to_read].copy_from_slice(&pending[..pending_to_read]);
+        pending.drain(..pending_to_read);
+        filled = pending_to_read;
+    }
+
+    if filled < buffer.len() {
+        client.read_exact(&mut buffer[filled..])?;
     }
 
     Ok(())
@@ -2859,6 +2936,29 @@ mod tests {
             !upstream_request.contains("OPTIONS /local/compress"),
             "chunked forwarding must stop at the terminating chunk"
         );
+    }
+
+    #[test]
+    fn read_request_body_decodes_chunked_local_body() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let port = listener.local_addr().expect("listener addr").port();
+        let writer = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("client connect");
+            stream
+                .write_all(b"dy\r\n6\r\n bytes\r\n0\r\nX-Test: ok\r\n\r\n")
+                .expect("client write");
+        });
+
+        let (mut stream, _) = listener.accept().expect("server accept");
+        let body = read_request_body(
+            &mut stream,
+            b"POST /local/ocr HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"4\r\nbo",
+        )
+        .expect("chunked body should decode");
+
+        writer.join().expect("writer should join");
+        assert_eq!(body, b"body bytes");
     }
 
     #[test]

@@ -1760,9 +1760,14 @@ export function App() {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
+    const cleanFileOcrGrant =
+      !streamedDocument && !document.dirty && document.filePath && isPathOpsRuntime()
+        ? document.filePath as FileGrant
+        : null;
+    const delegatedOcrGrant = streamedDocument ? pathOpsGrant : cleanFileOcrGrant;
 
-    if (streamedDocument) {
-      if (!pathOpsGrant) {
+    if (streamedDocument || delegatedOcrGrant) {
+      if (!delegatedOcrGrant) {
         // Browser streamed docs have no shell grant — the gate stays up.
         setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
         return;
@@ -1772,7 +1777,7 @@ export function App() {
       // in either mode (`--skip-text` keeps existing text layers;
       // `--force-ocr` re-renders every page and rebuilds the layer); the
       // output reopens as a new document (generation bump).
-      const grant = pathOpsGrant;
+      const grant = delegatedOcrGrant;
       const runId = ocrRunRef.current + 1;
       ocrRunRef.current = runId;
       ocrActiveRef.current = true;
@@ -1783,8 +1788,8 @@ export function App() {
       setOcrState({
         phase: "processing",
         message: ocrType === "force-ocr"
-          ? "Rebuilding the searchable text layer — the local engine re-renders the file itself; nothing is loaded into memory."
-          : "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+          ? "Rebuilding the searchable text layer — the local engine re-renders the file itself."
+          : "Making searchable — the local engine works on the file itself.",
         progress: null,
       });
 
@@ -2006,7 +2011,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.dirty, document.filePath, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {
@@ -2782,6 +2787,10 @@ export function App() {
         }
         return written;
       } catch (error: unknown) {
+        void recordDiagnosticEvent("save.failed", errorMessage(error), [
+          `forceSaveAs=${forceSaveAs}`,
+          `source=${source.kind}`,
+        ]);
         setError(
           error instanceof Error && error.message.includes("changed on disk")
             ? "This file changed on disk — reopen it."
@@ -2837,7 +2846,11 @@ export function App() {
         });
       }
       return written;
-    } catch {
+    } catch (error: unknown) {
+      void recordDiagnosticEvent("save.failed", errorMessage(error), [
+        `forceSaveAs=${forceSaveAs}`,
+        `source=${document.source?.kind ?? "none"}`,
+      ]);
       setError("This PDF could not be saved. Try reopening the document and saving again.");
       return null;
     } finally {
@@ -6708,6 +6721,14 @@ function requireAbsoluteSourcePaths(paths: readonly (string | null)[], errorMess
   }
 
   return absolutePaths;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function isTauriRuntime(): boolean {

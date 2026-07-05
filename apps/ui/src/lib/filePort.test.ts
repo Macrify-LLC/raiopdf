@@ -160,6 +160,68 @@ describe("readPickedFileSource", () => {
 });
 
 describe("directory saves", () => {
+  it("Tauri filePort writes raw bytes through typed dialog arguments", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => {
+      if (command === "save_pdf_dialog") {
+        return { fileGrant: "saved-grant", name: "saved.pdf" };
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { filePort } = await import("./filePort");
+    const saved = await filePort.saveFile(new Uint8Array([1, 2, 3]), "saved.pdf", null);
+
+    expect(saved).toEqual({ name: "saved.pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      {
+        command: "save_pdf_dialog",
+        args: {
+          suggestedName: "saved.pdf",
+          bytes: [1, 2, 3],
+        },
+      },
+    ]);
+  });
+
+  it("Tauri filePort writes in-place bytes through typed grant arguments", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => {
+      if (command === "save_pdf_to_path") {
+        return { fileGrant: "saved-grant", name: "case.pdf" };
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { filePort } = await import("./filePort");
+    const saved = await filePort.saveFile(
+      new Uint8Array([4, 5, 6]),
+      "case.pdf",
+      "open-grant" as FileGrant,
+    );
+
+    expect(saved).toEqual({ name: "case.pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      {
+        command: "save_pdf_to_path",
+        args: {
+          fileGrant: "open-grant",
+          bytes: [4, 5, 6],
+        },
+      },
+    ]);
+  });
+
   it("copies a streamed grant into a picked directory without opening another save dialog", async () => {
     invokeState.handler = () => ({ fileGrant: "saved-grant", name: "part (2).pdf" });
 
@@ -214,12 +276,10 @@ describe("directory saves", () => {
       { command: "pick_output_directory", args: undefined },
       {
         command: "save_pdf_into_dir",
-        args: new Uint8Array([1, 2, 3]),
-        options: {
-          headers: {
-            "x-raio-directory-grant": "dir-grant",
-            "x-raio-file-name": "part.pdf",
-          },
+        args: {
+          directoryGrant: "dir-grant",
+          fileName: "part.pdf",
+          bytes: [1, 2, 3],
         },
       },
     ]);

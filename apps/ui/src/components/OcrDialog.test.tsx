@@ -24,6 +24,7 @@ describe("OcrDialog", () => {
 
     expect(html).toContain("Making searchable: 2 of 5 pages");
     expect(html).toContain("long-process-loader__progress-bar");
+    expect(html).toContain("width:30px;height:30px");
   });
 
   it("communicates engine startup inside the OCR dialog while the run is starting", () => {

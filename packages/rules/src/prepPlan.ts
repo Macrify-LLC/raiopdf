@@ -13,7 +13,6 @@ type PolicyBackedStep = {
   label: string;
   policy: PolicyConstraint;
   destructive?: boolean;
-  disabledWhenProhibited?: boolean;
   impact: (facts: DocumentFacts) => string;
 };
 
@@ -49,7 +48,6 @@ export function resolvePrepPlan(
       label: "Flatten forms",
       policy: pack.flattenForms,
       destructive: true,
-      disabledWhenProhibited: true,
       impact: formImpact,
     }, facts),
     policyStep({
@@ -57,7 +55,6 @@ export function resolvePrepPlan(
       label: `Convert to ${pack.pdfa.flavor.toUpperCase()}`,
       policy: pack.pdfa,
       destructive: true,
-      disabledWhenProhibited: true,
       impact: conversionImpact,
     }, facts),
     splitStep(pack),
@@ -65,10 +62,6 @@ export function resolvePrepPlan(
 }
 
 function policyStep(input: PolicyBackedStep, facts: DocumentFacts): PrepPlanStep {
-  const disabledReason = input.disabledWhenProhibited && input.policy.stance === "prohibited"
-    ? "This pack marks this output property as prohibited."
-    : undefined;
-
   return {
     id: input.id,
     label: input.label,
@@ -78,8 +71,7 @@ function policyStep(input: PolicyBackedStep, facts: DocumentFacts): PrepPlanStep
     lastVerified: input.policy.lastVerified ?? UNKNOWN_LAST_VERIFIED,
     ...(input.policy.note ? { note: input.policy.note } : {}),
     prepDefault: input.policy.prepDefault,
-    defaultChecked: input.policy.prepDefault === "on" && !disabledReason,
-    ...(disabledReason ? { disabledReason } : {}),
+    defaultChecked: input.policy.prepDefault === "on" && input.policy.stance !== "prohibited",
     destructive: input.destructive === true,
     impact: input.impact(facts),
   };

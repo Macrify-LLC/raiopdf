@@ -21,7 +21,7 @@ const baseFacts: DocumentFacts = {
 };
 
 describe("resolvePrepPlan", () => {
-  it("resolves Florida defaults, destructive PDF/A impact, and prohibited flattening", () => {
+  it("resolves Florida defaults, destructive PDF/A impact, and advisory flattening guidance", () => {
     const plan = resolvePrepPlan(getPack("florida"), {
       ...baseFacts,
       annotationCount: 3,
@@ -56,8 +56,8 @@ describe("resolvePrepPlan", () => {
     expect(byId(plan, "flatten-forms")).toMatchObject({
       stance: "prohibited",
       defaultChecked: false,
-      disabledReason: "This pack marks this output property as prohibited.",
     });
+    expect(byId(plan, "flatten-forms").disabledReason).toBeUndefined();
   });
 
   it("keeps eFileGA PDF/A and OCR off by default while still showing the policy row", () => {

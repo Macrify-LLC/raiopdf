@@ -330,9 +330,10 @@
 
 .filing-prep__header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .filing-prep__title {
@@ -346,6 +347,42 @@
   margin: 0;
   color: var(--muted);
   font-size: var(--text-2xs);
+}
+
+.filing-prep__defaults {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.filing-prep__defaults-button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: 5px var(--space-2);
+}
+
+.filing-prep__defaults-button:hover {
+  background: var(--hover-ground);
+}
+
+.filing-prep__defaults-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.filing-prep__defaults-message {
+  color: var(--ok);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .filing-prep__rows {
@@ -363,6 +400,10 @@
   border-radius: var(--radius-control);
   background: var(--panel);
   padding: var(--space-2) var(--space-3);
+}
+
+.filing-prep-row[data-checked="false"] {
+  background: var(--chrome);
 }
 
 .filing-prep-row[data-disabled="true"] {
@@ -384,7 +425,14 @@
   min-width: 0;
 }
 
-.filing-prep-row__toggle input {
+.filing-prep-row__checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.filing-prep-row__checkbox-label input {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
@@ -396,8 +444,92 @@
   font-weight: 700;
 }
 
-.filing-prep-row[data-disabled="true"] .filing-prep-row__title {
+.filing-prep-row[data-disabled="true"] .filing-prep-row__title,
+.filing-prep-row[data-checked="false"] .filing-prep-row__title {
   color: var(--muted);
+}
+
+.filing-prep-row__flag-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.filing-prep-row__flag {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+}
+
+.filing-prep-row__flag:hover,
+.filing-prep-row__flag[aria-expanded="true"] {
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+.filing-prep-row__flag:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.filing-prep-row__flag-shape {
+  position: relative;
+  display: block;
+  width: 12px;
+  height: 14px;
+  border-left: 2px solid currentColor;
+  color: var(--warn);
+}
+
+.filing-prep-row__flag-shape::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  width: 8px;
+  height: 7px;
+  border-radius: 1px 2px 2px 1px;
+  background: currentColor;
+}
+
+.filing-prep-row__flag[data-tone="danger"] .filing-prep-row__flag-shape {
+  color: var(--danger);
+}
+
+.filing-prep-row__flag-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 4;
+  display: grid;
+  gap: 3px;
+  width: min(280px, 68vw);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--body);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  padding: var(--space-3);
+}
+
+.filing-prep-row__flag-popover strong {
+  color: var(--warn);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.filing-prep-row__flag-popover[data-tone="danger"] strong {
+  color: var(--danger);
 }
 
 .filing-prep-row__meta {
@@ -407,10 +539,8 @@
   flex: 0 0 auto;
 }
 
-/* Run-status chip -- item 6/7's will-run / not-needed / prohibited / done
-   vocabulary. Shares the chip shape (radius-chip, uppercase, tight padding)
-   with the preflight report's own chips below, so the two checklist-like
-   areas in this dialog read as one visual language. */
+/* Run-status chip. Only selected rows get a run-state label; unchecked rows
+   stay visually neutral. */
 .filing-prep-row__status {
   flex: 0 0 auto;
   min-width: 74px;
@@ -437,12 +567,6 @@
   border-color: var(--ok-bg);
   background: var(--ok-bg);
   color: var(--ok);
-}
-
-.filing-prep-row__status[data-status="prohibited"] {
-  border-color: var(--danger);
-  background: var(--danger-bg);
-  color: var(--danger);
 }
 
 .filing-prep-row__expand {

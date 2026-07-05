@@ -162,6 +162,176 @@ describe("PrepareForFilingWorkspace", () => {
     expect(articleContaining(html, "Remove encryption")).toContain('data-disabled="false"');
   });
 
+  it("keeps unchecked prep steps neutral and disfavored pack guidance toggleable", () => {
+    const pack = getPack("florida");
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    expect(html).not.toContain("Prohibited");
+    expect(html).not.toContain("Not needed");
+    expect(articleContaining(html, "Flatten forms")).toContain('data-disabled="false"');
+    expect(rowContaining(html, "Flatten forms")).not.toMatch(/<input[^>]*disabled/);
+  });
+
+  it("shows advisory flags when expected or recommended steps are unchecked", () => {
+    const indiana = getPack("indiana-iefs");
+    const florida = getPack("florida");
+
+    render(
+      <>
+        <PrepareForFilingWorkspace
+          document={mockDocument}
+          pack={indiana}
+          prepPlan={resolvePrepPlan(indiana, mockFacts)}
+          stepDefaultOverrides={{ "scrub-metadata": false }}
+          courtProfiles={[]}
+          selectedCourtProfile={null}
+          facts={mockFacts}
+          report={preflight(mockFacts, indiana)}
+          loadingReport={false}
+          progress={{ phase: "idle", message: null }}
+          result={null}
+          impact={null}
+          pdfAAvailable
+          compressAvailable
+          onPackChange={() => undefined}
+          onCourtProfileSelect={() => undefined}
+          onCourtProfileSave={() => undefined}
+          onPrepare={() => undefined}
+          onDismissImpact={() => undefined}
+          onCompressFirst={() => undefined}
+        />
+        <PrepareForFilingWorkspace
+          document={mockDocument}
+          pack={florida}
+          prepPlan={resolvePrepPlan(florida, mockFacts)}
+          stepDefaultOverrides={{ "convert-pdfa": false }}
+          courtProfiles={[]}
+          selectedCourtProfile={null}
+          facts={mockFacts}
+          report={preflight(mockFacts, florida)}
+          loadingReport={false}
+          progress={{ phase: "idle", message: null }}
+          result={null}
+          impact={null}
+          pdfAAvailable
+          compressAvailable
+          onPackChange={() => undefined}
+          onCourtProfileSelect={() => undefined}
+          onCourtProfileSave={() => undefined}
+          onPrepare={() => undefined}
+          onDismissImpact={() => undefined}
+          onCompressFirst={() => undefined}
+        />
+      </>,
+    );
+
+    click(getButtonByLabel("Expected by this jurisdiction for Scrub metadata"));
+    expect(document.body.textContent).toContain("This jurisdiction expects this step.");
+
+    click(getButtonByLabel("Recommended by this jurisdiction for Convert to PDFA-2B"));
+    expect(document.body.textContent).toContain("Recommended for this jurisdiction.");
+    expect(document.body.textContent).toContain("verified");
+  });
+
+  it("shows a red advisory flag when a checked step differs from pack guidance", () => {
+    const pack = getPack("florida");
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    const flattenCheckbox = getCheckbox("Flatten forms");
+    expect(flattenCheckbox.disabled).toBe(false);
+    click(flattenCheckbox);
+    click(getButtonByLabel("Pack guidance differs from this selection for Flatten forms"));
+
+    expect(document.body.textContent).toContain(
+      "Raio research indicates this step is not preferred in this jurisdiction.",
+    );
+    expect(document.body.textContent).not.toContain("Prohibited");
+  });
+
+  it("saves current checklist selections as per-pack defaults", () => {
+    const pack = getPack("florida");
+    const onStepDefaultOverridesChange = vi.fn();
+
+    render(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={preflight(mockFacts, pack)}
+        loadingReport={false}
+        progress={{ phase: "idle", message: null }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onStepDefaultOverridesChange={onStepDefaultOverridesChange}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    click(getCheckbox("Convert to PDFA-2B"));
+    click(getButton("Set current selections as my defaults for this pack"));
+
+    expect(onStepDefaultOverridesChange).toHaveBeenCalledWith(expect.objectContaining({
+      "convert-pdfa": false,
+      "flatten-forms": false,
+    }));
+    expect(document.body.textContent).toContain("Saved as your defaults for this pack.");
+  });
+
   it("asks whether to flatten RaioPDF markup annotations before filing", () => {
     const pack = getPack();
     const onPrepare = vi.fn();
@@ -380,6 +550,17 @@ function articleContaining(html: string, needle: string): string {
   return html.slice(articleStart, articleTagEnd + 1);
 }
 
+/** Finds the complete `<article>...</article>` block for the row whose text contains `needle`. */
+function rowContaining(html: string, needle: string): string {
+  const needleIndex = html.indexOf(needle);
+  expect(needleIndex).toBeGreaterThan(-1);
+  const articleStart = html.lastIndexOf("<article", needleIndex);
+  expect(articleStart).toBeGreaterThan(-1);
+  const articleEnd = html.indexOf("</article>", needleIndex);
+  expect(articleEnd).toBeGreaterThan(-1);
+  return html.slice(articleStart, articleEnd + "</article>".length);
+}
+
 function getButton(name: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(
     (element): element is HTMLButtonElement => element.textContent?.trim() === name,
@@ -392,9 +573,33 @@ function getButton(name: string): HTMLButtonElement {
   return button;
 }
 
-function click(button: HTMLButtonElement) {
+function getButtonByLabel(label: string): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (element): element is HTMLButtonElement => element.getAttribute("aria-label") === label,
+  );
+
+  if (!button) {
+    throw new Error(`Button not found by label: ${label}`);
+  }
+
+  return button;
+}
+
+function getCheckbox(label: string): HTMLInputElement {
+  const labels = Array.from(document.querySelectorAll("label"));
+  const matchingLabel = labels.find((element) => element.textContent?.trim() === label);
+  const input = matchingLabel?.querySelector("input[type='checkbox']");
+
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`Checkbox not found: ${label}`);
+  }
+
+  return input;
+}
+
+function click(element: HTMLElement) {
   act(() => {
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.click();
   });
 }
 

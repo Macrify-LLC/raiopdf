@@ -188,11 +188,14 @@ image_dict = (
     b" /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"
     b" /Length " + str(len(image_data)).encode("ascii") + b" >>"
 )
+# /Resources deliberately lives on the Pages node, not the page: inherited
+# resources are a common real-world layout, and the passthrough must
+# materialize the inheritance rather than only reading the page's own dict.
 objects = [
     b"<< /Type /Catalog /Pages 2 0 R >>",
-    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R"
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1"
     b" /Resources << /Font << /F1 6 0 R >> /XObject << /Im1 5 0 R >> >> >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
     b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
     image_dict + b"\nstream\n" + image_data + b"\nendstream",
     b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",

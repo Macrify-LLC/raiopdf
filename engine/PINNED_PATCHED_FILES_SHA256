@@ -1,2 +1,2 @@
 1c546d13aff746b5a6713fa62e57d2e90696eab932b3970186a7f42065ffd308  app/core/src/main/java/stirling/software/SPDF/controller/api/EditTextController.java
-e60e33e8cd8e7a729f1a1f89f8f0dbf2fdc2b6f1c4c85af333419d9aa8f6f1c6  app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
+3fb326a202f278709dd34dc404fd4c71b82ba2fa79cf8890b98ebb234f1fcca2  app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java

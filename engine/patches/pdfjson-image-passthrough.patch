@@ -15,7 +15,7 @@ index 3a10b14..fce70f9 100644
          int modifiedSpans = applyEdits(document, compiledEdits, pageFilter);
          log.info(
 diff --git a/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java b/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
-index fea3b52..ae10feb 100644
+index fea3b52..110228b 100644
 --- a/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
 +++ b/app/core/src/main/java/stirling/software/SPDF/service/PdfJsonConversionService.java
 @@ -258,8 +258,19 @@ public class PdfJsonConversionService {
@@ -84,7 +84,7 @@ index fea3b52..ae10feb 100644
              throws IOException {
          List<PdfJsonPage> pages = new ArrayList<>();
          int pageIndex = 0;
-@@ -2508,10 +2539,14 @@ public class PdfJsonConversionService {
+@@ -2508,10 +2539,23 @@ public class PdfJsonConversionService {
              pageModel.setImageElements(imagesByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
              pageModel.setAnnotations(
                      annotationsByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
@@ -95,6 +95,15 @@ index fea3b52..ae10feb 100644
 +            // JSON->PDF rebuild can restore the original encoded bytes.
              COSBase resourcesBase = page.getCOSObject().getDictionaryObject(COSName.RESOURCES);
 -            COSBase filteredResources = filterImageXObjectsFromResources(resourcesBase);
++            if (preserveImageStreams && resourcesBase == null) {
++                // /Resources may be inherited from an ancestor Pages node, in which case the
++                // direct dictionary lookup is null; materialize the inherited dictionary so the
++                // preserved image streams still travel with the page.
++                PDResources inheritedResources = page.getResources();
++                if (inheritedResources != null) {
++                    resourcesBase = inheritedResources.getCOSObject();
++                }
++            }
 +            COSBase filteredResources =
 +                    preserveImageStreams
 +                            ? resourcesBase
@@ -102,7 +111,7 @@ index fea3b52..ae10feb 100644
              if (omitResourceStreamData) {
                  // In lightweight editor mode, omit heavy resource/content stream payloads entirely.
                  // Partial export preserves originals from cached PDF when these fields are missing.
-@@ -2957,7 +2992,8 @@ public class PdfJsonConversionService {
+@@ -2957,7 +3001,8 @@ public class PdfJsonConversionService {
       * Reconstructs image XObjects from imageElements when content streams are preserved. During
       * serialization, image streams are filtered out from resources to avoid duplication. This
       * method adds them back by scanning content streams for XObject references and matching them
@@ -112,7 +121,7 @@ index fea3b52..ae10feb 100644
       */
      private void reconstructImageXObjects(
              PDDocument document,
-@@ -3007,7 +3043,19 @@ public class PdfJsonConversionService {
+@@ -3007,7 +3052,19 @@ public class PdfJsonConversionService {
              page.setResources(resources);
          }
  
@@ -132,7 +141,7 @@ index fea3b52..ae10feb 100644
              PdfJsonImageElement imageElement = imageMap.get(xobjName);
              if (imageElement == null) {
                  log.warn(
-@@ -3346,7 +3394,7 @@ public class PdfJsonConversionService {
+@@ -3346,7 +3403,7 @@ public class PdfJsonConversionService {
                          if (element == null) {
                              continue;
                          }
@@ -141,7 +150,7 @@ index fea3b52..ae10feb 100644
                      }
                  }
              }
-@@ -5423,10 +5471,11 @@ public class PdfJsonConversionService {
+@@ -5423,10 +5480,11 @@ public class PdfJsonConversionService {
      private void drawImageElement(
              PDPageContentStream contentStream,
              PDDocument document,
@@ -154,7 +163,7 @@ index fea3b52..ae10feb 100644
              return;
          }
  
-@@ -5436,7 +5485,12 @@ public class PdfJsonConversionService {
+@@ -5436,7 +5494,12 @@ public class PdfJsonConversionService {
                          : Integer.toHexString(System.identityHashCode(element));
          PDImageXObject image = cache.get(cacheKey);
          if (image == null) {
@@ -168,7 +177,7 @@ index fea3b52..ae10feb 100644
              if (image == null) {
                  return;
              }
-@@ -5471,8 +5525,42 @@ public class PdfJsonConversionService {
+@@ -5471,8 +5534,42 @@ public class PdfJsonConversionService {
          contentStream.drawImage(image, left, bottom, width, height);
      }
  

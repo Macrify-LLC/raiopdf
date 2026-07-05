@@ -1,5 +1,6 @@
 import { FloatingDialog } from "./FloatingDialog";
 import { LoadingSun } from "./LoadingSun";
+import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
 import "./OcrDialog.css";
 
 export type OcrDialogRunningPhase = "starting-engine" | "processing" | "verifying";
@@ -8,6 +9,7 @@ export type OcrDialogPhase = "confirm" | OcrDialogRunningPhase;
 export interface OcrDialogProps {
   phase: OcrDialogPhase;
   pageCount: number;
+  progress?: OcrProgressEvent | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -18,8 +20,11 @@ const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
   verifying: "Verifying…",
 };
 
-export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogProps) {
+export function OcrDialog({ phase, pageCount, progress = null, onConfirm, onCancel }: OcrDialogProps) {
   const isRunning = phase !== "confirm";
+  const progressValue = progress?.total && progress.total > 0
+    ? Math.min(Math.max(progress.completed, 0), progress.total)
+    : null;
 
   return (
     <FloatingDialog
@@ -34,8 +39,16 @@ export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogPr
           <div className="ocr-dialog__progress" key={phase}>
             <LoadingSun size={30} label="Making the document searchable" />
             <p className="ocr-dialog__status-line" role="status" aria-live="polite">
-              {RUNNING_STATUS_LABEL[phase]}
+              {progress ? describeOcrProgress(progress) : RUNNING_STATUS_LABEL[phase]}
             </p>
+            {progressValue !== null && progress?.total ? (
+              <progress
+                className="ocr-dialog__progress-bar"
+                value={progressValue}
+                max={progress.total}
+                aria-label={describeOcrProgress(progress)}
+              />
+            ) : null}
           </div>
         ) : (
           <div className="ocr-dialog__form">

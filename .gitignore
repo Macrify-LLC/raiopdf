@@ -17,6 +17,8 @@ src-tauri/gen/
 
 *.log
 pnpm-debug.log*
+__pycache__/
+*.py[cod]
 
 .env
 .env.*

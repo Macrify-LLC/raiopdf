@@ -92,6 +92,29 @@
   font-weight: 600;
 }
 
+.ocr-dialog__progress-bar {
+  width: min(220px, 100%);
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.ocr-dialog__progress-bar::-webkit-progress-bar {
+  background: var(--border);
+}
+
+.ocr-dialog__progress-bar::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--identity-amber);
+}
+
+.ocr-dialog__progress-bar::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--identity-amber);
+}
+
 @keyframes ocr-dialog-phase-in {
   from {
     opacity: 0;

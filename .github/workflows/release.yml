@@ -76,6 +76,9 @@ jobs:
         shell: bash
         run: bash installer/assemble-payload.sh --verify
 
+      - name: Smoke OCR progress wrapper
+        run: pnpm smoke:ocr-progress-wrapper
+
       - name: Stamp shell package version from release tag
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
         shell: bash

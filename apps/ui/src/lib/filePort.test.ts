@@ -160,7 +160,7 @@ describe("readPickedFileSource", () => {
 });
 
 describe("directory saves", () => {
-  it("Tauri filePort writes raw bytes through typed dialog arguments", async () => {
+  it("Tauri filePort writes Save As bytes as the raw invoke body", async () => {
     vi.resetModules();
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {},
@@ -182,17 +182,19 @@ describe("directory saves", () => {
     expect(invokeState.calls).toEqual([
       {
         command: "save_pdf_dialog",
-        args: {
-          suggestedName: "saved.pdf",
-          bytes,
+        args: bytes,
+        options: {
+          headers: {
+            "x-raio-suggested-name": "saved.pdf",
+          },
         },
       },
     ]);
-    expect((invokeState.calls[0]!.args as { bytes: unknown }).bytes).toBe(bytes);
-    expect(Array.isArray((invokeState.calls[0]!.args as { bytes: unknown }).bytes)).toBe(false);
+    expect(invokeState.calls[0]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[0]!.args)).toBe(false);
   });
 
-  it("Tauri filePort writes in-place bytes through typed grant arguments", async () => {
+  it("Tauri filePort writes in-place bytes as the raw invoke body", async () => {
     vi.resetModules();
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {},
@@ -218,14 +220,16 @@ describe("directory saves", () => {
     expect(invokeState.calls).toEqual([
       {
         command: "save_pdf_to_path",
-        args: {
-          fileGrant: "open-grant",
-          bytes,
+        args: bytes,
+        options: {
+          headers: {
+            "x-raio-file-grant": "open-grant",
+          },
         },
       },
     ]);
-    expect((invokeState.calls[0]!.args as { bytes: unknown }).bytes).toBe(bytes);
-    expect(Array.isArray((invokeState.calls[0]!.args as { bytes: unknown }).bytes)).toBe(false);
+    expect(invokeState.calls[0]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[0]!.args)).toBe(false);
   });
 
   it("copies a streamed grant into a picked directory without opening another save dialog", async () => {
@@ -283,14 +287,16 @@ describe("directory saves", () => {
       { command: "pick_output_directory", args: undefined },
       {
         command: "save_pdf_into_dir",
-        args: {
-          directoryGrant: "dir-grant",
-          fileName: "part.pdf",
-          bytes,
+        args: bytes,
+        options: {
+          headers: {
+            "x-raio-directory-grant": "dir-grant",
+            "x-raio-file-name": "part.pdf",
+          },
         },
       },
     ]);
-    expect((invokeState.calls[1]!.args as { bytes: unknown }).bytes).toBe(bytes);
-    expect(Array.isArray((invokeState.calls[1]!.args as { bytes: unknown }).bytes)).toBe(false);
+    expect(invokeState.calls[1]!.args).toBe(bytes);
+    expect(Array.isArray(invokeState.calls[1]!.args)).toBe(false);
   });
 });

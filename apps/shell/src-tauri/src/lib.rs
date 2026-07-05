@@ -32,6 +32,10 @@ use uuid::Uuid;
 
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
+const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
+const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
+const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
+const HEADER_FILE_NAME: &str = "x-raio-file-name";
 
 #[derive(Default)]
 struct PendingPdfBytes {
@@ -429,14 +433,14 @@ fn pick_output_directory(
 
 #[tauri::command]
 fn save_pdf_into_dir(
-    directory_grant: String,
-    file_name: String,
-    bytes: Vec<u8>,
+    request: tauri::ipc::Request<'_>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
+    let directory_grant = required_header(&request, HEADER_DIRECTORY_GRANT)?;
+    let file_name = required_header(&request, HEADER_FILE_NAME)?;
     let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
-    let path = write_pdf_bytes_into_directory(&directory, &file_name, &bytes)?;
+    let path = write_pdf_bytes_into_directory(&directory, &file_name, raw_pdf_bytes(&request)?)?;
 
     saved_pdf(&path, file_grants.inner())
 }
@@ -494,10 +498,10 @@ fn resolve_file_grants(
 #[tauri::command]
 fn save_pdf_dialog(
     app: tauri::AppHandle,
-    suggested_name: String,
-    bytes: Vec<u8>,
+    request: tauri::ipc::Request<'_>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
+    let suggested_name = required_header(&request, HEADER_SUGGESTED_NAME)?;
     let suggested_name = ensure_pdf_extension(&suggested_name);
     let Some(path) = app
         .dialog()
@@ -510,19 +514,19 @@ fn save_pdf_dialog(
     };
 
     let path = path.into_path().map_err(|error| error.to_string())?;
-    write_pdf_bytes_atomic(&path, &bytes)?;
+    write_pdf_bytes_atomic(&path, raw_pdf_bytes(&request)?)?;
 
     Ok(Some(saved_pdf(&path, file_grants.inner())?))
 }
 
 #[tauri::command]
 fn save_pdf_to_path(
-    file_grant: String,
-    bytes: Vec<u8>,
+    request: tauri::ipc::Request<'_>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
+    let file_grant = required_header(&request, HEADER_FILE_GRANT)?;
     let entry = file_grants.resolve_entry(&file_grant)?;
-    write_pdf_bytes_atomic_if_unchanged(&entry, &bytes)?;
+    write_pdf_bytes_atomic_if_unchanged(&entry, raw_pdf_bytes(&request)?)?;
 
     saved_pdf(&entry.path, file_grants.inner())
 }
@@ -547,6 +551,58 @@ fn open_source_licenses(app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
         .open_path(notices.to_string_lossy().into_owned(), None::<String>)
         .map_err(|error| format!("Could not open open-source notices: {error}"))
+}
+
+fn raw_pdf_bytes<'a>(request: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected raw PDF bytes".to_string());
+    };
+
+    Ok(bytes)
+}
+
+fn required_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<String, String> {
+    let value = request
+        .headers()
+        .get(name)
+        .ok_or_else(|| format!("Missing {name} header"))?
+        .to_str()
+        .map_err(|_| format!("Invalid {name} header"))?;
+
+    percent_decode(value)
+}
+
+fn percent_decode(value: &str) -> Result<String, String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut chars = value.as_bytes().iter().copied();
+
+    while let Some(byte) = chars.next() {
+        if byte != b'%' {
+            bytes.push(byte);
+            continue;
+        }
+
+        let high = chars
+            .next()
+            .ok_or_else(|| "Invalid percent-encoded header".to_string())?;
+        let low = chars
+            .next()
+            .ok_or_else(|| "Invalid percent-encoded header".to_string())?;
+        let high = hex_value(high)?;
+        let low = hex_value(low)?;
+        bytes.push((high << 4) | low);
+    }
+
+    String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 header value".to_string())
+}
+
+fn hex_value(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err("Invalid percent-encoded header".to_string()),
+    }
 }
 
 fn write_pdf_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {

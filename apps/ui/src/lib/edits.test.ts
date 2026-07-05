@@ -3,7 +3,6 @@ import {
   computeHighlightLineRects,
   computeTextMarkupLineRects,
   excerpt,
-  mergeTextMarkupSelectionRects,
   normalizePdfRectFromPoints,
   toPdfEdits,
   type PageTextBox,
@@ -486,21 +485,6 @@ describe("computeTextMarkupLineRects", () => {
     expect(
       computeHighlightLineRects({ x: 0, y: 0, w: 10, h: 10 }, [line(700)]),
     ).toEqual([]);
-  });
-});
-
-describe("mergeTextMarkupSelectionRects", () => {
-  it("merges native selection rect fragments per line without expanding to full rows", () => {
-    const rects = mergeTextMarkupSelectionRects([
-      { x: 70, y: 700, w: 40, h: 12 },
-      { x: 112, y: 700.5, w: 38, h: 12 },
-      { x: 90, y: 680, w: 55, h: 12 },
-    ]);
-
-    expect(rects).toEqual([
-      { x: 70, y: 700, w: 80, h: 12.5 },
-      { x: 90, y: 680, w: 55, h: 12 },
-    ]);
   });
 });
 

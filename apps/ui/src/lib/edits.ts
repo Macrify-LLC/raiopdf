@@ -469,40 +469,6 @@ function clipTextMarkupBoxToBand(
   };
 }
 
-export function mergeTextMarkupSelectionRects(
-  rects: readonly PdfEditRect[],
-  sideways = false,
-): PdfEditRect[] {
-  const usable = rects.filter((rect) => rect.w > 0.5 && rect.h > 0.5);
-
-  if (usable.length === 0) {
-    return [];
-  }
-
-  const lineKey = (rect: PdfEditRect) => (sideways ? rect.x + rect.w / 2 : rect.y + rect.h / 2);
-  const lineThickness = (rect: PdfEditRect) => (sideways ? rect.w : rect.h);
-  const sorted = [...usable].sort((left, right) => lineKey(left) - lineKey(right));
-  const clusters: PdfEditRect[][] = [];
-
-  for (const rect of sorted) {
-    const lastCluster = clusters.at(-1);
-    const lastRect = lastCluster?.at(-1);
-    const tolerance = lastRect
-      ? Math.max(lineThickness(rect), lineThickness(lastRect), 4) * 0.6
-      : 0;
-
-    if (lastCluster && lastRect && Math.abs(lineKey(rect) - lineKey(lastRect)) <= tolerance) {
-      lastCluster.push(rect);
-    } else {
-      clusters.push([rect]);
-    }
-  }
-
-  return clusters
-    .map((cluster) => unionBoxes(cluster))
-    .sort((left, right) => right.y + right.h - (left.y + left.h));
-}
-
 function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {
   return left.r === right.r && left.g === right.g && left.b === right.b;
 }

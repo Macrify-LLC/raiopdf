@@ -1859,8 +1859,9 @@ fn read_request_body(
     }
 
     let content_length = request_content_length(request_head);
+    let buffered_to_read = buffered_body.len().min(content_length);
 
-    let mut body = buffered_body.to_vec();
+    let mut body = buffered_body[..buffered_to_read].to_vec();
     if content_length > body.len() {
         client.set_read_timeout(Some(Duration::from_secs(60)))?;
         let mut remaining = vec![0u8; content_length - body.len()];
@@ -2936,6 +2937,26 @@ mod tests {
             !upstream_request.contains("OPTIONS /local/compress"),
             "chunked forwarding must stop at the terminating chunk"
         );
+    }
+
+    #[test]
+    fn read_request_body_truncates_buffered_non_chunked_local_body() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let port = listener.local_addr().expect("listener addr").port();
+        let writer = thread::spawn(move || {
+            let _stream = TcpStream::connect(("127.0.0.1", port)).expect("client connect");
+        });
+
+        let (mut stream, _) = listener.accept().expect("server accept");
+        let body = read_request_body(
+            &mut stream,
+            b"POST /local/ocr HTTP/1.1\r\nContent-Length: 4\r\n\r\n",
+            b"bodyOPTIONS /local/compress HTTP/1.1\r\n\r\n",
+        )
+        .expect("non-chunked body should read");
+
+        writer.join().expect("writer should join");
+        assert_eq!(body, b"body");
     }
 
     #[test]

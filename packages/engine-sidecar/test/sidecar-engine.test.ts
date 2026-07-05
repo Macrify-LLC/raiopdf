@@ -63,12 +63,13 @@ describe("SidecarPdfEngine", () => {
     await expect(engine.removeEncryption(bytes(1, 2, 3), "secret")).resolves.toEqual(bytes(9, 8, 7));
 
     // Decrypt goes to the engine's local qpdf interceptor, not Stirling's lossy
-    // /remove-password: raw PDF bytes in the body, the password hex-encoded in a
-    // header so qpdf never sees it on a command line.
-    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/local/decrypt");
-    expectRawBody(calls[0], [1, 2, 3]);
-    expect(headerValue(calls[0], "Content-Type")).toBe("application/pdf");
-    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBe("736563726574");
+    // /remove-password: PDF bytes are base64 text in the body, the password is
+    // hex-encoded in a loopback query param so qpdf never sees it on a command
+    // line.
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
+    expectBase64Body(calls[0], [1, 2, 3]);
+    expect(queryValue(calls[0], "body_encoding")).toBe("base64");
+    expect(queryValue(calls[0], "password_hex")).toBe("736563726574");
   });
 
   it("tries an empty local decrypt password for owner-restricted PDFs", async () => {
@@ -77,9 +78,10 @@ describe("SidecarPdfEngine", () => {
 
     await expect(engine.removeEncryption(bytes(1, 2, 3), "")).resolves.toEqual(bytes(9, 8, 7));
 
-    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/local/decrypt");
-    expectRawBody(calls[0], [1, 2, 3]);
-    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBe("");
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
+    expectBase64Body(calls[0], [1, 2, 3]);
+    expect(queryValue(calls[0], "body_encoding")).toBe("base64");
+    expect(queryValue(calls[0], "password_hex")).toBe("");
   });
 
   it("maps an empty-password local decrypt failure to PASSWORD_REQUIRED", async () => {
@@ -307,7 +309,7 @@ describe("SidecarPdfEngine", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("redacts PDF point areas through redact-execute imageBoxes", async () => {
+  it("redacts PDF point areas through the verified local redaction endpoint", async () => {
     const redactedPdf = await createPdfWithMetadata();
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfBytesResponse(redactedPdf));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
@@ -319,17 +321,16 @@ describe("SidecarPdfEngine", () => {
     ]);
 
     await expectNoDocumentMetadata(await engine.saveToBytes(redacted));
-    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/security/redact-execute");
-    expect(expectJsonFormField(calls[1], "imageBoxes")).toEqual([
-      { pageIndex: 0, x1: 10, y1: 60, x2: 40, y2: 20 },
-      { pageIndex: 2, x1: 50, y1: 140, x2: 120, y2: 60 },
+    expect(pathFromUrl(calls[1]?.url ?? "")).toBe("/local/redact-areas");
+    const request = JSON.parse(calls[1]?.init?.body as string) as {
+      pdfBase64: string;
+      areas: unknown;
+    };
+    expect(request.pdfBase64).toBe("AQ==");
+    expect(request.areas).toEqual([
+      { pageIndex: 0, x: 10, y: 20, w: 30, h: 40 },
+      { pageIndex: 2, x: 50, y: 60, w: 70, h: 80 },
     ]);
-    expect(expectJsonFormField(calls[1], "style")).toEqual({
-      color: "#000000",
-      padding: 0,
-      convertToImage: true,
-      strategy: "IMAGE_FINALIZE",
-    });
   });
 
   it("scrubs metadata through update-metadata deleteAll and local byte post-processing", async () => {
@@ -438,10 +439,11 @@ describe("SidecarPdfEngine", () => {
     expect(await engine.saveToBytes(converted)).toEqual(bytes(91));
     // PDF/A goes to the local Ghostscript interceptor, not Stirling's
     // LibreOffice-gated (and therefore disabled) /api/v1/convert/pdf/pdfa.
-    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/local/pdfa");
-    expectRawBody(calls[1], [1]);
-    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Level")).toBe("2");
-    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Strict")).toBe("true");
+    expect(pathFromUrl(calls[1]?.url ?? "")).toBe("/local/pdfa");
+    expectBase64Body(calls[1], [1]);
+    expect(queryValue(calls[1], "body_encoding")).toBe("base64");
+    expect(queryValue(calls[1], "pdfa_level")).toBe("2");
+    expect(queryValue(calls[1], "pdfa_strict")).toBe("true");
   });
 
   it("maps each PDF/A flavor to its Ghostscript conformance level", async () => {
@@ -458,13 +460,13 @@ describe("SidecarPdfEngine", () => {
       await engine.convertToPdfA(document, { flavor });
     }
 
-    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Level")).toBe("1");
-    expect(headerValue(calls[2], "X-RaioPDF-PdfA-Level")).toBe("2");
-    expect(headerValue(calls[3], "X-RaioPDF-PdfA-Level")).toBe("3");
-    expect(headerValue(calls[1], "X-RaioPDF-PdfA-Strict")).toBe("false");
+    expect(queryValue(calls[1], "pdfa_level")).toBe("1");
+    expect(queryValue(calls[2], "pdfa_level")).toBe("2");
+    expect(queryValue(calls[3], "pdfa_level")).toBe("3");
+    expect(queryValue(calls[1], "pdfa_strict")).toBe("false");
   });
 
-  it("compresses through compress-pdf with quality and grayscale fields", async () => {
+  it("compresses through the local qpdf endpoint", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(92));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
@@ -475,10 +477,9 @@ describe("SidecarPdfEngine", () => {
     });
 
     expect(await engine.saveToBytes(compressed)).toEqual(bytes(92));
-    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/compress-pdf");
-    expectFormField(calls[1], "optimizeLevel", "5");
-    expectFormField(calls[1], "grayscale", "true");
-    expectFormField(calls[1], "linearize", "false");
+    expect(pathFromUrl(calls[1]?.url ?? "")).toBe("/local/compress");
+    expectBase64Body(calls[1], [1]);
+    expect(queryValue(calls[1], "body_encoding")).toBe("base64");
   });
 
   it("sanitizes through sanitize-pdf and reports requested removal categories", async () => {
@@ -790,14 +791,20 @@ async function expectFormFile(call: FetchCall | undefined, expectedBytes: readon
   expect([...fileBytes]).toEqual(expectedBytes);
 }
 
-function expectRawBody(call: FetchCall | undefined, expectedBytes: readonly number[]): void {
+function expectBase64Body(call: FetchCall | undefined, expectedBytes: readonly number[]): void {
   const body = call?.init?.body;
-  expect(body).toBeInstanceOf(Uint8Array);
-  expect([...(body as Uint8Array)]).toEqual(expectedBytes);
+  expect(typeof body).toBe("string");
+  expect(body).toBe(btoa(String.fromCharCode(...expectedBytes)));
 }
 
 function pathFromUrl(url: string): string {
   return new URL(url).pathname;
+}
+
+function queryValue(call: FetchCall | undefined, name: string): string | null {
+  expect(call?.url).toBeDefined();
+
+  return new URL(call?.url ?? "").searchParams.get(name);
 }
 
 function headerValue(call: FetchCall | undefined, name: string): string | null {

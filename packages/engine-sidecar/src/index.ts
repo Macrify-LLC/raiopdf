@@ -28,6 +28,7 @@ import type {
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import {
+  countPdfPages,
   readPdfAIdentificationFromBytes,
   scrubPdfMetadataBytes,
   type PdfAIdentification,
@@ -87,7 +88,7 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  * PdfEngine implementation backed by Stirling PDF's current v2 API surface.
  *
  * Verified mappings:
- * - pageCount -> POST /api/v1/analysis/basic-info with multipart fileInput.
+ * - pageCount -> local PDF parse first, then POST /api/v1/analysis/basic-info fallback.
  * - reorderPages -> POST /api/v1/general/rearrange-pages with fileInput,
  *   1-based pageNumbers, and customMode=CUSTOM.
  * - rotatePages -> POST /api/v1/general/rotate-pdf with fileInput and angle
@@ -110,7 +111,7 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  *   rasterize=true. Stirling's auto-redact can fall back to overlay-only output
  *   unless convertPDFToImage=true; rasterization is the guaranteed removal mode
  *   but returns image-based pages without searchable/selectable text.
- * - redactAreas -> POST /api/v1/security/redact-execute with imageBoxes JSON.
+ * - redactAreas -> POST /local/redact-areas (engine-local verified raster redaction)
  *   RaioPDF `{pageIndex,x,y,w,h}` maps to Stirling
  *   `{pageIndex,x1:x,y1:y+h,x2:x+w,y2:y}` because Stirling names y1 as the
  *   top coordinate and y2 as bottom. `style` is sent as
@@ -119,16 +120,17 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  * - scrubMetadata -> POST /api/v1/misc/update-metadata with deleteAll=true,
  *   followed by engine-local's low-level Info dictionary and XMP metadata
  *   removal on the returned bytes.
- * - compress -> POST /api/v1/misc/compress-pdf with optimizeLevel,
- *   grayscale, and linearize=false.
+ * - compress -> POST /local/compress (engine-local qpdf) with the PDF body as
+ *   base64 text. Auth remains a small header for the proxy's preflight path;
+ *   large PDF bytes never travel in headers.
  * - sanitize -> POST /api/v1/security/sanitize-pdf with removeJavaScript,
  *   removeEmbeddedFiles, removeLinks, and metadata/font removal disabled.
  * - removeEncryption -> POST /local/decrypt (engine-local qpdf) with the raw PDF
- *   body and the password hex-encoded in X-RaioPDF-Password-Hex. Stirling's
+ *   body as base64 text and the password hex-encoded in a loopback query param. Stirling's
  *   /remove-password is lossy (drops the text layer) so it is never used; the
  *   password never touches a command line or document handle.
  * - convertToPdfA -> POST /local/pdfa (engine-local Ghostscript) with the raw PDF
- *   body, X-RaioPDF-PdfA-Level (1|2|3), and X-RaioPDF-PdfA-Strict. Stirling
+ *   body as base64 text and PDF/A options in loopback query params. Stirling
  *   2.14.0 gates /api/v1/convert/pdf/pdfa behind LibreOffice, which is not
  *   bundled, so the conversion runs on the bundled Ghostscript instead.
  * - repair -> POST /api/v1/misc/repair.
@@ -200,7 +202,7 @@ export class SidecarPdfEngine implements PdfEngine {
     try {
       return await readBytes(
         await this.requestLocal("/local/decrypt", normalizeBytes(bytes), {
-          "X-RaioPDF-Password-Hex": encodePasswordHex(password),
+          password_hex: encodePasswordHex(password),
         }),
       );
     } catch (error) {
@@ -221,7 +223,7 @@ export class SidecarPdfEngine implements PdfEngine {
 
   async open(bytes: PdfBytes): Promise<PdfDocumentHandle> {
     const normalizedBytes = normalizeBytes(bytes);
-    const pageCount = await this.fetchPageCount(normalizedBytes);
+    const pageCount = await this.countPages(normalizedBytes);
 
     return this.store(normalizedBytes, pageCount);
   }
@@ -384,8 +386,8 @@ export class SidecarPdfEngine implements PdfEngine {
       "/local/pdfa",
       normalizeBytes(storedDocument.bytes),
       {
-        "X-RaioPDF-PdfA-Level": PDFA_LEVEL_BY_FLAVOR[options.flavor],
-        "X-RaioPDF-PdfA-Strict": String(options.strict ?? false),
+        pdfa_level: PDFA_LEVEL_BY_FLAVOR[options.flavor],
+        pdfa_strict: String(options.strict ?? false),
       },
     );
 
@@ -400,12 +402,15 @@ export class SidecarPdfEngine implements PdfEngine {
 
     const storedDocument = this.get(document);
     const pageCount = await this.pageCount(document);
-    const formData = createFormData(storedDocument.bytes);
-    formData.append("optimizeLevel", String(options.quality));
-    formData.append("grayscale", String(options.grayscale ?? false));
-    formData.append("linearize", "false");
-
-    const response = await this.request("/api/v1/misc/compress-pdf", formData);
+    // Byte-mode compression uses the same qpdf-backed local path as streamed
+    // documents. The quality/grayscale options are accepted for API stability;
+    // image recompression is intentionally not delegated to Stirling's optional
+    // ImageMagick-dependent endpoint.
+    const response = await this.requestLocal(
+      "/local/compress",
+      normalizeBytes(storedDocument.bytes),
+      {},
+    );
 
     return this.store(await readBytes(response), pageCount);
   }
@@ -525,19 +530,13 @@ export class SidecarPdfEngine implements PdfEngine {
       return this.store(storedDocument.bytes, pageCount);
     }
 
-    const formData = createFormData(storedDocument.bytes);
-    formData.append("imageBoxes", JSON.stringify(areas.map(toSidecarImageBox)));
-    formData.append(
-      "style",
+    const response = await this.requestLocal(
+      "/local/redact-areas",
       JSON.stringify({
-        color: "#000000",
-        padding: 0,
-        convertToImage: true,
-        strategy: "IMAGE_FINALIZE",
+        pdfBase64: bytesToBase64(normalizeBytes(storedDocument.bytes)),
+        areas,
       }),
     );
-
-    const response = await this.request("/api/v1/security/redact-execute", formData);
 
     return this.store(await scrubReturnedMetadata(await readBytes(response)), pageCount);
   }
@@ -792,6 +791,14 @@ export class SidecarPdfEngine implements PdfEngine {
     return pageCount;
   }
 
+  private async countPages(bytes: Uint8Array): Promise<number> {
+    try {
+      return await countPdfPages(bytes);
+    } catch {
+      return this.fetchPageCount(bytes);
+    }
+  }
+
   private async postRearrange(
     bytes: Uint8Array,
     pageIndexes: readonly number[],
@@ -852,24 +859,32 @@ export class SidecarPdfEngine implements PdfEngine {
   }
 
   /**
-   * POST raw PDF bytes to a local engine-side handler (not Stirling), with
-   * extra headers. Used by the qpdf-backed decrypt path.
+   * POST to a local engine-side handler (not Stirling). Auth uses the same
+   * small header as proxied calls so Chromium performs the local-network CORS
+   * preflight the proxy is built to answer. Operation metadata stays in
+   * loopback-only query params, and binary PDFs are base64 text bodies so large
+   * PDF bytes never travel in headers.
    */
   private async requestLocal(
     path: string,
-    bytes: Uint8Array,
-    extraHeaders: Record<string, string>,
+    body: Uint8Array | string,
+    query: Record<string, string> = {},
   ): Promise<Response> {
     let response: Response;
+    const url = new URL(`${this.baseUrl}${path}`);
+    const requestBody = typeof body === "string" ? body : bytesToBase64(body);
+    if (typeof body !== "string") {
+      url.searchParams.set("body_encoding", "base64");
+    }
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, value);
+    }
 
     try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      response = await this.fetchImpl(url.href, {
         method: "POST",
-        headers: {
-          ...sidecarHeaders(this.authToken, extraHeaders),
-          "Content-Type": "application/pdf",
-        },
-        body: new Uint8Array(bytes),
+        headers: sidecarHeaders(this.authToken),
+        body: requestBody,
       });
     } catch (error) {
       throw new PdfEngineError("INVALID_DOCUMENT", "Local engine request failed.", {
@@ -894,6 +909,17 @@ function encodePasswordHex(password: string): string {
   return Array.from(new TextEncoder().encode(password))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
 }
 
 function sidecarHeaders(
@@ -1074,22 +1100,6 @@ function assertPositiveFinite(value: number, fieldName: string): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new PdfEngineError("INVALID_DOCUMENT", `${fieldName} must be a positive number.`);
   }
-}
-
-function toSidecarImageBox(area: PdfRedactionArea): {
-  pageIndex: number;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-} {
-  return {
-    pageIndex: area.pageIndex,
-    x1: area.x,
-    y1: area.y + area.h,
-    x2: area.x + area.w,
-    y2: area.y,
-  };
 }
 
 // Defaults to a maximal scrub: redaction outputs are rasterized rewrites, so any

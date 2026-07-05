@@ -42,6 +42,7 @@ import type {
   PreflightReport,
   RectInches,
   SelectionFacts,
+  SignatureDetectionFacts,
 } from "@raiopdf/rules";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
@@ -364,6 +365,26 @@ export function App() {
       if (!hasEmbeddedSignatureMarkers(signature)) {
         return true;
       }
+      return confirmSignatureInvalidation({
+        source,
+        sourceFileNames,
+        sourceFilePath,
+        signature,
+      });
+    },
+    [confirmSignatureInvalidation],
+  );
+  const confirmDecryptSignatureFactsInvalidation = useCallback(
+    (
+      signature: SignatureDetectionFacts,
+      source: ProtectedPdfSource,
+      sourceFileNames: readonly string[],
+      sourceFilePath: string | null,
+    ): Promise<boolean> => {
+      if (!hasEmbeddedSignatureMarkers(signature)) {
+        return Promise.resolve(true);
+      }
+
       return confirmSignatureInvalidation({
         source,
         sourceFileNames,
@@ -1901,7 +1922,34 @@ export function App() {
         void pathOpDecrypt(grant, password)
           .then(async (output) => {
             if (!isCurrentUnlock() || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+              await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
               return;
+            }
+
+            let signature;
+            try {
+              signature = (await pathOpDocumentFacts(output.outputGrant)).signatureDetection;
+            } catch {
+              // Match the byte unlock path: a signature-detector hiccup should
+              // not block a legitimate unlock.
+            }
+
+            if (signature) {
+              const proceed = await confirmDecryptSignatureFactsInvalidation(
+                signature,
+                password ? "user-password" : "owner-restricted",
+                [prompt.fileName],
+                prompt.filePath,
+              );
+              if (!isCurrentUnlock() || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+                await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+                return;
+              }
+              if (!proceed) {
+                await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+                setPasswordPrompt(null);
+                return;
+              }
             }
 
             setPasswordPrompt(null);
@@ -2040,7 +2088,7 @@ export function App() {
           );
         });
     },
-    [confirmDecryptSignatureInvalidation, document.generation, engineBridge, getOpenToken, isCurrentDocument, openDocumentFile, openPathOpOutput, passwordPrompt, setError],
+    [confirmDecryptSignatureFactsInvalidation, confirmDecryptSignatureInvalidation, document.generation, engineBridge, getOpenToken, isCurrentDocument, openDocumentFile, openPathOpOutput, passwordPrompt, setError],
   );
 
   const openFileSource = useCallback(
@@ -4066,68 +4114,86 @@ export function App() {
 
     setFilingResult(null);
     setFilingImpact(null);
-    setFilingProgress({
-      phase: "normalizing",
-      message: "Preparing the filing copy in the local engine — very large files run file-to-file, nothing loads into memory...",
-    });
 
-    void pathOpPrepareFiling(grant, plan)
-      .then(async (result) => {
+    void (async () => {
+      if (decryptPassword !== undefined && filingFacts?.signatureDetection) {
+        const proceed = await confirmDecryptSignatureFactsInvalidation(
+          filingFacts.signatureDetection,
+          decryptPassword ? "user-password" : "owner-restricted",
+          [document.fileName ?? "Document.pdf"],
+          document.filePath ?? null,
+        );
+        if (!isCurrentFilingRun()) {
+          return;
+        }
+        if (!proceed) {
+          setFilingProgress({ phase: "idle", message: null });
+          return;
+        }
+      }
+
+      setFilingProgress({
+        phase: "normalizing",
+        message: "Preparing the filing copy in the local engine — very large files run file-to-file, nothing loads into memory...",
+      });
+
+      const result = await pathOpPrepareFiling(grant, plan);
+
+      if (!isCurrentFilingRun()) {
+        return;
+      }
+
+      setFilingProgress({
+        phase: "verifying",
+        message: "Saving the output parts and reading the facts-based output preflight...",
+      });
+
+      const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+      const partNames: string[] = [];
+
+      for (const [index, part] of result.parts.entries()) {
         if (!isCurrentFilingRun()) {
           return;
         }
 
-        setFilingProgress({
-          phase: "verifying",
-          message: "Saving the output parts and reading the facts-based output preflight...",
-        });
+        const suggestedName = formatFilingOutputName(
+          baseName,
+          filingPack,
+          index + 1,
+          result.parts.length,
+        );
+        const written = await saveStreamedCopy(
+          { kind: "rangeGrant", grant: part.outputGrant },
+          suggestedName,
+        );
+        partNames.push(written?.name ?? suggestedName);
+      }
 
-        const baseName = stripPdfExtension(document.fileName ?? "Untitled");
-        const partNames: string[] = [];
+      if (!isCurrentFilingRun()) {
+        return;
+      }
 
-        for (const [index, part] of result.parts.entries()) {
-          if (!isCurrentFilingRun()) {
-            return;
-          }
-
-          const suggestedName = formatFilingOutputName(
-            baseName,
-            filingPack,
-            index + 1,
-            result.parts.length,
-          );
-          const written = await saveStreamedCopy(
-            { kind: "rangeGrant", grant: part.outputGrant },
-            suggestedName,
-          );
-          partNames.push(written?.name ?? suggestedName);
-        }
-
-        if (!isCurrentFilingRun()) {
-          return;
-        }
-
-        setFilingResult({
-          parts: result.parts.map((part, index) => ({
-            fileName: partNames[index] ?? part.name,
-            byteLength: part.byteLength,
-            pageIndexes: part.pageIndexes,
-            oversized: part.oversized,
-          })),
-          report: buildStreamedFilingOutputReport(result.factsReport),
-          verifiedAt: new Date().toISOString(),
-          skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
-          overrides: filingRunOverrides({
-            customSplitBytes,
-            packDefaultSplitBytes: filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null,
-            scrubbedBeforePdfA: false,
-          }),
-        });
-        setFilingProgress({
-          phase: "done",
-          message: "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
-        });
-      })
+      setFilingResult({
+        parts: result.parts.map((part, index) => ({
+          fileName: partNames[index] ?? part.name,
+          byteLength: part.byteLength,
+          pageIndexes: part.pageIndexes,
+          oversized: part.oversized,
+        })),
+        report: buildStreamedFilingOutputReport(result.factsReport),
+        verifiedAt: new Date().toISOString(),
+        skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
+        overrides: filingRunOverrides({
+          customSplitBytes,
+          packDefaultSplitBytes: filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null,
+          scrubbedBeforePdfA: false,
+        }),
+      });
+      setFilingProgress({
+        phase: "done",
+        message: "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
+      });
+    })()
       .catch((error: unknown) => {
         if (!isCurrentFilingRun()) {
           return;
@@ -4139,7 +4205,9 @@ export function App() {
         });
       });
   }, [
+    confirmDecryptSignatureFactsInvalidation,
     document.fileName,
+    document.filePath,
     document.generation,
     filingFacts,
     filingPack,

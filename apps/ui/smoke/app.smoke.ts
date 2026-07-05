@@ -1103,15 +1103,16 @@ async function installRedactionBridgeMock(
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
       const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
 
-      if (url.endsWith("/api/v1/analysis/basic-info")) {
+      if (pathname === "/api/v1/analysis/basic-info") {
         return new Response(JSON.stringify({ pageCount: 1 }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
 
-      if (url.endsWith("/api/v1/security/redact-execute")) {
+      if (pathname === "/local/redact-areas") {
         testWindow.__RAIOPDF_TEST_REDACTION_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_REDACTION_CALL_COUNT__ ?? 0) + 1;
 
@@ -1152,15 +1153,16 @@ async function installFilingBridgeMock(
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
       const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
 
-      if (url.endsWith("/api/v1/analysis/basic-info")) {
+      if (pathname === "/api/v1/analysis/basic-info") {
         return new Response(JSON.stringify({ pageCount: 2 }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
 
-      if (url.endsWith("/local/pdfa")) {
+      if (pathname === "/local/pdfa") {
         testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
 
@@ -1170,7 +1172,7 @@ async function installFilingBridgeMock(
         });
       }
 
-      if (url.endsWith("/api/v1/security/sanitize-pdf") || url.endsWith("/api/v1/misc/ocr-pdf")) {
+      if (pathname === "/api/v1/security/sanitize-pdf" || pathname === "/api/v1/misc/ocr-pdf") {
         return new Response(new Uint8Array(convertedContents), {
           status: 200,
           headers: { "content-type": "application/pdf" },
@@ -1213,15 +1215,16 @@ async function installFilingAndCompressBridgeMock(
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
       const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
 
-      if (url.endsWith("/api/v1/analysis/basic-info")) {
+      if (pathname === "/api/v1/analysis/basic-info") {
         return new Response(JSON.stringify({ pageCount: 1 }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
 
-      if (url.endsWith("/api/v1/misc/compress-pdf")) {
+      if (pathname === "/local/compress") {
         testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ ?? 0) + 1;
 
@@ -1231,7 +1234,7 @@ async function installFilingAndCompressBridgeMock(
         });
       }
 
-      if (url.endsWith("/local/pdfa")) {
+      if (pathname === "/local/pdfa") {
         testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_PDFA_CALL_COUNT__ ?? 0) + 1;
 
@@ -1241,7 +1244,7 @@ async function installFilingAndCompressBridgeMock(
         });
       }
 
-      if (url.endsWith("/api/v1/security/sanitize-pdf") || url.endsWith("/api/v1/misc/ocr-pdf")) {
+      if (pathname === "/api/v1/security/sanitize-pdf" || pathname === "/api/v1/misc/ocr-pdf") {
         return new Response(new Uint8Array(convertedContents), {
           status: 200,
           headers: { "content-type": "application/pdf" },
@@ -1278,15 +1281,16 @@ async function installCompressBridgeMock(
 
     testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
       const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
 
-      if (url.endsWith("/api/v1/analysis/basic-info")) {
+      if (pathname === "/api/v1/analysis/basic-info") {
         return new Response(JSON.stringify({ pageCount: 1 }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
 
-      if (url.endsWith("/api/v1/misc/compress-pdf")) {
+      if (pathname === "/local/compress") {
         testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ =
           (testWindow.__RAIOPDF_TEST_COMPRESS_CALL_COUNT__ ?? 0) + 1;
 

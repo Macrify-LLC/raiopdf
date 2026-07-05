@@ -79,11 +79,12 @@ describe("handleOcr", () => {
 });
 
 describe("handleRemoveEncryption", () => {
-  it("writes unlocked bytes without echoing the password", async () => {
-    const input = await writeInput("locked.pdf");
+  it.skipIf(!hasQpdf())("writes unlocked bytes without echoing the password", async () => {
+    const fixture = await createEncryptedPdfFixture("sensitive-password");
+    const input = path.join(dir, "locked.pdf");
     const output = path.join(dir, "unlocked.pdf");
-    const unlockedBytes = await pdfWithPageTexts(["unlocked"]);
-    const { handle } = fakeRemoveEncryptionEngine(unlockedBytes, "sensitive-password");
+    await fs.writeFile(input, fixture.encrypted);
+    const { handle } = fakeRemoveEncryptionEngine(fixture.decrypted, "sensitive-password");
 
     const result = await handleRemoveEncryption({
       input,
@@ -96,7 +97,9 @@ describe("handleRemoveEncryption", () => {
       output,
     });
     expect(JSON.stringify(result)).not.toContain("sensitive-password");
-    expect(await fs.readFile(output)).toEqual(Buffer.from(unlockedBytes));
+    const outputBytes = await fs.readFile(output);
+    await expect(PDFDocument.load(outputBytes, { updateMetadata: false })).resolves.toBeTruthy();
+    expect(outputBytes.toString("latin1")).not.toContain("/Encrypt");
   });
 
   it.skipIf(!hasQpdf())("round-trips a qpdf-encrypted fixture through remove_encryption", async () => {

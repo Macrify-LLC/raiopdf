@@ -137,7 +137,7 @@ interface PreparedDocument {
   handlesForCombined: readonly PdfDocumentHandle[];
 }
 
-const DEFAULT_APP_VERSION = "0.0.0";
+const DEFAULT_APP_VERSION = "0.1.0";
 const MANIFEST_PDF_NAME = "filing-packet-manifest.pdf";
 const PACKET_JSON_NAME = "filing-packet.json";
 

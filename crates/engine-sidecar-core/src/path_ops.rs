@@ -559,10 +559,19 @@ pub struct PageFacts {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SignatureDetectionFacts {
+    pub standard_acro_form_signature_count: u32,
+    pub has_byte_range_or_contents_markers: bool,
+    pub has_certification_dictionary: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentFacts {
     pub page_count: u32,
     pub size_bytes: u64,
     pub encrypted: bool,
+    pub signature_detection: SignatureDetectionFacts,
     pub pages: Vec<PageFacts>,
 }
 
@@ -607,6 +616,7 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         .and_then(|value| value.get("encrypted"))
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+    let signature_detection = read_signature_detection_facts(objects);
 
     let mut page_facts = Vec::with_capacity(pages.len());
     for (index, page) in pages.iter().enumerate() {
@@ -653,8 +663,80 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         page_count: page_facts.len() as u32,
         size_bytes,
         encrypted,
+        signature_detection,
         pages: page_facts,
     })
+}
+
+fn read_signature_detection_facts(objects: &JsonObjectMap) -> SignatureDetectionFacts {
+    let mut signature_field_refs = std::collections::BTreeSet::<String>::new();
+    let mut has_byte_range_or_contents_markers = false;
+    let mut has_certification_dictionary = false;
+
+    for (object_ref, entry) in objects {
+        let Some(value) = entry.get("value").and_then(|value| value.as_object()) else {
+            continue;
+        };
+
+        if json_name(value.get("/FT")) == Some("Sig") {
+            signature_field_refs.insert(object_ref.clone());
+        }
+
+        let type_name = json_name(value.get("/Type"));
+        let sub_filter = json_name(value.get("/SubFilter"));
+        let has_known_sub_filter = sub_filter.map(is_signature_sub_filter).unwrap_or(false);
+        let has_byte_range = value.contains_key("/ByteRange");
+        let has_contents = value.contains_key("/Contents");
+
+        if has_byte_range || has_known_sub_filter || (has_contents && type_name == Some("Sig")) {
+            has_byte_range_or_contents_markers = true;
+        }
+
+        if type_name == Some("Catalog")
+            && value
+                .get("/Perms")
+                .map(|perms| dictionary_has_any_key(objects, perms, &["/DocMDP", "/UR", "/UR3"]))
+                .unwrap_or(false)
+        {
+            has_certification_dictionary = true;
+        }
+    }
+
+    SignatureDetectionFacts {
+        standard_acro_form_signature_count: signature_field_refs.len() as u32,
+        has_byte_range_or_contents_markers,
+        has_certification_dictionary,
+    }
+}
+
+fn json_name(value: Option<&serde_json::Value>) -> Option<&str> {
+    value
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.strip_prefix('/'))
+}
+
+fn is_signature_sub_filter(value: &str) -> bool {
+    matches!(
+        value,
+        "adbe.pkcs7.detached"
+            | "adbe.pkcs7.sha1"
+            | "adbe.x509.rsa_sha1"
+            | "ETSI.CAdES.detached"
+            | "ETSI.RFC3161"
+    )
+}
+
+fn dictionary_has_any_key(
+    objects: &JsonObjectMap,
+    value: &serde_json::Value,
+    keys: &[&str],
+) -> bool {
+    let resolved = deref(objects, value);
+    let Some(map) = resolved.as_object() else {
+        return false;
+    };
+
+    keys.iter().any(|key| map.contains_key(*key))
 }
 
 type JsonObjectMap = serde_json::Map<String, serde_json::Value>;
@@ -2652,6 +2734,12 @@ mod tests {
         assert_eq!(facts.page_count, 2);
         assert_eq!(facts.size_bytes, 1234);
         assert!(facts.encrypted);
+        assert_eq!(
+            facts.signature_detection.standard_acro_form_signature_count,
+            0
+        );
+        assert!(!facts.signature_detection.has_byte_range_or_contents_markers);
+        assert!(!facts.signature_detection.has_certification_dictionary);
         // Page 0 inherits the Pages-node MediaBox: letter portrait.
         assert_eq!(facts.pages[0].media_box, [0.0, 0.0, 612.0, 792.0]);
         assert_eq!(facts.pages[0].orientation, "portrait");
@@ -2660,6 +2748,37 @@ mod tests {
         assert_eq!(facts.pages[1].rotate, 90);
         assert_eq!(facts.pages[1].orientation, "portrait");
         assert!(facts.pages[1].letter_portrait);
+    }
+
+    #[test]
+    fn parses_signature_facts_from_document_json() {
+        let json = br#"{
+          "version": 2,
+          "pages": [
+            { "object": "5 0 R" }
+          ],
+          "encrypt": { "encrypted": false },
+          "qpdf": [
+            { "jsonversion": 2 },
+            {
+              "obj:1 0 R": { "value": { "/Type": "/Catalog", "/Pages": "2 0 R", "/Perms": "9 0 R" } },
+              "obj:2 0 R": { "value": { "/Type": "/Pages", "/MediaBox": [0, 0, 612, 792], "/Kids": ["5 0 R"] } },
+              "obj:5 0 R": { "value": { "/Type": "/Page", "/Parent": "2 0 R" } },
+              "obj:7 0 R": { "value": { "/FT": "/Sig", "/T": "Signature1" } },
+              "obj:8 0 R": { "value": { "/Type": "/Sig", "/SubFilter": "/adbe.pkcs7.detached", "/ByteRange": [0, 10, 20, 30], "/Contents": "signed" } },
+              "obj:9 0 R": { "value": { "/DocMDP": "8 0 R" } }
+            }
+          ]
+        }"#;
+
+        let facts = parse_document_facts(json, 1234).unwrap();
+
+        assert_eq!(
+            facts.signature_detection.standard_acro_form_signature_count,
+            1
+        );
+        assert!(facts.signature_detection.has_byte_range_or_contents_markers);
+        assert!(facts.signature_detection.has_certification_dictionary);
     }
 
     #[test]

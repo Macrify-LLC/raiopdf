@@ -11,12 +11,12 @@ RaioPDF runs entirely on your own machine — there's no server, no account, and
 ## What to expect
 
 - Acknowledgement within a few business days.
-- This is a pre-alpha, solo-maintained project — there's no formal SLA, but security reports get priority over feature work.
+- This is a public alpha, solo-maintained project — there's no formal SLA, but security reports get priority over feature work.
 - Credit in the fix's release notes / advisory, if you'd like it.
 
 ## Supported versions
 
-Pre-alpha: there are no tagged releases yet, so only `main` is supported. Once releases ship, this section will list which versions get security fixes.
+Public alpha: the latest `0.1.x` release and `main` are supported. Security fixes are shipped in the next alpha release unless the issue requires a faster advisory.
 
 ## Scope
 

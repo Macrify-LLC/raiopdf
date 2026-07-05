@@ -15,7 +15,7 @@ export const unknownPack: JurisdictionPack = {
   id: UNKNOWN_PACK_ID,
   schemaVersion: 2,
   name: "Rules unavailable",
-  packVersion: "0.0.0",
+  packVersion: "0.1.0",
   jurisdiction: "Unknown",
   courtSystem: "Unknown",
   portal: "Unknown",

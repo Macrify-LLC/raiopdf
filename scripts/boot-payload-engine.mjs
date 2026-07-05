@@ -19,7 +19,7 @@
 // exact layer the "sidecar fetch illegal invocation" class of packaged-build bug
 // lives in.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { mkdtemp, rm, access } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -47,6 +47,35 @@ async function fileExists(target) {
   } catch {
     return false;
   }
+}
+
+function commandPath(command) {
+  const result = spawnSync("sh", ["-c", `command -v ${command}`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+function localDevToolchainEnv() {
+  if (IS_WINDOWS) {
+    return {};
+  }
+
+  return {
+    RAIOPDF_ENGINE_JAVA: process.env.RAIOPDF_ENGINE_JAVA?.trim() || "java",
+    ...envFileOverride("RAIOPDF_ENGINE_QPDF", "qpdf"),
+    ...envFileOverride("RAIOPDF_ENGINE_GHOSTSCRIPT", "gs"),
+    ...envFileOverride("RAIOPDF_ENGINE_OCRMYPDF", "ocrmypdf"),
+  };
+}
+
+function envFileOverride(key, command) {
+  if (process.env[key]?.trim()) {
+    return {};
+  }
+  const found = commandPath(command);
+  return found ? { [key]: found } : {};
 }
 
 /**
@@ -91,6 +120,7 @@ export async function bootPayloadEngine(options = {}) {
     env: {
       ...process.env,
       RAIOPDF_ENGINE_PAYLOAD_DIR: payloadDir,
+      ...localDevToolchainEnv(),
       RAIOPDF_APP_DATA_DIR: appDataDir,
     },
   });

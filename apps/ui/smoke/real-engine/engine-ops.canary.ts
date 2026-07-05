@@ -61,7 +61,16 @@ test("OCR: force-OCR turns an unreadable scan into genuinely SEARCHABLE text", a
     "OCR'd text must be searchable — Tesseract should have recovered 'Deadline'",
   ).toHaveText(/1 of [1-9]\d*/, { timeout: 20_000 });
 
+  // Regression guard for the proxy/local endpoint CORS split: a Stirling-backed
+  // OCR request must not poison a later local qpdf request in the same browser
+  // session.
+  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Compress...", exact: true }).click();
+  await page.getByRole("button", { name: "Compress PDF" }).click();
+  await expect(page.getByText("Compression complete.")).toBeVisible({ timeout: 120_000 });
+
   const saved = await savePdf(page);
+  expect(Buffer.from(saved.slice(0, 5)).toString("latin1")).toBe("%PDF-");
   expect(hasTextLayer(saved), "OCR output must carry a real text layer").toBe(true);
   logs.assertClean(BENIGN_LOG);
 });

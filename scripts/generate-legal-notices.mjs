@@ -78,11 +78,11 @@ function releaseVersion() {
   }
 
   const shellVersion = packageVersion(join(REPO_ROOT, "apps", "shell", "package.json"));
-  if (shellVersion && shellVersion !== "0.0.0") {
+  if (shellVersion) {
     return shellVersion;
   }
 
-  return packageVersion(join(REPO_ROOT, "package.json")) ?? "0.0.0";
+  return packageVersion(join(REPO_ROOT, "package.json")) ?? "0.1.0";
 }
 
 function exactGitTagVersion() {

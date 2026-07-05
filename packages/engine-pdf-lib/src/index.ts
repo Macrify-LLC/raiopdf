@@ -41,6 +41,15 @@ export type ScrubPdfMetadataOptions = {
   preservePdfAIdentification?: boolean | PdfAIdentification;
 };
 
+export async function countPdfPages(bytes: Uint8Array): Promise<number> {
+  const pdf = await PDFDocument.load(bytes, {
+    updateMetadata: false,
+    ignoreEncryption: true,
+  });
+
+  return pdf.getPageCount();
+}
+
 export function readPdfAIdentification(pdf: PDFDocument): PdfAIdentification | null {
   const xmp = readCatalogXmp(pdf);
 

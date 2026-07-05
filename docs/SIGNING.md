@@ -67,7 +67,7 @@ key** — separate from the Certum Authenticode cert — supplied via `TAURI_SIG
 *"Raio Tauri Private Signing Key 7/3"*: `credential` field = private key, `password` field =
 password). The build also stamps the app version from the **git tag on the current commit**,
 so tag the release before building — an untagged commit fails the stamp rather than shipping
-`0.0.0`.
+a placeholder version.
 
 ```powershell
 # 1. Log in with SimplySign Desktop (scan the QR with the mobile app).

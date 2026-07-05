@@ -23,8 +23,8 @@ word, but the word itself is always "RaioPDF.")
 
 ## Status banner (always visible, small, near the top)
 
-**Pre-alpha — under active development.** Nothing to download yet. Watch the
-repo for the first release.
+**Public alpha.** Windows build available from GitHub Releases. Get the
+latest release.
 
 This is not hidden or soft-pedaled. It sits near the top on every option.
 
@@ -121,7 +121,7 @@ abstract/strategic. A first-person belief claim like "I believe this is a
 genuinely better experience" is fine even pre-1.0 (the hedge is "I
 believe," not a claim about the product being finished) — an unattributed,
 third-person "RaioPDF is better than Acrobat" stated as flat fact is not,
-until there's a real release to back it.
+while the product is still in public alpha.
 
 Where it fits naturally (not every option needs the full essay), the
 concept-to-working-prototype timeline — about twelve hours — is a fair,
@@ -223,8 +223,7 @@ paragraph.)
 
 - Not "AI-powered." No AI features built into RaioPDF — if I wanted an AI
   summary I could go to a million other more useful places first.
-- Not released yet. Pre-alpha, no promised date. But if you want it, I'll
-  give it to you.
+- Public alpha, Windows first. Usable and versioned, but still early.
 - Windows first. macOS later — no date promised.
 - Not trying to win a features arms race. This isn't about beating anyone
   spec-for-spec — it's about proving the free, local, and genuinely
@@ -247,11 +246,11 @@ claim about the marketing page's own analytics/cookies; don't merge the two.)
 
 ## Download panel copy
 
-**Before a release exists** (`available: false` from the GitHub API):
-> RaioPDF is in active development. The first signed Windows installer ships
-> here first. [Watch the repo on GitHub →]
+**Fallback state** (`available: false` from the GitHub API):
+> RaioPDF is in public alpha. Download the current Windows build from GitHub
+> Releases. [Open GitHub Releases →]
 
-**Once a release exists** (`available: true`):
+**Live release state** (`available: true`):
 - Primary button: "Download for Windows" → the evergreen release asset URL
 - Small print under the button: version, file size, published date — all
   pulled live from GitHub, never hand-typed
@@ -262,8 +261,8 @@ claim about the marketing page's own analytics/cookies; don't merge the two.)
 ## Download counter
 
 Total downloads across every published release, summed client-side from the
-GitHub Releases API. Hidden entirely in the pre-release state (a "0" counter
-before there's a product to download reads as broken, not honest).
+GitHub Releases API. Hidden when the API does not return a release or the
+count is zero.
 
 ## No-telemetry line (footer or near the download panel)
 

@@ -56,6 +56,11 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
     pageCount: 2,
     sizeBytes: 283_000_000,
     encrypted: false,
+    signatureDetection: {
+      standardAcroFormSignatureCount: 1,
+      hasByteRangeOrContentsMarkers: true,
+      hasCertificationDictionary: false,
+    },
     pages: [
       {
         index: 0,
@@ -90,6 +95,8 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
     expect(mapped.fileBytes).toBe(283_000_000);
     expect(mapped.filename).toBe("appendix.pdf");
     expect(mapped.encryptionState).toBe("none");
+    expect(mapped.signatureFieldCount).toBe(1);
+    expect(mapped.signatureDetection).toEqual(facts.signatureDetection);
     // Facts qpdf cannot provide stay undefined — unknown, never passed.
     expect(mapped.searchableText).toBeUndefined();
     expect(mapped.pdfaCompliant).toBeUndefined();

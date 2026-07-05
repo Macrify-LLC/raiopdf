@@ -134,7 +134,7 @@ const WRITE_TOOL_ANNOTATIONS = {
 } as const;
 
 const SERVER_NAME = "raiopdf-mcp";
-const SERVER_VERSION = "0.0.0-p1b";
+const SERVER_VERSION = "0.1.0";
 
 export type ToolDependencies = {
   engineHandle: EngineHandle;

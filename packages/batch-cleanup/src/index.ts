@@ -162,7 +162,7 @@ type BatchCleanupFileResultInput =
   Omit<BatchCleanupFileResult, "signatureInvalidated" | "signatureDetection"> &
   Partial<Pick<BatchCleanupFileResult, "signatureInvalidated" | "signatureDetection">>;
 
-const DEFAULT_APP_VERSION = "0.0.0";
+const DEFAULT_APP_VERSION = "0.1.0";
 const DEFAULT_OCR_MODE: BatchCleanupOcrMode = "auto-image-only";
 const DEFAULT_COMPRESSION_QUALITY = 5;
 const DEFAULT_SPLIT_SIZE_MB = 25;

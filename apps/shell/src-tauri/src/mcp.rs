@@ -453,14 +453,45 @@ fn resolve_source_path(file_grants: &FileGrants, grant: &str) -> Result<String, 
     path_to_utf8_string(file_grants.resolve(grant)?, "File grant")
 }
 
-/// Canonicalizes and validates the output folder in Rust before it's used by
-/// any of the one-shot subprocess commands, mirroring `validate_output_directory`
-/// used by the other save/export flows in `lib.rs`.
+/// Validates the output folder in Rust before it's used by any of the
+/// one-shot subprocess commands.
+///
+/// Unlike the other save/export flows that use `validate_output_directory`
+/// directly, a fresh (not-yet-existing) package root is a supported input
+/// here: `PackageWriter` (`packages/package-writer/src/index.ts`) creates the
+/// root and its `upload/`/`raio-manifest/` subdirectories recursively,
+/// refusing only an existing *non-empty* root. So rather than requiring the
+/// full path to already exist, this walks up to the nearest existing
+/// ancestor, validates that ancestor is a real directory, and re-appends
+/// whatever trailing segments don't exist yet -- a nonsense path (no existing
+/// ancestor at all) still fails fast.
 fn resolve_output_dir(output_dir: &str) -> Result<String, String> {
-    path_to_utf8_string(
-        crate::validate_output_directory(Path::new(output_dir))?,
-        "Selected output folder",
-    )
+    let path = Path::new(output_dir);
+
+    let mut missing_segments = Vec::new();
+    let mut existing_ancestor = path;
+    while !existing_ancestor.exists() {
+        let name = existing_ancestor.file_name().ok_or_else(|| {
+            format!(
+                "No existing parent folder found for {}",
+                path.to_string_lossy()
+            )
+        })?;
+        missing_segments.push(name.to_os_string());
+        existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
+            format!(
+                "No existing parent folder found for {}",
+                path.to_string_lossy()
+            )
+        })?;
+    }
+
+    let mut resolved = crate::validate_output_directory(existing_ancestor)?;
+    for segment in missing_segments.into_iter().rev() {
+        resolved.push(segment);
+    }
+
+    path_to_utf8_string(resolved, "Selected output folder")
 }
 
 fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>, String> {
@@ -527,5 +558,76 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
             None => error.message,
         },
         None => format!("{tool_name} failed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_output_dir;
+
+    #[test]
+    fn accepts_an_output_dir_that_already_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let resolved = resolve_output_dir(dir.path().to_str().expect("utf8 tempdir path"))
+            .expect("existing directory should resolve");
+        assert_eq!(
+            std::path::Path::new(&resolved),
+            dir.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn accepts_a_not_yet_created_package_root_under_an_existing_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_root = dir.path().join("Smith Production Set 001");
+
+        let resolved = resolve_output_dir(package_root.to_str().expect("utf8 path"))
+            .expect("a fresh package root under an existing parent should resolve");
+
+        assert_eq!(
+            std::path::Path::new(&resolved),
+            dir.path()
+                .canonicalize()
+                .unwrap()
+                .join("Smith Production Set 001")
+        );
+        assert!(
+            !package_root.exists(),
+            "resolving must not create the directory itself"
+        );
+    }
+
+    #[test]
+    fn accepts_multiple_missing_nested_segments_under_an_existing_ancestor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_root = dir.path().join("2026").join("Q3").join("Filing Packet");
+
+        let resolved = resolve_output_dir(package_root.to_str().expect("utf8 path"))
+            .expect("nested missing segments under an existing ancestor should resolve");
+
+        assert_eq!(
+            std::path::Path::new(&resolved),
+            dir.path()
+                .canonicalize()
+                .unwrap()
+                .join("2026")
+                .join("Q3")
+                .join("Filing Packet")
+        );
+    }
+
+    #[test]
+    fn rejects_an_output_dir_whose_existing_ancestor_is_a_file_not_a_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("not-a-folder.txt");
+        std::fs::write(&file_path, b"not a folder").expect("write file");
+        let package_root = file_path.join("Package");
+
+        let error = resolve_output_dir(package_root.to_str().expect("utf8 path"))
+            .expect_err("a file cannot be treated as a folder ancestor");
+        assert!(
+            error.contains("not a folder") || error.contains("Failed"),
+            "{error}"
+        );
     }
 }

@@ -2858,6 +2858,9 @@ export function App() {
 
     void (async () => {
       let flattenedOverlayCount = 0;
+      const annotationCount = sourceBytes
+        ? await countRaioPdfMarkupAnnotations(sourceBytes)
+        : 0;
 
       if (overlayEdits.length > 0) {
         setMarkupAnnotationMessage("Flattening pending annotations...");
@@ -2875,24 +2878,17 @@ export function App() {
         editing.clearPendingEdits();
       }
 
-      const annotationCount = sourceBytes
-        ? await countRaioPdfMarkupAnnotations(sourceBytes)
-        : 0;
-
-      if (annotationCount === 0) {
-        setMarkupAnnotationMessage(
-          flattenedOverlayCount > 0
-            ? `Flattened ${flattenedOverlayCount} pending ${flattenedOverlayCount === 1 ? "annotation" : "annotations"} into permanent page content.`
-            : "No RaioPDF markup annotations were found.",
-        );
+      if (annotationCount === 0 && flattenedOverlayCount === 0) {
+        setMarkupAnnotationMessage("No RaioPDF markup annotations were found.");
         return;
       }
 
       setMarkupAnnotationMessage("Flattening markup annotations...");
       const flattened = await flattenMarkupAnnotations();
+      const flattenedCount = annotationCount + flattenedOverlayCount;
       setMarkupAnnotationMessage(
         flattened
-          ? `Flattened ${annotationCount + flattenedOverlayCount} ${annotationCount + flattenedOverlayCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+          ? `Flattened ${flattenedCount} ${flattenedCount === 1 ? "annotation" : "annotations"} into permanent page content.`
           : "Markup annotations were not flattened.",
       );
     })().catch(() => {

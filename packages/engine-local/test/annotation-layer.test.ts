@@ -197,6 +197,40 @@ describe("annotation-layer foundation", () => {
     expect(embeddedPageContent).toContain("/RaioPDFAnnot");
   });
 
+  it("flattens newly applied markup on a document with no pre-existing annotations", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 200]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "shape",
+          pageIndex: 0,
+          shape: "rect",
+          rect: { x: 40, y: 50, w: 80, h: 30 },
+          strokeWidthPt: 2,
+          strokeColor: { r: 0.1, g: 0.2, b: 0.3 },
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+
+    expect(readRaioPdfMarkupAnnotations(editedPdf.getPage(0)).map((entry) => entry.subtype)).toEqual([
+      "Square",
+    ]);
+
+    const flattened = await engine.flattenMarkupAnnotations(edited);
+    const flattenedBytes = await engine.saveToBytes(flattened);
+    const flattenedPdf = await PDFDocument.load(flattenedBytes);
+    const content = await readDecodedPageContent(flattenedBytes, 0);
+
+    expect(readRaioPdfMarkupAnnotations(flattenedPdf.getPage(0))).toHaveLength(0);
+    expect(flattenedPdf.getPage(0).node.lookupMaybe(PDFName.of("Annots"), PDFArray)).toBeUndefined();
+    expect(content).toContain("/RaioPDFAnnot");
+    expect(content).toContain(" Do");
+  });
+
   it("emits markup annotations by default and keeps baked mode reachable", async () => {
     const engine = createLocalPdfEngine();
     const defaultSource = await engine.open(await createPdf([[300, 200]]));

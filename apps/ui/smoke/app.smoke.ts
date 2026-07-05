@@ -788,6 +788,29 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(0);
 });
 
+test("flattens pending markup into page content on an annotation-free PDF", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "flatten-pending-markup.pdf", await createPdf([300]));
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = mainCanvas(page);
+  await commandBar.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await dragOnCanvas(page, canvas, 0.2, 0.25, 0.55, 0.45);
+  await expect(page.locator("svg.edit-layer__shapes rect.edit-layer__shape-item")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Flatten RaioPDF markup annotations" }).click();
+  await expect(
+    toolPanel.getByText("Flattened 1 annotation into permanent page content."),
+  ).toBeVisible();
+
+  const saved = await savePdf(page);
+
+  expect(await countPdfAnnotations(saved, 0, "Square")).toBe(0);
+  expect(await readDecodedPageContent(saved, 0)).toContain("/RaioPDFAnnot");
+});
+
 test("places a text box rotation-correctly on a rotated page", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "rotated-edit.pdf", await createPdf([300]));

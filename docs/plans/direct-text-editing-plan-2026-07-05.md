@@ -471,3 +471,58 @@ unchanged (tool deferred).
   machinery, not on `/edit-text`.
 - **MCP `replace-text` tool** (with the `docs/MCP.md` count sync).
 - **Ctrl+F/Ctrl+H** after a CommandBar find shortcut exists.
+
+## Phase 0 findings — 2026-07-05 (GO)
+
+Ran the fixture battery against the locally-built pinned engine
+(`stirling-pdf-2.14.0-linux-x64.jar`, this branch's vendored + patched source;
+`pnpm engine:build` + `engine:verify` green, incl. the image-passthrough check).
+Each fixture synthesized, driven through `/api/v1/general/edit-text`, and measured
+with scripted extraction/hashing (pymupdf + pikepdf).
+
+| # | Fixture | Result | Verdict |
+|---|---------|--------|---------|
+| 1 | Born-digital pleading (justified, footnote) | Single-word (`Plaintiff`→`Petitioner`) and same-run multi-word (`MOTION TO DISMISS`→`MOTION TO STRIKE`) both replaced; extracted text confirms. **Zero layout drift** on an unchanged control word (dx=0, dy=0). File 29% smaller after regeneration. | PASS |
+| 2 | Scanned JPEG exhibit + CCITT-G4 fax (zero-match) | Image XObject raw-stream SHA, `/Filter`, and dimensions **byte-identical** before/after for *both* DCTDecode (JPEG) and CCITTFaxDecode. The passthrough patch holds on real scans. | PASS (patch confirmed) |
+| 3 | PDF/A-1b and PDF/A-2b | `/OutputIntents` **dropped** (present→absent) for both; `pdfaid:part` XMP claim **retained** (1→1, 2→2). Output therefore advertises PDF/A conformance it no longer meets — a stale claim, exactly as anticipated. | Strip identification (planned mitigation confirmed necessary) |
+| 4 | Bookmarks + internal GoTo links | Outline **dropped** (3→0); internal GoTo links **survive** (1→1). | `preserveSamePageOutline` restore confirmed load-bearing |
+| 5 | Attachments + tagged (StructTree/Marked) | Embedded files **dropped** (1→0); `MarkInfo/Marked` and `StructTreeRoot` **dropped**. Text replaced fine. | **NEW — unmitigated in v2 (decision below)** |
+| 6 | Owner-password (permissions-only) | Engine **silently decrypts** (input encrypted → output not encrypted), no password supplied. | Client-side `ENCRYPTED_DOCUMENT` refusal confirmed necessary |
+| 7 | AcroForm (text field + checkbox) | Fields (2→2), widget appearance streams (2→2), and field value (`Jane Doe`) all **preserved**. | PASS |
+| 8 | Large image-heavy doc | 244.6 MB input → HTTP 200 in **7.88 s**, output 244.6 MB (no bloat — images pass through). No multipart rejection at 244 MB. | PASS (size-gated loader copy) |
+| + | Markup annotations (Highlight + FreeText) | Both **survive** the round trip. | PASS |
+
+**Go/No-Go: GO.** Born-digital fidelity is clean across text, AcroForm fields,
+markup annotations, and internal links; the one dropped structure (outline) is
+restored by the sidecar's `preserveSamePageOutline`. Mixed-document image handling
+is now byte-clean (patch). Wall time is acceptable and bounded by input size, not a
+hard cap. Nothing here blocks the plan.
+
+### Decisions for Jacob (do not silently change scope)
+
+1. **Attachments + tagged structure are silently dropped (new).** v2 does not
+   mitigate either. Embedded-file loss is a genuine data-loss risk (a firm editing
+   text on a PDF that carries a native-format exhibit would lose the exhibit);
+   tag loss degrades accessibility. Options, cheapest first: (a) preflight-detect
+   and warn ("editing text will remove N embedded attachment(s) and accessibility
+   tags — continue?"); (b) restore the `EmbeddedFiles` name tree post-process the
+   same way the outline is restored (feasible; tags are harder to restore
+   faithfully); (c) disclose only. Recommend (a) for both plus (b) for attachments
+   if cheap; needs a call before the sidecar phase since it adds a preflight +
+   warning code.
+2. **Relax the scanned-document gate to *image-only* (not *contains-images*).**
+   Because mixed docs now preserve image bytes, a document with a text layer *and*
+   scanned exhibits is safe to edit. The UI's "scanned-docs-out" gate should key
+   off *no extractable text layer*, not the mere presence of image XObjects.
+
+### Copy implications
+
+- **`IMAGES_REENCODED` warning:** on our patched bundled engine, images are
+  preserved (F2), so this warning should not fire for our build. Keep it only as a
+  guard for an un-patched engine, or drop it — revisit in the sidecar phase.
+- **Loader copy:** a large document round-trips in seconds with no progress
+  channel (244 MB → ~8 s). A size-based "this may take a few seconds" message is
+  sufficient; no streaming progress needed for v1.
+- **PDF/A:** after an edit the file is no longer valid PDF/A (OutputIntent gone);
+  stripping the stale `pdfaid` claim so the output stops advertising conformance is
+  the honest behavior, and F3 confirms the engine leaves that claim behind.

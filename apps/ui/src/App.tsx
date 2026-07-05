@@ -1184,6 +1184,28 @@ export function App() {
     }
   }, []);
 
+  const resetVisibleDocumentAppState = useCallback((next: "document" | "empty") => {
+    ocrRunRef.current += 1;
+    ocrActiveRef.current = false;
+    setOcrState({ phase: "idle", message: null });
+    setForceOcrConfirmation(null);
+    resetLegalState();
+    setSelectedPageIndexes(next === "document" ? new Set([0]) : new Set());
+    setPageDeleteConfirmation(null);
+    setPasswordPrompt(null);
+    setRepairCandidate(null);
+  }, [resetLegalState]);
+
+  const handleTabSelected = useCallback((tabId: string) => {
+    if (tabId === activeTabId) {
+      return;
+    }
+
+    if (switchDocumentTab(tabId)) {
+      resetVisibleDocumentAppState("document");
+    }
+  }, [activeTabId, resetVisibleDocumentAppState, switchDocumentTab]);
+
   // Document identity is (openToken, generation) [R1-8] — never a
   // Uint8Array reference, which streamed documents don't have.
   const isCurrentDocument = useCallback(
@@ -2316,6 +2338,8 @@ export function App() {
     if (!tab) {
       return;
     }
+    const closesVisibleDocument = tabId === activeTabId;
+    const nextVisibleState = documentTabs.length > 1 ? "document" : "empty";
 
     if (tab.document.dirty) {
       const fileName = tab.document.fileName ?? "this document";
@@ -2327,8 +2351,12 @@ export function App() {
       }
     }
 
-    void closeDocumentTab(tabId);
-  }, [closeDocumentTab, documentTabs]);
+    void closeDocumentTab(tabId).then((closed) => {
+      if (closed && closesVisibleDocument) {
+        resetVisibleDocumentAppState(nextVisibleState);
+      }
+    });
+  }, [activeTabId, closeDocumentTab, documentTabs, resetVisibleDocumentAppState]);
 
   const openFile = useCallback(() => {
     void filePort
@@ -5461,7 +5489,7 @@ export function App() {
           active: tab.id === activeTabId,
           canMoveToNewWindow: Boolean(tab.document.filePath),
         }))}
-        onTabSelected={switchDocumentTab}
+        onTabSelected={handleTabSelected}
         onTabCloseRequested={requestTabClose}
         onTabMoveToNewWindowRequested={requestTabMoveToNewWindow}
         pdfDocument={pdfDocument}

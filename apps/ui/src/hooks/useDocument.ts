@@ -235,6 +235,10 @@ interface OpenTarget {
 }
 
 export const MAX_DOCUMENT_TABS = 8;
+export const NEW_TAB_BUSY_MESSAGE =
+  "Finish the current document operation before opening another document.";
+const MAX_DOCUMENT_TABS_MESSAGE =
+  `RaioPDF can keep up to ${MAX_DOCUMENT_TABS} documents open at once. Close a tab before opening another.`;
 
 export interface DocumentFileInput {
   bytes: Uint8Array;
@@ -289,6 +293,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const activeHandleRef = useRef<PdfDocumentHandle | null>(null);
   const activeBytesRef = useRef<Uint8Array | null>(null);
   const openTokenRef = useRef(0);
+  const openTokenCounterRef = useRef(0);
+  const prepareOpenErrorRef = useRef<string | null>(null);
   // Never reset: generation is a globally monotonic document identity, so a
   // (generation) capture alone distinguishes documents across opens [R1-8].
   const generationRef = useRef(0);
@@ -434,14 +440,25 @@ export function useDocument(options: UseDocumentOptions = {}) {
   }), []);
 
   const prepareOpenTarget = useCallback((openMode: OpenFileOptions["openMode"] = "replace-active"): OpenTarget | null => {
+    prepareOpenErrorRef.current = null;
     const hasActiveDocument = document.source !== null;
     const shouldOpenNewTab = openMode === "new-tab" && hasActiveDocument;
     const previousActiveTabId = activeTabIdRef.current;
 
     if (shouldOpenNewTab && tabsRef.current.length >= MAX_DOCUMENT_TABS) {
+      prepareOpenErrorRef.current = MAX_DOCUMENT_TABS_MESSAGE;
       setDocument((current) => ({
         ...current,
-        error: `RaioPDF can keep up to ${MAX_DOCUMENT_TABS} documents open at once. Close a tab before opening another.`,
+        error: MAX_DOCUMENT_TABS_MESSAGE,
+      }));
+      return null;
+    }
+
+    if (shouldOpenNewTab && busyCountRef.current > 0) {
+      prepareOpenErrorRef.current = NEW_TAB_BUSY_MESSAGE;
+      setDocument((current) => ({
+        ...current,
+        error: NEW_TAB_BUSY_MESSAGE,
       }));
       return null;
     }
@@ -455,16 +472,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
       }
 
       const id = createTabId();
+      const token = openTokenCounterRef.current + 1;
+      openTokenCounterRef.current = token;
       activeTabIdRef.current = id;
       activeHandleRef.current = null;
       activeBytesRef.current = null;
-      openTokenRef.current = 1;
+      openTokenRef.current = token;
       sourceKindRef.current = null;
       scrollNonceRef.current = 0;
       mutationQueueRef.current = Promise.resolve();
       busyCountRef.current = 0;
       setPageScrollIntent(null);
-      return { id, previousActiveTabId, previousHandle: null, token: 1, newTab: true };
+      return { id, previousActiveTabId, previousHandle: null, token, newTab: true };
     }
 
     let id = activeTabIdRef.current;
@@ -473,7 +492,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
       activeTabIdRef.current = id;
     }
 
-    const token = openTokenRef.current + 1;
+    const token = openTokenCounterRef.current + 1;
+    openTokenCounterRef.current = token;
     openTokenRef.current = token;
     return {
       id,
@@ -767,7 +787,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       if (!target) {
         return {
           status: "failed",
-          error: `RaioPDF can keep up to ${MAX_DOCUMENT_TABS} documents open at once. Close a tab before opening another.`,
+          error: prepareOpenErrorRef.current ?? MAX_DOCUMENT_TABS_MESSAGE,
         };
       }
       const { id, token, previousHandle } = target;
@@ -917,7 +937,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       if (!target) {
         return {
           status: "failed",
-          error: `RaioPDF can keep up to ${MAX_DOCUMENT_TABS} documents open at once. Close a tab before opening another.`,
+          error: prepareOpenErrorRef.current ?? MAX_DOCUMENT_TABS_MESSAGE,
         };
       }
       const { id, token, previousHandle } = target;

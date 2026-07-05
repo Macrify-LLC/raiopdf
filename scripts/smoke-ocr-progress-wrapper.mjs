@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,20 +25,27 @@ const fixture = path.resolve(args.fixture ?? path.join(
   "three-pages.pdf",
 ));
 const runner = path.join(payloadDir, "ocr", "raiopdf-ocr-progress.cmd");
+const pythonExe = path.join(payloadDir, "ocr", "python", "python.exe");
+const wrapper = path.join(payloadDir, "ocr", "raiopdf_ocr_progress.py");
+const plugin = path.join(payloadDir, "ocr", "raiopdf_ocr_progress_plugin.py");
 
 if (process.platform !== "win32") {
   throw new Error("The OCR progress wrapper smoke currently requires the windows-x64 payload on Windows.");
 }
 
 await assertFile(runner, "OCR progress runner");
+await assertFile(pythonExe, "OCR payload Python");
+await assertFile(wrapper, "OCR progress wrapper");
+await assertFile(plugin, "OCR progress plugin");
 await assertFile(fixture, "smoke PDF fixture");
+await assertRunnerTemplate(runner);
 
 const tempDir = path.join(os.tmpdir(), `raiopdf-ocr-progress-smoke-${process.pid}-${Date.now()}`);
 await mkdir(tempDir, { recursive: true });
 
 try {
   const output = path.join(tempDir, "ocr-progress-output.pdf");
-  const result = await runOcr(runner, fixture, output, payloadDir);
+  const result = await runOcr(pythonExe, wrapper, fixture, output, payloadDir);
   if (result.code !== 0) {
     throw new Error([
       `OCR progress wrapper exited with ${result.code}.`,
@@ -112,11 +119,20 @@ async function assertFile(filePath, label) {
   }
 }
 
-function runOcr(command, input, output, payloadRoot) {
+async function assertRunnerTemplate(filePath) {
+  const content = await readFile(filePath, "utf8");
+  if (!content.includes("%~dp0python\\python.exe") || !content.includes("%~dp0raiopdf_ocr_progress.py")) {
+    throw new Error(`OCR progress runner does not launch the bundled wrapper: ${filePath}`);
+  }
+}
+
+function runOcr(python, wrapperPath, input, output, payloadRoot) {
   return new Promise((resolve, reject) => {
-    const ocrArgs = ["--mode", "force", "--output-type", "pdf", input, output];
     const env = {
       ...process.env,
+      PYTHONHOME: path.join(payloadRoot, "ocr", "python"),
+      PYTHONPATH: path.join(payloadRoot, "ocr", "python", "Lib", "site-packages"),
+      PYTHONDONTWRITEBYTECODE: "1",
       PATH: [
         path.join(payloadRoot, "ocr", "tesseract"),
         path.join(payloadRoot, "ocr", "gs", "bin"),
@@ -124,7 +140,7 @@ function runOcr(command, input, output, payloadRoot) {
         process.env.PATH ?? "",
       ].join(path.delimiter),
     };
-    const child = spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", command, ...ocrArgs], {
+    const child = spawn(python, [wrapperPath, "--mode", "force", "--output-type", "pdf", input, output], {
       cwd: repoRoot,
       env,
       windowsHide: true,

@@ -514,7 +514,7 @@ describe("SidecarPdfEngine", () => {
     await expectFormFile(calls[0], [1, 2, 3]);
   });
 
-  it("runs OCR through ocr-pdf with searchable sandwich defaults", async () => {
+  it("runs OCR through the local OCRmyPDF interceptor", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }), pdfResponse(42));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
     const document = await engine.open(bytes(1));
@@ -525,12 +525,12 @@ describe("SidecarPdfEngine", () => {
     });
 
     expect(await engine.saveToBytes(searchable)).toEqual(bytes(42));
-    expect(calls[1]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/ocr-pdf");
-    expect(getFormData(calls[1]).getAll("languages")).toEqual(["eng", "spa"]);
-    expectFormField(calls[1], "ocrType", "skip-text");
-    expectFormField(calls[1], "ocrRenderType", "sandwich");
-    expectFormField(calls[1], "sidecar", "false");
-    expectFormField(calls[1], "deskew", "true");
+    expect(pathFromUrl(calls[1]?.url ?? "")).toBe("/local/ocr");
+    expectBase64Body(calls[1], [1]);
+    expect(queryValue(calls[1], "body_encoding")).toBe("base64");
+    expect(queryValue(calls[1], "ocr_type")).toBe("skip-text");
+    expect(queryValue(calls[1], "languages")).toBe("eng,spa");
+    expect(queryValue(calls[1], "deskew")).toBe("true");
   });
 
   it("runs raw-byte OCR without probing basic-info when page count is known", async () => {
@@ -548,8 +548,26 @@ describe("SidecarPdfEngine", () => {
       pageCount: 6,
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/misc/ocr-pdf");
-    expectFormField(calls[0], "ocrType", "force-ocr");
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/ocr");
+    expectBase64Body(calls[0], [1]);
+    expect(queryValue(calls[0], "body_encoding")).toBe("base64");
+    expect(queryValue(calls[0], "ocr_type")).toBe("force-ocr");
+  });
+
+  it("normalizes legacy Normal OCR mode to skip-text for the local interceptor", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(42));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.ocrBytes(bytes(1), {
+      ocrType: "Normal",
+      knownPageCount: 1,
+    })).resolves.toMatchObject({
+      bytes: bytes(42),
+      pageCount: 1,
+    });
+
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/ocr");
+    expect(queryValue(calls[0], "ocr_type")).toBe("skip-text");
   });
 
   it("closes document handles and ignores unknown handles", async () => {

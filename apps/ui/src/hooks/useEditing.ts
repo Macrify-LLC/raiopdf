@@ -119,7 +119,6 @@ export interface EditingState {
   collectEdits: () => { edits: PdfEdit[]; flatten: boolean } | null;
   collectAnnotationSavePlan: () => {
     plan: AnnotationSavePlan;
-    formEdits: PdfEdit[];
     flatten: boolean;
   } | null;
   hasUnsavedEdits: boolean;
@@ -425,18 +424,25 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }, [annotationSavePlan, formValues]);
 
   const collectAnnotationSavePlan = useCallback(() => {
-    const formEdits = Object.keys(formValues).length > 0
-      ? [{ type: "formValues" as const, values: formValues }]
-      : [];
+    const hasFormWrite = Object.keys(formValues).length > 0;
 
-    if (!annotationSavePlanHasChanges(annotationSavePlan) && formEdits.length === 0) {
+    if (!annotationSavePlanHasChanges(annotationSavePlan) && !hasFormWrite) {
       return null;
     }
 
+    const plan = hasFormWrite
+      ? {
+          ...annotationSavePlan,
+          appendEdits: [
+            ...annotationSavePlan.appendEdits,
+            { type: "formValues" as const, values: formValues },
+          ],
+        }
+      : annotationSavePlan;
+
     return {
-      plan: annotationSavePlan,
-      formEdits,
-      flatten: flattenOnSave && (annotationSavePlan.hasSignatureEdit || formEdits.length > 0),
+      plan,
+      flatten: flattenOnSave && (annotationSavePlan.hasSignatureEdit || hasFormWrite),
     };
   }, [annotationSavePlan, flattenOnSave, formValues]);
 

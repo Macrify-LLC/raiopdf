@@ -1556,12 +1556,13 @@ export function App() {
     clearDocumentBoundLegalState(previousGeneration);
   }, [clearDocumentBoundLegalState, document.generation, document.source]);
 
-  // Pending edits and form values are geometry- and page-bound, so any change
-  // to the underlying document (rotate, delete, reorder, apply — each swaps
-  // the source and bumps the generation) invalidates them.
+  // Pending edits and form values are geometry- and page-bound, so source
+  // swaps reset and re-import annotations. Engine-handle churn for the same
+  // source must not force a full annotation re-parse.
   const resetEditingForDocument = editing.resetForDocument;
   const loadImportedAnnotations = editing.loadImportedAnnotations;
   const editingDocumentSourceRef = useRef<typeof document.source | undefined>(undefined);
+  const importedAnnotationsSourceRef = useRef<typeof document.source | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
     const sourceChanged = editingDocumentSourceRef.current !== document.source;
@@ -1569,24 +1570,33 @@ export function App() {
 
     if (sourceChanged) {
       resetEditingForDocument();
+      importedAnnotationsSourceRef.current = undefined;
     }
 
     // Imported annotations are document-bound pending edits. Keep reset and
     // import in this flow so a source swap deterministically resets first,
     // then rehydrates imports without relying on sibling effect order.
     if (document.source === null || document.source.kind !== "memory" || !document.engineHandle) {
-      loadImportedAnnotations([]);
+      if (sourceChanged) {
+        loadImportedAnnotations([]);
+      }
+      return;
+    }
+
+    if (importedAnnotationsSourceRef.current === document.source) {
       return;
     }
 
     void readRaioPdfAnnotations()
       .then((annotations) => {
         if (!disposed) {
+          importedAnnotationsSourceRef.current = document.source;
           loadImportedAnnotations(annotations);
         }
       })
       .catch(() => {
         if (!disposed) {
+          importedAnnotationsSourceRef.current = document.source;
           loadImportedAnnotations([]);
         }
       });
@@ -2840,7 +2850,7 @@ export function App() {
 
       if (pendingApply) {
         const applied = await applyAnnotationSavePlan({
-          appendEdits: [...pendingApply.plan.appendEdits, ...pendingApply.formEdits],
+          appendEdits: pendingApply.plan.appendEdits,
           updateEdits: pendingApply.plan.updateEdits,
           deleteAnnotIds: pendingApply.plan.deleteAnnotIds,
         }, {

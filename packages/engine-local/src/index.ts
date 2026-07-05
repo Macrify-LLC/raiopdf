@@ -191,13 +191,13 @@ const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
   "StrikeOut",
   "Underline",
 ]);
-const RAIOPDF_ROUNDTRIP_ANNOTATION_SUBTYPES = new Set([
-  "FreeText",
-  "Highlight",
-  "StrikeOut",
-  "Text",
-  "Underline",
-]);
+const RAIO_ROUNDTRIP_SUBTYPE_BY_KIND = {
+  highlight: "Highlight",
+  underline: "Underline",
+  strikethrough: "StrikeOut",
+  textBox: "FreeText",
+  comment: "Text",
+} satisfies Record<PdfRaioAnnotationEdit["type"], string>;
 const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
   "helvetica:regular": StandardFonts.Helvetica,
   "helvetica:bold": StandardFonts.HelveticaBold,
@@ -968,8 +968,11 @@ export class LocalPdfEngine implements PdfEngine {
     const output = await this.load(document);
 
     assertValidAnnotationId(annotId);
-    assertValidRaioAnnotationEdit(edit, output.getPageCount());
+    assertValidEdit(edit, output.getPageCount());
 
+    // Slice 1 can remove+re-emit self-contained kinds, but this moves the
+    // annotation to the end of /Annots and drops references like Popup/IRT.
+    // Later threaded/foreign annotation slices need true in-place mutation.
     if (!removeAnnotationByIdInPlace(output, annotId)) {
       throw new PdfEngineError("INVALID_DOCUMENT", `RaioPDF annotation "${annotId}" was not found.`);
     }
@@ -1135,7 +1138,11 @@ function readRaioPdfAnnotationImport(
   const kind = readPdfTextObject(marker.get(PDFName.of("Kind")));
   const subtype = readAnnotationSubtype(annotation);
 
-  if (kind !== "Markup" || !subtype || !RAIOPDF_ROUNDTRIP_ANNOTATION_SUBTYPES.has(subtype)) {
+  if (
+    kind !== "Markup" ||
+    !subtype ||
+    !Object.values(RAIO_ROUNDTRIP_SUBTYPE_BY_KIND).includes(subtype)
+  ) {
     return null;
   }
 
@@ -1150,7 +1157,7 @@ function readRaioPdfAnnotationImport(
 
   const edit = parseRaioPdfSourceEdit(sourceEditText);
 
-  if (!edit || edit.pageIndex !== pageIndex || !sourceEditMatchesSubtype(edit, subtype)) {
+  if (!edit || edit.pageIndex !== pageIndex || RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type] !== subtype) {
     return null;
   }
 
@@ -1309,21 +1316,6 @@ function readPdfTextObject(value: unknown): string | undefined {
   }
 
   return undefined;
-}
-
-function sourceEditMatchesSubtype(edit: PdfRaioAnnotationEdit, subtype: string): boolean {
-  switch (edit.type) {
-    case "highlight":
-      return subtype === "Highlight";
-    case "underline":
-      return subtype === "Underline";
-    case "strikethrough":
-      return subtype === "StrikeOut";
-    case "textBox":
-      return subtype === "FreeText";
-    case "comment":
-      return subtype === "Text";
-  }
 }
 
 function isRaioAnnotationEdit(value: unknown): value is PdfRaioAnnotationEdit {
@@ -3023,10 +3015,6 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       assertNonEmptyEditText(edit.text, "Comment");
       return;
   }
-}
-
-function assertValidRaioAnnotationEdit(edit: PdfRaioAnnotationEdit, pageCount: number): void {
-  assertValidEdit(edit, pageCount);
 }
 
 function assertValidAnnotationId(annotId: string): void {

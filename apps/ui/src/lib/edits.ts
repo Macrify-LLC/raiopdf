@@ -54,7 +54,7 @@ interface PendingEditBase {
   status?: PendingEditStatus;
   annotId?: string;
   annotSource?: "raio";
-  sourceBaseline?: PdfRaioAnnotationEdit;
+  sourceBaseline?: string;
 }
 
 export interface PendingHighlight extends PendingEditBase {
@@ -316,11 +316,10 @@ export function pendingEditsFromRaioAnnotations(
 ): PendingEdit[] {
   return annotations.map((annotation) => {
     const pending = pendingEditFromRaioAnnotation(annotation);
-    const baseline = toPdfEdit(pending);
 
     return {
       ...pending,
-      sourceBaseline: isRaioAnnotationPdfEdit(baseline) ? baseline : annotation.edit,
+      sourceBaseline: JSON.stringify(toPdfEdit(pending)),
     };
   });
 }
@@ -355,7 +354,7 @@ export function buildAnnotationSavePlan(
 
     const baseline = edit.sourceBaseline;
 
-    if (baseline && stableJson(pdfEdit) === stableJson(baseline)) {
+    if (baseline && JSON.stringify(pdfEdit) === baseline) {
       continue;
     }
 
@@ -439,26 +438,6 @@ function isRaioAnnotationPdfEdit(edit: PdfEdit): edit is PdfRaioAnnotationEdit {
     edit.type === "strikethrough" ||
     edit.type === "textBox" ||
     edit.type === "comment";
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(sortJson(value));
-}
-
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortJson);
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entryValue]) => [key, sortJson(entryValue)]),
-    );
-  }
-
-  return value;
 }
 
 export function describePendingEdit(edit: PendingEdit): {

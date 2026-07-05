@@ -174,6 +174,8 @@ const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
 const EDIT_INK_COLOR_COMPONENTS = [0x11 / 0xff, 0x11 / 0xff, 0x11 / 0xff] as const;
 const HIGHLIGHT_COLOR_COMPONENTS = [1, 0.9, 0.3] as const;
+/** PDF annotation flag bit 2 (value 2): do not display or print the annotation. */
+const ANNOTATION_FLAG_HIDDEN = 2;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
 const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
@@ -1106,6 +1108,37 @@ export function readRaioPdfMarkupAnnotations(
   page: ReturnType<PDFDocument["getPage"]>,
 ): RaioPdfMarkupAnnotation[] {
   return readAnnotationEntries(page).filter((entry) => isRaioPdfMarkupAnnotation(entry.dict));
+}
+
+/**
+ * Builds a viewer-only copy whose re-importable RaioPDF annotations are hidden
+ * from pdf.js canvas rendering. The source bytes are not mutated; the engine
+ * should keep using the original annotations for update/delete/save.
+ */
+export async function hideRaioPdfImportedAnnotationsForDisplay(
+  bytes: PdfBytes,
+): Promise<Uint8Array> {
+  const normalizedBytes = normalizeBytes(bytes);
+  const pdf = await loadPdf(normalizedBytes);
+  let changed = false;
+
+  pdf.getPages().forEach((page, pageIndex) => {
+    for (const entry of readAnnotationEntries(page)) {
+      if (!readRaioPdfAnnotationImport(entry.dict, pageIndex)) {
+        continue;
+      }
+
+      const flags = entry.dict.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0;
+      const hiddenFlags = flags | ANNOTATION_FLAG_HIDDEN;
+
+      if (hiddenFlags !== flags) {
+        entry.dict.set(PDFName.of("F"), PDFNumber.of(hiddenFlags));
+        changed = true;
+      }
+    }
+  });
+
+  return changed ? pdf.save() : normalizedBytes;
 }
 
 function readRaioPdfAnnotationImports(pdf: PDFDocument): PdfRaioAnnotationImport[] {

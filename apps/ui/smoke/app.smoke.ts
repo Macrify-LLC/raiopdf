@@ -767,8 +767,9 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
 
   const saved = await savePdf(page);
 
-  // The pending list clears only on verified success.
-  await expect(toolPanel.getByText("2 pending edits")).toHaveCount(0);
+  // The document is clean after verified success, but saved RaioPDF-authored
+  // annotations re-import as editable applied overlays.
+  await expect(toolPanel.getByText("2 pending edits")).toHaveCount(1);
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 
   // Saved bytes carry RaioPDF markup as live annotations, plus a regular
@@ -777,15 +778,33 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await expectPdfAnnotation(saved, 0, "Highlight");
   await expectPdfAnnotation(saved, 0, "Text", "Check exhibit reference");
 
-  // Re-open the saved file: it loads and renders cleanly, with nothing pending.
+  // Re-open the saved file: RaioPDF-authored annotations re-import as editable
+  // overlays, while their saved PDF appearances are hidden from pdf.js' canvas
+  // render to avoid drawing each annotation twice.
   await openPdf(page, "edit-round-trip-reopened.pdf", saved);
   await expect.poll(() => mainCanvasStats(page)).toMatchObject({
     widthReady: true,
     heightReady: true,
     hasTextPixels: true,
   });
-  await expect(page.locator(".edit-layer__text-box")).toHaveCount(0);
-  await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(0);
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__highlight")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__text-box")).toContainText("Deposition note");
+  await expect(page.getByRole("button", { name: "Comment: Check exhibit reference" })).toBeVisible();
+
+  await page.locator(".edit-layer__text-box").dblclick();
+  await expect(page.getByLabel("Text box content")).toHaveValue("Deposition note");
+  await page.getByLabel("Text box content").press("Escape");
+  await page.getByRole("button", { name: "Comment: Check exhibit reference" }).click();
+  await expect(page.getByLabel("Comment text")).toHaveValue("Check exhibit reference");
+  await page.getByLabel("Comment text").press("Escape");
+
+  await expect.poll(() => canvasRegionInkPixels(page, 0.25, 0.34, 0.72, 0.47)).toBe(0);
+  await expect.poll(() => canvasRegionInkPixels(page, 0.56, 0.46, 0.7, 0.58)).toBe(0);
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 });
 
 test("flattens pending markup into page content on an annotation-free PDF", async ({ page }) => {
@@ -832,12 +851,16 @@ test("places a text box rotation-correctly on a rotated page", async ({ page }) 
   expect(pdf.getPage(0).getRotation().angle).toBe(90);
   await expectPdfAnnotation(saved, 0, "FreeText", "ROTCHECK");
 
-  // Re-open the saved file: the annotation text must render where it was placed
-  // (near the click point), not mirrored to another corner by a bad mapping.
+  // Re-open the saved file: the annotation must re-import as an overlay where
+  // it was placed (near the click point), not mirror to another corner by a bad
+  // mapping or double-render through the canvas.
   await openPdf(page, "rotated-edit-reopened.pdf", saved);
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__text-box")).toContainText("ROTCHECK");
   await expect
-    .poll(() => canvasRegionInkPixels(page, 0.2, 0.2, 0.6, 0.38))
-    .toBeGreaterThan(0);
+    .poll(() => elementIntersectsCanvasRegion(page, ".edit-layer__text-box", 0.2, 0.2, 0.6, 0.38))
+    .toBe(true);
+  await expect.poll(() => canvasRegionInkPixels(page, 0.2, 0.2, 0.6, 0.38)).toBe(0);
   expect(await canvasRegionInkPixels(page, 0.62, 0.55, 0.98, 0.98)).toBe(0);
 });
 
@@ -897,7 +920,7 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
     buffer: Buffer.from(bytes),
   });
 
-  await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page 1", exact: true })).toBeVisible();
   await expect(mainCanvas(page)).toBeVisible();
 }
 
@@ -1479,6 +1502,41 @@ async function canvasRegionInkPixels(
       return inkPixels;
     },
     [x0Fraction, y0Fraction, x1Fraction, y1Fraction],
+  );
+}
+
+async function elementIntersectsCanvasRegion(
+  page: Page,
+  selector: string,
+  x0Fraction: number,
+  y0Fraction: number,
+  x1Fraction: number,
+  y1Fraction: number,
+): Promise<boolean> {
+  return page.evaluate(
+    ([targetSelector, x0f, y0f, x1f, y1f]) => {
+      const canvas = document.querySelector('[data-testid="pdf-page-canvas"]');
+      const target = document.querySelector(targetSelector ?? "");
+
+      if (!(canvas instanceof HTMLCanvasElement) || !(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      const canvasBox = canvas.getBoundingClientRect();
+      const targetBox = target.getBoundingClientRect();
+      const region = {
+        left: canvasBox.left + canvasBox.width * (x0f ?? 0),
+        top: canvasBox.top + canvasBox.height * (y0f ?? 0),
+        right: canvasBox.left + canvasBox.width * (x1f ?? 0),
+        bottom: canvasBox.top + canvasBox.height * (y1f ?? 0),
+      };
+
+      return targetBox.left < region.right &&
+        targetBox.right > region.left &&
+        targetBox.top < region.bottom &&
+        targetBox.bottom > region.top;
+    },
+    [selector, x0Fraction, y0Fraction, x1Fraction, y1Fraction],
   );
 }
 

@@ -19,6 +19,7 @@ import {
   createAnnotationAppearanceTarget,
   createLocalPdfEngine,
   createPageDrawTarget,
+  hideRaioPdfImportedAnnotationsForDisplay,
   readRaioPdfMarkupAnnotations,
   stampRaioPdfAnnotation,
 } from "../src/index";
@@ -194,6 +195,54 @@ describe("annotation-layer foundation", () => {
       expect(readString(annotation, "NM")).toBe(markerId);
       expect(sourceEdit.type).toBe(imports.find((entry) => entry.annotId === markerId)?.edit.type);
     }
+  });
+
+  it("hides only re-importable RaioPDF annotations in viewer display bytes", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 20, y: 150, w: 80, h: 12 }],
+        },
+        {
+          type: "comment",
+          pageIndex: 0,
+          at: { x: 210, y: 160 },
+          text: "Imported note",
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const sourceBytes = await engine.saveToBytes(edited);
+    const sourcePdf = await PDFDocument.load(sourceBytes);
+    const sourcePage = sourcePdf.getPage(0);
+    const foreignAnnotation = sourcePdf.context.obj({
+      Type: "Annot",
+      Subtype: "Text",
+      Rect: [40, 40, 60, 60],
+      Contents: PDFString.of("Foreign note"),
+      F: 0,
+    }) as PDFDict;
+    const annotations = sourcePage.node.lookup(PDFName.of("Annots"), PDFArray);
+    annotations.push(sourcePdf.context.register(foreignAnnotation));
+    const withForeignBytes = await sourcePdf.save();
+
+    const displayBytes = await hideRaioPdfImportedAnnotationsForDisplay(withForeignBytes);
+    const original = await PDFDocument.load(withForeignBytes);
+    const display = await PDFDocument.load(displayBytes);
+    const originalAnnotations = readPageAnnotations(original, 0);
+    const displayAnnotations = readPageAnnotations(display, 0);
+
+    expect(originalAnnotations.map((annotation) =>
+      annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0
+    )).toEqual([4, 4, 0]);
+    expect(displayAnnotations.map((annotation) =>
+      annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0
+    )).toEqual([6, 6, 0]);
   });
 
   it("updates and deletes RaioPDF annotations by id without duplicating them", async () => {

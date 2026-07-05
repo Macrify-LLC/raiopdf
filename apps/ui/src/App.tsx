@@ -20,7 +20,10 @@ import type {
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
-import { LocalPdfEngine } from "@raiopdf/engine-local";
+import {
+  LocalPdfEngine,
+  hideRaioPdfImportedAnnotationsForDisplay,
+} from "@raiopdf/engine-local";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   buildDocumentFacts,
@@ -1386,7 +1389,8 @@ export function App() {
     if (source.kind === "memory") {
       const sourceBytes = source.bytes;
 
-      void loadPdfDocument(sourceBytes)
+      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes)
+        .then((displayBytes) => loadPdfDocument(displayBytes))
         .then((loaded) => {
           loadedDocument = loaded;
 

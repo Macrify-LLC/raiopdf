@@ -44,6 +44,7 @@ import type {
   PdfTextBoxEdit,
   PdfTextBoxFontFamily,
   PdfTextMarkupEdit,
+  PdfUpdateAnnotationOptions,
   PdfTextRegion,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -966,6 +967,7 @@ export class LocalPdfEngine implements PdfEngine {
     document: PdfDocumentHandle,
     annotId: string,
     edit: PdfRaioAnnotationEdit,
+    options: PdfUpdateAnnotationOptions = {},
   ): Promise<PdfDocumentHandle> {
     const output = await this.load(document);
 
@@ -993,7 +995,7 @@ export class LocalPdfEngine implements PdfEngine {
     };
 
     await applyRaioAnnotationEditInPlace(output, { ...edit, annotId }, resolveTextBoxFont, {
-      print: true,
+      print: options.printMarkupAnnotations ?? true,
     });
 
     return this.store(await output.save());
@@ -1190,14 +1192,14 @@ function readRaioPdfAnnotationImport(
 
   const edit = parseRaioPdfSourceEdit(sourceEditText);
 
-  if (!edit || edit.pageIndex !== pageIndex || RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type] !== subtype) {
+  if (!edit || RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type] !== subtype) {
     return null;
   }
 
   return {
     pageIndex,
     annotId,
-    edit: { ...edit, annotId },
+    edit: { ...edit, pageIndex, annotId },
   };
 }
 

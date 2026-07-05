@@ -104,7 +104,7 @@ import {
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useEditing } from "./hooks/useEditing";
-import { toPdfEdits, type EditToolId } from "./lib/edits";
+import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
   checkForSignedUpdate,
@@ -462,7 +462,6 @@ export function App() {
     cropResizePages,
     buildBinder,
     batesStamp,
-    applyEdits,
     readRaioPdfAnnotations,
     applyAnnotationSavePlan,
     flattenMarkupAnnotations,
@@ -2905,9 +2904,9 @@ export function App() {
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;
-    const overlayEdits = toPdfEdits(editing.pendingEdits);
+    const savePlan = editing.collectMarkupAnnotationSavePlan();
 
-    if (!sourceBytes && overlayEdits.length === 0) {
+    if (!sourceBytes && !annotationSavePlanHasChanges(savePlan)) {
       setMarkupAnnotationMessage(
         streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before flattening markup.",
       );
@@ -2915,15 +2914,20 @@ export function App() {
     }
 
     void (async () => {
-      let flattenedOverlayCount = 0;
       const annotationCount = sourceBytes
         ? await countRaioPdfMarkupAnnotations(sourceBytes)
         : 0;
+      const targetAnnotationCount = Math.max(0, annotationCount - savePlan.deleteAnnotIds.length) +
+        savePlan.appendEdits.length;
 
-      if (overlayEdits.length > 0) {
+      if (annotationSavePlanHasChanges(savePlan)) {
         setMarkupAnnotationMessage("Flattening pending annotations...");
-        const applied = await applyEdits(overlayEdits, {
-          flatten: true,
+        const applied = await applyAnnotationSavePlan({
+          appendEdits: savePlan.appendEdits,
+          updateEdits: savePlan.updateEdits,
+          deleteAnnotIds: savePlan.deleteAnnotIds,
+        }, {
+          flatten: false,
           printMarkupAnnotations,
         });
 
@@ -2931,29 +2935,28 @@ export function App() {
           setMarkupAnnotationMessage("Pending annotations were not flattened.");
           return;
         }
-
-        flattenedOverlayCount = editing.pendingEdits.length;
-        editing.clearPendingEdits();
       }
 
-      if (annotationCount === 0 && flattenedOverlayCount === 0) {
+      if (targetAnnotationCount === 0) {
         setMarkupAnnotationMessage("No RaioPDF markup annotations were found.");
         return;
       }
 
       setMarkupAnnotationMessage("Flattening markup annotations...");
       const flattened = await flattenMarkupAnnotations();
-      const flattenedCount = annotationCount + flattenedOverlayCount;
       setMarkupAnnotationMessage(
         flattened
-          ? `Flattened ${flattenedCount} ${flattenedCount === 1 ? "annotation" : "annotations"} into permanent page content.`
+          ? `Flattened ${targetAnnotationCount} ${targetAnnotationCount === 1 ? "annotation" : "annotations"} into permanent page content.`
           : "Markup annotations were not flattened.",
       );
+      if (flattened) {
+        editing.clearPendingEdits();
+      }
     })().catch(() => {
       setMarkupAnnotationMessage("Markup annotations could not be flattened.");
     });
   }, [
-    applyEdits,
+    applyAnnotationSavePlan,
     document.bytes,
     editing,
     flattenMarkupAnnotations,

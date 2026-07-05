@@ -629,6 +629,16 @@ export type PdfApplyEditsOptions = {
   printMarkupAnnotations?: boolean;
 };
 
+export type PdfUpdateAnnotationOptions = {
+  /**
+   * Controls the PDF `/F` Print flag when re-emitting a RaioPDF-owned markup
+   * annotation during an update.
+   *
+   * Defaults to true.
+   */
+  printMarkupAnnotations?: boolean;
+};
+
 /**
  * A sticky-note comment stored as a real PDF `/Text` annotation.
  *
@@ -1055,6 +1065,7 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     annotId: string,
     edit: PdfRaioAnnotationEdit,
+    options?: PdfUpdateAnnotationOptions,
   ): Promise<PdfDocumentHandle>;
 
   /** Removes one RaioPDF-authored live annotation by stable id. */

@@ -541,6 +541,59 @@ describe("buildAnnotationSavePlan", () => {
       deleteAnnotIds: [],
     });
   });
+
+  it("plans flattening without re-appending unchanged imported annotations", () => {
+    const imported = pendingEditsFromRaioAnnotations([
+      {
+        pageIndex: 0,
+        annotId: "existing-highlight",
+        edit: {
+          type: "highlight",
+          annotId: "existing-highlight",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 20, w: 60, h: 12 }],
+          opacity: 0.4,
+        },
+      },
+      {
+        pageIndex: 0,
+        annotId: "existing-comment",
+        edit: {
+          type: "comment",
+          annotId: "existing-comment",
+          pageIndex: 0,
+          at: { x: 80, y: 90 },
+          text: "Already saved",
+        },
+      },
+    ]);
+    const pending: PendingEdit[] = [
+      ...imported,
+      {
+        kind: "shape",
+        id: "new-rect",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+      },
+    ];
+
+    const plan = buildAnnotationSavePlan(
+      pending,
+      new Set(["existing-highlight", "existing-comment"]),
+    );
+
+    expect(plan.appendEdits).toEqual([
+      {
+        type: "shape",
+        pageIndex: 0,
+        shape: "rect",
+        rect: { x: 120, y: 130, w: 90, h: 30 },
+      },
+    ]);
+    expect(plan.updateEdits).toEqual([]);
+    expect(plan.deleteAnnotIds).toEqual([]);
+  });
 });
 
 describe("computeTextMarkupLineRects", () => {

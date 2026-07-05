@@ -121,6 +121,7 @@ export interface EditingState {
     plan: AnnotationSavePlan;
     flatten: boolean;
   } | null;
+  collectMarkupAnnotationSavePlan: () => AnnotationSavePlan;
   hasUnsavedEdits: boolean;
   /** Clears all document-bound edit state (pending items + form values). */
   resetForDocument: () => void;
@@ -446,6 +447,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     };
   }, [annotationSavePlan, flattenOnSave, formValues]);
 
+  const collectMarkupAnnotationSavePlan = useCallback(() => annotationSavePlan, [annotationSavePlan]);
+
   const resetForDocument = useCallback(() => {
     setPendingEdits([]);
     setImportedAnnotIds(new Set());
@@ -504,6 +507,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       setMessage,
       collectEdits,
       collectAnnotationSavePlan,
+      collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
       resetForDocument,
     }),
@@ -552,6 +556,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       message,
       collectEdits,
       collectAnnotationSavePlan,
+      collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
       resetForDocument,
     ],

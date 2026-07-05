@@ -31,6 +31,7 @@ import type {
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTextRegion,
+  PdfUpdateAnnotationOptions,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError } from "@raiopdf/engine-api";
@@ -828,6 +829,7 @@ export class SidecarPdfEngine implements PdfEngine {
     _document: PdfDocumentHandle,
     _annotId: string,
     _edit: PdfRaioAnnotationEdit,
+    _options?: PdfUpdateAnnotationOptions,
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",

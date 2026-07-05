@@ -830,6 +830,38 @@ test("flattens pending markup into page content on an annotation-free PDF", asyn
   expect(await readDecodedPageContent(saved, 0)).toContain("/RaioPDFAnnot");
 });
 
+test("flattens reopened imported markup once without re-appending it", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "flatten-imported-markup-source.pdf", await createPdf([300]));
+
+  const commandBar = page.locator(".command-bar");
+  const canvas = mainCanvas(page);
+  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await clickCanvasAt(page, canvas, 0.3, 0.4);
+  await page.getByLabel("Text box content").fill("Flatten once");
+  await page.getByLabel("Text box content").press("Enter");
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+
+  const savedWithAnnotation = await savePdf(page);
+  expect(await countPdfAnnotations(savedWithAnnotation, 0, "FreeText")).toBe(1);
+
+  await openPdf(page, "flatten-imported-markup-reopened.pdf", savedWithAnnotation);
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Flatten RaioPDF markup annotations" }).click();
+  await expect(
+    toolPanel.getByText("Flattened 1 annotation into permanent page content."),
+  ).toBeVisible();
+
+  const flattened = await savePdf(page);
+  const flattenedContent = await readDecodedPageContent(flattened, 0);
+
+  expect(await countPdfAnnotations(flattened, 0, "FreeText")).toBe(0);
+  expect(countOccurrences(flattenedContent, "/RaioPDFAnnot")).toBe(1);
+});
+
 test("places a text box rotation-correctly on a rotated page", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "rotated-edit.pdf", await createPdf([300]));
@@ -1657,6 +1689,10 @@ function encodeTextAsHex(text: string): string {
   return `<${[...new TextEncoder().encode(text)]
     .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
     .join("")}>`;
+}
+
+function countOccurrences(source: string, needle: string): number {
+  return source.split(needle).length - 1;
 }
 
 function onePixelPng(): Uint8Array {

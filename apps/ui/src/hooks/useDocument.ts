@@ -1616,6 +1616,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
               currentHandle,
               update.annotId,
               update.edit,
+              applyOptions,
             );
             currentHandle = nextHandle;
             handlesToClose.push(nextHandle);

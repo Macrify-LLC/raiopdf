@@ -1,5 +1,5 @@
 import { FloatingDialog } from "./FloatingDialog";
-import { LoadingSun } from "./LoadingSun";
+import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
 import "./OcrDialog.css";
 
 export type OcrDialogRunningPhase = "starting-engine" | "processing" | "verifying";
@@ -8,8 +8,17 @@ export type OcrDialogPhase = "confirm" | OcrDialogRunningPhase;
 export interface OcrDialogProps {
   phase: OcrDialogPhase;
   pageCount: number;
+  progress?: OcrDialogProgress | null;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+export interface OcrDialogProgress {
+  phase?: string;
+  description?: string | null;
+  completed: number;
+  total?: number | null;
+  unit?: string | null;
 }
 
 const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
@@ -18,7 +27,13 @@ const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
   verifying: "Verifying…",
 };
 
-export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogProps) {
+export function OcrDialog({
+  phase,
+  pageCount,
+  progress = null,
+  onConfirm,
+  onCancel,
+}: OcrDialogProps) {
   const isRunning = phase !== "confirm";
 
   return (
@@ -31,12 +46,12 @@ export function OcrDialog({ phase, pageCount, onConfirm, onCancel }: OcrDialogPr
     >
       <div className="ocr-dialog" data-phase={phase}>
         {isRunning ? (
-          <div className="ocr-dialog__progress" key={phase}>
-            <LoadingSun size={30} label="Making the document searchable" />
-            <p className="ocr-dialog__status-line" role="status" aria-live="polite">
-              {RUNNING_STATUS_LABEL[phase]}
-            </p>
-          </div>
+          <LongProcessLoader
+            key={phase}
+            message={formatOcrRunningMessage(phase, progress)}
+            progress={toLongProcessProgress(progress)}
+            hideProgressText={hasDeterminateProgress(progress)}
+          />
         ) : (
           <div className="ocr-dialog__form">
             <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
@@ -68,4 +83,60 @@ function formatPageCountCopy(pageCount: number): string {
   }
 
   return `All ${pageCount} ${pageCount === 1 ? "page" : "pages"} will be processed.`;
+}
+
+function formatOcrRunningMessage(
+  phase: OcrDialogRunningPhase,
+  progress: OcrDialogProgress | null,
+): string {
+  if (!progress) {
+    return RUNNING_STATUS_LABEL[phase];
+  }
+
+  const count = formatOcrProgressCount(progress);
+  if (count) {
+    return progress.phase === "postprocess"
+      ? `Finishing searchable copy: ${count}`
+      : `Making searchable: ${count}`;
+  }
+
+  if (progress.phase === "postprocess") {
+    return progress.description ? `Finishing searchable copy: ${progress.description}` : "Finishing searchable copy…";
+  }
+
+  return progress.description ? `Making searchable: ${progress.description}` : "Making searchable…";
+}
+
+function toLongProcessProgress(progress: OcrDialogProgress | null): LongProcessProgress | null {
+  if (!hasDeterminateProgress(progress)) {
+    return null;
+  }
+
+  return {
+    current: progress.completed,
+    total: progress.total,
+    unit: progress.unit || "page",
+  };
+}
+
+function hasDeterminateProgress(
+  progress: OcrDialogProgress | null,
+): progress is OcrDialogProgress & { total: number } {
+  return Boolean(progress && typeof progress.total === "number" && progress.total > 0);
+}
+
+function formatOcrProgressCount(progress: OcrDialogProgress): string | null {
+  if (!hasDeterminateProgress(progress)) {
+    return null;
+  }
+
+  const completed = Math.min(Math.max(Math.floor(progress.completed), 0), Math.ceil(progress.total));
+  const total = Math.ceil(progress.total);
+
+  if (progress.unit === "%") {
+    return `${completed}%`;
+  }
+
+  const unit = progress.unit === "page" ? "page" : progress.unit || "step";
+  return `${completed} of ${total} ${unit}${total === 1 || unit.endsWith("s") ? "" : "s"}`;
 }

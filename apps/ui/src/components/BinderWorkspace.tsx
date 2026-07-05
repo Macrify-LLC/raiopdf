@@ -22,7 +22,7 @@ import {
 } from "../icons";
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import { IconButton } from "./IconButton";
-import { LoadingSun } from "./LoadingSun";
+import { LongProcessLoader } from "./LongProcessLoader";
 import "./BinderWorkspace.css";
 
 type IdentifierStyle = "letters" | "numbers";
@@ -465,14 +465,25 @@ export function BinderWorkspace({
         </section>
       </div>
 
+      {building ? (
+        <section className="binder-workspace__process" aria-label="Binder build progress">
+          <LongProcessLoader
+            phaseLabel="Building binder"
+            message={status ?? "Building binder..."}
+            detail={`${stripPdfExtension(mainName)} + ${exhibits.length} ${
+              exhibits.length === 1 ? "exhibit" : "exhibits"
+            }`}
+          />
+        </section>
+      ) : null}
+
       <footer className="binder-workspace__footer">
         <div className="binder-workspace__footer-summary">
           <p>
             {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPages} {totalPages === 1 ? "page" : "pages"}
           </p>
-          {status ? (
+          {status && !building ? (
             <p className="binder-workspace__status" role="status">
-              {building ? <LoadingSun size={13} label="Building binder" /> : null}
               {status}
             </p>
           ) : null}
@@ -484,7 +495,6 @@ export function BinderWorkspace({
           disabled={!document.bytes || exhibits.length === 0 || building}
         >
           <CombineExhibitsIcon size={16} />
-          {building ? <LoadingSun size={14} label="Building binder" /> : null}
           {building ? "Building Binder" : "Build Binder"}
         </button>
       </footer>

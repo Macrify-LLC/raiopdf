@@ -22,6 +22,7 @@ import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
 import { LoadingSun } from "./LoadingSun";
+import { LongProcessLoader, type LongProcessStep } from "./LongProcessLoader";
 import "./PrepareForFilingWorkspace.css";
 
 export type FilingProgressPhase =
@@ -621,15 +622,19 @@ export const PrepareForFilingWorkspace = forwardRef<
         ) : null}
 
         {progress.message ? (
-          <div className="filing-progress" data-phase={progress.phase} role="status" aria-live="polite">
-            <p className="filing-progress__label">
-              {isFilingProgressActive(progress.phase) ? (
-                <LoadingSun size={14} label="Preparing filing output" />
-              ) : null}
-              {formatProgressLabel(progress.phase)}
-            </p>
-            <FilingProgressSteps phase={progress.phase} />
-            <p>{progress.message}</p>
+          <div className="filing-progress" data-phase={progress.phase} aria-live="polite">
+            {isFilingProgressActive(progress.phase) ? (
+              <LongProcessLoader
+                phaseLabel={formatProgressLabel(progress.phase)}
+                message={progress.message}
+                steps={filingProgressSteps(progress.phase)}
+              />
+            ) : (
+              <>
+                <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
+                <p>{progress.message}</p>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -880,12 +885,11 @@ function PacketBuilderPanel({
         </button>
       </div>
       {progress.running ? (
-        <div className="filing-progress" data-phase="active" role="status" aria-live="polite">
-          <p className="filing-progress__label">
-            <LoadingSun size={14} label="Building filing packet" />
-            Building packet
-          </p>
-          <p>{localMessage ?? progress.message ?? "Writing packet files..."}</p>
+        <div className="filing-progress" data-phase="active" aria-live="polite">
+          <LongProcessLoader
+            phaseLabel="Building packet"
+            message={localMessage ?? progress.message ?? "Writing packet files..."}
+          />
         </div>
       ) : localMessage || progress.message ? (
         <p className="filing-card__status" role="status">{localMessage ?? progress.message}</p>
@@ -1505,31 +1509,6 @@ function ResultCard({
   );
 }
 
-function FilingProgressSteps({ phase }: { phase: FilingProgressPhase }) {
-  if (phase === "idle" || phase === "error") {
-    return null;
-  }
-
-  const currentIndex = phase === "done" ? PHASE_SEQUENCE.length : PHASE_SEQUENCE.indexOf(phase);
-
-  return (
-    <ol className="filing-progress__steps" aria-hidden="true">
-      {PHASE_SEQUENCE.map((step, index) => {
-        const state = index < currentIndex ? "done" : index === currentIndex ? "active" : "pending";
-
-        return (
-          <li key={step} className="filing-progress__step" data-state={state}>
-            <span className="filing-progress__step-dot">
-              {state === "done" ? <CheckIcon size={9} /> : null}
-            </span>
-            {PHASE_STEP_LABEL[step]}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
 function formatStatus(check: PreflightCheck): string {
   if (check.status === "unknown") {
     return "not checked";
@@ -1682,6 +1661,16 @@ const PHASE_STEP_LABEL: Record<(typeof PHASE_SEQUENCE)[number], string> = {
   converting: "Convert",
   verifying: "Verify",
 };
+
+function filingProgressSteps(phase: FilingProgressPhase): LongProcessStep[] {
+  const currentIndex = PHASE_SEQUENCE.findIndex((step) => step === phase);
+
+  return PHASE_SEQUENCE.map((step, index) => ({
+    id: step,
+    label: PHASE_STEP_LABEL[step],
+    state: index < currentIndex ? "done" : index === currentIndex ? "active" : "pending",
+  }));
+}
 
 function parsePositiveNumber(value: string): number | null {
   const trimmed = value.trim();

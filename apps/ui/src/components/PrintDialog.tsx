@@ -12,9 +12,11 @@ import {
   printStatus,
   sortPrintersForPicker,
   type PrinterInfo,
+  type PrintProgressEvent,
   type PrintResult,
 } from "../lib/printPipeline";
 import { FloatingDialog } from "./FloatingDialog";
+import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
 
 /**
  * RaioPDF's own print dialog for streamed (large) documents — the native
@@ -46,6 +48,7 @@ export function PrintDialog({
   const [copiesInput, setCopiesInput] = useState("1");
   const [message, setMessage] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
+  const [progressEvent, setProgressEvent] = useState<PrintProgressEvent | null>(null);
   const [result, setResult] = useState<PrintResult | null>(null);
 
   const disposedRef = useRef(false);
@@ -129,6 +132,7 @@ export function PrintDialog({
       unlisten = await listenPrintProgress(token, (event) => {
         if (!disposedRef.current) {
           setProgressText(describePrintProgress(event));
+          setProgressEvent(event);
         }
       });
       if (disposedRef.current || runningJobRef.current?.token !== token) {
@@ -175,6 +179,7 @@ export function PrintDialog({
       }
       if (!disposedRef.current) {
         setProgressText(null);
+        setProgressEvent(null);
       }
     }
   }, [copiesInput, grant, pageCount, pagesInput, printerName]);
@@ -275,18 +280,16 @@ export function PrintDialog({
               </p>
             ) : null}
             {phase === "printing" ? (
-              <>
-                <p className="tool-panel__status-line" role="status">
-                  {progressText ?? "Printing..."}
-                </p>
-                <button
-                  type="button"
-                  className="tool-panel__secondary-button"
-                  onClick={cancelRunning}
-                >
-                  Cancel Printing
-                </button>
-              </>
+              <LongProcessLoader
+                phaseLabel="Printing"
+                message={progressText ?? "Printing..."}
+                progress={printProgressCount(progressEvent)}
+                hideProgressText={Boolean(progressEvent)}
+                cancelMode="cancel"
+                cancelLabel="Cancel Printing"
+                cancelMessage="Stops after the current part."
+                onCancel={cancelRunning}
+              />
             ) : (
               <>
                 <button type="submit" className="tool-panel__primary-button">
@@ -332,4 +335,16 @@ export function PrintDialog({
       </div>
     </FloatingDialog>
   );
+}
+
+function printProgressCount(event: PrintProgressEvent | null): LongProcessProgress | null {
+  if (!event) {
+    return null;
+  }
+
+  return {
+    current: event.current,
+    total: event.total,
+    unit: event.phase === "gs-segment" ? "segment" : "part",
+  };
 }

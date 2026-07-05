@@ -1426,6 +1426,18 @@ fn proxy_client_with_activity(
         return result;
     }
 
+    // OCR is also handled locally. The Stirling endpoint requires a multipart
+    // upload through this proxy; force-OCR on larger in-memory PDFs can back up
+    // that upload path and leave Jetty with a truncated multipart body. Running
+    // the same bundled OCRmyPDF command here keeps the request single-hop.
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/ocr")
+    {
+        let result = handle_local_ocr(&mut client, &request_head, &buffered_body);
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
     // Area redaction must destroy underlying page text, not just draw black
     // rectangles. The local path op rasterizes affected pages and verifies the
     // output fail-closed before returning any PDF bytes.
@@ -1638,6 +1650,58 @@ fn handle_local_compress(
     }
 }
 
+/// Handle `POST /local/ocr`: PDF bytes in the body, optionally base64 encoded
+/// when `body_encoding=base64`; `ocr_type=skip-text|force-ocr` controls the
+/// text-layer strategy. Responds with the OCRmyPDF output (200) or plain-text
+/// error (422).
+fn handle_local_ocr(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let body = match read_local_pdf_body(client, request_head, buffered_body) {
+        Ok(body) => body,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+
+    let mode = match local_ocr_mode(request_head) {
+        Ok(mode) => mode,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+
+    match run_path_op_ocr(&body, mode) {
+        Ok(ocr) => {
+            write_local_bytes_response(client, request_head, 200, "OK", "application/pdf", &ocr)
+        }
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
 /// Handle `POST /local/redact-areas`: raw PDF bytes in the body and
 /// `X-RaioPDF-Redaction-Areas` as camelCase JSON. Responds with a verified
 /// redacted PDF (200) or a plain-text error (422).
@@ -1734,6 +1798,17 @@ fn parse_local_redact_request(
         .map(Into::into)
         .collect::<Vec<_>>();
     Ok((pdf, areas))
+}
+
+fn local_ocr_mode(request_head: &[u8]) -> Result<path_ops::OcrMode, String> {
+    match request_query_param(request_head, "ocr_type")
+        .or_else(|| request_query_param(request_head, "ocrType"))
+        .unwrap_or("skip-text")
+    {
+        "skip-text" | "skip_text" | "skip" => Ok(path_ops::OcrMode::SkipText),
+        "force-ocr" | "force_ocr" | "force" => Ok(path_ops::OcrMode::ForceOcr),
+        other => Err(format!("unsupported OCR mode: {other}")),
+    }
 }
 
 fn read_request_body(
@@ -1991,6 +2066,26 @@ fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
         return Err("qpdf produced an empty compressed output".to_string());
     }
     Ok(compressed)
+}
+
+fn run_path_op_ocr(pdf: &[u8], mode: path_ops::OcrMode) -> Result<Vec<u8>, String> {
+    let work_dir = unique_temp_dir("raiopdf-ocr");
+    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let _cleanup = TempDirGuard(work_dir.clone());
+
+    let in_path = work_dir.join("in.pdf");
+    let out_path = work_dir.join("out.pdf");
+    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
+
+    let toolchain = path_ops::PathOpsToolchain::discover(None);
+    path_ops::ocr_with_mode(&toolchain, &in_path, &out_path, mode)
+        .map_err(|error| error.to_string())?;
+
+    let ocr = fs::read(&out_path).map_err(|error| format!("read OCR output: {error}"))?;
+    if ocr.is_empty() {
+        return Err("OCR produced an empty output".to_string());
+    }
+    Ok(ocr)
 }
 
 fn run_path_op_redact_areas(pdf: &[u8], areas: &[path_ops::RedactArea]) -> Result<Vec<u8>, String> {
@@ -2690,6 +2785,25 @@ mod tests {
             !upstream_request.contains("OPTIONS /local/compress"),
             "chunked forwarding must stop at the terminating chunk"
         );
+    }
+
+    #[test]
+    fn auth_proxy_handles_local_ocr_without_upstream_multipart() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let response = send_proxy_request(
+            proxy_port,
+            b"POST /local/ocr?body_encoding=base64&ocr_type=bogus HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://tauri.localhost\r\nX-RaioPDF-Auth: secret\r\nContent-Length: 4\r\nConnection: close\r\n\r\nAQ==",
+        );
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+        assert!(response.contains("unsupported OCR mode: bogus"));
+        assert_eq!(stub.received_request(), None);
     }
 
     #[test]

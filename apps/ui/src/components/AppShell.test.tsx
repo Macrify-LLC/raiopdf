@@ -81,6 +81,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     tabs: [],
     onTabSelected: () => undefined,
     onTabCloseRequested: () => undefined,
+    onTabMoveToNewWindowRequested: () => undefined,
     pdfDocument: null,
     documentSearch: mockDocumentSearch,
     selectedPageIndexes: new Set(),

@@ -316,34 +316,7 @@ function createTauriFilePort(): FilePort {
         return null;
       }
 
-      // Adopt the shell's authoritative threshold for all UI-side branches.
-      setLargeDocThresholdBytes(selected.thresholdBytes);
-
-      // No bytes token means the shell stat'ed the file at or above the
-      // large-doc threshold and skipped `fs::read` entirely — the document
-      // streams by ranged reads against the grant.
-      if (selected.bytesToken === null) {
-        return {
-          kind: "rangeGrant",
-          grant: selected.fileGrant as FileGrant,
-          name: selected.name,
-          sizeBytes: selected.sizeBytes,
-        };
-      }
-
-      const bytes = await invoke<BinaryInvokeResponse>(
-        "read_opened_pdf_bytes",
-        {
-          token: selected.bytesToken,
-        },
-      );
-
-      return {
-        kind: "memory",
-        bytes: toUint8Array(bytes),
-        name: selected.name,
-        path: selected.fileGrant,
-      };
+      return openedPdfFromTauri(selected);
     },
     async pickDirectory() {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -388,6 +361,34 @@ function createTauriFilePort(): FilePort {
   };
 }
 
+export async function takeStartupFile(): Promise<OpenedFileSource | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const selected = await invoke<TauriOpenedPdf | null>("take_startup_pdf");
+  return selected ? openedPdfFromTauri(selected) : null;
+}
+
+export async function openFileInNewWindow(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("open_pdf_in_new_window_dialog");
+}
+
+export async function openGrantInNewWindow(fileGrant: FileGrant): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Open in New Window is only available in the desktop app.");
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_in_new_window", { fileGrant });
+}
+
 interface TauriPickedDirectory {
   grant: string;
   path: string;
@@ -407,6 +408,38 @@ interface TauriSavedPdf {
 }
 
 export type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
+
+async function openedPdfFromTauri(selected: TauriOpenedPdf): Promise<OpenedFileSource> {
+  // Adopt the shell's authoritative threshold for all UI-side branches.
+  setLargeDocThresholdBytes(selected.thresholdBytes);
+
+  // No bytes token means the shell stat'ed the file at or above the
+  // large-doc threshold and skipped `fs::read` entirely — the document
+  // streams by ranged reads against the grant.
+  if (selected.bytesToken === null) {
+    return {
+      kind: "rangeGrant",
+      grant: selected.fileGrant as FileGrant,
+      name: selected.name,
+      sizeBytes: selected.sizeBytes,
+    };
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const bytes = await invoke<BinaryInvokeResponse>(
+    "read_opened_pdf_bytes",
+    {
+      token: selected.bytesToken,
+    },
+  );
+
+  return {
+    kind: "memory",
+    bytes: toUint8Array(bytes),
+    name: selected.name,
+    path: selected.fileGrant,
+  };
+}
 
 function savedFromTauri(saved: TauriSavedPdf): SavedFile {
   return {

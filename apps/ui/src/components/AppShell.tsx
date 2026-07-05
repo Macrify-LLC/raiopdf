@@ -46,6 +46,7 @@ export interface AppShellProps {
   tabs: DocumentTabInfo[];
   onTabSelected: (tabId: string) => void;
   onTabCloseRequested: (tabId: string) => void;
+  onTabMoveToNewWindowRequested: (tabId: string) => void;
   pdfDocument: PDFDocumentProxy | null;
   documentSearch: DocumentSearchState;
   pageScrollIntent: PageScrollIntent | null;
@@ -117,6 +118,7 @@ export function AppShell({
   tabs,
   onTabSelected,
   onTabCloseRequested,
+  onTabMoveToNewWindowRequested,
   pdfDocument,
   documentSearch,
   pageScrollIntent,
@@ -217,6 +219,7 @@ export function AppShell({
         tabs={tabs}
         onTabSelected={onTabSelected}
         onTabCloseRequested={onTabCloseRequested}
+        onTabMoveToNewWindowRequested={onTabMoveToNewWindowRequested}
         onOpenAbout={onOpenAbout}
         hasDocument={hasDocument}
         canUndo={canUndo}

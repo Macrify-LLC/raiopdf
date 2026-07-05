@@ -1,5 +1,6 @@
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
+import { ContextMenu } from "./ContextMenu";
 import { MenuBar } from "./MenuBar";
 import "./TitleBar.css";
 
@@ -8,12 +9,14 @@ export interface DocumentTabInfo {
   fileName: string;
   active?: boolean;
   dirty?: boolean;
+  canMoveToNewWindow?: boolean;
 }
 
 export interface TitleBarProps {
   tabs?: DocumentTabInfo[];
   onTabSelected?: (tabId: string) => void;
   onTabCloseRequested?: (tabId: string) => void;
+  onTabMoveToNewWindowRequested?: (tabId: string) => void;
   onOpenAbout?: () => void;
   /** Gates every File-menu action that operates on the open document. */
   hasDocument?: boolean;
@@ -31,6 +34,7 @@ export function TitleBar({
   tabs = [],
   onTabSelected,
   onTabCloseRequested,
+  onTabMoveToNewWindowRequested,
   onOpenAbout,
   hasDocument = false,
   canUndo = false,
@@ -38,6 +42,12 @@ export function TitleBar({
 }: TitleBarProps) {
   const showWindowControls = isTauriRuntime();
   const hasTabs = tabs.length > 0;
+  const [tabMenu, setTabMenu] = useState<{
+    tabId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const contextTab = tabMenu ? tabs.find((tab) => tab.id === tabMenu.tabId) ?? null : null;
 
   function handleDragRegionDoubleClick(event: MouseEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest("button")) {
@@ -45,6 +55,16 @@ export function TitleBar({
     }
 
     void toggleMaximizeWindow();
+  }
+
+  function handleTabContextMenu(event: MouseEvent<HTMLElement>, tabId: string) {
+    if (!showWindowControls) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setTabMenu({ tabId, x: event.clientX, y: event.clientY });
   }
 
   return (
@@ -76,6 +96,7 @@ export function TitleBar({
               key={tab.id}
               className="title-bar__tab"
               data-active={tab.active ? "true" : undefined}
+              onContextMenu={(event) => handleTabContextMenu(event, tab.id)}
             >
               <button
                 type="button"
@@ -129,6 +150,20 @@ export function TitleBar({
         </button>
         {showWindowControls ? <WindowControls /> : null}
       </div>
+      {showWindowControls && tabMenu && contextTab ? (
+        <ContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          items={[
+            {
+              label: "Move to New Window",
+              disabled: !contextTab.canMoveToNewWindow,
+              onSelect: () => onTabMoveToNewWindowRequested?.(contextTab.id),
+            },
+          ]}
+          onClose={() => setTabMenu(null)}
+        />
+      ) : null}
     </header>
   );
 }
@@ -183,5 +218,5 @@ async function closeWindow(): Promise<void> {
 }
 
 function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }

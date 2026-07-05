@@ -24,10 +24,13 @@ Already done — do not redo:
   ADR 0003).
 - `engine/patches/pdfjson-image-passthrough.patch` — fixes upstream's
   image re-encoding in the `/edit-text` round trip (the plan's critique finding
-  C1). Verified `git apply --check` clean on v2.14.0; parse-clean under javac 25;
-  **not yet compiled or live-verified** (authoring environment could not
-  download Gradle). An upstream issue draft exists (delivered to Jacob; patch is
-  slated for upstream contribution and eventual deletion).
+  C1). **Verified end-to-end by the Engine CI workflow on PR #152** (run 13,
+  2026-07-05): patch applies, compiles, and the live `edit-text` +
+  `edit-text-image-passthrough` checks pass — original image stream bytes
+  survive a zero-match edit byte-identically. An upstream issue draft exists
+  (delivered to Jacob; patch is slated for upstream contribution and eventual
+  deletion). Step 0 below remains worth running once in the local environment
+  to establish the toolchain for Phase 0.
 - `engine/verify-live.sh` gained two checks: `edit-text` (asserts replaced
   output text) and `edit-text-image-passthrough` (zero-match edit must preserve
   image stream bytes — fails on an unpatched engine).

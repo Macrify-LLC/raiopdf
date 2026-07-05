@@ -379,12 +379,14 @@ curl_ok "rearrange-pages" "$BASE_URL/api/v1/general/rearrange-pages" "$TMP_DIR/r
   -F "pageNumbers=2,1" \
   -F "customMode=CUSTOM"
 
+# Match the paren-prefixed literal-string form: bare "Page" would false-positive
+# on PDF dictionary tokens like "/Type /Page /Parent" in the raw bytes.
 curl_ok "edit-text" "$BASE_URL/api/v1/general/edit-text" "$TMP_DIR/edit-text.pdf" \
   -F "fileInput=@$INPUT_PDF;type=application/pdf" \
   -F 'edits=[{"find":"Page","replace":"Sheet"}]' \
   -F "wholeWordSearch=false" \
   -F "pageNumbers=all"
-assert_pdf_text "edit-text" "$TMP_DIR/edit-text.pdf" "Sheet" "Page "
+assert_pdf_text "edit-text" "$TMP_DIR/edit-text.pdf" "(Sheet" "(Page"
 
 IMAGE_PDF="$TMP_DIR/image-input.pdf"
 IMAGE_STREAM="$TMP_DIR/image-stream.bin"

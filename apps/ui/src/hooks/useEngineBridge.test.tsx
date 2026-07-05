@@ -10,6 +10,7 @@ const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
     ocrCalls: unknown[];
     removeEncryptionCalls: Array<{ password: string }>;
+    options: unknown;
   }>,
   // Queued outcomes for the NEXT ocr() call, consumed across all instances
   // in call order (not per-instance) -- lets a test simulate "the first
@@ -23,8 +24,10 @@ vi.mock("@raiopdf/engine-sidecar", () => {
   class SidecarPdfEngine {
     readonly ocrCalls: unknown[] = [];
     readonly removeEncryptionCalls: Array<{ password: string }> = [];
+    readonly options: unknown;
 
-    constructor() {
+    constructor(options?: unknown) {
+      this.options = options;
       sidecarState.instances.push(this);
     }
 
@@ -96,6 +99,18 @@ describe("useEngineBridge runOcr", () => {
     });
 
     expect(sidecarState.instances[0]?.ocrCalls[0]).toMatchObject({ ocrType: "skip-text" });
+  });
+
+  it("uses IPv4 loopback for the desktop engine proxy", async () => {
+    const bridge = renderHookValue();
+
+    await act(async () => {
+      await bridge.runOcr(new Uint8Array([1]));
+    });
+
+    expect(sidecarState.instances[0]?.options).toMatchObject({
+      baseUrl: "http://127.0.0.1:1234",
+    });
   });
 
   it("passes force-ocr through to the sidecar", async () => {

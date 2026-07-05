@@ -140,7 +140,9 @@ export function useEngineBridge(): EngineBridge {
 
       const engine = new SidecarPdfEngine({
         authToken: response.token,
-        baseUrl: `http://localhost:${response.port}`,
+        // The shell binds the authenticated proxy to IPv4 loopback. On Windows,
+        // WebView may resolve localhost to ::1 first and fail before retrying.
+        baseUrl: `http://127.0.0.1:${response.port}`,
         ...(window.__RAIOPDF_TEST_ENGINE_FETCH__
           ? { fetch: window.__RAIOPDF_TEST_ENGINE_FETCH__ }
           : {}),

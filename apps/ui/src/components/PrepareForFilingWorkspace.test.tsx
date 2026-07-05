@@ -73,6 +73,7 @@ describe("PrepareForFilingWorkspace", () => {
           ],
           report,
           verifiedAt: "2026-07-03T00:00:00.000Z",
+          savedDirectoryPath: "/tmp/filing-output",
           skippedSteps: [],
           overrides: [],
         }}
@@ -91,6 +92,7 @@ describe("PrepareForFilingWorkspace", () => {
     expect(html).toContain("Portal envelope size cap");
     expect(html).toContain("exceeding");
     expect(html).toContain("warning");
+    expect(html).toContain("Saved to /tmp/filing-output.");
   });
 
   it("shows a filing-check read failure near the preflight checks", () => {

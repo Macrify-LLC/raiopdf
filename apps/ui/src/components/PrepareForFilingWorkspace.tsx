@@ -49,6 +49,7 @@ export interface FilingResultState {
   parts: readonly FilingOutputPart[];
   report: PreflightReport;
   verifiedAt: string;
+  savedDirectoryPath?: string | null;
   skippedSteps: readonly string[];
   overrides: readonly string[];
 }
@@ -1487,6 +1488,11 @@ function ResultCard({
         ))}
       </div>
       <div className="filing-result__footer">
+        {result.savedDirectoryPath ? (
+          <p className="filing-result__fine filing-result__saved-path">
+            Saved to {result.savedDirectoryPath}.
+          </p>
+        ) : null}
         <p className="filing-result__fine">
           Pack {pack.packVersion}; final report generated {result.verifiedAt}.
         </p>

@@ -129,9 +129,12 @@ import {
   isFileChangedError,
   readBrowserFileSource,
   saveStreamedCopy,
+  saveStreamedCopyIntoDirectory,
   type FileGrant,
   type OpenedFile,
   type OpenedFileSource,
+  type PickedDirectory,
+  type SavedFile,
 } from "./lib/filePort";
 import {
   pickFileForAdd,
@@ -2973,16 +2976,7 @@ export function App() {
         return null;
       }
 
-      const saved = [];
-      for (const part of parts) {
-        const written = await filePort.saveFile(part.bytes, part.fileName, null);
-
-        if (written) {
-          saved.push(written);
-        }
-      }
-
-      return saved;
+      return (await saveByteOutputParts(parts)).files.filter(isSavedFile);
     },
     [document.fileName, setError, splitPages, streamedDocument],
   );
@@ -4290,25 +4284,16 @@ export function App() {
       });
 
       const baseName = stripPdfExtension(document.fileName ?? "Untitled");
-      const partNames: string[] = [];
-
-      for (const [index, part] of result.parts.entries()) {
-        if (!isCurrentFilingRun()) {
-          return;
-        }
-
-        const suggestedName = formatFilingOutputName(
+      const saveParts = result.parts.map((part, index) => ({
+        grant: part.outputGrant,
+        fileName: formatFilingOutputName(
           baseName,
           filingPack,
           index + 1,
           result.parts.length,
-        );
-        const written = await saveStreamedCopy(
-          { kind: "rangeGrant", grant: part.outputGrant },
-          suggestedName,
-        );
-        partNames.push(written?.name ?? suggestedName);
-      }
+        ),
+      }));
+      const savedOutput = await saveStreamedOutputParts(saveParts, isCurrentFilingRun);
 
       if (!isCurrentFilingRun()) {
         return;
@@ -4316,13 +4301,14 @@ export function App() {
 
       setFilingResult({
         parts: result.parts.map((part, index) => ({
-          fileName: partNames[index] ?? part.name,
+          fileName: savedOutput.files[index]?.name ?? saveParts[index]?.fileName ?? part.name,
           byteLength: part.byteLength,
           pageIndexes: part.pageIndexes,
           oversized: part.oversized,
         })),
         report: buildStreamedFilingOutputReport(result.factsReport),
         verifiedAt: new Date().toISOString(),
+        savedDirectoryPath: savedOutput.directoryPath,
         skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
         overrides: filingRunOverrides({
           customSplitBytes,
@@ -4332,7 +4318,9 @@ export function App() {
       });
       setFilingProgress({
         phase: "done",
-        message: "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
+        message: savedOutput.directoryPath
+          ? `Filing output saved to ${savedOutput.directoryPath}. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.`
+          : "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
       });
     })()
       .catch((error: unknown) => {
@@ -4687,22 +4675,20 @@ export function App() {
           oversized: part.oversized,
         }));
 
-        for (const part of convertedParts) {
-          if (!isCurrentFilingRun()) {
-            return;
-          }
-
-          await filePort.saveFile(part.bytes, part.fileName, null);
-        }
+        const savedOutput = await saveByteOutputParts(convertedParts, isCurrentFilingRun);
 
         if (!isCurrentFilingRun()) {
           return;
         }
 
         setFilingResult({
-          parts: outputParts,
+          parts: outputParts.map((part, index) => ({
+            ...part,
+            fileName: savedOutput.files[index]?.name ?? part.fileName,
+          })),
           report: finalReport,
           verifiedAt: new Date().toISOString(),
+          savedDirectoryPath: savedOutput.directoryPath,
           skippedSteps: skippedPrepSteps(filingPrepPlan, selectedSteps),
           overrides: filingRunOverrides({
             customSplitBytes,
@@ -4712,7 +4698,9 @@ export function App() {
         });
         setFilingProgress({
           phase: "done",
-          message: "Filing output saved after output preflight verification.",
+          message: savedOutput.directoryPath
+            ? `Filing output saved to ${savedOutput.directoryPath} after output preflight verification.`
+            : "Filing output saved after output preflight verification.",
         });
       } finally {
         await Promise.all(closeHandles.map((handle) => filingEngine.close(handle).catch(() => undefined)));
@@ -6118,6 +6106,114 @@ function formatFilingOutputName(
     .replace("{name}", baseName)
     .replace("{n}", String(partNumber))
     .replace("{total}", String(totalParts))}.pdf`;
+}
+
+interface SaveBytesPart {
+  bytes: Uint8Array;
+  fileName: string;
+}
+
+interface SaveStreamedPart {
+  grant: FileGrant;
+  fileName: string;
+}
+
+interface MultiPartSaveResult {
+  files: Array<SavedFile | null>;
+  directoryPath: string | null;
+}
+
+async function saveByteOutputParts(
+  parts: readonly SaveBytesPart[],
+  shouldContinue: () => boolean = () => true,
+): Promise<MultiPartSaveResult> {
+  const directory = parts.length > 1 ? await filePort.pickDirectory() : null;
+
+  if (directory) {
+    return saveByteOutputPartsIntoDirectory(parts, directory, shouldContinue);
+  }
+
+  const files: Array<SavedFile | null> = [];
+
+  for (const part of parts) {
+    if (!shouldContinue()) {
+      break;
+    }
+
+    files.push(await filePort.saveFile(part.bytes, part.fileName, null));
+  }
+
+  return { files, directoryPath: null };
+}
+
+async function saveByteOutputPartsIntoDirectory(
+  parts: readonly SaveBytesPart[],
+  directory: PickedDirectory,
+  shouldContinue: () => boolean,
+): Promise<MultiPartSaveResult> {
+  const files: Array<SavedFile | null> = [];
+
+  for (const part of parts) {
+    if (!shouldContinue()) {
+      break;
+    }
+
+    files.push(await filePort.saveFileIntoDirectory(part.bytes, part.fileName, directory));
+  }
+
+  return { files, directoryPath: directory.path };
+}
+
+async function saveStreamedOutputParts(
+  parts: readonly SaveStreamedPart[],
+  shouldContinue: () => boolean = () => true,
+): Promise<MultiPartSaveResult> {
+  const directory = parts.length > 1 ? await filePort.pickDirectory() : null;
+
+  if (directory) {
+    return saveStreamedOutputPartsIntoDirectory(parts, directory, shouldContinue);
+  }
+
+  const files: Array<SavedFile | null> = [];
+
+  for (const part of parts) {
+    if (!shouldContinue()) {
+      break;
+    }
+
+    files.push(await saveStreamedCopy(
+      { kind: "rangeGrant", grant: part.grant },
+      part.fileName,
+    ));
+  }
+
+  return { files, directoryPath: null };
+}
+
+async function saveStreamedOutputPartsIntoDirectory(
+  parts: readonly SaveStreamedPart[],
+  directory: PickedDirectory,
+  shouldContinue: () => boolean,
+): Promise<MultiPartSaveResult> {
+  const files: Array<SavedFile | null> = [];
+
+  for (const part of parts) {
+    if (!shouldContinue()) {
+      break;
+    }
+
+    files.push(await saveStreamedCopyIntoDirectory(
+      { kind: "rangeGrant", grant: part.grant },
+      part.fileName,
+      directory,
+    ));
+  }
+
+  return { files, directoryPath: directory.path };
+}
+
+function isSavedFile(file: SavedFile | null): file is SavedFile {
+  return file !== null;
 }
 
 async function createCertificateOfServicePdf(

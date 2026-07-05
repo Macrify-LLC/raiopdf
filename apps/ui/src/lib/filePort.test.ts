@@ -4,19 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Tauri's invoke is loaded dynamically inside filePort; the mock lets the
 // grant-backed helpers run without a shell.
 const invokeState = vi.hoisted(() => ({
-  calls: [] as Array<{ command: string; args: unknown }>,
-  handler: undefined as ((command: string, args?: unknown) => unknown) | undefined,
+  calls: [] as Array<{ command: string; args: unknown; options?: unknown }>,
+  handler: undefined as
+    | ((command: string, args?: unknown, options?: unknown) => unknown)
+    | undefined,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: async (command: string, args?: unknown) => {
-    invokeState.calls.push({ command, args });
+  invoke: async (command: string, args?: unknown, options?: unknown) => {
+    const call: { command: string; args: unknown; options?: unknown } = { command, args };
+
+    if (options !== undefined) {
+      call.options = options;
+    }
+
+    invokeState.calls.push(call);
 
     if (!invokeState.handler) {
       throw new Error(`Unexpected invoke: ${command}`);
     }
 
-    return invokeState.handler(command, args);
+    return invokeState.handler(command, args, options);
   },
 }));
 
@@ -27,7 +35,9 @@ import {
   readBrowserFileSource,
   readPdfRange,
   readPickedFileSource,
+  saveStreamedCopyIntoDirectory,
   type FileGrant,
+  type PickedDirectory,
 } from "./filePort";
 
 function makeFile(sizeBytes: number, name = "doc.pdf"): File {
@@ -37,6 +47,7 @@ function makeFile(sizeBytes: number, name = "doc.pdf"): File {
 beforeEach(() => {
   invokeState.calls.length = 0;
   invokeState.handler = undefined;
+  delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
 describe("readBrowserFileSource", () => {
@@ -145,5 +156,72 @@ describe("readPickedFileSource", () => {
       sizeBytes: 64,
     });
     expect(invokeState.calls).toHaveLength(0);
+  });
+});
+
+describe("directory saves", () => {
+  it("copies a streamed grant into a picked directory without opening another save dialog", async () => {
+    invokeState.handler = () => ({ fileGrant: "saved-grant", name: "part (2).pdf" });
+
+    const saved = await saveStreamedCopyIntoDirectory(
+      { kind: "rangeGrant", grant: "source-grant" as FileGrant },
+      "part.pdf",
+      { grant: "dir-grant" as FileGrant, path: "/tmp/output" },
+    );
+
+    expect(saved).toEqual({ name: "part (2).pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      {
+        command: "save_pdf_copy_into_dir",
+        args: {
+          sourceGrant: "source-grant",
+          directoryGrant: "dir-grant",
+          fileName: "part.pdf",
+        },
+      },
+    ]);
+  });
+
+  it("Tauri filePort picks a directory and writes raw bytes into it", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => {
+      if (command === "pick_output_directory") {
+        return { grant: "dir-grant", path: "/tmp/output" };
+      }
+
+      if (command === "save_pdf_into_dir") {
+        return { fileGrant: "saved-grant", name: "part.pdf" };
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { filePort } = await import("./filePort");
+    const directory = await filePort.pickDirectory();
+    const saved = await filePort.saveFileIntoDirectory(
+      new Uint8Array([1, 2, 3]),
+      "part.pdf",
+      directory as PickedDirectory,
+    );
+
+    expect(directory).toEqual({ grant: "dir-grant", path: "/tmp/output" });
+    expect(saved).toEqual({ name: "part.pdf", path: "saved-grant" });
+    expect(invokeState.calls).toEqual([
+      { command: "pick_output_directory", args: undefined },
+      {
+        command: "save_pdf_into_dir",
+        args: new Uint8Array([1, 2, 3]),
+        options: {
+          headers: {
+            "x-raio-directory-grant": "dir-grant",
+            "x-raio-file-name": "part.pdf",
+          },
+        },
+      },
+    ]);
   });
 });

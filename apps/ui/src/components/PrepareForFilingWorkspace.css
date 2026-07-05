@@ -1106,6 +1106,10 @@
   padding-top: var(--space-2);
 }
 
+.filing-result__saved-path {
+  overflow-wrap: anywhere;
+}
+
 .filing-card__footer {
   justify-content: space-between;
   gap: var(--space-3);

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { OcrDialog } from "./OcrDialog";
 
-describe("OcrDialog", () => {
-  it("renders OCR progress when a path operation reports it", () => {
+describe("OcrDialog long-process loader", () => {
+  it("passes path-operation progress into the reusable long-process loader", () => {
     const html = renderToStaticMarkup(
       <OcrDialog
         phase="processing"
@@ -22,6 +22,7 @@ describe("OcrDialog", () => {
       />,
     );
 
+    expect(html).toContain("long-process-loader");
     expect(html).toContain("Making searchable: 2 of 5 pages");
     expect(html).toContain("long-process-loader__progress-bar");
   });

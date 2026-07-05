@@ -4814,6 +4814,9 @@ export function App() {
       return;
     }
 
+    setActiveOrganizeTool(null);
+    setActiveEditDialogTool(null);
+    setActiveLegalTool("prepare-for-filing");
     prepareFilingCopy(null, {
       selectedStepIds: [
         ...filingPrepPlan

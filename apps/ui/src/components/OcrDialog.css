@@ -68,53 +68,6 @@
   box-shadow: var(--shadow-control-hover);
 }
 
-/* Running state: LoadingSun centered above a single status line. Fixed
-   min-height keeps the dialog from jumping size between the confirm step
-   and the loading step. */
-.ocr-dialog__progress {
-  display: grid;
-  justify-items: center;
-  gap: var(--space-3);
-  min-height: 96px;
-  padding: var(--space-3) 0;
-  text-align: center;
-  animation: ocr-dialog-phase-in var(--duration-fast) ease-out;
-}
-
-.ocr-dialog__progress .loading-sun {
-  color: var(--identity-amber);
-}
-
-.ocr-dialog__status-line {
-  margin: 0;
-  color: var(--body);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.ocr-dialog__progress-bar {
-  width: min(220px, 100%);
-  height: 6px;
-  border: 0;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--border);
-}
-
-.ocr-dialog__progress-bar::-webkit-progress-bar {
-  background: var(--border);
-}
-
-.ocr-dialog__progress-bar::-webkit-progress-value {
-  border-radius: 999px;
-  background: var(--identity-amber);
-}
-
-.ocr-dialog__progress-bar::-moz-progress-bar {
-  border-radius: 999px;
-  background: var(--identity-amber);
-}
-
 @keyframes ocr-dialog-phase-in {
   from {
     opacity: 0;
@@ -126,8 +79,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ocr-dialog__form,
-  .ocr-dialog__progress {
+  .ocr-dialog__form {
     animation: none;
   }
 }

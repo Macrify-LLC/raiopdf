@@ -1,5 +1,5 @@
 import { FloatingDialog } from "./FloatingDialog";
-import { LoadingSun } from "./LoadingSun";
+import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
 import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
 import "./OcrDialog.css";
 
@@ -20,11 +20,14 @@ const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
   verifying: "Verifying…",
 };
 
-export function OcrDialog({ phase, pageCount, progress = null, onConfirm, onCancel }: OcrDialogProps) {
+export function OcrDialog({
+  phase,
+  pageCount,
+  progress = null,
+  onConfirm,
+  onCancel,
+}: OcrDialogProps) {
   const isRunning = phase !== "confirm";
-  const progressValue = progress?.total && progress.total > 0
-    ? Math.min(Math.max(progress.completed, 0), progress.total)
-    : null;
 
   return (
     <FloatingDialog
@@ -36,20 +39,12 @@ export function OcrDialog({ phase, pageCount, progress = null, onConfirm, onCanc
     >
       <div className="ocr-dialog" data-phase={phase}>
         {isRunning ? (
-          <div className="ocr-dialog__progress" key={phase}>
-            <LoadingSun size={30} label="Making the document searchable" />
-            <p className="ocr-dialog__status-line" role="status" aria-live="polite">
-              {progress ? describeOcrProgress(progress) : RUNNING_STATUS_LABEL[phase]}
-            </p>
-            {progressValue !== null && progress?.total ? (
-              <progress
-                className="ocr-dialog__progress-bar"
-                value={progressValue}
-                max={progress.total}
-                aria-label={describeOcrProgress(progress)}
-              />
-            ) : null}
-          </div>
+          <LongProcessLoader
+            key={phase}
+            message={formatOcrRunningMessage(phase, progress)}
+            progress={toLongProcessProgress(progress)}
+            hideProgressText={hasDeterminateProgress(progress)}
+          />
         ) : (
           <div className="ocr-dialog__form">
             <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
@@ -81,4 +76,29 @@ function formatPageCountCopy(pageCount: number): string {
   }
 
   return `All ${pageCount} ${pageCount === 1 ? "page" : "pages"} will be processed.`;
+}
+
+function formatOcrRunningMessage(
+  phase: OcrDialogRunningPhase,
+  progress: OcrProgressEvent | null,
+): string {
+  return progress ? describeOcrProgress(progress) : RUNNING_STATUS_LABEL[phase];
+}
+
+function toLongProcessProgress(progress: OcrProgressEvent | null): LongProcessProgress | null {
+  if (!hasDeterminateProgress(progress)) {
+    return null;
+  }
+
+  return {
+    current: progress.completed,
+    total: progress.total,
+    unit: progress.unit || "page",
+  };
+}
+
+function hasDeterminateProgress(
+  progress: OcrProgressEvent | null,
+): progress is OcrProgressEvent & { total: number } {
+  return Boolean(progress && typeof progress.total === "number" && progress.total > 0);
 }

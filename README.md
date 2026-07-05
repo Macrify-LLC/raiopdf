@@ -30,7 +30,7 @@
 
 <br>
 
-> **Public alpha — version 0.1.0.** Download the current Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest published release automatically.
+> **Public alpha — version 0.1.0.** Download the signed Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
 
 ## The philosophy
 
@@ -102,7 +102,7 @@ Everything above is implemented and working in the public alpha today. Expect ro
 - **Not stable software yet.** This is a public alpha: usable, public, and versioned, but still early.
 - **Not cross-platform yet.** Windows first. macOS later — no date promised.
 - **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
-- **Not phoning home.** No telemetry, no background analytics — RaioPDF makes no network requests of its own, and the content-security policy only lets it reach its own bundled engine. Nothing is ever sent automatically. If it ever crashes, it asks — once — whether to report it, your choice of two ways: open a pre-filled GitHub issue in your browser, or save the report to a file you can email in yourself (no account needed). Either way you review every word before anything is sent, and you can switch the prompt off entirely.
+- **Not phoning home with your files.** No telemetry, no background analytics, no document upload. RaioPDF's only automatic internet access is a signed update check against GitHub Releases; everything that touches your PDFs stays on your machine. If it ever crashes, it asks — once — whether to report it, your choice of two ways: open a pre-filled GitHub issue in your browser, or save the report to a file you can email in yourself (no account needed). Either way you review every word before anything is sent, and you can switch the prompt off entirely.
 
 ## How it's built
 
@@ -122,15 +122,15 @@ flowchart LR
 
 A [Tauri](https://tauri.app) desktop shell with a custom UI built to feel familiar from the first click, running the MIT-licensed [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) backend engine as a bundled localhost sidecar — no Docker, no Java setup, it's all inside the installer — plus a bundled Tesseract/Ghostscript/OCRmyPDF toolchain for fully offline OCR.
 
-Everything in that diagram runs on your machine. Nothing in it talks to the internet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown, including how the Stirling-PDF engine is vendored and scrubbed to its MIT-licensed core only ([`docs/ENGINE-VENDORING.md`](docs/ENGINE-VENDORING.md)).
+Everything in that diagram runs on your machine. Document operations do not talk to the internet; the desktop app only reaches GitHub for signed update checks. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown, including how the Stirling-PDF engine is vendored and scrubbed to its MIT-licensed core only ([`docs/ENGINE-VENDORING.md`](docs/ENGINE-VENDORING.md)).
 
 Optionally, an off-by-default "bring your own AI" connector — bundled right in the installer — lets your own AI assistant (Claude Desktop / Claude Code) operate RaioPDF's local tools over [MCP](https://modelcontextprotocol.io): 25 tools covering OCR, verified redaction, Bates stamping, exhibit binders, production sets, filing packets, batch cleanup, and e-filing preflight. Still entirely on-device, no AI inside RaioPDF itself. See [`docs/MCP.md`](docs/MCP.md).
 
 ## Status
 
-**Public alpha, version 0.1.0.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide. The Windows installer ships first, with the maintainer signing and update infrastructure in place. macOS is planned with no committed date.
+**Public alpha, version 0.1.0.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is signed, the maintainer signing pipeline is local-only, and signed update checks are wired into the desktop app. Windows ships first; macOS is planned with no committed date.
 
-The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, and the canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
+The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed Windows installer when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 
 ## License
 

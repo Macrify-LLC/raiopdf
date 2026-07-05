@@ -152,15 +152,28 @@ pnpm exec playwright test smoke/streamed-large.smoke.ts
 pnpm exec playwright test smoke/streamed-memory.smoke.ts
 
 # 3. Path-op acceptance (split-by-max-bytes parts pass qpdf --check;
-#    prepare_filing scrub+split with per-part facts preflight):
+#    prepare_filing normalize+split with per-part facts preflight):
 RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload \
 RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
 ```
 
 When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
-disk, point `RAIOPDF_LARGE_FIXTURE` (and the smoke test's env var of the same
-name) at them instead — the synthetic file is the stand-in, not the goal.
+disk, point `RAIOPDF_LARGE_FIXTURES_DIR` at the local-only fixture folder instead
+— the synthetic file is the stand-in, not the goal:
+
+```powershell
+$env:RAIOPDF_ENGINE_PAYLOAD_DIR = "D:\Macrify\raiopdf\apps\shell\src-tauri\payload"
+$env:RAIOPDF_LARGE_FIXTURES_DIR = "H:\Shared drives\Macrify\RaioPDF\Canary\test-objects"
+pnpm canary:large
+```
+
+`canary:large` scans the folder recursively for PDFs at least 40 MB by default,
+then runs the path-based filing pipeline (`normalize-pages` + `split-by-size`)
+against each one. That folder is Drive-local, contains real legal examples, and
+must never be committed. If `RAIOPDF_LARGE_FIXTURE` or
+`RAIOPDF_LARGE_FIXTURES_DIR` is set but no matching PDFs are found, the canary
+fails instead of silently passing.
 
 **Recorded run (2026-07-04, v1.1 Phase 4 validation, synthetic 270 MB / 270 pp):**
 
@@ -305,17 +318,13 @@ Committed as a work-in-progress. Open items, roughly in priority order:
   **desktop packet builder itself** (`build_filing_packet` Tauri command + its UI, which
   needs real desktop paths + a filesystem output dir) is a Tauri-only flow the browser
   canary can't drive — not end-to-end covered. Would need a Rust-level or manual test.
-- **Over-cap split is verified on a small-page file only.** The `Split-by-size` test splits a
-  real 34 MB / 7-page plat into two portal-legal parts. Genuinely huge filings (283 MB /
-  2,556 pages; 59 MB / 1,461 pages) are **not** run — `LocalPdfEngine.splitByMaxBytes`
-  re-serializes per page (O(n²)) and the browser can't open them at all. Tracked in Blueprint
-  **`raiopdf-large-pdf-handling`** (viewer range-streaming + delegate heavy ops to qpdf).
+- **Browser UI canary still uses small files for split-by-size.** Genuinely huge filings
+  are covered by the opt-in `pnpm canary:large` path-op tier because the browser canary
+  should not materialize 132-283 MB legal filings into the WebView.
 - **Review artifacts** are saved for the real-fixture tests (garble, restricted, decrypt) and
   the split test only. The synthetic engine-ops / features / filing-binder tests don't yet
   write their outputs to `test-output/` — add `saveCanaryArtifact` calls as wanted.
 - **Metadata scrub** needs its endpoint confirmed enabled in the payload, then a check.
-- **Large files as fixtures**: the huge real filings live on the Drive as manual/stress
-  objects; there's no automated "slow tier" that runs them.
 
 ## Adding a feature check
 

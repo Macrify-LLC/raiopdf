@@ -35,13 +35,16 @@ change, clunky, leaks the user's email), or **defer** the whole feature.
 in their own browser and submits themselves.** The app builds a URL
 (`https://github.com/Macrify-LLC/raiopdf/issues/new?...`) whose title and body
 are the scrubbed, data-minimized payload, and shells out to the OS browser to
-open it. **RaioPDF makes no network request of its own** — the browser does, and
-only after the user reviews the exact text and clicks submit on GitHub.
+open it. **RaioPDF makes no crash-reporting network request of its own** — the
+browser does, and only after the user reviews the exact text and clicks submit
+on GitHub. Signed update checks are the separate, intentional GitHub Releases
+exception to the product's otherwise local runtime.
 
 Consequences for the surrounding promises:
 
-- **The CSP does not change.** `connect-src` stays local-only. The strongest,
-  machine-checkable form of the telemetry-none promise is preserved verbatim.
+- **The CSP does not change for crash reporting.** The webview still does not
+  send crash reports. The updater plugin reaches GitHub Releases outside the
+  document-processing path to check and install signed app updates.
 - **The "Telemetry: none" badge stays.** User-initiated reporting is not
   telemetry — nothing is collected in the background and nothing is ever sent
   automatically. The copy gains one honest clarifying line rather than a

@@ -104,6 +104,15 @@ import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
+  checkForSignedUpdate,
+  installSignedUpdate,
+  isUpdaterRuntime,
+  relaunchForInstalledUpdate,
+  UPDATE_IDLE_STATUS,
+  UPDATE_UNAVAILABLE_STATUS,
+  type AppUpdateStatus,
+} from "./lib/appUpdates";
+import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
   loadStreamedPdfDocument,
@@ -610,6 +619,12 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>(() => (
+    isUpdaterRuntime() ? UPDATE_IDLE_STATUS : UPDATE_UNAVAILABLE_STATUS
+  ));
+  const updateCheckRequestRef = useRef(0);
+  const updateInstallRequestRef = useRef(0);
+  const availableUpdateRef = useRef<Awaited<ReturnType<typeof checkForSignedUpdate>>>(null);
   const [crashReportPayload, setCrashReportPayload] =
     useState<CrashReportPayload | null>(null);
   const [crashReportOpenStatus, setCrashReportOpenStatus] = useState<string | null>(null);
@@ -713,6 +728,124 @@ export function App() {
       }
     })();
   }, []);
+  const handleCheckForUpdates = useCallback(async (mode: "auto" | "manual" = "manual") => {
+    if (!isUpdaterRuntime()) {
+      setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
+      return;
+    }
+
+    const requestId = updateCheckRequestRef.current + 1;
+    updateCheckRequestRef.current = requestId;
+    setUpdateStatus({
+      phase: "checking",
+      message: mode === "auto" ? "Checking for signed updates..." : "Checking GitHub for signed updates...",
+    });
+
+    try {
+      const update = await checkForSignedUpdate();
+      if (updateCheckRequestRef.current !== requestId) {
+        return;
+      }
+
+      availableUpdateRef.current = update;
+      if (update) {
+        setUpdateStatus({
+          phase: "available",
+          message: `RaioPDF ${update.version} is available.`,
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+        });
+      } else {
+        setUpdateStatus({
+          phase: "current",
+          message: "RaioPDF is up to date.",
+        });
+      }
+    } catch {
+      if (updateCheckRequestRef.current === requestId) {
+        availableUpdateRef.current = null;
+        setUpdateStatus({
+          phase: "error",
+          message: "Update check could not reach GitHub or verify release metadata.",
+        });
+      }
+    }
+  }, []);
+  const handleInstallUpdate = useCallback(async () => {
+    if (!isUpdaterRuntime()) {
+      setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
+      return;
+    }
+
+    let update = availableUpdateRef.current;
+    if (!update) {
+      await handleCheckForUpdates("manual");
+      update = availableUpdateRef.current;
+    }
+
+    if (!update) {
+      return;
+    }
+
+    const requestId = updateInstallRequestRef.current + 1;
+    updateInstallRequestRef.current = requestId;
+    setUpdateStatus({
+      phase: "downloading",
+      message: `Downloading RaioPDF ${update.version}...`,
+      currentVersion: update.currentVersion,
+      availableVersion: update.version,
+      progress: null,
+    });
+
+    try {
+      await installSignedUpdate(update, (progress) => {
+        if (updateInstallRequestRef.current === requestId) {
+          setUpdateStatus((current) => ({
+            ...current,
+            phase: "downloading",
+            message: progress === null
+              ? `Downloading RaioPDF ${update.version}...`
+              : `Downloading RaioPDF ${update.version} (${Math.round(progress * 100)}%).`,
+            progress,
+          }));
+        }
+      });
+      if (updateInstallRequestRef.current === requestId) {
+        availableUpdateRef.current = null;
+        setUpdateStatus({
+          phase: "installed",
+          message: "Update installed. Restart RaioPDF to finish.",
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+          progress: 1,
+        });
+      }
+    } catch {
+      if (updateInstallRequestRef.current === requestId) {
+        setUpdateStatus({
+          phase: "error",
+          message: "Update download or installation failed. Try again from Preferences.",
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+        });
+      }
+    }
+  }, [handleCheckForUpdates]);
+  const handleRelaunchForUpdate = useCallback(() => {
+    void relaunchForInstalledUpdate().catch(() => {
+      setUpdateStatus((current) => ({
+        ...current,
+        phase: "error",
+        message: "RaioPDF could not restart automatically. Close and reopen it to finish updating.",
+      }));
+    });
+  }, []);
+  useEffect(() => {
+    if (!isUpdaterRuntime()) {
+      return;
+    }
+    void handleCheckForUpdates("auto");
+  }, [handleCheckForUpdates]);
   const handleSaveCrashReport = useCallback(async (): Promise<string | null> => {
     if (!isTauriRuntime()) {
       return null;
@@ -5280,6 +5413,14 @@ export function App() {
           mcpStatus={mcpStatus}
           diagnosticsStatus={diagnosticsStatus}
           onExportDiagnostics={handleExportDiagnostics}
+          updateStatus={updateStatus}
+          onCheckForUpdates={() => {
+            void handleCheckForUpdates("manual");
+          }}
+          onInstallUpdate={() => {
+            void handleInstallUpdate();
+          }}
+          onRelaunchForUpdate={handleRelaunchForUpdate}
         />
       ) : null}
       <CrashReportDialog

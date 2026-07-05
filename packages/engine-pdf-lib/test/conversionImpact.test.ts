@@ -3,11 +3,16 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
+  PDFString,
 } from "pdf-lib";
 import {
   assessPdfAConversionImpactFromBytes,
+  countEmbeddedFiles,
+  countSignedSignatureFields,
   hasPdfAConversionImpact,
+  restoreEmbeddedFiles,
 } from "../src/index";
 
 async function createPdf(): Promise<PDFDocument> {
@@ -108,5 +113,53 @@ describe("assessPdfAConversionImpact", () => {
 
     expect(impact.formFields).toBe(1);
     expect(impact.signedSignatureFields).toBe(1);
+    await expect(countSignedSignatureFields(await saveBytes(pdf))).resolves.toBe(1);
   });
 });
+
+describe("restoreEmbeddedFiles", () => {
+  it("restores embedded file name trees onto regenerated output bytes", async () => {
+    const source = await createPdf();
+    addEmbeddedFile(source, "native-exhibit.txt", new Uint8Array([1, 2, 3]));
+    const output = await createPdf();
+    const result = await restoreEmbeddedFiles(await saveBytes(source), await saveBytes(output));
+
+    expect(result.sourceEmbeddedFileCount).toBe(1);
+    expect(result.restoredEmbeddedFileCount).toBe(1);
+    await expect(countEmbeddedFiles(result.bytes)).resolves.toBe(1);
+  });
+
+  it("leaves output unchanged when the source has no embedded files", async () => {
+    const source = await createPdf();
+    const outputBytes = await saveBytes(await createPdf());
+    const result = await restoreEmbeddedFiles(await saveBytes(source), outputBytes);
+
+    expect(result).toEqual({
+      bytes: outputBytes,
+      sourceEmbeddedFileCount: 0,
+      restoredEmbeddedFileCount: 0,
+    });
+  });
+});
+
+function addEmbeddedFile(pdf: PDFDocument, fileName: string, contents: Uint8Array): void {
+  const embeddedStreamRef = pdf.context.register(pdf.context.stream(contents, {
+    Type: "EmbeddedFile",
+    Subtype: "text/plain",
+  }));
+  const fileSpecRef = pdf.context.register(pdf.context.obj({
+    Type: "Filespec",
+    F: PDFString.of(fileName),
+    UF: PDFHexString.fromText(fileName),
+    EF: pdf.context.obj({
+      F: embeddedStreamRef,
+      UF: embeddedStreamRef,
+    }),
+  }));
+  const namesRoot = pdf.catalog.lookupMaybe(PDFName.of("Names"), PDFDict)
+    ?? pdf.context.obj({}) as PDFDict;
+  namesRoot.set(PDFName.of("EmbeddedFiles"), pdf.context.obj({
+    Names: [PDFString.of(fileName), fileSpecRef],
+  }));
+  pdf.catalog.set(PDFName.of("Names"), namesRoot);
+}

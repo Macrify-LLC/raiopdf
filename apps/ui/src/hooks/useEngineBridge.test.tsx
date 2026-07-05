@@ -9,7 +9,9 @@ import type { EngineBridge } from "./useEngineBridge";
 const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
     ocrCalls: unknown[];
+    replaceTextCalls: unknown[];
     removeEncryptionCalls: Array<{ password: string }>;
+    closedHandles: string[];
     options: unknown;
   }>,
   // Queued outcomes for the NEXT ocr() call, consumed across all instances
@@ -18,13 +20,18 @@ const sidecarState = vi.hoisted(() => ({
   ocrBehaviors: [] as Array<Error | undefined>,
   // Same shape, for removeEncryption().
   removeEncryptionBehaviors: [] as Array<Error | undefined>,
+  replaceTextBehaviors: [] as Array<Error | undefined>,
 }));
 
 vi.mock("@raiopdf/engine-sidecar", () => {
   class SidecarPdfEngine {
     readonly ocrCalls: unknown[] = [];
+    readonly replaceTextCalls: unknown[] = [];
     readonly removeEncryptionCalls: Array<{ password: string }> = [];
+    readonly closedHandles: string[] = [];
     readonly options: unknown;
+    private nextHandle = 1;
+    private readonly bytesByHandle = new Map<string, Uint8Array>();
 
     constructor(options?: unknown) {
       this.options = options;
@@ -56,7 +63,40 @@ vi.mock("@raiopdf/engine-sidecar", () => {
       return new Uint8Array([7]);
     }
 
-    async close() {
+    async open(bytes: Uint8Array) {
+      const handle = `test-pdf:${this.nextHandle}`;
+      this.nextHandle += 1;
+      this.bytesByHandle.set(handle, bytes);
+
+      return handle;
+    }
+
+    async replaceText(handle: string, options: unknown) {
+      this.replaceTextCalls.push({ handle, options });
+      const behavior = sidecarState.replaceTextBehaviors.shift();
+
+      if (behavior) {
+        throw behavior;
+      }
+
+      const outputHandle = `test-pdf:${this.nextHandle}`;
+      this.nextHandle += 1;
+      this.bytesByHandle.set(outputHandle, new Uint8Array([5]));
+
+      return {
+        document: outputHandle,
+        replacedCounts: null,
+        warnings: [{ code: "COUNTS_UNAVAILABLE", message: "Counts unavailable." }],
+      };
+    }
+
+    async saveToBytes(handle: string) {
+      return this.bytesByHandle.get(handle) ?? new Uint8Array();
+    }
+
+    async close(handle: string) {
+      this.closedHandles.push(handle);
+
       return undefined;
     }
   }
@@ -307,6 +347,106 @@ describe("useEngineBridge removeEncryption", () => {
     expect(caught).toBe(wrongPassword);
     expect(sidecarState.instances).toHaveLength(1);
     expect(sidecarState.instances[0]?.removeEncryptionCalls).toHaveLength(1);
+  });
+
+  function renderHookValue(): EngineBridge {
+    let bridge: EngineBridge | null = null;
+    render(<Harness onReady={(value) => { bridge = value; }} />);
+
+    if (!bridge) {
+      throw new Error("Engine bridge was not rendered.");
+    }
+
+    return bridge;
+  }
+
+  function render(element: ReactNode) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(element);
+    });
+  }
+});
+
+describe("useEngineBridge replaceText", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>() => ({
+      port: 1234,
+      token: "test-token",
+      ocrToolchain: { available: true, missing: [] },
+    }) as T;
+    sidecarState.instances.length = 0;
+    sidecarState.replaceTextBehaviors.length = 0;
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    delete window.__RAIOPDF_TEST_TAURI_INVOKE__;
+    delete window.__RAIOPDF_TEST_ENGINE_FETCH__;
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
+  it("opens bytes, runs replaceText, saves output bytes, and closes both handles", async () => {
+    const bridge = renderHookValue();
+    let result: Awaited<ReturnType<EngineBridge["replaceText"]>> | undefined;
+
+    await act(async () => {
+      result = await bridge.replaceText(new Uint8Array([1]), {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+        wholeWord: true,
+      });
+    });
+
+    expect(result).toEqual({
+      bytes: new Uint8Array([5]),
+      replacedCounts: null,
+      warnings: [{ code: "COUNTS_UNAVAILABLE", message: "Counts unavailable." }],
+    });
+    expect(sidecarState.instances[0]?.replaceTextCalls[0]).toMatchObject({
+      handle: "test-pdf:1",
+      options: {
+        operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+        wholeWord: true,
+      },
+    });
+    expect(sidecarState.instances[0]?.closedHandles).toEqual(["test-pdf:2", "test-pdf:1"]);
+  });
+
+  it("propagates PdfEngineError from replaceText without retrying", async () => {
+    const signed = new PdfEngineError(
+      "SIGNED_DOCUMENT",
+      "Text editing would invalidate existing PDF signatures.",
+    );
+    sidecarState.replaceTextBehaviors.push(signed);
+
+    const bridge = renderHookValue();
+    let caught: unknown = null;
+
+    await act(async () => {
+      try {
+        await bridge.replaceText(new Uint8Array([1]), {
+          operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+        });
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBe(signed);
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.replaceTextCalls).toHaveLength(1);
   });
 
   function renderHookValue(): EngineBridge {

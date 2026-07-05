@@ -428,9 +428,13 @@ export function App() {
   );
   const {
     document,
+    tabs: documentTabs,
+    activeTabId,
     pageScrollIntent,
     openFile: openDocumentFile,
     openStreamedFile,
+    switchTab: switchDocumentTab,
+    closeTab: closeDocumentTab,
     setStreamedPageCount,
     replaceBytes,
     getOpenToken,
@@ -1187,7 +1191,10 @@ export function App() {
   /** Streamed variant of `openOpenedFile`: same per-open state resets, but
    * the document opens over a range transport — no bytes anywhere. */
   const openStreamedSource = useCallback(
-    (source: Exclude<OpenedFileSource, { kind: "memory" }>) => {
+    (
+      source: Exclude<OpenedFileSource, { kind: "memory" }>,
+      options: { openInNewTab?: boolean } = {},
+    ) => {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
@@ -1207,6 +1214,7 @@ export function App() {
               name: source.name,
               path: null,
             },
+        { openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active" },
       ).then((result) => {
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
@@ -1215,7 +1223,7 @@ export function App() {
         return result;
       });
     },
-    [openStreamedFile, resetLegalState],
+    [document.source, openStreamedFile, resetLegalState],
   );
 
   /**
@@ -2023,14 +2031,16 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
-    (file: OpenedFile) => {
+    (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
       resetLegalState();
       setSelectedPageIndexes(new Set());
       setPasswordPrompt(null);
-      void openDocumentFile(file).then((result) => {
+      void openDocumentFile(file, {
+        openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
+      }).then((result) => {
         if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
@@ -2060,7 +2070,7 @@ export function App() {
         }
       });
     },
-    [openDocumentFile, resetLegalState],
+    [document.source, openDocumentFile, resetLegalState],
   );
 
   const cancelPasswordPrompt = useCallback(() => {
@@ -2220,7 +2230,10 @@ export function App() {
           // renaming doesn't apply here, this is the same document.
           const result = await openDocumentFile(
             { bytes: decryptedBytes, name: prompt.fileName, path: null },
-            { markDirty: true },
+            {
+              markDirty: true,
+              openMode: document.source ? "new-tab" : "replace-active",
+            },
           );
 
           if (!isCurrentUnlock()) {
@@ -2285,13 +2298,32 @@ export function App() {
   const openFileSource = useCallback(
     (source: OpenedFileSource) => {
       if (source.kind === "memory") {
-        openOpenedFile(source);
+        openOpenedFile(source, { openInNewTab: true });
       } else {
-        void openStreamedSource(source);
+        void openStreamedSource(source, { openInNewTab: true });
       }
     },
     [openOpenedFile, openStreamedSource],
   );
+
+  const requestTabClose = useCallback((tabId: string) => {
+    const tab = documentTabs.find((candidate) => candidate.id === tabId);
+    if (!tab) {
+      return;
+    }
+
+    if (tab.document.dirty) {
+      const fileName = tab.document.fileName ?? "this document";
+      const confirmed = window.confirm(
+        `Close ${fileName} and discard unsaved changes?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    void closeDocumentTab(tabId);
+  }, [closeDocumentTab, documentTabs]);
 
   const openFile = useCallback(() => {
     void filePort
@@ -5321,6 +5353,14 @@ export function App() {
       ) : null}
       <AppShell
         document={document}
+        tabs={documentTabs.map((tab) => ({
+          id: tab.id,
+          fileName: tab.document.fileName ?? "Untitled.pdf",
+          dirty: tab.document.dirty,
+          active: tab.id === activeTabId,
+        }))}
+        onTabSelected={switchDocumentTab}
+        onTabCloseRequested={requestTabClose}
         pdfDocument={pdfDocument}
         documentSearch={documentSearch}
         pageScrollIntent={pageScrollIntent}

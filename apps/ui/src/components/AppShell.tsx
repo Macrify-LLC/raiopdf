@@ -7,7 +7,7 @@ import { CanvasWell } from "./CanvasWell";
 import { CommandBar } from "./CommandBar";
 import { DocumentNavPanel } from "./DocumentNavPanel";
 import { StatusBar } from "./StatusBar";
-import { TitleBar } from "./TitleBar";
+import { TitleBar, type DocumentTabInfo } from "./TitleBar";
 import {
   ToolPanel,
   type EditDialogToolId,
@@ -43,6 +43,9 @@ function isOcrDialogPhase(phase: OcrUiState["phase"]): boolean {
 
 export interface AppShellProps {
   document: DocumentState;
+  tabs: DocumentTabInfo[];
+  onTabSelected: (tabId: string) => void;
+  onTabCloseRequested: (tabId: string) => void;
   pdfDocument: PDFDocumentProxy | null;
   documentSearch: DocumentSearchState;
   pageScrollIntent: PageScrollIntent | null;
@@ -111,6 +114,9 @@ export interface AppShellProps {
 
 export function AppShell({
   document,
+  tabs,
+  onTabSelected,
+  onTabCloseRequested,
   pdfDocument,
   documentSearch,
   pageScrollIntent,
@@ -183,17 +189,6 @@ export function AppShell({
   const streamedDocument = document.source !== null && document.source.kind !== "memory";
   const canUndo = editing.pendingEdits.length > 0;
   const showEngineStartingOverlay = ocrStarting && !isOcrDialogPhase(ocrState.phase);
-  const tabs = document.fileName
-    ? [
-        {
-          id: "active-document",
-          fileName: document.fileName,
-          active: true,
-          dirty: document.dirty,
-        },
-      ]
-    : [];
-
   function requestOpen() {
     onOpenRequested();
   }
@@ -220,6 +215,8 @@ export function AppShell({
       />
       <TitleBar
         tabs={tabs}
+        onTabSelected={onTabSelected}
+        onTabCloseRequested={onTabCloseRequested}
         onOpenAbout={onOpenAbout}
         hasDocument={hasDocument}
         canUndo={canUndo}

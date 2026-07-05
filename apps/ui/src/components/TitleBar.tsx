@@ -12,6 +12,8 @@ export interface DocumentTabInfo {
 
 export interface TitleBarProps {
   tabs?: DocumentTabInfo[];
+  onTabSelected?: (tabId: string) => void;
+  onTabCloseRequested?: (tabId: string) => void;
   onOpenAbout?: () => void;
   /** Gates every File-menu action that operates on the open document. */
   hasDocument?: boolean;
@@ -27,6 +29,8 @@ export interface TitleBarProps {
 
 export function TitleBar({
   tabs = [],
+  onTabSelected,
+  onTabCloseRequested,
   onOpenAbout,
   hasDocument = false,
   canUndo = false,
@@ -61,21 +65,48 @@ export function TitleBar({
       />
 
       {hasTabs ? (
-        <div className="title-bar__tabs" data-tauri-drag-region>
+        <div
+          className="title-bar__tabs"
+          role="tablist"
+          aria-label="Open documents"
+          data-tauri-drag-region
+        >
           {tabs.map((tab) => (
             <div
               key={tab.id}
               className="title-bar__tab"
-              aria-current={tab.active ? "page" : undefined}
+              data-active={tab.active ? "true" : undefined}
             >
-              {tab.dirty ? (
-                <span
-                  className="title-bar__tab-dot"
-                  aria-label="Unsaved changes"
-                  title="Unsaved changes"
-                />
-              ) : null}
-              {tab.fileName}
+              <button
+                type="button"
+                className="title-bar__tab-button"
+                role="tab"
+                aria-selected={tab.active ? "true" : "false"}
+                tabIndex={tab.active ? 0 : -1}
+                title={tab.fileName}
+                onClick={() => onTabSelected?.(tab.id)}
+              >
+                {tab.dirty ? (
+                  <span
+                    className="title-bar__tab-dot"
+                    aria-label="Unsaved changes"
+                    title="Unsaved changes"
+                  />
+                ) : null}
+                <span className="title-bar__tab-name">{tab.fileName}</span>
+              </button>
+              <button
+                type="button"
+                className="title-bar__tab-close"
+                aria-label={`Close ${tab.fileName}`}
+                title={`Close ${tab.fileName}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTabCloseRequested?.(tab.id);
+                }}
+              >
+                <span aria-hidden="true">x</span>
+              </button>
             </div>
           ))}
         </div>

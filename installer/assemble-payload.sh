@@ -29,6 +29,9 @@ REQUIRED_PAYLOAD_FILES=(
   "mcp/node/node.exe"
   "ocr/THIRD-PARTY-PYTHON.md"
   "ocr/ocrmypdf.cmd"
+  "ocr/raiopdf-ocr-progress.cmd"
+  "ocr/raiopdf_ocr_progress.py"
+  "ocr/raiopdf_ocr_progress_plugin.py"
   "ocr/python/python.exe"
   "ocr/tesseract/tesseract.exe"
   "ocr/tesseract/tessdata/eng.traineddata"
@@ -459,6 +462,16 @@ set "PYTHONHOME=%~dp0python"
 set "PYTHONPATH=%~dp0python\Lib\site-packages"
 set "PYTHONDONTWRITEBYTECODE=1"
 "%~dp0python\python.exe" -m ocrmypdf %*
+EOF
+
+  cp "$REPO_ROOT/installer/ocr/raiopdf_ocr_progress.py" "$PAYLOAD_DIR/ocr/raiopdf_ocr_progress.py"
+  cp "$REPO_ROOT/installer/ocr/raiopdf_ocr_progress_plugin.py" "$PAYLOAD_DIR/ocr/raiopdf_ocr_progress_plugin.py"
+  cat >"$PAYLOAD_DIR/ocr/raiopdf-ocr-progress.cmd" <<'EOF'
+@echo off
+set "PYTHONHOME=%~dp0python"
+set "PYTHONPATH=%~dp0python\Lib\site-packages"
+set "PYTHONDONTWRITEBYTECODE=1"
+"%~dp0python\python.exe" "%~dp0raiopdf_ocr_progress.py" %*
 EOF
 
   generate_python_third_party_notice "$python_dir/Lib/site-packages" "$PAYLOAD_DIR/ocr/THIRD-PARTY-PYTHON.md"

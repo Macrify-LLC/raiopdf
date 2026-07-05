@@ -423,12 +423,32 @@ function checkLegalPayload() {
   const manifestPath = join(legalDir, "COMPONENT-MANIFEST.json");
   if (existsSync(manifestPath)) {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (manifest.product !== "RaioPDF") {
+      errors.push(`COMPONENT-MANIFEST.json product must be RaioPDF, got ${manifest.product}`);
+    }
+    if (manifest.releaseVersion !== version) {
+      errors.push(
+        `COMPONENT-MANIFEST.json releaseVersion must be ${version}, got ${manifest.releaseVersion}`,
+      );
+    }
+    const raio = manifest.components?.find((entry) => entry.name === "RaioPDF");
+    if (!raio) {
+      errors.push("COMPONENT-MANIFEST.json is missing RaioPDF");
+    } else if (raio.version !== version) {
+      errors.push(`RaioPDF component version must be ${version}, got ${raio.version}`);
+    }
     const ghostscript = manifest.components?.find((entry) => entry.name === "Ghostscript");
     if (!ghostscript) {
       errors.push("COMPONENT-MANIFEST.json is missing Ghostscript");
     } else {
+      if (ghostscript.version !== pins.GHOSTSCRIPT_VERSION) {
+        errors.push(`Ghostscript version must be ${pins.GHOSTSCRIPT_VERSION}, got ${ghostscript.version}`);
+      }
       if (ghostscript.license !== "AGPL-3.0-only") {
         errors.push(`Ghostscript license must be AGPL-3.0-only, got ${ghostscript.license}`);
+      }
+      if (ghostscript.source?.url !== pins.GHOSTSCRIPT_SOURCE_URL) {
+        errors.push("Ghostscript source URL in manifest does not match installer/PINS.env");
       }
       if (ghostscript.source?.sha256 !== pins.GHOSTSCRIPT_SOURCE_SHA256) {
         errors.push("Ghostscript source SHA256 in manifest does not match installer/PINS.env");

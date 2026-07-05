@@ -10,6 +10,7 @@ describe("OcrDialog long-process loader", () => {
         phase="processing"
         pageCount={5}
         progress={{
+          jobToken: "job-1",
           phase: "ocr",
           description: "OCR",
           completed: 2.5,

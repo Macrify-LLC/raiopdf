@@ -1,5 +1,6 @@
 import { FloatingDialog } from "./FloatingDialog";
 import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
+import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
 import "./OcrDialog.css";
 
 export type OcrDialogRunningPhase = "starting-engine" | "processing" | "verifying";
@@ -8,17 +9,9 @@ export type OcrDialogPhase = "confirm" | OcrDialogRunningPhase;
 export interface OcrDialogProps {
   phase: OcrDialogPhase;
   pageCount: number;
-  progress?: OcrDialogProgress | null;
+  progress?: OcrProgressEvent | null;
   onConfirm: () => void;
   onCancel: () => void;
-}
-
-export interface OcrDialogProgress {
-  phase?: string;
-  description?: string | null;
-  completed: number;
-  total?: number | null;
-  unit?: string | null;
 }
 
 const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
@@ -87,27 +80,12 @@ function formatPageCountCopy(pageCount: number): string {
 
 function formatOcrRunningMessage(
   phase: OcrDialogRunningPhase,
-  progress: OcrDialogProgress | null,
+  progress: OcrProgressEvent | null,
 ): string {
-  if (!progress) {
-    return RUNNING_STATUS_LABEL[phase];
-  }
-
-  const count = formatOcrProgressCount(progress);
-  if (count) {
-    return progress.phase === "postprocess"
-      ? `Finishing searchable copy: ${count}`
-      : `Making searchable: ${count}`;
-  }
-
-  if (progress.phase === "postprocess") {
-    return progress.description ? `Finishing searchable copy: ${progress.description}` : "Finishing searchable copy…";
-  }
-
-  return progress.description ? `Making searchable: ${progress.description}` : "Making searchable…";
+  return progress ? describeOcrProgress(progress) : RUNNING_STATUS_LABEL[phase];
 }
 
-function toLongProcessProgress(progress: OcrDialogProgress | null): LongProcessProgress | null {
+function toLongProcessProgress(progress: OcrProgressEvent | null): LongProcessProgress | null {
   if (!hasDeterminateProgress(progress)) {
     return null;
   }
@@ -120,23 +98,7 @@ function toLongProcessProgress(progress: OcrDialogProgress | null): LongProcessP
 }
 
 function hasDeterminateProgress(
-  progress: OcrDialogProgress | null,
-): progress is OcrDialogProgress & { total: number } {
+  progress: OcrProgressEvent | null,
+): progress is OcrProgressEvent & { total: number } {
   return Boolean(progress && typeof progress.total === "number" && progress.total > 0);
-}
-
-function formatOcrProgressCount(progress: OcrDialogProgress): string | null {
-  if (!hasDeterminateProgress(progress)) {
-    return null;
-  }
-
-  const completed = Math.min(Math.max(Math.floor(progress.completed), 0), Math.ceil(progress.total));
-  const total = Math.ceil(progress.total);
-
-  if (progress.unit === "%") {
-    return `${completed}%`;
-  }
-
-  const unit = progress.unit === "page" ? "page" : progress.unit || "step";
-  return `${completed} of ${total} ${unit}${total === 1 || unit.endsWith("s") ? "" : "s"}`;
 }

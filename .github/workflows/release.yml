@@ -76,6 +76,9 @@ jobs:
         shell: bash
         run: bash installer/assemble-payload.sh --verify
 
+      - name: Smoke OCR progress wrapper
+        run: pnpm smoke:ocr-progress-wrapper
+
       - name: Stamp shell package version from release tag
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
         shell: bash
@@ -365,7 +368,7 @@ jobs:
           pnpm --filter @raiopdf/ui exec playwright install chromium
           pnpm canary
 
-      - name: Collect installer artifacts
+      - name: Collect unsigned workflow artifacts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -376,7 +379,7 @@ jobs:
             VERSION="dev-${GITHUB_SHA:0:7}"
           fi
 
-          ASSET_DIR="$PWD/release-assets"
+          ASSET_DIR="$PWD/unsigned-workflow-artifacts"
           mkdir -p -- "$ASSET_DIR"
 
           mapfile -t PAYLOAD_LEGAL_DIRS < <(
@@ -418,17 +421,17 @@ jobs:
               xargs sha256sum > SHA256SUMS.txt
           )
 
-          echo "Collected release assets:"
+          echo "Collected unsigned workflow artifacts:"
           ls -lh "$ASSET_DIR"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: raiopdf-windows-x64-unsigned
-          path: release-assets/*
+          path: unsigned-workflow-artifacts/*
           if-no-files-found: error
 
-      - name: Create draft GitHub Release
+      - name: Create unsigned validation draft GitHub Release
         if: github.ref_type == 'tag'
         shell: bash
         env:
@@ -438,9 +441,12 @@ jobs:
 
           TAG="$GITHUB_REF_NAME"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --draft=true --title "$TAG"
+            echo "Release $TAG already exists; leaving its draft/published state unchanged."
           else
             gh release create "$TAG" --draft --title "$TAG" --notes "Draft release for $TAG."
           fi
 
-          gh release upload "$TAG" release-assets/* --clobber
+          echo "Unsigned installers stay as workflow artifacts only."
+          echo "Prepare signed public assets locally with: pnpm prepare:release-assets -- --tag $TAG"
+          echo "Validate them with: pnpm validate:release-assets -- --tag $TAG"
+          echo "Upload the validated release-assets/signed/* files with gh release upload."

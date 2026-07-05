@@ -26,7 +26,7 @@
 
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { helpArticles } from "../packages/help-content/dist/index.ts";
 
 const SITE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
@@ -220,10 +220,10 @@ function renderFooter() {
     <div class="footer__col">
       <h4>No telemetry, ever</h4>
       <p class="footer__telemetry">
-        This page runs no analytics, sets no tracking cookies, and profiles no one. The only
-        thing it fetches on its own is a single anonymous, unauthenticated call to GitHub's
-        public API for the current release — the same thing your browser would show if you
-        visited the repo directly.
+        This page runs no analytics, sets no tracking cookies, and profiles no one. It loads
+        its web fonts from Google Fonts and makes unauthenticated public GitHub API requests
+        for release data — the same public release information your browser would show if
+        you visited the repo directly.
       </p>
       <div class="footer__support">
         <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>
@@ -541,6 +541,10 @@ function safeJsonForScript(value) {
   return JSON.stringify(value).replaceAll("</", "<\\/");
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const invokedUrl = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href
+  : null;
+
+if (import.meta.url === invokedUrl) {
   await main();
 }

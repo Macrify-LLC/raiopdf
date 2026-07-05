@@ -360,8 +360,9 @@ export type PathOpOcrMode = "skip-text" | "force-ocr";
 export function pathOpOcr(
   grant: PathOpsFileGrant,
   mode: PathOpOcrMode = "skip-text",
+  jobToken?: string,
 ): Promise<PathOpOutput> {
-  return invokePathOp("path_op_ocr", { grant, mode });
+  return invokePathOp("path_op_ocr", { grant, mode, ...(jobToken ? { jobToken } : {}) });
 }
 
 export function pathOpRepair(grant: PathOpsFileGrant): Promise<PathOpOutput> {

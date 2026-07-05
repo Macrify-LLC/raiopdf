@@ -104,6 +104,15 @@ import { useEditing } from "./hooks/useEditing";
 import type { EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
+  checkForSignedUpdate,
+  installSignedUpdate,
+  isUpdaterRuntime,
+  relaunchForInstalledUpdate,
+  UPDATE_IDLE_STATUS,
+  UPDATE_UNAVAILABLE_STATUS,
+  type AppUpdateStatus,
+} from "./lib/appUpdates";
+import {
   getPdfLoadErrorMessage,
   loadPdfDocument,
   loadStreamedPdfDocument,
@@ -129,6 +138,11 @@ import {
   tooLargeToAddMessage,
   type FileAddResult,
 } from "./lib/readFileForAdd";
+import {
+  listenOcrProgress,
+  newOcrJobToken,
+  type OcrProgressEvent,
+} from "./lib/ocrProgress";
 import {
   isPathOpsRuntime,
   pathOpBatesStamp,
@@ -261,6 +275,7 @@ export type OcrPhase =
 export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
+  progress?: OcrProgressEvent | null;
 }
 
 function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
@@ -610,6 +625,12 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>(() => (
+    isUpdaterRuntime() ? UPDATE_IDLE_STATUS : UPDATE_UNAVAILABLE_STATUS
+  ));
+  const updateCheckRequestRef = useRef(0);
+  const updateInstallRequestRef = useRef(0);
+  const availableUpdateRef = useRef<Awaited<ReturnType<typeof checkForSignedUpdate>>>(null);
   const [crashReportPayload, setCrashReportPayload] =
     useState<CrashReportPayload | null>(null);
   const [crashReportOpenStatus, setCrashReportOpenStatus] = useState<string | null>(null);
@@ -713,6 +734,124 @@ export function App() {
       }
     })();
   }, []);
+  const handleCheckForUpdates = useCallback(async (mode: "auto" | "manual" = "manual") => {
+    if (!isUpdaterRuntime()) {
+      setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
+      return;
+    }
+
+    const requestId = updateCheckRequestRef.current + 1;
+    updateCheckRequestRef.current = requestId;
+    setUpdateStatus({
+      phase: "checking",
+      message: mode === "auto" ? "Checking for signed updates..." : "Checking GitHub for signed updates...",
+    });
+
+    try {
+      const update = await checkForSignedUpdate();
+      if (updateCheckRequestRef.current !== requestId) {
+        return;
+      }
+
+      availableUpdateRef.current = update;
+      if (update) {
+        setUpdateStatus({
+          phase: "available",
+          message: `RaioPDF ${update.version} is available.`,
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+        });
+      } else {
+        setUpdateStatus({
+          phase: "current",
+          message: "RaioPDF is up to date.",
+        });
+      }
+    } catch {
+      if (updateCheckRequestRef.current === requestId) {
+        availableUpdateRef.current = null;
+        setUpdateStatus({
+          phase: "error",
+          message: "Update check could not reach GitHub or verify release metadata.",
+        });
+      }
+    }
+  }, []);
+  const handleInstallUpdate = useCallback(async () => {
+    if (!isUpdaterRuntime()) {
+      setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
+      return;
+    }
+
+    let update = availableUpdateRef.current;
+    if (!update) {
+      await handleCheckForUpdates("manual");
+      update = availableUpdateRef.current;
+    }
+
+    if (!update) {
+      return;
+    }
+
+    const requestId = updateInstallRequestRef.current + 1;
+    updateInstallRequestRef.current = requestId;
+    setUpdateStatus({
+      phase: "downloading",
+      message: `Downloading RaioPDF ${update.version}...`,
+      currentVersion: update.currentVersion,
+      availableVersion: update.version,
+      progress: null,
+    });
+
+    try {
+      await installSignedUpdate(update, (progress) => {
+        if (updateInstallRequestRef.current === requestId) {
+          setUpdateStatus((current) => ({
+            ...current,
+            phase: "downloading",
+            message: progress === null
+              ? `Downloading RaioPDF ${update.version}...`
+              : `Downloading RaioPDF ${update.version} (${Math.round(progress * 100)}%).`,
+            progress,
+          }));
+        }
+      });
+      if (updateInstallRequestRef.current === requestId) {
+        availableUpdateRef.current = null;
+        setUpdateStatus({
+          phase: "installed",
+          message: "Update installed. Restart RaioPDF to finish.",
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+          progress: 1,
+        });
+      }
+    } catch {
+      if (updateInstallRequestRef.current === requestId) {
+        setUpdateStatus({
+          phase: "error",
+          message: "Update download or installation failed. Try again from Preferences.",
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+        });
+      }
+    }
+  }, [handleCheckForUpdates]);
+  const handleRelaunchForUpdate = useCallback(() => {
+    void relaunchForInstalledUpdate().catch(() => {
+      setUpdateStatus((current) => ({
+        ...current,
+        phase: "error",
+        message: "RaioPDF could not restart automatically. Close and reopen it to finish updating.",
+      }));
+    });
+  }, []);
+  useEffect(() => {
+    if (!isUpdaterRuntime()) {
+      return;
+    }
+    void handleCheckForUpdates("auto");
+  }, [handleCheckForUpdates]);
   const handleSaveCrashReport = useCallback(async (): Promise<string | null> => {
     if (!isTauriRuntime()) {
       return null;
@@ -1558,11 +1697,32 @@ export function App() {
         message: ocrType === "force-ocr"
           ? "Rebuilding the searchable text layer — the local engine re-renders the file itself; nothing is loaded into memory."
           : "Making searchable — the local engine works on the file itself; nothing is loaded into memory.",
+        progress: null,
       });
 
-      void pathOpOcr(grant, ocrType)
-        .then(async (output) => {
+      void (async () => {
+        const jobToken = newOcrJobToken();
+        let unlisten: (() => void) | null = null;
+        try {
+          try {
+            unlisten = await listenOcrProgress(jobToken, (progress) => {
+              if (!isCurrentStreamedRun()) {
+                return;
+              }
+              setOcrState((current) => (
+                current.phase === "processing"
+                  ? { ...current, progress }
+                  : current
+              ));
+            });
+          } catch {
+            // Progress is additive. OCR should still run if event subscription
+            // fails in an unusual desktop/runtime state.
+          }
+
+          const output = await pathOpOcr(grant, ocrType, jobToken);
           if (!isCurrentStreamedRun()) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return;
           }
 
@@ -1578,8 +1738,7 @@ export function App() {
             phase: "done",
             message: "Searchable copy ready — it opened as a new document. Use Save As to keep it.",
           });
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (!isCurrentStreamedRun()) {
             return;
           }
@@ -1588,12 +1747,13 @@ export function App() {
             phase: "error",
             message: pathOpErrorMessage(error, "OCR could not finish. The document was left unchanged."),
           });
-        })
-        .finally(() => {
+        } finally {
+          unlisten?.();
           if (ocrRunRef.current === runId) {
             ocrActiveRef.current = false;
           }
-        });
+        }
+      })();
       return;
     }
 
@@ -1638,6 +1798,7 @@ export function App() {
     setOcrState({
       phase: "starting-engine",
       message: "Starting the PDF engine...",
+      progress: null,
     });
 
     void engineBridge
@@ -1651,6 +1812,7 @@ export function App() {
               message: ocrType === "force-ocr"
                 ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
                 : "Making searchable — page-by-page work happens in the engine.",
+              progress: null,
             });
           }
         },
@@ -1663,6 +1825,7 @@ export function App() {
         setOcrState({
           phase: "verifying",
           message: "Verifying the text layer...",
+          progress: null,
         });
 
         const textLayerCoverage = await inspectTextLayer(ocrResult.bytes);
@@ -5220,6 +5383,7 @@ export function App() {
         <OcrDialog
           phase={ocrState.phase}
           pageCount={document.pageCount}
+          progress={ocrState.progress ?? null}
           onConfirm={confirmOcrDialog}
           onCancel={cancelOcrDialog}
         />
@@ -5283,6 +5447,14 @@ export function App() {
           mcpStatus={mcpStatus}
           diagnosticsStatus={diagnosticsStatus}
           onExportDiagnostics={handleExportDiagnostics}
+          updateStatus={updateStatus}
+          onCheckForUpdates={() => {
+            void handleCheckForUpdates("manual");
+          }}
+          onInstallUpdate={() => {
+            void handleInstallUpdate();
+          }}
+          onRelaunchForUpdate={handleRelaunchForUpdate}
         />
       ) : null}
       <CrashReportDialog

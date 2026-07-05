@@ -7,6 +7,7 @@ target/
 engine/upstream/
 engine/dist/
 installer/.payload-cache/
+release-assets/
 apps/shell/src-tauri/binaries/*
 !apps/shell/src-tauri/binaries/.gitkeep
 apps/shell/src-tauri/payload/*
@@ -16,6 +17,8 @@ src-tauri/gen/
 
 *.log
 pnpm-debug.log*
+__pycache__/
+*.py[cod]
 
 .env
 .env.*
@@ -34,3 +37,5 @@ apps/ui/playwright-report/
 apps/ui/smoke/real-engine/fixtures.local/
 **/fixtures.local/
 *.local.pdf
+Canary/test-objects/
+test-objects/

@@ -152,6 +152,8 @@ export interface PrepareForFilingWorkspaceProps {
   onPacketPreferencesChange?: (
     preferences: { layoutMode: FilingPacketLayoutMode; prefixFilenames: boolean },
   ) => void;
+  stepDefaultOverrides?: Partial<Record<PrepPlanStepId, boolean>> | undefined;
+  onStepDefaultOverridesChange?: (overrides: Partial<Record<PrepPlanStepId, boolean>>) => void;
   onDismissImpact: () => void;
   onCompressFirst: () => void;
 }
@@ -199,6 +201,8 @@ export const PrepareForFilingWorkspace = forwardRef<
     defaultPacketLayoutMode = "separate-files",
     defaultPacketPrefixFilenames = true,
     onPacketPreferencesChange,
+    stepDefaultOverrides,
+    onStepDefaultOverridesChange,
     onDismissImpact,
     onCompressFirst,
   }: PrepareForFilingWorkspaceProps,
@@ -207,7 +211,10 @@ export const PrepareForFilingWorkspace = forwardRef<
   const [mode, setMode] = useState<"single" | "packet">("single");
   const [rulesOpen, setRulesOpen] = useState(false);
   const [certificateOpen, setCertificateOpen] = useState(false);
-  const [checkedSteps, setCheckedSteps] = useState<Set<PrepPlanStepId>>(() => defaultCheckedSteps(prepPlan));
+  const [checkedSteps, setCheckedSteps] = useState<Set<PrepPlanStepId>>(() => (
+    defaultCheckedSteps(prepPlan, undefined, stepDefaultOverrides)
+  ));
+  const [stepDefaultsMessage, setStepDefaultsMessage] = useState<string | null>(null);
   const [customSplitMegabytes, setCustomSplitMegabytes] = useState("");
   const [packetFiles, setPacketFiles] = useState<FilingPacketFile[]>(() => (
     document.bytes
@@ -291,7 +298,11 @@ export const PrepareForFilingWorkspace = forwardRef<
   const needsUnlockPassword = removeEncryptionSelected && facts?.encryptionState === "encrypted";
 
   useEffect(() => {
-    setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps));
+    setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps, stepDefaultOverrides));
+  }, [prepPlan, stepDefaultOverrides, unavailableSteps]);
+
+  useEffect(() => {
+    setStepDefaultsMessage(null);
   }, [prepPlan, unavailableSteps]);
 
   useImperativeHandle(ref, () => ({
@@ -311,6 +322,17 @@ export const PrepareForFilingWorkspace = forwardRef<
 
     setActiveUnlockPassword(null);
     onPrepare(certificateOpen ? certificate : null, prepareOptions());
+  }
+
+  function saveCurrentStepDefaults() {
+    const overrides = Object.fromEntries(
+      prepPlan
+        .filter((step) => !step.disabledReason && !unavailableSteps.get(step.id))
+        .map((step) => [step.id, checkedSteps.has(step.id)]),
+    ) as Partial<Record<PrepPlanStepId, boolean>>;
+
+    onStepDefaultOverridesChange?.(overrides);
+    setStepDefaultsMessage("Saved as your defaults for this pack.");
   }
 
   function submitPassword(event: FormEvent<HTMLFormElement>) {
@@ -431,6 +453,9 @@ export const PrepareForFilingWorkspace = forwardRef<
           hasResult={hasFilingResult}
           customSplitMegabytes={customSplitMegabytes}
           onCustomSplitMegabytesChange={setCustomSplitMegabytes}
+          stepDefaultsMessage={stepDefaultsMessage}
+          canSaveStepDefaults={Boolean(onStepDefaultOverridesChange)}
+          onSaveStepDefaults={saveCurrentStepDefaults}
           onToggle={(stepId) => {
             setCheckedSteps((current) => {
               const next = new Set(current);
@@ -1107,37 +1132,27 @@ function CourtProfilePrompt({
   );
 }
 
-/**
- * Which run-outcome chip a checklist row shows -- item 6/7's "will-run /
- * not-needed / prohibited / done" vocabulary, computed from state that
- * already exists on the step (nothing new is tracked): a pack-policy or
- * product-availability block always wins ("prohibited"); an unchecked,
- * unblocked step is simply not part of this run ("not needed"); a checked
- * step shows "done" once the workspace already has a completed result and
- * "will run" before that.
- */
-type StepRunStatus = "will-run" | "not-needed" | "prohibited" | "done";
+type StepRunStatus = "will-run" | "idle" | "done";
 
 const STEP_RUN_STATUS_LABEL: Record<StepRunStatus, string> = {
   "will-run": "Will run",
-  "not-needed": "Not needed",
-  prohibited: "Prohibited",
+  idle: "",
   done: "Done",
 };
 
-function computeStepRunStatus(checked: boolean, blocked: boolean, hasResult: boolean): StepRunStatus {
-  if (blocked) {
-    return "prohibited";
-  }
-
+function computeStepRunStatus(checked: boolean, hasResult: boolean): StepRunStatus {
   if (!checked) {
-    return "not-needed";
+    return "idle";
   }
 
   return hasResult ? "done" : "will-run";
 }
 
 function StepRunStatusChip({ status }: { status: StepRunStatus }) {
+  if (status === "idle") {
+    return null;
+  }
+
   return (
     <span className="filing-prep-row__status" data-status={status}>
       {STEP_RUN_STATUS_LABEL[status]}
@@ -1152,6 +1167,9 @@ function PrepChecklist({
   hasResult,
   customSplitMegabytes,
   onCustomSplitMegabytesChange,
+  stepDefaultsMessage,
+  canSaveStepDefaults,
+  onSaveStepDefaults,
   onToggle,
 }: {
   steps: readonly PrepPlanStep[];
@@ -1160,6 +1178,9 @@ function PrepChecklist({
   hasResult: boolean;
   customSplitMegabytes: string;
   onCustomSplitMegabytesChange: (value: string) => void;
+  stepDefaultsMessage: string | null;
+  canSaveStepDefaults: boolean;
+  onSaveStepDefaults: () => void;
   onToggle: (stepId: PrepPlanStepId) => void;
 }) {
   const runnableSteps = steps.filter((step) => !step.disabledReason && !unavailableSteps.get(step.id));
@@ -1189,10 +1210,28 @@ function PrepChecklist({
   return (
     <section className="filing-prep" aria-label="Preparation checklist">
       <div className="filing-prep__header">
-        <p className="filing-prep__title">Prep checklist</p>
-        <p className="filing-prep__subtitle">
-          {activeCount} of {runnableSteps.length} step{runnableSteps.length === 1 ? "" : "s"} will run
-        </p>
+        <div>
+          <p className="filing-prep__title">Prep checklist</p>
+          <p className="filing-prep__subtitle">
+            {activeCount} of {runnableSteps.length} step{runnableSteps.length === 1 ? "" : "s"} will run
+          </p>
+        </div>
+        {canSaveStepDefaults ? (
+          <div className="filing-prep__defaults">
+            <button
+              type="button"
+              className="filing-prep__defaults-button"
+              onClick={onSaveStepDefaults}
+            >
+              Set current selections as my defaults for this pack
+            </button>
+            {stepDefaultsMessage ? (
+              <span className="filing-prep__defaults-message" role="status">
+                {stepDefaultsMessage}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="filing-prep__rows" role="list">
         {steps.map((step) => (
@@ -1235,16 +1274,16 @@ function PrepStepRow({
   onCustomSplitMegabytesChange: (value: string) => void;
   onToggle: () => void;
 }) {
-  // Two different reasons a row can be locked, and they read differently:
-  // a pack POLICY forbidding the property (this is a legal fact) vs. Raio
-  // itself not shipping the capability yet (a product fact, not a legal one).
-  const policyBlockedReason = step.disabledReason;
+  // Product or engine availability can still lock a row. Jurisdiction-pack
+  // stance is advisory and appears as the small flag beside the label.
+  const planBlockedReason = step.disabledReason;
   const productUnavailableReason = unavailableReason;
-  const blockedReason = policyBlockedReason ?? productUnavailableReason;
+  const blockedReason = planBlockedReason ?? productUnavailableReason;
   const disabled = Boolean(blockedReason);
   const descriptionId = `filing-step-${step.id}-body`;
   const showCustomSplit = step.id === "split-by-size" && checked && !disabled;
-  const runStatus = computeStepRunStatus(checked, disabled, hasResult);
+  const runStatus = computeStepRunStatus(checked, hasResult);
+  const guidanceFlag = disabled ? null : getStepGuidanceFlag(step, checked);
 
   return (
     <article
@@ -1255,16 +1294,19 @@ function PrepStepRow({
       data-expanded={expanded ? "true" : "false"}
     >
       <div className="filing-prep-row__main">
-        <label className="filing-prep-row__toggle">
-          <input
-            type="checkbox"
-            checked={checked}
-            disabled={disabled}
-            aria-describedby={expanded ? descriptionId : undefined}
-            onChange={onToggle}
-          />
-          <span className="filing-prep-row__title">{step.label}</span>
-        </label>
+        <div className="filing-prep-row__toggle">
+          <label className="filing-prep-row__checkbox-label">
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={disabled}
+              aria-describedby={expanded ? descriptionId : undefined}
+              onChange={onToggle}
+            />
+            <span className="filing-prep-row__title">{step.label}</span>
+          </label>
+          {guidanceFlag ? <StepGuidanceFlag flag={guidanceFlag} stepLabel={step.label} /> : null}
+        </div>
         <div className="filing-prep-row__meta">
           <StepRunStatusChip status={runStatus} />
           <button
@@ -1283,12 +1325,12 @@ function PrepStepRow({
       {expanded ? (
         <div id={descriptionId} className="filing-prep-row__body">
           <div className="filing-prep-row__stance-row">
-            <StepStanceBadge stance={step.stance} />
+            <StepStanceBadge stance={step.actionStance} />
           </div>
           {step.condition ? <p className="filing-prep-row__condition">{step.condition}</p> : null}
           {step.note ? <p className="filing-prep-row__note">{step.note}</p> : null}
-          {policyBlockedReason ? (
-            <p className="filing-prep-row__blocked" data-tone="policy">{policyBlockedReason}</p>
+          {planBlockedReason ? (
+            <p className="filing-prep-row__blocked" data-tone="product">{capitalize(planBlockedReason)}.</p>
           ) : productUnavailableReason ? (
             <p className="filing-prep-row__blocked" data-tone="product">{capitalize(productUnavailableReason)}.</p>
           ) : null}
@@ -1319,6 +1361,89 @@ function PrepStepRow({
       ) : null}
     </article>
   );
+}
+
+type StepGuidanceFlagModel = {
+  tone: "warning" | "danger";
+  summary: string;
+  detail: string;
+};
+
+function StepGuidanceFlag({
+  flag,
+  stepLabel,
+}: {
+  flag: StepGuidanceFlagModel;
+  stepLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const descriptionId = useId();
+
+  return (
+    <span
+      className="filing-prep-row__flag-wrap"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        className="filing-prep-row__flag"
+        data-tone={flag.tone}
+        aria-label={`${flag.summary} for ${stepLabel}`}
+        aria-expanded={open}
+        aria-describedby={open ? descriptionId : undefined}
+        onClick={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      >
+        <span className="filing-prep-row__flag-shape" aria-hidden="true" />
+      </button>
+      {open ? (
+        <span
+          id={descriptionId}
+          className="filing-prep-row__flag-popover"
+          role="tooltip"
+          data-tone={flag.tone}
+        >
+          <strong>{flag.summary}</strong>
+          <span>{flag.detail}</span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function getStepGuidanceFlag(step: PrepPlanStep, checked: boolean): StepGuidanceFlagModel | null {
+  if (checked && step.actionStance === "prohibited") {
+    return {
+      tone: "danger",
+      summary: "Pack guidance differs from this selection",
+      detail: `Raio research indicates this step is not preferred in this jurisdiction. ${formatStepGuidanceCitation(step)}`,
+    };
+  }
+
+  if (!checked && step.actionStance === "required") {
+    return {
+      tone: "warning",
+      summary: "Expected by this jurisdiction",
+      detail: `This jurisdiction expects this step. ${formatStepGuidanceCitation(step)}`,
+    };
+  }
+
+  if (!checked && step.actionStance === "preferred") {
+    return {
+      tone: "warning",
+      summary: "Recommended by this jurisdiction",
+      detail: `Recommended for this jurisdiction. ${formatStepGuidanceCitation(step)}`,
+    };
+  }
+
+  return null;
 }
 
 function StepStanceBadge({ stance }: { stance: PrepPlanStep["stance"] }) {
@@ -1603,10 +1728,11 @@ function packStalenessHint(oldestVerified: string): string | null {
 function defaultCheckedSteps(
   steps: readonly PrepPlanStep[],
   unavailableSteps: ReadonlyMap<PrepPlanStepId, string> = new Map(),
+  overrides: Partial<Record<PrepPlanStepId, boolean>> | undefined = undefined,
 ): Set<PrepPlanStepId> {
   return new Set(
     steps
-      .filter((step) => step.defaultChecked && !step.disabledReason && !unavailableSteps.get(step.id))
+      .filter((step) => (overrides?.[step.id] ?? step.defaultChecked) && !step.disabledReason && !unavailableSteps.get(step.id))
       .map((step) => step.id),
   );
 }
@@ -1637,7 +1763,7 @@ const STANCE_LABEL: Record<PrepPlanStep["stance"], string> = {
   required: "Required",
   preferred: "Preferred",
   accepted: "Accepted",
-  prohibited: "Prohibited",
+  prohibited: "Not preferred",
   unknown: "Unknown",
   standard: "Standard prep",
 };
@@ -1653,6 +1779,15 @@ function formatStepAuthority(step: PrepPlanStep): string {
   }
 
   return `${step.authority} - verified ${step.lastVerified}`;
+}
+
+function formatStepGuidanceCitation(step: PrepPlanStep): string {
+  const verified = !step.lastVerified || step.lastVerified === UNVERIFIED_SENTINEL
+    ? ""
+    : `, verified ${step.lastVerified}`;
+  const note = step.note ? ` ${step.note}` : "";
+
+  return `${step.authority}${verified}.${note}`;
 }
 
 function capitalize(value: string): string {

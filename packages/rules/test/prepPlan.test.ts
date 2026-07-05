@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getPack,
+  listPacks,
   resolvePrepPlan,
   type DocumentFacts,
   type PrepPlanStep,
@@ -21,7 +22,7 @@ const baseFacts: DocumentFacts = {
 };
 
 describe("resolvePrepPlan", () => {
-  it("resolves Florida defaults, destructive PDF/A impact, and prohibited flattening", () => {
+  it("resolves Florida defaults, destructive PDF/A impact, and advisory flattening guidance", () => {
     const plan = resolvePrepPlan(getPack("florida"), {
       ...baseFacts,
       annotationCount: 3,
@@ -46,6 +47,7 @@ describe("resolvePrepPlan", () => {
     ]);
     expect(byId(plan, "convert-pdfa")).toMatchObject({
       stance: "preferred",
+      actionStance: "preferred",
       prepDefault: "on",
       defaultChecked: true,
       destructive: true,
@@ -53,11 +55,92 @@ describe("resolvePrepPlan", () => {
     expect(byId(plan, "convert-pdfa").impact).toContain(
       "3 annotations, 2 form fields, 1 signature field, 1 possible unapplied redaction detected",
     );
+    expect(byId(plan, "sanitize-content")).toMatchObject({
+      stance: "prohibited",
+      actionStance: "required",
+      defaultChecked: true,
+    });
     expect(byId(plan, "flatten-forms")).toMatchObject({
       stance: "prohibited",
+      actionStance: "prohibited",
       defaultChecked: false,
-      disabledReason: "This pack marks this output property as prohibited.",
     });
+    expect(byId(plan, "flatten-forms").disabledReason).toBeUndefined();
+  });
+
+  it("preserves legacy defaultChecked behavior across bundled packs", () => {
+    const defaultCheckedByPack = Object.fromEntries(
+      listPacks().map((pack) => {
+        const plan = resolvePrepPlan(pack, baseFacts);
+        const defaults = Object.fromEntries(
+          plan.map((step) => [step.id, step.defaultChecked]),
+        );
+
+        for (const step of plan) {
+          expect(
+            step.defaultChecked,
+            `${pack.id}.${step.id}`,
+          ).toBe(legacyDefaultChecked(step));
+        }
+
+        return [pack.id, defaults];
+      }),
+    );
+
+    expect(defaultCheckedByPack).toMatchInlineSnapshot(`
+      {
+        "federal-cmecf": {
+          "convert-pdfa": false,
+          "flatten-forms": true,
+          "make-searchable": false,
+          "normalize-pages": true,
+          "remove-encryption": true,
+          "sanitize-content": true,
+          "scrub-metadata": true,
+          "split-by-size": false,
+        },
+        "florida": {
+          "convert-pdfa": true,
+          "flatten-forms": false,
+          "make-searchable": true,
+          "normalize-pages": true,
+          "remove-encryption": false,
+          "sanitize-content": true,
+          "scrub-metadata": true,
+          "split-by-size": true,
+        },
+        "georgia-efilega": {
+          "convert-pdfa": false,
+          "flatten-forms": false,
+          "make-searchable": false,
+          "normalize-pages": true,
+          "remove-encryption": true,
+          "sanitize-content": true,
+          "scrub-metadata": true,
+          "split-by-size": true,
+        },
+        "georgia-peachcourt": {
+          "convert-pdfa": false,
+          "flatten-forms": false,
+          "make-searchable": false,
+          "normalize-pages": true,
+          "remove-encryption": true,
+          "sanitize-content": true,
+          "scrub-metadata": true,
+          "split-by-size": true,
+        },
+        "indiana-iefs": {
+          "convert-pdfa": false,
+          "flatten-forms": false,
+          "make-searchable": true,
+          "normalize-pages": true,
+          "remove-encryption": true,
+          "sanitize-content": true,
+          "scrub-metadata": true,
+          "split-by-size": true,
+        },
+      }
+    `);
   });
 
   it("keeps eFileGA PDF/A and OCR off by default while still showing the policy row", () => {
@@ -65,12 +148,14 @@ describe("resolvePrepPlan", () => {
 
     expect(byId(plan, "convert-pdfa")).toMatchObject({
       stance: "accepted",
+      actionStance: "accepted",
       prepDefault: "off",
       defaultChecked: false,
     });
     expect(byId(plan, "convert-pdfa").disabledReason).toBeUndefined();
     expect(byId(plan, "make-searchable")).toMatchObject({
       stance: "accepted",
+      actionStance: "accepted",
       prepDefault: "off",
       defaultChecked: false,
     });
@@ -85,12 +170,24 @@ describe("resolvePrepPlan", () => {
       defaultChecked: false,
       condition: "set this court's cap before Raio can evaluate size",
     });
+    expect(byId(plan, "remove-encryption")).toMatchObject({
+      stance: "prohibited",
+      actionStance: "required",
+      defaultChecked: true,
+    });
+    expect(byId(plan, "sanitize-content")).toMatchObject({
+      stance: "prohibited",
+      actionStance: "required",
+      defaultChecked: true,
+    });
     expect(byId(plan, "flatten-forms")).toMatchObject({
       stance: "preferred",
+      actionStance: "preferred",
       defaultChecked: true,
     });
     expect(byId(plan, "convert-pdfa")).toMatchObject({
       stance: "accepted",
+      actionStance: "accepted",
       defaultChecked: false,
     });
   });
@@ -100,16 +197,24 @@ describe("resolvePrepPlan", () => {
 
     expect(byId(plan, "scrub-metadata")).toMatchObject({
       stance: "required",
+      actionStance: "required",
       condition: "when the filing contains confidential/redacted information",
       defaultChecked: true,
     });
     expect(byId(plan, "make-searchable")).toMatchObject({
       stance: "required",
+      actionStance: "required",
       condition: "for scanned documents",
+      defaultChecked: true,
+    });
+    expect(byId(plan, "remove-encryption")).toMatchObject({
+      stance: "prohibited",
+      actionStance: "required",
       defaultChecked: true,
     });
     expect(byId(plan, "convert-pdfa")).toMatchObject({
       stance: "unknown",
+      actionStance: "unknown",
       defaultChecked: false,
     });
   });
@@ -154,4 +259,10 @@ function byId(
   }
 
   return step;
+}
+
+function legacyDefaultChecked(step: PrepPlanStep): boolean {
+  const disabledWhenProhibited = step.id === "flatten-forms" || step.id === "convert-pdfa";
+
+  return step.prepDefault === "on" && !(disabledWhenProhibited && step.stance === "prohibited");
 }

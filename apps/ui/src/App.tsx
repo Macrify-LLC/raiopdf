@@ -195,6 +195,7 @@ import {
   selectCourtProfile,
   selectDefaultPack,
   setPacketPreferences,
+  setPrepStepDefaultOverrides,
   upsertCourtProfile,
   writeFilingPreferences,
   type CourtProfile,
@@ -703,6 +704,9 @@ export function App() {
   ) => {
     updateFilingPreferences(setPacketPreferences(filingPreferences, preferences));
   }, [filingPreferences, updateFilingPreferences]);
+  const handlePrepStepDefaultOverridesChange = useCallback((overrides: Partial<Record<PrepPlanStepId, boolean>>) => {
+    updateFilingPreferences(setPrepStepDefaultOverrides(filingPreferences, baseFilingPack.id, overrides));
+  }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     const requestId = mcpToggleRequestRef.current + 1;
     mcpToggleRequestRef.current = requestId;
@@ -5141,6 +5145,8 @@ export function App() {
             defaultPacketLayoutMode={filingPreferences.packetLayoutMode}
             defaultPacketPrefixFilenames={filingPreferences.packetPrefixFilenames}
             onPacketPreferencesChange={handlePacketPreferencesChange}
+            stepDefaultOverrides={filingPreferences.stepDefaultOverridesByPack[baseFilingPack.id]}
+            onStepDefaultOverridesChange={handlePrepStepDefaultOverridesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
           />

@@ -1,4 +1,4 @@
-import type { JurisdictionPackId } from "@raiopdf/rules";
+import type { JurisdictionPackId, PrepPlanStepId } from "@raiopdf/rules";
 
 const STORAGE_KEY = "raiopdf.filingPreferences.v1";
 
@@ -15,6 +15,7 @@ export interface FilingPreferences {
   packetPrefixFilenames?: boolean;
   courtProfiles: readonly CourtProfile[];
   lastCourtProfileByPack: Record<string, string>;
+  stepDefaultOverridesByPack: Record<string, Partial<Record<PrepPlanStepId, boolean>>>;
 }
 
 export function readFilingPreferences(): FilingPreferences {
@@ -35,6 +36,7 @@ export function readFilingPreferences(): FilingPreferences {
       ? object.courtProfiles.map(readCourtProfile).filter((profile): profile is CourtProfile => profile !== null)
       : [];
     const lastCourtProfileByPack = readStringMap(object.lastCourtProfileByPack);
+    const stepDefaultOverridesByPack = readStepDefaultOverridesByPack(object.stepDefaultOverridesByPack);
     const defaultPackId = typeof object.defaultPackId === "string"
       ? object.defaultPackId as JurisdictionPackId
       : undefined;
@@ -52,6 +54,7 @@ export function readFilingPreferences(): FilingPreferences {
       ...(packetPrefixFilenames === undefined ? {} : { packetPrefixFilenames }),
       courtProfiles,
       lastCourtProfileByPack,
+      stepDefaultOverridesByPack,
     };
   } catch {
     return emptyPreferences();
@@ -122,10 +125,25 @@ export function setPacketPreferences(
   };
 }
 
+export function setPrepStepDefaultOverrides(
+  preferences: FilingPreferences,
+  packId: JurisdictionPackId,
+  overrides: Partial<Record<PrepPlanStepId, boolean>>,
+): FilingPreferences {
+  return {
+    ...preferences,
+    stepDefaultOverridesByPack: {
+      ...preferences.stepDefaultOverridesByPack,
+      [packId]: overrides,
+    },
+  };
+}
+
 function emptyPreferences(): FilingPreferences {
   return {
     courtProfiles: [],
     lastCourtProfileByPack: {},
+    stepDefaultOverridesByPack: {},
   };
 }
 
@@ -165,4 +183,33 @@ function readStringMap(value: unknown): Record<string, string> {
     Object.entries(value as Record<string, unknown>)
       .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
+}
+
+function readStepDefaultOverridesByPack(
+  value: unknown,
+): Record<string, Partial<Record<PrepPlanStepId, boolean>>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, Partial<Record<PrepPlanStepId, boolean>>] => (
+        typeof entry[0] === "string" &&
+        Boolean(entry[1]) &&
+        typeof entry[1] === "object" &&
+        !Array.isArray(entry[1])
+      ))
+      .map(([packId, overrides]) => [
+        packId,
+        readBooleanStepMap(overrides),
+      ]),
+  );
+}
+
+function readBooleanStepMap(value: Partial<Record<PrepPlanStepId, unknown>>): Partial<Record<PrepPlanStepId, boolean>> {
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [PrepPlanStepId, boolean] => typeof entry[1] === "boolean"),
+  ) as Partial<Record<PrepPlanStepId, boolean>>;
 }

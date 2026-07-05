@@ -399,7 +399,7 @@ test("compresses through the mocked desktop engine from the inline Compress expa
   await page.goto("/");
   await openPdf(page, "compress.pdf", await createPdf([200]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Compress...", exact: true }).click();
   // Item 18: Compress lives inline under its own ToolRow now, not a
   // FloatingDialog -- there is no dialog role to wait on.
@@ -460,7 +460,7 @@ test("rotates the selected page through the inline Rotate expansion, then collap
   await page.goto("/");
   await openPdf(page, "sidebar-rotate.pdf", await createPdf([200, 210]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   // Item 18: Rotate used to fire instantly from the row; it now expands
   // inline like every other tool, with explicit left/right actions.
   await page.getByRole("button", { name: "Rotate Pages", exact: true }).click();
@@ -483,7 +483,7 @@ test("clicking an inline tool row again collapses its expansion", async ({ page 
   await page.goto("/");
   await openPdf(page, "inline-toggle.pdf", await createPdf([200]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Compress...", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compress PDF" })).toBeVisible();
 
@@ -495,7 +495,7 @@ test("inserts an image as a full PDF page", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "insert-image-pages.pdf", await createPdf([200, 210]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Insert images as pages...", exact: true }).click();
   await page.locator("#insert-image-pages").setInputFiles({
     name: "pixel.png",
@@ -516,7 +516,7 @@ test("drops insert-image results if another PDF opens while images are read", as
   await page.goto("/");
   await openPdf(page, "insert-image-race.pdf", await createPdf([200, 210]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Insert images as pages...", exact: true }).click();
   await page.locator("#insert-image-pages").setInputFiles({
     name: "pixel.png",
@@ -566,7 +566,7 @@ test("organize page grid multi-select extracts selected pages round trip", async
   await page.goto("/");
   await openPdf(page, "organize-extract.pdf", await createPdf([200, 210, 220, 230]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Organize Pages" })).toBeVisible();
 
@@ -575,7 +575,7 @@ test("organize page grid multi-select extracts selected pages round trip", async
   await page.getByRole("button", { name: "Organize page 4" }).click();
   await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
 
-  await page.getByRole("button", { name: "Extract" }).click();
+  await page.getByRole("button", { name: "Extract", exact: true }).click();
   await expect(page.getByText("Page 1 / 2")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
@@ -595,7 +595,7 @@ test("organize page grid ignores rapid second drag while a reorder is pending", 
   await page.goto("/");
   await openPdf(page, "organize-rapid-drag.pdf", await createPdf([200, 210, 220, 230]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
 
   const grid = page.getByRole("list", { name: "Page grid" });
@@ -665,7 +665,7 @@ test("prepare for filing closes an open organize workspace", async ({ page }) =>
   await page.goto("/");
   await openPdf(page, "organize-to-filing.pdf", await createPdf([200, 210, 220]));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Organize Pages", exact: true }).click();
   await expect(page.getByRole("list", { name: "Page grid" })).toBeVisible();
 

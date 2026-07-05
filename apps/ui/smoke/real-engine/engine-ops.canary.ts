@@ -64,7 +64,7 @@ test("OCR: force-OCR turns an unreadable scan into genuinely SEARCHABLE text", a
   // Regression guard for the proxy/local endpoint CORS split: a Stirling-backed
   // OCR request must not poison a later local qpdf request in the same browser
   // session.
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Compress...", exact: true }).click();
   await page.getByRole("button", { name: "Compress PDF" }).click();
   await expect(page.getByText("Compression complete.")).toBeVisible({ timeout: 120_000 });
@@ -132,7 +132,7 @@ test("Compress: runs a real compression pass and saves a valid PDF", async ({ pa
   await page.goto("/");
   await openPdf(page, "compress.pdf", await createHeavyTextPdf(3));
 
-  await page.getByRole("button", { name: "Organize" }).click();
+  await page.getByRole("button", { name: "Organize", exact: true }).click();
   await page.getByRole("button", { name: "Compress...", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compress PDF" })).toBeVisible();
   await page.getByLabel("Quality").fill("6");

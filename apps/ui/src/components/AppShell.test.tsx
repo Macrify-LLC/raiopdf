@@ -54,11 +54,33 @@ describe("AppShell", () => {
 
     expect(html).not.toContain("canvas-well__engine-starting");
   });
+
+  it("renders interactive document tabs with close labels", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          tabs: [
+            { id: "tab-1", fileName: "alpha.pdf", active: true, dirty: true },
+            { id: "tab-2", fileName: "beta.pdf", active: false, dirty: false },
+          ],
+        })}
+      />,
+    );
+
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('aria-label="Close alpha.pdf"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain("beta.pdf");
+  });
 });
 
 function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
   return {
     document: mockDocument,
+    tabs: [],
+    onTabSelected: () => undefined,
+    onTabCloseRequested: () => undefined,
     pdfDocument: null,
     documentSearch: mockDocumentSearch,
     selectedPageIndexes: new Set(),

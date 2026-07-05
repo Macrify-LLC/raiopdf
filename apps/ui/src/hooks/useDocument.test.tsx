@@ -14,6 +14,7 @@ type UseDocumentValue = ReturnType<typeof useDocument>;
 const engineState = vi.hoisted(() => ({
   openBehaviors: [] as Array<"succeed" | "encrypted" | "invalid">,
   openCalls: [] as Uint8Array[],
+  closeCalls: [] as PdfDocumentHandle[],
   applyOptions: [] as PdfApplyEditsOptions[],
   flattenedMarkupHandles: [] as PdfDocumentHandle[],
 }));
@@ -47,7 +48,8 @@ vi.mock("@raiopdf/engine-local", () => {
       return { items: [], openMode: "default" as const, revision: "mock" };
     }
 
-    async close() {
+    async close(handle: PdfDocumentHandle) {
+      engineState.closeCalls.push(handle);
       return undefined;
     }
 
@@ -83,6 +85,7 @@ describe("useDocument openFile", () => {
   beforeEach(() => {
     engineState.openBehaviors.length = 0;
     engineState.openCalls.length = 0;
+    engineState.closeCalls.length = 0;
     engineState.applyOptions.length = 0;
     engineState.flattenedMarkupHandles.length = 0;
     latest = null;
@@ -217,6 +220,55 @@ describe("useDocument openFile", () => {
     expect(flattened).toBe(true);
     expect(engineState.flattenedMarkupHandles).toEqual(["handle-1"]);
     expect(getHook().document.dirty).toBe(true);
+  });
+
+  it("opens, switches, and closes independent document tabs", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "one.pdf" });
+    });
+    const firstTabId = getHook().activeTabId;
+
+    await act(async () => {
+      await getHook().openFile(
+        { bytes: new Uint8Array([2]), name: "two.pdf" },
+        { openMode: "new-tab" },
+      );
+    });
+    const secondTabId = getHook().activeTabId;
+
+    expect(firstTabId).toBeTruthy();
+    expect(secondTabId).toBeTruthy();
+    expect(secondTabId).not.toBe(firstTabId);
+    expect(getHook().tabs.map((tab) => tab.document.fileName)).toEqual([
+      "one.pdf",
+      "two.pdf",
+    ]);
+    expect(getHook().document.fileName).toBe("two.pdf");
+    expect(engineState.closeCalls).toEqual([]);
+
+    act(() => {
+      getHook().switchTab(firstTabId!);
+    });
+
+    expect(getHook().document.fileName).toBe("one.pdf");
+
+    await act(async () => {
+      await getHook().closeTab(firstTabId!);
+    });
+
+    expect(engineState.closeCalls).toEqual(["handle-1"]);
+    expect(getHook().document.fileName).toBe("two.pdf");
+    expect(getHook().tabs).toHaveLength(1);
+
+    await act(async () => {
+      await getHook().closeTab(secondTabId!);
+    });
+
+    expect(engineState.closeCalls).toEqual(["handle-1", "handle-2"]);
+    expect(getHook().tabs).toHaveLength(0);
+    expect(getHook().document.source).toBeNull();
   });
 
   function mount(): void {

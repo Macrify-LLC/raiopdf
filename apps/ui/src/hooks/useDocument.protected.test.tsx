@@ -44,6 +44,10 @@ vi.mock("@raiopdf/engine-local", async () => {
     async saveToBytes() {
       return engineState.saveBytes;
     }
+
+    async getOutline() {
+      return { items: [], openMode: "default" as const, revision: "mock" };
+    }
   }
 
   return { LocalPdfEngine };

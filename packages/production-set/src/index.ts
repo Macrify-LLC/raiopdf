@@ -211,7 +211,10 @@ export async function buildProductionSet(
 
     let combinedPdf: string | null = null;
     if (options.combinedPdf) {
-      const combined = await engine.merge(stampedForCombined);
+      const merged = await engine.merge(stampedForCombined, {
+        labels: files.map((file) => file.sourceFilename),
+      });
+      const combined = merged.document;
       opened.push({ handle: combined });
       const combinedBytes = await engine.saveToBytes(combined);
       const combinedName = `${formatBates(options.prefix, options.start, options.digits)} - ${formatBates(

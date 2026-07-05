@@ -95,6 +95,16 @@
   outline-offset: 2px;
 }
 
+.status-bar__outline-status {
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--warn);
+  font-weight: 700;
+}
+
 @keyframes status-bar-chip-alert-in {
   from {
     opacity: 0;

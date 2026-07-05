@@ -426,6 +426,7 @@ export function App() {
     pageNumbers,
     watermark,
     insertImagePages,
+    replaceOutline,
     save: saveDocument,
     markSaved,
   } = useDocument({ protectedPdf });
@@ -2246,6 +2247,13 @@ export function App() {
         next.add(pageIndex);
         return next;
       });
+    },
+    [setCurrentPage],
+  );
+
+  const handleBookmarkNavigate = useCallback(
+    (pageIndex: number) => {
+      setCurrentPage(pageIndex + 1);
     },
     [setCurrentPage],
   );
@@ -4385,11 +4393,13 @@ export function App() {
           const certificateHandle = await filingEngine.open(certificateBytes);
           closeHandles.push(certificateHandle);
           const pageCount = await filingEngine.pageCount(workingHandle);
-          const appendedHandle = await filingEngine.insertPages(
+          const appended = await filingEngine.insertPages(
             workingHandle,
             pageCount,
             certificateHandle,
+            { sourceLabel: "Certificate of Service" },
           );
+          const appendedHandle = appended.document;
           closeHandles.push(appendedHandle);
           workingHandle = appendedHandle;
         }
@@ -5154,6 +5164,8 @@ export function App() {
         onDeleteSelected={deleteSelected}
         onMoveSelectedUp={() => moveSelected(-1)}
         onMoveSelectedDown={() => moveSelected(1)}
+        onBookmarkNavigate={handleBookmarkNavigate}
+        onOutlineChange={replaceOutline}
         ocrState={ocrState}
         ocrAvailable={engineBridge.ocrAvailable}
         ocrStarting={engineBridge.starting}

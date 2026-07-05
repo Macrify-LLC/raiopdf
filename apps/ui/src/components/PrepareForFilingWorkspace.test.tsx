@@ -419,6 +419,8 @@ const mockDocument: DocumentState = {
     garbledPages: [],
   },
   pageSizeInches: null,
+  outline: null,
+  outlineStatus: null,
   signatureInvalidationNotice: null,
   error: null,
 };

@@ -452,6 +452,6 @@ export function handleExtract(
       throw new Error("No pages selected to keep.");
     }
     const result = await engine.deletePages(document, toDelete);
-    return { result, summary: `Extracted ${keep.size} page(s) into ${input.output}.` };
+    return { result: result.document, summary: `Extracted ${keep.size} page(s) into ${input.output}.` };
   });
 }

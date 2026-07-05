@@ -20,7 +20,12 @@ import type {
   PdfImagePageInput,
   PdfImageEdit,
   PdfInkEdit,
+  PdfInsertPagesOptions,
+  PdfMergeOptions,
   PdfNormalizePagesOptions,
+  PdfOutlineItem,
+  PdfOutlineState,
+  PdfOutlineWriteResult,
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
@@ -41,7 +46,15 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import { PdfEngineError, wrapTextBoxLines } from "@raiopdf/engine-api";
-import { scrubPdfMetadataInPlace } from "@raiopdf/engine-pdf-lib";
+import {
+  createPdfOutlinePageItem,
+  mapPdfOutlineItems,
+  offsetPdfOutlineItems,
+  prefixPdfOutlineItemIds,
+  readPdfOutline,
+  scrubPdfMetadataInPlace,
+  writePdfOutlineInPlace,
+} from "@raiopdf/engine-pdf-lib";
 import {
   degrees as pdfDegrees,
   LineCapStyle,
@@ -79,11 +92,6 @@ export {
 
 type StoredDocument = {
   bytes: Uint8Array;
-};
-
-type OutlineEntry = {
-  pageIndex: number;
-  title: string;
 };
 
 type PageRotation = 0 | 90 | 180 | 270;
@@ -225,7 +233,7 @@ export class LocalPdfEngine implements PdfEngine {
   async reorderPages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     const source = await this.load(document);
     assertCompletePageSet(pageIndexes, source.getPageCount());
 
@@ -235,7 +243,15 @@ export class LocalPdfEngine implements PdfEngine {
       output.addPage(page);
     }
 
-    return this.store(await output.save());
+    const pageMap = new Map(pageIndexes.map((pageIndex, outputIndex) => [pageIndex, outputIndex]));
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
   }
 
   async rotatePages(
@@ -262,13 +278,16 @@ export class LocalPdfEngine implements PdfEngine {
       output.addPage(page);
     });
 
+    const outline = readPdfOutline(source);
+    writePdfOutlineInPlace(output, outline, { preserveSource: source });
+
     return this.store(await output.save());
   }
 
   async deletePages(
     document: PdfDocumentHandle,
     pageIndexes: readonly number[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     const source = await this.load(document);
     const pageCount = source.getPageCount();
     assertPageIndexes(pageIndexes, pageCount);
@@ -291,7 +310,15 @@ export class LocalPdfEngine implements PdfEngine {
       output.addPage(page);
     }
 
-    return this.store(await output.save());
+    const pageMap = new Map(keptPageIndexes.map((pageIndex, outputIndex) => [pageIndex, outputIndex]));
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) => pageMap.get(pageIndex) ?? null);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
   }
 
   async cropPages(
@@ -476,7 +503,8 @@ export class LocalPdfEngine implements PdfEngine {
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
     fromOtherDocument: PdfDocumentHandle,
-  ): Promise<PdfDocumentHandle> {
+    options: PdfInsertPagesOptions = {},
+  ): Promise<PdfOutlineWriteResult> {
     const target = await this.load(document);
     const inserted = await this.load(fromOtherDocument);
     const targetPageCount = target.getPageCount();
@@ -487,22 +515,86 @@ export class LocalPdfEngine implements PdfEngine {
     await copyPagesInto(output, inserted, inserted.getPageIndices());
     await copyPagesInto(output, target, target.getPageIndices().slice(insertAtPageIndex));
 
-    return this.store(await output.save());
+    const targetOutline = readPdfOutline(target);
+    const targetMapped = mapPdfOutlineItems(targetOutline.items, (pageIndex) =>
+      pageIndex < insertAtPageIndex ? pageIndex : pageIndex + inserted.getPageCount());
+    const insertedOutline = readPdfOutline(inserted);
+    const insertedOffset = offsetPdfOutlineItems(insertedOutline.items, insertAtPageIndex);
+    const prefixedInserted = prefixPdfOutlineItemIds(insertedOffset.items, "inserted:");
+    const insertedParent = prefixedInserted.length > 0
+      ? [createPdfOutlinePageItem({
+          id: "inserted:root",
+          title: options.sourceLabel ?? "Inserted document",
+          pageIndex: insertAtPageIndex,
+          expanded: true,
+          children: prefixedInserted,
+        })]
+      : [];
+    writePdfOutlineInPlace(output, {
+      ...targetOutline,
+      items: [
+        ...targetMapped.items,
+        ...insertedParent,
+      ],
+    }, {
+      preserveSources: [
+        { pdf: target },
+        { pdf: inserted, idPrefix: "inserted:" },
+      ],
+    });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets: targetMapped.removedTargets + insertedOffset.removedTargets,
+    };
   }
 
-  async merge(documents: readonly PdfDocumentHandle[]): Promise<PdfDocumentHandle> {
+  async merge(
+    documents: readonly PdfDocumentHandle[],
+    options: PdfMergeOptions = {},
+  ): Promise<PdfOutlineWriteResult> {
     if (documents.length === 0) {
       throw new PdfEngineError("EMPTY_INPUT", "At least one document is required.");
     }
 
     const output = await PDFDocument.create();
+    const outlineItems: PdfOutlineItem[] = [];
+    const preserveSources: Array<{ pdf: PDFDocument; idPrefix?: string | undefined }> = [];
+    let pageOffset = 0;
+    let removedTargets = 0;
 
-    for (const document of documents) {
+    for (const [index, document] of documents.entries()) {
       const source = await this.load(document);
       await copyPagesInto(output, source, source.getPageIndices());
+
+      const prefix = `merged:${index}:`;
+      preserveSources.push({ pdf: source, idPrefix: prefix });
+      const outline = readPdfOutline(source);
+      const mapped = offsetPdfOutlineItems(outline.items, pageOffset);
+      const prefixed = prefixPdfOutlineItemIds(mapped.items, prefix);
+      removedTargets += mapped.removedTargets;
+      if (prefixed.length > 0) {
+        outlineItems.push(createPdfOutlinePageItem({
+          id: `${prefix}root`,
+          title: options.labels?.[index] ?? `Merged document ${index + 1}`,
+          pageIndex: pageOffset,
+          expanded: true,
+          children: prefixed,
+        }));
+      }
+      pageOffset += source.getPageCount();
     }
 
-    return this.store(await output.save());
+    writePdfOutlineInPlace(output, {
+      items: outlineItems,
+      openMode: "default",
+      revision: "merged",
+    }, { preserveSources });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets,
+    };
   }
 
   async stampText(
@@ -631,7 +723,7 @@ export class LocalPdfEngine implements PdfEngine {
     document: PdfDocumentHandle,
     insertAtPageIndex: number,
     images: readonly PdfImagePageInput[],
-  ): Promise<PdfDocumentHandle> {
+  ): Promise<PdfOutlineWriteResult> {
     if (images.length === 0) {
       throw new PdfEngineError("EMPTY_INPUT", "At least one image is required.");
     }
@@ -656,7 +748,32 @@ export class LocalPdfEngine implements PdfEngine {
 
     await copyPagesInto(output, source, source.getPageIndices().slice(insertAtPageIndex));
 
-    return this.store(await output.save());
+    const outline = readPdfOutline(source);
+    const mapped = mapPdfOutlineItems(outline.items, (pageIndex) =>
+      pageIndex < insertAtPageIndex ? pageIndex : pageIndex + images.length);
+    writePdfOutlineInPlace(output, { ...outline, items: mapped.items }, { preserveSource: source });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets: mapped.removedTargets,
+    };
+  }
+
+  async getOutline(document: PdfDocumentHandle): Promise<PdfOutlineState> {
+    return readPdfOutline(await this.load(document));
+  }
+
+  async replaceOutline(
+    document: PdfDocumentHandle,
+    outline: PdfOutlineState,
+  ): Promise<PdfOutlineWriteResult> {
+    const output = await this.load(document);
+    writePdfOutlineInPlace(output, outline, { preserveSource: output });
+
+    return {
+      document: this.store(await output.save()),
+      removedTargets: 0,
+    };
   }
 
   async buildBinder(
@@ -675,10 +792,21 @@ export class LocalPdfEngine implements PdfEngine {
     }
 
     const output = await PDFDocument.create();
-    const outlineEntries: OutlineEntry[] = [{ title: "Main document", pageIndex: 0 }];
+    const outputOutlineItems: PdfOutlineItem[] = [];
+    const preserveSources: Array<{ pdf: PDFDocument; idPrefix?: string | undefined }> = [
+      { pdf: mainPdf, idPrefix: "main:" },
+    ];
     const indexOptions = normalizeBinderIndexOptions(options);
 
     await copyPagesInto(output, mainPdf, mainPdf.getPageIndices());
+    const mainOutline = prefixPdfOutlineItemIds(readPdfOutline(mainPdf).items, "main:");
+    outputOutlineItems.push(createPdfOutlinePageItem({
+      id: "binder:main",
+      title: "Main document",
+      pageIndex: 0,
+      expanded: true,
+      children: mainOutline,
+    }));
 
     const mainFirstPage = output.getPage(0);
     const slipSheetSize: [number, number] = [mainFirstPage.getWidth(), mainFirstPage.getHeight()];
@@ -700,14 +828,17 @@ export class LocalPdfEngine implements PdfEngine {
       });
       const indexPdf = await loadPdf(indexLayout.bytes);
 
-      outlineEntries.push({ title: "Exhibit Index", pageIndex: output.getPageCount() });
+      outputOutlineItems.push(createPdfOutlinePageItem({
+        id: "binder:index",
+        title: "Exhibit Index",
+        pageIndex: output.getPageCount(),
+      }));
       await copyPagesInto(output, indexPdf, indexPdf.getPageIndices());
     }
 
-    for (const exhibit of loadedExhibits) {
+    for (const [exhibitIndex, exhibit] of loadedExhibits.entries()) {
       const exhibitPdf = exhibit.pdf;
       const sectionStartPageIndex = output.getPageCount();
-      outlineEntries.push({ title: exhibit.label, pageIndex: sectionStartPageIndex });
 
       if (options.slipSheets) {
         const slipSheet = output.addPage(slipSheetSize);
@@ -738,9 +869,27 @@ export class LocalPdfEngine implements PdfEngine {
           });
         }
       });
+
+      const prefix = `exhibit:${exhibitIndex}:`;
+      preserveSources.push({ pdf: exhibitPdf, idPrefix: prefix });
+      const mappedExhibitOutline = offsetPdfOutlineItems(
+        readPdfOutline(exhibitPdf).items,
+        exhibitPageStartIndex,
+      );
+      outputOutlineItems.push(createPdfOutlinePageItem({
+        id: `${prefix}root`,
+        title: exhibit.label,
+        pageIndex: sectionStartPageIndex,
+        expanded: true,
+        children: prefixPdfOutlineItemIds(mappedExhibitOutline.items, prefix),
+      }));
     }
 
-    addOutline(output, outlineEntries);
+    writePdfOutlineInPlace(output, {
+      items: outputOutlineItems,
+      openMode: "outlines",
+      revision: "binder",
+    }, { preserveSources });
 
     return this.store(await output.save());
   }
@@ -3182,40 +3331,6 @@ function assertBatesFitsPageCount(options: PdfBatesStampOptions, pageCount: numb
 
 function formatBatesNumber(options: PdfBatesStampOptions, offset: number): string {
   return `${options.prefix}${String(options.start + offset).padStart(options.digits, "0")}`;
-}
-
-function addOutline(pdf: PDFDocument, entries: readonly OutlineEntry[]): void {
-  if (entries.length === 0) {
-    return;
-  }
-
-  const context = pdf.context;
-  const outlineRootRef = context.nextRef();
-  const itemRefs = entries.map(() => context.nextRef());
-
-  entries.forEach((entry, index) => {
-    const item = context.obj({
-      Title: PDFString.of(entry.title),
-      Parent: outlineRootRef,
-      Dest: [pdf.getPage(entry.pageIndex).ref, "Fit"],
-      ...(index > 0 ? { Prev: itemRefs[index - 1]! } : {}),
-      ...(index < itemRefs.length - 1 ? { Next: itemRefs[index + 1]! } : {}),
-    });
-    context.assign(itemRefs[index]!, item);
-  });
-
-  context.assign(
-    outlineRootRef,
-    context.obj({
-      Type: "Outlines",
-      First: itemRefs[0]!,
-      Last: itemRefs[itemRefs.length - 1]!,
-      Count: entries.length,
-    }),
-  );
-
-  pdf.catalog.set(PDFName.of("Outlines"), outlineRootRef);
-  pdf.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
 }
 
 async function loadPdf(bytes: Uint8Array): Promise<PDFDocument> {

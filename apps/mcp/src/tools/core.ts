@@ -12,7 +12,7 @@ import {
   successResult,
   type StructuredToolResult,
 } from "../format.js";
-import { resolvePageIndexes, runLocalOutputOp, runOutputOp, runSingleOutputOp } from "../ops.js";
+import { resolvePageIndexes, runLocalOutputOp, runSingleOutputOp } from "../ops.js";
 import { prepareOutput, resolveInput } from "../paths.js";
 import { extractTextLayerCoverage } from "../pdfjs-node.js";
 
@@ -179,8 +179,8 @@ export function handleMerge(
   _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
   return runLocalOutputOp(input.inputs, input.output, async (e, documents) => {
-    const result = await e.merge(documents);
-    return { result, summary: `Merged ${documents.length} files into ${input.output}.` };
+    const result = await e.merge(documents, { labels: input.inputs.map((file) => path.basename(file)) });
+    return { result: result.document, summary: `Merged ${documents.length} files into ${input.output}.` };
   });
 }
 
@@ -284,7 +284,7 @@ async function compressWithQpdf(inputPath: string, outputTempPath: string): Prom
     }
     return new Uint8Array(bytes);
   } catch (error) {
-    throw new Error(formatQpdfCompressError(error));
+    throw new Error(formatQpdfCompressError(error), { cause: error });
   } finally {
     await fs.rm(qpdfOutput, { force: true }).catch(() => undefined);
   }
@@ -342,7 +342,7 @@ async function decryptWithQpdf(inputPath: string, password: string, outputTempPa
     }
     return new Uint8Array(bytes);
   } catch (error) {
-    throw new Error(formatQpdfDecryptError(error));
+    throw new Error(formatQpdfDecryptError(error), { cause: error });
   } finally {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rm(qpdfOutput, { force: true }).catch(() => undefined);

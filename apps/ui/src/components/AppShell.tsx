@@ -5,8 +5,8 @@ import type { DocumentSearchState } from "../hooks/useDocumentSearch";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
 import { CommandBar } from "./CommandBar";
+import { DocumentNavPanel } from "./DocumentNavPanel";
 import { StatusBar } from "./StatusBar";
-import { ThumbnailRail } from "./ThumbnailRail";
 import { TitleBar } from "./TitleBar";
 import {
   ToolPanel,
@@ -22,6 +22,7 @@ import type {
 import type { PendingRedactionOverlay } from "./CanvasWell";
 import type {
   PdfCompressOptions,
+  PdfOutlineState,
   PdfPageNumbersOptions,
   PdfRedactionArea,
   PdfWatermarkOptions,
@@ -56,6 +57,8 @@ export interface AppShellProps {
   onDeleteSelected: () => void;
   onMoveSelectedUp: () => void;
   onMoveSelectedDown: () => void;
+  onBookmarkNavigate: (pageIndex: number) => void;
+  onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
@@ -122,6 +125,8 @@ export function AppShell({
   onDeleteSelected,
   onMoveSelectedUp,
   onMoveSelectedDown,
+  onBookmarkNavigate,
+  onOutlineChange,
   ocrState,
   ocrAvailable,
   ocrStarting,
@@ -238,16 +243,21 @@ export function AppShell({
       />
       <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">
-        <ThumbnailRail
+        <DocumentNavPanel
           pdfDocument={pdfDocument}
           pageCount={document.pageCount}
           currentPage={document.currentPage}
           selectedPageIndexes={selectedPageIndexes}
+          outline={document.outline}
+          outlineStatus={document.outlineStatus}
+          bookmarksDisabled={streamedDocument}
           onPageClick={onThumbnailClick}
           onRotateSelected={onRotateSelected}
           onDeleteSelected={onDeleteSelected}
           onMoveSelectedUp={onMoveSelectedUp}
           onMoveSelectedDown={onMoveSelectedDown}
+          onBookmarkNavigate={onBookmarkNavigate}
+          onOutlineChange={onOutlineChange}
         />
         <CanvasWell
           workspace={workspace}
@@ -323,6 +333,7 @@ export function AppShell({
         pageSizeInches={hasDocument ? document.pageSizeInches : null}
         fileSizeBytes={hasDocument ? document.fileSizeBytes : null}
         textLayerStatus={hasDocument ? deriveTextLayerStatus(document.textLayerCoverage) : null}
+        outlineStatus={hasDocument ? document.outlineStatus : null}
         onFixGarbledText={onForceOcr}
       />
     </div>

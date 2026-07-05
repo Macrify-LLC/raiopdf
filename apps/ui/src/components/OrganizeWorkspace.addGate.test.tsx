@@ -28,6 +28,8 @@ const documentState = {
   hasTextLayer: null,
   textLayerCoverage: null,
   pageSizeInches: null,
+  outline: null,
+  outlineStatus: null,
   signatureInvalidationNotice: null,
   error: null,
 } satisfies DocumentState;

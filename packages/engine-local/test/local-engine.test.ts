@@ -319,6 +319,42 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("preserves remote view-only bookmarks through page remaps", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithRemoteOutline());
+
+    const result = await engine.reorderPages(document, [1, 0]);
+    const outline = await engine.getOutline(result.document);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+    const action = item.lookup(PDFName.of("A"), PDFDict);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items[0]).toMatchObject({
+      title: "External appendix",
+      target: { kind: "remote" },
+    });
+    expect(action.lookup(PDFName.of("S"), PDFName).decodeText()).toBe("GoToR");
+    expect(readTextValue(action.get(PDFName.of("F")))).toBe("appendix.pdf");
+  });
+
+  it("preserves unresolved named bookmarks through page remaps", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithUnresolvedNamedOutline());
+
+    const result = await engine.deletePages(document, [0]);
+    const outline = await engine.getOutline(result.document);
+    const pdf = await PDFDocument.load(await engine.saveToBytes(result.document));
+    const item = readFirstOutlineItem(pdf);
+
+    expect(result.removedTargets).toBe(0);
+    expect(outline.items[0]).toMatchObject({
+      title: "Unresolved destination",
+      target: { kind: "named", name: "Missing" },
+    });
+    expect(readTextValue(item.get(PDFName.of("Dest")))).toBe("Missing");
+  });
+
   it("preserves /XYZ page destination view while remapping pages", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdfWithXyzOutline());
@@ -901,6 +937,68 @@ async function createPdfWithUriOutline(): Promise<Uint8Array> {
         S: PDFName.of("URI"),
         URI: PDFString.of("https://example.test/source"),
       },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithRemoteOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("External appendix"),
+      Parent: rootRef,
+      A: {
+        S: PDFName.of("GoToR"),
+        F: PDFString.of("appendix.pdf"),
+        D: PDFString.of("Intro"),
+      },
+    }),
+  );
+  pdf.context.assign(
+    rootRef,
+    pdf.context.obj({
+      Type: PDFName.of("Outlines"),
+      First: itemRef,
+      Last: itemRef,
+      Count: 1,
+    }),
+  );
+  pdf.catalog.set(PDFName.of("Outlines"), rootRef);
+
+  return pdf.save();
+}
+
+async function createPdfWithUnresolvedNamedOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+  pdf.addPage([210, 300]);
+
+  const rootRef = pdf.context.nextRef();
+  const itemRef = pdf.context.nextRef();
+  pdf.context.assign(
+    itemRef,
+    pdf.context.obj({
+      Title: PDFString.of("Unresolved destination"),
+      Parent: rootRef,
+      Dest: PDFString.of("Missing"),
     }),
   );
   pdf.context.assign(

@@ -1,11 +1,15 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@raiopdf/engine-api": ["packages/engine-api/dist/index.d.ts"]
+    },
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": false,
     "rootDir": "src",
     "outDir": "dist"
   },
-  "exclude": ["test", "**/*.test.ts"]
+  "include": ["src"]
 }

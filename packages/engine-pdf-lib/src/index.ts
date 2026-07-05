@@ -1030,7 +1030,7 @@ function mapOutlineTarget(
     return mappedPageIndex === null ? null : { ...target, resolvedPageIndex: mappedPageIndex };
   }
 
-  return target.kind === "uri" ? target : null;
+  return target;
 }
 
 function prefixOutlineTarget(target: PdfOutlineTarget, prefix: string): PdfOutlineTarget {

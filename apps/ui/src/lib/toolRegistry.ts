@@ -37,7 +37,7 @@ export const ORGANIZE_TOOLS = [
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_PANEL_EDIT_TOOLS = [
-  { id: "edit-text", label: "Edit Document Text", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
+  { id: "edit-text", label: "Find & Replace", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
   { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
   { id: "callout", label: "Callout", group: "edit", helpArticleId: "callout", description: "Place a text box with a leader arrow pointing to a page spot." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", description: "Place an image on the current page before saving." },

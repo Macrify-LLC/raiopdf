@@ -9,7 +9,7 @@ contract). Engine-patch policy: `docs/decisions/0003-functional-engine-patches.m
 
 ## Mission
 
-Ship find & replace against real PDF content streams ("Edit Document Text"),
+Ship find & replace against real PDF content streams ("Find & Replace"),
 driven by the bundled Stirling engine's MIT-core `/api/v1/general/edit-text`
 endpoint, with honest UX around its hard limits (no reflow, case-sensitive
 literal matching, whole-document regeneration, fallback fonts).

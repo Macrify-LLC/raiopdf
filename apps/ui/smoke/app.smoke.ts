@@ -387,7 +387,7 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
   await openPdf(page, "edit-text.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await expect(page.getByText("Replacements never reflow the page", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Search document")).toBeDisabled();
 
@@ -415,7 +415,7 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
   await openPdf(page, "edit-text-zero.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -442,13 +442,13 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Pending annotations" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await openPdf(page, "image-only.pdf", await createPdf([200]));
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
 });
 

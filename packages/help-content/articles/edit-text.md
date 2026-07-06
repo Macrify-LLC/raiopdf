@@ -1,12 +1,12 @@
 ---
 id: edit-text
-title: Edit Document Text — find and replace
+title: Find & Replace — change text in a PDF
 group: edit
 summary: Find a word or phrase in a typed PDF and replace it everywhere — a real text change, not a sticky note on top.
 order: 15
 ---
 
-# Edit Document Text — find and replace
+# Find & Replace — change text in a PDF
 
 Change the actual words in a PDF. Type what you want to find and what to put in
 its place, and RaioPDF rewrites that text in the document itself — not a box
@@ -15,7 +15,7 @@ drawn on top, the real text.
 ## Why you'd use it
 
 A wrong date slipped into a filing. A name is misspelled on every page. A
-placeholder like "[CLIENT]" never got filled in. **Edit Document Text** fixes
+placeholder like "[CLIENT]" never got filled in. **Find & Replace** fixes
 those across the whole document at once, so you don't retype or re-export the
 file from the program that made it.
 
@@ -25,7 +25,7 @@ selectable text. It is **not** for scanned documents (see *What to know*).
 ## How to do it
 
 1. Open the PDF.
-2. In the **Edit** tools, choose **Edit Document Text**.
+2. In the **Edit** tools, choose **Find & Replace**.
 3. Type the text to **Find** and the text to **Replace** it with. Turn on
    **Whole word** if you only want to match the word on its own (so "art"
    doesn't also change "start").

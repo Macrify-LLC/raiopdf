@@ -254,7 +254,7 @@ export function AppShell({
         searchResultLabel={documentSearch.resultLabel}
         searchBusy={documentSearch.status === "searching"}
         searchDisabled={activeTextEdit}
-        searchDisabledReason="Document search is disabled while Edit Document Text owns the page highlights."
+        searchDisabledReason="Document search is disabled while Find & Replace owns the page highlights."
         searchCanNavigate={documentSearch.canNavigate}
         onSearchChange={documentSearch.setQuery}
         onSearchPrevious={documentSearch.goToPrevious}

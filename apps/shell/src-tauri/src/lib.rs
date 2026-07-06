@@ -241,12 +241,13 @@ fn opened_pdf_for_path(
         })?;
         if let Some(before) = snapshot_before {
             let after = snapshot_file(&path).map_err(|error| {
-                format!("Failed to verify PDF at {}: {error}", path.to_string_lossy())
+                format!(
+                    "Failed to verify PDF at {}: {error}",
+                    path.to_string_lossy()
+                )
             })?;
             if after != before {
-                return Err(
-                    "This file changed while it was being opened — reopen it.".to_string(),
-                );
+                return Err("This file changed while it was being opened — reopen it.".to_string());
             }
         }
         Some(pending_pdf_bytes.insert(bytes)?)

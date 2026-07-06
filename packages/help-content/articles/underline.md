@@ -18,6 +18,9 @@ annotation you can toggle, delete, or flatten later.
 3. Pick a color if you want something other than the default black.
 4. To remove one, double-click an underline you've added.
 
+**Or skip the tool:** with the **Select** tool, select text, then **right-click**
+and choose **Underline**. Right-click an underline to **Remove** it.
+
 ## What to know
 
 - **Underlines are held until you Save,** then saved as PDF annotations.

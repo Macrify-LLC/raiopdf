@@ -663,6 +663,34 @@ export function computeTextMarkupSelectionRects(
   return rects;
 }
 
+/**
+ * Drops markup line-rects that fall outside the drag's cross-line span. The
+ * browser extends a text selection greedily when a drag starts or ends in
+ * whitespace (pdf.js snaps to the nearest text and can run to end-of-page), so
+ * without this a whitespace drag highlights far more than it covered. Only the
+ * block (cross-line) axis is clipped; each kept line keeps its full
+ * reading-order width. `band` is the drag's bounding box in PDF space.
+ */
+export function clipMarkupRectsToDragBand(
+  rects: readonly PdfEditRect[],
+  band: PdfEditRect,
+  sideways = false,
+): PdfEditRect[] {
+  const bandMin = sideways ? band.x : band.y;
+  const bandMax = sideways ? band.x + band.w : band.y + band.h;
+
+  return rects.filter((rect) => {
+    const rectMin = sideways ? rect.x : rect.y;
+    const rectMax = sideways ? rect.x + rect.w : rect.y + rect.h;
+    // A full line of slack, so a line the user watched get selected is never
+    // dropped just because the drag was released in the whitespace gap next to
+    // it — while the greedy runaway (many lines to end-of-page) is still cut.
+    const tolerance = rectMax - rectMin;
+
+    return rectMax >= bandMin - tolerance && rectMin <= bandMax + tolerance;
+  });
+}
+
 function clusterTextLines(
   textBoxes: readonly PageTextBox[],
   sideways: boolean,

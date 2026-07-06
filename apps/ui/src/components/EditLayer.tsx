@@ -11,6 +11,7 @@ import {
 } from "react";
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
+  clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
@@ -186,10 +187,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [stampGhost, setStampGhost] = useState<StampGhost | null>(null);
-  const [itemContextMenu, setItemContextMenu] = useState<{
+  const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    editId: string;
+    items: ContextMenuItem[];
   } | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const drawPointsRef = useRef<ViewportPoint[]>([]);
@@ -259,7 +260,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setCommentDraft(null);
     setDragPreview(null);
     setStampGhost(null);
-    setItemContextMenu(null);
+    setContextMenu(null);
     dragStartRef.current = null;
     drawPointsRef.current = [];
     itemDragRef.current = null;
@@ -456,6 +457,18 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         );
       }
 
+      // Bound the result to the drag's line span. Dragging into whitespace lets
+      // the browser's text selection run greedily to the end of the page; this
+      // keeps only the lines the drag actually crossed (full reading-order width
+      // preserved — the clip is on the cross-line axis only).
+      if (end) {
+        rects = clipMarkupRectsToDragBand(
+          rects,
+          viewportRectToPdfRect(pointsToViewportRect(start, end), viewport),
+          sideways,
+        );
+      }
+
       if (rects.length === 0) {
         editing.setMessage(
           `No text under that drag — ${textMarkupPlural(activeTextMarkupTool)} attach to text lines.`,
@@ -478,12 +491,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       }
 
       const pdfPoint = viewportPointToPdfPoint(point, viewport);
-      const hit = pageEditsRef.current.find(
-        (edit): edit is Extract<PendingEdit, { kind: TextMarkupToolId }> =>
-          edit.kind === activeTextMarkupTool &&
-          isPendingTextMarkup(edit) &&
-          edit.rects.some((rect) => pdfRectContainsPoint(rect, pdfPoint)),
-      );
+      const hit = textMarkupAtPoint(pageEditsRef.current, pdfPoint, activeTextMarkupTool);
 
       if (hit) {
         removeEdit(hit.id);
@@ -1176,6 +1184,125 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     [selectedId, setSelectedId, updateEdit],
   );
 
+  // Unified right-click menu. A window-level capture listener is the only way to
+  // see every right-click: in Select mode the layer is pointer-events:none
+  // except interactive items, and markups + the selectable text layer sit
+  // beneath it, so element-level onContextMenu can't reach them. The handler is
+  // reassigned each render (fresh pageEdits/closures); the listener subscribes
+  // once. Pinned items are click-through, so they're skipped in the geometric
+  // hit-test — a right-click over a pinned annotation falls through to the
+  // markup or text selection underneath (unpin via the badge's left-click).
+  const contextMenuHandlerRef = useRef<(event: MouseEvent) => void>(() => {});
+  contextMenuHandlerRef.current = (event: MouseEvent) => {
+    // Stay out of the way of an open inline editor (so its native paste menu
+    // works and Delete/Pin can't mutate the box being typed into) and while a
+    // dialog owns the canvas. A right-click inside a text field is never ours.
+    if (
+      textDraft ||
+      commentDraft ||
+      isTextEntryTarget(event.target) ||
+      hasOpenDialogStackEntry()
+    ) {
+      return;
+    }
+
+    const point = getClientLayerPoint(event.clientX, event.clientY, { requireInside: true });
+
+    if (!point) {
+      return;
+    }
+
+    const pdfPoint = viewportPointToPdfPoint(point, viewport);
+    const edits = pageEditsRef.current;
+    let items: ContextMenuItem[] | null = null;
+    let selectId: string | null = null;
+
+    // 1. Topmost UNPINNED floating item / shape under the cursor.
+    for (let index = edits.length - 1; index >= 0; index -= 1) {
+      const edit = edits[index];
+
+      if (!edit || edit.pinned === true || !editHitTest(edit, pdfPoint)) {
+        continue;
+      }
+
+      items = buildEditContextMenu(edit, {
+        removeEdit,
+        setPinned,
+        openTextBoxForEditing,
+        openCommentForEditing,
+      });
+      selectId = edit.kind === "comment" ? null : edit.id;
+      break;
+    }
+
+    // 2. Existing markup under the cursor.
+    if (!items) {
+      const markup = textMarkupAtPoint(edits, pdfPoint);
+
+      if (markup) {
+        items = [
+          {
+            label: `Remove ${textMarkupLabel(markup.kind).toLowerCase()}`,
+            danger: true,
+            onSelect: () => removeEdit(markup.id),
+          },
+        ];
+      }
+    }
+
+    // 3. Any active text selection on this page → copy it, or mark it up
+    // without switching tools. `selectedText` is captured now because clicking
+    // a menu item collapses the selection before the action runs.
+    if (!items) {
+      const layer = layerRef.current;
+      const selectionRects = layer ? markupRectsFromSelection(layer, viewport) : [];
+
+      if (selectionRects.length > 0) {
+        const selectedText = window.getSelection()?.toString() ?? "";
+        const markupFromSelection = (kind: TextMarkupToolId) => () => {
+          addTextMarkup(kind, selectionRects);
+          window.getSelection()?.removeAllRanges();
+        };
+
+        items = [
+          {
+            label: "Copy",
+            onSelect: () => {
+              if (selectedText) {
+                void navigator.clipboard?.writeText(selectedText).catch(() => undefined);
+              }
+            },
+          },
+          { label: "Highlight", onSelect: markupFromSelection("highlight") },
+          { label: "Underline", onSelect: markupFromSelection("underline") },
+          { label: "Strike through", onSelect: markupFromSelection("strikethrough") },
+        ];
+      }
+    }
+
+    if (!items || items.length === 0) {
+      return; // Nothing to offer — leave the platform default alone.
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (selectId) {
+      setSelectedId(selectId);
+    }
+
+    setContextMenu({ x: event.clientX, y: event.clientY, items });
+  };
+
+  useEffect(() => {
+    function handleContextMenu(event: MouseEvent) {
+      contextMenuHandlerRef.current(event);
+    }
+
+    window.addEventListener("contextmenu", handleContextMenu, true);
+    return () => window.removeEventListener("contextmenu", handleContextMenu, true);
+  }, []);
+
   const interactive = tool !== "select";
   const inkEdits = pageEdits.filter((edit) => edit.kind === "ink");
   const shapeEdits = pageEdits.filter((edit): edit is PendingShape => edit.kind === "shape");
@@ -1232,12 +1359,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               }
               onRemove={() => removeEdit(edit.id)}
               onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedId(edit.id);
-                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-              }}
             />
           );
         }
@@ -1258,14 +1379,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onPointerDown={(event) => beginItemDrag(event, edit, "move")}
               onPointerMove={handleItemPointerMove}
               onPointerUp={handleItemPointerUp}
+              onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
               onRemove={() => removeEdit(edit.id)}
               onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedId(edit.id);
-                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-              }}
             />
           );
         }
@@ -1288,12 +1404,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
               onRemove={() => removeEdit(edit.id)}
               onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedId(edit.id);
-                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-              }}
             />
           );
         }
@@ -1370,12 +1480,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           onPointerMove={handleItemPointerMove}
           onPointerUp={handleItemPointerUp}
           onRemove={removeEdit}
-          onContextMenu={(event, edit) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setSelectedId(edit.id);
-            setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-          }}
         />
       ) : null}
 
@@ -1452,54 +1556,99 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         />
       ) : null}
 
-      {itemContextMenu ? (
+      {contextMenu ? (
         <ContextMenu
-          x={itemContextMenu.x}
-          y={itemContextMenu.y}
-          items={buildItemContextMenuItems(
-            itemContextMenu.editId,
-            pendingEdits,
-            removeEdit,
-            setPinned,
-          )}
-          onClose={() => setItemContextMenu(null)}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
         />
       ) : null}
     </div>
   );
 }
 
-function buildItemContextMenuItems(
-  editId: string,
-  pendingEdits: readonly PendingEdit[],
-  removeEdit: (id: string) => void,
-  setPinned: (id: string, pinned: boolean) => void,
-): ContextMenuItem[] {
-  const edit = pendingEdits.find((candidate) => candidate.id === editId);
-  const isPinned = edit?.pinned === true;
+/**
+ * Topmost text markup whose rects contain the point, optionally restricted to
+ * one kind. Shared by the double-click removal and the right-click menu.
+ */
+function textMarkupAtPoint(
+  edits: readonly PendingEdit[],
+  point: PdfSpacePoint,
+  kind?: TextMarkupToolId,
+): Extract<PendingEdit, { kind: TextMarkupToolId }> | null {
+  for (let index = edits.length - 1; index >= 0; index -= 1) {
+    const edit = edits[index];
 
-  // A pinned item is locked: the only move is to unpin it. Deleting requires
-  // unpinning first, mirroring the on-canvas pin badge / X affordances.
-  if (isPinned) {
+    if (
+      edit &&
+      isPendingTextMarkup(edit) &&
+      (kind === undefined || edit.kind === kind) &&
+      edit.rects.some((rect) => pdfRectContainsPoint(rect, point))
+    ) {
+      return edit;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Hit-tests one pending edit against a PDF-space point: floating boxes and
+ * shapes by geometry, a comment by its icon rect. Markup and ink are not
+ * hit-tested here (markup has its own path; ink has no menu).
+ */
+function editHitTest(edit: PendingEdit, point: PdfSpacePoint): boolean {
+  switch (edit.kind) {
+    case "textBox":
+    case "callout":
+    case "image":
+    case "signature":
+      return pdfRectContainsPoint(edit.rect, point);
+    case "comment":
+      return pdfRectContainsPoint(
+        { x: edit.at.x, y: edit.at.y, w: COMMENT_ICON_SIZE_PT, h: COMMENT_ICON_SIZE_PT },
+        point,
+      );
+    case "shape":
+      return shapeHitTest(edit, point);
+    default:
+      return false;
+  }
+}
+
+/**
+ * The right-click menu for an unpinned floating item or shape. Pinned items are
+ * excluded upstream (they're click-through), so everything reaching here is
+ * unpinned: Pin + Delete for all, plus Edit text / Open note for the kinds that
+ * have an inline editor. Comments aren't in the pin model — Open + Delete only.
+ */
+function buildEditContextMenu(
+  edit: PendingEdit,
+  actions: {
+    removeEdit: (id: string) => void;
+    setPinned: (id: string, pinned: boolean) => void;
+    openTextBoxForEditing: (edit: PendingTextBox) => void;
+    openCommentForEditing: (edit: PendingComment) => void;
+  },
+): ContextMenuItem[] {
+  if (edit.kind === "comment") {
     return [
-      {
-        label: "Unpin",
-        onSelect: () => setPinned(editId, false),
-      },
+      { label: "Open note", onSelect: () => actions.openCommentForEditing(edit) },
+      { label: "Delete", danger: true, onSelect: () => actions.removeEdit(edit.id) },
     ];
   }
 
-  return [
-    {
-      label: "Pin",
-      onSelect: () => setPinned(editId, true),
-    },
-    {
-      label: "Delete",
-      danger: true,
-      onSelect: () => removeEdit(editId),
-    },
-  ];
+  const items: ContextMenuItem[] = [];
+
+  if (edit.kind === "textBox") {
+    items.push({ label: "Edit text", onSelect: () => actions.openTextBoxForEditing(edit) });
+  }
+
+  items.push({ label: "Pin", onSelect: () => actions.setPinned(edit.id, true) });
+  items.push({ label: "Delete", danger: true, onSelect: () => actions.removeEdit(edit.id) });
+
+  return items;
 }
 
 // Text markup renders as page-anchored decoration only; removal is the
@@ -1578,7 +1727,6 @@ function ShapeSvgOverlay({
   onPointerMove,
   onPointerUp,
   onRemove,
-  onContextMenu,
 }: {
   shapes: readonly PendingShape[];
   draft: ShapeDraft | null;
@@ -1592,7 +1740,6 @@ function ShapeSvgOverlay({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: (id: string) => void;
-  onContextMenu: (event: ReactMouseEvent<SVGElement>, edit: PendingShape) => void;
 }) {
   return (
     <svg
@@ -1619,7 +1766,6 @@ function ShapeSvgOverlay({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onRemove={() => onRemove(shape.id)}
-          onContextMenu={(event) => onContextMenu(event, shape)}
         />
       ))}
       {draft ? <ShapeDraftElement draft={draft} scale={scale} editing={editing} /> : null}
@@ -1638,7 +1784,6 @@ function ShapeElement({
   onPointerMove,
   onPointerUp,
   onRemove,
-  onContextMenu,
 }: {
   shape: PendingShape;
   viewport: PageViewport;
@@ -1650,7 +1795,6 @@ function ShapeElement({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: () => void;
-  onContextMenu: (event: ReactMouseEvent<SVGElement>) => void;
 }) {
   const displayShape = shapeWithPreview(shape, preview, viewport);
   const stroke = pdfEditColorToHex(shape.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR);
@@ -1666,7 +1810,6 @@ function ShapeElement({
     onPointerDown,
     onPointerMove,
     onPointerUp,
-    onContextMenu,
     onClick: removable
       ? (event: ReactMouseEvent<SVGElement>) => {
           event.stopPropagation();
@@ -1958,9 +2101,9 @@ function CalloutOverlay({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onResizeStart,
   onRemove,
   onTogglePin,
-  onContextMenu,
 }: {
   edit: PendingCallout;
   viewport: PageViewport;
@@ -1970,9 +2113,9 @@ function CalloutOverlay({
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onRemove: () => void;
   onTogglePin: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   // The box follows the drag preview; the tip stays put, so the leader
   // re-anchors to the same target while the box moves.
@@ -2022,7 +2165,6 @@ function CalloutOverlay({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onContextMenu={onContextMenu}
       >
         <span
           className="edit-layer__text-content"
@@ -2039,6 +2181,7 @@ function CalloutOverlay({
           onTogglePin={onTogglePin}
           onRemove={onRemove}
         />
+        {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
       </div>
     </>
   );
@@ -2181,7 +2324,6 @@ function TextBoxOverlay({
   onTextStyleChange,
   onRemove,
   onTogglePin,
-  onContextMenu,
 }: {
   edit: PendingTextBox;
   viewport: PageViewport;
@@ -2197,7 +2339,6 @@ function TextBoxOverlay({
   onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
   onTogglePin: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
   const pinned = edit.pinned === true;
@@ -2230,7 +2371,6 @@ function TextBoxOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onContextMenu={onContextMenu}
       onDoubleClick={(event) => {
         event.stopPropagation();
         onEditRequested();
@@ -2278,7 +2418,6 @@ function StampOverlay({
   onResizeStart,
   onRemove,
   onTogglePin,
-  onContextMenu,
 }: {
   edit: PendingStamp;
   viewport: PageViewport;
@@ -2290,7 +2429,6 @@ function StampOverlay({
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onRemove: () => void;
   onTogglePin: () => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
   const pinned = edit.pinned === true;
@@ -2305,7 +2443,6 @@ function StampOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onContextMenu={onContextMenu}
     >
       <img
         className="edit-layer__stamp-image"

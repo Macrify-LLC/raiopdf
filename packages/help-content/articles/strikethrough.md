@@ -18,6 +18,9 @@ becomes a real PDF annotation you can toggle, delete, or flatten later.
 3. Pick a color if you want something other than the default black.
 4. To remove one, double-click a strikethrough you've added.
 
+**Or skip the tool:** with the **Select** tool, select text, then **right-click**
+and choose **Strike through**. Right-click a strikethrough to **Remove** it.
+
 ## What to know
 
 - **Strikethroughs are held until you Save,** then saved as PDF annotations.

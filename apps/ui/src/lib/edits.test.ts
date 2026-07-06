@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   annotationSavePlanHasChanges,
   buildAnnotationSavePlan,
+  clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
   excerpt,
   normalizePdfRectFromPoints,
@@ -680,6 +681,37 @@ describe("computeTextMarkupSelectionRects", () => {
       computeTextMarkupSelectionRects({ x: 0, y: 0 }, { x: 5, y: 5 }, [line(700)]),
     ).toEqual([]);
     expect(computeTextMarkupSelectionRects({ x: 0, y: 0 }, { x: 5, y: 5 }, [])).toEqual([]);
+  });
+});
+
+describe("clipMarkupRectsToDragBand", () => {
+  it("drops lines outside the drag's cross-line span (greedy whitespace selection)", () => {
+    const rects = [
+      { x: 10, y: 105, w: 100, h: 12 }, // inside the band
+      { x: 10, y: 300, w: 100, h: 12 }, // far below — browser over-selection
+    ];
+    const band = { x: 0, y: 100, w: 500, h: 30 };
+
+    expect(clipMarkupRectsToDragBand(rects, band)).toEqual([{ x: 10, y: 105, w: 100, h: 12 }]);
+  });
+
+  it("keeps a single line for a thin same-line drag via the half-line tolerance", () => {
+    const rects = [{ x: 10, y: 100, w: 200, h: 12 }];
+    const band = { x: 20, y: 104, w: 120, h: 0 };
+
+    expect(clipMarkupRectsToDragBand(rects, band)).toEqual(rects);
+  });
+
+  it("clips along the x axis on sideways pages", () => {
+    const rects = [
+      { x: 100, y: 10, w: 12, h: 200 }, // inside
+      { x: 400, y: 10, w: 12, h: 200 }, // outside
+    ];
+    const band = { x: 90, y: 0, w: 40, h: 300 };
+
+    expect(clipMarkupRectsToDragBand(rects, band, true)).toEqual([
+      { x: 100, y: 10, w: 12, h: 200 },
+    ]);
   });
 });
 

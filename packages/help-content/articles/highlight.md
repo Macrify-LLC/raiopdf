@@ -18,6 +18,10 @@ PDF annotation you can toggle, delete, or flatten later.
 3. Pick a color or opacity if you want something other than the default yellow.
 4. To remove one, double-click a highlight you've added.
 
+**Or skip the tool:** with the **Select** tool, select text the normal way, then
+**right-click** and choose **Highlight** (or Underline / Strike through).
+Right-click a highlight to **Remove** it.
+
 ## What to know
 
 - **Highlights follow the text you select.** They hug the words across every

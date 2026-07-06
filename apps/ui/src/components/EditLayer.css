@@ -75,7 +75,10 @@
 
 .edit-layer__text-box {
   border: 1px dashed var(--border);
-  overflow: hidden;
+  /* visible, not hidden: the pin badge and resize handles sit just outside the
+     box and must not be clipped. The text is clipped by .edit-layer__text-content
+     instead. Matches the stamp overlay. */
+  overflow: visible;
   cursor: move;
 }
 
@@ -111,7 +114,9 @@
 .edit-layer__callout-box {
   border: 1px solid var(--edit-ink);
   background: color-mix(in srgb, var(--panel) 86%, transparent);
-  overflow: hidden;
+  /* visible so the pin badge + resize handles just outside the box show; the
+     text is clipped by .edit-layer__text-content instead. */
+  overflow: visible;
   cursor: move;
 }
 
@@ -135,6 +140,12 @@
   white-space: pre;
   overflow-wrap: normal;
   user-select: none;
+  /* The box itself is overflow:visible so the pin badge + resize handles (its
+     absolutely-positioned siblings) aren't clipped; clip the TEXT here instead,
+     so resizing a box smaller than its text hides the overflow rather than
+     spilling it past the border. */
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .edit-layer__text-line {

@@ -24,6 +24,9 @@ real PDF annotation.
 
 - **Drag the box to reposition it; the arrow stays put.** Move the text box
   anywhere and the leader line re-points from the box's edge to the same target.
+- **Resize it from the corner handles** once it's selected.
+- **Right-click** a callout (or any annotation) for quick actions — Pin, Delete,
+  and Edit text.
 - **Pin it to lock it.** Click the pin badge in the box's corner to lock a
   callout in place — a pinned callout can't be moved and lets clicks pass
   through to whatever's underneath, so it won't get in your way. Click the pin

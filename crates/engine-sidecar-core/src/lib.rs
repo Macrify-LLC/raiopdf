@@ -1801,10 +1801,12 @@ fn parse_local_redact_request(
 }
 
 fn local_ocr_options(request_head: &[u8]) -> Result<path_ops::OcrOptions, String> {
+    let page_indexes = local_ocr_page_indexes(request_head)?;
     Ok(path_ops::OcrOptions {
         mode: local_ocr_mode(request_head)?,
         languages: local_ocr_languages(request_head),
         deskew: local_ocr_deskew(request_head)?,
+        page_indexes,
     })
 }
 
@@ -1847,6 +1849,27 @@ fn local_ocr_deskew(request_head: &[u8]) -> Result<bool, String> {
         "false" | "0" | "no" => Ok(false),
         other => Err(format!("unsupported OCR deskew value: {other}")),
     }
+}
+
+fn local_ocr_page_indexes(request_head: &[u8]) -> Result<Vec<u32>, String> {
+    let Some(raw) = request_query_param_decoded(request_head, "page_indexes")
+        .or_else(|| request_query_param_decoded(request_head, "pageIndexes"))
+    else {
+        return Ok(Vec::new());
+    };
+    let page_indexes = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_| format!("invalid OCR page index: {value}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    path_ops::one_based_range_string(&page_indexes)
+        .map_err(|error| format!("invalid OCR page indexes: {}", error.message))?;
+    Ok(page_indexes)
 }
 
 fn read_request_body(
@@ -3004,7 +3027,7 @@ mod tests {
     #[test]
     fn local_ocr_options_decode_normal_mode_languages_and_deskew() {
         let options = local_ocr_options(
-            b"POST /local/ocr?ocr_type=Normal&languages=eng%2Cspa&deskew=true HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            b"POST /local/ocr?ocr_type=Normal&languages=eng%2Cspa&deskew=true&page_indexes=0%2C2 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
         )
         .expect("OCR options should parse");
 
@@ -3014,6 +3037,17 @@ mod tests {
             vec!["eng".to_string(), "spa".to_string()]
         );
         assert!(options.deskew);
+        assert_eq!(options.page_indexes, vec![0, 2]);
+    }
+
+    #[test]
+    fn local_ocr_options_reject_duplicate_page_indexes() {
+        let error = local_ocr_options(
+            b"POST /local/ocr?ocr_type=force-ocr&page_indexes=0%2C0 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+        .expect_err("duplicate page indexes should be rejected");
+
+        assert_eq!(error, "invalid OCR page indexes: duplicate page indexes");
     }
 
     #[test]

@@ -747,14 +747,24 @@ pub async fn path_op_ocr(
     grant: String,
     mode: Option<core_ops::OcrMode>,
     job_token: Option<String>,
+    page_indexes: Option<Vec<u32>>,
 ) -> Result<PathOpOutput, PathOpError> {
     // Older callers omit the mode — default to the text-preserving pass.
     let mode = mode.unwrap_or_default();
+    let options = core_ops::OcrOptions {
+        mode,
+        page_indexes: page_indexes.unwrap_or_default(),
+        ..Default::default()
+    };
+    let force_ocr_note = if options.page_indexes.is_empty() {
+        "text layer rebuilt from scratch (--force-ocr); every page is re-rendered"
+    } else {
+        "text layer rebuilt from scratch (--force-ocr); OCR-selected pages are re-rendered"
+    };
     let spec = match mode {
         core_ops::OcrMode::SkipText => OpSpec::new("ocr", "ocrmypdf", "ocr")
             .note("existing text layers are kept (--skip-text)"),
-        core_ops::OcrMode::ForceOcr => OpSpec::new("ocr", "ocrmypdf", "ocr")
-            .note("text layer rebuilt from scratch (--force-ocr); every page is re-rendered"),
+        core_ops::OcrMode::ForceOcr => OpSpec::new("ocr", "ocrmypdf", "ocr").note(force_ocr_note),
     };
     let progress_app = app.clone();
     run_single_output_op(
@@ -765,11 +775,11 @@ pub async fn path_op_ocr(
         move |toolchain, input, output, _work_dir| {
             if let Some(job_token) = job_token {
                 let app = progress_app.clone();
-                core_ops::ocr_with_mode_and_progress(
+                core_ops::ocr_with_options_and_progress(
                     toolchain,
                     input,
                     output,
-                    mode,
+                    &options,
                     move |progress| {
                         let _ = app.emit(
                             OCR_PROGRESS_EVENT,
@@ -785,7 +795,7 @@ pub async fn path_op_ocr(
                     },
                 )
             } else {
-                core_ops::ocr_with_mode(toolchain, input, output, mode)
+                core_ops::ocr_with_options(toolchain, input, output, &options)
             }
         },
     )

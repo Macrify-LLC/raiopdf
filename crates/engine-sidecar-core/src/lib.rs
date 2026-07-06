@@ -24,6 +24,10 @@ use std::os::windows::process::CommandExt;
 
 pub const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+/// Ceiling for the post-start probe that confirms the auth proxy actually serves a
+/// request before the engine is reported ready. Reached only if the proxy never
+/// answers; the probe normally succeeds within a poll interval or two.
+pub const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 pub const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
 pub const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 15;
@@ -702,6 +706,24 @@ impl SidecarManager {
                     StartAttemptError::Stopped(message)
                 })?;
                 *self.proxy.lock().expect("sidecar proxy lock poisoned") = Some(proxy);
+                // `wait_until_ready` proved Stirling serves on the engine port, but the
+                // UI talks to the auth proxy, whose accept loop was only just spawned and
+                // may not be serving yet. Confirm the proxy answers an authed request
+                // before signaling ready, so the first real request (e.g. the OCR that
+                // lazily triggered this start) can't race a cold accept loop and fail with
+                // an intermittent `Local engine request failed`.
+                if !wait_until_proxy_ready(
+                    proxy_port,
+                    &self.auth_token,
+                    &self.config.health_path,
+                    PROXY_READY_TIMEOUT,
+                ) {
+                    stop_proxy(&self.proxy);
+                    self.stop_child();
+                    let message = "engine proxy did not accept requests after startup".to_string();
+                    set_state(&self.state, EngineState::error(Some(proxy_port), &message));
+                    return Err(StartAttemptError::Stopped(message));
+                }
                 set_state(&self.state, EngineState::ready(proxy_port));
                 spawn_child_supervisor(
                     proxy_port,
@@ -2696,6 +2718,50 @@ pub fn health_check(port: u16, path: &str) -> std::io::Result<bool> {
     ))
 }
 
+/// Health-check the authenticated proxy the UI actually connects to, rather than
+/// the raw engine port `health_check` probes. Sends one authed request through the
+/// proxy and requires a `200`, proving the proxy accept loop is live and forwarding
+/// — the readiness `wait_until_ready` (engine-port only) does not establish.
+fn proxy_health_check(proxy_port: u16, token: &str, path: &str) -> std::io::Result<bool> {
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{proxy_port}\r\n{AUTH_HEADER_NAME}: {token}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes())?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let Some(status_line) = response.lines().next() else {
+        return Ok(false);
+    };
+
+    let mut parts = status_line.split_whitespace();
+    Ok(matches!(
+        (parts.next(), parts.next()),
+        (Some("HTTP/1.0") | Some("HTTP/1.1"), Some("200"))
+    ))
+}
+
+/// Poll `proxy_health_check` until the proxy answers an authed request or the
+/// deadline passes. The accept loop is normally serving within a poll interval or
+/// two; the timeout is a generous safety bound so a genuinely stuck proxy fails the
+/// start rather than blocking forever.
+fn wait_until_proxy_ready(proxy_port: u16, token: &str, path: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if matches!(proxy_health_check(proxy_port, token, path), Ok(true)) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn parse_duration_ms(value: &OsString) -> Option<Duration> {
     parse_u64(value).map(Duration::from_millis)
 }
@@ -2888,6 +2954,44 @@ mod tests {
         stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
         assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
         assert_eq!(stub.received_request(), None);
+    }
+
+    #[test]
+    fn wait_until_proxy_ready_polls_until_the_proxy_answers() {
+        // The accept loop may not be serving the instant readiness is signaled, so
+        // the readiness gate must retry a probe rather than trust the first hit.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("stub should bind");
+        let port = listener.local_addr().expect("stub addr").port();
+        let server = thread::spawn(move || {
+            // First probe: accept, read, close without responding -> "not ready".
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                let mut buffer = [0u8; 256];
+                let _ = stream.read(&mut buffer);
+            }
+            // Second probe: answer 200 -> "ready".
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0u8; 256];
+                let _ = stream.read(&mut buffer);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+
+        assert!(wait_until_proxy_ready(
+            port,
+            "token",
+            "/api/v1/info/status",
+            Duration::from_secs(5),
+        ));
+        server.join().expect("stub server thread");
+    }
+
+    #[test]
+    fn proxy_health_check_rejects_non_200() {
+        let stub = start_stub_http_server(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(!proxy_health_check(stub.port, "token", "/api/v1/info/status").unwrap());
     }
 
     #[test]

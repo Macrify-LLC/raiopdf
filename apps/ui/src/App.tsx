@@ -160,6 +160,7 @@ import {
   newOcrJobToken,
   type OcrProgressEvent,
 } from "./lib/ocrProgress";
+import { resolveEngineOpRoute } from "./lib/engineOpRoute";
 import {
   isPathOpsRuntime,
   pathOpApplyEdits,
@@ -572,6 +573,26 @@ export function App() {
     };
   }, [pathOpsGrant]);
   const editing = useEditing(pdfDocument);
+  // The shell file grant to route a memory-mode engine op (OCR, PDF/A, compress,
+  // redaction) through the file-based path_ops lane — non-null only when it is
+  // SAFE to process the on-disk file instead of shipping the document bytes over
+  // the loopback proxy (which WebView2/Chromium-150 rejects above ~1MB). Safe
+  // means: desktop runtime, opened from a file (grant present), and clean (no
+  // unsaved in-memory edits — those live only in the WebView, so the on-disk
+  // file would be the pre-edit content). Streamed docs pass through their
+  // existing grant. Dirty / browser / no-grant docs get null and fall back to
+  // the in-memory loopback path (correct bytes; fails honestly above ~1MB).
+  const engineDelegatedGrant = ((): FileGrant | null => {
+    const route = resolveEngineOpRoute({
+      isTauriRuntime: isPathOpsRuntime(),
+      sourceKind: document.source?.kind ?? null,
+      streamedGrant: pathOpsGrant,
+      memoryFilePath: document.filePath,
+      dirty: document.dirty,
+      hasUnsavedEdits: editing.hasUnsavedEdits,
+    });
+    return route.via === "path-ops" ? route.grant : null;
+  })();
   const overlayDirtyRef = useRef<{ generation: number; marked: boolean } | null>(null);
   const documentSearch = useDocumentSearch({
     pdfDocumentState: currentPdfDocumentState,
@@ -2051,7 +2072,7 @@ export function App() {
     const sourceBytes = document.bytes;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
-    const delegatedOcrGrant = streamedDocument ? pathOpsGrant : null;
+    const delegatedOcrGrant = engineDelegatedGrant;
     const resolveSourceTextLayerCoverage = async (): Promise<TextLayerCoverage | null> => {
       if (ocrType === "force-ocr") {
         return null;
@@ -2375,7 +2396,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, pdfDocument, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, engineDelegatedGrant, getOpenToken, isCurrentDocument, openPathOpOutput, pdfDocument, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent,
   type MouseEvent,
 } from "react";
 import { PDFDocument } from "pdf-lib";
@@ -12,6 +13,7 @@ import type { ResizePreset } from "../lib/cropResize";
 import { isTextEntryTarget } from "../lib/domGuards";
 import type { FileGrant, OpenedFile, SavedFile } from "../lib/filePort";
 import { pathOpPageCount } from "../lib/pathOps";
+import { reorderPagesForDrop } from "../lib/organizePages";
 import {
   pickPdfsForAdd,
   readFileForAdd,
@@ -242,6 +244,11 @@ function OrganizePagesGrid({
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
   const [dragOverPageIndex, setDragOverPageIndex] = useState<number | null>(null);
+  // Which side of the hovered page the drop will land on. Paired with
+  // dragOverPageIndex it drives the insertion-line indicator and the reorder
+  // math, so "drag a page just after its neighbour" actually moves it (a plain
+  // insert-before is a no-op for adjacent forward drags).
+  const [dropSide, setDropSide] = useState<"before" | "after">("after");
   const [pageContextMenu, setPageContextMenu] = useState<{ x: number; y: number; pageIndex: number } | null>(null);
   const [reorderPending, setReorderPending] = useState(false);
   // Drop settle: the grid's cells are positional (0..pageCount-1), not keyed
@@ -399,7 +406,17 @@ function OrganizePagesGrid({
     setStatus(exported ? "Page image saved." : "The page image could not be exported.");
   }
 
-  async function dropOn(targetPageIndex: number) {
+  // Which half of a page cell the pointer is over -> which side the moved
+  // page(s) drop on. Horizontal split matches the reading order of the grid;
+  // the midpoint counts as "before" so a drop onto a cell's center inserts
+  // ahead of it (the intuitive default), and only the right half moves a page
+  // past its target -- the move that a plain insert-before could never do.
+  function dropSideForPointer(event: DragEvent<HTMLButtonElement>): "before" | "after" {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientX <= rect.left + rect.width / 2 ? "before" : "after";
+  }
+
+  async function dropOn(targetPageIndex: number, side: "before" | "after") {
     setDragOverPageIndex(null);
 
     if (reorderPending || draggingPageIndex === null || draggingPageIndex === targetPageIndex) {
@@ -410,16 +427,10 @@ function OrganizePagesGrid({
     const selectedSource = selectedPageIndexes.has(draggingPageIndex)
       ? selectedIndexes
       : [draggingPageIndex];
-    const moving = new Set(selectedSource);
-    const remaining = pages.filter((pageIndex) => !moving.has(pageIndex));
-    const targetInRemaining = remaining.indexOf(targetPageIndex);
-    const insertIndex = targetInRemaining === -1 ? remaining.length : targetInRemaining;
-    const nextOrder = [
-      ...remaining.slice(0, insertIndex),
-      ...selectedSource,
-      ...remaining.slice(insertIndex),
-    ];
+    const nextOrder = reorderPagesForDrop(pages, selectedSource, targetPageIndex, side);
     const nextCurrentPage = nextOrder.indexOf(document.currentPage - 1) + 1;
+    // Grid cell the moved content lands in -- the first moved page's new slot.
+    const insertIndex = nextOrder.indexOf(selectedSource[0] ?? draggingPageIndex);
 
     setDraggingPageIndex(null);
 
@@ -549,6 +560,11 @@ function OrganizePagesGrid({
                   ? "true"
                   : undefined
               }
+              data-drop-side={
+                dragOverPageIndex === pageIndex && draggingPageIndex !== null && draggingPageIndex !== pageIndex
+                  ? dropSide
+                  : undefined
+              }
               data-drop-settle={settledPageIndex === pageIndex ? "true" : undefined}
               onAnimationEnd={() => {
                 setSettledPageIndex((current) => (current === pageIndex ? null : current));
@@ -597,9 +613,16 @@ function OrganizePagesGrid({
                 }
               }}
               onDragOver={(event) => {
-                if (!reorderPending) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
+                if (reorderPending) {
+                  return;
+                }
+
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+
+                if (draggingPageIndex !== null) {
+                  setDragOverPageIndex(pageIndex);
+                  setDropSide(dropSideForPointer(event));
                 }
               }}
               onDragLeave={() => {
@@ -607,7 +630,7 @@ function OrganizePagesGrid({
               }}
               onDrop={(event) => {
                 event.preventDefault();
-                void dropOn(pageIndex);
+                void dropOn(pageIndex, dropSideForPointer(event));
               }}
               onDragEnd={() => {
                 setDraggingPageIndex(null);

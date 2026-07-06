@@ -10,8 +10,10 @@ import {
 } from "pdf-lib";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import {
+  areaForTextRange,
   extractPageText,
   extractPageTextForIndexes,
+  matchAreaForTextRange,
   type ExtractedPageText,
   type PageTextInput,
 } from "./pageTextCache";
@@ -128,9 +130,16 @@ export async function findTextRedactionAreas(
   return findTextRedactionAreasInPages(pages, query);
 }
 
-export function findTextRedactionAreasInPages(
+type TextRangeAreaFn = (
+  page: ExtractedPageText,
+  start: number,
+  end: number,
+) => PdfRedactionArea | null;
+
+function collectQueryAreas(
   pages: readonly ExtractedPageText[],
   query: string,
+  areaFn: TextRangeAreaFn,
 ): PdfRedactionArea[] {
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -157,7 +166,7 @@ export function findTextRedactionAreasInPages(
         continue;
       }
 
-      const area = areaForTextRange(page, match.index, match.index + matchedText.length);
+      const area = areaFn(page, match.index, match.index + matchedText.length);
 
       if (area) {
         areas.push(area);
@@ -166,6 +175,22 @@ export function findTextRedactionAreasInPages(
   }
 
   return areas;
+}
+
+/** Over-inclusive areas covering each match in full — for redacting found text. */
+export function findTextRedactionAreasInPages(
+  pages: readonly ExtractedPageText[],
+  query: string,
+): PdfRedactionArea[] {
+  return collectQueryAreas(pages, query, areaForTextRange);
+}
+
+/** Tight per-word areas for highlighting search matches (display-only). */
+export function findTextMatchAreasInPages(
+  pages: readonly ExtractedPageText[],
+  query: string,
+): PdfRedactionArea[] {
+  return collectQueryAreas(pages, query, matchAreaForTextRange);
 }
 
 export async function scanSensitivePatterns(
@@ -211,37 +236,6 @@ export async function scanSensitivePatterns(
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function areaForTextRange(
-  page: ExtractedPageText,
-  start: number,
-  end: number,
-): PdfRedactionArea | null {
-  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
-
-  if (matchingSpans.length === 0) {
-    return null;
-  }
-
-  return matchingSpans
-    .map((span) => span.area)
-    .reduce(unionAreas);
-}
-
-function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedactionArea {
-  const x = Math.min(left.x, right.x);
-  const y = Math.min(left.y, right.y);
-  const maxX = Math.max(left.x + left.w, right.x + right.w);
-  const maxY = Math.max(left.y + left.h, right.y + right.h);
-
-  return {
-    pageIndex: left.pageIndex,
-    x,
-    y,
-    w: Math.max(1, maxX - x),
-    h: Math.max(1, maxY - y),
-  };
 }
 
 export async function verifyRedactionAreasClear(

@@ -1,6 +1,6 @@
 import type { PdfRedactionArea, PdfReplaceTextWarning } from "@raiopdf/engine-api";
 import type { TextLayerCoverage } from "@raiopdf/rules";
-import type { ExtractedPageText } from "./pageTextCache";
+import { matchAreaForTextRange, type ExtractedPageText } from "./pageTextCache";
 
 export interface PendingTextReplacement {
   id: string;
@@ -94,7 +94,7 @@ export function findTextMatchesInPages(
         continue;
       }
 
-      const area = areaForTextRange(page, match.index, match.index + matchedText.length);
+      const area = matchAreaForTextRange(page, match.index, match.index + matchedText.length);
       if (!area) {
         continue;
       }
@@ -272,37 +272,6 @@ function lengthDeltaAdvisory(operations: readonly PendingTextReplacement[]): str
   return operations.some((operation) => operation.find.length !== operation.replace.length)
     ? TEXT_EDIT_ADVISORY
     : null;
-}
-
-function areaForTextRange(
-  page: ExtractedPageText,
-  start: number,
-  end: number,
-): PdfRedactionArea | null {
-  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
-
-  if (matchingSpans.length === 0) {
-    return null;
-  }
-
-  return matchingSpans
-    .map((span) => span.area)
-    .reduce(unionAreas);
-}
-
-function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedactionArea {
-  const x = Math.min(left.x, right.x);
-  const y = Math.min(left.y, right.y);
-  const maxX = Math.max(left.x + left.w, right.x + right.w);
-  const maxY = Math.max(left.y + left.h, right.y + right.h);
-
-  return {
-    pageIndex: left.pageIndex,
-    x,
-    y,
-    w: Math.max(1, maxX - x),
-    h: Math.max(1, maxY - y),
-  };
 }
 
 function escapeRegExp(value: string): string {

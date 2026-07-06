@@ -11,7 +11,10 @@ import {
 import type { PDFDocumentProxy } from "./pdfjs";
 import {
   collectRedactionAreaTexts,
+  extractPageText,
+  findTextMatchAreasInPages,
   findTextRedactionAreas,
+  findTextRedactionAreasInPages,
   scanSensitivePatterns,
   verifyRedactionAreasClear,
 } from "./legalTools";
@@ -80,6 +83,30 @@ describe("legalTools", () => {
     expect(areas[0]).toMatchObject({ pageIndex: 0 });
     expect(areas[0]?.x).toBeLessThanOrEqual(8);
     expect(areas[0]?.w).toBeGreaterThan(90);
+  });
+
+  it("clips search-match highlights to the matched word while redaction stays full-width", async () => {
+    // One text item spanning a whole line; "matter" is only its trailing word.
+    const pdf = mockPdf([textItem("Privileged matter", 10, 170)]);
+    const pages = await extractPageText(pdf);
+
+    const redaction = findTextRedactionAreasInPages(pages, "matter");
+    const match = findTextMatchAreasInPages(pages, "matter");
+
+    expect(redaction).toHaveLength(1);
+    expect(match).toHaveLength(1);
+
+    const full = redaction[0]!;
+    const word = match[0]!;
+
+    // Redaction must stay over-inclusive: the entire text item.
+    expect(full.w).toBeGreaterThan(150);
+    // The search highlight is clipped down to just the trailing word.
+    expect(word.w).toBeLessThan(full.w * 0.6);
+    expect(word.x).toBeGreaterThan(full.x + full.w * 0.4);
+    // ...and never extends past the text item's own box.
+    expect(word.x).toBeGreaterThanOrEqual(full.x);
+    expect(word.x + word.w).toBeLessThanOrEqual(full.x + full.w + 0.001);
   });
 
   it("finds two-word search matches split across text items without literal spaces", async () => {

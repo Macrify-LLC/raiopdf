@@ -11,6 +11,7 @@ import {
 } from "react";
 import type {
   PdfBatesStampOptions,
+  PdfBinderOptions,
   PdfCompressOptions,
   PdfImagePageInput,
   PdfPageNumbersOptions,
@@ -101,6 +102,7 @@ import {
 import {
   STREAMED_DOCUMENT_GATE_MESSAGE,
   useDocument,
+  type BinderExhibitInput,
   type DocumentState,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
@@ -158,6 +160,7 @@ import {
 import {
   isPathOpsRuntime,
   pathOpBatesStamp,
+  pathOpBuildBinder,
   pathOpCompress,
   pathOpDecrypt,
   pathOpDocumentFacts,
@@ -171,6 +174,8 @@ import {
   pathOpRepair,
   pathOpSanitize,
   pathOpsStatus,
+  isPathOpAvailableForInput,
+  pathOpStatusEntry,
   pathOpWatermark,
   pathOpErrorMessage,
   PathOpsError,
@@ -472,7 +477,7 @@ export function App() {
     splitPages,
     insertFile,
     cropResizePages,
-    buildBinder,
+    buildBinder: buildBinderInMemory,
     batesStamp,
     readRaioPdfAnnotations,
     applyAnnotationSavePlan,
@@ -513,6 +518,30 @@ export function App() {
     document.source?.kind === "rangeGrant" && isPathOpsRuntime()
       ? document.source.grant
       : null;
+  useEffect(() => {
+    let disposed = false;
+
+    if (!pathOpsGrant) {
+      setPathOpsGeneralStatus(null);
+      return;
+    }
+
+    void pathOpsStatus()
+      .then((status) => {
+        if (!disposed) {
+          setPathOpsGeneralStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setPathOpsGeneralStatus(null);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [pathOpsGrant]);
   const editing = useEditing(pdfDocument);
   const overlayDirtyRef = useRef<{ generation: number; marked: boolean } | null>(null);
   const documentSearch = useDocumentSearch({
@@ -655,6 +684,8 @@ export function App() {
   const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
   /** PathOpsEngine status for the streamed filing checklist rule [R7-1]. */
   const [pathOpsFilingStatus, setPathOpsFilingStatus] = useState<PathOpsStatus | null>(null);
+  /** General PathOpsEngine status for streamed legal-tool availability gates. */
+  const [pathOpsGeneralStatus, setPathOpsGeneralStatus] = useState<PathOpsStatus | null>(null);
   /** Page-range print prompt — the fallback when native printing is out. */
   const [printRangePrompt, setPrintRangePrompt] = useState<{
     value: string;
@@ -3231,6 +3262,112 @@ export function App() {
     window.print();
   }, [document.bytes, pathOpsGrant, setError, streamedDocument]);
 
+  const buildBinder = useCallback(
+    async (
+      exhibits: readonly BinderExhibitInput[],
+      options: PdfBinderOptions,
+      fileName: string,
+    ) => {
+      const sourceBytes = document.bytes;
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
+
+      if (sourceBytes) {
+        return buildBinderInMemory(exhibits, options, fileName);
+      }
+
+      if (!streamedDocument || !pathOpsGrant) {
+        setError(streamedDocument
+          ? STREAMED_DOCUMENT_GATE_MESSAGE
+          : "Open a PDF before building an exhibit binder.");
+        return false;
+      }
+
+      if (!isPathOpAvailableForInput(
+        pathOpsGeneralStatus,
+        "build_binder",
+        document.fileSizeBytes,
+      )) {
+        setError(streamedBinderGateMessage(pathOpsGeneralStatus, document.fileSizeBytes));
+        return false;
+      }
+
+      setSidecarStatus({
+        running: true,
+        message: "Building binder through the local Node engine...",
+        removed: [],
+        beforeBytes: document.fileSizeBytes,
+        afterBytes: null,
+      });
+
+      try {
+        const output = await pathOpBuildBinder(pathOpsGrant, exhibits, options, fileName);
+
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return true;
+        }
+
+        const reopened = await openPathOpOutput(output, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+        if (reopened.status !== "opened") {
+          const message = reopened.status === "failed"
+            ? reopened.error
+            : "The binder was built, but the output could not be reopened.";
+          setSidecarStatus({
+            running: false,
+            message,
+            removed: [],
+            beforeBytes: document.fileSizeBytes,
+            afterBytes: null,
+          });
+          return false;
+        }
+
+        setSidecarStatus({
+          running: false,
+          message: "Binder built — the combined copy opened as a new document. Use Save As to keep it.",
+          removed: [],
+          beforeBytes: document.fileSizeBytes,
+          afterBytes: output.sizeBytes,
+        });
+        return true;
+      } catch (error) {
+        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return true;
+        }
+
+        const message = pathOpErrorMessage(
+          error,
+          "The binder could not be built through the local Node engine. The document was left unchanged.",
+        );
+        setSidecarStatus({
+          running: false,
+          message,
+          removed: [],
+          beforeBytes: document.fileSizeBytes,
+          afterBytes: null,
+        });
+        setError(message);
+        return false;
+      }
+    },
+    [
+      buildBinderInMemory,
+      document.bytes,
+      document.fileSizeBytes,
+      document.generation,
+      getOpenToken,
+      isCurrentDocument,
+      openPathOpOutput,
+      pathOpsGeneralStatus,
+      pathOpsGrant,
+      setError,
+      streamedDocument,
+    ],
+  );
+
   // The print dialog holds the grant it was opened with — close it when the
   // document changes so it can never print a stale grant (the #127 stale-
   // guard discipline, applied at the dialog boundary).
@@ -3287,8 +3424,16 @@ export function App() {
       // PathOpsEngine (or that were already path/proxy-based) are open;
       // everything still byte-based stays gated with the message naming
       // what works [R1-2].
-      if (streamedDocument && !isStreamedLegalToolAvailable(toolId, pathOpsGrant !== null)) {
-        setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+      if (
+        streamedDocument &&
+        !isStreamedLegalToolAvailable(
+          toolId,
+          pathOpsGrant !== null,
+          pathOpsGeneralStatus,
+          document.fileSizeBytes,
+        )
+      ) {
+        setError(streamedLegalToolGateMessage(toolId, pathOpsGeneralStatus, document.fileSizeBytes));
         return;
       }
 
@@ -3302,7 +3447,7 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [editing, pathOpsGrant, setError, streamedDocument],
+    [document.fileSizeBytes, editing, pathOpsGeneralStatus, pathOpsGrant, setError, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
@@ -5581,6 +5726,7 @@ export function App() {
   const workspace = activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
+      pdfDocument={pdfDocument}
       onBuildBinder={buildBinder}
       onOpenRequested={openFile}
       onCancel={closeWorkspace}
@@ -6143,16 +6289,53 @@ const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
   "prepare-for-filing",
   "batch-cleanup",
   "production-set",
+  "combine-exhibits",
   "redact",
   "sanitize",
   "bates-numbering",
 ];
 
-function isStreamedLegalToolAvailable(toolId: LegalToolId, delegated: boolean): boolean {
-  return (
-    STREAMED_LEGAL_TOOLS_ALWAYS.includes(toolId) ||
-    (delegated && STREAMED_LEGAL_TOOLS_DELEGATED.includes(toolId))
-  );
+function isStreamedLegalToolAvailable(
+  toolId: LegalToolId,
+  delegated: boolean,
+  status: PathOpsStatus | null = null,
+  sizeBytes: number | null = null,
+): boolean {
+  if (STREAMED_LEGAL_TOOLS_ALWAYS.includes(toolId)) {
+    return true;
+  }
+  if (!delegated || !STREAMED_LEGAL_TOOLS_DELEGATED.includes(toolId)) {
+    return false;
+  }
+  if (toolId === "combine-exhibits") {
+    return isPathOpAvailableForInput(status, "build_binder", sizeBytes);
+  }
+  return true;
+}
+
+function streamedLegalToolGateMessage(
+  toolId: LegalToolId,
+  status: PathOpsStatus | null,
+  sizeBytes: number | null,
+): string {
+  if (toolId === "combine-exhibits") {
+    return streamedBinderGateMessage(status, sizeBytes);
+  }
+  return STREAMED_DOCUMENT_GATE_MESSAGE;
+}
+
+function streamedBinderGateMessage(status: PathOpsStatus | null, sizeBytes: number | null): string {
+  if (status === null) {
+    return "Combine with Exhibits for this large document is still starting. Try again in a moment.";
+  }
+  const entry = pathOpStatusEntry(status, "build_binder");
+  if (!entry?.available) {
+    return "Combine with Exhibits for large documents needs the bundled Node binder engine, which is not available in this app install.";
+  }
+  if (entry.maxInputBytes !== null && sizeBytes !== null && sizeBytes > entry.maxInputBytes) {
+    return `Combine with Exhibits can process large main PDFs up to ${formatBytes(entry.maxInputBytes)}. This document is ${formatBytes(sizeBytes)}.`;
+  }
+  return STREAMED_DOCUMENT_GATE_MESSAGE;
 }
 
 /** Per-area pass/fail rendering for the delegated redaction's verification.

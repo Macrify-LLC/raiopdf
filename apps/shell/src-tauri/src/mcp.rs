@@ -11,6 +11,7 @@ use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -246,6 +247,67 @@ fn resolve_mcp_binary() -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|candidate| candidate.exists())
+}
+
+pub(crate) fn mcp_one_shot_runtime_available(resource_dir: Option<&Path>) -> bool {
+    if std::env::var_os("RAIOPDF_MCP_BIN")
+        .map(PathBuf::from)
+        .is_some_and(|path| path.is_file())
+    {
+        return true;
+    }
+
+    if resolve_mcp_binary().is_none() {
+        return false;
+    }
+
+    let Some(resource_dir) = resolve_mcp_resource_dir(resource_dir) else {
+        return false;
+    };
+    let node = resource_dir
+        .join("payload")
+        .join("mcp")
+        .join("node")
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    let entrypoint = resource_dir
+        .join("payload")
+        .join("mcp")
+        .join("app")
+        .join("index.mjs");
+    node.is_file() && entrypoint.is_file()
+}
+
+fn resolve_mcp_resource_dir(app_resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("RAIOPDF_RESOURCE_DIR").map(PathBuf::from) {
+        if explicit.join("payload").is_dir() {
+            return Some(explicit);
+        }
+    }
+
+    if let Some(resource_dir) = app_resource_dir {
+        if resource_dir.join("payload").is_dir() {
+            return Some(resource_dir.to_path_buf());
+        }
+    }
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))?;
+
+    [
+        exe_dir.clone(),
+        exe_dir.join("resources"),
+        exe_dir.join("resource"),
+        exe_dir.join("Resources"),
+        exe_dir.join("_up_"),
+        exe_dir.join("_up_").join("resources"),
+        exe_dir
+            .parent()
+            .map(|parent| parent.join("Resources"))
+            .unwrap_or_else(|| exe_dir.join("..").join("Resources")),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.join("payload").is_dir())
 }
 
 #[tauri::command]
@@ -494,7 +556,29 @@ fn resolve_output_dir(output_dir: &str) -> Result<String, String> {
     path_to_utf8_string(resolved, "Selected output folder")
 }
 
+pub(crate) struct McpOneShotOptions {
+    pub timeout: Option<Duration>,
+    pub node_options: Option<String>,
+}
+
+impl McpOneShotOptions {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            node_options: None,
+        }
+    }
+}
+
 fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>, String> {
+    run_mcp_one_shot_with_options(tool_name, input, McpOneShotOptions::default())
+}
+
+pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
+    tool_name: &str,
+    input: &T,
+    options: McpOneShotOptions,
+) -> Result<Vec<u8>, String> {
     let binary = resolve_mcp_binary().ok_or_else(|| {
         "RaioPDF MCP binary is not configured; set RAIOPDF_MCP_BIN or install the bundled MCP executable."
             .to_string()
@@ -506,6 +590,9 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(node_options) = options.node_options {
+        command.env("NODE_OPTIONS", node_options);
+    }
     apply_platform_spawn_flags(&mut command);
 
     let mut child = command.spawn().map_err(|error| {
@@ -527,9 +614,7 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
             .map_err(|error| format!("failed to send {tool_name} request: {error}"))?;
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("failed to read {tool_name} response: {error}"))?;
+    let output = wait_with_optional_timeout(child, tool_name, options.timeout)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -541,6 +626,48 @@ fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>,
     }
 
     Ok(output.stdout)
+}
+
+fn wait_with_optional_timeout(
+    mut child: std::process::Child,
+    tool_name: &str,
+    timeout: Option<Duration>,
+) -> Result<std::process::Output, String> {
+    let Some(timeout) = timeout else {
+        return child
+            .wait_with_output()
+            .map_err(|error| format!("failed to read {tool_name} response: {error}"));
+    };
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("failed to read {tool_name} response: {error}"));
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let output = child.wait_with_output().map_err(|error| {
+                    format!("failed to read timed-out {tool_name} response: {error}")
+                })?;
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if stderr.is_empty() {
+                    format!("{tool_name} timed out after {} seconds", timeout.as_secs())
+                } else {
+                    format!(
+                        "{tool_name} timed out after {} seconds: {stderr}",
+                        timeout.as_secs()
+                    )
+                });
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(error) => {
+                return Err(format!("failed to poll {tool_name} response: {error}"));
+            }
+        }
+    }
 }
 
 #[cfg(windows)]

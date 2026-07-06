@@ -1,11 +1,22 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { PdfPageSelection, PdfSplitPart, PdfStampPlacement } from "@raiopdf/engine-api";
+import type {
+  PdfBinderOptions,
+  PdfDocumentHandle,
+  PdfPageSelection,
+  PdfSplitPart,
+  PdfStampPlacement,
+} from "@raiopdf/engine-api";
 import { buildProductionSet } from "@raiopdf/production-set";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
-import { baseOutputSchema, successResult, type StructuredToolResult } from "../format.js";
-import { preparePackageOutputDir, resolveInput } from "../paths.js";
+import {
+  baseOutputSchema,
+  errorResult,
+  successResult,
+  type StructuredToolResult,
+} from "../format.js";
+import { prepareOutput, preparePackageOutputDir, resolveInput } from "../paths.js";
 import { runLocalOutputOp, runLocalSingleOutputOp, writeManyOutputs } from "../ops.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
@@ -32,6 +43,14 @@ const binderIndexSchema = z.object({
     .optional()
     .describe("Include source filenames in the Exhibit Index. Defaults to false."),
 });
+const binderOptionsSchema = z.object({
+  slipSheets: z.boolean(),
+  index: binderIndexSchema.optional(),
+  placement: placementSchema.optional(),
+  stampPages: pageSelectionSchema.optional(),
+  fontSizePt: z.number().positive().optional(),
+  marginIn: z.number().nonnegative().optional(),
+});
 
 const outputResultSchema = { ...baseOutputSchema, output: z.string().optional() };
 const multiOutputResultSchema = { ...baseOutputSchema, outputs: z.array(z.string()).optional() };
@@ -45,6 +64,11 @@ function safeFileComponent(value: string, field: string): string {
     throw new Error(`${field} must be a plain filename component (no path separators or "..").`);
   }
   return value;
+}
+
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MiB`;
 }
 
 // The engine's PdfEngine annotates this as its structural type; the tools that
@@ -123,6 +147,98 @@ export function handleBinder(
       summary: `Assembled an exhibit binder (${exhibits.length} exhibit(s)) into ${input.output}.`,
     };
   });
+}
+
+// ---- one-shot build_binder ----
+export const buildBinderOneShotInputSchema = {
+  mainPath: absoluteInput,
+  exhibits: z
+    .array(z.object({
+      path: absoluteInput,
+      label: z.string(),
+      description: z.string().optional(),
+      sourceFileName: z.string().optional(),
+    }))
+    .min(1),
+  options: binderOptionsSchema,
+  outputPath: absoluteOutput,
+  maxInputBytes: z.number().int().positive(),
+};
+export const buildBinderOneShotOutputSchema = outputResultSchema;
+export interface BuildBinderOneShotInput {
+  mainPath: string;
+  exhibits: {
+    path: string;
+    label: string;
+    description?: string | undefined;
+    sourceFileName?: string | undefined;
+  }[];
+  options: PdfBinderOptions;
+  outputPath: string;
+  maxInputBytes: number;
+}
+
+export async function handleBuildBinderOneShot(
+  input: BuildBinderOneShotInput,
+): Promise<StructuredToolResult> {
+  if (input.exhibits.length === 0) {
+    return errorResult("INVALID_ARGUMENT", "build_binder requires at least one exhibit.");
+  }
+
+  const mainStats = await fs.stat(input.mainPath).catch((error: unknown) => {
+    throw new Error(`Main PDF is not accessible: ${input.mainPath}.`, { cause: error });
+  });
+  if (!mainStats.isFile()) {
+    return errorResult("INVALID_ARGUMENT", `Main path is not a regular file: ${input.mainPath}.`);
+  }
+  if (mainStats.size > input.maxInputBytes) {
+    return errorResult(
+      "INVALID_ARGUMENT",
+      `Main PDF is too large for build_binder (${formatBytes(mainStats.size)}).`,
+      `Choose a PDF at or below ${formatBytes(input.maxInputBytes)}.`,
+    );
+  }
+
+  const engine = getLocalEngine();
+  const output = await prepareOutput(input.outputPath);
+  const opened: PdfDocumentHandle[] = [];
+  let produced: Awaited<ReturnType<typeof engine.buildBinder>> | undefined;
+
+  try {
+    const main = await engine.open(await fs.readFile(input.mainPath));
+    opened.push(main);
+
+    const exhibitInputs = [];
+    for (const exhibit of input.exhibits) {
+      const doc = await engine.open(await fs.readFile(exhibit.path));
+      opened.push(doc);
+      exhibitInputs.push({
+        doc,
+        label: exhibit.label,
+        description: exhibit.description,
+        sourceFileName: exhibit.sourceFileName,
+      });
+    }
+
+    produced = await engine.buildBinder(main, exhibitInputs, input.options);
+    await output.write(await engine.saveToBytes(produced));
+    await output.commit();
+
+    return successResult(
+      `Assembled an exhibit binder (${input.exhibits.length} exhibit(s)) into ${input.outputPath}.`,
+      { output: output.outputPath },
+    );
+  } catch (error) {
+    await output.abort();
+    throw error;
+  } finally {
+    if (produced !== undefined && !opened.includes(produced)) {
+      opened.push(produced);
+    }
+    for (const document of opened) {
+      await engine.close(document).catch(() => undefined);
+    }
+  }
 }
 
 // ---- bates_stamp ----

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PDFDocumentProxy } from "./pdfjs";
 import {
+  inspectOpenTextLayerCoverage,
   pdfDocumentHasTextLayer,
   pdfDocumentTextLayerCoverage,
 } from "./textLayer";
@@ -41,12 +42,23 @@ describe("pdfDocumentTextLayerCoverage", () => {
       garbledPages: [],
     });
   });
+
+  it("leaves streamed document coverage lazy at open", async () => {
+    const document = fakePdfDocument(["page one", "page two"]);
+
+    await expect(inspectOpenTextLayerCoverage({
+      bytes: null,
+      pdfDocument: document,
+      streamed: true,
+    })).resolves.toBeNull();
+    expect(document.getPage).not.toHaveBeenCalled();
+  });
 });
 
 function fakePdfDocument(pageTexts: readonly string[]): PDFDocumentProxy {
   return {
     numPages: pageTexts.length,
-    getPage: async (pageNumber: number) => {
+    getPage: vi.fn(async (pageNumber: number) => {
       const text = pageTexts[pageNumber - 1] ?? "";
       return {
         getTextContent: async () => ({
@@ -56,6 +68,6 @@ function fakePdfDocument(pageTexts: readonly string[]): PDFDocumentProxy {
           fnArray: [],
         }),
       };
-    },
+    }),
   } as unknown as PDFDocumentProxy;
 }

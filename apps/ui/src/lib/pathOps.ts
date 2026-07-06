@@ -13,8 +13,10 @@
  */
 
 import type {
+  PdfApplyEditsOptions,
   PdfBatesStampOptions,
   PdfBinderOptions,
+  PdfEdit,
   PdfPageNumbersOptions,
   PdfRedactionArea,
   PdfWatermarkOptions,
@@ -391,6 +393,35 @@ export function pathOpBuildBinder(
     options,
     outputName,
   });
+}
+
+export function pathOpApplyEdits(
+  grant: PathOpsFileGrant,
+  edits: readonly PdfEdit[],
+  applyOptions: PdfApplyEditsOptions,
+  outputName: string,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_apply_edits", {
+    grant,
+    payload: {
+      edits: edits.map(serializePathOpEdit),
+      applyOptions,
+      outputName,
+    },
+  });
+}
+
+function serializePathOpEdit(edit: PdfEdit): Record<string, unknown> {
+  if (edit.type === "image" || edit.type === "signature") {
+    return {
+      ...edit,
+      bytes: edit.bytes instanceof ArrayBuffer
+        ? Array.from(new Uint8Array(edit.bytes))
+        : Array.from(edit.bytes),
+    };
+  }
+
+  return { ...edit };
 }
 
 export function pathOpSplitByMaxBytes(

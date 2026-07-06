@@ -367,6 +367,12 @@ pub const OP_DESCRIPTORS: &[OpDescriptor] = &[
         filing_step: None,
         max_input_bytes: None,
     },
+    OpDescriptor {
+        name: "apply_edits",
+        requires: &[Tool::Node, Tool::Qpdf],
+        filing_step: None,
+        max_input_bytes: None,
+    },
 ];
 
 /// Runtime availability of one registered op.

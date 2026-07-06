@@ -19,6 +19,7 @@
 use engine_sidecar_core::path_ops as core_ops;
 use engine_sidecar_core::path_ops::{OpResult, PathOpError, PathOpsToolchain};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs,
@@ -33,6 +34,7 @@ use crate::FileGrants;
 const NODE_LANE_MAX_BYTES_ENV: &str = "RAIOPDF_NODE_LANE_MAX_BYTES";
 const DEFAULT_NODE_LANE_MAX_BYTES: u64 = 400 * 1024 * 1024;
 const NODE_LANE_HEAP_MB: u64 = 8192;
+const NODE_LANE_SECURITY_FLAG: &str = "--disallow-code-generation-from-strings";
 
 /// The input file changed on disk while the op ran (typed like Phase 1's
 /// range-read snapshot error so the UI can share the "reopen it" message).
@@ -222,6 +224,40 @@ struct BuildBinderOneShotError {
     action: Option<String>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyEditsOptions {
+    markup_mode: Option<String>,
+    print_markup_annotations: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyEditsOneShotInput {
+    main_path: String,
+    edits: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apply_options: Option<ApplyEditsOptions>,
+    output_path: String,
+    max_input_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyEditsOneShotOutput {
+    ok: bool,
+    error: Option<BuildBinderOneShotError>,
+    output: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyEditsPayload {
+    pub edits: Vec<Value>,
+    pub apply_options: Option<ApplyEditsOptions>,
+    pub output_name: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolchainStatus {
@@ -352,9 +388,10 @@ fn node_lane_timeout(input_size_bytes: u64) -> Duration {
 
 fn node_options_heap_arg() -> String {
     let heap = format!("--max-old-space-size={NODE_LANE_HEAP_MB}");
+    let lane_options = format!("{heap} {NODE_LANE_SECURITY_FLAG}");
     match std::env::var("NODE_OPTIONS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {heap}"),
-        _ => heap,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {lane_options}"),
+        _ => lane_options,
     }
 }
 
@@ -367,11 +404,11 @@ fn path_to_utf8(path: PathBuf, label: &str) -> OpResult<String> {
         })
 }
 
-fn format_build_binder_error(error: Option<BuildBinderOneShotError>) -> PathOpError {
+fn format_node_one_shot_error(op: &str, error: Option<BuildBinderOneShotError>) -> PathOpError {
     let Some(error) = error else {
         return PathOpError {
             code: core_ops::ERR_OP_FAILED,
-            message: "build_binder failed".to_string(),
+            message: format!("{op} failed"),
         };
     };
     let message = match error.action {
@@ -606,7 +643,7 @@ pub fn path_ops_status(app: tauri::AppHandle) -> PathOpsStatusResponse {
     let ops = core_ops::registry(&toolchain)
         .into_iter()
         .map(|mut op| {
-            if op.name == "build_binder" {
+            if op.name == "build_binder" || op.name == "apply_edits" {
                 op.max_input_bytes = Some(max_input_bytes);
             }
             op
@@ -1174,7 +1211,7 @@ pub async fn path_op_build_binder(
                     message: format!("failed to parse build_binder result: {error}"),
                 })?;
             if !output.ok {
-                return Err(format_build_binder_error(output.error));
+                return Err(format_node_one_shot_error("build_binder", output.error));
             }
             if output.output.as_deref() != Some(output_path.to_string_lossy().as_ref()) {
                 return Err(PathOpError {
@@ -1216,10 +1253,207 @@ pub async fn path_op_build_binder(
             output_size_bytes: output_size,
             notes: vec![
                 format!("Node heap capped with --max-old-space-size={NODE_LANE_HEAP_MB}"),
+                format!("Node flag: {NODE_LANE_SECURITY_FLAG}"),
                 format!("timeout: {} seconds", timeout.as_secs()),
             ],
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// apply_edits — Node one-shot lane
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn path_op_apply_edits(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    payload: ApplyEditsPayload,
+) -> Result<PathOpOutput, PathOpError> {
+    if payload.edits.is_empty() {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: "apply_edits requires at least one edit".to_string(),
+        });
+    }
+
+    let input = resolve_grant(&grants, &grant)?;
+    let toolchain = discover_toolchain(&app);
+    if !toolchain.node_one_shot {
+        return Err(PathOpError {
+            code: core_ops::ERR_TOOLCHAIN_MISSING,
+            message: "bundled Node/MCP one-shot runtime not found".to_string(),
+        });
+    }
+    if toolchain.qpdf.is_none() {
+        return Err(PathOpError {
+            code: core_ops::ERR_TOOLCHAIN_MISSING,
+            message: "qpdf binary not found in payload".to_string(),
+        });
+    }
+
+    let work_dir = OpWorkDir::create(&app)?;
+    let base_output_name = Path::new(&payload.output_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("edited.pdf");
+    let safe_output_name = if base_output_name.to_ascii_lowercase().ends_with(".pdf") {
+        base_output_name.to_string()
+    } else {
+        format!("{base_output_name}.pdf")
+    };
+    let output_path = work_dir.path().join(safe_output_name);
+    let before = snapshot(&input)?;
+    let max_input_bytes = node_lane_max_bytes();
+    if before.len > max_input_bytes {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: format!(
+                "Main PDF is too large for streamed editing through the Node lane ({} > {}).",
+                before.len, max_input_bytes
+            ),
+        });
+    }
+
+    let started = Instant::now();
+    let mut edits = payload.edits;
+    let edit_temp_size = materialize_apply_edit_temp_files(work_dir.path(), &mut edits)?;
+
+    let request = ApplyEditsOneShotInput {
+        main_path: path_to_utf8(input.clone(), "Main document")?,
+        edits,
+        apply_options: payload.apply_options,
+        output_path: path_to_utf8(output_path.clone(), "Edited output")?,
+        max_input_bytes,
+    };
+    let timeout = node_lane_timeout(before.len);
+    let mcp_options = crate::mcp::McpOneShotOptions {
+        timeout: Some(timeout),
+        node_options: Some(node_options_heap_arg()),
+    };
+
+    let (page_count, output_size) = {
+        let input = input.clone();
+        let output_path = output_path.clone();
+        let toolchain = toolchain.clone();
+        on_blocking_pool(move || {
+            let stdout =
+                crate::mcp::run_mcp_one_shot_with_options("apply_edits", &request, mcp_options)
+                    .map_err(|message| PathOpError {
+                        code: core_ops::ERR_OP_FAILED,
+                        message,
+                    })?;
+            let output: ApplyEditsOneShotOutput =
+                serde_json::from_slice(&stdout).map_err(|error| PathOpError {
+                    code: core_ops::ERR_OP_FAILED,
+                    message: format!("failed to parse apply_edits result: {error}"),
+                })?;
+            if !output.ok {
+                return Err(format_node_one_shot_error("apply_edits", output.error));
+            }
+            if output.output.as_deref() != Some(output_path.to_string_lossy().as_ref()) {
+                return Err(PathOpError {
+                    code: core_ops::ERR_OP_FAILED,
+                    message: "apply_edits result did not confirm the expected output path"
+                        .to_string(),
+                });
+            }
+            ensure_unchanged(&input, before)?;
+            let page_count = core_ops::page_count(&toolchain, &output_path)?;
+            let output_size = fs::metadata(&output_path)
+                .map(|metadata| metadata.len())
+                .map_err(|error| PathOpError {
+                    code: core_ops::ERR_IO,
+                    message: format!("cannot stat output: {error}"),
+                })?;
+            Ok((page_count, output_size))
+        })
+        .await?
+    };
+
+    let output_grant = issue_grant(&grants, &output_path)?;
+    let name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("edited.pdf")
+        .to_string();
+    work_dir.keep();
+    Ok(PathOpOutput {
+        output_grant,
+        name,
+        size_bytes: output_size,
+        page_count,
+        op_report: OpReport {
+            op: "apply_edits",
+            tool: "node",
+            duration_ms: started.elapsed().as_millis() as u64,
+            input_size_bytes: before.len + edit_temp_size,
+            output_size_bytes: output_size,
+            notes: vec![
+                format!("Node heap capped with --max-old-space-size={NODE_LANE_HEAP_MB}"),
+                format!("Node flag: {NODE_LANE_SECURITY_FLAG}"),
+                format!("timeout: {} seconds", timeout.as_secs()),
+            ],
+        },
+    })
+}
+
+fn materialize_apply_edit_temp_files(work_dir: &Path, edits: &mut [Value]) -> OpResult<u64> {
+    let mut temp_size = 0_u64;
+
+    for (index, edit) in edits.iter_mut().enumerate() {
+        let object = edit.as_object_mut().ok_or_else(|| PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: "apply_edits edit entries must be objects".to_string(),
+        })?;
+        let edit_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| PathOpError {
+                code: core_ops::ERR_INVALID_INPUT,
+                message: "apply_edits edit entries must include a type".to_string(),
+            })?
+            .to_string();
+
+        if edit_type == "formValues" {
+            return Err(PathOpError {
+                code: core_ops::ERR_INVALID_INPUT,
+                message: "Form filling is not available for streamed documents yet.".to_string(),
+            });
+        }
+
+        if edit_type != "image" && edit_type != "signature" {
+            continue;
+        }
+
+        let bytes_value = object.remove("bytes").ok_or_else(|| PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: format!("{edit_type} edits must include bytes"),
+        })?;
+        let bytes: Vec<u8> = serde_json::from_value(bytes_value).map_err(|error| PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: format!("{edit_type} edit bytes must be a byte array: {error}"),
+        })?;
+        let extension = object
+            .get("format")
+            .and_then(Value::as_str)
+            .filter(|format| *format == "jpeg" || *format == "png")
+            .unwrap_or("bin");
+        let temp_path = work_dir.join(format!("edit-{:03}.{extension}", index + 1));
+        fs::write(&temp_path, &bytes).map_err(|error| PathOpError {
+            code: core_ops::ERR_IO,
+            message: format!("failed to write {edit_type} temp file: {error}"),
+        })?;
+        temp_size += bytes.len() as u64;
+        object.insert(
+            "bytes".to_string(),
+            serde_json::json!({ "tempPath": path_to_utf8(temp_path, "Edit temp")? }),
+        );
+    }
+
+    Ok(temp_size)
 }
 
 // ---------------------------------------------------------------------------

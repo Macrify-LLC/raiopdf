@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EngineHandle } from "../src/engine.js";
 import {
+  handleApplyEditsOneShot,
   handleBates,
   handleBatesFolder,
   handleBinder,
@@ -50,6 +51,11 @@ async function pageCount(filePath: string): Promise<number> {
 function structured(result: { structuredContent: Record<string, unknown> }): Record<string, unknown> {
   return result.structuredContent;
 }
+
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lb9hKwAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 describe("legal tools (local pdf-lib engine)", () => {
   it("extract_pages keeps only the selected pages, in order", async () => {
@@ -132,6 +138,50 @@ describe("legal tools (local pdf-lib engine)", () => {
 
     expect(structured(result)).toMatchObject({ ok: true, output });
     expect(await pageCount(output)).toBe(3);
+  });
+
+  it("one-shot apply_edits rejects a main PDF over its passed-in ceiling", async () => {
+    const main = await makePdf("main.pdf", 1);
+    const output = path.join(dir, "edited.pdf");
+    const result = await handleApplyEditsOneShot({
+      mainPath: main,
+      edits: [{ type: "comment", pageIndex: 0, at: { x: 20, y: 20 }, text: "review" }],
+      applyOptions: { markupMode: "annotation" },
+      outputPath: output,
+      maxInputBytes: 1,
+    });
+
+    expect(structured(result)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_ARGUMENT" },
+    });
+    await expect(fs.access(output)).rejects.toBeTruthy();
+  });
+
+  it("one-shot apply_edits materializes temp-file image edits", async () => {
+    const main = await makePdf("main.pdf", 1);
+    const imagePath = path.join(dir, "stamp.png");
+    const output = path.join(dir, "edited-image.pdf");
+    await fs.writeFile(imagePath, ONE_PIXEL_PNG);
+
+    const result = await handleApplyEditsOneShot({
+      mainPath: main,
+      edits: [
+        {
+          type: "image",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 24, h: 24 },
+          bytes: { tempPath: imagePath },
+          format: "png",
+        },
+      ],
+      applyOptions: { markupMode: "annotation" },
+      outputPath: output,
+      maxInputBytes: 10_000_000,
+    });
+
+    expect(structured(result)).toMatchObject({ ok: true, output });
+    expect(await pageCount(output)).toBe(1);
   });
 
   it("split_pdf writes multiple parts that cover every page", async () => {

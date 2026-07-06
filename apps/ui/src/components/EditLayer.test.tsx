@@ -305,6 +305,28 @@ describe("EditLayer shape removal", () => {
     expect(removeAllRanges).toHaveBeenCalled();
   });
 
+  it("surfaces the page-level no-text-layer message for text markup", async () => {
+    const addEdit = vi.fn();
+    testTextContentItems = [];
+
+    await renderEditLayer([], "highlight", { addEdit });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 10, 10);
+      dispatchPointerEvent(layer!, "pointerup", 90, 40);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(addEdit).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain(
+      "This page has no text layer, so text markup is unavailable here.",
+    );
+  });
+
   it("removes a pending callout as one box-and-leader unit", async () => {
     await renderEditLayer(
       [

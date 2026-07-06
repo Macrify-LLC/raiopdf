@@ -54,7 +54,7 @@ export type DocumentSource =
  * ops) and never require materializing the document in memory.
  */
 export const STREAMED_DOCUMENT_GATE_MESSAGE =
-  "This document is too large for in-app editing. Split, extract, compress, and OCR run through the local engine and still work.";
+  "This document is too large for some in-memory tools. Annotation editing, exhibits, split, extract, compress, repair, OCR, redaction, Bates stamps, page numbers, and watermarks run through the local engine when this desktop app has file access; document text editing, form filling, flattening, crop/rotate, image insertion, and password protection are still unavailable for streamed documents.";
 
 export interface DocumentState {
   bytes: Uint8Array | null;
@@ -972,8 +972,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
         ...INITIAL_DOCUMENT,
         source: { ...input.source, generation },
         generation,
-        // Streamed docs can't dirty (mutations are gated), so `dirty` stays
-        // false for the document's whole lifetime.
+        // Streamed path ops reopen generated copies. The source itself stays
+        // clean, but UI overlays may mark the tab dirty until Save routes
+        // them through apply_edits.
         fileName: input.name,
         filePath: input.path,
         fileSizeBytes: input.source.sizeBytes,

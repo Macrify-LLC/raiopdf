@@ -10,7 +10,7 @@ import type { TextLayerCoverage } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
   extractPageText,
-  findTextRedactionAreasInPages,
+  findTextMatchAreasInPages,
 } from "../lib/legalTools";
 import { extractPageTextForIndexes } from "../lib/pageTextCache";
 
@@ -169,7 +169,7 @@ export function useDocumentSearch({
             return;
           }
 
-          const areas = findTextRedactionAreasInPages(pages, trimmedQuery);
+          const areas = findTextMatchAreasInPages(pages, trimmedQuery);
           const nextResults = areas.map((area, index) => ({
             id: `search-${index}`,
             area,
@@ -220,7 +220,7 @@ export function useDocumentSearch({
           return;
         }
 
-        const areas = findTextRedactionAreasInPages(pages, trimmedQuery);
+        const areas = findTextMatchAreasInPages(pages, trimmedQuery);
 
         if (areas.length > 0) {
           const firstMatchOfRun = collected.length === 0;

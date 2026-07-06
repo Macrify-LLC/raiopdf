@@ -318,6 +318,32 @@
   outline-offset: 2px;
 }
 
+/* Directional insertion line: the dragged page lands on this edge of the
+   hovered cell (left = before, right = after). It sits in the inter-cell gap
+   so it reads as "between these pages", not "onto this page". */
+.organize-page[data-drop-side] {
+  position: relative;
+}
+
+.organize-page[data-drop-side]::after {
+  content: "";
+  position: absolute;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.organize-page[data-drop-side="before"]::after {
+  left: calc(var(--space-2) * -1);
+}
+
+.organize-page[data-drop-side="after"]::after {
+  right: calc(var(--space-2) * -1);
+}
+
 /* Drop settle: the grid is positional, not identity-keyed (see the comment
    in OrganizeWorkspace.tsx), so a reorder can't slide a thumbnail across
    the grid -- the cell the drag landed on just settles into place instead

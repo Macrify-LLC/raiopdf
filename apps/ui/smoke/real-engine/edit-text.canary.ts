@@ -1,4 +1,4 @@
-// Real-engine canary for Edit Document Text. Authored for `pnpm canary`;
+// Real-engine canary for Find & Replace. Authored for `pnpm canary`;
 // do not run from the ordinary UI test command.
 
 import { expect, test } from "@playwright/test";
@@ -31,7 +31,7 @@ const BENIGN_LOG = [
   /fontkit/i,
 ];
 
-test("Edit Document Text: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
+test("Find & Replace: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
   await page.goto("/");
@@ -40,7 +40,7 @@ test("Edit Document Text: real engine replaces born-digital text and preserves r
   await openPdf(page, "edit-text-bookmarked.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -61,7 +61,7 @@ test("Edit Document Text: real engine replaces born-digital text and preserves r
   logs.assertClean(BENIGN_LOG);
 });
 
-test("Edit Document Text: image-bearing mixed document stays within the Phase 0 size envelope", async ({ page }) => {
+test("Find & Replace: image-bearing mixed document stays within the Phase 0 size envelope", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
   await page.goto("/");
@@ -70,7 +70,7 @@ test("Edit Document Text: image-bearing mixed document stays within the Phase 0 
   await openPdf(page, "edit-text-image-bearing.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
   await page.getByLabel("Find text").fill("Acme");
   await page.getByLabel("Replace with").fill("Raio");
   await page.getByRole("button", { name: "Replace all" }).click();

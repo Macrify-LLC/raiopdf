@@ -6454,7 +6454,7 @@ export function App() {
       {textEditAnnotationPrompt ? (
         <FloatingDialog
           title="Pending annotations"
-          eyebrow="Edit Document Text"
+          eyebrow="Find & Replace"
           width="sm"
           onClose={() => setTextEditAnnotationPrompt(false)}
         >

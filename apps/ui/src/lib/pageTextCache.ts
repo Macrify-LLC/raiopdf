@@ -261,3 +261,96 @@ function textItemToRedactionArea(
     h: Math.max(1, height * 1.35 + REDACTION_PADDING_PT * 2),
   };
 }
+
+function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedactionArea {
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  const maxX = Math.max(left.x + left.w, right.x + right.w);
+  const maxY = Math.max(left.y + left.h, right.y + right.h);
+
+  return {
+    pageIndex: left.pageIndex,
+    x,
+    y,
+    w: Math.max(1, maxX - x),
+    h: Math.max(1, maxY - y),
+  };
+}
+
+/**
+ * Bounding box that fully covers the matched text range `[start, end)`.
+ *
+ * Unions the *entire* box of every text span the range touches. Because each
+ * span box is already padded (see `textItemToRedactionArea`), the result is
+ * deliberately over-inclusive — use this wherever the area must never leave a
+ * sliver of the matched text uncovered, i.e. redaction and the sensitive-info
+ * scanner. Verified redaction re-extracts to confirm removal, so undershooting
+ * here would fail that check.
+ */
+export function areaForTextRange(
+  page: ExtractedPageText,
+  start: number,
+  end: number,
+): PdfRedactionArea | null {
+  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
+
+  if (matchingSpans.length === 0) {
+    return null;
+  }
+
+  return matchingSpans.map((span) => span.area).reduce(unionAreas);
+}
+
+/**
+ * Tight bounding box clipped to just the matched characters within each span.
+ *
+ * A pdf.js text item often covers a whole line, so the safe `areaForTextRange`
+ * paints far more than a single-word match. This variant slices each touched
+ * span's box proportionally to the matched character offsets, so search
+ * highlights and edit-match previews frame the word rather than the line.
+ *
+ * The slice assumes a roughly uniform glyph advance across the text item —
+ * per-glyph metrics aren't available at this layer — which is visually correct
+ * for the overwhelming majority of matches. It is display-only: never feed this
+ * to redaction, which must stay over-inclusive.
+ */
+export function matchAreaForTextRange(
+  page: ExtractedPageText,
+  start: number,
+  end: number,
+): PdfRedactionArea | null {
+  const matchingSpans = page.spans.filter((span) => span.start < end && span.end > start);
+
+  if (matchingSpans.length === 0) {
+    return null;
+  }
+
+  return matchingSpans.map((span) => clipSpanAreaToRange(span, start, end)).reduce(unionAreas);
+}
+
+function clipSpanAreaToRange(
+  span: TextSpan,
+  start: number,
+  end: number,
+): PdfRedactionArea {
+  const spanLength = span.end - span.start;
+  const { area } = span;
+  const overlapStart = Math.max(start, span.start);
+  const overlapEnd = Math.min(end, span.end);
+
+  // Whole span covered (or unmeasurable) → keep the span's own box.
+  if (spanLength <= 0 || (overlapStart <= span.start && overlapEnd >= span.end)) {
+    return area;
+  }
+
+  const fractionStart = (overlapStart - span.start) / spanLength;
+  const fractionEnd = (overlapEnd - span.start) / spanLength;
+
+  return {
+    pageIndex: area.pageIndex,
+    x: area.x + fractionStart * area.w,
+    y: area.y,
+    w: Math.max(1, (fractionEnd - fractionStart) * area.w),
+    h: area.h,
+  };
+}

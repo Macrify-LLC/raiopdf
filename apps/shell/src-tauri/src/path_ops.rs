@@ -455,25 +455,37 @@ pub(crate) fn resolve_grant(
     })
 }
 
-/// Resolve a grant to its path, refusing if the file drifted from the snapshot
-/// taken when the grant was issued (the moment the document was opened). A
-/// memory-mode document routes engine ops through its on-disk file via this
-/// grant; without this check an external edit to that file between open and op
-/// would make the engine silently process bytes the user never saw. This is
-/// the same open-time drift guard that ranged reads and Save-As already use.
-pub(crate) fn resolve_grant_unchanged(
+/// Verify that `current` — the snapshot the op is actually about to process —
+/// matches the snapshot taken when the grant was issued (the moment the
+/// document was opened). A memory-mode document routes engine ops through its
+/// on-disk file via this grant; without this check an external edit to that
+/// file between open and op would make the engine silently process bytes the
+/// user never saw. Validating the op's OWN snapshot (rather than snapshotting
+/// again inside the check) leaves no window between the check and the op. This
+/// is the same open-time drift guard ranged reads and Save-As already use.
+pub(crate) fn ensure_grant_snapshot_unchanged(
     grants: &tauri::State<'_, FileGrants>,
     grant: &str,
-) -> OpResult<PathBuf> {
+    current: &InputSnapshot,
+) -> OpResult<()> {
     let entry = grants.resolve_entry(grant).map_err(|message| PathOpError {
         code: "INVALID_INPUT",
         message,
     })?;
-    crate::ensure_grant_file_unchanged(&entry).map_err(|message| PathOpError {
+    let open = entry.snapshot.ok_or(PathOpError {
         code: ERR_FILE_CHANGED,
-        message,
+        message: "This file could not be verified against its open-time snapshot — reopen it."
+            .to_string(),
     })?;
-    Ok(entry.path)
+    // `InputSnapshot` and the grant's `FileSnapshot` carry the same {len, mtime}
+    // drift baseline under different field names.
+    if current.len != open.len || current.modified != open.mtime {
+        return Err(PathOpError {
+            code: ERR_FILE_CHANGED,
+            message: "This file changed on disk — reopen it.".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn issue_grant(grants: &tauri::State<'_, FileGrants>, path: &Path) -> OpResult<String> {
@@ -553,12 +565,15 @@ async fn run_single_output_op<F>(
 where
     F: FnOnce(&PathOpsToolchain, &Path, &Path, &Path) -> OpResult<()> + Send + 'static,
 {
-    let input = resolve_grant_unchanged(&grants, &grant)?;
+    let input = resolve_grant(&grants, &grant)?;
     let toolchain = discover_toolchain(&app);
     let work_dir = OpWorkDir::create(&app)?;
     let name = output_name(&input, spec.suffix);
     let output_path = work_dir.path().join(&name);
     let before = snapshot(&input)?;
+    // Refuse if the on-disk file drifted from its open-time snapshot: the op is
+    // about to process `before`, so validating THAT snapshot leaves no window.
+    ensure_grant_snapshot_unchanged(&grants, &grant, &before)?;
     let started = Instant::now();
 
     let (page_count, output_size) = {
@@ -1598,12 +1613,15 @@ pub async fn path_op_redact_areas(
     grant: String,
     areas: Vec<core_ops::RedactArea>,
 ) -> Result<RedactResponse, PathOpError> {
-    let input = resolve_grant_unchanged(&grants, &grant)?;
+    let input = resolve_grant(&grants, &grant)?;
     let toolchain = discover_toolchain(&app);
     let work_dir = OpWorkDir::create(&app)?;
     let name = output_name(&input, "redacted");
     let output_path = work_dir.path().join(&name);
     let before = snapshot(&input)?;
+    // Refuse if the on-disk file drifted from its open-time snapshot (same
+    // single-snapshot validation as run_single_output_op).
+    ensure_grant_snapshot_unchanged(&grants, &grant, &before)?;
     let started = Instant::now();
 
     let (verification, page_count) = {

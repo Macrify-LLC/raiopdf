@@ -216,9 +216,26 @@ fn opened_pdf_for_path(
         .len();
 
     let bytes_token = if size_bytes < threshold_bytes {
+        // Snapshot around the read so the bytes handed to the WebView describe
+        // the same file the grant is snapshotted against. The file-based engine
+        // route (path_ops) trusts that a clean memory document's in-WebView
+        // bytes and its on-disk grant file match; an external replace mid-open
+        // would otherwise desync them and let an op process content the user
+        // never saw.
+        let before = snapshot_file(&path).ok();
         let bytes = fs::read(&path).map_err(|error| {
             format!("Failed to read PDF at {}: {error}", path.to_string_lossy())
         })?;
+        if let Some(before) = before {
+            let after = snapshot_file(&path).map_err(|error| {
+                format!("Failed to verify PDF at {}: {error}", path.to_string_lossy())
+            })?;
+            if after != before {
+                return Err(
+                    "This file changed while it was being opened — reopen it.".to_string(),
+                );
+            }
+        }
         Some(pending_pdf_bytes.insert(bytes)?)
     } else {
         None

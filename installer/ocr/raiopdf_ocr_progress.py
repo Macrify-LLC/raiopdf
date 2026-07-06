@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", action="append", dest="languages")
     parser.add_argument("--pdf-renderer", default=None)
     parser.add_argument("--deskew", action="store_true")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("input_pdf")
     parser.add_argument("output_pdf")
     return parser.parse_args()
@@ -36,6 +37,7 @@ def main() -> int:
             language=args.languages or ["eng"],
             output_type=args.output_type,
             mode=args.mode,
+            pages=args.pages,
             pdf_renderer=args.pdf_renderer,
             deskew=args.deskew,
             progress_bar=True,

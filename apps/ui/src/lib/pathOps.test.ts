@@ -214,6 +214,25 @@ describe("path op invoke plumbing", () => {
     });
   });
 
+  it("passes selected OCR page indexes when provided", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "doc-ocr.pdf",
+      sizeBytes: 10,
+      pageCount: 2,
+      opReport: { op: "ocr", tool: "ocrmypdf", durationMs: 1, inputSizeBytes: 9, outputSizeBytes: 10, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpOcr(grant, "force-ocr", "job-1", [0, 2])).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_ocr", {
+      grant: "grant-1",
+      mode: "force-ocr",
+      jobToken: "job-1",
+      pageIndexes: [0, 2],
+    });
+  });
+
   it("invokes build_binder with exhibit bytes and options", async () => {
     const output = {
       outputGrant: "grant-out",

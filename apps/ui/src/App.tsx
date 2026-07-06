@@ -49,6 +49,7 @@ import type {
   RectInches,
   SelectionFacts,
   SignatureDetectionFacts,
+  TextLayerCoverage,
 } from "@raiopdf/rules";
 import { AppShell } from "./components/AppShell";
 import { BinderWorkspace } from "./components/BinderWorkspace";
@@ -226,6 +227,7 @@ import {
   textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
+import { planOcrRun } from "./lib/ocrRunPlan";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
@@ -2050,6 +2052,33 @@ export function App() {
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
     const delegatedOcrGrant = streamedDocument ? pathOpsGrant : null;
+    const resolveSourceTextLayerCoverage = async (): Promise<TextLayerCoverage | null> => {
+      if (ocrType === "force-ocr") {
+        return null;
+      }
+
+      if (document.textLayerCoverage) {
+        return document.textLayerCoverage;
+      }
+
+      try {
+        if (pdfDocument) {
+          return await pdfDocumentTextLayerCoverage(pdfDocument);
+        }
+
+        if (sourceBytes) {
+          return await inspectTextLayer(sourceBytes);
+        }
+      } catch {
+        // Preflight is advisory. Post-OCR verification still decides whether
+        // the output is safe to apply.
+      }
+
+      return null;
+    };
+    const resolveOcrRunPlan = async () => (
+      planOcrRun(ocrType, await resolveSourceTextLayerCoverage())
+    );
 
     if (streamedDocument || delegatedOcrGrant) {
       if (!delegatedOcrGrant) {
@@ -2102,7 +2131,12 @@ export function App() {
           }
 
           await waitForUiPaint();
-          const output = await pathOpOcr(grant, ocrType, jobToken);
+          const runPlan = await resolveOcrRunPlan();
+          if (!isCurrentStreamedRun()) {
+            return;
+          }
+
+          const output = await pathOpOcr(grant, runPlan.ocrType, jobToken, runPlan.pageIndexes);
           outputToReleaseOnError = output;
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
@@ -2215,13 +2249,19 @@ export function App() {
     });
 
     void waitForUiPaint()
-      .then(() => {
+      .then(async () => {
+        if (!isCurrentRun()) {
+          return Promise.reject(new Error("OCR run is stale."));
+        }
+
+        const runPlan = await resolveOcrRunPlan();
         if (!isCurrentRun()) {
           return Promise.reject(new Error("OCR run is stale."));
         }
 
         return engineBridge.runOcr(sourceBytes, {
-          ocrType,
+          ocrType: runPlan.ocrType,
+          ...(runPlan.pageIndexes?.length ? { pageIndexes: runPlan.pageIndexes } : {}),
           pageCount: document.pageCount,
           onEngineReady: () => {
             if (isCurrentRun()) {
@@ -2335,7 +2375,7 @@ export function App() {
         ]);
       })
       .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, replaceBytes, streamedDocument]);
+  }, [document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, pdfDocument, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {
@@ -5451,8 +5491,13 @@ export function App() {
             filingEngine.saveToBytes(workingHandle),
             filingEngine.pageCount(workingHandle),
           ]);
+          const filingOcrPlan = planOcrRun(
+            document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
+            document.textLayerCoverage,
+          );
           const ocrResult = await engineBridge.runOcr(workingBytes, {
-            ocrType: document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
+            ocrType: filingOcrPlan.ocrType,
+            ...(filingOcrPlan.pageIndexes?.length ? { pageIndexes: filingOcrPlan.pageIndexes } : {}),
             pageCount: workingPageCount,
           });
           workingHandle = await reopenFilingHandle(
@@ -5590,6 +5635,7 @@ export function App() {
   }, [
     document.bytes,
     document.fileName,
+    document.textLayerCoverage,
     engineBridge,
     filingEngine,
     filingFacts,

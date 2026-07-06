@@ -781,6 +781,7 @@ describe("SidecarPdfEngine", () => {
       languages: ["eng"],
       ocrType: "force-ocr",
       knownPageCount: 6,
+      pageIndexes: [0, 2, 3],
     });
 
     expect(searchable).toEqual({
@@ -792,6 +793,7 @@ describe("SidecarPdfEngine", () => {
     expectBase64Body(calls[0], [1]);
     expect(queryValue(calls[0], "body_encoding")).toBe("base64");
     expect(queryValue(calls[0], "ocr_type")).toBe("force-ocr");
+    expect(queryValue(calls[0], "page_indexes")).toBe("0,2,3");
   });
 
   it("normalizes legacy Normal OCR mode to skip-text for the local interceptor", async () => {

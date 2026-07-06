@@ -26,6 +26,7 @@ interface EngineOcrToolchainStatus {
 export interface RunOcrOptions {
   ocrType?: "skip-text" | "force-ocr";
   pageCount?: number;
+  pageIndexes?: readonly number[];
   onEngineReady?: () => void;
 }
 
@@ -224,6 +225,9 @@ export function useEngineBridge(): EngineBridge {
           languages: ["eng"],
           ocrType: options.ocrType ?? "skip-text",
           deskew: false,
+          ...(options.pageIndexes?.length
+            ? { pageIndexes: options.pageIndexes }
+            : {}),
           ...(options.pageCount !== undefined
             ? { knownPageCount: options.pageCount }
             : {}),

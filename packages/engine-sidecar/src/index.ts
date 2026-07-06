@@ -87,6 +87,7 @@ export interface SidecarOcrOptions {
   languages?: readonly string[];
   ocrType?: SidecarOcrType;
   deskew?: boolean;
+  pageIndexes?: readonly number[];
 }
 
 export interface SidecarOcrBytesOptions extends SidecarOcrOptions {
@@ -940,11 +941,15 @@ export class SidecarPdfEngine implements PdfEngine {
 
   private async postOcr(bytes: Uint8Array, options: SidecarOcrOptions): Promise<Response> {
     const languages = options.languages?.length ? options.languages : ["eng"];
+    const pageIndexes = options.pageIndexes?.length
+      ? options.pageIndexes.map((pageIndex) => String(pageIndex)).join(",")
+      : undefined;
 
     return this.requestLocal("/local/ocr", bytes, {
       ocr_type: normalizeSidecarOcrType(options.ocrType),
       languages: languages.join(","),
       deskew: String(options.deskew ?? false),
+      ...(pageIndexes ? { page_indexes: pageIndexes } : {}),
     });
   }
 

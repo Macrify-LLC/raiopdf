@@ -445,8 +445,14 @@ export function pathOpOcr(
   grant: PathOpsFileGrant,
   mode: PathOpOcrMode = "skip-text",
   jobToken?: string,
+  pageIndexes?: readonly number[],
 ): Promise<PathOpOutput> {
-  return invokePathOp("path_op_ocr", { grant, mode, ...(jobToken ? { jobToken } : {}) });
+  return invokePathOp("path_op_ocr", {
+    grant,
+    mode,
+    ...(jobToken ? { jobToken } : {}),
+    ...(pageIndexes?.length ? { pageIndexes: [...pageIndexes] } : {}),
+  });
 }
 
 export function pathOpRepair(grant: PathOpsFileGrant): Promise<PathOpOutput> {

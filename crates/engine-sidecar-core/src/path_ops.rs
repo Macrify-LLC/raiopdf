@@ -1501,8 +1501,8 @@ pub fn compress(toolchain: &PathOpsToolchain, input: &Path, output_path: &Path) 
 // ---------------------------------------------------------------------------
 
 /// OCRmyPDF text-layer strategy. `SkipText` keeps any existing text layer
-/// untouched; `ForceOcr` re-renders every page and rebuilds the text layer
-/// from scratch (the garbled-text-layer recovery path).
+/// untouched; `ForceOcr` re-renders processed pages and rebuilds the text
+/// layer from scratch (the garbled-text-layer recovery path).
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OcrMode {
@@ -1532,6 +1532,7 @@ pub struct OcrOptions {
     pub mode: OcrMode,
     pub languages: Vec<String>,
     pub deskew: bool,
+    pub page_indexes: Vec<u32>,
 }
 
 impl OcrOptions {
@@ -1549,30 +1550,34 @@ impl Default for OcrOptions {
             mode: OcrMode::SkipText,
             languages: vec!["eng".to_string()],
             deskew: false,
+            page_indexes: Vec::new(),
         }
     }
 }
 
 /// Pure argument construction for the OCR op (unit-testable without the
 /// toolchain): mode flag first, then output format and OCR options.
-fn ocr_arguments(options: &OcrOptions) -> Vec<OsString> {
+fn ocr_arguments(options: &OcrOptions) -> OpResult<Vec<OsString>> {
     let mut arguments = args(&[options.mode.flag(), "--output-type", "pdf"]);
-    append_ocr_option_arguments(&mut arguments, options);
-    arguments
+    append_ocr_option_arguments(&mut arguments, options)?;
+    Ok(arguments)
 }
 
-fn ocr_progress_arguments(options: &OcrOptions) -> Vec<OsString> {
+fn ocr_progress_arguments(options: &OcrOptions) -> OpResult<Vec<OsString>> {
     let mut arguments = args(&[
         "--mode",
         options.mode.wrapper_mode(),
         "--output-type",
         "pdf",
     ]);
-    append_ocr_option_arguments(&mut arguments, options);
-    arguments
+    append_ocr_option_arguments(&mut arguments, options)?;
+    Ok(arguments)
 }
 
-fn append_ocr_option_arguments(arguments: &mut Vec<OsString>, options: &OcrOptions) {
+fn append_ocr_option_arguments(
+    arguments: &mut Vec<OsString>,
+    options: &OcrOptions,
+) -> OpResult<()> {
     for language in normalized_ocr_languages(&options.languages) {
         arguments.push(OsString::from("--language"));
         arguments.push(OsString::from(language));
@@ -1580,6 +1585,11 @@ fn append_ocr_option_arguments(arguments: &mut Vec<OsString>, options: &OcrOptio
     if options.deskew {
         arguments.push(OsString::from("--deskew"));
     }
+    if !options.page_indexes.is_empty() {
+        arguments.push(OsString::from("--pages"));
+        arguments.push(OsString::from(one_based_range_string(&options.page_indexes)?));
+    }
+    Ok(())
 }
 
 fn normalized_ocr_languages(languages: &[String]) -> Vec<&str> {
@@ -1623,7 +1633,7 @@ pub fn ocr_with_options(
 ) -> OpResult<()> {
     require_input_file(input)?;
     let ocrmypdf = toolchain.require_ocrmypdf()?;
-    let mut arguments = ocr_arguments(options);
+    let mut arguments = ocr_arguments(options)?;
     arguments.push(path_arg(input));
     arguments.push(path_arg(output_path));
     let output = run_command(ocrmypdf, &arguments, None, &toolchain.path_entries)?;
@@ -1669,7 +1679,7 @@ where
     let Some(progress_runner) = toolchain.ocr_progress.as_deref() else {
         return ocr_with_options(toolchain, input, output_path, options);
     };
-    let mut arguments = ocr_progress_arguments(options);
+    let mut arguments = ocr_progress_arguments(options)?;
     arguments.push(path_arg(input));
     arguments.push(path_arg(output_path));
     run_command_with_ocr_progress(
@@ -3680,9 +3690,9 @@ mod tests {
 
     #[test]
     fn ocr_arguments_reflect_mode() {
-        let skip = ocr_arguments(&OcrOptions::with_mode(OcrMode::SkipText));
+        let skip = ocr_arguments(&OcrOptions::with_mode(OcrMode::SkipText)).unwrap();
         assert_eq!(skip[0], OsString::from("--skip-text"));
-        let force = ocr_arguments(&OcrOptions::with_mode(OcrMode::ForceOcr));
+        let force = ocr_arguments(&OcrOptions::with_mode(OcrMode::ForceOcr)).unwrap();
         assert_eq!(force[0], OsString::from("--force-ocr"));
         for arguments in [&skip, &force] {
             assert_eq!(arguments[1], OsString::from("--output-type"));
@@ -3698,7 +3708,9 @@ mod tests {
             mode: OcrMode::ForceOcr,
             languages: vec!["eng".to_string(), "spa".to_string()],
             deskew: true,
-        });
+            page_indexes: Vec::new(),
+        })
+        .unwrap();
 
         assert_eq!(
             arguments,
@@ -3716,11 +3728,35 @@ mod tests {
     }
 
     #[test]
+    fn ocr_arguments_include_compact_page_selection() {
+        let arguments = ocr_arguments(&OcrOptions {
+            mode: OcrMode::ForceOcr,
+            languages: vec!["eng".to_string()],
+            deskew: false,
+            page_indexes: vec![0, 2, 3, 8],
+        })
+        .unwrap();
+
+        assert_eq!(
+            arguments,
+            args(&[
+                "--force-ocr",
+                "--output-type",
+                "pdf",
+                "--language",
+                "eng",
+                "--pages",
+                "1,3-4,9",
+            ])
+        );
+    }
+
+    #[test]
     fn ocr_progress_arguments_reflect_mode() {
-        let skip = ocr_progress_arguments(&OcrOptions::with_mode(OcrMode::SkipText));
+        let skip = ocr_progress_arguments(&OcrOptions::with_mode(OcrMode::SkipText)).unwrap();
         assert_eq!(skip[0], OsString::from("--mode"));
         assert_eq!(skip[1], OsString::from("skip"));
-        let force = ocr_progress_arguments(&OcrOptions::with_mode(OcrMode::ForceOcr));
+        let force = ocr_progress_arguments(&OcrOptions::with_mode(OcrMode::ForceOcr)).unwrap();
         assert_eq!(force[0], OsString::from("--mode"));
         assert_eq!(force[1], OsString::from("force"));
         for arguments in [&skip, &force] {
@@ -3729,6 +3765,31 @@ mod tests {
             assert_eq!(arguments[4], OsString::from("--language"));
             assert_eq!(arguments[5], OsString::from("eng"));
         }
+    }
+
+    #[test]
+    fn ocr_progress_arguments_include_compact_page_selection() {
+        let arguments = ocr_progress_arguments(&OcrOptions {
+            mode: OcrMode::ForceOcr,
+            languages: vec!["eng".to_string()],
+            deskew: false,
+            page_indexes: vec![1, 2, 4],
+        })
+        .unwrap();
+
+        assert_eq!(
+            arguments,
+            args(&[
+                "--mode",
+                "force",
+                "--output-type",
+                "pdf",
+                "--language",
+                "eng",
+                "--pages",
+                "2-3,5",
+            ])
+        );
     }
 
     #[test]

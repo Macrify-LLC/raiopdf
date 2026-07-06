@@ -26,6 +26,11 @@ export function EditTextStatusPanel({
       </div>
       <p className="tool-panel__card-copy">{TEXT_EDIT_ADVISORY}</p>
       <p className="tool-panel__note">Preview match counts are estimates; the review re-reads the staged PDF and is authoritative.</p>
+      {textEdit.selectedReplacementText ? (
+        <p className="tool-panel__status-line" role="status">
+          Selected for replacement: {textEdit.selectedReplacementText}
+        </p>
+      ) : null}
       {textEdit.positionalSpaceRisk ? (
         <p className="tool-panel__field-error" role="status">{TEXT_EDIT_MULTI_WORD_CAUTION}</p>
       ) : null}
@@ -35,12 +40,17 @@ export function EditTextStatusPanel({
       {textEdit.pendingOps.length > 0 ? (
         <>
           <p className="tool-panel__card-title">
-            {textEdit.pendingOps.length} queued {textEdit.pendingOps.length === 1 ? "replacement" : "replacements"}
+            {textEdit.pendingOps.some((operation) => operation.target)
+              ? "Selected replacement queued"
+              : `${textEdit.pendingOps.length} queued ${textEdit.pendingOps.length === 1 ? "replacement" : "replacements"}`}
           </p>
           <div className="tool-panel__pending-list" role="list" aria-label="Queued text replacements">
             {textEdit.pendingOps.map((operation) => (
               <div key={operation.id} className="tool-panel__pending-row" role="listitem">
                 <span className="tool-panel__pending-text">
+                  {operation.target ? (
+                    <span className="tool-panel__pending-detail">Page {operation.target.pageIndex + 1}</span>
+                  ) : null}
                   <span className="tool-panel__pending-label">
                     {operation.find} &rarr; {operation.replace || "(delete)"}
                   </span>
@@ -58,7 +68,7 @@ export function EditTextStatusPanel({
           </div>
         </>
       ) : (
-        <p className="tool-panel__note">Use the canvas bar to queue replacements.</p>
+        <p className="tool-panel__note">Use the canvas bar to queue selected or bulk replacements.</p>
       )}
       {textEdit.message ? (
         <p

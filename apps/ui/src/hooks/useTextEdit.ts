@@ -8,6 +8,7 @@ import type { ReplaceBytesResult } from "./useDocument";
 import type { EngineBridge } from "./useEngineBridge";
 import {
   buildTextEditReviewReport,
+  canApplyTextEditReview,
   deriveTextEditGate,
   detectsPositionalSpaceRisk,
   findTextMatchesInPages,
@@ -17,6 +18,12 @@ import {
   type TextEditMatch,
   type TextEditReviewReport,
 } from "../lib/textEdit";
+import {
+  captureCurrentTextSelection,
+  resolveSelectedTextTarget,
+  selectionForReplacement,
+  type CapturedTextSelection,
+} from "../lib/selectedTextEdit";
 import type { SignatureInvalidationNotice } from "./useDocument";
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -54,10 +61,14 @@ export interface TextEditState {
   message: string | null;
   staged: TextEditStagedResult | null;
   positionalSpaceRisk: boolean;
+  selectionResolving: boolean;
+  selectedReplacementText: string | null;
   setFind: (find: string) => void;
   setReplace: (replace: string) => void;
   setWholeWord: (wholeWord: boolean) => void;
+  captureSelectedText: () => void;
   queueReplaceAll: () => void;
+  queueSelectedReplacement: () => Promise<void>;
   removePendingOp: (id: string) => void;
   clear: () => void;
   goToNext: () => void;
@@ -65,6 +76,83 @@ export interface TextEditState {
   review: () => Promise<void>;
   apply: () => Promise<void>;
   cancelReview: () => void;
+}
+
+export interface TextEditEngineReplacementOptions {
+  engineBridge: Pick<EngineBridge, "replaceSelectedText" | "replaceText">;
+  sourceBytes: Uint8Array;
+  operations: readonly PendingTextReplacement[];
+  allowSignatureInvalidation?: boolean;
+  allowPdfAIdentificationRemoval?: boolean;
+}
+
+export interface TextEditEngineReplacementResult {
+  bytes: Uint8Array;
+  replacedCounts: readonly number[] | null;
+  warnings: readonly PdfReplaceTextWarning[];
+}
+
+export async function runTextEditEngineReplacement({
+  engineBridge,
+  sourceBytes,
+  operations,
+  allowSignatureInvalidation = false,
+  allowPdfAIdentificationRemoval = false,
+}: TextEditEngineReplacementOptions): Promise<TextEditEngineReplacementResult> {
+  const selectedOperation = operations.length === 1 ? operations[0] : null;
+  if (operations.some((operation) => Boolean(operation.target)) && !selectedOperation?.target) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Selected-text edits must be reviewed by themselves.",
+    );
+  }
+
+  if (selectedOperation?.target) {
+    return {
+      ...(await engineBridge.replaceSelectedText(sourceBytes, {
+        target: selectedOperation.target,
+        replacement: selectedOperation.replace,
+        ...(allowSignatureInvalidation ? { allowSignatureInvalidation: true } : {}),
+        ...(allowPdfAIdentificationRemoval ? { allowPdfAIdentificationRemoval: true } : {}),
+      })),
+      replacedCounts: null,
+    };
+  }
+
+  return engineBridge.replaceText(sourceBytes, {
+    operations: operations.map(({ find, replace }) => ({ find, replace })),
+    wholeWord: operations.every((operation) => operation.wholeWord),
+    pageIndexes: "all",
+    ...(allowSignatureInvalidation ? { allowSignatureInvalidation: true } : {}),
+    ...(allowPdfAIdentificationRemoval ? { allowPdfAIdentificationRemoval: true } : {}),
+  });
+}
+
+export function unsafeSelectedTextPageIndexes(
+  textLayerCoverage: TextLayerCoverage | null,
+): ReadonlySet<number> {
+  return new Set([
+    ...(textLayerCoverage?.imageOnlyPages ?? []),
+    ...((textLayerCoverage?.trivialTextImagePages ?? []).map((page) => page.pageIndex)),
+    ...((textLayerCoverage?.garbledPages ?? []).map((page) => page.pageIndex)),
+  ]);
+}
+
+export function selectedTextReviewGateMessage(
+  operations: readonly PendingTextReplacement[],
+  unsafePageIndexes: ReadonlySet<number>,
+): string | null {
+  const selectedOperation = operations.length === 1 ? operations[0] : null;
+
+  if (operations.some((operation) => Boolean(operation.target)) && !selectedOperation?.target) {
+    return "Selected-text edits must be reviewed by themselves.";
+  }
+
+  if (selectedOperation?.target && unsafePageIndexes.has(selectedOperation.target.pageIndex)) {
+    return "Selected-text editing is not available on pages with scanned or unreliable text layers.";
+  }
+
+  return null;
 }
 
 export function useTextEdit({
@@ -85,7 +173,10 @@ export function useTextEdit({
   sourceOpenToken: number;
   streamed: boolean;
   textLayerCoverage: TextLayerCoverage | null;
-  engineBridge: Pick<EngineBridge, "available" | "warmEngine" | "replaceText">;
+  engineBridge: Pick<
+    EngineBridge,
+    "available" | "warmEngine" | "inspectTextMap" | "replaceSelectedText" | "replaceText"
+  >;
   replaceBytes: (bytes: Uint8Array, options: {
     dirty: boolean;
     hasTextLayer: boolean | null;
@@ -111,11 +202,16 @@ export function useTextEdit({
   const [phase, setPhase] = useState<TextEditPhase>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [staged, setStaged] = useState<TextEditStagedResult | null>(null);
+  const [selectionResolving, setSelectionResolving] = useState(false);
   const runRef = useRef(0);
   const opIdRef = useRef(0);
   const sourceRef = useRef(source);
   const generationRef = useRef(documentGeneration);
   const openTokenRef = useRef(sourceOpenToken);
+  const pendingOpsRef = useRef<readonly PendingTextReplacement[]>([]);
+  const selectionResolvingRef = useRef(false);
+  const selectedReplacementRef = useRef<CapturedTextSelection | null>(null);
+  const [selectedReplacementText, setSelectedReplacementText] = useState<string | null>(null);
 
   useEffect(() => {
     sourceRef.current = source;
@@ -125,6 +221,10 @@ export function useTextEdit({
     generationRef.current = documentGeneration;
     openTokenRef.current = sourceOpenToken;
   }, [documentGeneration, sourceOpenToken]);
+
+  useEffect(() => {
+    pendingOpsRef.current = pendingOps;
+  }, [pendingOps]);
 
   const gate = useMemo(
     () => deriveTextEditGate({
@@ -140,6 +240,10 @@ export function useTextEdit({
     () => new Set(textLayerCoverage?.imageOnlyPages ?? []),
     [textLayerCoverage],
   );
+  const unsafeSelectedPageIndexes = useMemo(
+    () => unsafeSelectedTextPageIndexes(textLayerCoverage),
+    [textLayerCoverage],
+  );
 
   const clear = useCallback(() => {
     runRef.current += 1;
@@ -152,6 +256,10 @@ export function useTextEdit({
     setPhase("idle");
     setMessage(null);
     setStaged(null);
+    setSelectionResolving(false);
+    selectionResolvingRef.current = false;
+    selectedReplacementRef.current = null;
+    setSelectedReplacementText(null);
   }, []);
 
   useEffect(() => {
@@ -204,6 +312,10 @@ export function useTextEdit({
   }, [documentGeneration, gate.blocked, source.bytes, source.proxy]);
 
   useEffect(() => {
+    if (pendingOps.some((operation) => operation.target)) {
+      return;
+    }
+
     if (!debouncedFind || pages.length === 0) {
       setMatches([]);
       setActiveMatchIndex(null);
@@ -220,7 +332,7 @@ export function useTextEdit({
     const nextMatches = findTextMatchesInPages(pages, previewOp, { excludedPageIndexes });
     setMatches(nextMatches);
     setActiveMatchIndex(nextMatches.length > 0 ? 0 : null);
-  }, [debouncedFind, excludedPageIndexes, pages, replace, wholeWord]);
+  }, [debouncedFind, excludedPageIndexes, pages, pendingOps, replace, wholeWord]);
 
   const positionalSpaceRisk = useMemo(
     () => detectsPositionalSpaceRisk(pages, find),
@@ -230,6 +342,16 @@ export function useTextEdit({
   const queueReplaceAll = useCallback(() => {
     const trimmedFind = find.trim();
     if (!trimmedFind || gate.blocked) {
+      return;
+    }
+
+    if (selectionResolvingRef.current) {
+      setMessage("Wait for the selected text to resolve before queuing another replacement.");
+      return;
+    }
+
+    if (pendingOpsRef.current.some((operation) => operation.target)) {
+      setMessage("Review or clear the selected-text edit before queuing bulk replacements.");
       return;
     }
 
@@ -243,16 +365,143 @@ export function useTextEdit({
     };
 
     setPendingOps((current) => [...current, operation]);
+    selectedReplacementRef.current = null;
+    setSelectedReplacementText(null);
     setPhase("idle");
     setMessage(null);
     setStaged(null);
     engineBridge.warmEngine();
   }, [engineBridge, find, gate.blocked, replace, wholeWord]);
 
+  const captureSelectedText = useCallback(() => {
+    const captured = captureCurrentTextSelection();
+    if (!captured.ok) {
+      return;
+    }
+
+    selectedReplacementRef.current = captured.selection;
+    setSelectedReplacementText(captured.selection.text);
+    setMessage(`Selected "${captured.selection.text}" for replacement.`);
+  }, []);
+
+  const queueSelectedReplacement = useCallback(async () => {
+    const currentSource = sourceRef.current;
+    const sourceBytes = currentSource.bytes;
+
+    if (gate.blocked) {
+      setMessage(gate.message);
+      return;
+    }
+
+    if (!sourceBytes || !currentSource.proxy) {
+      setMessage("Open a PDF before editing document text.");
+      return;
+    }
+
+    if (selectionResolvingRef.current) {
+      setMessage("Selected text is already being resolved.");
+      return;
+    }
+
+    if (pendingOpsRef.current.length > 0) {
+      setMessage("Review or clear queued replacements before adding a selected-text edit.");
+      return;
+    }
+
+    const queuedSelection = selectionForReplacement(
+      captureCurrentTextSelection(),
+      selectedReplacementRef.current,
+    );
+    if (!queuedSelection.ok) {
+      setMessage(queuedSelection.message);
+      return;
+    }
+    const selectedText = queuedSelection.selection;
+
+    if (unsafeSelectedPageIndexes.has(selectedText.pageIndex)) {
+      setMessage("Selected-text editing is not available on pages with scanned or unreliable text layers.");
+      return;
+    }
+
+    const runId = runRef.current + 1;
+    runRef.current = runId;
+    selectionResolvingRef.current = true;
+    setSelectionResolving(true);
+    setMessage("Resolving selected text...");
+    setPhase("idle");
+    setStaged(null);
+
+    try {
+      const textMap = await engineBridge.inspectTextMap(sourceBytes, {
+        pageIndexes: [selectedText.pageIndex],
+      });
+
+      if (runRef.current !== runId) {
+        return;
+      }
+
+      const resolved = resolveSelectedTextTarget(selectedText, textMap);
+      if (!resolved.ok) {
+        setMessage(resolved.message);
+        return;
+      }
+
+      if (pendingOpsRef.current.length > 0) {
+        setMessage("Selected text was not queued because another replacement was added first.");
+        return;
+      }
+
+      opIdRef.current += 1;
+      const operation: PendingTextReplacement = {
+        id: `selected-text-edit-${opIdRef.current}`,
+        find: resolved.target.expectedText,
+        replace,
+        wholeWord: false,
+        pageIndexes: [resolved.target.pageIndex],
+        target: resolved.target,
+        selectedArea: resolved.area,
+      };
+
+      setPendingOps([operation]);
+      setMatches([{
+        id: `${operation.id}-selected`,
+        operationId: operation.id,
+        pageIndex: resolved.target.pageIndex,
+        area: resolved.area,
+        excerpt: resolved.target.expectedText,
+      }]);
+      setActiveMatchIndex(0);
+      setCurrentPage(resolved.target.pageIndex + 1);
+      window.getSelection()?.removeAllRanges();
+      selectedReplacementRef.current = null;
+      setSelectedReplacementText(null);
+      setMessage(null);
+      engineBridge.warmEngine();
+    } catch (error) {
+      if (runRef.current !== runId) {
+        return;
+      }
+
+      setMessage(textEditErrorMessage(error));
+    } finally {
+      if (runRef.current === runId) {
+        selectionResolvingRef.current = false;
+        setSelectionResolving(false);
+      }
+    }
+  }, [engineBridge, gate.blocked, gate.message, replace, setCurrentPage, unsafeSelectedPageIndexes]);
+
   const removePendingOp = useCallback((id: string) => {
+    const removed = pendingOpsRef.current.find((operation) => operation.id === id);
     setPendingOps((current) => current.filter((operation) => operation.id !== id));
     setStaged(null);
     setPhase("idle");
+    selectedReplacementRef.current = null;
+    setSelectedReplacementText(null);
+    if (removed?.target) {
+      setMatches([]);
+      setActiveMatchIndex(null);
+    }
   }, []);
 
   const goToResult = useCallback((index: number) => {
@@ -299,6 +548,12 @@ export function useTextEdit({
       return;
     }
 
+    const selectedGate = selectedTextReviewGateMessage(operations, unsafeSelectedPageIndexes);
+    if (selectedGate) {
+      setMessage(selectedGate);
+      return;
+    }
+
     const runId = runRef.current + 1;
     runRef.current = runId;
     setPhase("staging");
@@ -311,12 +566,12 @@ export function useTextEdit({
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const result = await engineBridge.replaceText(sourceBytes, {
-          operations: operations.map(({ find, replace }) => ({ find, replace })),
-          wholeWord: operations.every((operation) => operation.wholeWord),
-          pageIndexes: "all",
-          ...(allowSignatureInvalidation ? { allowSignatureInvalidation: true } : {}),
-          ...(allowPdfAIdentificationRemoval ? { allowPdfAIdentificationRemoval: true } : {}),
+        const result = await runTextEditEngineReplacement({
+          engineBridge,
+          sourceBytes,
+          operations,
+          allowSignatureInvalidation,
+          allowPdfAIdentificationRemoval,
         });
 
         if (
@@ -412,6 +667,7 @@ export function useTextEdit({
     gate.blocked,
     gate.message,
     pendingOps,
+    unsafeSelectedPageIndexes,
   ]);
 
   const apply = useCallback(async () => {
@@ -420,8 +676,10 @@ export function useTextEdit({
       return;
     }
 
-    if (candidate.report.zeroChange) {
-      setMessage(formatReplaceTextResult(candidate.report));
+    if (!canApplyTextEditReview(candidate.report)) {
+      setMessage(candidate.report.zeroChange
+        ? formatReplaceTextResult(candidate.report)
+        : "The staged PDF did not verify every queued replacement. The result was not applied.");
       return;
     }
 
@@ -488,10 +746,14 @@ export function useTextEdit({
     message,
     staged,
     positionalSpaceRisk,
+    selectionResolving,
+    selectedReplacementText,
     setFind,
     setReplace,
     setWholeWord,
+    captureSelectedText,
     queueReplaceAll,
+    queueSelectedReplacement,
     removePendingOp,
     clear,
     goToNext,

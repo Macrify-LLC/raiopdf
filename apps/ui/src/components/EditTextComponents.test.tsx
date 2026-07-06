@@ -31,11 +31,20 @@ describe("EditText components", () => {
 
   it("queues from the mode bar and navigates with Enter/Shift+Enter", () => {
     const queueReplaceAll = vi.fn();
+    const queueSelectedReplacement = vi.fn(async () => undefined);
+    const captureSelectedText = vi.fn();
     const goToNext = vi.fn();
     const goToPrevious = vi.fn();
     render(
       <EditTextModeBar
-        textEdit={state({ find: "John", queueReplaceAll, goToNext, goToPrevious })}
+        textEdit={state({
+          find: "John",
+          queueReplaceAll,
+          queueSelectedReplacement,
+          captureSelectedText,
+          goToNext,
+          goToPrevious,
+        })}
         onExit={() => undefined}
       />,
     );
@@ -55,6 +64,25 @@ describe("EditText components", () => {
       getButton("Replace all").click();
     });
     expect(queueReplaceAll).toHaveBeenCalled();
+
+    const selectionButton = getButton("Replace selection");
+    let pointerAllowed = true;
+    act(() => {
+      pointerAllowed = selectionButton.dispatchEvent(new Event("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    act(() => {
+      selectionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(pointerAllowed).toBe(false);
+    expect(queueSelectedReplacement).toHaveBeenCalled();
+
+    act(() => {
+      getInput("Replace with").dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(captureSelectedText).toHaveBeenCalled();
   });
 
   it("renders gate, advisory, and positional-space caution in the status panel", () => {
@@ -83,11 +111,44 @@ describe("EditText components", () => {
     expect(document.body.textContent).toContain("Image-only pages are skipped.");
   });
 
+  it("disables replacement queue actions while selected text is resolving", () => {
+    render(
+      <EditTextModeBar
+        textEdit={state({ find: "John", selectionResolving: true })}
+        onExit={() => undefined}
+      />,
+    );
+
+    expect(getButton("Replace selection").disabled).toBe(true);
+    expect(getButton("Replace all").disabled).toBe(true);
+  });
+
+  it("shows captured selection status separately from bulk queued replacements", () => {
+    render(
+      <EditTextStatusPanel
+        textEdit={state({
+          selectedReplacementText: "John Smith",
+          pendingOps: [op()],
+        })}
+        onHelp={() => undefined}
+      />,
+    );
+
+    expect(document.body.textContent).toContain("Selected for replacement: John Smith");
+    expect(document.body.textContent).toContain("1 queued replacement");
+  });
+
   it("renders whole-document disclosure and disables Apply for zero-change review", () => {
     render(<EditTextReviewDialog textEdit={state({ phase: "review", staged: staged(true) })} />);
 
     expect(document.body.textContent).toContain(TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE);
     expect(document.body.textContent).toContain(TEXT_EDIT_ZERO_CHANGE_MESSAGE);
+    expect(getButton("Apply").disabled).toBe(true);
+  });
+
+  it("disables Apply when one operation did not change", () => {
+    render(<EditTextReviewDialog textEdit={state({ phase: "review", staged: staged(false, "unchanged", true) })} />);
+
     expect(getButton("Apply").disabled).toBe(true);
   });
 
@@ -119,10 +180,14 @@ function state(overrides: Partial<TextEditState> = {}): TextEditState {
     message: null,
     staged: null,
     positionalSpaceRisk: false,
+    selectionResolving: false,
+    selectedReplacementText: null,
     setFind: () => undefined,
     setReplace: () => undefined,
     setWholeWord: () => undefined,
+    captureSelectedText: () => undefined,
     queueReplaceAll: () => undefined,
+    queueSelectedReplacement: async () => undefined,
     removePendingOp: () => undefined,
     clear: () => undefined,
     goToNext: () => undefined,
@@ -134,7 +199,11 @@ function state(overrides: Partial<TextEditState> = {}): TextEditState {
   };
 }
 
-function staged(zeroChange: boolean): NonNullable<TextEditState["staged"]> {
+function staged(
+  zeroChange: boolean,
+  status: "changed" | "not-found" | "unchanged" = zeroChange ? "not-found" : "changed",
+  selected = false,
+): NonNullable<TextEditState["staged"]> {
   return {
     bytes: new Uint8Array([1]),
     warnings: [{ code: "COUNTS_UNAVAILABLE", message: "" }],
@@ -144,10 +213,11 @@ function staged(zeroChange: boolean): NonNullable<TextEditState["staged"]> {
         operationId: "op",
         find: "John",
         replace: "Jane",
+        selected,
         foundBefore: zeroChange ? [] : [0],
         foundAfter: [],
         replacedEstimate: zeroChange ? 0 : 1,
-        status: zeroChange ? "not-found" : "changed",
+        status,
       }],
       changedPageIndexes: zeroChange ? [] : [0],
       zeroChange,

@@ -33,10 +33,14 @@ import type {
   PdfRaioAnnotationImport,
   PdfReplaceTextOptions,
   PdfReplaceTextResult,
+  PdfReplaceSelectedTextOptions,
+  PdfReplaceSelectedTextResult,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
   PdfSanitizeResult,
+  PdfInspectTextMapOptions,
+  PdfInspectTextMapResult,
   PdfShapeEdit,
   PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
@@ -522,6 +526,26 @@ export class LocalPdfEngine implements PdfEngine {
     throw new PdfEngineError(
       "UNSUPPORTED",
       "PDF text replacement requires the desktop sidecar engine; the local pdf-lib engine cannot re-encode arbitrary glyph runs.",
+    );
+  }
+
+  async inspectTextMap(
+    _document: PdfDocumentHandle,
+    _options: PdfInspectTextMapOptions = {},
+  ): Promise<PdfInspectTextMapResult> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "PDF text-map inspection requires the desktop sidecar engine; the local pdf-lib engine cannot read rewrite-safe glyph runs.",
+    );
+  }
+
+  async replaceSelectedText(
+    _document: PdfDocumentHandle,
+    _options: PdfReplaceSelectedTextOptions,
+  ): Promise<PdfReplaceSelectedTextResult> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Selected PDF text replacement requires the desktop sidecar engine; the local pdf-lib engine cannot re-encode arbitrary glyph runs.",
     );
   }
 

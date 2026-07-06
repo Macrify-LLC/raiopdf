@@ -8,7 +8,9 @@ import type { EngineBridge } from "./useEngineBridge";
 
 const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
+    inspectTextMapCalls: unknown[];
     ocrCalls: unknown[];
+    replaceSelectedTextCalls: unknown[];
     replaceTextCalls: unknown[];
     removeEncryptionCalls: Array<{ password: string }>;
     closedHandles: string[];
@@ -20,12 +22,15 @@ const sidecarState = vi.hoisted(() => ({
   ocrBehaviors: [] as Array<Error | undefined>,
   // Same shape, for removeEncryption().
   removeEncryptionBehaviors: [] as Array<Error | undefined>,
+  replaceSelectedTextBehaviors: [] as Array<Error | undefined>,
   replaceTextBehaviors: [] as Array<Error | undefined>,
 }));
 
 vi.mock("@raiopdf/engine-sidecar", () => {
   class SidecarPdfEngine {
+    readonly inspectTextMapCalls: unknown[] = [];
     readonly ocrCalls: unknown[] = [];
+    readonly replaceSelectedTextCalls: unknown[] = [];
     readonly replaceTextCalls: unknown[] = [];
     readonly removeEncryptionCalls: Array<{ password: string }> = [];
     readonly closedHandles: string[] = [];
@@ -87,6 +92,38 @@ vi.mock("@raiopdf/engine-sidecar", () => {
         document: outputHandle,
         replacedCounts: null,
         warnings: [{ code: "COUNTS_UNAVAILABLE", message: "Counts unavailable." }],
+      };
+    }
+
+    async inspectTextMap(handle: string, options: unknown) {
+      this.inspectTextMapCalls.push({ handle, options });
+
+      return {
+        sourceFingerprint: "document-fingerprint",
+        pages: [{
+          pageIndex: 0,
+          text: "John Smith",
+          sourceFingerprint: "fingerprint",
+          elements: [],
+        }],
+      };
+    }
+
+    async replaceSelectedText(handle: string, options: unknown) {
+      this.replaceSelectedTextCalls.push({ handle, options });
+      const behavior = sidecarState.replaceSelectedTextBehaviors.shift();
+
+      if (behavior) {
+        throw behavior;
+      }
+
+      const outputHandle = `test-pdf:${this.nextHandle}`;
+      this.nextHandle += 1;
+      this.bytesByHandle.set(outputHandle, new Uint8Array([6]));
+
+      return {
+        document: outputHandle,
+        warnings: [],
       };
     }
 
@@ -452,6 +489,147 @@ describe("useEngineBridge replaceText", () => {
     expect(caught).toBe(signed);
     expect(sidecarState.instances).toHaveLength(1);
     expect(sidecarState.instances[0]?.replaceTextCalls).toHaveLength(1);
+  });
+
+  function renderHookValue(): EngineBridge {
+    let bridge: EngineBridge | null = null;
+    render(<Harness onReady={(value) => { bridge = value; }} />);
+
+    if (!bridge) {
+      throw new Error("Engine bridge was not rendered.");
+    }
+
+    return bridge;
+  }
+
+  function render(element: ReactNode) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(element);
+    });
+  }
+});
+
+describe("useEngineBridge selected text editing", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>() => ({
+      port: 1234,
+      token: "test-token",
+      ocrToolchain: { available: true, missing: [] },
+    }) as T;
+    sidecarState.instances.length = 0;
+    sidecarState.replaceSelectedTextBehaviors.length = 0;
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    delete window.__RAIOPDF_TEST_TAURI_INVOKE__;
+    delete window.__RAIOPDF_TEST_ENGINE_FETCH__;
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
+  it("opens bytes, inspects the text map, and closes the source handle", async () => {
+    const bridge = renderHookValue();
+    let result: Awaited<ReturnType<EngineBridge["inspectTextMap"]>> | undefined;
+
+    await act(async () => {
+      result = await bridge.inspectTextMap(new Uint8Array([1]), {
+        pageIndexes: [0],
+      });
+    });
+
+    expect(result?.pages[0]?.text).toBe("John Smith");
+    expect(sidecarState.instances[0]?.inspectTextMapCalls[0]).toMatchObject({
+      handle: "test-pdf:1",
+      options: { pageIndexes: [0] },
+    });
+    expect(sidecarState.instances[0]?.closedHandles).toEqual(["test-pdf:1"]);
+  });
+
+  it("opens bytes, replaces selected text, saves output bytes, and closes both handles", async () => {
+    const bridge = renderHookValue();
+    let result: Awaited<ReturnType<EngineBridge["replaceSelectedText"]>> | undefined;
+
+    await act(async () => {
+      result = await bridge.replaceSelectedText(new Uint8Array([1]), {
+        replacement: "Jane Doe",
+        target: {
+          pageIndex: 0,
+          start: 0,
+          end: 10,
+          expectedText: "John Smith",
+          sourceDocumentFingerprint: "document-fingerprint",
+          sourceFingerprint: "fingerprint",
+          firstElementIndex: 0,
+          lastElementIndex: 0,
+          firstElementOffset: 0,
+          lastElementOffset: 10,
+        },
+      });
+    });
+
+    expect(result).toEqual({ bytes: new Uint8Array([6]), warnings: [] });
+    expect(sidecarState.instances[0]?.replaceSelectedTextCalls[0]).toMatchObject({
+      handle: "test-pdf:1",
+      options: {
+        replacement: "Jane Doe",
+        target: {
+          expectedText: "John Smith",
+          sourceDocumentFingerprint: "document-fingerprint",
+          sourceFingerprint: "fingerprint",
+        },
+      },
+    });
+    expect(sidecarState.instances[0]?.closedHandles).toEqual(["test-pdf:2", "test-pdf:1"]);
+  });
+
+  it("propagates PdfEngineError from replaceSelectedText without retrying", async () => {
+    const stale = new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target is stale.",
+    );
+    sidecarState.replaceSelectedTextBehaviors.push(stale);
+
+    const bridge = renderHookValue();
+    let caught: unknown = null;
+
+    await act(async () => {
+      try {
+        await bridge.replaceSelectedText(new Uint8Array([1]), {
+          replacement: "Jane Doe",
+          target: {
+            pageIndex: 0,
+            start: 0,
+            end: 10,
+            expectedText: "John Smith",
+            sourceDocumentFingerprint: "document-fingerprint",
+            sourceFingerprint: "fingerprint",
+            firstElementIndex: 0,
+            lastElementIndex: 0,
+            firstElementOffset: 0,
+            lastElementOffset: 10,
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBe(stale);
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.replaceSelectedTextCalls).toHaveLength(1);
   });
 
   function renderHookValue(): EngineBridge {

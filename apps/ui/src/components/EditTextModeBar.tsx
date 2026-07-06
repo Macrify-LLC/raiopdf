@@ -13,8 +13,10 @@ export function EditTextModeBar({
   textEdit: TextEditState;
   onExit: () => void;
 }) {
-  const busy = textEdit.phase === "staging" || textEdit.phase === "applying";
-  const canQueue = Boolean(textEdit.find.trim()) && !busy && !textEdit.gate.blocked;
+  const busy = textEdit.phase === "staging" || textEdit.phase === "applying" || textEdit.selectionResolving;
+  const hasSelectedOperation = textEdit.pendingOps.some((operation) => operation.target);
+  const canQueue = Boolean(textEdit.find.trim()) && !busy && !textEdit.gate.blocked && !hasSelectedOperation;
+  const canQueueSelection = !busy && !textEdit.gate.blocked && textEdit.pendingOps.length === 0;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,6 +72,8 @@ export function EditTextModeBar({
             aria-label="Replace with"
             value={textEdit.replace}
             disabled={busy}
+            onFocus={textEdit.captureSelectedText}
+            onPointerDown={textEdit.captureSelectedText}
             onChange={(event) => textEdit.setReplace(event.currentTarget.value)}
           />
         </label>
@@ -86,7 +90,9 @@ export function EditTextModeBar({
         </span>
       </div>
       <span className="edit-text-mode-bar__match-chip" aria-live="polite">
-        {textEdit.matchLabel || `${textEdit.pendingOps.length} queued`}
+        {textEdit.selectedReplacementText
+          ? "Selection captured"
+          : textEdit.matchLabel || `${textEdit.pendingOps.length} queued`}
       </span>
       {/* Previous/next grouped as one stepper so a narrow window wraps them
           together instead of splitting the pair across two lines in the
@@ -112,6 +118,17 @@ export function EditTextModeBar({
         </button>
       </div>
       <div className="edit-text-mode-bar__actions">
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          disabled={!canQueueSelection}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            void textEdit.queueSelectedReplacement();
+          }}
+        >
+          Replace selection
+        </button>
         <button type="submit" className="legal-mode-bar__danger-button" disabled={!canQueue}>
           Replace all
         </button>

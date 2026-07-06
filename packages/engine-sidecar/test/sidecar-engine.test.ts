@@ -1,4 +1,4 @@
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, type PdfSelectedTextTarget, type PdfTextMapPage } from "@raiopdf/engine-api";
 import {
   PDFBool,
   PDFDict,
@@ -410,6 +410,33 @@ describe("SidecarPdfEngine", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("refuses encrypted selected-text edits before validating a stale target", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(new TextEncoder().encode("%PDF-1.7\ntrailer\n<< /Encrypt <<>> >>"));
+
+    await expect(
+      engine.replaceSelectedText(document, {
+        replacement: "Jane Doe",
+        target: {
+          pageIndex: 99,
+          start: 0,
+          end: 10,
+          expectedText: "John Smith",
+          sourceDocumentFingerprint: "stale-document",
+          sourceFingerprint: "stale-page",
+          firstElementIndex: 0,
+          lastElementIndex: 0,
+          firstElementOffset: 0,
+          lastElementOffset: 10,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "ENCRYPTED_DOCUMENT",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
   it("refuses signed PDFs unless signature invalidation is explicitly allowed", async () => {
     const sourceBytes = await createPdfWithSignedSignatureField();
     const { calls, fetchImpl } = createFetch();
@@ -528,6 +555,120 @@ describe("SidecarPdfEngine", () => {
 
     expect(result.warnings.map((warning) => warning.code)).toContain("FALLBACK_FONT_POSSIBLE");
     expect(result.warnings.map((warning) => warning.code)).not.toContain("IMAGES_REENCODED");
+  });
+
+  it("inspects the engine text map without inferred separators", async () => {
+    const sourceBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(jsonResponse(textEditorJson(["John", "Smith"])));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.inspectTextMap(document);
+
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0]?.text).toBe("JohnSmith");
+    expect(result.pages[0]?.elements[0]?.area).toMatchObject({
+      x: 72,
+      y: 700,
+      w: 28,
+      h: 12,
+    });
+    expect(result.pages[0]?.elements.map((element) => element.text)).toEqual(["John", "Smith"]);
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/api/v1/convert/pdf/text-editor");
+  });
+
+  it("replaces only the selected duplicate occurrence through text-editor JSON", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["John Smith", " v. ", "John Smith"]);
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse(sourceJson),
+      jsonResponse(sourceJson),
+      pdfBytesResponse(serverBytes),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const inspected = await engine.inspectTextMap(document);
+    const page = inspected.pages[0];
+    expect(page).toBeDefined();
+
+    const result = await engine.replaceSelectedText(document, {
+      replacement: "Jane Doe",
+      target: targetForRange(inspected.sourceFingerprint, page!, 14, 24),
+    });
+
+    expect(await engine.saveToBytes(result.document)).toBeInstanceOf(Uint8Array);
+    expect(result.warnings).toEqual([]);
+    expect(pathFromUrl(calls[1]?.url ?? "")).toBe("/api/v1/convert/pdf/text-editor");
+    expect(pathFromUrl(calls[2]?.url ?? "")).toBe("/api/v1/convert/text-editor/pdf");
+
+    const postedJson = await expectJsonFormFile(calls[2]);
+    expect(pageTextElements(postedJson, 0)).toEqual(["John Smith", " v. ", "Jane Doe"]);
+  });
+
+  it("deletes a selected split-run name and preserves following text", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["John", " ", "Smith", " filed"]);
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(jsonResponse(sourceJson), pdfBytesResponse(serverBytes));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const page = textMapPageFromJson(sourceJson, 0);
+
+    const result = await engine.replaceSelectedText(document, {
+      replacement: "",
+      target: targetForRange(testDocumentFingerprint(sourceJson), page, 0, 10),
+    });
+
+    const postedJson = await expectJsonFormFile(calls[1]);
+    expect(pageTextElements(postedJson, 0)).toEqual(["", "", "", " filed"]);
+    expect(result.warnings.map((warning) => warning.code)).toContain("SELECTED_TEXT_LAYOUT_RISK");
+  });
+
+  it("preserves same-element prefix and suffix for selected middle text", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["Alpha John Smith Omega"]);
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(jsonResponse(sourceJson), pdfBytesResponse(serverBytes));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const page = textMapPageFromJson(sourceJson, 0);
+
+    await engine.replaceSelectedText(document, {
+      replacement: "Jane Doe",
+      target: targetForRange(testDocumentFingerprint(sourceJson), page, 6, 16),
+    });
+
+    const postedJson = await expectJsonFormFile(calls[1]);
+    expect(pageTextElements(postedJson, 0)).toEqual(["Alpha Jane Doe Omega"]);
+  });
+
+  it("refuses stale selected-text fingerprints before rebuilding a PDF", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["John Q. Smith"]);
+    const { calls, fetchImpl } = createFetch(jsonResponse(sourceJson));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    await expect(
+      engine.replaceSelectedText(document, {
+        replacement: "Jane Doe",
+        target: {
+          ...targetForRange(
+            testDocumentFingerprint(textEditorJson(["John Smith"])),
+            textMapPageFromJson(textEditorJson(["John Smith"]), 0),
+            0,
+            10,
+          ),
+          sourceFingerprint: "stale",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/api/v1/convert/pdf/text-editor");
   });
 
   it("redacts PDF point areas through the verified local redaction endpoint", async () => {
@@ -1139,6 +1280,124 @@ function bytes(...contents: number[]): Uint8Array {
   return new Uint8Array(contents);
 }
 
+function textEditorJson(texts: readonly string[]): { pages: Array<{ textElements: unknown[] }> } {
+  return {
+    pages: [{
+      textElements: texts.map((text, index) => ({
+        height: 12,
+        textMatrix: [12, 0, 0, 12, 72 + index * 80, 700],
+        text,
+        width: Math.max(1, text.length * 7),
+      })),
+    }],
+  };
+}
+
+function textMapPageFromJson(document: { pages: Array<{ textElements: unknown[] }> }, pageIndex: number): PdfTextMapPage {
+  const rawElements = document.pages[pageIndex]?.textElements ?? [];
+  let text = "";
+  const elements = rawElements.map((rawElement, elementIndex) => {
+    const element = rawElement as {
+      height: number;
+      text: string;
+      textMatrix: readonly number[];
+      width: number;
+    };
+    const start = text.length;
+    text += element.text;
+
+    return {
+      elementIndex,
+      start,
+      end: text.length,
+      text: element.text,
+      area: {
+        pageIndex,
+        x: element.textMatrix[4] ?? 0,
+        y: element.textMatrix[5] ?? 0,
+        w: element.width,
+        h: element.height,
+      },
+    };
+  });
+
+  return {
+    pageIndex,
+    text,
+    sourceFingerprint: testFingerprintRawElements(rawElements),
+    elements,
+  };
+}
+
+function targetForRange(
+  sourceDocumentFingerprint: string,
+  page: PdfTextMapPage,
+  start: number,
+  end: number,
+): PdfSelectedTextTarget {
+  const first = page.elements.find((element) => start >= element.start && start < element.end);
+  const last = [...page.elements].reverse().find((element) => end > element.start && end <= element.end);
+
+  if (!first || !last) {
+    throw new Error(`Invalid target range ${start}-${end} for ${page.text}`);
+  }
+
+  return {
+    pageIndex: page.pageIndex,
+    start,
+    end,
+    expectedText: page.text.slice(start, end),
+    sourceDocumentFingerprint,
+    sourceFingerprint: page.sourceFingerprint,
+    firstElementIndex: first.elementIndex,
+    lastElementIndex: last.elementIndex,
+    firstElementOffset: start - first.start,
+    lastElementOffset: end - last.start,
+  };
+}
+
+function testFingerprintRawElements(elements: readonly unknown[]): string {
+  return testFnv1a32Hex(testStableStringify(elements));
+}
+
+function testDocumentFingerprint(document: unknown): string {
+  return testFnv1a32Hex(testStableStringify(document));
+}
+
+function testStableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(testStableStringify).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${testStableStringify(record[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function testFnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function pageTextElements(document: unknown, pageIndex: number): string[] {
+  const pages = (document as { pages?: Array<{ textElements?: Array<{ text?: string }> }> }).pages ?? [];
+
+  return (pages[pageIndex]?.textElements ?? []).map((element) => element.text ?? "");
+}
+
 function arrayBuffer(...contents: number[]): ArrayBuffer {
   const buffer = new ArrayBuffer(contents.length);
   new Uint8Array(buffer).set(contents);
@@ -1161,6 +1420,13 @@ function getFormData(call: FetchCall | undefined): FormData {
 
 function expectFormField(call: FetchCall | undefined, name: string, value: string): void {
   expect(getFormData(call).get(name)).toBe(value);
+}
+
+async function expectJsonFormFile(call: FetchCall | undefined): Promise<unknown> {
+  const value = getFormData(call).get("fileInput");
+  expect(value).toBeInstanceOf(Blob);
+
+  return JSON.parse(await (value as Blob).text());
 }
 
 async function expectFormFile(call: FetchCall | undefined, expectedBytes: readonly number[]): Promise<void> {

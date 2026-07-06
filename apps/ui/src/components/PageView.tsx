@@ -352,7 +352,11 @@ export function PageView({
           aria-label={`Page ${pageIndex + 1}`}
           data-testid="pdf-page-canvas"
         />
-        <div ref={textLayerRef} className="textLayer page-view__text-layer" />
+        <div
+          ref={textLayerRef}
+          className="textLayer page-view__text-layer"
+          data-page-index={pageIndex}
+        />
       </div>
       {pagePending || renderPending ? (
         <div className="page-view__render-pending" role="status" aria-live="polite">

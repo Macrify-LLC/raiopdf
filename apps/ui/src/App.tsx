@@ -5268,26 +5268,65 @@ export function App() {
   }, [editing]);
 
   const exportPdfA = useCallback(() => {
-    if (!document.bytes) {
+    const sourceBytes = document.bytes;
+
+    if (!sourceBytes) {
       setError(
         streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before exporting PDF/A.",
       );
       return;
     }
 
-    setActiveOrganizeTool(null);
-    setActiveEditDialogTool(null);
-    setActiveLegalTool("prepare-for-filing");
-    prepareFilingCopy(null, {
-      selectedStepIds: [
-        ...filingPrepPlan
-          .filter((step) => step.defaultChecked && !step.disabledReason)
-          .map((step) => step.id),
-        "convert-pdfa",
-      ],
-      customSplitMegabytes: null,
-    });
-  }, [document.bytes, filingPrepPlan, prepareFilingCopy, setError, streamedDocument]);
+    if (!engineBridge.available) {
+      setError("Exporting to PDF/A needs the desktop app's bundled engine.");
+      return;
+    }
+
+    // A plain "convert this document to PDF/A and save a copy" export. Prepare
+    // for Filing is a separate workflow (it also normalizes page size, splits
+    // oversized filings, scrubs metadata); Export PDF/A must not pull the user
+    // into it — it just converts and hands back a file.
+    const flavor = filingPack.pdfa.flavor;
+    const suggestedName = `${stripPdfExtension(document.fileName ?? "Untitled")} (PDF-A).pdf`;
+
+    void (async () => {
+      // PDF/A conversion flattens form fields and interactive annotations into
+      // the page. Confirm before rewriting when the open document has any so
+      // the export is never a silent loss of editability.
+      const impact = await getCachedConversionImpact(sourceBytes);
+      const markupAnnotationCount = await countRaioPdfMarkupAnnotations(sourceBytes);
+
+      if ((impact && hasPdfAConversionImpact(impact)) || markupAnnotationCount > 0) {
+        const confirmed = window.confirm(
+          "Converting to PDF/A flattens form fields and interactive annotations into the page. "
+            + "The exported copy keeps how they look, but they'll no longer be fillable or editable. "
+            + "Export anyway?",
+        );
+
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      try {
+        const converted = await engineBridge.convertToPdfA(sourceBytes, flavor);
+        await filePort.saveFile(converted, suggestedName, null);
+      } catch (error: unknown) {
+        setError(
+          isEngineBridgeUnavailableError(error)
+            ? error.message
+            : formatWorkflowError(error, "This PDF could not be exported to PDF/A."),
+        );
+      }
+    })();
+  }, [
+    document.bytes,
+    document.fileName,
+    engineBridge,
+    filingPack.pdfa.flavor,
+    setError,
+    streamedDocument,
+  ]);
 
   const showPasswordProtection = useCallback(() => {
     setActiveOrganizeTool(null);

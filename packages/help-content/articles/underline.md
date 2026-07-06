@@ -16,7 +16,7 @@ annotation you can toggle, delete, or flatten later.
 1. Choose **Underline**, from the toolbar or the **Edit** tools.
 2. Drag across the text you want to mark.
 3. Pick a color if you want something other than the default black.
-4. To remove one, click an underline you've added.
+4. To remove one, double-click an underline you've added.
 
 ## What to know
 

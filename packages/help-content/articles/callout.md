@@ -22,6 +22,14 @@ real PDF annotation.
 
 ## What to know
 
+- **Drag the box to reposition it; the arrow stays put.** Move the text box
+  anywhere and the leader line re-points from the box's edge to the same target.
+- **Pin it to lock it.** Click the pin badge in the box's corner to lock a
+  callout in place — a pinned callout can't be moved and lets clicks pass
+  through to whatever's underneath, so it won't get in your way. Click the pin
+  again to unpin.
+- **Remove it with the ×.** An unpinned callout shows a small × next to its pin;
+  click it to delete the box and leader together. Unpin first to reveal the ×.
 - **It's held until you Save,** then saved as a PDF annotation.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   callouts when printing, or turn it off before saving new callouts.

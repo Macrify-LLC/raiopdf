@@ -171,14 +171,20 @@
   pointer-events: none;
 }
 
-.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item,
+/* A pinned item (data-pinned="true") is deliberately excluded here, so it
+   never opts back into pointer events: it stays click-through and can sit over
+   highlighted text without stealing clicks meant for the markup underneath.
+   Its pin badge is re-enabled via .edit-layer__pin-controls so it can still be
+   unpinned. (The base click-through comes from EditLayer.css.) */
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item:not([data-pinned="true"]),
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item-chrome,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__item-chrome *,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__pin-controls,
+.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__pin-controls *,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__resize-handle,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-item,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-hit,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__shape-hit-line,
-.page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__callout-hit-line,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-pin,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-popover,
 .page-view[data-text-select="true"][data-edit-tool="select"] .edit-layer__comment-popover * {

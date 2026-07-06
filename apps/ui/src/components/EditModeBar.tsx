@@ -494,15 +494,15 @@ function formatAlignLabel(align: PdfTextBoxAlign): string {
 function getToolHint(editing: EditingState): string {
   switch (editing.tool) {
     case "highlight":
-      return "Drag over text to highlight. Click a pending highlight to remove it.";
+      return "Drag over text to highlight. Double-click a highlight to remove it.";
     case "underline":
-      return "Drag over text to underline. Click a pending underline to remove it.";
+      return "Drag over text to underline. Double-click an underline to remove it.";
     case "strikethrough":
-      return "Drag over text to strike through. Click a pending strikethrough to remove it.";
+      return "Drag over text to strike through. Double-click a strikethrough to remove it.";
     case "textBox":
       return "Click the page to place a text box. Enter commits, Esc cancels.";
     case "callout":
-      return "Drag a text box, click the target point, then type. Click a pending callout to remove it.";
+      return "Drag a box, click the target point, then type. Use the × to remove; pin to lock it.";
     case "image":
       return editing.armedImage
         ? "Click the page to place the image."

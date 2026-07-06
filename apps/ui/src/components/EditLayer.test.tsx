@@ -327,7 +327,7 @@ describe("EditLayer shape removal", () => {
     );
   });
 
-  it("removes a pending callout as one box-and-leader unit", async () => {
+  it("removes a pending callout as one box-and-leader unit via its X", async () => {
     await renderEditLayer(
       [
         {
@@ -340,22 +340,53 @@ describe("EditLayer shape removal", () => {
           fontSizePt: 12,
         },
       ],
-      "callout",
+      "select",
     );
 
     expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(1);
     expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(1);
 
-    const box = container?.querySelector<HTMLElement>(".edit-layer__callout-box");
-    expect(box).not.toBeNull();
+    const remove = container?.querySelector<HTMLElement>(".edit-layer__pin-remove");
+    expect(remove).not.toBeNull();
 
     await act(async () => {
-      box!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      remove!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
 
     expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(0);
     expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(0);
+  });
+
+  it("keeps a pinned callout's X hidden until it is unpinned", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-pinned",
+          pageIndex: 0,
+          pinned: true,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Locked",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    // Pinned: only the pin badge, no X.
+    expect(container?.querySelector(".edit-layer__pin-remove")).toBeNull();
+    const badge = container?.querySelector<HTMLElement>(".edit-layer__pin-badge[data-pinned='true']");
+    expect(badge).not.toBeNull();
+
+    // Unpin, and the X appears.
+    await act(async () => {
+      badge!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelector(".edit-layer__pin-remove")).not.toBeNull();
   });
 
   it("previews callout leaders from the nearest box boundary point", async () => {
@@ -390,8 +421,7 @@ describe("EditLayer shape removal", () => {
       "callout",
     );
 
-    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])]
-      .filter((line) => !line.classList.contains("edit-layer__callout-hit-line"));
+    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])];
 
     expect(leaders).toHaveLength(cases.length);
 
@@ -437,16 +467,47 @@ describe("EditLayer shape removal", () => {
     expect(visibleLine?.getAttribute("y2")).toBe("90");
   });
 
-  it("keeps applied overlay items movable", async () => {
+  it("locks a pinned overlay item against dragging", async () => {
     await renderEditLayer(
       [
         {
           kind: "textBox",
           id: "applied-text",
           pageIndex: 0,
-          status: "applied",
+          pinned: true,
           rect: { x: 20, y: 20, w: 80, h: 30 },
           text: "Applied",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const textBox = container?.querySelector<HTMLElement>(".edit-layer__text-box");
+    expect(textBox).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(textBox!, "pointerdown", 25, 25);
+      dispatchPointerEvent(textBox!, "pointermove", 45, 35);
+      dispatchPointerEvent(textBox!, "pointerup", 45, 35);
+      await Promise.resolve();
+    });
+
+    // Pinned items are locked in place; the drag is a no-op.
+    expect(textBox?.style.left).toBe("20px");
+    expect(textBox?.style.top).toBe("20px");
+  });
+
+  it("keeps an unpinned overlay item draggable", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "textBox",
+          id: "draft-text",
+          pageIndex: 0,
+          pinned: false,
+          rect: { x: 20, y: 20, w: 80, h: 30 },
+          text: "Draft",
           fontSizePt: 12,
         },
       ],

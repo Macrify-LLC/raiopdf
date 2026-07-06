@@ -40,33 +40,11 @@
   pointer-events: none;
 }
 
-.edit-layer__highlight[data-removable="true"] {
-  pointer-events: auto;
-}
-
-.edit-layer__highlight-draft {
-  position: absolute;
-  background: var(--highlight);
-  opacity: 0.25;
-  border: 1px dashed var(--primary);
-  pointer-events: none;
-}
-
 .edit-layer__text-markup-lines {
   position: absolute;
   inset: 0;
   pointer-events: none;
   overflow: visible;
-}
-
-.edit-layer__text-markup-hit {
-  position: absolute;
-  background: transparent;
-  pointer-events: none;
-}
-
-.edit-layer__text-markup-hit[data-removable="true"] {
-  pointer-events: auto;
 }
 
 .edit-layer__message {
@@ -101,8 +79,12 @@
   cursor: move;
 }
 
+/* Imported (already-saved) markup, and any pinned item, drop their dashed
+   working border — a pinned item reads as "locked" via its solid pin badge. */
 .edit-layer__text-box[data-status="applied"],
-.edit-layer__stamp[data-status="applied"] {
+.edit-layer__stamp[data-status="applied"],
+.edit-layer__text-box[data-pinned="true"],
+.edit-layer__stamp[data-pinned="true"] {
   border-style: solid;
   border-color: transparent;
 }
@@ -112,14 +94,25 @@
   border: 1px solid var(--primary);
 }
 
+/* A pinned item is locked in place and click-through, so it never intercepts
+   clicks meant for the text (or other annotations) underneath. Only its pin
+   badge stays interactive, so it can still be unpinned. Pinning is a user
+   action distinct from `status` — imported (applied) items stay interactive. */
+.edit-layer__item[data-pinned="true"] {
+  cursor: default;
+  pointer-events: none;
+}
+
+.edit-layer__item[data-pinned="true"] .edit-layer__pin-controls,
+.edit-layer__item[data-pinned="true"] .edit-layer__pin-controls * {
+  pointer-events: auto;
+}
+
 .edit-layer__callout-box {
   border: 1px solid var(--edit-ink);
   background: color-mix(in srgb, var(--panel) 86%, transparent);
   overflow: hidden;
-}
-
-.edit-layer__callout-box[data-removable="true"] {
-  cursor: pointer;
+  cursor: move;
 }
 
 .edit-layer__callout-placement {
@@ -134,13 +127,6 @@
   inset: 0;
   pointer-events: none;
   overflow: visible;
-}
-
-.edit-layer__callout-hit-line {
-  stroke: transparent;
-  stroke-width: 14px;
-  pointer-events: auto;
-  cursor: pointer;
 }
 
 .edit-layer__text-content {
@@ -247,34 +233,63 @@
   padding-right: var(--space-1);
 }
 
-.edit-layer__item-pin,
-.edit-layer__item-remove {
+/* Pin badge + remove X: shown on every floating item so its pinned state
+   reads at a glance. Sits just above the item's top-right corner, like the
+   selection chrome, and always stays clickable (even when the item body is
+   click-through because it's pinned). */
+.edit-layer__pin-controls {
+  position: absolute;
+  z-index: 3;
+  top: -22px;
+  right: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+}
+
+.edit-layer__pin-badge,
+.edit-layer__pin-remove {
   display: grid;
   place-items: center;
+  width: 20px;
   height: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--panel);
-  color: var(--body);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+  padding: 0;
+}
+
+.edit-layer__pin-badge {
+  color: var(--muted);
+}
+
+.edit-layer__pin-badge:hover {
+  color: var(--primary);
+  background: var(--hover-ground);
+}
+
+/* Pinned: the badge fills in and takes the brand color so a locked annotation
+   is unmistakable from an unpinned (hollow, muted) one at a glance. */
+.edit-layer__pin-badge[data-pinned="true"] {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--accent-pale);
+}
+
+.edit-layer__pin-remove {
+  color: var(--danger);
   font-family: var(--font-ui);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   line-height: 1;
-  cursor: default;
 }
 
-.edit-layer__item-pin {
-  min-width: 36px;
-  padding: 0 var(--space-1);
-}
-
-.edit-layer__item-remove {
-  width: 20px;
-}
-
-.edit-layer__item-pin:hover,
-.edit-layer__item-remove:hover {
-  background: var(--hover-ground);
+.edit-layer__pin-remove:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
 }
 
 .edit-layer__resize-handle {

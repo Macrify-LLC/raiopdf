@@ -67,8 +67,10 @@ it("keeps select-mode edit overlays interactive while markup tools pass through"
   expect(css).toMatch(
     /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer\s*{[^}]*pointer-events:\s*none;/s,
   );
+  // Unpinned items opt into pointer events; pinned ones are excluded so they
+  // stay click-through over the text underneath.
   expect(css).toMatch(
-    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__item,/,
+    /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__item:not\(\[data-pinned="true"\]\),/,
   );
   expect(css).toMatch(
     /\.page-view\[data-text-select="true"\]\[data-edit-tool="select"\]\s+\.edit-layer__shape-hit-line,/,

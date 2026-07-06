@@ -16,10 +16,13 @@ PDF annotation you can toggle, delete, or flatten later.
 1. Choose **Highlight**, from the toolbar or the **Edit** tools.
 2. Drag across the text you want to mark.
 3. Pick a color or opacity if you want something other than the default yellow.
-4. To remove one, click a highlight you've added.
+4. To remove one, double-click a highlight you've added.
 
 ## What to know
 
+- **Highlights follow the text you select.** They hug the words across every
+  line the way selecting text does — a partial first and last line, full lines
+  in between — instead of a rectangular block.
 - **Highlights are held until you Save,** then saved as PDF annotations.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   highlights when printing, or turn it off before saving new highlights.

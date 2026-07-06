@@ -47,8 +47,17 @@ test("Find & Replace: real engine replaces born-digital text and preserves resto
   await page.getByRole("button", { name: "Review" }).click();
 
   await expect(page.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible({ timeout: 120_000 });
+  // The review dialog is where the estimate surfaces ("N estimated
+  // replacement(s) on M page(s)"). Apply commits the edit and reopens the
+  // result as a fresh document, which by design leaves edit-text mode and
+  // dismisses this dialog -- so the estimate must be asserted while the dialog
+  // is still open, before Apply. The applied result itself is verified below by
+  // reopening the saved PDF. Scope to the dialog: the same estimate also
+  // echoes in the tool panel's status line, so an unscoped match is ambiguous.
+  await expect(
+    page.getByRole("dialog", { name: "Review text replacements" }).getByText(/estimated replacement/).first(),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Apply" }).click();
-  await expect(page.getByText(/estimated replacement/)).toBeVisible({ timeout: 120_000 });
 
   const saved = await savePdf(page);
   saveCanaryArtifact("edit text", "edit-text-bookmarked-output.pdf", saved,
@@ -149,7 +158,16 @@ async function createImageBearingTextPdf(text: string): Promise<Uint8Array> {
   const drawRef = pdf.context.register(draw);
   page.node.set(PDFName.of("Contents"), PDFArray.withContext(pdf.context));
   const contents = page.node.lookup(PDFName.of("Contents"), PDFArray);
-  if (existing) {
+  // pdf-lib already stores the drawn text as a Contents *array* (one stream
+  // ref). Pushing `existing` whole would nest that array inside the new one --
+  // an invalid Contents of the shape [[textStream], imageDraw] that pdf.js
+  // cannot walk, so the text layer vanishes and the page reads as scanned.
+  // Flatten it: keep the text stream ref, then append the image draw after it.
+  if (existing instanceof PDFArray) {
+    for (const entry of existing.asArray()) {
+      contents.push(entry);
+    }
+  } else if (existing) {
     contents.push(existing);
   }
   contents.push(drawRef);

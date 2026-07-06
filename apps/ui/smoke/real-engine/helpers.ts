@@ -361,9 +361,13 @@ export async function searchHitCount(page: Page, term: string): Promise<number> 
   await box.fill(term);
   const count = page.locator(".command-bar__search-count");
   try {
-    await expect(count).toBeVisible({ timeout: 5000 });
+    // The count element appears immediately showing "Searching" / "Searching
+    // N/M", and only resolves to a final "N of M" once indexing finishes. Wait
+    // for that final label -- reading while it still says "Searching" (which
+    // happens for slower-to-index documents) yields a spurious 0.
+    await expect(count).toHaveText(/\bof\s+\d+/, { timeout: 20_000 });
   } catch {
-    return 0; // no matches — the count element isn't shown
+    return 0; // no matches / search never resolved — no final "N of M" label
   }
   const text = (await count.textContent()) ?? "";
   const match = text.match(/of\s+(\d+)/);

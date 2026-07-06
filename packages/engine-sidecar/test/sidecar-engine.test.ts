@@ -687,6 +687,25 @@ describe("SidecarPdfEngine", () => {
     expect(queryValue(calls[1], "pdfa_strict")).toBe("false");
   });
 
+  it("surfaces the plain-text reason when a local PDF/A conversion fails", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 1 }),
+      textResponse(
+        "ghostscript PDF/A conversion failed (exit status: 1): input file is encrypted",
+        422,
+      ),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    // The interceptor replies text/plain; the surfaced error must carry the
+    // Ghostscript reason, not just the bare "Unprocessable Entity" status text.
+    await expect(engine.convertToPdfA(document, { flavor: "pdfa-2b" })).rejects.toMatchObject({
+      message:
+        "Stirling PDF request failed: ghostscript PDF/A conversion failed (exit status: 1): input file is encrypted",
+    });
+  });
+
   it("compresses through the local qpdf endpoint", async () => {
     const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 2 }), pdfResponse(92));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

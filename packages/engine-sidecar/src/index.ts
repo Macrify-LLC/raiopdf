@@ -1784,8 +1784,16 @@ function readStringProperty(body: unknown, propertyName: string): string | undef
 }
 
 async function throwResponseError(response: Response): Promise<never> {
-  const errorBody = await readErrorBody(response);
-  const message = readErrorMessage(errorBody) ?? response.statusText;
+  // Read the body once as text so we can surface a reason regardless of the
+  // content type. Stirling replies with JSON error bodies, but the local
+  // gs/qpdf interceptors reply text/plain (e.g. "ghostscript PDF/A conversion
+  // failed (exit status: 1): <reason>"). Parsing JSON only — as we used to —
+  // dropped those plain-text reasons and left the caller with a bare
+  // "Unprocessable Entity".
+  const rawBody = await readResponseText(response);
+  const errorBody = parseErrorBody(rawBody);
+  const message =
+    readErrorMessage(errorBody) ?? plainTextErrorMessage(rawBody) ?? response.statusText;
   const errorCode = readErrorCode(errorBody);
   const code = mapHttpStatusToErrorCode(response.status, message, errorCode);
   const detail = errorCode ? `${message} (${errorCode})` : message;
@@ -1793,14 +1801,46 @@ async function throwResponseError(response: Response): Promise<never> {
   throw new PdfEngineError(code, `Stirling PDF request failed: ${detail}`);
 }
 
-async function readErrorBody(response: Response): Promise<StirlingErrorBody | null> {
+async function readResponseText(response: Response): Promise<string | null> {
   try {
-    const body = await response.json();
+    return await response.text();
+  } catch {
+    return null;
+  }
+}
+
+function parseErrorBody(rawBody: string | null): StirlingErrorBody | null {
+  if (!rawBody) {
+    return null;
+  }
+
+  try {
+    const body = JSON.parse(rawBody);
 
     return isRecord(body) ? body : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * A plain-text error body collapsed to a single readable line and capped so a
+ * multi-line Ghostscript stderr dump doesn't flood the surfaced error.
+ */
+function plainTextErrorMessage(rawBody: string | null): string | null {
+  if (!rawBody) {
+    return null;
+  }
+
+  const collapsed = rawBody.replace(/\s+/g, " ").trim();
+
+  if (!collapsed) {
+    return null;
+  }
+
+  const MAX_LENGTH = 300;
+
+  return collapsed.length > MAX_LENGTH ? `${collapsed.slice(0, MAX_LENGTH)}…` : collapsed;
 }
 
 function readErrorMessage(errorBody: StirlingErrorBody | null): string | null {

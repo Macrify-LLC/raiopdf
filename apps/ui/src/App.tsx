@@ -220,14 +220,15 @@ import {
 } from "./lib/crashReportIssue";
 import {
   hasSearchableTextLayerCoverage,
+  inspectOpenTextLayerCoverage,
   inspectTextLayer,
-  pdfDocumentTextLayerCoverage,
   textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
+import { editToolStreamedGateMessage } from "./lib/editToolGate";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -1626,13 +1627,18 @@ export function App() {
       return;
     }
 
+    if (!sourceBytes && streamedDocument) {
+      setTextLayerCoverage(null);
+      return;
+    }
+
     let disposed = false;
 
-    const coverage = sourceBytes
-      ? inspectTextLayer(sourceBytes, pdfDocument)
-      : streamedDocument
-        ? pdfDocumentTextLayerCoverage(pdfDocument)
-        : Promise.resolve(null);
+    const coverage = inspectOpenTextLayerCoverage({
+      bytes: sourceBytes,
+      pdfDocument,
+      streamed: streamedDocument,
+    });
 
     void coverage
       .then((textLayerCoverage) => {
@@ -1747,6 +1753,12 @@ export function App() {
         !isPathOpAvailableForInput(pathOpsGeneralStatus, "apply_edits", document.fileSizeBytes)
       ) {
         setError(streamedEditingGateMessage(pathOpsGeneralStatus, document.fileSizeBytes, pathOpsGrant !== null));
+        return;
+      }
+
+      const streamedToolGate = editToolStreamedGateMessage(toolId, streamedDocument);
+      if (streamedToolGate) {
+        setError(streamedToolGate);
         return;
       }
 

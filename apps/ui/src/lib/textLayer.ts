@@ -25,6 +25,26 @@ export async function hasExtractableTextLayer(
   return hasSearchableTextLayerCoverage(await inspectTextLayer(bytes, currentPdfDocument));
 }
 
+export async function inspectOpenTextLayerCoverage({
+  bytes,
+  pdfDocument,
+  streamed,
+}: {
+  bytes: Uint8Array | null;
+  pdfDocument: PDFDocumentProxy;
+  streamed: boolean;
+}): Promise<TextLayerCoverage | null> {
+  if (bytes) {
+    return inspectTextLayer(bytes, pdfDocument);
+  }
+
+  if (streamed) {
+    return null;
+  }
+
+  return null;
+}
+
 export async function pdfDocumentTextLayerCoverage(
   pdfDocument: PDFDocumentProxy,
 ): Promise<TextLayerCoverage> {

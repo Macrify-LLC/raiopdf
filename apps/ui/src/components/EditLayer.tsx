@@ -228,7 +228,13 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       .getTextContent()
       .then((textContent) => {
         if (!disposed) {
-          setTextBoxes(extractPageTextBoxes(textContent.items));
+          const boxes = extractPageTextBoxes(textContent.items);
+          setTextBoxes(boxes);
+          setTextLayerError(
+            boxes.length === 0
+              ? "This page has no text layer, so text markup is unavailable here."
+              : null,
+          );
         }
       })
       .catch(() => {

@@ -32,12 +32,12 @@ function prepStep(id: PrepPlanStep["id"]): PrepPlanStep {
 
 function statusFixture(): PathOpsStatus {
   return {
-    toolchain: { qpdf: true, ghostscript: true, ocrmypdf: false },
+    toolchain: { qpdf: true, ghostscript: true, ocrmypdf: false, node: false },
     ops: [
-      { name: "normalize_to_letter_portrait", available: true, missingTools: [], filingStep: "normalize-pages" },
-      { name: "split_by_max_bytes", available: true, missingTools: [], filingStep: "split-by-size" },
-      { name: "scrub_metadata", available: true, missingTools: [], filingStep: "scrub-metadata" },
-      { name: "ocr", available: false, missingTools: ["ocrmypdf"], filingStep: "make-searchable" },
+      { name: "normalize_to_letter_portrait", available: true, missingTools: [], filingStep: "normalize-pages", maxInputBytes: null },
+      { name: "split_by_max_bytes", available: true, missingTools: [], filingStep: "split-by-size", maxInputBytes: null },
+      { name: "scrub_metadata", available: true, missingTools: [], filingStep: "scrub-metadata", maxInputBytes: null },
+      { name: "ocr", available: false, missingTools: ["ocrmypdf"], filingStep: "make-searchable", maxInputBytes: null },
     ],
     filingSteps: {
       "remove-encryption": "decrypt",

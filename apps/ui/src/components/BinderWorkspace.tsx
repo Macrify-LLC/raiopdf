@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { PdfBinderOptions } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
   pickPdfsForAdd,
   readFileForAdd,
@@ -52,6 +53,7 @@ export interface ExhibitFile {
 
 export interface BinderWorkspaceProps {
   document: DocumentState;
+  pdfDocument?: PDFDocumentProxy | null | undefined;
   onBuildBinder: (
     exhibits: readonly {
       bytes: Uint8Array;
@@ -69,6 +71,7 @@ export interface BinderWorkspaceProps {
 
 export function BinderWorkspace({
   document,
+  pdfDocument = null,
   onBuildBinder,
   onOpenRequested,
   onCancel,
@@ -95,6 +98,7 @@ export function BinderWorkspace({
   const [building, setBuilding] = useState(false);
   const mainName = document.fileName ?? "Untitled.pdf";
   const mainPages = document.pageCount;
+  const hasMainDocument = document.source !== null;
   const labels = useMemo(
     () => exhibits.map((_, index) => formatExhibitLabel(prefix, identifierStyle, index)),
     [exhibits, identifierStyle, prefix],
@@ -231,7 +235,7 @@ export function BinderWorkspace({
   }
 
   async function buildBinder() {
-    if (!document.bytes || exhibits.length === 0 || building) {
+    if (!hasMainDocument || exhibits.length === 0 || building) {
       return;
     }
 
@@ -301,7 +305,11 @@ export function BinderWorkspace({
         <section className="binder-card" aria-label="Main document">
           <p className="binder-card__label">Main document</p>
           <div className="binder-main">
-            <PdfMiniThumb bytes={document.bytes} label={`${mainName} thumbnail`} />
+            <PdfMiniThumb
+              bytes={document.bytes}
+              pdfDocument={pdfDocument}
+              label={`${mainName} thumbnail`}
+            />
             <div>
               <p className="binder-main__name">{mainName}</p>
               <p className="binder-main__meta">{mainPages} {mainPages === 1 ? "page" : "pages"}</p>
@@ -492,7 +500,7 @@ export function BinderWorkspace({
           type="button"
           className="binder-workspace__primary"
           onClick={buildBinder}
-          disabled={!document.bytes || exhibits.length === 0 || building}
+          disabled={!hasMainDocument || exhibits.length === 0 || building}
         >
           <CombineExhibitsIcon size={16} />
           {building ? "Building Binder" : "Build Binder"}

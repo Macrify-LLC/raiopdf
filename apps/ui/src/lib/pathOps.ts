@@ -14,6 +14,7 @@
 
 import type {
   PdfBatesStampOptions,
+  PdfBinderOptions,
   PdfPageNumbersOptions,
   PdfRedactionArea,
   PdfWatermarkOptions,
@@ -97,6 +98,7 @@ export interface PathOpsToolchainStatus {
   qpdf: boolean;
   ghostscript: boolean;
   ocrmypdf: boolean;
+  node: boolean;
 }
 
 export interface PathOpStatusEntry {
@@ -104,6 +106,7 @@ export interface PathOpStatusEntry {
   available: boolean;
   missingTools: string[];
   filingStep: string | null;
+  maxInputBytes: number | null;
 }
 
 export interface PathOpsStatus {
@@ -246,6 +249,28 @@ export function isFilingStepEnabled(
   return op?.available ?? false;
 }
 
+export function pathOpStatusEntry(
+  status: PathOpsStatus | null,
+  opName: string,
+): PathOpStatusEntry | null {
+  return status?.ops.find((entry) => entry.name === opName) ?? null;
+}
+
+export function isPathOpAvailableForInput(
+  status: PathOpsStatus | null,
+  opName: string,
+  inputSizeBytes: number | null,
+): boolean {
+  const entry = pathOpStatusEntry(status, opName);
+  if (!entry?.available) {
+    return false;
+  }
+  if (entry.maxInputBytes !== null && inputSizeBytes !== null) {
+    return inputSizeBytes <= entry.maxInputBytes;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Runtime guard + invoke plumbing
 // ---------------------------------------------------------------------------
@@ -338,6 +363,34 @@ export function pathOpInsertPages(
   atIndex: number,
 ): Promise<PathOpOutput> {
   return invokePathOp("path_op_insert_pages", { grant, insertGrant, atIndex });
+}
+
+export interface PathOpBuildBinderExhibit {
+  bytes: Uint8Array;
+  label: string;
+  description?: string | undefined;
+  sourceFileName?: string | undefined;
+}
+
+export function pathOpBuildBinder(
+  grant: PathOpsFileGrant,
+  exhibits: readonly PathOpBuildBinderExhibit[],
+  options: PdfBinderOptions,
+  outputName: string,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_build_binder", {
+    grant,
+    exhibits: exhibits.map((exhibit) => ({
+      bytes: Array.from(exhibit.bytes),
+      label: exhibit.label,
+      ...(exhibit.description === undefined ? {} : { description: exhibit.description }),
+      ...(exhibit.sourceFileName === undefined
+        ? {}
+        : { sourceFileName: exhibit.sourceFileName }),
+    })),
+    options,
+    outputName,
+  });
 }
 
 export function pathOpSplitByMaxBytes(

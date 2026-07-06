@@ -18,17 +18,21 @@
 
 use engine_sidecar_core::path_ops as core_ops;
 use engine_sidecar_core::path_ops::{OpResult, PathOpError, PathOpsToolchain};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::FileGrants;
+
+const NODE_LANE_MAX_BYTES_ENV: &str = "RAIOPDF_NODE_LANE_MAX_BYTES";
+const DEFAULT_NODE_LANE_MAX_BYTES: u64 = 400 * 1024 * 1024;
+const NODE_LANE_HEAP_MB: u64 = 8192;
 
 /// The input file changed on disk while the op ran (typed like Phase 1's
 /// range-read snapshot error so the UI can share the "reopen it" message).
@@ -134,12 +138,97 @@ pub struct PrepareFilingResponse {
     pub op_report: OpReport,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildBinderExhibitPayload {
+    pub bytes: Vec<u8>,
+    pub label: String,
+    pub description: Option<String>,
+    pub source_file_name: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildBinderOneShotExhibit {
+    path: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_file_name: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderStampPlacement {
+    edge: String,
+    align: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderIndexOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_source_file_name: Option<bool>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum BinderPageSelection {
+    Name(String),
+    Pages(Vec<u32>),
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildBinderOptions {
+    slip_sheets: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<BinderIndexOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement: Option<BinderStampPlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stamp_pages: Option<BinderPageSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    font_size_pt: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    margin_in: Option<f64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildBinderOneShotInput {
+    main_path: String,
+    exhibits: Vec<BuildBinderOneShotExhibit>,
+    options: BuildBinderOptions,
+    output_path: String,
+    max_input_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildBinderOneShotOutput {
+    ok: bool,
+    error: Option<BuildBinderOneShotError>,
+    output: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BuildBinderOneShotError {
+    code: Option<String>,
+    message: String,
+    action: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolchainStatus {
     pub qpdf: bool,
     pub ghostscript: bool,
     pub ocrmypdf: bool,
+    pub node: bool,
 }
 
 #[derive(Serialize)]
@@ -159,7 +248,9 @@ pub struct PathOpsStatusResponse {
 
 pub(crate) fn discover_toolchain(app: &tauri::AppHandle) -> PathOpsToolchain {
     let resource_dir = app.path().resource_dir().ok();
-    PathOpsToolchain::discover(resource_dir.as_deref())
+    let mut toolchain = PathOpsToolchain::discover(resource_dir.as_deref());
+    toolchain.node_one_shot = crate::mcp::mcp_one_shot_runtime_available(resource_dir.as_deref());
+    toolchain
 }
 
 fn path_ops_root(app: &tauri::AppHandle) -> OpResult<PathBuf> {
@@ -244,6 +335,55 @@ impl Drop for OpWorkDir {
 pub(crate) struct InputSnapshot {
     len: u64,
     modified: Option<SystemTime>,
+}
+
+fn node_lane_max_bytes() -> u64 {
+    std::env::var(NODE_LANE_MAX_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_NODE_LANE_MAX_BYTES)
+}
+
+fn node_lane_timeout(input_size_bytes: u64) -> Duration {
+    let chunks = input_size_bytes.div_ceil(50 * 1024 * 1024);
+    Duration::from_secs(60 + chunks * 15)
+}
+
+fn node_options_heap_arg() -> String {
+    let heap = format!("--max-old-space-size={NODE_LANE_HEAP_MB}");
+    match std::env::var("NODE_OPTIONS") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {heap}"),
+        _ => heap,
+    }
+}
+
+fn path_to_utf8(path: PathBuf, label: &str) -> OpResult<String> {
+    path.into_os_string()
+        .into_string()
+        .map_err(|_| PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: format!("{label} path is not valid UTF-8"),
+        })
+}
+
+fn format_build_binder_error(error: Option<BuildBinderOneShotError>) -> PathOpError {
+    let Some(error) = error else {
+        return PathOpError {
+            code: core_ops::ERR_OP_FAILED,
+            message: "build_binder failed".to_string(),
+        };
+    };
+    let message = match error.action {
+        Some(action) => format!("{} {}", error.message, action),
+        None => error.message,
+    };
+    let code = match error.code.as_deref() {
+        Some("INVALID_ARGUMENT") => core_ops::ERR_INVALID_INPUT,
+        Some("PATH_POLICY") => core_ops::ERR_INVALID_INPUT,
+        _ => core_ops::ERR_OP_FAILED,
+    };
+    PathOpError { code, message }
 }
 
 pub(crate) fn snapshot(path: &Path) -> OpResult<InputSnapshot> {
@@ -462,7 +602,16 @@ pub fn path_op_release_output(
 #[tauri::command]
 pub fn path_ops_status(app: tauri::AppHandle) -> PathOpsStatusResponse {
     let toolchain = discover_toolchain(&app);
-    let ops = core_ops::registry(&toolchain);
+    let max_input_bytes = node_lane_max_bytes();
+    let ops = core_ops::registry(&toolchain)
+        .into_iter()
+        .map(|mut op| {
+            if op.name == "build_binder" {
+                op.max_input_bytes = Some(max_input_bytes);
+            }
+            op
+        })
+        .collect();
 
     let mut filing_steps: BTreeMap<&'static str, Option<&'static str>> = BTreeMap::new();
     for step in ALL_FILING_STEPS {
@@ -478,6 +627,7 @@ pub fn path_ops_status(app: tauri::AppHandle) -> PathOpsStatusResponse {
             qpdf: toolchain.qpdf.is_some(),
             ghostscript: toolchain.ghostscript.is_some(),
             ocrmypdf: toolchain.ocrmypdf.is_some(),
+            node: toolchain.node_one_shot,
         },
         ops,
         filing_steps,
@@ -906,6 +1056,173 @@ pub async fn path_op_insert_pages(
 }
 
 // ---------------------------------------------------------------------------
+// build_binder — Node one-shot lane
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn path_op_build_binder(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    exhibits: Vec<BuildBinderExhibitPayload>,
+    options: BuildBinderOptions,
+    output_name: String,
+) -> Result<PathOpOutput, PathOpError> {
+    if exhibits.is_empty() {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: "build_binder requires at least one exhibit".to_string(),
+        });
+    }
+
+    let input = resolve_grant(&grants, &grant)?;
+    let toolchain = discover_toolchain(&app);
+    if !toolchain.node_one_shot {
+        return Err(PathOpError {
+            code: core_ops::ERR_TOOLCHAIN_MISSING,
+            message: "bundled Node/MCP one-shot runtime not found".to_string(),
+        });
+    }
+    if toolchain.qpdf.is_none() {
+        return Err(PathOpError {
+            code: core_ops::ERR_TOOLCHAIN_MISSING,
+            message: "qpdf binary not found in payload".to_string(),
+        });
+    }
+
+    let work_dir = OpWorkDir::create(&app)?;
+    let base_output_name = Path::new(&output_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("binder.pdf");
+    let safe_output_name = if base_output_name.to_ascii_lowercase().ends_with(".pdf") {
+        base_output_name.to_string()
+    } else {
+        format!("{base_output_name}.pdf")
+    };
+    let output_path = work_dir.path().join(safe_output_name);
+    let before = snapshot(&input)?;
+    let max_input_bytes = node_lane_max_bytes();
+    if before.len > max_input_bytes {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: format!(
+                "Main PDF is too large for Combine with Exhibits through the Node lane ({} > {}).",
+                before.len, max_input_bytes
+            ),
+        });
+    }
+
+    let started = Instant::now();
+    let exhibit_inputs = exhibits
+        .into_iter()
+        .enumerate()
+        .map(|(index, exhibit)| {
+            let path = work_dir
+                .path()
+                .join(format!("exhibit-{:03}.pdf", index + 1));
+            fs::write(&path, &exhibit.bytes).map_err(|error| PathOpError {
+                code: core_ops::ERR_IO,
+                message: format!("failed to write exhibit temp file: {error}"),
+            })?;
+            Ok(BuildBinderOneShotExhibit {
+                path: path_to_utf8(path, "Exhibit temp")?,
+                label: exhibit.label,
+                description: exhibit.description,
+                source_file_name: exhibit.source_file_name,
+            })
+        })
+        .collect::<OpResult<Vec<_>>>()?;
+    let exhibit_size: u64 = exhibit_inputs
+        .iter()
+        .filter_map(|exhibit| {
+            fs::metadata(&exhibit.path)
+                .ok()
+                .map(|metadata| metadata.len())
+        })
+        .sum();
+
+    let request = BuildBinderOneShotInput {
+        main_path: path_to_utf8(input.clone(), "Main document")?,
+        exhibits: exhibit_inputs,
+        options,
+        output_path: path_to_utf8(output_path.clone(), "Binder output")?,
+        max_input_bytes,
+    };
+    let total_work_size = before.len.saturating_add(exhibit_size);
+    let timeout = node_lane_timeout(total_work_size);
+    let mcp_options = crate::mcp::McpOneShotOptions {
+        timeout: Some(timeout),
+        node_options: Some(node_options_heap_arg()),
+    };
+
+    let (page_count, output_size) = {
+        let input = input.clone();
+        let output_path = output_path.clone();
+        let toolchain = toolchain.clone();
+        on_blocking_pool(move || {
+            let stdout =
+                crate::mcp::run_mcp_one_shot_with_options("build_binder", &request, mcp_options)
+                    .map_err(|message| PathOpError {
+                        code: core_ops::ERR_OP_FAILED,
+                        message,
+                    })?;
+            let output: BuildBinderOneShotOutput =
+                serde_json::from_slice(&stdout).map_err(|error| PathOpError {
+                    code: core_ops::ERR_OP_FAILED,
+                    message: format!("failed to parse build_binder result: {error}"),
+                })?;
+            if !output.ok {
+                return Err(format_build_binder_error(output.error));
+            }
+            if output.output.as_deref() != Some(output_path.to_string_lossy().as_ref()) {
+                return Err(PathOpError {
+                    code: core_ops::ERR_OP_FAILED,
+                    message: "build_binder result did not confirm the expected output path"
+                        .to_string(),
+                });
+            }
+            ensure_unchanged(&input, before)?;
+            let page_count = core_ops::page_count(&toolchain, &output_path)?;
+            let output_size = fs::metadata(&output_path)
+                .map(|metadata| metadata.len())
+                .map_err(|error| PathOpError {
+                    code: core_ops::ERR_IO,
+                    message: format!("cannot stat output: {error}"),
+                })?;
+            Ok((page_count, output_size))
+        })
+        .await?
+    };
+
+    let output_grant = issue_grant(&grants, &output_path)?;
+    let name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("binder.pdf")
+        .to_string();
+    work_dir.keep();
+    Ok(PathOpOutput {
+        output_grant,
+        name,
+        size_bytes: output_size,
+        page_count,
+        op_report: OpReport {
+            op: "build_binder",
+            tool: "node",
+            duration_ms: started.elapsed().as_millis() as u64,
+            input_size_bytes: before.len + exhibit_size,
+            output_size_bytes: output_size,
+            notes: vec![
+                format!("Node heap capped with --max-old-space-size={NODE_LANE_HEAP_MB}"),
+                format!("timeout: {} seconds", timeout.as_secs()),
+            ],
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
 // split_by_max_bytes
 // ---------------------------------------------------------------------------
 
@@ -1114,5 +1431,49 @@ mod tests {
             releasable_output_dir(Path::new("/data/path-ops/uuid-1/nested/out.pdf"), root),
             None,
         );
+    }
+
+    #[test]
+    fn build_binder_one_shot_payload_omits_unset_optional_options() {
+        let request = BuildBinderOneShotInput {
+            main_path: "/tmp/main.pdf".to_string(),
+            exhibits: vec![BuildBinderOneShotExhibit {
+                path: "/tmp/exhibit.pdf".to_string(),
+                label: "Exhibit A".to_string(),
+                description: None,
+                source_file_name: None,
+            }],
+            options: BuildBinderOptions {
+                slip_sheets: false,
+                index: Some(BinderIndexOptions {
+                    enabled: None,
+                    include_source_file_name: None,
+                }),
+                placement: None,
+                stamp_pages: None,
+                font_size_pt: None,
+                margin_in: None,
+            },
+            output_path: "/tmp/binder.pdf".to_string(),
+            max_input_bytes: 10_000_000,
+        };
+
+        let payload = serde_json::to_value(request).expect("serialize request");
+        let options = payload
+            .get("options")
+            .and_then(serde_json::Value::as_object)
+            .expect("options object");
+        let index = options
+            .get("index")
+            .and_then(serde_json::Value::as_object)
+            .expect("index object");
+
+        assert_eq!(options.get("slipSheets"), Some(&serde_json::json!(false)));
+        assert!(!options.contains_key("placement"));
+        assert!(!options.contains_key("stampPages"));
+        assert!(!options.contains_key("fontSizePt"));
+        assert!(!options.contains_key("marginIn"));
+        assert!(!index.contains_key("enabled"));
+        assert!(!index.contains_key("includeSourceFileName"));
     }
 }

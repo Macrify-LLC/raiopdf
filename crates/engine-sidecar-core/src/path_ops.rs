@@ -97,6 +97,7 @@ pub struct PathOpsToolchain {
     pub qpdf: Option<PathBuf>,
     pub ghostscript: Option<PathBuf>,
     pub ocrmypdf: Option<PathBuf>,
+    pub node_one_shot: bool,
     /// RaioPDF-owned OCRmyPDF API wrapper that emits bounded NDJSON progress.
     pub ocr_progress: Option<PathBuf>,
     /// Payload bin dirs prepended to PATH when spawning OCRmyPDF (it invokes
@@ -160,6 +161,15 @@ impl PathOpsToolchain {
                 let candidate = payload_dir.join("ocr").join("ocrmypdf.cmd");
                 candidate.is_file().then_some(candidate)
             },
+            node_one_shot: {
+                let node = payload_dir.join("mcp").join("node").join(if cfg!(windows) {
+                    "node.exe"
+                } else {
+                    "node"
+                });
+                let entrypoint = payload_dir.join("mcp").join("app").join("index.mjs");
+                node.is_file() && entrypoint.is_file()
+            },
             ocr_progress: {
                 let candidate = payload_dir.join("ocr").join("raiopdf-ocr-progress.cmd");
                 candidate.is_file().then_some(candidate)
@@ -209,6 +219,7 @@ pub enum Tool {
     Qpdf,
     Ghostscript,
     Ocrmypdf,
+    Node,
 }
 
 impl Tool {
@@ -217,6 +228,7 @@ impl Tool {
             Tool::Qpdf => "qpdf",
             Tool::Ghostscript => "ghostscript",
             Tool::Ocrmypdf => "ocrmypdf",
+            Tool::Node => "node",
         }
     }
 }
@@ -230,6 +242,7 @@ pub struct OpDescriptor {
     pub name: &'static str,
     pub requires: &'static [Tool],
     pub filing_step: Option<&'static str>,
+    pub max_input_bytes: Option<u64>,
 }
 
 /// The enumerable PathOpsEngine registry. Order is the plan's priority order.
@@ -238,96 +251,121 @@ pub const OP_DESCRIPTORS: &[OpDescriptor] = &[
         name: "page_count",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "document_facts",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "decrypt",
         requires: &[Tool::Qpdf],
         filing_step: Some("remove-encryption"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "extract_pages",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "merge",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "insert_pages",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "split_by_max_bytes",
         requires: &[Tool::Qpdf],
         filing_step: Some("split-by-size"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "normalize_to_letter_portrait",
         requires: &[Tool::Ghostscript],
         filing_step: Some("normalize-pages"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "scrub_metadata",
         requires: &[Tool::Qpdf],
         filing_step: Some("scrub-metadata"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "prepare_filing",
         requires: &[Tool::Qpdf, Tool::Ghostscript],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "ocr",
         requires: &[Tool::Ocrmypdf],
         filing_step: Some("make-searchable"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "repair",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "redact_areas",
         requires: &[Tool::Qpdf, Tool::Ghostscript],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "linearize",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "compress",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "sanitize",
         requires: &[Tool::Ghostscript],
         filing_step: Some("sanitize-content"),
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "bates_stamp",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "page_numbers",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
     },
     OpDescriptor {
         name: "watermark",
         requires: &[Tool::Qpdf],
         filing_step: None,
+        max_input_bytes: None,
+    },
+    OpDescriptor {
+        name: "build_binder",
+        requires: &[Tool::Node, Tool::Qpdf],
+        filing_step: None,
+        max_input_bytes: None,
     },
 ];
 
@@ -341,6 +379,7 @@ pub struct PathOpStatus {
     pub missing_tools: Vec<&'static str>,
     /// The `PrepPlanStepId` this op implements, if any.
     pub filing_step: Option<&'static str>,
+    pub max_input_bytes: Option<u64>,
 }
 
 pub fn registry(toolchain: &PathOpsToolchain) -> Vec<PathOpStatus> {
@@ -354,6 +393,7 @@ pub fn registry(toolchain: &PathOpsToolchain) -> Vec<PathOpStatus> {
                     Tool::Qpdf => toolchain.qpdf.is_none(),
                     Tool::Ghostscript => toolchain.ghostscript.is_none(),
                     Tool::Ocrmypdf => toolchain.ocrmypdf.is_none(),
+                    Tool::Node => !toolchain.node_one_shot,
                 })
                 .map(|tool| tool.name())
                 .collect();
@@ -362,6 +402,7 @@ pub fn registry(toolchain: &PathOpsToolchain) -> Vec<PathOpStatus> {
                 available: missing_tools.is_empty(),
                 missing_tools,
                 filing_step: descriptor.filing_step,
+                max_input_bytes: descriptor.max_input_bytes,
             }
         })
         .collect()

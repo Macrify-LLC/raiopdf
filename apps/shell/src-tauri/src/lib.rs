@@ -1226,6 +1226,7 @@ pub fn run() {
             path_ops::path_op_extract_pages,
             path_ops::path_op_merge,
             path_ops::path_op_insert_pages,
+            path_ops::path_op_build_binder,
             path_ops::path_op_split_by_max_bytes,
             path_ops::path_op_prepare_filing,
             path_ops::path_op_ocr,

@@ -8,6 +8,7 @@ import {
   handleBates,
   handleBatesFolder,
   handleBinder,
+  handleBuildBinderOneShot,
   handleExtract,
   handlePageNumbers,
   handleProductionSet,
@@ -96,6 +97,41 @@ describe("legal tools (local pdf-lib engine)", () => {
       engine,
     );
     expect(await pageCount(output)).toBe(4);
+  });
+
+  it("one-shot build_binder rejects a main PDF over its passed-in ceiling", async () => {
+    const main = await makePdf("main.pdf", 1);
+    const exhibit = await makePdf("ex1.pdf", 1);
+    const output = path.join(dir, "binder.pdf");
+    const result = await handleBuildBinderOneShot({
+      mainPath: main,
+      exhibits: [{ path: exhibit, label: "Exhibit A" }],
+      options: { slipSheets: false },
+      outputPath: output,
+      maxInputBytes: 1,
+    });
+
+    expect(structured(result)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_ARGUMENT" },
+    });
+    await expect(fs.access(output)).rejects.toBeTruthy();
+  });
+
+  it("one-shot build_binder writes a binder file with optional options omitted", async () => {
+    const main = await makePdf("main.pdf", 1);
+    const exhibit = await makePdf("ex1.pdf", 1);
+    const output = path.join(dir, "binder-one-shot.pdf");
+    const result = await handleBuildBinderOneShot({
+      mainPath: main,
+      exhibits: [{ path: exhibit, label: "Exhibit A", sourceFileName: "ex1.pdf" }],
+      options: { slipSheets: false },
+      outputPath: output,
+      maxInputBytes: 10_000_000,
+    });
+
+    expect(structured(result)).toMatchObject({ ok: true, output });
+    expect(await pageCount(output)).toBe(3);
   });
 
   it("split_pdf writes multiple parts that cover every page", async () => {

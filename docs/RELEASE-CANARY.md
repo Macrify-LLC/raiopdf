@@ -158,6 +158,14 @@ RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
 ```
 
+For streamed Combine with Exhibits, use a large main PDF from
+`RAIOPDF_CANARY_FIXTURES_DIR` (at or below the Node-lane ceiling) plus one or more
+small exhibit PDFs. Open the main file so it uses streamed/range mode, add the
+exhibits, build the binder, and confirm the output opens as a new document with
+the exhibit index/stamps/bookmarks present. The expected user-facing result is
+the Save As funnel: the original large PDF is untouched, and the generated binder
+must be saved explicitly to keep it.
+
 When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
 disk, point `RAIOPDF_LARGE_FIXTURES_DIR` at your own local, private fixture folder
 instead — the synthetic file is the stand-in, not the goal:

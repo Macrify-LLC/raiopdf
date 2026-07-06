@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isFilingStepEnabled,
   pathOpErrorMessage,
+  isPathOpAvailableForInput,
+  pathOpBuildBinder,
   pathOpOcr,
   pathOpRedactAreas,
   PathOpsError,
@@ -20,25 +22,35 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 function statusFixture(overrides?: Partial<PathOpsStatus>): PathOpsStatus {
   return {
-    toolchain: { qpdf: true, ghostscript: true, ocrmypdf: false },
+    toolchain: { qpdf: true, ghostscript: true, ocrmypdf: false, node: true },
     ops: [
       {
         name: "normalize_to_letter_portrait",
         available: true,
         missingTools: [],
         filingStep: "normalize-pages",
+        maxInputBytes: null,
       },
       {
         name: "split_by_max_bytes",
         available: true,
         missingTools: [],
         filingStep: "split-by-size",
+        maxInputBytes: null,
       },
       {
         name: "ocr",
         available: false,
         missingTools: ["ocrmypdf"],
         filingStep: "make-searchable",
+        maxInputBytes: null,
+      },
+      {
+        name: "build_binder",
+        available: true,
+        missingTools: [],
+        filingStep: null,
+        maxInputBytes: 400,
       },
     ],
     filingSteps: {
@@ -78,6 +90,35 @@ describe("isFilingStepEnabled (closed-form checklist rule)", () => {
     // include it — the rule must fail closed, not assume availability.
     const status = statusFixture();
     expect(isFilingStepEnabled(status, "remove-encryption")).toBe(false);
+  });
+});
+
+describe("isPathOpAvailableForInput", () => {
+  it("requires the op to be present and available", () => {
+    const status = statusFixture({
+      ops: [
+        {
+          name: "build_binder",
+          available: false,
+          missingTools: ["node"],
+          filingStep: null,
+          maxInputBytes: 400,
+        },
+      ],
+    });
+    expect(isPathOpAvailableForInput(status, "build_binder", 100)).toBe(false);
+    expect(isPathOpAvailableForInput(status, "missing_op", 100)).toBe(false);
+  });
+
+  it("honors per-op maxInputBytes when reported", () => {
+    const status = statusFixture();
+    expect(isPathOpAvailableForInput(status, "build_binder", 399)).toBe(true);
+    expect(isPathOpAvailableForInput(status, "build_binder", 401)).toBe(false);
+  });
+
+  it("allows available ops without a ceiling", () => {
+    const status = statusFixture();
+    expect(isPathOpAvailableForInput(status, "split_by_max_bytes", 1_000_000)).toBe(true);
   });
 });
 
@@ -160,6 +201,30 @@ describe("path op invoke plumbing", () => {
       grant: "grant-1",
       mode: "force-ocr",
       jobToken: "job-1",
+    });
+  });
+
+  it("invokes build_binder with exhibit bytes and options", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "binder.pdf",
+      sizeBytes: 20,
+      pageCount: 4,
+      opReport: { op: "build_binder", tool: "node", durationMs: 1, inputSizeBytes: 12, outputSizeBytes: 20, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpBuildBinder(
+      grant,
+      [{ bytes: new Uint8Array([1, 2, 3]), label: "Exhibit A", sourceFileName: "a.pdf" }],
+      { slipSheets: false },
+      "Main Binder.pdf",
+    )).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_build_binder", {
+      grant: "grant-1",
+      exhibits: [{ bytes: [1, 2, 3], label: "Exhibit A", sourceFileName: "a.pdf" }],
+      options: { slipSheets: false },
+      outputName: "Main Binder.pdf",
     });
   });
 

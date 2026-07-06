@@ -63,6 +63,7 @@ import {
   batesOutputSchema,
   binderInputSchema,
   binderOutputSchema,
+  handleBuildBinderOneShot,
   extractInputSchema,
   extractOutputSchema,
   handleBates,
@@ -80,6 +81,7 @@ import {
   splitOutputSchema,
   type BatesFolderInput,
   type BatesInput,
+  type BuildBinderOneShotInput,
   type BinderInput,
   type ExtractInput,
   type PageNumbersInput,
@@ -618,7 +620,8 @@ async function runOneShot(): Promise<void> {
   if (
     toolName !== "build_production_set" &&
     toolName !== "batch_cleanup" &&
-    toolName !== "build_filing_packet"
+    toolName !== "build_filing_packet" &&
+    toolName !== "build_binder"
   ) {
     throw new Error(`Unsupported one-shot tool: ${toolName ?? "(missing)"}`);
   }
@@ -628,7 +631,9 @@ async function runOneShot(): Promise<void> {
       ? await handleBatchCleanup(input as BatchCleanupInput, defaultEngineHandle)
       : toolName === "build_filing_packet"
         ? await handleBuildFilingPacket(input as FilingPacketInput, defaultEngineHandle)
-        : await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
+        : toolName === "build_binder"
+          ? await handleBuildBinderOneShot(input as BuildBinderOneShotInput)
+          : await handleProductionSet(input as ProductionSetInput, defaultEngineHandle);
     console.log(JSON.stringify(result.structuredContent));
   } catch (error) {
     const result = toolError(error);

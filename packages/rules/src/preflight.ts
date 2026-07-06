@@ -154,6 +154,7 @@ function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): P
 
 function searchableTextWarningDetail(document: DocumentFacts): string {
   const garbledPages = document.textLayerCoverage?.garbledPages.length ?? 0;
+  const trivialTextImagePages = document.textLayerCoverage?.trivialTextImagePages?.length ?? 0;
   const totalPages = document.textLayerCoverage
     ? document.textLayerCoverage.imageOnlyPages.length +
       document.textLayerCoverage.mixedPages.length +
@@ -163,6 +164,11 @@ function searchableTextWarningDetail(document: DocumentFacts): string {
   if (garbledPages > 0) {
     const totalText = totalPages > 0 ? ` on ${garbledPages} of ${totalPages} pages` : "";
     return `The document's text layer looks unreliable${totalText}; re-OCR is recommended.`;
+  }
+
+  if (trivialTextImagePages > 0) {
+    const totalText = totalPages > 0 ? ` on ${trivialTextImagePages} of ${totalPages} pages` : "";
+    return `The document has only a tiny text layer over scanned page images${totalText}; Force OCR is recommended.`;
   }
 
   return "The document facts report no searchable text.";
@@ -727,7 +733,10 @@ function requiredPhraseApplies(
 }
 
 function hasSearchableTextForPhraseCheck(document: DocumentFacts): boolean {
-  if ((document.textLayerCoverage?.garbledPages.length ?? 0) > 0) {
+  if (
+    (document.textLayerCoverage?.garbledPages.length ?? 0) > 0 ||
+    (document.textLayerCoverage?.trivialTextImagePages?.length ?? 0) > 0
+  ) {
     return false;
   }
 
@@ -740,7 +749,10 @@ function hasSearchableTextForPhraseCheck(document: DocumentFacts): boolean {
     return false;
   }
 
-  if (document.textLayerCoverage?.imageOnlyPages.length === document.pages.length && document.pages.length > 0) {
+  const effectivelyImageOnlyPages =
+    (document.textLayerCoverage?.imageOnlyPages.length ?? 0) +
+    (document.textLayerCoverage?.trivialTextImagePages?.length ?? 0);
+  if (effectivelyImageOnlyPages === document.pages.length && document.pages.length > 0) {
     return false;
   }
 

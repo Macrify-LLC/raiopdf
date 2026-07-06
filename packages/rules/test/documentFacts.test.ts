@@ -196,6 +196,34 @@ describe("document fact extractors", () => {
     });
   });
 
+  it("does not mark a mostly scanned page searchable when it only has trivial text", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]);
+
+    const facts = await buildDocumentFacts(await pdf.save({ useObjectStreams: false }), {
+      textExtractor: {
+        extractTextLayerCoverage: async () => ({
+          textPages: [],
+          imageOnlyPages: [],
+          mixedPages: [0],
+          garbledPages: [],
+          trivialTextImagePages: [{
+            pageIndex: 0,
+            textCharacterCount: 8,
+            imageCoverageRatio: 0.96,
+          }],
+        }),
+      },
+    });
+
+    expect(facts.searchableText).toBe(false);
+    expect(deriveTextLayerQuality(facts.textLayerCoverage!)).toMatchObject({
+      imageOnlyPages: 1,
+      totalPages: 1,
+      verdict: "image_only",
+    });
+  });
+
   it("detects encrypted trailers without requiring PDF parsing", async () => {
     const encrypted = syntheticPdfWithEncrypt("5 0 R", "<< /Filter /Standard /V 1 /R 2 /O <> /U <> /P -4 >>");
     const usageRestricted = syntheticPdfWithEncrypt("<< /P -4 >>");

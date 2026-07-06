@@ -148,6 +148,7 @@ export type TextLayerCoverage = {
   mixedPages: readonly number[];
   textPages: readonly number[];
   garbledPages: readonly GarbledPageInfo[];
+  trivialTextImagePages?: readonly TrivialTextImagePageInfo[];
 };
 
 export type GarbleReason = "pua_glyphs" | "replacement_chars" | "low_alpha_entropy" | "combined";
@@ -161,6 +162,12 @@ export type GarbledPageInfo = {
   alphaRatio: number;
 };
 
+export type TrivialTextImagePageInfo = {
+  pageIndex: number;
+  textCharacterCount: number;
+  imageCoverageRatio: number;
+};
+
 export type TextLayerQuality = {
   cleanPages: number;
   garbledPages: number;
@@ -170,7 +177,8 @@ export type TextLayerQuality = {
 };
 
 export function deriveTextLayerQuality(coverage: TextLayerCoverage): TextLayerQuality {
-  const imageOnlyPages = coverage.imageOnlyPages.length;
+  const imageOnlyPages =
+    coverage.imageOnlyPages.length + (coverage.trivialTextImagePages?.length ?? 0);
   const garbledPages = coverage.garbledPages.length;
   const totalPages = coverage.imageOnlyPages.length + coverage.mixedPages.length + coverage.textPages.length;
   const cleanPages = Math.max(0, totalPages - imageOnlyPages - garbledPages);

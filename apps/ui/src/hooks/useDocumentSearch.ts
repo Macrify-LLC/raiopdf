@@ -335,8 +335,13 @@ export function useDocumentSearch({
 
 export function documentSearchWarning(textLayerCoverage: TextLayerCoverage | null): string | null {
   const garbledPageCount = textLayerCoverage?.garbledPages.length ?? 0;
-  if (garbledPageCount === 0) {
+  const trivialTextImagePageCount = textLayerCoverage?.trivialTextImagePages?.length ?? 0;
+  if (garbledPageCount === 0 && trivialTextImagePageCount === 0) {
     return null;
+  }
+
+  if (trivialTextImagePageCount > 0) {
+    return `Search may be incomplete - ${trivialTextImagePageCount} page${trivialTextImagePageCount === 1 ? "" : "s"} only ${trivialTextImagePageCount === 1 ? "has" : "have"} a tiny text layer over scanned page images.`;
   }
 
   return `Search may be incomplete - the text layer looks garbled on ${garbledPageCount} page${garbledPageCount === 1 ? "" : "s"}.`;

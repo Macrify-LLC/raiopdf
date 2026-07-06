@@ -67,6 +67,7 @@ export type {
   SignatureDetectionFacts,
   TextLayerCoverage,
   TextLayerQuality,
+  TrivialTextImagePageInfo,
 } from "./types.js";
 export { deriveTextLayerQuality } from "./types.js";
 export type {

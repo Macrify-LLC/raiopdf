@@ -222,6 +222,7 @@ import {
   hasSearchableTextLayerCoverage,
   inspectOpenTextLayerCoverage,
   inspectTextLayer,
+  pdfDocumentTextLayerCoverage,
   textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
@@ -334,6 +335,27 @@ function memoryOcrProcessingMessage(ocrType: OcrType): string {
   return ocrType === "force-ocr"
     ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
     : "Making searchable — page-by-page work happens in the engine.";
+}
+
+async function inspectPathOpOutputTextLayer(output: {
+  outputGrant: FileGrant;
+  name: string;
+  sizeBytes: number;
+}) {
+  const plan = await planPathOpReopen(output);
+  if (plan.mode === "memory") {
+    return inspectTextLayer(plan.bytes);
+  }
+
+  const transport = createGrantRangeTransport(output.outputGrant, output.sizeBytes);
+  const pdfDocument = await loadStreamedPdfDocument(transport);
+
+  try {
+    return await pdfDocumentTextLayerCoverage(pdfDocument);
+  } finally {
+    transport.abort();
+    await pdfDocument.loadingTask.destroy();
+  }
 }
 
 /** What the password prompt unlocks: the still-encrypted source bytes
@@ -2057,6 +2079,7 @@ export function App() {
       void (async () => {
         const jobToken = newOcrJobToken();
         let unlisten: (() => void) | null = null;
+        let outputToReleaseOnError: { outputGrant: FileGrant } | null = null;
         try {
           try {
             unlisten = await listenOcrProgress(jobToken, (progress) => {
@@ -2080,8 +2103,34 @@ export function App() {
 
           await waitForUiPaint();
           const output = await pathOpOcr(grant, ocrType, jobToken);
+          outputToReleaseOnError = output;
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            outputToReleaseOnError = null;
+            return;
+          }
+
+          setOcrState({
+            phase: "verifying",
+            message: "Verifying the text layer...",
+            progress: null,
+          });
+
+          const textLayerCoverage = await inspectPathOpOutputTextLayer(output);
+          const verification = verifyOcrTextLayer(textLayerCoverage, ocrType);
+          if (!isCurrentStreamedRun()) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            outputToReleaseOnError = null;
+            return;
+          }
+
+          if (verification.status === "failed") {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            outputToReleaseOnError = null;
+            setOcrState({
+              phase: "error",
+              message: verification.message,
+            });
             return;
           }
 
@@ -2089,15 +2138,20 @@ export function App() {
             openToken: sourceOpenToken,
             generation: sourceGeneration,
           });
+          outputToReleaseOnError = null;
           if (reopened.status !== "opened") {
             return;
           }
 
           setOcrState({
             phase: "done",
-            message: "Searchable copy ready — it opened as a new document. Use Save As to keep it.",
+            message: `${verification.message} It opened as a new document. Use Save As to keep it.`,
           });
         } catch (error: unknown) {
+          if (outputToReleaseOnError) {
+            await pathOpReleaseOutput(outputToReleaseOnError.outputGrant).catch(() => undefined);
+          }
+
           if (!isCurrentStreamedRun()) {
             return;
           }
@@ -6817,7 +6871,8 @@ function emptyDocumentFacts(document: DocumentState): DocumentFacts {
       ? {
           textLayerCoverage: document.textLayerCoverage,
           searchableText: document.textLayerCoverage.imageOnlyPages.length === 0 &&
-            document.textLayerCoverage.garbledPages.length === 0,
+            document.textLayerCoverage.garbledPages.length === 0 &&
+            (document.textLayerCoverage.trivialTextImagePages?.length ?? 0) === 0,
         }
       : {}),
   };

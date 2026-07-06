@@ -1791,9 +1791,12 @@ async function throwResponseError(response: Response): Promise<never> {
   // dropped those plain-text reasons and left the caller with a bare
   // "Unprocessable Entity".
   const rawBody = await readResponseText(response);
-  const errorBody = parseErrorBody(rawBody);
+  const parsedError = parseErrorBody(rawBody);
+  const errorBody = parsedError.body;
   const message =
-    readErrorMessage(errorBody) ?? plainTextErrorMessage(rawBody) ?? response.statusText;
+    readErrorMessage(errorBody)
+    ?? (parsedError.parsedJson ? null : plainTextErrorMessage(rawBody))
+    ?? response.statusText;
   const errorCode = readErrorCode(errorBody);
   const code = mapHttpStatusToErrorCode(response.status, message, errorCode);
   const detail = errorCode ? `${message} (${errorCode})` : message;
@@ -1809,17 +1812,20 @@ async function readResponseText(response: Response): Promise<string | null> {
   }
 }
 
-function parseErrorBody(rawBody: string | null): StirlingErrorBody | null {
+function parseErrorBody(rawBody: string | null): {
+  body: StirlingErrorBody | null;
+  parsedJson: boolean;
+} {
   if (!rawBody) {
-    return null;
+    return { body: null, parsedJson: false };
   }
 
   try {
     const body = JSON.parse(rawBody);
 
-    return isRecord(body) ? body : null;
+    return { body: isRecord(body) ? body : null, parsedJson: true };
   } catch {
-    return null;
+    return { body: null, parsedJson: false };
   }
 }
 

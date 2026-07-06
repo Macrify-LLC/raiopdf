@@ -883,6 +883,20 @@ describe("SidecarPdfEngine", () => {
     });
   });
 
+  it("does not map structured JSON fallback text as a plain-text error", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({
+        path: "/api/v1/general/remove-pages",
+        errors: [{ field: "pageNumbers", reason: "must not be empty" }],
+      }, 400),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const result = engine.open(bytes(1));
+
+    await expect(result).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    await expect(result).rejects.not.toThrow("remove-pages");
+  });
+
   it("maps Stirling encrypted-document errors to ENCRYPTED_DOCUMENT", async () => {
     const { fetchImpl } = createFetch(
       jsonResponse({ message: "PDF is encrypted or password protected" }, 400),

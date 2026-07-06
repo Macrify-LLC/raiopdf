@@ -1368,7 +1368,7 @@ fn proxy_client_with_activity(
 
     if is_cors_preflight(&request_head) {
         write_cors_preflight_response(&mut client, &request_head)?;
-        let _ = client.shutdown(Shutdown::Both);
+        let _ = client.shutdown(Shutdown::Write);
         return Ok(());
     }
 
@@ -1376,7 +1376,7 @@ fn proxy_client_with_activity(
         client.write_all(
             b"HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         )?;
-        let _ = client.shutdown(Shutdown::Both);
+        let _ = client.shutdown(Shutdown::Write);
         return Ok(());
     }
 
@@ -3103,6 +3103,44 @@ mod tests {
             .received_request()
             .expect("stub should receive authorized request")
             .starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
+    }
+
+    #[test]
+    fn auth_proxy_forwards_large_authorized_post_after_cors_preflight() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let preflight = send_proxy_request(
+            proxy_port,
+            b"OPTIONS /api/v1/misc/ocr-pdf HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://tauri.localhost\r\nAccess-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: X-RaioPDF-Auth, Content-Type\r\nConnection: close\r\n\r\n",
+        );
+
+        assert!(preflight.starts_with("HTTP/1.1 204 No Content"));
+
+        let body = vec![b'A'; 1024 * 1024];
+        let mut post = format!(
+            "POST /api/v1/misc/ocr-pdf HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://tauri.localhost\r\nX-RaioPDF-Auth: secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        post.extend_from_slice(&body);
+
+        let response = send_proxy_request(proxy_port, &post);
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"), "response was {response:?}");
+        let upstream_request = stub
+            .received_request()
+            .expect("stub should receive authorized request");
+        assert!(upstream_request.starts_with("POST /api/v1/misc/ocr-pdf HTTP/1.1"));
+        assert_eq!(
+            upstream_request.len(),
+            post.len(),
+            "proxy must forward the complete large upload"
+        );
     }
 
     #[test]

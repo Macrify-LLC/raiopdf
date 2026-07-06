@@ -46,6 +46,9 @@
     --font-display:"Newsreader",Georgia,serif;
     --font-editorial:"DM Serif Display",Georgia,serif;
     --font-body:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,sans-serif;
+    --ease-drawer:cubic-bezier(0.32,0.72,0,1); /* iOS-style expand/collapse curve */
+    /* lets height:auto animate (FAQ accordion reveal); ignored where unsupported */
+    interpolate-size:allow-keywords;
   }
 
   html{scroll-behavior:smooth;}
@@ -554,9 +557,10 @@
   .feature-demo__cap span{ font-size:12.5px; color:var(--text-muted); line-height:1.5; }
 
   /* brief FAQ band — dark navy treatment shared with .equipai, native <details>
-     accordions. No JS height animation (details can't animate open natively) —
-     the open/hover feel comes from background/border/shadow shifts on the item
-     itself, a filled toggle badge, and a gold divider under the revealed answer. */
+     accordions. The reveal animates height smoothly via ::details-content +
+     interpolate-size:allow-keywords (progressive enhancement — browsers without
+     it fall back to the instant native toggle). Open/hover feel also comes from
+     background/border/shadow shifts, a filled toggle badge, and a gold divider. */
   .faq{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
   .faq__cap{ text-align:center; max-width:640px; margin:0 auto 36px; }
   .faq__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
@@ -587,14 +591,26 @@
     width:30px; height:30px; border-radius:50%;
     font-family:var(--font-body); font-weight:400; font-size:20px; line-height:1;
     color:var(--gold); background:rgba(245,185,66,.12); border:1px solid rgba(245,185,66,.28);
-    transition:transform .25s ease, background-color .2s ease, border-color .2s ease, color .2s ease;
+    transition:transform .3s var(--ease-drawer), background-color .2s ease, border-color .2s ease, color .2s ease;
   }
   .faq__item:hover summary::after{ background:rgba(245,185,66,.22); border-color:rgba(245,185,66,.55); }
   .faq__item[open] summary::after{
     transform:rotate(45deg); background:var(--gold); border-color:var(--gold); color:var(--navy-deep);
   }
   .faq__item summary:focus-visible{ outline:2px solid var(--gold); outline-offset:-4px; border-radius:16px; }
-  .faq__answer{ padding:0 24px 24px; }
+  /* smooth expand/collapse: the content box animates from block-size:0 to auto
+     (needs interpolate-size on :root); the answer itself fades and settles in. */
+  .faq__item::details-content{
+    block-size:0; overflow:clip;
+    transition:block-size .3s var(--ease-drawer), content-visibility .3s var(--ease-drawer) allow-discrete;
+  }
+  .faq__item[open]::details-content{ block-size:auto; }
+  .faq__answer{
+    padding:0 24px 24px;
+    opacity:0; transform:translateY(-4px);
+    transition:opacity .22s ease, transform .3s var(--ease-drawer);
+  }
+  .faq__item[open] .faq__answer{ opacity:1; transform:translateY(0); }
   .faq__answer::before{
     content:""; display:block; height:1px; margin:0 0 16px;
     background:linear-gradient(90deg, rgba(245,185,66,.4), rgba(255,255,255,.05));
@@ -604,6 +620,12 @@
   .faq__answer strong{ color:#fff; font-weight:700; }
   .faq__answer a{ color:var(--gold); text-decoration:underline; text-underline-offset:2px; }
   .faq__more{ text-align:center; margin-top:32px; }
+  /* reduced motion: keep the gentle fade, drop the height/position movement */
+  @media (prefers-reduced-motion: reduce){
+    .faq__item::details-content{ transition:content-visibility .01ms allow-discrete; }
+    .faq__answer{ transform:none; transition:opacity .2s ease; }
+    .faq__item, .faq__item summary::after{ transition:background-color .2s ease, border-color .2s ease, color .2s ease; }
+  }
 
   /* equip-your-AI band: dark navy treatment shared with .faq, single larger demo + proof points */
   .equipai{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
@@ -724,9 +746,10 @@
       <img class="nav__logo" src="./assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
     </a>
     <nav class="nav__links" aria-label="Primary">
-      <a href="#philosophy">Why</a>
-      <a href="#inputs">How it works</a>
       <a href="#outcomes">Features</a>
+      <a href="#faq">FAQ</a>
+      <a href="#inputs">How it works</a>
+      <a href="#philosophy">Why</a>
       <a href="#honest">What it isn't</a>
       <a href="/help/">Help</a>
       <a class="nav__cta" href="#top">Download</a>

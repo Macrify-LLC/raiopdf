@@ -2,6 +2,7 @@ import { useRef, type ChangeEvent, type MouseEvent, type ReactNode } from "react
 import type { OcrUiState } from "../App";
 import type { DocumentState, PageScrollIntent } from "../hooks/useDocument";
 import type { DocumentSearchState } from "../hooks/useDocumentSearch";
+import type { TextEditState } from "../hooks/useTextEdit";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { CanvasWell } from "./CanvasWell";
 import { CommandBar } from "./CommandBar";
@@ -80,9 +81,11 @@ export interface AppShellProps {
   workspace: ReactNode;
   overlay: ReactNode;
   activeLegalTool: string | null;
+  activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
   activeOrganizeTool: string | null;
   onEditDialogToolSelected: (toolId: EditDialogToolId) => void;
+  onTextEditSelected?: (() => void) | undefined;
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
@@ -94,6 +97,7 @@ export interface AppShellProps {
   compressAvailable: boolean;
   onCompress: (options: PdfCompressOptions) => Promise<boolean>;
   redaction: RedactionPanelState;
+  textEdit?: TextEditState | undefined;
   scanner: ScannerPanelState;
   pendingRedactions: readonly PendingRedactionOverlay[];
   modeBar: ReactNode;
@@ -153,9 +157,11 @@ export function AppShell({
   workspace,
   overlay,
   activeLegalTool,
+  activeTextEdit = false,
   activeEditDialogTool,
   activeOrganizeTool,
   onEditDialogToolSelected,
+  onTextEditSelected,
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
@@ -167,6 +173,7 @@ export function AppShell({
   compressAvailable,
   onCompress,
   redaction,
+  textEdit,
   scanner,
   pendingRedactions,
   modeBar,
@@ -246,6 +253,8 @@ export function AppShell({
         searchValue={documentSearch.query}
         searchResultLabel={documentSearch.resultLabel}
         searchBusy={documentSearch.status === "searching"}
+        searchDisabled={activeTextEdit}
+        searchDisabledReason="Document search is disabled while Edit Document Text owns the page highlights."
         searchCanNavigate={documentSearch.canNavigate}
         onSearchChange={documentSearch.setQuery}
         onSearchPrevious={documentSearch.goToPrevious}
@@ -297,8 +306,8 @@ export function AppShell({
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}
           onRedactionAreaRemoved={onRedactionAreaRemoved}
-          searchResults={documentSearch.results}
-          activeSearchResultId={documentSearch.activeMatch?.id ?? null}
+          searchResults={activeTextEdit && textEdit ? textEdit.matches : documentSearch.results}
+          activeSearchResultId={activeTextEdit && textEdit ? textEdit.activeMatch?.id ?? null : documentSearch.activeMatch?.id ?? null}
           lazyPageMeasurement={streamedDocument}
           engineStarting={showEngineStartingOverlay}
         />
@@ -309,10 +318,12 @@ export function AppShell({
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
           activeEditTool={editing.tool}
+          activeTextEdit={activeTextEdit}
           activeEditDialogTool={activeEditDialogTool}
           activeLegalTool={activeLegalTool}
           activeOrganizeTool={activeOrganizeTool}
           onEditToolSelected={editing.setTool}
+          onTextEditSelected={onTextEditSelected}
           onEditDialogToolSelected={onEditDialogToolSelected}
           onLegalToolSelected={onLegalToolSelected}
           onOrganizeToolSelected={onOrganizeToolSelected}
@@ -326,6 +337,7 @@ export function AppShell({
           compressAvailable={compressAvailable}
           onCompress={onCompress}
           redaction={redaction}
+          textEdit={textEdit}
           scanner={scanner}
           pendingEdits={editing.pendingEdits}
           onRemovePendingEdit={editing.removeEdit}

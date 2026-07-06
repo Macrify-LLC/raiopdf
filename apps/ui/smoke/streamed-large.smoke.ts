@@ -72,6 +72,12 @@ test.describe("streamed large-PDF handling", () => {
       page.getByText("This document is too large for in-app editing", { exact: false }),
     ).toBeVisible();
 
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+    await expect(
+      page.getByText("This document is too large for in-app text editing.", { exact: false }),
+    ).toBeVisible();
+
     // Whole-document print is gated in the browser runtime (no shell grant
     // for the page-range extract op).
     await page.getByRole("button", { name: "Print" }).click();

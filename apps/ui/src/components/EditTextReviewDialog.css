@@ -1,0 +1,219 @@
+/*
+ * Review dialog body -- lives directly in a `FloatingDialog` (width="lg"),
+ * not in the 288px Tool Panel sidebar. Deliberately does NOT reuse
+ * `.tool-panel__inline-card` for its own root: that class carries a
+ * sidebar-only 42px left margin (aligning a card under a ToolRow's icon)
+ * which reads as a lopsided, off-center card once dropped into a wide
+ * dialog. Typography-only tool-panel classes (`__card-copy`, `__note`,
+ * `__field-error`, `__danger-button`, `__secondary-button`, ...) are still
+ * reused where they carry no layout side effect, per the rest of the app's
+ * FloatingDialog bodies (OcrDialog, force-ocr-confirmation).
+ */
+.edit-text-review {
+  display: grid;
+  gap: var(--space-3);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  animation: edit-text-review-in var(--duration-fast) ease-out;
+}
+
+@keyframes edit-text-review-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edit-text-review {
+    animation: none;
+  }
+}
+
+/* The whole-document-rewrite disclosure -- load-bearing honesty copy that
+   stays put every time this dialog opens, so it reads as a standing notice
+   rather than one line lost among the rest of the report. */
+.edit-text-review__disclosure {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.edit-text-review__summary {
+  margin: 0;
+  color: var(--ok);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.edit-text-review__advisory {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* Warnings grouped visually apart from the rest of the report -- a labeled,
+   warn-toned block instead of a bare, easy-to-miss list. */
+.edit-text-review__warnings {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  list-style: none;
+}
+
+.edit-text-review__warnings-label {
+  margin: 0 0 1px;
+  color: var(--warn);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+}
+
+.edit-text-review__warnings li {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.edit-text-review__operations {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.edit-text-review__operation {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-2);
+}
+
+.edit-text-review__operation-terms {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.edit-text-review__operation-find {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.edit-text-review__operation-arrow {
+  color: var(--muted);
+}
+
+.edit-text-review__operation-replace {
+  font-weight: 700;
+  color: var(--primary-deep);
+}
+
+.edit-text-review__operation-detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.edit-text-review__operation-detail[data-tone="not-found"] {
+  color: var(--warn);
+}
+
+.edit-text-review__pages {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.edit-text-review__page {
+  display: grid;
+  gap: var(--space-1);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-2);
+}
+
+.edit-text-review__page-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.edit-text-review__page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* Before/after read as a text-diff preview, not a fabricated image -- there
+   is no page-image byte source available at this layer (see the component
+   doc comment), so honesty wins over a fake thumbnail. The color-coded left
+   border carries the before/after distinction visually; the visible label
+   carries it for everyone else. */
+.edit-text-review__snippet {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+  background: var(--panel);
+}
+
+.edit-text-review__snippet[data-variant="before"] {
+  border-left-color: var(--border);
+}
+
+.edit-text-review__snippet[data-variant="after"] {
+  border-left-color: var(--primary);
+}
+
+.edit-text-review__snippet-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+}
+
+.edit-text-review__snippet-text {
+  margin: 0;
+  color: var(--body);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Reuses the app's own highlight-tool color -- the same yellow a Highlight
+   annotation lays over selected text -- so "this is the matched word" reads
+   as the same visual language the rest of the app already uses. */
+.edit-text-review__mark {
+  background: var(--highlight);
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.edit-text-review__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}

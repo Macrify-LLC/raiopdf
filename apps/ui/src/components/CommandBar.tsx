@@ -78,6 +78,8 @@ export interface CommandBarProps {
   searchValue?: string;
   searchResultLabel?: string;
   searchBusy?: boolean;
+  searchDisabled?: boolean;
+  searchDisabledReason?: string;
   searchCanNavigate?: boolean;
   onSearchChange?: ((value: string) => void) | undefined;
   onSearchPrevious?: (() => void) | undefined;
@@ -112,6 +114,8 @@ export function CommandBar({
   searchValue = "",
   searchResultLabel = "",
   searchBusy = false,
+  searchDisabled = false,
+  searchDisabledReason,
   searchCanNavigate = false,
   onSearchChange,
   onSearchPrevious,
@@ -315,7 +319,8 @@ export function CommandBar({
             placeholder="Search document"
             aria-label="Search document"
             value={searchValue}
-            disabled={!hasDocument}
+            title={searchDisabled ? searchDisabledReason : undefined}
+            disabled={!hasDocument || searchDisabled}
             onChange={(event) => onSearchChange?.(event.currentTarget.value)}
             onKeyDown={handleSearchKeyDown}
           />

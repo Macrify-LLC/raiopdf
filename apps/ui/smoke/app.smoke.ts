@@ -379,6 +379,79 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await expect.poll(() => getRedactionCallCount(page)).toBe(1);
 });
 
+test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {
+  const sourcePdf = await createTextPdf("Plaintiff files the motion.");
+  const editedPdf = await createTextPdf("Petitioner files the motion.");
+  await installTextEditBridgeMock(page, editedPdf);
+  await page.goto("/");
+  await openPdf(page, "edit-text.pdf", sourcePdf);
+
+  await openEditToolPanel(page);
+  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await expect(page.getByText("Replacements never reflow the page", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Search document")).toBeDisabled();
+
+  await page.getByLabel("Find text").fill("Plaintiff");
+  await page.getByLabel("Replace with").fill("Petitioner");
+  await page.getByRole("button", { name: "Replace all" }).click();
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
+  await expect(reviewDialog.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible();
+  await expect(reviewDialog.getByText("1 estimated replacement on 1 page.")).toBeVisible();
+  await expect(reviewDialog.getByText("The engine does not return replacement counts", { exact: false })).toBeVisible();
+  await reviewDialog.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+  await expect.poll(() => getTextEditCallCount(page)).toBe(1);
+
+  const saved = await savePdf(page);
+  await expectPageContentToContainLabel(saved, 0, "Petitioner files the motion.");
+});
+
+test("edit document text cancel and zero-change review leave bytes untouched", async ({ page }) => {
+  const sourcePdf = await createTextPdf("No replacement happens.");
+  await installTextEditBridgeMock(page, sourcePdf);
+  await page.goto("/");
+  await openPdf(page, "edit-text-zero.pdf", sourcePdf);
+
+  await openEditToolPanel(page);
+  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await page.getByLabel("Find text").fill("Missing");
+  await page.getByLabel("Replace with").fill("Present");
+  await page.getByRole("button", { name: "Replace all" }).click();
+  await page.getByRole("button", { name: "Review" }).click();
+
+  const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
+  await expect(reviewDialog.getByText("Nothing was replaced — the document was not modified.")).toBeVisible();
+  await expect(reviewDialog.getByRole("button", { name: "Apply" })).toBeDisabled();
+  await reviewDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByLabel("Unsaved changes")).toBeHidden();
+
+  const saved = await savePdf(page);
+  expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
+});
+
+test("edit document text prompts for pending annotations and gates scanned documents", async ({ page }) => {
+  await installTextEditBridgeMock(page, await createTextPdf("Prompt fixture."));
+  await page.goto("/");
+  await openPdf(page, "edit-text-prompt.pdf", await createTextPdf("Prompt fixture."));
+
+  await openEditToolPanel(page);
+  await page.locator(".command-bar").getByRole("button", { name: "Text box", exact: true }).click();
+  await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
+  await page.getByLabel("Text box content").fill("Pending note");
+  await page.getByLabel("Text box content").press("Enter");
+  await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
+  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Pending annotations" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await openPdf(page, "image-only.pdf", await createPdf([200]));
+  await openEditToolPanel(page);
+  await page.getByRole("button", { name: "Edit Document Text", exact: true }).click();
+  await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
+});
+
 test("Bates numbering card shows the live default format preview", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "bates.pdf", await createPdf([200, 210]));
@@ -956,6 +1029,17 @@ async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise
   await expect(mainCanvas(page)).toBeVisible();
 }
 
+async function openEditToolPanel(page: Page): Promise<void> {
+  const toolPanel = page.locator(".tool-panel");
+  const editButton = toolPanel.getByRole("button", { name: "Edit", exact: true });
+
+  if (await editButton.getAttribute("aria-expanded") !== "true") {
+    await editButton.click();
+  }
+
+  await expect(toolPanel.locator("#accordion-panel-edit")).toBeVisible();
+}
+
 async function expectCommandBarPage(page: Page, currentPage: number, pageCount: number): Promise<void> {
   await expect(page.getByLabel("Go to page")).toHaveValue(String(currentPage));
   await expect(page.locator(".command-bar__page-label")).toContainText(`/ ${pageCount}`);
@@ -1213,6 +1297,54 @@ async function installRedactionBridgeMock(
   });
 }
 
+async function installTextEditBridgeMock(
+  page: Page,
+  editedBytes: Uint8Array,
+): Promise<void> {
+  await page.addInitScript(({ editedContents }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      return { port: 39393, token: "smoke-token" } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
+
+      if (pathname === "/api/v1/analysis/basic-info") {
+        return new Response(JSON.stringify({ pageCount: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (pathname === "/api/v1/general/edit-text") {
+        testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ ?? 0) + 1;
+
+        return new Response(new Uint8Array(editedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    editedContents: [...editedBytes],
+  });
+}
+
 async function installFilingBridgeMock(
   page: Page,
   convertedBytes: Uint8Array,
@@ -1412,6 +1544,14 @@ async function getRedactionCallCount(page: Page): Promise<number> {
     return (window as typeof window & {
       __RAIOPDF_TEST_REDACTION_CALL_COUNT__?: number;
     }).__RAIOPDF_TEST_REDACTION_CALL_COUNT__ ?? 0;
+  });
+}
+
+async function getTextEditCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ ?? 0;
   });
 }
 

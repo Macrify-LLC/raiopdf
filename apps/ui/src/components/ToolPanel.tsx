@@ -51,7 +51,9 @@ import {
   UnderlineIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
+import type { TextEditState } from "../hooks/useTextEdit";
 import { AccordionGroup } from "./AccordionGroup";
+import { EditTextStatusPanel } from "./EditTextStatusPanel";
 import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import { Switch } from "./Switch";
@@ -93,6 +95,7 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   shapeLine: <LineIcon size={16} />,
   shapeArrow: <ArrowLineIcon size={16} />,
   sign: <SignIcon size={16} />,
+  "edit-text": <EditIcon size={16} />,
   "page-numbers": <BatesIcon size={16} />,
   watermark: <ScrubMetadataIcon size={16} />,
 };
@@ -144,16 +147,19 @@ export interface ToolPanelProps {
   ocrAvailable: boolean;
   ocrStarting: boolean;
   activeEditTool: EditToolId;
+  activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
   activeLegalTool: string | null;
   activeOrganizeTool: string | null;
   onEditToolSelected: (toolId: EditToolId) => void;
+  onTextEditSelected?: (() => void) | undefined;
   onEditDialogToolSelected: (toolId: EditDialogToolId) => void;
   onLegalToolSelected: (toolId: LegalToolId) => void;
   onOrganizeToolSelected: (toolId: OrganizeToolId) => void;
   onMakeSearchable: () => void;
   onForceOcr: () => void;
   redaction: RedactionPanelState;
+  textEdit?: TextEditState | undefined;
   scanner: ScannerPanelState;
   pendingEdits: readonly PendingEdit[];
   onRemovePendingEdit: (id: string) => void;
@@ -189,16 +195,19 @@ export function ToolPanel({
   ocrAvailable,
   ocrStarting,
   activeEditTool,
+  activeTextEdit = false,
   activeEditDialogTool,
   activeLegalTool,
   activeOrganizeTool,
   onEditToolSelected,
+  onTextEditSelected,
   onEditDialogToolSelected,
   onLegalToolSelected,
   onOrganizeToolSelected,
   onMakeSearchable,
   onForceOcr,
   redaction,
+  textEdit,
   scanner,
   pendingEdits,
   onRemovePendingEdit,
@@ -241,16 +250,35 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        {TOOL_PANEL_EDIT_TOOLS.map((tool) => (
-          <ToolRow
-            key={tool.id}
-            icon={TOOL_PANEL_ICONS[tool.id]}
-            label={tool.label}
-            description={tool.description}
-            selected={activeEditTool === tool.id}
-            onSelect={() => onEditToolSelected(tool.id)}
-          />
-        ))}
+        {TOOL_PANEL_EDIT_TOOLS.map((tool) => {
+          const selected = tool.id === "edit-text"
+            ? activeTextEdit
+            : activeEditTool === tool.id;
+
+          return (
+            <div key={tool.id}>
+              <ToolRow
+                icon={TOOL_PANEL_ICONS[tool.id]}
+                label={tool.label}
+                description={tool.description}
+                selected={selected}
+                onSelect={() => {
+                  if (tool.id === "edit-text") {
+                    onTextEditSelected?.();
+                  } else if (isAnnotationEditToolId(tool.id)) {
+                    onEditToolSelected(tool.id);
+                  }
+                }}
+              />
+              {tool.id === "edit-text" && selected && textEdit ? (
+                <EditTextStatusPanel
+                  textEdit={textEdit}
+                  onHelp={() => onHelpRequested(tool.helpArticleId)}
+                />
+              ) : null}
+            </div>
+          );
+        })}
         {EDIT_DIALOG_TOOLS.map((tool) => {
           const selected = activeEditDialogTool === tool.id;
 
@@ -459,6 +487,10 @@ function ConnectToAiRow({ onSelect }: { onSelect: () => void }) {
       </button>
     </div>
   );
+}
+
+function isAnnotationEditToolId(toolId: string): toolId is Exclude<EditToolId, "select" | "comment"> {
+  return toolId !== "edit-text";
 }
 
 function MarkupAnnotationControls({
@@ -933,7 +965,7 @@ export function PasswordsPanel() {
   );
 }
 
-function InlineMessage({
+export function InlineMessage({
   tone,
   message,
 }: {

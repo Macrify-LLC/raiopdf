@@ -130,8 +130,21 @@ impl FileGrants {
     /// have a drift baseline. Grants whose file could not be stat'ed still
     /// resolve to a path (save flows need that) but refuse ranged reads.
     fn grant(&self, path: PathBuf) -> Result<String, String> {
-        let grant = Uuid::new_v4().to_string();
         let snapshot = snapshot_file(&path).ok();
+        self.grant_with_snapshot(path, snapshot)
+    }
+
+    /// Issue a grant with a caller-supplied drift baseline. The open path uses
+    /// this to mint the grant from the snapshot it already verified the read
+    /// bytes against, so a file replaced between that verification and grant
+    /// issuance can't leave the WebView holding old bytes while the grant
+    /// baseline describes the replacement.
+    fn grant_with_snapshot(
+        &self,
+        path: PathBuf,
+        snapshot: Option<FileSnapshot>,
+    ) -> Result<String, String> {
+        let grant = Uuid::new_v4().to_string();
         let mut paths = self.paths.lock().map_err(|_| "File grant lock poisoned")?;
         paths.insert(grant.clone(), FileGrantEntry { path, snapshot });
         Ok(grant)
@@ -215,18 +228,18 @@ fn opened_pdf_for_path(
         .map_err(|error| format!("Failed to stat PDF at {}: {error}", path.to_string_lossy()))?
         .len();
 
+    // Snapshot BEFORE any read so the grant is minted from exactly this baseline
+    // (below threshold: the bytes handed to the WebView; above: the file streamed
+    // by range). The file-based engine route (path_ops) trusts that a clean
+    // memory document's in-WebView bytes and its on-disk grant file match; an
+    // external replace during open would otherwise desync them and let an op
+    // process content the user never saw.
+    let snapshot_before = snapshot_file(&path).ok();
     let bytes_token = if size_bytes < threshold_bytes {
-        // Snapshot around the read so the bytes handed to the WebView describe
-        // the same file the grant is snapshotted against. The file-based engine
-        // route (path_ops) trusts that a clean memory document's in-WebView
-        // bytes and its on-disk grant file match; an external replace mid-open
-        // would otherwise desync them and let an op process content the user
-        // never saw.
-        let before = snapshot_file(&path).ok();
         let bytes = fs::read(&path).map_err(|error| {
             format!("Failed to read PDF at {}: {error}", path.to_string_lossy())
         })?;
-        if let Some(before) = before {
+        if let Some(before) = snapshot_before {
             let after = snapshot_file(&path).map_err(|error| {
                 format!("Failed to verify PDF at {}: {error}", path.to_string_lossy())
             })?;
@@ -240,7 +253,10 @@ fn opened_pdf_for_path(
     } else {
         None
     };
-    let file_grant = file_grants.grant(path.clone())?;
+    // Mint the grant from the pre-read snapshot rather than letting `grant` take
+    // a fresh one after the read — a replace between the verify above and grant
+    // issuance can't desync the WebView bytes from the grant baseline.
+    let file_grant = file_grants.grant_with_snapshot(path.clone(), snapshot_before)?;
 
     Ok(OpenedPdf {
         name: file_name(&path),

@@ -4,6 +4,9 @@ import type {
   PdfAFlavor,
   PdfCompressOptions,
   PdfDocumentHandle,
+  PdfInspectTextMapOptions,
+  PdfInspectTextMapResult,
+  PdfReplaceSelectedTextOptions,
   PdfReplaceTextOptions,
   PdfReplaceTextWarning,
   PdfRedactionArea,
@@ -46,6 +49,7 @@ export type RunOcrResult = {
 };
 
 export type ReplaceTextBridgeOptions = PdfReplaceTextOptions;
+export type ReplaceSelectedTextBridgeOptions = PdfReplaceSelectedTextOptions;
 
 export interface EngineBridge {
   available: boolean;
@@ -75,6 +79,14 @@ export interface EngineBridge {
   replaceText: (bytes: Uint8Array, options: ReplaceTextBridgeOptions) => Promise<{
     bytes: Uint8Array;
     replacedCounts: readonly number[] | null;
+    warnings: readonly PdfReplaceTextWarning[];
+  }>;
+  inspectTextMap: (
+    bytes: Uint8Array,
+    options?: PdfInspectTextMapOptions,
+  ) => Promise<PdfInspectTextMapResult>;
+  replaceSelectedText: (bytes: Uint8Array, options: ReplaceSelectedTextBridgeOptions) => Promise<{
+    bytes: Uint8Array;
     warnings: readonly PdfReplaceTextWarning[];
   }>;
   repair: (bytes: Uint8Array) => Promise<Uint8Array>;
@@ -354,6 +366,42 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine],
   );
 
+  const inspectTextMap = useCallback(
+    (bytes: Uint8Array, options: PdfInspectTextMapOptions = {}) =>
+      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+        const sourceHandle = await engine.open(bytes);
+
+        try {
+          return await engine.inspectTextMap(sourceHandle, options);
+        } finally {
+          await closeHandle(engine, sourceHandle);
+        }
+      }),
+    [ensureEngine],
+  );
+
+  const replaceSelectedText = useCallback(
+    (bytes: Uint8Array, options: ReplaceSelectedTextBridgeOptions) =>
+      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+        const sourceHandle = await engine.open(bytes);
+        let outputHandle: PdfDocumentHandle | null = null;
+
+        try {
+          const result = await engine.replaceSelectedText(sourceHandle, options);
+          outputHandle = result.document;
+
+          return {
+            bytes: await engine.saveToBytes(outputHandle),
+            warnings: result.warnings,
+          };
+        } finally {
+          await closeHandle(engine, outputHandle);
+          await closeHandle(engine, sourceHandle);
+        }
+      }),
+    [ensureEngine],
+  );
+
   return {
     available: runtimeAvailable && !disabled,
     ocrAvailable: runtimeAvailable && !disabled && ocrToolchainMissing.length === 0,
@@ -367,6 +415,8 @@ export function useEngineBridge(): EngineBridge {
     removeEncryption,
     sanitize,
     replaceText,
+    inspectTextMap,
+    replaceSelectedText,
     repair,
   };
 }

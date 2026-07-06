@@ -78,7 +78,8 @@ export type PdfReplaceTextWarning = {
     /** Reserved for engines that do not carry RaioPDF's image-passthrough patch. */
     | "IMAGES_REENCODED"
     | "ATTACHMENTS_REMOVED"
-    | "TAGS_REMOVED";
+    | "TAGS_REMOVED"
+    | "SELECTED_TEXT_LAYOUT_RISK";
   message: string;
 };
 
@@ -86,6 +87,69 @@ export type PdfReplaceTextResult = {
   document: PdfDocumentHandle;
   /** Index-aligned per-op counts when the engine reports them; null otherwise. */
   replacedCounts: readonly number[] | null;
+  warnings: readonly PdfReplaceTextWarning[];
+};
+
+export type PdfTextMapElement = {
+  /** Zero-based index in the engine's page text element array. */
+  elementIndex: number;
+  /** Start offset in the engine-joined page text. */
+  start: number;
+  /** End offset in the engine-joined page text. */
+  end: number;
+  /** Text exactly as the engine will rewrite it; no inferred separators are added. */
+  text: string;
+  /** Best-effort page-space area for selection matching. */
+  area: PdfRedactionArea;
+};
+
+export type PdfTextMapPage = {
+  pageIndex: number;
+  /** Engine-joined page text. Adjacent elements are concatenated without inferred spaces. */
+  text: string;
+  /** Fingerprint over element text and geometry; apply rejects if it changes. */
+  sourceFingerprint: string;
+  elements: readonly PdfTextMapElement[];
+};
+
+export type PdfInspectTextMapOptions = {
+  /** Zero-based pages to inspect, or "all" (default). */
+  pageIndexes?: PdfPageSelection;
+};
+
+export type PdfInspectTextMapResult = {
+  /** Fingerprint over the full engine text-editor document. */
+  sourceFingerprint: string;
+  pages: readonly PdfTextMapPage[];
+};
+
+export type PdfSelectedTextTarget = {
+  pageIndex: number;
+  start: number;
+  end: number;
+  expectedText: string;
+  /** Fingerprint over the full engine text-editor document. */
+  sourceDocumentFingerprint: string;
+  /** Fingerprint over the selected page's engine text elements. */
+  sourceFingerprint: string;
+  firstElementIndex: number;
+  lastElementIndex: number;
+  firstElementOffset: number;
+  lastElementOffset: number;
+};
+
+export type PdfReplaceSelectedTextOptions = {
+  target: PdfSelectedTextTarget;
+  /** Replacement text. Empty string deletes the selected span. */
+  replacement: string;
+  /** Required opt-in when the document has signed signature fields. */
+  allowSignatureInvalidation?: boolean;
+  /** Required opt-in when the document declares PDF/A conformance. */
+  allowPdfAIdentificationRemoval?: boolean;
+};
+
+export type PdfReplaceSelectedTextResult = {
+  document: PdfDocumentHandle;
   warnings: readonly PdfReplaceTextWarning[];
 };
 
@@ -986,6 +1050,32 @@ export interface PdfEngine {
     document: PdfDocumentHandle,
     options: PdfReplaceTextOptions,
   ): Promise<PdfReplaceTextResult>;
+
+  /**
+   * Extracts the backing engine's editable text map for selected-span editing.
+   *
+   * The returned text is not pdf.js copy/paste text: elements are joined exactly
+   * as the rewrite engine will see them, including the absence of inferred spaces.
+   * Callers may use the viewer text layer to capture a selection, but they must
+   * resolve it to one of these engine-backed spans before applying an edit.
+   */
+  inspectTextMap(
+    document: PdfDocumentHandle,
+    options?: PdfInspectTextMapOptions,
+  ): Promise<PdfInspectTextMapResult>;
+
+  /**
+   * Replaces one resolved selected text span in real PDF content streams.
+   *
+   * The target must come from `inspectTextMap` for the same source bytes. Engines
+   * must reject if the page fingerprint, selected text, element indexes, or
+   * offsets no longer match. Like `replaceText`, the whole PDF may be regenerated
+   * and callers must review the returned bytes before applying them.
+   */
+  replaceSelectedText(
+    document: PdfDocumentHandle,
+    options: PdfReplaceSelectedTextOptions,
+  ): Promise<PdfReplaceSelectedTextResult>;
 
   /**
    * Creates a new document with document metadata scrubbed.

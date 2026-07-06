@@ -75,6 +75,35 @@ describe("LocalPdfEngine", () => {
     });
   });
 
+  it("reports selected text-map editing as unsupported", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[200, 300]]));
+
+    await expect(engine.inspectTextMap(document)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+
+    await expect(
+      engine.replaceSelectedText(document, {
+        replacement: "Petitioner",
+        target: {
+          pageIndex: 0,
+          start: 0,
+          end: 9,
+          expectedText: "Plaintiff",
+          sourceDocumentFingerprint: "document-test",
+          sourceFingerprint: "test",
+          firstElementIndex: 0,
+          lastElementIndex: 0,
+          firstElementOffset: 0,
+          lastElementOffset: 9,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("maps encrypted documents to ENCRYPTED_DOCUMENT", async () => {
     const engine = createLocalPdfEngine();
 

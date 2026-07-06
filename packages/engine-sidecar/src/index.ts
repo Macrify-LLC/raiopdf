@@ -25,11 +25,17 @@ import type {
   PdfReplaceTextOptions,
   PdfReplaceTextResult,
   PdfReplaceTextWarning,
+  PdfReplaceSelectedTextOptions,
+  PdfReplaceSelectedTextResult,
   PdfRedactTextOptions,
   PdfRedactionArea,
   PdfSanitizeOptions,
   PdfSanitizeRemovedItem,
   PdfSanitizeResult,
+  PdfInspectTextMapOptions,
+  PdfInspectTextMapResult,
+  PdfTextMapElement,
+  PdfTextMapPage,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
@@ -66,6 +72,33 @@ type Fetch = typeof globalThis.fetch;
 type StoredDocument = {
   bytes: Uint8Array;
   pageCount?: number;
+};
+
+type TextEditorDocument = {
+  pages?: unknown;
+};
+
+type TextEditorPage = {
+  height?: unknown;
+  pageNumber?: unknown;
+  textElements?: unknown;
+  width?: unknown;
+};
+
+type TextEditorTextElement = {
+  height?: unknown;
+  text?: unknown;
+  textMatrix?: unknown;
+  width?: unknown;
+  x?: unknown;
+  y?: unknown;
+};
+
+type TextRewritePreflight = {
+  inputBaseFonts: ReadonlySet<string>;
+  pdfAIdentification: PdfAIdentification | null;
+  sourceAttachmentCount: number;
+  warnings: PdfReplaceTextWarning[];
 };
 
 export type SidecarPdfEngineOptions = {
@@ -667,14 +700,90 @@ export class SidecarPdfEngine implements PdfEngine {
       };
     }
 
-    const hasEncryption = await hasEncryptionDictionary(storedDocument.bytes);
+    const preflight = await this.prepareTextRewrite(storedDocument, options);
 
-    if (hasEncryption) {
-      throw new PdfEngineError(
-        "ENCRYPTED_DOCUMENT",
-        "Text editing refuses encrypted or permissions-protected PDFs because the engine would strip document protection.",
-      );
-    }
+    const formData = createFormData(storedDocument.bytes);
+    formData.append("edits", JSON.stringify(options.operations));
+    formData.append("wholeWordSearch", String(options.wholeWord ?? false));
+    formData.append("pageNumbers", toSidecarPageNumbers(pageIndexes));
+
+    const response = await this.request("/api/v1/general/edit-text", formData);
+    const output = await this.finalizeTextRewriteOutput(
+      storedDocument.bytes,
+      await readBytes(response),
+      preflight,
+    );
+
+    // Phase 0 confirmed the bundled engine's image-passthrough patch preserves
+    // image streams byte-identically; IMAGES_REENCODED is reserved for unpatched
+    // engines and is intentionally not emitted here.
+    return {
+      document: this.store(output.bytes, pageCount),
+      replacedCounts: null,
+      warnings: [{
+        code: "COUNTS_UNAVAILABLE",
+        message: "The text engine returned edited bytes but does not report replacement counts.",
+      }, ...output.warnings],
+    };
+  }
+
+  async inspectTextMap(
+    document: PdfDocumentHandle,
+    options: PdfInspectTextMapOptions = {},
+  ): Promise<PdfInspectTextMapResult> {
+    const storedDocument = this.get(document);
+    const pageCount = await this.pageCount(document);
+    const pageIndexes = options.pageIndexes ?? "all";
+    assertPageSelection(pageIndexes, pageCount);
+
+    const textEditorDocument = await this.convertPdfToTextEditorJson(storedDocument.bytes);
+    const selectedPageIndexes = resolveSelectedPageIndexes(pageIndexes, pageCount);
+
+    return {
+      sourceFingerprint: fingerprintTextEditorDocument(textEditorDocument),
+      pages: selectedPageIndexes.map((pageIndex) =>
+        textEditorPageToTextMapPage(textEditorDocument, pageIndex)),
+    };
+  }
+
+  async replaceSelectedText(
+    document: PdfDocumentHandle,
+    options: PdfReplaceSelectedTextOptions,
+  ): Promise<PdfReplaceSelectedTextResult> {
+    const storedDocument = this.get(document);
+    await refuseEncryptedTextRewrite(storedDocument.bytes);
+    const pageCount = await this.pageCount(document);
+    assertReplaceSelectedTextOptions(options, pageCount);
+
+    const textEditorDocument = await this.convertPdfToTextEditorJson(storedDocument.bytes);
+    applySelectedTextReplacement(textEditorDocument, options);
+    const preflight = await this.prepareTextRewrite(storedDocument, options);
+    const selectedWarnings = selectedTextWarnings(options);
+
+    const response = await this.request(
+      "/api/v1/convert/text-editor/pdf",
+      createJsonFormData(textEditorDocument),
+    );
+    const output = await this.finalizeTextRewriteOutput(
+      storedDocument.bytes,
+      await readBytes(response),
+      preflight,
+    );
+
+    return {
+      document: this.store(output.bytes, pageCount),
+      warnings: [...selectedWarnings, ...output.warnings],
+    };
+  }
+
+  private async prepareTextRewrite(
+    storedDocument: StoredDocument,
+    options: Pick<
+      PdfReplaceTextOptions | PdfReplaceSelectedTextOptions,
+      "allowPdfAIdentificationRemoval" | "allowSignatureInvalidation"
+    >,
+  ): Promise<TextRewritePreflight> {
+    await refuseEncryptedTextRewrite(storedDocument.bytes);
 
     const [
       signedSignatureFields,
@@ -690,10 +799,7 @@ export class SidecarPdfEngine implements PdfEngine {
       readBaseFontNames(storedDocument.bytes),
     ]);
 
-    const warnings: PdfReplaceTextWarning[] = [{
-      code: "COUNTS_UNAVAILABLE",
-      message: "The text engine returned edited bytes but does not report replacement counts.",
-    }];
+    const warnings: PdfReplaceTextWarning[] = [];
 
     if (signedSignatureFields > 0) {
       if (options.allowSignatureInvalidation !== true) {
@@ -725,21 +831,29 @@ export class SidecarPdfEngine implements PdfEngine {
       });
     }
 
-    const formData = createFormData(storedDocument.bytes);
-    formData.append("edits", JSON.stringify(options.operations));
-    formData.append("wholeWordSearch", String(options.wholeWord ?? false));
-    formData.append("pageNumbers", toSidecarPageNumbers(pageIndexes));
+    return {
+      inputBaseFonts,
+      pdfAIdentification,
+      sourceAttachmentCount,
+      warnings,
+    };
+  }
 
-    const response = await this.request("/api/v1/general/edit-text", formData);
-    let outputBytes = await readBytes(response);
+  private async finalizeTextRewriteOutput(
+    sourceBytes: Uint8Array,
+    initialOutputBytes: Uint8Array,
+    preflight: TextRewritePreflight,
+  ): Promise<{ bytes: Uint8Array; warnings: PdfReplaceTextWarning[] }> {
+    let outputBytes = initialOutputBytes;
+    const warnings = [...preflight.warnings];
 
-    const outline = await preserveSamePageOutline(storedDocument.bytes, outputBytes);
+    const outline = await preserveSamePageOutline(sourceBytes, outputBytes);
     outputBytes = outline.bytes;
 
-    const attachmentRestore = await restoreEmbeddedFiles(storedDocument.bytes, outputBytes)
+    const attachmentRestore = await restoreEmbeddedFiles(sourceBytes, outputBytes)
       .catch((error: unknown) => ({
         bytes: outputBytes,
-        sourceEmbeddedFileCount: sourceAttachmentCount,
+        sourceEmbeddedFileCount: preflight.sourceAttachmentCount,
         restoredEmbeddedFileCount: 0,
         error,
       }));
@@ -754,7 +868,7 @@ export class SidecarPdfEngine implements PdfEngine {
       });
     }
 
-    if (pdfAIdentification) {
+    if (preflight.pdfAIdentification) {
       outputBytes = await stripPdfAIdentificationBytes(outputBytes);
       warnings.push({
         code: "PDFA_IDENTIFICATION_REMOVED",
@@ -763,21 +877,34 @@ export class SidecarPdfEngine implements PdfEngine {
     }
 
     const outputBaseFonts = await readBaseFontNames(outputBytes).catch(() => new Set<string>());
-    if (hasNewNotoBaseFont(inputBaseFonts, outputBaseFonts)) {
+    if (hasNewNotoBaseFont(preflight.inputBaseFonts, outputBaseFonts)) {
       warnings.push({
         code: "FALLBACK_FONT_POSSIBLE",
         message: "The output references a Noto fallback font that was not present in the input, so affected pages may have been re-laid out.",
       });
     }
 
-    // Phase 0 confirmed the bundled engine's image-passthrough patch preserves
-    // image streams byte-identically; IMAGES_REENCODED is reserved for unpatched
-    // engines and is intentionally not emitted here.
     return {
-      document: this.store(outputBytes, pageCount),
-      replacedCounts: null,
+      bytes: outputBytes,
       warnings,
     };
+  }
+
+  private async convertPdfToTextEditorJson(bytes: Uint8Array): Promise<TextEditorDocument> {
+    const response = await this.request(
+      "/api/v1/convert/pdf/text-editor",
+      createFormData(bytes),
+    );
+    const body = await readJson(response);
+
+    if (!isRecord(body) || !Array.isArray(body.pages)) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        "The text editor engine returned an invalid text map.",
+      );
+    }
+
+    return body as TextEditorDocument;
   }
 
   async scrubMetadata(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
@@ -1220,8 +1347,280 @@ function createFormData(bytes: Uint8Array): FormData {
   return formData;
 }
 
+function createJsonFormData(document: TextEditorDocument): FormData {
+  const formData = new FormData();
+  formData.append(
+    "fileInput",
+    new Blob([JSON.stringify(document)], { type: "application/json" }),
+    "document.json",
+  );
+
+  return formData;
+}
+
 function createPdfBlob(bytes: Uint8Array): Blob {
   return new Blob([toArrayBuffer(bytes)], { type: "application/pdf" });
+}
+
+function textEditorPageToTextMapPage(
+  document: TextEditorDocument,
+  pageIndex: number,
+): PdfTextMapPage {
+  const page = readTextEditorPage(document, pageIndex);
+  const rawElements = readTextEditorTextElements(page, pageIndex);
+  const elements: PdfTextMapElement[] = [];
+  let text = "";
+
+  rawElements.forEach((element, elementIndex) => {
+    const elementText = readTextElementText(element);
+    const start = text.length;
+    text += elementText;
+    const end = text.length;
+
+    elements.push({
+      elementIndex,
+      start,
+      end,
+      text: elementText,
+      area: textElementArea(pageIndex, element),
+    });
+  });
+
+  return {
+    pageIndex,
+    text,
+    sourceFingerprint: fingerprintTextEditorElements(rawElements),
+    elements,
+  };
+}
+
+function applySelectedTextReplacement(
+  document: TextEditorDocument,
+  options: PdfReplaceSelectedTextOptions,
+): void {
+  const { replacement, target } = options;
+
+  if (fingerprintTextEditorDocument(document) !== target.sourceDocumentFingerprint) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target is stale; the source document changed before apply.",
+    );
+  }
+
+  const page = readTextEditorPage(document, target.pageIndex);
+  const elements = readTextEditorTextElements(page, target.pageIndex);
+  const textMap = textEditorPageToTextMapPage(document, target.pageIndex);
+
+  if (textMap.sourceFingerprint !== target.sourceFingerprint) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target is stale; the source text map changed before apply.",
+    );
+  }
+
+  if (textMap.text.slice(target.start, target.end) !== target.expectedText) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target no longer resolves to the expected text.",
+    );
+  }
+
+  const first = textMap.elements[target.firstElementIndex];
+  const last = textMap.elements[target.lastElementIndex];
+  if (!first || !last) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target references a missing text element.",
+    );
+  }
+
+  if (
+    target.firstElementOffset < 0 ||
+    target.firstElementOffset > first.text.length ||
+    target.lastElementOffset < 0 ||
+    target.lastElementOffset > last.text.length ||
+    target.start !== first.start + target.firstElementOffset ||
+    target.end !== last.start + target.lastElementOffset
+  ) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target offsets do not match the engine text map.",
+    );
+  }
+
+  const firstRaw = elements[target.firstElementIndex];
+  const lastRaw = elements[target.lastElementIndex];
+  if (!firstRaw || !lastRaw) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target references a missing raw text element.",
+    );
+  }
+
+  if (target.firstElementIndex === target.lastElementIndex) {
+    const sourceText = readTextElementText(firstRaw);
+    firstRaw.text = [
+      sourceText.slice(0, target.firstElementOffset),
+      replacement,
+      sourceText.slice(target.lastElementOffset),
+    ].join("");
+    return;
+  }
+
+  const firstText = readTextElementText(firstRaw);
+  firstRaw.text = `${firstText.slice(0, target.firstElementOffset)}${replacement}`;
+  for (let index = target.firstElementIndex + 1; index < target.lastElementIndex; index += 1) {
+    const element = elements[index];
+    if (!element) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        "The selected text target references a missing intermediate text element.",
+      );
+    }
+    element.text = "";
+  }
+  const lastText = readTextElementText(lastRaw);
+  lastRaw.text = lastText.slice(target.lastElementOffset);
+}
+
+function readTextEditorPage(document: TextEditorDocument, pageIndex: number): TextEditorPage {
+  const pages = Array.isArray(document.pages) ? document.pages : [];
+  const page = pages[pageIndex];
+
+  if (!isRecord(page)) {
+    throw new PdfEngineError(
+      "INVALID_PAGE_INDEX",
+      `Text map page ${pageIndex} is outside the returned document range.`,
+    );
+  }
+
+  return page as TextEditorPage;
+}
+
+function readTextEditorTextElements(
+  page: TextEditorPage,
+  pageIndex: number,
+): TextEditorTextElement[] {
+  if (!Array.isArray(page.textElements)) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Text map page ${pageIndex} does not include text elements.`,
+    );
+  }
+
+  return page.textElements.map((element) => {
+    if (!isRecord(element)) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `Text map page ${pageIndex} includes a malformed text element.`,
+      );
+    }
+
+    return element as TextEditorTextElement;
+  });
+}
+
+function readTextElementText(element: TextEditorTextElement): string {
+  return typeof element.text === "string" ? element.text : "";
+}
+
+async function refuseEncryptedTextRewrite(bytes: Uint8Array): Promise<void> {
+  const hasEncryption = await hasEncryptionDictionary(bytes);
+
+  if (hasEncryption) {
+    throw new PdfEngineError(
+      "ENCRYPTED_DOCUMENT",
+      "Text editing refuses encrypted or permissions-protected PDFs because the engine would strip document protection.",
+    );
+  }
+}
+
+function selectedTextWarnings(options: PdfReplaceSelectedTextOptions): PdfReplaceTextWarning[] {
+  if (options.target.firstElementIndex === options.target.lastElementIndex) {
+    return [];
+  }
+
+  return [{
+    code: "SELECTED_TEXT_LAYOUT_RISK",
+    message: "This selected-text edit spans multiple PDF text runs; review the affected page for spacing or overlap before applying.",
+  }];
+}
+
+function textElementArea(pageIndex: number, element: TextEditorTextElement): PdfRedactionArea {
+  const matrix = readTextMatrix(element);
+  const x = finiteNumber(element.x, matrix?.[4] ?? 0);
+  const baselineY = finiteNumber(element.y, matrix?.[5] ?? 0);
+  const height = Math.max(0, finiteNumber(element.height, Math.abs(matrix?.[3] ?? 0)));
+
+  return {
+    pageIndex,
+    x,
+    y: baselineY,
+    w: Math.max(0, finiteNumber(element.width, 0)),
+    h: height,
+  };
+}
+
+function readTextMatrix(element: TextEditorTextElement): readonly number[] | null {
+  if (!Array.isArray(element.textMatrix) || element.textMatrix.length < 6) {
+    return null;
+  }
+
+  const values = element.textMatrix.map(Number);
+
+  return values.every(Number.isFinite) ? values : null;
+}
+
+function fingerprintTextEditorDocument(document: TextEditorDocument): string {
+  return fnv1a32Hex(stableStringify(document));
+}
+
+function fingerprintTextEditorElements(elements: readonly TextEditorTextElement[]): string {
+  return fnv1a32Hex(stableStringify(elements));
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function fnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function resolveSelectedPageIndexes(selection: PdfPageSelection, pageCount: number): number[] {
+  if (selection === "all") {
+    return range(0, pageCount);
+  }
+
+  if (selection === "first") {
+    return pageCount > 0 ? [0] : [];
+  }
+
+  return [...new Set(selection)];
 }
 
 async function preserveReorderedOutline(
@@ -1551,6 +1950,49 @@ function assertReplaceTextOptions(options: PdfReplaceTextOptions): void {
     if (operation.find.length === 0) {
       throw new PdfEngineError("INVALID_DOCUMENT", "Replacement find text must not be empty.");
     }
+  }
+}
+
+function assertReplaceSelectedTextOptions(
+  options: PdfReplaceSelectedTextOptions,
+  pageCount: number,
+): void {
+  const { target } = options;
+  assertPageIndexes([target.pageIndex], pageCount);
+
+  if (
+    !Number.isInteger(target.start) ||
+    !Number.isInteger(target.end) ||
+    target.start < 0 ||
+    target.end <= target.start
+  ) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target range is invalid.");
+  }
+
+  if (
+    !Number.isInteger(target.firstElementIndex) ||
+    !Number.isInteger(target.lastElementIndex) ||
+    target.firstElementIndex < 0 ||
+    target.lastElementIndex < target.firstElementIndex
+  ) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target element indexes are invalid.");
+  }
+
+  if (
+    !Number.isInteger(target.firstElementOffset) ||
+    !Number.isInteger(target.lastElementOffset) ||
+    target.firstElementOffset < 0 ||
+    target.lastElementOffset < 0
+  ) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target element offsets are invalid.");
+  }
+
+  if (!target.sourceFingerprint) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target fingerprint is required.");
+  }
+
+  if (!target.sourceDocumentFingerprint) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target document fingerprint is required.");
   }
 }
 

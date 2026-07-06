@@ -2,6 +2,7 @@ import type { TextEditState, TextEditStagedResult } from "../hooks/useTextEdit";
 import {
   TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE,
   TEXT_EDIT_ZERO_CHANGE_MESSAGE,
+  canApplyTextEditReview,
   formatReplaceTextResult,
   warningCopy,
   type TextEditOperationReport,
@@ -75,6 +76,7 @@ function ReviewBody({
   onCancel: () => void;
 }) {
   const report = staged.report;
+  const canApply = canApplyTextEditReview(report);
   const warnings = [...new Set(staged.warnings.map(warningCopy))];
   const changedPages = report.changedPageIndexes.slice(0, 6);
   const findTerms = report.operations.map((operation) => operation.find).filter((term) => term.trim().length > 0);
@@ -140,7 +142,7 @@ function ReviewBody({
         </div>
       ) : null}
       <div className="edit-text-review__actions">
-        <button type="button" className="tool-panel__danger-button" disabled={report.zeroChange} onClick={onApply}>
+        <button type="button" className="tool-panel__danger-button" disabled={!canApply} onClick={onApply}>
           Apply
         </button>
         <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
@@ -216,6 +218,14 @@ function escapeForRegExp(value: string): string {
 }
 
 function operationStatusCopy(operation: TextEditOperationReport): string {
+  if (operation.selected) {
+    if (operation.status === "changed") {
+      return `1 selected replacement staged on page ${formatPages(operation.foundBefore)}.`;
+    }
+
+    return `Selected text was found on page ${formatPages(operation.foundBefore)}, but the staged PDF text did not change.`;
+  }
+
   if (operation.status === "not-found") {
     return "Not found in the staged review.";
   }

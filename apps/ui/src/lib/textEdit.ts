@@ -1,4 +1,8 @@
-import type { PdfRedactionArea, PdfReplaceTextWarning } from "@raiopdf/engine-api";
+import type {
+  PdfRedactionArea,
+  PdfReplaceTextWarning,
+  PdfSelectedTextTarget,
+} from "@raiopdf/engine-api";
 import type { TextLayerCoverage } from "@raiopdf/rules";
 import { matchAreaForTextRange, type ExtractedPageText } from "./pageTextCache";
 
@@ -8,6 +12,8 @@ export interface PendingTextReplacement {
   replace: string;
   wholeWord: boolean;
   pageIndexes: readonly number[] | "all";
+  target?: PdfSelectedTextTarget;
+  selectedArea?: PdfRedactionArea;
 }
 
 export interface TextEditMatch {
@@ -28,6 +34,7 @@ export interface TextEditOperationReport {
   operationId: string;
   find: string;
   replace: string;
+  selected: boolean;
   foundBefore: readonly number[];
   foundAfter: readonly number[];
   replacedEstimate: number;
@@ -200,7 +207,49 @@ export function buildTextEditReviewReport({
   originalPages: readonly ExtractedPageText[];
   candidatePages: readonly ExtractedPageText[];
 }): TextEditReviewReport {
+  const changedPageIndexes = uniqueSorted(
+    candidatePages
+      .filter((candidate) => {
+        const original = originalPages.find((page) => page.pageIndex === candidate.pageIndex);
+        return original ? original.text !== candidate.text : candidate.text.trim().length > 0;
+      })
+      .map((page) => page.pageIndex),
+  );
+  const changedPages = new Set(changedPageIndexes);
   const reports: TextEditOperationReport[] = operations.map((operation) => {
+    if (operation.target) {
+      const pageIndex = operation.target.pageIndex;
+      const originalPage = originalPages.find((page) => page.pageIndex === pageIndex);
+      const candidatePage = candidatePages.find((page) => page.pageIndex === pageIndex);
+      const originalText = originalPage?.text ?? "";
+      const candidateText = candidatePage?.text ?? "";
+      const originalStillMatches = originalText.slice(
+        operation.target.start,
+        operation.target.end,
+      ) === operation.target.expectedText;
+      const expectedCandidateText = originalStillMatches
+        ? [
+            originalText.slice(0, operation.target.start),
+            operation.replace,
+            originalText.slice(operation.target.end),
+          ].join("")
+        : null;
+      const selectedChanged = changedPages.has(pageIndex) &&
+        originalStillMatches &&
+        candidateText === expectedCandidateText;
+
+      return {
+        operationId: operation.id,
+        find: operation.find,
+        replace: operation.replace,
+        selected: true,
+        foundBefore: [pageIndex],
+        foundAfter: selectedChanged ? [] : [pageIndex],
+        replacedEstimate: selectedChanged ? 1 : 0,
+        status: selectedChanged ? "changed" : "unchanged",
+      };
+    }
+
     const beforeMatches = findTextMatchesInPages(originalPages, operation);
     const afterMatches = findTextMatchesInPages(candidatePages, operation);
     const foundBefore = uniqueSorted(beforeMatches.map((match) => match.pageIndex));
@@ -211,6 +260,7 @@ export function buildTextEditReviewReport({
       operationId: operation.id,
       find: operation.find,
       replace: operation.replace,
+      selected: false,
       foundBefore,
       foundAfter,
       replacedEstimate,
@@ -221,15 +271,6 @@ export function buildTextEditReviewReport({
           : "not-found",
     };
   });
-
-  const changedPageIndexes = uniqueSorted(
-    candidatePages
-      .filter((candidate) => {
-        const original = originalPages.find((page) => page.pageIndex === candidate.pageIndex);
-        return original ? original.text !== candidate.text : candidate.text.trim().length > 0;
-      })
-      .map((page) => page.pageIndex),
-  );
 
   return {
     operations: reports,
@@ -255,6 +296,8 @@ export function warningCopy(warning: PdfReplaceTextWarning): string {
       return "Embedded attachments may be removed by this edit.";
     case "TAGS_REMOVED":
       return "Accessibility tags may be removed by this edit.";
+    case "SELECTED_TEXT_LAYOUT_RISK":
+      return "This selected-text edit spans multiple PDF text runs; review the affected page for spacing or overlap.";
   }
 }
 
@@ -266,6 +309,11 @@ export function formatReplaceTextResult(report: TextEditReviewReport): string {
   const estimate = report.operations.reduce((total, operation) => total + operation.replacedEstimate, 0);
   const pageCount = report.changedPageIndexes.length;
   return `${estimate} estimated ${estimate === 1 ? "replacement" : "replacements"} on ${pageCount} ${pageCount === 1 ? "page" : "pages"}.`;
+}
+
+export function canApplyTextEditReview(report: TextEditReviewReport): boolean {
+  return !report.zeroChange &&
+    report.operations.every((operation) => !operation.selected || operation.status === "changed");
 }
 
 function lengthDeltaAdvisory(operations: readonly PendingTextReplacement[]): string | null {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PdfSelectedTextTarget } from "@raiopdf/engine-api";
 import type { TextLayerCoverage } from "@raiopdf/rules";
 import {
   TEXT_EDIT_ADVISORY,
@@ -7,6 +8,7 @@ import {
   TEXT_EDIT_STREAMED_GATE_MESSAGE,
   buildEngineParityPattern,
   buildTextEditReviewReport,
+  canApplyTextEditReview,
   deriveTextEditGate,
   detectsPositionalSpaceRisk,
   findTextMatchesInPages,
@@ -88,6 +90,196 @@ describe("textEdit", () => {
     ]);
   });
 
+  it("reports selected-target edits without broad duplicate counting", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "John Q",
+          pageIndexes: [0],
+          target: selectedTarget(5, 9),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, "John John Q")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      operationId: "selected",
+      selected: true,
+      foundBefore: [0],
+      foundAfter: [],
+      replacedEstimate: 1,
+      status: "changed",
+    });
+    expect(report.zeroChange).toBe(false);
+  });
+
+  it("reports unchanged selected-target edits as zero-change", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "John",
+          pageIndexes: [0],
+          target: selectedTarget(0, 4),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, "John John")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      foundBefore: [0],
+      foundAfter: [0],
+      replacedEstimate: 0,
+      status: "unchanged",
+    });
+    expect(report.zeroChange).toBe(true);
+  });
+
+  it("does not report selected-target success for unrelated same-page changes", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "Jane",
+          pageIndexes: [0],
+          target: selectedTarget(5, 9),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, "Jane John")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      foundBefore: [0],
+      foundAfter: [0],
+      replacedEstimate: 0,
+      status: "unchanged",
+    });
+    expect(report.zeroChange).toBe(false);
+  });
+
+  it("does not report selected replacement success when the expected text remains after inserted replacement", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John Smith",
+          replace: "Jane Doe",
+          pageIndexes: [0],
+          target: {
+            ...selectedTarget(0, 10),
+            expectedText: "John Smith",
+            lastElementOffset: 10,
+          },
+        }),
+      ],
+      originalPages: [page(0, "John Smith filed")],
+      candidatePages: [page(0, "Jane DoeJohn Smith filed")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      replacedEstimate: 0,
+      status: "unchanged",
+    });
+    expect(canApplyTextEditReview(report)).toBe(false);
+  });
+
+  it("does not report selected deletion success when an artifact remains at the target offset", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "",
+          pageIndexes: [0],
+          target: selectedTarget(0, 4),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, "Jane John")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      replacedEstimate: 0,
+      status: "unchanged",
+    });
+    expect(canApplyTextEditReview(report)).toBe(false);
+  });
+
+  it("reports selected deletion success only when the original suffix shifts left", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "",
+          pageIndexes: [0],
+          target: selectedTarget(0, 4),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, " John")],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      replacedEstimate: 1,
+      status: "changed",
+    });
+    expect(canApplyTextEditReview(report)).toBe(true);
+  });
+
+  it("only allows applying review reports where every operation changed", () => {
+    const changed = buildTextEditReviewReport({
+      operations: [op({ find: "Plaintiff", replace: "Petitioner" })],
+      originalPages: [page(0, "Plaintiff files.")],
+      candidatePages: [page(0, "Petitioner files.")],
+    });
+    const unverifiedSelected = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "Jane",
+          pageIndexes: [0],
+          target: selectedTarget(5, 9),
+        }),
+      ],
+      originalPages: [page(0, "John John")],
+      candidatePages: [page(0, "Jane John")],
+    });
+
+    expect(canApplyTextEditReview(changed)).toBe(true);
+    expect(canApplyTextEditReview(unverifiedSelected)).toBe(false);
+  });
+
+  it("allows applying bulk partial-success reviews", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({ id: "changed", find: "Plaintiff", replace: "Petitioner" }),
+        op({ id: "missing", find: "Respondent", replace: "Defendant" }),
+      ],
+      originalPages: [page(0, "Plaintiff files.")],
+      candidatePages: [page(0, "Petitioner files.")],
+    });
+
+    expect(report.operations).toMatchObject([
+      { selected: false, status: "changed" },
+      { selected: false, status: "not-found" },
+    ]);
+    expect(canApplyTextEditReview(report)).toBe(true);
+  });
+
   it("maps warning codes to honest copy", () => {
     expect(warningCopy({ code: "COUNTS_UNAVAILABLE", message: "" })).toContain("does not return replacement counts");
     expect(warningCopy({ code: "PDFA_IDENTIFICATION_REMOVED", message: "" })).toContain("PDF/A marking");
@@ -102,6 +294,21 @@ function op(overrides: Partial<PendingTextReplacement>): PendingTextReplacement 
     wholeWord: false,
     pageIndexes: "all",
     ...overrides,
+  };
+}
+
+function selectedTarget(start: number, end: number): PdfSelectedTextTarget {
+  return {
+    pageIndex: 0,
+    start,
+    end,
+    expectedText: "John",
+    sourceDocumentFingerprint: "document",
+    sourceFingerprint: "page",
+    firstElementIndex: 0,
+    lastElementIndex: 0,
+    firstElementOffset: start,
+    lastElementOffset: end,
   };
 }
 

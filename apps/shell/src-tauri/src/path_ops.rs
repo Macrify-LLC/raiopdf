@@ -455,6 +455,27 @@ pub(crate) fn resolve_grant(
     })
 }
 
+/// Resolve a grant to its path, refusing if the file drifted from the snapshot
+/// taken when the grant was issued (the moment the document was opened). A
+/// memory-mode document routes engine ops through its on-disk file via this
+/// grant; without this check an external edit to that file between open and op
+/// would make the engine silently process bytes the user never saw. This is
+/// the same open-time drift guard that ranged reads and Save-As already use.
+pub(crate) fn resolve_grant_unchanged(
+    grants: &tauri::State<'_, FileGrants>,
+    grant: &str,
+) -> OpResult<PathBuf> {
+    let entry = grants.resolve_entry(grant).map_err(|message| PathOpError {
+        code: "INVALID_INPUT",
+        message,
+    })?;
+    crate::ensure_grant_file_unchanged(&entry).map_err(|message| PathOpError {
+        code: ERR_FILE_CHANGED,
+        message,
+    })?;
+    Ok(entry.path)
+}
+
 fn issue_grant(grants: &tauri::State<'_, FileGrants>, path: &Path) -> OpResult<String> {
     grants
         .grant(path.to_path_buf())
@@ -532,7 +553,7 @@ async fn run_single_output_op<F>(
 where
     F: FnOnce(&PathOpsToolchain, &Path, &Path, &Path) -> OpResult<()> + Send + 'static,
 {
-    let input = resolve_grant(&grants, &grant)?;
+    let input = resolve_grant_unchanged(&grants, &grant)?;
     let toolchain = discover_toolchain(&app);
     let work_dir = OpWorkDir::create(&app)?;
     let name = output_name(&input, spec.suffix);
@@ -1577,7 +1598,7 @@ pub async fn path_op_redact_areas(
     grant: String,
     areas: Vec<core_ops::RedactArea>,
 ) -> Result<RedactResponse, PathOpError> {
-    let input = resolve_grant(&grants, &grant)?;
+    let input = resolve_grant_unchanged(&grants, &grant)?;
     let toolchain = discover_toolchain(&app);
     let work_dir = OpWorkDir::create(&app)?;
     let name = output_name(&input, "redacted");

@@ -1587,7 +1587,9 @@ fn append_ocr_option_arguments(
     }
     if !options.page_indexes.is_empty() {
         arguments.push(OsString::from("--pages"));
-        arguments.push(OsString::from(one_based_range_string(&options.page_indexes)?));
+        arguments.push(OsString::from(one_based_range_string(
+            &options.page_indexes,
+        )?));
     }
     Ok(())
 }

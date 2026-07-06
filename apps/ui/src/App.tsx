@@ -5288,8 +5288,22 @@ export function App() {
     // into it — it just converts and hands back a file.
     const flavor = filingPack.pdfa.flavor;
     const suggestedName = `${stripPdfExtension(document.fileName ?? "Untitled")} (PDF-A).pdf`;
+    const unappliedRedactionMarks = pendingRedactions.length;
 
     void (async () => {
+      if (unappliedRedactionMarks > 0) {
+        const confirmed = window.confirm(
+          `${unappliedRedactionMarks} pending redaction `
+            + `${unappliedRedactionMarks === 1 ? "mark has" : "marks have"} not been applied. `
+            + "Exporting PDF/A now saves a copy of the current PDF bytes, so those visible boxes "
+            + "will be omitted and the underlying content will remain in the export. Export anyway?",
+        );
+
+        if (!confirmed) {
+          return;
+        }
+      }
+
       // PDF/A conversion flattens form fields and interactive annotations into
       // the page. Confirm before rewriting when the open document has any so
       // the export is never a silent loss of editability.
@@ -5324,6 +5338,7 @@ export function App() {
     document.fileName,
     engineBridge,
     filingPack.pdfa.flavor,
+    pendingRedactions.length,
     setError,
     streamedDocument,
   ]);

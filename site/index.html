@@ -270,8 +270,9 @@
   .btn--primary svg{ width:18px; height:18px; }
   .btn--outline{
     background:transparent; color:#fff; border:1.5px solid rgba(255,255,255,.4);
+    transition:background-color .2s ease, border-color .2s ease, color .2s ease;
   }
-  .btn--outline:hover{ border-color:var(--gold); color:var(--gold); }
+  .btn--outline:hover{ background:rgba(245,185,66,.08); border-color:var(--gold); color:var(--gold); }
 
   .btn--ghost{
     background:transparent; color:rgba(255,255,255,.6);
@@ -466,6 +467,9 @@
     .download-panel{ padding:22px; }
     .footer__bottom{ flex-direction:column; }
     .philosophy__letter{ padding-left:18px; }
+    .faq__item summary{ padding:16px 18px; gap:14px; }
+    .faq__item summary::after{ width:26px; height:26px; font-size:18px; }
+    .faq__answer{ padding:0 18px 20px; }
   }
 
   /* ==================== embedded motion primitives ==================== */
@@ -549,16 +553,59 @@
   .feature-demo__cap b{ display:block; font-size:14px; color:var(--text-primary); font-weight:700; margin-bottom:3px; }
   .feature-demo__cap span{ font-size:12.5px; color:var(--text-muted); line-height:1.5; }
 
-  /* anti-subscription navy band: price-crack counter + local shield */
-  .costlocal{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
-  .costlocal__grid{ display:grid; grid-template-columns:1fr 1fr; gap:26px; max-width:1000px; margin:0 auto; }
-  .costlocal__cell{ aspect-ratio:16/11; }
-  .costlocal__cell iframe{ width:100%; height:100%; border:0; display:block; background:transparent; }
-  .costlocal__cap{ text-align:center; max-width:600px; margin:0 auto 34px; }
-  .costlocal__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; line-height:1.15; }
-  .costlocal__cap p{ margin-top:12px; color:var(--light-blue); font-size:16px; }
+  /* brief FAQ band — dark navy treatment shared with .equipai, native <details>
+     accordions. No JS height animation (details can't animate open natively) —
+     the open/hover feel comes from background/border/shadow shifts on the item
+     itself, a filled toggle badge, and a gold divider under the revealed answer. */
+  .faq{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
+  .faq__cap{ text-align:center; max-width:640px; margin:0 auto 36px; }
+  .faq__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
+  .faq__cap p{ margin-top:12px; color:var(--light-blue); font-size:16px; }
+  .faq__list{ max-width:780px; margin:0 auto; display:grid; gap:16px; }
+  .faq__item{
+    background:rgba(255,255,255,.055); border:1px solid rgba(255,255,255,.14);
+    border-radius:16px; overflow:hidden;
+    transition:background-color .2s ease, border-color .2s ease, box-shadow .25s ease, transform .2s ease;
+  }
+  .faq__item:hover{
+    background:rgba(255,255,255,.085); border-color:rgba(245,185,66,.32);
+    transform:translateY(-2px); box-shadow:0 16px 34px -20px rgba(3,9,18,.55);
+  }
+  .faq__item[open]{
+    background:rgba(255,255,255,.09); border-color:rgba(245,185,66,.4);
+    box-shadow:0 18px 40px -20px rgba(3,9,18,.6);
+  }
+  .faq__item summary{
+    list-style:none; cursor:pointer; padding:20px 24px;
+    display:flex; align-items:center; justify-content:space-between; gap:18px;
+    font-family:var(--font-display); font-weight:700; font-size:clamp(1.02rem,1.6vw,1.18rem); color:#fff;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .faq__item summary::-webkit-details-marker{ display:none; }
+  .faq__item summary::after{
+    content:"+"; flex:none; display:inline-flex; align-items:center; justify-content:center;
+    width:30px; height:30px; border-radius:50%;
+    font-family:var(--font-body); font-weight:400; font-size:20px; line-height:1;
+    color:var(--gold); background:rgba(245,185,66,.12); border:1px solid rgba(245,185,66,.28);
+    transition:transform .25s ease, background-color .2s ease, border-color .2s ease, color .2s ease;
+  }
+  .faq__item:hover summary::after{ background:rgba(245,185,66,.22); border-color:rgba(245,185,66,.55); }
+  .faq__item[open] summary::after{
+    transform:rotate(45deg); background:var(--gold); border-color:var(--gold); color:var(--navy-deep);
+  }
+  .faq__item summary:focus-visible{ outline:2px solid var(--gold); outline-offset:-4px; border-radius:16px; }
+  .faq__answer{ padding:0 24px 24px; }
+  .faq__answer::before{
+    content:""; display:block; height:1px; margin:0 0 16px;
+    background:linear-gradient(90deg, rgba(245,185,66,.4), rgba(255,255,255,.05));
+  }
+  .faq__answer p{ margin:0; color:rgba(234,242,251,.86); font-size:15px; line-height:1.65; }
+  .faq__answer p + p{ margin-top:12px; }
+  .faq__answer strong{ color:#fff; font-weight:700; }
+  .faq__answer a{ color:var(--gold); text-decoration:underline; text-underline-offset:2px; }
+  .faq__more{ text-align:center; margin-top:32px; }
 
-  /* equip-your-AI band: same dark treatment as .costlocal, single larger demo + proof points */
+  /* equip-your-AI band: dark navy treatment shared with .faq, single larger demo + proof points */
   .equipai{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
   .equipai__cap{ text-align:center; max-width:640px; margin:0 auto 34px; }
   .equipai__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
@@ -647,7 +694,6 @@
     .hero__content{ grid-template-columns:1fr; }
     .hero__showcase{ display:none; }
     .hero__halo{ width:320px; height:320px; top:-90px; left:-90px; }
-    .costlocal__grid{ grid-template-columns:1fr; max-width:460px; }
   }
   @media (max-width:860px){
     .feature-demos__grid{ grid-template-columns:1fr 1fr; }
@@ -804,90 +850,6 @@
     <div class="sundiv-horizon-line"></div>
   </div>
 
-  <section class="philosophy" id="philosophy">
-    <img class="philosophy__glow" src="shared/sun-mark.svg" alt="" aria-hidden="true">
-    <div class="container philosophy__inner">
-      <div class="section-head">
-        <span class="eyebrow">From the person who built it</span>
-        <h2>Why this exists</h2>
-      </div>
-
-      <div class="philosophy__letter">
-        <div class="philosophy__prose">
-          <p>Nobody at my firm likes dealing with Acrobat. The bloat stresses computers, the licensing quirks can bring work to a standstill, it constantly pushes features nobody asked for — and we're paying thousands for the privilege. Editing a file that's already sitting on your own computer shouldn't need an account, a cloud upload, and a cavalcade of minor annoyances.</p>
-
-          <p>So, in this age of agentic coding, I asked how hard it'd be to build a fully featured PDF program the old fashioned way. Turns out, not that hard — idea to working prototype in about twelve hours, and I'm a lawyer, not an engineer. <strong>RaioPDF is the other way of doing it: a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.</strong></p>
-
-          <p>You don't need a subscription and a login screen to make solid software — you just have to build it. And once someone proves that, "this is just how PDF software works now" stops being true. That's really the point: not to out-feature any particular vendor, but to show a firm doesn't have to accept whatever terms it's handed for a task this basic.</p>
-        </div>
-
-        <p class="philosophy__signoff">
-          <img src="shared/sun-mark.svg" alt="" aria-hidden="true">
-          Jacob — attorney, and the one who built RaioPDF
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- anti-subscription visual: the price stops climbing ($0), and it stays local -->
-  <section class="costlocal">
-    <div class="container">
-      <div class="costlocal__cap">
-        <span class="eyebrow eyebrow--on-dark">The whole point, in two pictures</span>
-        <h2>Your price stops going up. Your files never leave.</h2>
-        <p>No subscription that creeps up every renewal. No cloud round-trip to open a file that's already sitting on your own machine.</p>
-      </div>
-      <div class="costlocal__grid">
-        <div class="costlocal__cell"><iframe class="motion-frame" src="./motion/12-price-crack-counter-bare.html" title="A climbing subscription price cracks and falls to $0, forever" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
-        <div class="costlocal__cell"><iframe class="motion-frame" src="./motion/13-local-shield-bare.html" title="Upload attempts bounce off the machine — the document never leaves your computer" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="inputs" id="inputs">
-    <div class="container">
-      <div class="section-head">
-        <span class="eyebrow">How you'd actually use it</span>
-        <h2>Four ways it fits into a real day at the firm</h2>
-      </div>
-      <div class="inputs-grid">
-        <div class="input-card">
-          <span class="input-card__num">01</span>
-          <div>
-            <h3>Download the installer, open it, use it.</h3>
-            <p>No account screen, no sign-in, no "create a free account to continue."</p>
-          </div>
-        </div>
-        <div class="input-card">
-          <span class="input-card__num">02</span>
-          <div>
-            <h3>Drop in a scanned PDF, hit Make Searchable.</h3>
-            <p>OCR runs entirely offline — no upload, no wait on a server.</p>
-          </div>
-        </div>
-        <div class="input-card">
-          <span class="input-card__num">03</span>
-          <div>
-            <h3>One click, "Prepare for Filing."</h3>
-            <p>Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, and RaioPDF normalizes every page and splits an oversized file into properly labeled, sequential, portal-compliant parts.</p>
-          </div>
-        </div>
-        <div class="input-card">
-          <span class="input-card__num">04</span>
-          <div>
-            <h3>"Combine with Exhibits."</h3>
-            <p>Assemble a motion or brief with exhibit files in order, auto-stamped ("Exhibit A," configurable) and auto-bookmarked.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- feature ticker -->
-  <div class="motion-band motion-band--marquee" aria-hidden="true">
-    <iframe class="motion-frame" src="./motion/14-feature-marquee.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
-  </div>
-
   <section class="outcomes" id="outcomes">
     <div class="container">
       <div class="section-head">
@@ -992,6 +954,110 @@
             <p><strong>Metadata scrubbing</strong> before production or filing — inspect what a document carries, then strip it without touching the pages.</p>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- brief FAQ -->
+  <section class="faq" id="faq">
+    <div class="container">
+      <div class="faq__cap">
+        <span class="eyebrow eyebrow--on-dark">Questions, answered plainly</span>
+        <h2>The short version</h2>
+        <p>A few of the ones people ask first. The rest are in the full FAQ.</p>
+      </div>
+      <div class="faq__list">
+        <details class="faq__item" open>
+          <summary>Is it really free — and why?</summary>
+          <div class="faq__answer">
+            <p>Free, permanently. No account, no subscription, no trial that expires, no watermarks, no nag screens — and no paid tier hiding behind the free one. This <strong>is</strong> the whole thing.</p>
+            <p>It's free because it was a lot of fun to build, because Acrobat is the most bloated software I use day to day, because it wasn't that hard — and because it doubles as an advertisement for the custom software work I do. In that order. Built and given away by <a href="https://macrify.me" target="_blank" rel="noopener">Macrify LLC</a>.</p>
+          </div>
+        </details>
+        <details class="faq__item">
+          <summary>Does it upload my files anywhere?</summary>
+          <div class="faq__answer">
+            <p>No. Every operation — <strong>including OCR</strong> — runs on your own machine. Your documents are never uploaded, and the parts of the app that touch your PDFs never talk to the internet at all. No telemetry, no analytics, no tracking.</p>
+          </div>
+        </details>
+        <details class="faq__item">
+          <summary>Can it really replace Adobe Acrobat?</summary>
+          <div class="faq__answer">
+            <p>For most of what people do with PDFs day to day, yes — view, organize, OCR, annotate, fill forms, sign — plus legal workflows like verified redaction, Bates numbering, and e-filing prep that Acrobat either doesn't have or buries. It's a <strong>public alpha</strong> and Windows-first, so expect a few rough edges — but it's free and needs no signup, so you can just try it and see.</p>
+          </div>
+        </details>
+      </div>
+      <div class="faq__more">
+        <a class="btn btn--outline" href="https://github.com/Macrify-LLC/raiopdf/blob/main/FAQ.md" target="_blank" rel="noopener">Read the full FAQ →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="inputs" id="inputs">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">How you'd actually use it</span>
+        <h2>Four ways it fits into a real day at the firm</h2>
+      </div>
+      <div class="inputs-grid">
+        <div class="input-card">
+          <span class="input-card__num">01</span>
+          <div>
+            <h3>Download the installer, open it, use it.</h3>
+            <p>No account screen, no sign-in, no "create a free account to continue."</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">02</span>
+          <div>
+            <h3>Drop in a scanned PDF, hit Make Searchable.</h3>
+            <p>OCR runs entirely offline — no upload, no wait on a server.</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">03</span>
+          <div>
+            <h3>One click, "Prepare for Filing."</h3>
+            <p>Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, and RaioPDF normalizes every page and splits an oversized file into properly labeled, sequential, portal-compliant parts.</p>
+          </div>
+        </div>
+        <div class="input-card">
+          <span class="input-card__num">04</span>
+          <div>
+            <h3>"Combine with Exhibits."</h3>
+            <p>Assemble a motion or brief with exhibit files in order, auto-stamped ("Exhibit A," configurable) and auto-bookmarked.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- feature ticker -->
+  <div class="motion-band motion-band--marquee" aria-hidden="true">
+    <iframe class="motion-frame" src="./motion/14-feature-marquee.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe>
+  </div>
+
+  <section class="philosophy" id="philosophy">
+    <img class="philosophy__glow" src="shared/sun-mark.svg" alt="" aria-hidden="true">
+    <div class="container philosophy__inner">
+      <div class="section-head">
+        <span class="eyebrow">From the person who built it</span>
+        <h2>Why this exists</h2>
+      </div>
+
+      <div class="philosophy__letter">
+        <div class="philosophy__prose">
+          <p>Nobody at my firm likes dealing with Acrobat. The bloat stresses computers, the licensing quirks can bring work to a standstill, it constantly pushes features nobody asked for — and we're paying thousands for the privilege. Editing a file that's already sitting on your own computer shouldn't need an account, a cloud upload, and a cavalcade of minor annoyances.</p>
+
+          <p>So, in this age of agentic coding, I asked how hard it'd be to build a fully featured PDF program the old fashioned way. Turns out, not that hard — idea to working prototype in about twelve hours, and I'm a lawyer, not an engineer. <strong>RaioPDF is the other way of doing it: a full, genuinely useful PDF suite — including the less-glamorous legal stuff like true redaction and Bates numbering — given away for free, running entirely on your own machine, permanently.</strong></p>
+
+          <p>You don't need a subscription and a login screen to make solid software — you just have to build it. And once someone proves that, "this is just how PDF software works now" stops being true. That's really the point: not to out-feature any particular vendor, but to show a firm doesn't have to accept whatever terms it's handed for a task this basic.</p>
+        </div>
+
+        <p class="philosophy__signoff">
+          <img src="shared/sun-mark.svg" alt="" aria-hidden="true">
+          Jacob — attorney, and the one who built RaioPDF
+        </p>
       </div>
     </div>
   </section>

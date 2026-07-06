@@ -112,6 +112,55 @@ describe("verifyOcrTextLayer", () => {
     });
     expect(result.message).toContain("1 page still has no searchable text");
   });
+
+  it("fails normal OCR when a mostly scanned page kept only a trivial text layer", () => {
+    const result = verifyOcrTextLayer(coverage({
+      imageOnlyPages: [],
+      mixedPages: [0],
+      textPages: [1, 2],
+      garbledPages: [],
+      trivialTextImagePages: [{
+        pageIndex: 0,
+        textCharacterCount: 8,
+        imageCoverageRatio: 0.96,
+      }],
+    }), "skip-text");
+
+    expect(result).toMatchObject({
+      status: "failed",
+      garbledPages: 0,
+      imageOnlyPages: 0,
+      trivialTextImagePages: 1,
+    });
+    expect(result.message).toContain("Normal OCR may have skipped page 1");
+    expect(result.message).toContain("tiny text layer over a scanned page image");
+    expect(result.message).toContain("Run Force OCR");
+    expect(result.message).toContain("The original was kept unchanged");
+  });
+
+  it("keeps force OCR output with a warning when a mostly scanned page is still imperfect", () => {
+    const result = verifyOcrTextLayer(coverage({
+      imageOnlyPages: [],
+      mixedPages: [0],
+      textPages: [1],
+      garbledPages: [],
+      trivialTextImagePages: [{
+        pageIndex: 0,
+        textCharacterCount: 8,
+        imageCoverageRatio: 0.96,
+      }],
+    }), "force-ocr");
+
+    expect(result).toMatchObject({
+      status: "warning",
+      pageCount: 2,
+      rebuiltPages: 2,
+      garbledPages: 0,
+      imageOnlyPages: 0,
+      trivialTextImagePages: 1,
+    });
+    expect(result.message).toContain("Warning: 1 page may still have imperfect text");
+  });
 });
 
 function coverage(overrides: TextLayerCoverage): TextLayerCoverage {

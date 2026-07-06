@@ -170,13 +170,16 @@ export function deriveTextEditGate({
       textLayerCoverage.mixedPages.length +
       textLayerCoverage.textPages.length
     : 0;
+  const effectivelyImageOnlyPages = textLayerCoverage
+    ? textLayerCoverage.imageOnlyPages.length + (textLayerCoverage.trivialTextImagePages?.length ?? 0)
+    : 0;
 
-  if (textLayerCoverage && totalPages > 0 && textLayerCoverage.imageOnlyPages.length === totalPages) {
+  if (textLayerCoverage && totalPages > 0 && effectivelyImageOnlyPages === totalPages) {
     return { blocked: true, message: TEXT_EDIT_SCANNED_GATE_MESSAGE, notes: [] };
   }
 
   const notes: string[] = [];
-  if (textLayerCoverage && textLayerCoverage.imageOnlyPages.length > 0) {
+  if (textLayerCoverage && effectivelyImageOnlyPages > 0) {
     notes.push(TEXT_EDIT_IMAGE_PAGE_NOTE);
   }
   if (textLayerCoverage && textLayerCoverage.garbledPages.length > 0) {

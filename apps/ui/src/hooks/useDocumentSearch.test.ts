@@ -16,6 +16,20 @@ describe("documentSearchWarning", () => {
       garbledPages: [],
     })).toBeNull();
   });
+
+  it("warns when scanned pages only have trivial text", () => {
+    expect(documentSearchWarning({
+      imageOnlyPages: [],
+      mixedPages: [0],
+      textPages: [1],
+      garbledPages: [],
+      trivialTextImagePages: [{
+        pageIndex: 0,
+        textCharacterCount: 8,
+        imageCoverageRatio: 0.96,
+      }],
+    })).toBe("Search may be incomplete - 1 page only has a tiny text layer over scanned page images.");
+  });
 });
 
 function coverageWithGarbledPages(count: number): TextLayerCoverage {

@@ -140,7 +140,8 @@ export async function buildDocumentFacts(
       // layer is also not verified-searchable, even when text is present.
       facts.searchableText = facts.pages.length > 0 &&
         facts.textLayerCoverage.imageOnlyPages.length === 0 &&
-        facts.textLayerCoverage.garbledPages.length === 0;
+        facts.textLayerCoverage.garbledPages.length === 0 &&
+        (facts.textLayerCoverage.trivialTextImagePages?.length ?? 0) === 0;
     } catch (error) {
       errors.push(detectorError("textLayerCoverage", errorMessage(error)));
       try {

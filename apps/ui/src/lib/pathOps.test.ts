@@ -5,6 +5,7 @@ import {
   isFilingStepEnabled,
   pathOpErrorMessage,
   isPathOpAvailableForInput,
+  pathOpApplyEdits,
   pathOpBuildBinder,
   pathOpOcr,
   pathOpRedactAreas,
@@ -47,6 +48,13 @@ function statusFixture(overrides?: Partial<PathOpsStatus>): PathOpsStatus {
       },
       {
         name: "build_binder",
+        available: true,
+        missingTools: [],
+        filingStep: null,
+        maxInputBytes: 400,
+      },
+      {
+        name: "apply_edits",
         available: true,
         missingTools: [],
         filingStep: null,
@@ -114,6 +122,8 @@ describe("isPathOpAvailableForInput", () => {
     const status = statusFixture();
     expect(isPathOpAvailableForInput(status, "build_binder", 399)).toBe(true);
     expect(isPathOpAvailableForInput(status, "build_binder", 401)).toBe(false);
+    expect(isPathOpAvailableForInput(status, "apply_edits", 399)).toBe(true);
+    expect(isPathOpAvailableForInput(status, "apply_edits", 401)).toBe(false);
   });
 
   it("allows available ops without a ceiling", () => {
@@ -225,6 +235,46 @@ describe("path op invoke plumbing", () => {
       exhibits: [{ bytes: [1, 2, 3], label: "Exhibit A", sourceFileName: "a.pdf" }],
       options: { slipSheets: false },
       outputName: "Main Binder.pdf",
+    });
+  });
+
+  it("invokes apply_edits with image bytes serialized for shell temp transport", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "edited.pdf",
+      sizeBytes: 20,
+      pageCount: 1,
+      opReport: { op: "apply_edits", tool: "node", durationMs: 1, inputSizeBytes: 12, outputSizeBytes: 20, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpApplyEdits(
+      grant,
+      [
+        {
+          type: "image",
+          pageIndex: 0,
+          rect: { x: 1, y: 2, w: 3, h: 4 },
+          bytes: new Uint8Array([9, 8, 7]),
+          format: "png",
+        },
+      ],
+      { markupMode: "annotation", printMarkupAnnotations: true },
+      "edited.pdf",
+    )).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_apply_edits", {
+      grant: "grant-1",
+      payload: {
+        edits: [{
+          type: "image",
+          pageIndex: 0,
+          rect: { x: 1, y: 2, w: 3, h: 4 },
+          bytes: [9, 8, 7],
+          format: "png",
+        }],
+        applyOptions: { markupMode: "annotation", printMarkupAnnotations: true },
+        outputName: "edited.pdf",
+      },
     });
   });
 

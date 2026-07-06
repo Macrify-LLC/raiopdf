@@ -10,8 +10,10 @@ import {
   type MouseEvent,
 } from "react";
 import type {
+  PdfApplyEditsOptions,
   PdfBatesStampOptions,
   PdfBinderOptions,
+  PdfEdit,
   PdfCompressOptions,
   PdfImagePageInput,
   PdfPageNumbersOptions,
@@ -159,6 +161,7 @@ import {
 } from "./lib/ocrProgress";
 import {
   isPathOpsRuntime,
+  pathOpApplyEdits,
   pathOpBatesStamp,
   pathOpBuildBinder,
   pathOpCompress,
@@ -218,6 +221,7 @@ import {
 import {
   hasSearchableTextLayerCoverage,
   inspectTextLayer,
+  pdfDocumentTextLayerCoverage,
   textLayerCoveragePageCount,
 } from "./lib/textLayer";
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
@@ -1613,7 +1617,7 @@ export function App() {
   useEffect(() => {
     const sourceBytes = document.bytes;
 
-    if (!pdfDocument || !sourceBytes) {
+    if (!pdfDocument) {
       return;
     }
 
@@ -1624,9 +1628,20 @@ export function App() {
 
     let disposed = false;
 
-    void inspectTextLayer(sourceBytes, pdfDocument)
+    const coverage = sourceBytes
+      ? inspectTextLayer(sourceBytes, pdfDocument)
+      : streamedDocument
+        ? pdfDocumentTextLayerCoverage(pdfDocument)
+        : Promise.resolve(null);
+
+    void coverage
       .then((textLayerCoverage) => {
         if (disposed) {
+          return;
+        }
+        if (!textLayerCoverage) {
+          setTextLayerCoverage(null);
+          setHasTextLayer(false);
           return;
         }
 
@@ -1649,6 +1664,7 @@ export function App() {
     pdfDocument,
     setHasTextLayer,
     setTextLayerCoverage,
+    streamedDocument,
   ]);
 
   // Keyed on `source` (not generation): a plain Save swaps the source object
@@ -1723,10 +1739,14 @@ export function App() {
         return;
       }
 
-      // Streamed mode: pending edits are applied on Save through the engine
-      // (byte path), so every non-Select tool is gated [R1-2].
-      if (toolId !== "select" && document.source !== null && document.source.kind !== "memory") {
-        setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+      // Streamed mode: pending annotation overlays are allowed only when the
+      // shell can commit them through the Node one-shot lane [R1-2].
+      if (
+        toolId !== "select" &&
+        streamedDocument &&
+        !isPathOpAvailableForInput(pathOpsGeneralStatus, "apply_edits", document.fileSizeBytes)
+      ) {
+        setError(streamedEditingGateMessage(pathOpsGeneralStatus, document.fileSizeBytes, pathOpsGrant !== null));
         return;
       }
 
@@ -1741,7 +1761,17 @@ export function App() {
       setActiveEditDialogTool(null);
       editing.setTool(toolId);
     },
-    [activeLegalTool, activeTextEdit, document.source, editing, setError, textEdit.pendingOps.length],
+    [
+      activeLegalTool,
+      activeTextEdit,
+      document.fileSizeBytes,
+      editing,
+      pathOpsGeneralStatus,
+      pathOpsGrant,
+      setError,
+      streamedDocument,
+      textEdit.pendingOps.length,
+    ],
   );
 
   const enterTextEditMode = useCallback(() => {
@@ -2993,14 +3023,117 @@ export function App() {
     }
 
     // Streamed documents can't dirty, so Save has nothing to write (the
-    // button is disabled); Save As is a shell-side copy by grant — no bytes
-    // cross into the WebView.
+    // button is disabled unless pending overlays made the document dirty).
+    // With pending edits, both Save and Save As commit through apply_edits and
+    // reopen a generated copy; without pending edits, Save As is a shell-side
+    // copy by grant — no bytes cross into the WebView [R1-2].
     if (document.source !== null && document.source.kind !== "memory") {
+      const source = document.source;
+      const pendingApply = editing.collectAnnotationSavePlan();
+
+      if (pendingApply) {
+        const grant = pathOpsGrant;
+        if (!grant) {
+          setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+          return null;
+        }
+
+        if (pendingApply.flatten || planHasFormValues(pendingApply.plan.appendEdits)) {
+          setError("Form filling is not available for streamed documents yet.");
+          return null;
+        }
+
+        if (
+          pendingApply.plan.updateEdits.length > 0 ||
+          pendingApply.plan.deleteAnnotIds.length > 0
+        ) {
+          setError("Editing existing annotations on streamed documents is not available yet.");
+          return null;
+        }
+
+        if (!isPathOpAvailableForInput(pathOpsGeneralStatus, "apply_edits", document.fileSizeBytes)) {
+          setError(streamedEditingGateMessage(pathOpsGeneralStatus, document.fileSizeBytes, true));
+          return null;
+        }
+
+        const sourceOpenToken = getOpenToken();
+        const sourceGeneration = document.generation;
+        const applyOptions: PdfApplyEditsOptions = {
+          markupMode: "annotation",
+          printMarkupAnnotations,
+        };
+
+        savingRef.current = true;
+        setSidecarStatus({
+          running: true,
+          message: "Saving edits through the local Node engine...",
+          removed: [],
+          beforeBytes: document.fileSizeBytes,
+          afterBytes: null,
+        });
+        try {
+          const output = await pathOpApplyEdits(
+            grant,
+            pendingApply.plan.appendEdits,
+            applyOptions,
+            document.fileName ?? "Edited.pdf",
+          );
+
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            return null;
+          }
+
+          const reopened = await openPathOpOutput(output, {
+            openToken: sourceOpenToken,
+            generation: sourceGeneration,
+          });
+          if (reopened.status !== "opened") {
+            setSidecarStatus({
+              running: false,
+              message: "Edits were applied, but the edited copy could not be reopened.",
+              removed: [],
+              beforeBytes: document.fileSizeBytes,
+              afterBytes: output.sizeBytes,
+            });
+            return null;
+          }
+
+          editing.clearPending();
+          setSidecarStatus({
+            running: false,
+            message: "Edits saved — the edited copy opened as a new document. Use Save As to keep it.",
+            removed: [],
+            beforeBytes: document.fileSizeBytes,
+            afterBytes: output.sizeBytes,
+          });
+          return null;
+        } catch (error: unknown) {
+          if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            void recordDiagnosticEvent("save.failed", errorMessage(error), [
+              `forceSaveAs=${forceSaveAs}`,
+              `source=${source.kind}`,
+              "op=apply_edits",
+            ]);
+            setError(pathOpErrorMessage(error, "This PDF could not be saved. The document was left unchanged."));
+            setSidecarStatus({
+              running: false,
+              message: "Edits could not be saved. The document was left unchanged.",
+              removed: [],
+              beforeBytes: document.fileSizeBytes,
+              afterBytes: null,
+            });
+          }
+          return null;
+        } finally {
+          savingRef.current = false;
+        }
+      }
+
       if (!forceSaveAs) {
         return null;
       }
 
-      const source = document.source;
       savingRef.current = true;
       try {
         const written = await saveStreamedCopy(
@@ -3088,7 +3221,23 @@ export function App() {
     } finally {
       savingRef.current = false;
     }
-  }, [applyAnnotationSavePlan, document.fileName, document.source, editing, markSaved, printMarkupAnnotations, saveDocument, setError]);
+  }, [
+    applyAnnotationSavePlan,
+    document.fileName,
+    document.fileSizeBytes,
+    document.generation,
+    document.source,
+    editing,
+    getOpenToken,
+    isCurrentDocument,
+    markSaved,
+    openPathOpOutput,
+    pathOpsGeneralStatus,
+    pathOpsGrant,
+    printMarkupAnnotations,
+    saveDocument,
+    setError,
+  ]);
 
   const flattenCurrentMarkup = useCallback(() => {
     const sourceBytes = document.bytes;
@@ -3239,6 +3388,11 @@ export function App() {
 
   const printDocument = useCallback(() => {
     if (streamedDocument) {
+      if (editing.hasUnsavedEdits) {
+        setError("Save the pending edits before printing this streamed document.");
+        return;
+      }
+
       if (pathOpsGrant) {
         // Native streaming print (Lane F): Ghostscript prints straight from
         // disk, so the whole document is available at any size. The dialog
@@ -3260,7 +3414,7 @@ export function App() {
     }
 
     window.print();
-  }, [document.bytes, pathOpsGrant, setError, streamedDocument]);
+  }, [document.bytes, editing.hasUnsavedEdits, pathOpsGrant, setError, streamedDocument]);
 
   const buildBinder = useCallback(
     async (
@@ -6336,6 +6490,31 @@ function streamedBinderGateMessage(status: PathOpsStatus | null, sizeBytes: numb
     return `Combine with Exhibits can process large main PDFs up to ${formatBytes(entry.maxInputBytes)}. This document is ${formatBytes(sizeBytes)}.`;
   }
   return STREAMED_DOCUMENT_GATE_MESSAGE;
+}
+
+function streamedEditingGateMessage(
+  status: PathOpsStatus | null,
+  sizeBytes: number | null,
+  hasGrant: boolean,
+): string {
+  if (!hasGrant) {
+    return STREAMED_DOCUMENT_GATE_MESSAGE;
+  }
+  if (status === null) {
+    return "Editing for this large document is still starting. Try again in a moment.";
+  }
+  const entry = pathOpStatusEntry(status, "apply_edits");
+  if (!entry?.available) {
+    return "Editing large documents needs the bundled Node editing engine, which is not available in this app install.";
+  }
+  if (entry.maxInputBytes !== null && sizeBytes !== null && sizeBytes > entry.maxInputBytes) {
+    return `Editing large documents supports PDFs up to ${formatBytes(entry.maxInputBytes)}. This document is ${formatBytes(sizeBytes)}.`;
+  }
+  return STREAMED_DOCUMENT_GATE_MESSAGE;
+}
+
+function planHasFormValues(edits: readonly PdfEdit[]): boolean {
+  return edits.some((edit) => edit.type === "formValues");
 }
 
 /** Per-area pass/fail rendering for the delegated redaction's verification.

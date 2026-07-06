@@ -2,8 +2,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type {
+  PdfApplyEditsOptions,
   PdfBinderOptions,
   PdfDocumentHandle,
+  PdfEdit,
+  PdfEditImageFormat,
   PdfPageSelection,
   PdfSplitPart,
   PdfStampPlacement,
@@ -50,6 +53,13 @@ const binderOptionsSchema = z.object({
   stampPages: pageSelectionSchema.optional(),
   fontSizePt: z.number().positive().optional(),
   marginIn: z.number().nonnegative().optional(),
+});
+const applyEditsOptionsSchema = z.object({
+  markupMode: z.enum(["baked", "annotation"]).optional(),
+  printMarkupAnnotations: z.boolean().optional(),
+});
+const applyEditsTempBytesSchema = z.object({
+  tempPath: absoluteInput,
 });
 
 const outputResultSchema = { ...baseOutputSchema, output: z.string().optional() };
@@ -239,6 +249,115 @@ export async function handleBuildBinderOneShot(
       await engine.close(document).catch(() => undefined);
     }
   }
+}
+
+// ---- one-shot apply_edits ----
+export const applyEditsOneShotInputSchema = {
+  mainPath: absoluteInput,
+  edits: z.array(z.unknown()),
+  applyOptions: applyEditsOptionsSchema.optional(),
+  outputPath: absoluteOutput,
+  maxInputBytes: z.number().int().positive(),
+};
+export const applyEditsOneShotOutputSchema = outputResultSchema;
+export interface ApplyEditsOneShotInput {
+  mainPath: string;
+  edits: unknown[];
+  applyOptions?: PdfApplyEditsOptions | undefined;
+  outputPath: string;
+  maxInputBytes: number;
+}
+
+type ImageBackedEditWithTemp = {
+  type: "image" | "signature";
+  bytes: { tempPath: string };
+  format: PdfEditImageFormat;
+} & Record<string, unknown>;
+
+export async function handleApplyEditsOneShot(
+  input: ApplyEditsOneShotInput,
+): Promise<StructuredToolResult> {
+  const mainStats = await fs.stat(input.mainPath).catch((error: unknown) => {
+    throw new Error(`Main PDF is not accessible: ${input.mainPath}.`, { cause: error });
+  });
+  if (!mainStats.isFile()) {
+    return errorResult("INVALID_ARGUMENT", `Main path is not a regular file: ${input.mainPath}.`);
+  }
+  if (mainStats.size > input.maxInputBytes) {
+    return errorResult(
+      "INVALID_ARGUMENT",
+      `Main PDF is too large for apply_edits (${formatBytes(mainStats.size)}).`,
+      `Choose a PDF at or below ${formatBytes(input.maxInputBytes)}.`,
+    );
+  }
+
+  const engine = getLocalEngine();
+  const output = await prepareOutput(input.outputPath);
+  const opened: PdfDocumentHandle[] = [];
+  let produced: Awaited<ReturnType<typeof engine.applyEdits>> | undefined;
+
+  try {
+    const main = await engine.open(await fs.readFile(input.mainPath));
+    opened.push(main);
+    const edits = await materializeApplyEdits(input.edits);
+    const applyOptions: PdfApplyEditsOptions = {
+      markupMode: "annotation",
+      printMarkupAnnotations: true,
+      ...input.applyOptions,
+    };
+
+    produced = await engine.applyEdits(main, edits, applyOptions);
+    await output.write(await engine.saveToBytes(produced));
+    await output.commit();
+
+    return successResult(
+      `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"} into ${input.outputPath}.`,
+      { output: output.outputPath },
+    );
+  } catch (error) {
+    await output.abort();
+    throw error;
+  } finally {
+    if (produced !== undefined && !opened.includes(produced)) {
+      opened.push(produced);
+    }
+    for (const document of opened) {
+      await engine.close(document).catch(() => undefined);
+    }
+  }
+}
+
+async function materializeApplyEdits(edits: readonly unknown[]): Promise<PdfEdit[]> {
+  const materialized: PdfEdit[] = [];
+
+  for (const edit of edits) {
+    if (!isObject(edit) || typeof edit.type !== "string") {
+      throw new Error("Each apply_edits edit must be an object with a type.");
+    }
+
+    if (isImageBackedEditWithTemp(edit)) {
+      const tempBytes = applyEditsTempBytesSchema.parse(edit.bytes);
+      const bytes = new Uint8Array(await fs.readFile(tempBytes.tempPath));
+      materialized.push({ ...edit, bytes } as PdfEdit);
+      continue;
+    }
+
+    materialized.push(edit as PdfEdit);
+  }
+
+  return materialized;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isImageBackedEditWithTemp(value: Record<string, unknown>): value is ImageBackedEditWithTemp {
+  return (
+    (value.type === "image" || value.type === "signature") &&
+    isObject(value.bytes) &&
+    typeof value.bytes.tempPath === "string"
+  );
 }
 
 // ---- bates_stamp ----

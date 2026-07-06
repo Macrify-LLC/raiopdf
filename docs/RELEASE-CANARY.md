@@ -344,6 +344,17 @@ Committed as a work-in-progress. Open items, roughly in priority order:
 4. Add a row to the runbook table above.
 5. `pnpm canary` until green.
 
+## Streamed Editing Canary
+
+Streamed annotation editing is covered by the large-fixture tier because the
+important behavior is the desktop file-grant path, not small in-memory PDFs.
+Set `RAIOPDF_CANARY_FIXTURES_DIR` to the fixture directory used by the large
+document canary and run the streamed editing smoke after the desktop payload is
+available. The check should open a >50 MiB PDF by path, verify highlight/comment
+selection works through the pdf.js range proxy, save pending edits through
+`apply_edits`, and confirm the edited copy reopens as a generated document. The
+win32 real-engine canary remains the release gate for packaged payload behavior.
+
 ## Files
 
 | File | Role |

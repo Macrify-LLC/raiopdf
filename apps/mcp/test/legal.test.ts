@@ -118,7 +118,7 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(output)).rejects.toBeTruthy();
   });
 
-  it("one-shot build_binder writes a binder file when the main PDF is within its ceiling", async () => {
+  it("one-shot build_binder writes a binder file with optional options omitted", async () => {
     const main = await makePdf("main.pdf", 1);
     const exhibit = await makePdf("ex1.pdf", 1);
     const output = path.join(dir, "binder-one-shot.pdf");

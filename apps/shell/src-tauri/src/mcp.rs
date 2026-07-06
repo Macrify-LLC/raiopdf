@@ -585,6 +585,7 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     })?;
     let mut command = Command::new(&binary);
     command
+        .arg("--disallow-code-generation-from-strings")
         .arg("--one-shot")
         .arg(tool_name)
         .stdin(Stdio::piped())

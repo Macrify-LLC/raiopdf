@@ -168,7 +168,9 @@ pub struct BinderStampPlacement {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BinderIndexOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     include_source_file_name: Option<bool>,
 }
 
@@ -183,10 +185,15 @@ pub enum BinderPageSelection {
 #[serde(rename_all = "camelCase")]
 pub struct BuildBinderOptions {
     slip_sheets: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     index: Option<BinderIndexOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     placement: Option<BinderStampPlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stamp_pages: Option<BinderPageSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     font_size_pt: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     margin_in: Option<f64>,
 }
 
@@ -1143,7 +1150,8 @@ pub async fn path_op_build_binder(
         output_path: path_to_utf8(output_path.clone(), "Binder output")?,
         max_input_bytes,
     };
-    let timeout = node_lane_timeout(before.len);
+    let total_work_size = before.len.saturating_add(exhibit_size);
+    let timeout = node_lane_timeout(total_work_size);
     let mcp_options = crate::mcp::McpOneShotOptions {
         timeout: Some(timeout),
         node_options: Some(node_options_heap_arg()),
@@ -1423,5 +1431,49 @@ mod tests {
             releasable_output_dir(Path::new("/data/path-ops/uuid-1/nested/out.pdf"), root),
             None,
         );
+    }
+
+    #[test]
+    fn build_binder_one_shot_payload_omits_unset_optional_options() {
+        let request = BuildBinderOneShotInput {
+            main_path: "/tmp/main.pdf".to_string(),
+            exhibits: vec![BuildBinderOneShotExhibit {
+                path: "/tmp/exhibit.pdf".to_string(),
+                label: "Exhibit A".to_string(),
+                description: None,
+                source_file_name: None,
+            }],
+            options: BuildBinderOptions {
+                slip_sheets: false,
+                index: Some(BinderIndexOptions {
+                    enabled: None,
+                    include_source_file_name: None,
+                }),
+                placement: None,
+                stamp_pages: None,
+                font_size_pt: None,
+                margin_in: None,
+            },
+            output_path: "/tmp/binder.pdf".to_string(),
+            max_input_bytes: 10_000_000,
+        };
+
+        let payload = serde_json::to_value(request).expect("serialize request");
+        let options = payload
+            .get("options")
+            .and_then(serde_json::Value::as_object)
+            .expect("options object");
+        let index = options
+            .get("index")
+            .and_then(serde_json::Value::as_object)
+            .expect("index object");
+
+        assert_eq!(options.get("slipSheets"), Some(&serde_json::json!(false)));
+        assert!(!options.contains_key("placement"));
+        assert!(!options.contains_key("stampPages"));
+        assert!(!options.contains_key("fontSizePt"));
+        assert!(!options.contains_key("marginIn"));
+        assert!(!index.contains_key("enabled"));
+        assert!(!index.contains_key("includeSourceFileName"));
     }
 }

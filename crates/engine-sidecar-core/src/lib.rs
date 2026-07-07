@@ -1385,6 +1385,18 @@ fn proxy_client_with_activity(
     token: &str,
     idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
 ) -> io::Result<()> {
+    // The listener is non-blocking so the accept loop can poll the shutdown
+    // flag (see `start_auth_proxy_inner`). On Windows, a socket returned by
+    // `accept()` INHERITS the listener's non-blocking flag, and std does not
+    // reset it — so without this the accepted stream stays non-blocking, the
+    // read timeouts below are ineffective (SO_RCVTIMEO only governs blocking
+    // receives), and any `read_exact` whose bytes haven't fully arrived yet
+    // returns WSAEWOULDBLOCK (os error 10035) immediately instead of waiting.
+    // That surfaces as a spurious "read request body" failure on request
+    // bodies split across TCP segments. Reset to blocking so the timeouts
+    // apply as intended. No-op on Unix, where accepted sockets are always
+    // blocking.
+    client.set_nonblocking(false)?;
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     client.set_write_timeout(Some(Duration::from_secs(30)))?;
 
@@ -3280,6 +3292,59 @@ mod tests {
             upstream_request.len(),
             post.len(),
             "proxy must forward the complete large upload"
+        );
+    }
+
+    // Regression (os error 10035): on Windows an accepted socket inherits the
+    // listener's non-blocking flag, so `read_exact` on a request body that
+    // lands on a later TCP segment returned WSAEWOULDBLOCK instead of blocking.
+    // Writing the head, pausing, then the body forces that split — the exact
+    // window the bug fired in. Fails before the `client.set_nonblocking(false)`
+    // reset in `proxy_client_with_activity`, passes after. Windows-only: Unix
+    // accepted sockets are always blocking, so this would no-op elsewhere.
+    #[cfg(windows)]
+    #[test]
+    fn auth_proxy_reads_segmented_body_over_nonblocking_listener() {
+        let stub = start_stub_http_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+        let proxy_listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy should bind");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        let proxy =
+            start_auth_proxy(proxy_listener, stub.port, "secret".to_string()).expect("proxy");
+
+        let body = vec![b'A'; 256 * 1024];
+        let head = format!(
+            "POST /api/v1/analysis/basic-info HTTP/1.1\r\nHost: 127.0.0.1\r\nX-RaioPDF-Auth: secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+
+        let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).expect("proxy connect");
+        stream.set_nodelay(true).expect("nodelay");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("proxy read timeout");
+        stream.write_all(head.as_bytes()).expect("write head");
+        stream.flush().expect("flush head");
+        // Let the proxy read the head and reach the body read before any body
+        // byte arrives — the window where the non-blocking read failed fast.
+        thread::sleep(Duration::from_millis(100));
+        stream.write_all(&body).expect("write body");
+        let _ = stream.shutdown(Shutdown::Write);
+
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("proxy response read");
+
+        stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
+        assert!(response.ends_with("OK"), "response was {response:?}");
+        let upstream_request = stub
+            .received_request()
+            .expect("stub should receive authorized request");
+        assert!(upstream_request.starts_with("POST /api/v1/analysis/basic-info HTTP/1.1"));
+        assert_eq!(
+            upstream_request.len(),
+            head.len() + body.len(),
+            "proxy must forward the complete segmented upload"
         );
     }
 

@@ -80,6 +80,8 @@ export interface AppShellProps {
   documentBanner: ReactNode;
   workspace: ReactNode;
   overlay: ReactNode;
+  /** Update indicator (UpdatePill) rendered in the title bar's meta area. */
+  updateSlot?: ReactNode;
   activeLegalTool: string | null;
   activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
@@ -156,6 +158,7 @@ export function AppShell({
   documentBanner,
   workspace,
   overlay,
+  updateSlot,
   activeLegalTool,
   activeTextEdit = false,
   activeEditDialogTool,
@@ -233,6 +236,7 @@ export function AppShell({
         hasDocument={hasDocument}
         canUndo={canUndo}
         onMenuCommand={onMenuCommand}
+        updateSlot={updateSlot}
       />
       <CommandBar
         onOpen={requestOpen}

@@ -26,6 +26,7 @@ export interface SettingsDialogProps {
   defaultCoverStyle: PdfCoverStyle;
   onDefaultCoverStyleChange: (style: PdfCoverStyle) => void;
   onCheckForUpdates: () => void;
+  onDownloadUpdate: () => void;
   onInstallUpdate: () => void;
   onRelaunchForUpdate: () => void;
 }
@@ -44,9 +45,17 @@ export function SettingsDialog({
   defaultCoverStyle,
   onDefaultCoverStyleChange,
   onCheckForUpdates,
+  onDownloadUpdate,
   onInstallUpdate,
   onRelaunchForUpdate,
 }: SettingsDialogProps) {
+  // The update section shows at most one primary button; which one (and its
+  // label/disabled state) is a pure function of the phase.
+  const primaryUpdate = primaryUpdateButton(updateStatus, {
+    onDownloadUpdate,
+    onInstallUpdate,
+    onRelaunchForUpdate,
+  });
   const [offerCrashReports, setOfferCrashReports] = useState(true);
   const [crashReportsLoading, setCrashReportsLoading] = useState(isTauriRuntime());
   const [crashReportsStatus, setCrashReportsStatus] = useState<string | null>(null);
@@ -138,27 +147,18 @@ export function SettingsDialog({
                 type="button"
                 className="settings-dialog__button"
                 onClick={onCheckForUpdates}
-                disabled={updateStatus.phase === "checking" || updateStatus.phase === "downloading"}
+                disabled={isUpdateInFlight(updateStatus.phase)}
               >
                 Check now
               </button>
-              {updateStatus.phase === "available" || updateStatus.phase === "downloading" ? (
+              {primaryUpdate ? (
                 <button
                   type="button"
                   className="settings-dialog__button settings-dialog__button--primary"
-                  onClick={onInstallUpdate}
-                  disabled={updateStatus.phase === "downloading"}
+                  onClick={primaryUpdate.onClick}
+                  disabled={primaryUpdate.disabled}
                 >
-                  Install update
-                </button>
-              ) : null}
-              {updateStatus.phase === "installed" ? (
-                <button
-                  type="button"
-                  className="settings-dialog__button settings-dialog__button--primary"
-                  onClick={onRelaunchForUpdate}
-                >
-                  Restart
+                  {primaryUpdate.label}
                 </button>
               ) : null}
             </div>
@@ -251,4 +251,53 @@ function isTauriRuntime(): boolean {
 
 function formatUpdateStatus(status: AppUpdateStatus): string {
   return status.message;
+}
+
+/**
+ * Phases where a re-check would be destructive (it discards the staged download
+ * handle) or redundant (already checking) — "Check now" is disabled for these.
+ */
+function isUpdateInFlight(phase: AppUpdateStatus["phase"]): boolean {
+  return (
+    phase === "checking" ||
+    phase === "downloading" ||
+    phase === "downloaded" ||
+    phase === "installing" ||
+    phase === "installed"
+  );
+}
+
+/**
+ * The single primary action offered in the update section for the current
+ * phase (or null when only "Check now" applies). Download → Install now →
+ * Restart, with the in-progress phases shown as a disabled button.
+ */
+function primaryUpdateButton(
+  status: AppUpdateStatus,
+  handlers: {
+    onDownloadUpdate: () => void;
+    onInstallUpdate: () => void;
+    onRelaunchForUpdate: () => void;
+  },
+): { onClick: () => void; disabled: boolean; label: string } | null {
+  switch (status.phase) {
+    case "available":
+    case "downloading":
+      return {
+        onClick: handlers.onDownloadUpdate,
+        disabled: status.phase === "downloading",
+        label: status.phase === "downloading" ? "Downloading…" : "Download update",
+      };
+    case "downloaded":
+    case "installing":
+      return {
+        onClick: handlers.onInstallUpdate,
+        disabled: status.phase === "installing",
+        label: status.phase === "installing" ? "Installing…" : "Install now",
+      };
+    case "installed":
+      return { onClick: handlers.onRelaunchForUpdate, disabled: false, label: "Restart" };
+    default:
+      return null;
+  }
 }

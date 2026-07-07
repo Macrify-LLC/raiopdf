@@ -209,6 +209,28 @@ same commit and don't need the real engine, so the canary doesn't duplicate them
 organize (merge/split/reorder/extract/insert/rotate/crop), annotations (text box, highlight,
 comment, callout), zoom, search, insert-image, and the filing-dialog choreography.
 
+### Auto-update (partly automated, partly manual acceptance)
+
+The signed auto-updater can't be exercised end-to-end in CI: the real check/download/install
+path runs through the Tauri updater plugin in the packaged **WebView2** runtime, which the
+Playwright/Node harness can't drive (the same webview blind spot the canary exists for).
+
+**Automated (CI, every PR):**
+- `apps/ui/src/lib/appUpdates.test.ts` locks the load-bearing contract — `downloadSignedUpdate`
+  downloads but **never** installs; `installDownloadedUpdate` installs only. This guards against
+  the "downloads then auto-installs" behavior the pill redesign removed.
+- `apps/ui/src/components/UpdatePill.test.tsx` covers the pill surface — it shows only when an
+  update is in flight, renders the right action per phase (Download → Install now → Restart),
+  and each action calls the matching handler.
+- `pnpm validate:release-assets --tag vX --github` verifies the **published** `latest.json` +
+  updater `.sig` against the app's embedded key (run at release time — see `SIGNING.md`).
+
+**Manual acceptance (once per release, on the real installer):** install the previous
+signed release, launch it, confirm the top-bar update pill appears; click **Download in
+background** → progress → **Install now** → **Restart RaioPDF**; confirm it relaunches on the
+new version and the pill is gone. Nothing should install without an explicit click, and the
+pill should reappear on every launch until the update is installed.
+
 ## The MCP connector canary
 
 The same "prove the advertised feature works in the real artifact" discipline applies to

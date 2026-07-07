@@ -27,6 +27,7 @@ import {
   type UnlockResult,
 } from "../lib/protectedPdfResolver";
 import type { FileGrant } from "../lib/filePort";
+import { pathOpReleaseOutput } from "../lib/pathOps";
 
 export interface PageSizeInches {
   width: number;
@@ -122,6 +123,14 @@ const INITIAL_DOCUMENT: DocumentState = {
   signatureInvalidationNotice: null,
   error: null,
 };
+
+function releaseRangeGrantSource(source: DocumentSource | null | undefined): Promise<void> {
+  if (source?.kind !== "rangeGrant") {
+    return Promise.resolve();
+  }
+
+  return pathOpReleaseOutput(source.grant).catch(() => undefined);
+}
 
 interface CommitOptions {
   dirty: boolean;
@@ -573,6 +582,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
       activeHandleRef.current = null;
       activeBytesRef.current = null;
       void Promise.all([...handles].map((handle) => closeHandle(handle)));
+      const grants = new Set<FileGrant>();
+      for (const tab of tabsRef.current) {
+        if (tab.document.source?.kind === "rangeGrant") {
+          grants.add(tab.document.source.grant);
+        }
+      }
+      void Promise.all([...grants].map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)));
     };
   }, [closeHandle]);
 
@@ -798,6 +814,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         };
       }
       const { id, token, previousHandle } = target;
+      const previousSource = target.newTab ? null : document.source;
       let prepared: PreparedDocument | null = null;
 
       try {
@@ -859,6 +876,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
             : [...current, storedTab]
         ));
         prepared = null;
+        void releaseRangeGrantSource(previousSource);
         requestPageScroll(1);
         return { status: "opened" };
       } catch (error) {
@@ -895,6 +913,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
             busyCountRef.current = 0;
             setPageScrollIntent(null);
             setDocument(INITIAL_DOCUMENT);
+            void releaseRangeGrantSource(previousSource);
           } else {
             restoreAfterFailedNewTabOpen(target);
           }
@@ -925,11 +944,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
             ...INITIAL_DOCUMENT,
             error: message,
           });
+          void releaseRangeGrantSource(previousSource);
         }
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, createStoredTab, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
+    [closeHandle, createStoredTab, document.source, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
   );
 
   /**
@@ -948,6 +968,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         };
       }
       const { id, token, previousHandle } = target;
+      const previousSource = target.newTab ? null : document.source;
 
       activeHandleRef.current = null;
       activeBytesRef.current = null;
@@ -989,10 +1010,17 @@ export function useDocument(options: UseDocumentOptions = {}) {
           ? current.map((tab) => (tab.id === id ? { ...tab, ...storedTab } : tab))
           : [...current, storedTab]
       ));
+      if (
+        previousSource?.kind !== "rangeGrant" ||
+        input.source.kind !== "rangeGrant" ||
+        previousSource.grant !== input.source.grant
+      ) {
+        void releaseRangeGrantSource(previousSource);
+      }
       requestPageScroll(1);
       return { status: "opened" };
     },
-    [closeHandle, createStoredTab, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
+    [closeHandle, createStoredTab, document.source, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
   );
 
   /**
@@ -1020,6 +1048,48 @@ export function useDocument(options: UseDocumentOptions = {}) {
     },
     [],
   );
+
+  const upgradeStreamedFileToGrant = useCallback((
+    source: { grant: FileGrant; sizeBytes: number; name?: string | undefined },
+    expected: { generation: number; openToken?: number | undefined },
+  ) => {
+    if (expected.openToken !== undefined && openTokenRef.current !== expected.openToken) {
+      return false;
+    }
+
+    if (
+      document.generation !== expected.generation ||
+      document.source?.kind !== "rangeFile"
+    ) {
+      return false;
+    }
+
+    setDocument((current) => {
+      if (
+        current.generation !== expected.generation ||
+        current.source?.kind !== "rangeFile"
+      ) {
+        return current;
+      }
+
+      sourceKindRef.current = "rangeGrant";
+      return {
+        ...current,
+        source: {
+          kind: "rangeGrant",
+          grant: source.grant,
+          sizeBytes: source.sizeBytes,
+          generation: current.generation,
+        },
+        fileName: source.name ?? current.fileName,
+        filePath: source.grant,
+        fileSizeBytes: source.sizeBytes,
+        error: null,
+      };
+    });
+
+    return true;
+  }, [document.generation, document.source, setDocument]);
 
   const replaceBytes = useCallback(
     async (bytes: Uint8Array, options: ReplaceBytesOptions): Promise<ReplaceBytesResult> => {
@@ -1914,6 +1984,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }
 
     await closeHandle(tab.engineHandle);
+    await releaseRangeGrantSource(tab.document.source);
 
     if (isActive) {
       const nextActive = nextTabs[Math.min(closingIndex, nextTabs.length - 1)] ?? null;
@@ -1943,6 +2014,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     switchTab,
     closeTab,
     setStreamedPageCount,
+    upgradeStreamedFileToGrant,
     replaceBytes,
     getOpenToken,
     getGeneration,

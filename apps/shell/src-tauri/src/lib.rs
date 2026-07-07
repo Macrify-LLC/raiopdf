@@ -39,11 +39,29 @@ const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
 const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
 const HEADER_FILE_NAME: &str = "x-raio-file-name";
+const HEADER_DROPPED_PDF_SIZE: &str = "x-raio-dropped-pdf-size";
+const HEADER_DROPPED_PDF_TOKEN: &str = "x-raio-dropped-pdf-token";
+const MAX_DROPPED_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_IN_FLIGHT_DROPPED_UPLOADS: usize = 4;
 
 #[derive(Default)]
 struct PendingPdfBytes {
     next_token: AtomicU64,
     bytes: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+struct UploadState {
+    temp_dir: PathBuf,
+    file_path: PathBuf,
+    file: fs::File,
+    bytes_written: u64,
+    expected_total: u64,
+    sanitized_name: String,
+}
+
+#[derive(Default)]
+struct DroppedUploads {
+    uploads: Mutex<HashMap<String, UploadState>>,
 }
 
 /// Grant-time state for one shell-issued file grant. The snapshot is the
@@ -207,6 +225,166 @@ impl PendingPdfBytes {
     }
 }
 
+impl DroppedUploads {
+    fn begin_upload(
+        &self,
+        path_ops_root: &Path,
+        expected_total: u64,
+        file_name: &str,
+    ) -> Result<String, String> {
+        if expected_total > MAX_DROPPED_UPLOAD_BYTES {
+            return Err("Dropped PDF is too large to prepare for filing".to_string());
+        }
+
+        let root = canonical_path_ops_root(path_ops_root)?;
+        let sanitized_name = sanitize_pdf_file_name(file_name);
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+
+        if uploads.len() >= MAX_IN_FLIGHT_DROPPED_UPLOADS {
+            return Err("Too many dropped PDF uploads are already in progress".to_string());
+        }
+
+        for _ in 0..16 {
+            let token = Uuid::new_v4().to_string();
+            if uploads.contains_key(&token) {
+                continue;
+            }
+
+            let temp_dir = root.join(&token);
+            match fs::create_dir(&temp_dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!("Failed to create dropped PDF temp folder: {error}"));
+                }
+            }
+
+            match create_upload_state(&root, temp_dir, sanitized_name.clone(), expected_total) {
+                Ok(state) => {
+                    uploads.insert(token.clone(), state);
+                    return Ok(token);
+                }
+                Err(error) => {
+                    let _ = fs::remove_dir_all(root.join(&token));
+                    return Err(error);
+                }
+            }
+        }
+
+        Err("Could not allocate a dropped PDF upload token".to_string())
+    }
+
+    fn append_upload(&self, token: &str, bytes: &[u8]) -> Result<(), String> {
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+        let upload = uploads
+            .get_mut(token)
+            .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
+        let chunk_len = u64::try_from(bytes.len())
+            .map_err(|_| "Dropped PDF upload chunk is too large".to_string())?;
+        let next_len = upload
+            .bytes_written
+            .checked_add(chunk_len)
+            .ok_or_else(|| "Dropped PDF upload size overflow".to_string())?;
+
+        if next_len > upload.expected_total {
+            return Err("Dropped PDF upload exceeded its declared size".to_string());
+        }
+
+        upload.file.write_all(bytes).map_err(|error| {
+            format!(
+                "Failed to write dropped PDF at {}: {error}",
+                upload.file_path.to_string_lossy()
+            )
+        })?;
+        upload.bytes_written = next_len;
+        Ok(())
+    }
+
+    fn finish_upload(
+        &self,
+        token: &str,
+        path_ops_root: &Path,
+        file_grants: &FileGrants,
+    ) -> Result<OpenedPdf, String> {
+        let root = canonical_path_ops_root(path_ops_root)?;
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+
+        {
+            let upload = uploads
+                .get_mut(token)
+                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
+            if upload.bytes_written != upload.expected_total {
+                return Err("Dropped PDF upload is incomplete".to_string());
+            }
+
+            upload.file.flush().map_err(|error| {
+                format!(
+                    "Failed to flush dropped PDF at {}: {error}",
+                    upload.file_path.to_string_lossy()
+                )
+            })?;
+            upload.file.sync_all().map_err(|error| {
+                format!(
+                    "Failed to sync dropped PDF at {}: {error}",
+                    upload.file_path.to_string_lossy()
+                )
+            })?;
+        }
+
+        let upload = uploads
+            .remove(token)
+            .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
+        drop(uploads);
+        let UploadState {
+            file_path,
+            file,
+            sanitized_name,
+            ..
+        } = upload;
+        drop(file);
+
+        opened_pdf_for_temp_upload(&file_path, &root, &sanitized_name, file_grants)
+    }
+
+    fn abort_upload(&self, token: &str) -> Result<(), String> {
+        let upload = {
+            let mut uploads = self
+                .uploads
+                .lock()
+                .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+            uploads
+                .remove(token)
+                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?
+        };
+
+        let UploadState { temp_dir, file, .. } = upload;
+        drop(file);
+        fs::remove_dir_all(&temp_dir).map_err(|error| {
+            format!(
+                "Failed to delete dropped PDF temp folder at {}: {error}",
+                temp_dir.to_string_lossy()
+            )
+        })
+    }
+
+    #[cfg(test)]
+    fn upload_temp_dir(&self, token: &str) -> Option<PathBuf> {
+        self.uploads
+            .lock()
+            .ok()
+            .and_then(|uploads| uploads.get(token).map(|upload| upload.temp_dir.clone()))
+    }
+}
+
 impl FileGrants {
     /// Issue a grant, snapshotting `{len, mtime}` best-effort so ranged reads
     /// have a drift baseline. Grants whose file could not be stat'ed still
@@ -347,6 +525,105 @@ fn opened_pdf_for_path(
         size_bytes,
         bytes_token,
         threshold_bytes,
+    })
+}
+
+fn path_ops_root_for_app(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("app data dir unavailable: {error}"))?
+        .join(path_ops::PATH_OPS_DIR))
+}
+
+fn canonical_path_ops_root(path_ops_root: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(path_ops_root)
+        .map_err(|error| format!("Failed to create path-ops temp root: {error}"))?;
+    fs::canonicalize(path_ops_root)
+        .map_err(|error| format!("Failed to resolve path-ops temp root: {error}"))
+}
+
+fn create_upload_state(
+    root: &Path,
+    temp_dir: PathBuf,
+    sanitized_name: String,
+    expected_total: u64,
+) -> Result<UploadState, String> {
+    let temp_dir = fs::canonicalize(&temp_dir)
+        .map_err(|error| format!("Failed to resolve dropped PDF temp folder: {error}"))?;
+    if temp_dir.parent() != Some(root) {
+        return Err("Dropped PDF temp folder resolved outside the temp root".to_string());
+    }
+
+    let file_path = temp_dir.join(&sanitized_name);
+    require_pdf_extension(&file_path)?;
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .append(true)
+        .open(&file_path)
+        .map_err(|error| {
+            format!(
+                "Failed to create dropped PDF temp file at {}: {error}",
+                file_path.to_string_lossy()
+            )
+        })?;
+    let file_path = fs::canonicalize(&file_path)
+        .map_err(|error| format!("Failed to resolve dropped PDF temp file: {error}"))?;
+    if file_path.parent() != Some(temp_dir.as_path()) {
+        return Err("Dropped PDF temp file resolved outside its upload folder".to_string());
+    }
+
+    Ok(UploadState {
+        temp_dir,
+        file_path,
+        file,
+        bytes_written: 0,
+        expected_total,
+        sanitized_name,
+    })
+}
+
+fn opened_pdf_for_temp_upload(
+    path: &Path,
+    root: &Path,
+    sanitized_name: &str,
+    file_grants: &FileGrants,
+) -> Result<OpenedPdf, String> {
+    let path = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to resolve dropped PDF temp file at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+    require_pdf_extension(&path)?;
+    if path.parent().and_then(Path::parent) != Some(root) {
+        return Err("Dropped PDF temp file resolved outside the temp root".to_string());
+    }
+
+    let metadata = fs::metadata(&path).map_err(|error| {
+        format!(
+            "Failed to stat dropped PDF temp file at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err("Dropped PDF temp path is not a file".to_string());
+    }
+
+    let snapshot = snapshot_file(&path).map_err(|error| {
+        format!(
+            "Failed to snapshot dropped PDF temp file at {}: {error}",
+            path.to_string_lossy()
+        )
+    })?;
+    let file_grant = file_grants.grant_with_snapshot(path, Some(snapshot))?;
+
+    Ok(OpenedPdf {
+        name: sanitized_name.to_string(),
+        file_grant,
+        size_bytes: metadata.len(),
+        bytes_token: None,
+        threshold_bytes: large_doc_threshold_bytes(),
     })
 }
 
@@ -720,6 +997,53 @@ fn read_opened_pdf_bytes(
 }
 
 #[tauri::command]
+fn dropped_pdf_begin(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+    dropped_uploads: tauri::State<'_, DroppedUploads>,
+) -> Result<String, String> {
+    let expected_total = required_u64_header(&request, HEADER_DROPPED_PDF_SIZE)?;
+    let file_name = required_header(&request, HEADER_FILE_NAME)?;
+    let root = path_ops_root_for_app(&app)?;
+
+    dropped_uploads.begin_upload(&root, expected_total, &file_name)
+}
+
+#[tauri::command]
+fn dropped_pdf_append(
+    request: tauri::ipc::Request<'_>,
+    dropped_uploads: tauri::State<'_, DroppedUploads>,
+) -> Result<(), String> {
+    let token = required_header(&request, HEADER_DROPPED_PDF_TOKEN)?;
+    let bytes = raw_pdf_bytes(&request)?;
+
+    dropped_uploads.append_upload(&token, &bytes)
+}
+
+#[tauri::command]
+fn dropped_pdf_finish(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+    dropped_uploads: tauri::State<'_, DroppedUploads>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<OpenedPdf, String> {
+    let token = required_header(&request, HEADER_DROPPED_PDF_TOKEN)?;
+    let root = path_ops_root_for_app(&app)?;
+
+    dropped_uploads.finish_upload(&token, &root, file_grants.inner())
+}
+
+#[tauri::command]
+fn dropped_pdf_abort(
+    request: tauri::ipc::Request<'_>,
+    dropped_uploads: tauri::State<'_, DroppedUploads>,
+) -> Result<(), String> {
+    let token = required_header(&request, HEADER_DROPPED_PDF_TOKEN)?;
+
+    dropped_uploads.abort_upload(&token)
+}
+
+#[tauri::command]
 fn save_pdf_dialog(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
@@ -849,6 +1173,13 @@ fn required_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<Stri
         .map_err(|_| format!("Invalid {name} header"))?;
 
     percent_decode(value)
+}
+
+fn required_u64_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<u64, String> {
+    let value = required_header(request, name)?;
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("Invalid {name} header"))
 }
 
 fn percent_decode(value: &str) -> Result<String, String> {
@@ -1650,6 +1981,7 @@ pub fn run() {
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
             app.manage(DirectoryGrants::default());
+            app.manage(DroppedUploads::default());
             app.manage(StartupPdf::default());
             app.manage(print::PrintJobs::default());
             app.manage(word::WordCapabilityCache::default());
@@ -1706,6 +2038,10 @@ pub fn run() {
             open_pdf_in_new_window_dialog,
             open_in_new_window,
             read_opened_pdf_bytes,
+            dropped_pdf_begin,
+            dropped_pdf_append,
+            dropped_pdf_finish,
+            dropped_pdf_abort,
             read_pdf_range,
             pick_pdfs_for_add,
             pick_pdf_for_word,
@@ -1988,6 +2324,109 @@ mod tests {
         assert!(json_pdf_bytes(&serde_json::json!([256])).is_err());
         assert!(json_pdf_bytes(&serde_json::json!([-1])).is_err());
         assert!(json_pdf_bytes(&serde_json::json!([1, "x", 3])).is_err());
+    }
+
+    #[test]
+    fn dropped_upload_finish_grants_temp_pdf_with_original_bytes() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let bytes = b"%PDF-1.7\nbody";
+        let token = uploads
+            .begin_upload(root.path(), bytes.len() as u64, "case.pdf")
+            .expect("begin");
+
+        uploads
+            .append_upload(&token, &bytes[..5])
+            .expect("append a");
+        uploads
+            .append_upload(&token, &bytes[5..])
+            .expect("append b");
+        let opened = uploads
+            .finish_upload(&token, root.path(), &grants)
+            .expect("finish");
+
+        assert_eq!(opened.name, "case.pdf");
+        assert_eq!(opened.size_bytes, bytes.len() as u64);
+        assert!(opened.bytes_token.is_none());
+        let entry = grants
+            .resolve_entry(&opened.file_grant)
+            .expect("grant resolves");
+        assert_eq!(fs::read(&entry.path).expect("read temp"), bytes);
+        let root = fs::canonicalize(root.path()).expect("canonical root");
+        let path = fs::canonicalize(entry.path).expect("canonical path");
+        assert_eq!(path.parent().and_then(Path::parent), Some(root.as_path()));
+    }
+
+    #[test]
+    fn dropped_upload_append_rejects_unknown_token_and_declared_size_overflow() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+
+        assert!(uploads.append_upload("missing", b"%PDF").is_err());
+
+        let token = uploads
+            .begin_upload(root.path(), 3, "case.pdf")
+            .expect("begin");
+        uploads.append_upload(&token, b"%P").expect("append");
+        assert!(uploads.append_upload(&token, b"DF").is_err());
+        uploads.abort_upload(&token).expect("abort");
+    }
+
+    #[test]
+    fn dropped_upload_finish_rejects_incomplete_upload() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let token = uploads
+            .begin_upload(root.path(), 8, "case.pdf")
+            .expect("begin");
+
+        uploads.append_upload(&token, b"%PDF").expect("append");
+
+        let error = match uploads.finish_upload(&token, root.path(), &grants) {
+            Ok(_) => panic!("finish should reject incomplete upload"),
+            Err(error) => error,
+        };
+        assert!(error.contains("incomplete"));
+        uploads.abort_upload(&token).expect("abort");
+    }
+
+    #[test]
+    fn dropped_upload_abort_deletes_temp_dir() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let token = uploads
+            .begin_upload(root.path(), 4, "case.pdf")
+            .expect("begin");
+        let temp_dir = uploads
+            .upload_temp_dir(&token)
+            .expect("upload temp dir recorded");
+
+        assert!(temp_dir.exists());
+        uploads.abort_upload(&token).expect("abort");
+        assert!(!temp_dir.exists());
+    }
+
+    #[test]
+    fn dropped_upload_sanitizes_messy_non_pdf_filename() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let token = uploads
+            .begin_upload(root.path(), 0, "../nested\\case:part.txt")
+            .expect("begin");
+
+        let opened = uploads
+            .finish_upload(&token, root.path(), &grants)
+            .expect("finish");
+
+        assert_eq!(opened.name, "_nested_case_part.txt.pdf");
+        assert!(grants
+            .resolve_entry(&opened.file_grant)
+            .expect("grant")
+            .path
+            .ends_with("_nested_case_part.txt.pdf"));
     }
 
     #[test]

@@ -199,6 +199,41 @@ describe("useDocument streamed mode", () => {
     expect(getHook().document.source?.kind).toBe("rangeFile");
   });
 
+  it("upgrades a grant-less streamed File source to a grant without changing document identity", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeFile", file: new File([new Uint8Array(4)], "big.pdf"), sizeBytes: 4 },
+        name: "big.pdf",
+        path: null,
+      });
+    });
+
+    const openToken = getHook().getOpenToken();
+    const generation = getHook().document.generation;
+    let upgraded = false;
+
+    act(() => {
+      upgraded = getHook().upgradeStreamedFileToGrant(
+        { grant: "temp-grant" as FileGrant, sizeBytes: 4, name: "big.pdf" },
+        { openToken, generation },
+      );
+    });
+
+    expect(upgraded).toBe(true);
+    expect(getHook().getOpenToken()).toBe(openToken);
+    expect(getHook().document.generation).toBe(generation);
+    expect(getHook().document.source).toEqual({
+      kind: "rangeGrant",
+      grant: "temp-grant",
+      sizeBytes: 4,
+      generation,
+    });
+    expect(getHook().document.filePath).toBe("temp-grant");
+    expect(engineState.openCalls).toHaveLength(0);
+  });
+
   it("a path-op reconcile reopens the output grant as a NEW identity (generation bump)", async () => {
     mount();
 

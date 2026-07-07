@@ -504,7 +504,6 @@ struct WordRunOutput {
 #[cfg(windows)]
 fn run_word_powershell(args: &[std::ffi::OsString], timeout: Duration) -> OpResult<WordRunOutput> {
     use std::{
-        io::Read,
         process::{Command, Stdio},
         sync::{Arc, Mutex},
         thread,

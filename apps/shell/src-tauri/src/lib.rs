@@ -4,6 +4,7 @@ mod path_ops;
 mod print;
 mod range_read;
 mod sidecar;
+mod word;
 
 use diagnostics::AppDiagnostics;
 use range_read::{
@@ -1178,6 +1179,7 @@ pub fn run() {
             app.manage(DirectoryGrants::default());
             app.manage(StartupPdf::default());
             app.manage(print::PrintJobs::default());
+            app.manage(word::WordCapabilityCache::default());
 
             let (startup_pdf_path, startup_arg_diagnostics) =
                 startup_pdf_arg_from_args(env::args_os().skip(1).map(PathBuf::from));
@@ -1280,7 +1282,8 @@ pub fn run() {
             print::print_status,
             print::print_list_printers,
             print::print_pdf,
-            print::print_cancel
+            print::print_cancel,
+            word::word_capability
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

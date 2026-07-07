@@ -2,9 +2,7 @@
 
 use engine_sidecar_core::path_ops as core_ops;
 use engine_sidecar_core::path_ops::PathOpError;
-use engine_sidecar_core::word_ops::{
-    self as core_word, MarkupMode, WordCapability, WordCapabilityState,
-};
+use engine_sidecar_core::word_ops::{self as core_word, MarkupMode, WordCapability};
 use serde::Serialize;
 use std::{fs, path::Path, sync::Mutex, time::Instant};
 
@@ -20,7 +18,11 @@ pub struct WordCapabilityCache {
 }
 
 impl WordCapabilityCache {
-    fn get(&self) -> Result<Option<WordCapability>, PathOpError> {
+    fn get_unless_forced(&self, force: bool) -> Result<Option<WordCapability>, PathOpError> {
+        if force {
+            return Ok(None);
+        }
+
         let capability = self.authoritative.lock().map_err(|_| PathOpError {
             code: "IO_ERROR",
             message: "Word capability cache lock poisoned".to_string(),
@@ -58,19 +60,14 @@ pub async fn word_capability(
     cache: tauri::State<'_, WordCapabilityCache>,
     force: Option<bool>,
 ) -> Result<WordCapability, PathOpError> {
-    if let Some(cached) = cache.get()? {
+    let force = force.unwrap_or(false);
+    if let Some(cached) = cache.get_unless_forced(force)? {
         return Ok(cached);
     }
 
-    let force = force.unwrap_or(false);
     let capability = on_blocking_pool(move || core_word::word_capability(force)).await?;
 
-    if force
-        && matches!(
-            capability.state,
-            WordCapabilityState::Available | WordCapabilityState::Unavailable
-        )
-    {
+    if force {
         cache.set(capability.clone())?;
     }
 
@@ -306,14 +303,38 @@ fn reflow_pdf_to_docx_with_optional_ocr(
         core_word::convert_pdf_to_docx(&ocr_pdf, output_path)
     })();
 
-    let cleanup = fs::remove_file(&ocr_pdf);
-    match (result, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        (Ok(()), Err(error)) => Err(PathOpError {
-            code: "IO_ERROR",
-            message: format!("failed to delete OCR temp PDF: {error}"),
-        }),
+    if let Err(error) = fs::remove_file(&ocr_pdf) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("failed to delete Word reflow OCR temp PDF: {error}");
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_sidecar_core::word_ops::WordCapabilityState;
+
+    #[test]
+    fn forced_word_capability_bypasses_cached_authoritative_result() {
+        let cache = WordCapabilityCache::default();
+        let cached = WordCapability {
+            state: WordCapabilityState::Unavailable,
+            reason: Some("transient failure".to_string()),
+        };
+        cache.set(cached.clone()).expect("cache stores result");
+
+        assert_eq!(
+            cache.get_unless_forced(false).expect("cache reads"),
+            Some(cached)
+        );
+        assert_eq!(
+            cache
+                .get_unless_forced(true)
+                .expect("forced read bypasses cache"),
+            None
+        );
     }
 }

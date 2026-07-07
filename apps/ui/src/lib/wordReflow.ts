@@ -176,6 +176,18 @@ export async function pdfGrantHasTextLayer(grant: FileGrant): Promise<boolean> {
   return response.hasTextLayer;
 }
 
+export async function resolveWordReflowTextLayerSignal(
+  input: WordReflowInput,
+  cachedSignal: boolean | null,
+  probeGrant: (grant: FileGrant) => Promise<boolean> = pdfGrantHasTextLayer,
+): Promise<boolean> {
+  if (cachedSignal !== null) {
+    return cachedSignal;
+  }
+
+  return probeGrant(input.grant);
+}
+
 async function reflowPdfToDocx(
   grant: FileGrant,
   ocrFirst: boolean,

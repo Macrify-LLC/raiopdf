@@ -34,7 +34,7 @@ type PlacementEdge = "header" | "footer";
 type PlacementAlign = "left" | "center" | "right";
 type StampPages = "first" | "all";
 
-const ADD_FILE_ACCEPT = "application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx";
+const ADD_FILE_ACCEPT = "application/pdf,.pdf";
 
 interface BinderPresetV1 {
   version: 1;

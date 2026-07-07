@@ -239,6 +239,7 @@ import {
   WORD_REFLOW_EXPERIMENTAL_LABEL,
   pdfGrantHasTextLayer,
   pickStandalonePdfForWord,
+  resolveWordReflowTextLayerSignal,
   runPdfToWordReflow,
   type WordReflowStatus,
 } from "./lib/wordReflow";
@@ -5857,7 +5858,7 @@ export function App() {
         grant,
         name: document.fileName ?? "Document.pdf",
       }),
-      getTextLayer: async () => hasTextLayerSignal,
+      getTextLayer: (input) => resolveWordReflowTextLayerSignal(input, hasTextLayerSignal),
       onStatus: setWordReflowStatus,
       suggestedName: (_input, output) => (
         output.name || `${stripPdfExtension(document.fileName ?? "Document")}.docx`

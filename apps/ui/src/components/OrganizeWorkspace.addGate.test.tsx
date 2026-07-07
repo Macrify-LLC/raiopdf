@@ -14,7 +14,7 @@ vi.hoisted(() => {
 
 import type { DocumentState } from "../hooks/useDocument";
 import { setLargeDocThresholdBytes } from "../lib/largeDocThreshold";
-import { OrganizeWorkspace } from "./OrganizeWorkspace";
+import { OrganizeWorkspace, type OrganizeFlowId } from "./OrganizeWorkspace";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockRejectedValue("Command pick_pdfs_for_add not found"),
@@ -68,10 +68,14 @@ describe("OrganizeWorkspace pages-tab insert gate", () => {
     window.document.body.appendChild(container);
     root = createRoot(container);
 
+    renderWorkspace();
+  });
+
+  function renderWorkspace(flow: OrganizeFlowId = "pages") {
     act(() => {
       root?.render(
         <OrganizeWorkspace
-          flow="pages"
+          flow={flow}
           document={documentState}
           onCancel={() => undefined}
           onMerge={async () => true}
@@ -82,7 +86,7 @@ describe("OrganizeWorkspace pages-tab insert gate", () => {
         />,
       );
     });
-  });
+  }
 
   afterEach(() => {
     setLargeDocThresholdBytes(null);
@@ -131,5 +135,20 @@ describe("OrganizeWorkspace pages-tab insert gate", () => {
     expect(openedFile.bytes.byteLength).toBe(16);
     expect(insertAt).toBe(0);
     expect(container?.textContent).toContain("Inserted pages opened as the working document.");
+  });
+
+  it("keeps DOM fallback file inputs PDF-only", () => {
+    for (const flow of ["pages", "merge", "insert"] satisfies OrganizeFlowId[]) {
+      renderWorkspace(flow);
+      const inputs = Array.from(
+        window.document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
+      );
+
+      expect(inputs.length).toBeGreaterThan(0);
+      for (const input of inputs) {
+        expect(input.accept).toBe("application/pdf,.pdf");
+        expect(input.accept).not.toContain("docx");
+      }
+    }
   });
 });

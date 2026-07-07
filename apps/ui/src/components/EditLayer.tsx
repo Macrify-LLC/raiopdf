@@ -552,25 +552,46 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           return null;
         }
 
-        addEdit({
-          kind: "callout",
-          id: newEditId(),
-          pageIndex,
-          rect,
-          tip: viewportPointToPdfPoint(draft.tip, viewport),
-          text,
-          fontSizePt: draft.fontSizePt,
-          ...(draft.color ? { color: draft.color } : {}),
-          fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
-          bold: Boolean(draft.bold),
-          italic: Boolean(draft.italic),
-          align: draft.align ?? DEFAULT_TEXT_ALIGN,
-          strokeWidthPt: draft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
-          ...(draft.strokeColor ? { strokeColor: draft.strokeColor } : {}),
-          arrowhead: draft.arrowhead ?? true,
-          boxBorder: draft.boxBorder ?? true,
-          ...(draft.boxFill ? { boxFill: draft.boxFill } : {}),
-        });
+        if (draft.editId) {
+          // Re-editing an existing callout: update text/box in place and leave
+          // the leader's `tip` (and stroke/arrowhead/fill) untouched via spread,
+          // so the callout keeps pointing at the same target.
+          updateEdit(draft.editId, (edit) =>
+            edit.kind === "callout"
+              ? {
+                  ...edit,
+                  rect,
+                  text,
+                  fontSizePt: draft.fontSizePt,
+                  ...(draft.color ? { color: draft.color } : {}),
+                  fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+                  bold: Boolean(draft.bold),
+                  italic: Boolean(draft.italic),
+                  align: draft.align ?? DEFAULT_TEXT_ALIGN,
+                }
+              : edit,
+          );
+        } else {
+          addEdit({
+            kind: "callout",
+            id: newEditId(),
+            pageIndex,
+            rect,
+            tip: viewportPointToPdfPoint(draft.tip, viewport),
+            text,
+            fontSizePt: draft.fontSizePt,
+            ...(draft.color ? { color: draft.color } : {}),
+            fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+            bold: Boolean(draft.bold),
+            italic: Boolean(draft.italic),
+            align: draft.align ?? DEFAULT_TEXT_ALIGN,
+            strokeWidthPt: draft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+            ...(draft.strokeColor ? { strokeColor: draft.strokeColor } : {}),
+            arrowhead: draft.arrowhead ?? true,
+            boxBorder: draft.boxBorder ?? true,
+            ...(draft.boxFill ? { boxFill: draft.boxFill } : {}),
+          });
+        }
       } else if (draft.editId) {
         updateEdit(draft.editId, (edit) =>
           edit.kind === "textBox"
@@ -1164,6 +1185,29 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     suppressPlacement();
   }
 
+  function openCalloutForEditing(edit: PendingCallout) {
+    setSelectedId(null);
+    setTextDraft({
+      kind: "callout",
+      editId: edit.id,
+      rect: pdfRectToViewportRect(edit.rect, viewport),
+      tip: pdfPointToViewport(edit.tip, viewport),
+      text: edit.text,
+      fontSizePt: edit.fontSizePt,
+      ...(edit.color ? { color: edit.color } : {}),
+      fontFamily: edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+      bold: Boolean(edit.bold),
+      italic: Boolean(edit.italic),
+      align: edit.align ?? DEFAULT_TEXT_ALIGN,
+      strokeWidthPt: edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+      ...(edit.strokeColor ? { strokeColor: edit.strokeColor } : {}),
+      arrowhead: edit.arrowhead ?? true,
+      boxBorder: edit.boxBorder ?? true,
+      ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
+    });
+    suppressPlacement();
+  }
+
   function openCommentForEditing(edit: PendingComment) {
     setCommentDraft({ editId: edit.id, at: edit.at, text: edit.text });
     suppressPlacement();
@@ -1229,6 +1273,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         removeEdit,
         setPinned,
         openTextBoxForEditing,
+        openCalloutForEditing,
         openCommentForEditing,
       });
       selectId = edit.kind === "comment" ? null : edit.id;
@@ -1364,6 +1409,12 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         }
 
         if (edit.kind === "callout") {
+          // While this callout's inline editor is open, the draft renders the
+          // box + leader; hide the placed overlay so they don't double up.
+          if (textDraft?.editId === edit.id) {
+            return null;
+          }
+
           return (
             <CalloutOverlay
               key={edit.id}
@@ -1380,6 +1431,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onPointerMove={handleItemPointerMove}
               onPointerUp={handleItemPointerUp}
               onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
+              onEditRequested={() => openCalloutForEditing(edit)}
               onRemove={() => removeEdit(edit.id)}
               onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
             />
@@ -1629,6 +1681,7 @@ function buildEditContextMenu(
     removeEdit: (id: string) => void;
     setPinned: (id: string, pinned: boolean) => void;
     openTextBoxForEditing: (edit: PendingTextBox) => void;
+    openCalloutForEditing: (edit: PendingCallout) => void;
     openCommentForEditing: (edit: PendingComment) => void;
   },
 ): ContextMenuItem[] {
@@ -1643,6 +1696,10 @@ function buildEditContextMenu(
 
   if (edit.kind === "textBox") {
     items.push({ label: "Edit text", onSelect: () => actions.openTextBoxForEditing(edit) });
+  }
+
+  if (edit.kind === "callout") {
+    items.push({ label: "Edit text", onSelect: () => actions.openCalloutForEditing(edit) });
   }
 
   items.push({ label: "Pin", onSelect: () => actions.setPinned(edit.id, true) });
@@ -2102,6 +2159,7 @@ function CalloutOverlay({
   onPointerMove,
   onPointerUp,
   onResizeStart,
+  onEditRequested,
   onRemove,
   onTogglePin,
 }: {
@@ -2114,6 +2172,7 @@ function CalloutOverlay({
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
+  onEditRequested: () => void;
   onRemove: () => void;
   onTogglePin: () => void;
 }) {
@@ -2165,6 +2224,10 @@ function CalloutOverlay({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          onEditRequested();
+        }}
       >
         <span
           className="edit-layer__text-content"

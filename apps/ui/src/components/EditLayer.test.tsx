@@ -581,7 +581,7 @@ describe("EditLayer shape removal", () => {
     expect(container?.querySelector(".edit-layer__stamp[data-selected='true']")).not.toBeNull();
   });
 
-  it("right-click on an unpinned callout offers Pin and Delete", async () => {
+  it("right-click on an unpinned callout offers Edit text, Pin and Delete", async () => {
     await renderEditLayer(
       [
         {
@@ -605,7 +605,7 @@ describe("EditLayer shape removal", () => {
       await Promise.resolve();
     });
 
-    expect(contextMenuLabels(container)).toEqual(["Pin", "Delete"]);
+    expect(contextMenuLabels(container)).toEqual(["Edit text", "Pin", "Delete"]);
   });
 
   it("right-click on a pinned callout falls through (no item menu)", async () => {
@@ -636,6 +636,146 @@ describe("EditLayer shape removal", () => {
     // Pinned items are click-through: no item menu, and with nothing beneath,
     // no context menu at all.
     expect(container?.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("clicking a context-menu item never falls through to start a placement", async () => {
+    // Regression: with an interactive tool active the edit layer owns
+    // pointerdown; a menu rendered inside it must absorb the item-click's
+    // pointerdown or the click starts a new placement and captures the pointer.
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-menu-passthrough",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Note",
+          fontSizePt: 12,
+        },
+      ],
+      "callout", // the callout tool is active, so the layer is interactive
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40); // inside the callout rect
+      await Promise.resolve();
+    });
+
+    const menuItem = container?.querySelector<HTMLElement>(".context-menu__item");
+    expect(menuItem).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(menuItem!, "pointerdown", 50, 40);
+      await Promise.resolve();
+    });
+
+    // The pointerdown was absorbed by the menu: no callout placement draft
+    // started underneath it.
+    expect(container?.querySelector(".edit-layer__callout-placement")).toBeNull();
+  });
+
+  it("double-clicking a placed callout opens its inline text editor", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-dblclick",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Before",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const box = container?.querySelector<HTMLElement>(".edit-layer__callout-box");
+    expect(box).not.toBeNull();
+
+    await act(async () => {
+      box!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    // The inline editor is open (a draft box with a textarea), and the placed
+    // overlay is hidden so the two don't stack.
+    const textarea = container?.querySelector<HTMLTextAreaElement>(".edit-layer__text-input");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe("Before");
+    expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(1);
+    expect(
+      container?.querySelector(".edit-layer__callout-box.edit-layer__text-draft"),
+    ).not.toBeNull();
+    // The leader still draws while editing so the callout keeps its target.
+    expect(container?.querySelector(".edit-layer__callout-leader")).not.toBeNull();
+  });
+
+  it("Edit text on a callout menu edits the text in place, keeping the tip", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-edit-menu",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Before",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40); // inside the callout rect
+      await Promise.resolve();
+    });
+
+    const editItem = [...(container?.querySelectorAll(".context-menu__item") ?? [])].find(
+      (item) => item.textContent === "Edit text",
+    );
+    expect(editItem).toBeTruthy();
+
+    await act(async () => {
+      editItem!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const textarea = container?.querySelector<HTMLTextAreaElement>(".edit-layer__text-input");
+    expect(textarea).not.toBeNull();
+
+    // Retype the note and commit with Enter.
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setValue?.call(textarea, "After");
+      textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      textarea!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    // The editor closed and the placed callout now shows the new text — with a
+    // single box and its leader still anchored at the original tip.
+    expect(container?.querySelector(".edit-layer__text-input")).toBeNull();
+    const boxes = [...(container?.querySelectorAll(".edit-layer__callout-box") ?? [])];
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]?.textContent).toContain("After");
+    expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(1);
   });
 
   it("right-click on a highlight offers to remove it", async () => {

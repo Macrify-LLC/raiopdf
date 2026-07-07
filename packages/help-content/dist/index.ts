@@ -262,6 +262,15 @@ export const helpArticles = [
     "plainText": "# Rotate Pages\n\nRotate Pages turns the pages you've selected 90° clockwise — for a page that was\nscanned sideways, or a landscape exhibit in a portrait document.\n\n## How to do it\n\n1. Select the page or pages you want to turn (in the thumbnail rail on the left,\n   or in **Organize Pages**).\n2. In the **Organize** tools, choose **Rotate Pages**.\n\nEach time you use it, the selected pages turn another quarter-turn clockwise.\n\n## What to know\n\n- **It changes the open document.** Save to keep it — use **Save As** to keep the\n  original unrotated.\n- **Select first.** If no pages are selected, nothing happens.\n- To turn several pages while seeing the whole document, work in\n  **Organize Pages** instead.\n\n## Related\n\n- [Organize Pages](tool:pages) — reorder, delete, extract, split, and more"
   },
   {
+    "id": "pdf-to-word",
+    "title": "PDF -> Word",
+    "group": "organize",
+    "summary": "Convert one PDF into an editable Word document.",
+    "order": 25,
+    "html": "<h1>PDF -&gt; Word</h1><p>PDF -&gt; Word creates a <code>.docx</code> copy from a PDF using Microsoft Word's PDF reflow\nengine.</p><h2>How to do it</h2><ol><li>In the <strong>Organize</strong> tools, choose <strong>PDF -&gt; Word</strong>.</li><li>Pick one PDF.</li><li>If the PDF looks scanned, choose whether to run OCR first.</li><li>Save the generated Word document.</li></ol><h2>What to know</h2><ul><li><strong>Experimental — formatting may be approximate.</strong> Read the Word file before\nrelying on it.</li><li><strong>Microsoft Word is required.</strong> If Word is not available, RaioPDF explains\nthat at the point of action and does not convert the file.</li><li><strong>OCR is offered only for scans.</strong> PDFs that already have a searchable text\nlayer convert directly.</li></ul><h2>Related</h2><ul><li><a href=\"tool:make-searchable\">Make Searchable (OCR)</a> — add real text to a scan first</li><li><a href=\"tool:pages\">Organize Pages</a></li></ul>",
+    "plainText": "# PDF -> Word\n\nPDF -> Word creates a `.docx` copy from a PDF using Microsoft Word's PDF reflow\nengine.\n\n## How to do it\n\n1. In the **Organize** tools, choose **PDF -> Word**.\n2. Pick one PDF.\n3. If the PDF looks scanned, choose whether to run OCR first.\n4. Save the generated Word document.\n\n## What to know\n\n- **Experimental — formatting may be approximate.** Read the Word file before\n  relying on it.\n- **Microsoft Word is required.** If Word is not available, RaioPDF explains\n  that at the point of action and does not convert the file.\n- **OCR is offered only for scans.** PDFs that already have a searchable text\n  layer convert directly.\n\n## Related\n\n- [Make Searchable (OCR)](tool:make-searchable) — add real text to a scan first\n- [Organize Pages](tool:pages)"
+  },
+  {
     "id": "merge",
     "title": "Merge PDFs",
     "group": "organize",

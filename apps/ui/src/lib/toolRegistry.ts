@@ -26,6 +26,7 @@ export const LEGAL_TOOLS = [
 
 export const ORGANIZE_TOOLS = [
   { id: "pages", label: "Organize Pages", group: "organize", helpArticleId: "pages", description: "Select, reorder, rotate, delete, extract, or split pages." },
+  { id: "pdf-to-word", label: "PDF -> Word", group: "organize", helpArticleId: "pdf-to-word", description: "Convert one PDF to an editable Word document." },
   { id: "compress", label: "Compress...", group: "organize", helpArticleId: "compress", description: "Reduce file size through the desktop engine while preserving a PDF output." },
   { id: "repair", label: "Repair...", group: "organize", helpArticleId: "repair", description: "Ask the desktop engine to rebuild a PDF that will not open cleanly." },
   { id: "merge", label: "Merge PDFs...", group: "organize", helpArticleId: "merge", description: "Append other PDFs after the current document." },

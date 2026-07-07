@@ -77,6 +77,7 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   pages: <OrganizeIcon size={16} />,
   compress: <CropIcon size={16} />,
   repair: <ShieldCheckIcon size={16} />,
+  "pdf-to-word": <EditIcon size={16} />,
   merge: <CombineExhibitsIcon size={16} />,
   insert: <InsertIcon size={16} />,
   "insert-images": <ImageIcon size={16} />,

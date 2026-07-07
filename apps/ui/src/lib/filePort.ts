@@ -56,6 +56,12 @@ export interface PickedPdfsForAdd {
   thresholdBytes: number;
 }
 
+export interface PickedPdfForWord {
+  grant: FileGrant;
+  name: string;
+  sizeBytes: number;
+}
+
 export interface FilePort {
   openFile: () => Promise<OpenedFileSource | null>;
   pickDirectory: () => Promise<PickedDirectory | null>;
@@ -190,6 +196,38 @@ export async function pickPdfsForAdd(): Promise<PickedPdfsForAdd | null> {
 
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<PickedPdfsForAdd | null>("pick_pdfs_for_add");
+}
+
+export async function pickPdfForWord(): Promise<PickedPdfForWord | null> {
+  if (!isTauriRuntime()) {
+    throw new Error("pickPdfForWord is desktop-only.");
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const selected = await invoke<PickedPdfForWord | null>("pick_pdf_for_word");
+  return selected
+    ? {
+      grant: selected.grant as FileGrant,
+      name: selected.name,
+      sizeBytes: selected.sizeBytes,
+    }
+    : null;
+}
+
+export async function saveDocxGrant(
+  sourceGrant: FileGrant,
+  suggestedName: string,
+): Promise<SavedFile | null> {
+  if (!isTauriRuntime()) {
+    throw new Error("saveDocxGrant is desktop-only.");
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const saved = await invoke<TauriSavedDocx | null>("save_docx_dialog", {
+    sourceGrant,
+    suggestedName,
+  });
+  return saved ? savedFromTauri(saved) : null;
 }
 
 /**
@@ -408,6 +446,11 @@ interface TauriOpenedPdf {
 }
 
 interface TauriSavedPdf {
+  fileGrant: string;
+  name: string;
+}
+
+interface TauriSavedDocx {
   fileGrant: string;
   name: string;
 }

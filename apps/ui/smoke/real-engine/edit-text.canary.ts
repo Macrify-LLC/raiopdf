@@ -1,7 +1,7 @@
 // Real-engine canary for Find & Replace. Authored for `pnpm canary`;
 // do not run from the ordinary UI test command.
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   PDFArray,
   PDFDict,
@@ -24,12 +24,17 @@ import {
 } from "./helpers";
 
 const endpoint = readEngineEndpoint();
+const REVIEW_TIMEOUT_MS = 240_000;
+const TEST_TIMEOUT_MS = 360_000;
+const REVIEW_DISCLOSURE = "The whole document is rewritten by this operation. Pages not shown here may shift slightly.";
 
 const BENIGN_LOG = [
   /Setting up fake worker/i,
   /Warning: /i,
   /fontkit/i,
 ];
+
+test.describe.configure({ timeout: TEST_TIMEOUT_MS });
 
 test("Find & Replace: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
   const logs = captureLogs(page);
@@ -46,7 +51,7 @@ test("Find & Replace: real engine replaces born-digital text and preserves resto
   await page.getByRole("button", { name: "Replace all" }).click();
   await page.getByRole("button", { name: "Review" }).click();
 
-  await expect(page.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible({ timeout: 120_000 });
+  const reviewDialog = await expectTextEditReviewReady(page);
   // The review dialog is where the estimate surfaces ("N estimated
   // replacement(s) on M page(s)"). Apply commits the edit and reopens the
   // result as a fresh document, which by design leaves edit-text mode and
@@ -55,7 +60,7 @@ test("Find & Replace: real engine replaces born-digital text and preserves resto
   // reopening the saved PDF. Scope to the dialog: the same estimate also
   // echoes in the tool panel's status line, so an unscoped match is ambiguous.
   await expect(
-    page.getByRole("dialog", { name: "Review text replacements" }).getByText(/estimated replacement/).first(),
+    reviewDialog.getByText(/estimated replacement/).first(),
   ).toBeVisible();
   await page.getByRole("button", { name: "Apply" }).click();
 
@@ -84,7 +89,7 @@ test("Find & Replace: image-bearing mixed document stays within the Phase 0 size
   await page.getByLabel("Replace with").fill("Raio");
   await page.getByRole("button", { name: "Replace all" }).click();
   await page.getByRole("button", { name: "Review" }).click();
-  await expect(page.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible({ timeout: 120_000 });
+  await expectTextEditReviewReady(page);
   await page.getByRole("button", { name: "Apply" }).click();
 
   const saved = await savePdf(page);
@@ -98,6 +103,29 @@ test("Find & Replace: image-bearing mixed document stays within the Phase 0 size
   expect(await searchHitCount(page, "Acme")).toBe(0);
   logs.assertClean(BENIGN_LOG);
 });
+
+async function expectTextEditReviewReady(page: Page): Promise<ReturnType<Page["getByRole"]>> {
+  const dialog = page.getByRole("dialog", { name: "Review text replacements" });
+  await expect(dialog, "Review should open the staging dialog before the engine request completes.").toBeVisible();
+
+  try {
+    await expect(dialog.getByText(REVIEW_DISCLOSURE)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+  } catch (error) {
+    const [dialogText, statusText] = await Promise.all([
+      dialog.textContent().catch(() => null),
+      page.locator(".tool-panel__field-error, .tool-panel__status-line")
+        .allTextContents()
+        .catch(() => []),
+    ]);
+    throw new Error([
+      `Text replacement staging did not reach review within ${REVIEW_TIMEOUT_MS}ms.`,
+      `Dialog text: ${JSON.stringify(dialogText ?? "")}`,
+      `Status text: ${JSON.stringify(statusText)}`,
+    ].join("\n"), { cause: error });
+  }
+
+  return dialog;
+}
 
 async function createBookmarkedTextPdf(text: string): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();

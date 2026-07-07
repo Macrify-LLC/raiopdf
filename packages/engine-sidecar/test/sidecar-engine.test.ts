@@ -5,6 +5,7 @@ import {
   PDFDocument,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFString,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
@@ -513,6 +514,25 @@ describe("SidecarPdfEngine", () => {
     }));
 
     expect(outline.items[0]?.title).toBe("First page");
+  });
+
+  it("restores canary-style handwritten XYZ outlines after edit-text regeneration", async () => {
+    const sourceBytes = await createPdfWithHandwrittenXyzOutline();
+    const { fetchImpl } = createFetch(pdfBytesResponse(await createBasicPdf()));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+
+    const result = await engine.replaceText(document, {
+      operations: [{ find: "Plaintiff", replace: "Petitioner" }],
+    });
+    const outline = readPdfOutline(await PDFDocument.load(await engine.saveToBytes(result.document), {
+      updateMetadata: false,
+    }));
+
+    expect(outline.items[0]).toMatchObject({
+      title: "Motion",
+      target: { kind: "page", pageIndex: 0 },
+    });
   });
 
   it("restores embedded files after edit-text regeneration without warning", async () => {
@@ -1198,6 +1218,36 @@ async function createPdfWithOutline(): Promise<Uint8Array> {
       target: { kind: "page", pageIndex: 0 },
     }],
   });
+
+  return pdf.save();
+}
+
+async function createPdfWithHandwrittenXyzOutline(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([200, 300]);
+
+  const pageRef = pdf.getPage(0).ref;
+  const dest = pdf.context.obj([
+    pageRef,
+    PDFName.of("XYZ"),
+    PDFNumber.of(0),
+    PDFNumber.of(300),
+    PDFNumber.of(0),
+  ]);
+  const itemRef = pdf.context.nextRef();
+  const outlinesRef = pdf.context.nextRef();
+  const item = PDFDict.withContext(pdf.context);
+  item.set(PDFName.of("Title"), PDFHexString.fromText("Motion"));
+  item.set(PDFName.of("Parent"), outlinesRef);
+  item.set(PDFName.of("Dest"), dest);
+  const outlines = PDFDict.withContext(pdf.context);
+  outlines.set(PDFName.of("Type"), PDFName.of("Outlines"));
+  outlines.set(PDFName.of("First"), itemRef);
+  outlines.set(PDFName.of("Last"), itemRef);
+  outlines.set(PDFName.of("Count"), PDFNumber.of(1));
+  pdf.context.assign(itemRef, item);
+  pdf.context.assign(outlinesRef, outlines);
+  pdf.catalog.set(PDFName.of("Outlines"), outlinesRef);
 
   return pdf.save();
 }

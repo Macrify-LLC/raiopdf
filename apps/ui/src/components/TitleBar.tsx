@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
 import { ContextMenu } from "./ContextMenu";
 import { MenuBar } from "./MenuBar";
@@ -28,6 +28,8 @@ export interface TitleBarProps {
    * one switch statement.
    */
   onMenuCommand?: (command: string) => void;
+  /** Optional update indicator (the UpdatePill), rendered in the right-side meta area. */
+  updateSlot?: ReactNode;
 }
 
 export function TitleBar({
@@ -39,6 +41,7 @@ export function TitleBar({
   hasDocument = false,
   canUndo = false,
   onMenuCommand,
+  updateSlot,
 }: TitleBarProps) {
   const showWindowControls = isTauriRuntime();
   const hasTabs = tabs.length > 0;
@@ -138,6 +141,7 @@ export function TitleBar({
       )}
 
       <div className="title-bar__meta" data-tauri-drag-region>
+        {updateSlot}
         <button
           type="button"
           className="title-bar__byline"

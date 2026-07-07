@@ -53,6 +53,7 @@ import type {
   TextLayerCoverage,
 } from "@raiopdf/rules";
 import { AppShell } from "./components/AppShell";
+import { UpdatePill } from "./components/UpdatePill";
 import { BinderWorkspace } from "./components/BinderWorkspace";
 import {
   OrganizeWorkspace,
@@ -117,7 +118,8 @@ import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
   checkForSignedUpdate,
-  installSignedUpdate,
+  downloadSignedUpdate,
+  installDownloadedUpdate,
   isUpdaterRuntime,
   relaunchForInstalledUpdate,
   UPDATE_IDLE_STATUS,
@@ -838,7 +840,12 @@ export function App() {
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>(() => (
     isUpdaterRuntime() ? UPDATE_IDLE_STATUS : UPDATE_UNAVAILABLE_STATUS
   ));
+  // Mirror of the current phase for callbacks that must not close over a stale
+  // status (handleCheckForUpdates is created once and must read the live phase).
+  const updatePhaseRef = useRef(updateStatus.phase);
+  updatePhaseRef.current = updateStatus.phase;
   const updateCheckRequestRef = useRef(0);
+  const updateDownloadRequestRef = useRef(0);
   const updateInstallRequestRef = useRef(0);
   const availableUpdateRef = useRef<Awaited<ReturnType<typeof checkForSignedUpdate>>>(null);
   const [crashReportPayload, setCrashReportPayload] =
@@ -956,6 +963,19 @@ export function App() {
       return;
     }
 
+    // Never re-check while a download is staged or an install/restart is
+    // pending: check() returns a fresh Update handle, and adopting it would
+    // discard the one holding the downloaded bytes (install() needs that exact
+    // handle) and bounce the pill back to "Download".
+    if (
+      updatePhaseRef.current === "downloading" ||
+      updatePhaseRef.current === "downloaded" ||
+      updatePhaseRef.current === "installing" ||
+      updatePhaseRef.current === "installed"
+    ) {
+      return;
+    }
+
     const requestId = updateCheckRequestRef.current + 1;
     updateCheckRequestRef.current = requestId;
     setUpdateStatus({
@@ -993,7 +1013,9 @@ export function App() {
       }
     }
   }, []);
-  const handleInstallUpdate = useCallback(async () => {
+  // Download only — stages the update bytes in the plugin's session handle and
+  // stops at "downloaded". Nothing installs until the user clicks Install.
+  const handleDownloadUpdate = useCallback(async () => {
     if (!isUpdaterRuntime()) {
       setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
       return;
@@ -1009,8 +1031,8 @@ export function App() {
       return;
     }
 
-    const requestId = updateInstallRequestRef.current + 1;
-    updateInstallRequestRef.current = requestId;
+    const requestId = updateDownloadRequestRef.current + 1;
+    updateDownloadRequestRef.current = requestId;
     setUpdateStatus({
       phase: "downloading",
       message: `Downloading RaioPDF ${update.version}...`,
@@ -1020,8 +1042,8 @@ export function App() {
     });
 
     try {
-      await installSignedUpdate(update, (progress) => {
-        if (updateInstallRequestRef.current === requestId) {
+      await downloadSignedUpdate(update, (progress) => {
+        if (updateDownloadRequestRef.current === requestId) {
           setUpdateStatus((current) => ({
             ...current,
             phase: "downloading",
@@ -1032,6 +1054,51 @@ export function App() {
           }));
         }
       });
+      if (updateDownloadRequestRef.current === requestId) {
+        setUpdateStatus({
+          phase: "downloaded",
+          message: `RaioPDF ${update.version} is ready to install.`,
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+          progress: 1,
+        });
+      }
+    } catch {
+      if (updateDownloadRequestRef.current === requestId) {
+        setUpdateStatus({
+          phase: "error",
+          message: "Update download could not be completed. Try again.",
+          currentVersion: update.currentVersion,
+          availableVersion: update.version,
+        });
+      }
+    }
+  }, [handleCheckForUpdates]);
+  // Install only — runs the installer for the already-downloaded update on an
+  // explicit click. If nothing is staged yet, fall back to downloading first.
+  const handleInstallUpdate = useCallback(async () => {
+    if (!isUpdaterRuntime()) {
+      setUpdateStatus(UPDATE_UNAVAILABLE_STATUS);
+      return;
+    }
+
+    const update = availableUpdateRef.current;
+    if (!update) {
+      await handleDownloadUpdate();
+      return;
+    }
+
+    const requestId = updateInstallRequestRef.current + 1;
+    updateInstallRequestRef.current = requestId;
+    setUpdateStatus({
+      phase: "installing",
+      message: `Installing RaioPDF ${update.version}...`,
+      currentVersion: update.currentVersion,
+      availableVersion: update.version,
+    });
+
+    try {
+      await installDownloadedUpdate(update);
       if (updateInstallRequestRef.current === requestId) {
         availableUpdateRef.current = null;
         setUpdateStatus({
@@ -1046,19 +1113,24 @@ export function App() {
       if (updateInstallRequestRef.current === requestId) {
         setUpdateStatus({
           phase: "error",
-          message: "Update download or installation failed. Try again from Preferences.",
+          message: "Update installation failed. Try again.",
           currentVersion: update.currentVersion,
           availableVersion: update.version,
         });
       }
     }
-  }, [handleCheckForUpdates]);
+  }, [handleDownloadUpdate]);
   const handleRelaunchForUpdate = useCallback(() => {
     void relaunchForInstalledUpdate().catch(() => {
+      // The update is already installed — only the restart failed. Stay in
+      // "installed" (whose pill/Settings action is "Restart") so the button
+      // retries the relaunch rather than routing to the generic error state,
+      // whose "Try again" would start a pointless fresh download.
       setUpdateStatus((current) => ({
         ...current,
-        phase: "error",
-        message: "RaioPDF could not restart automatically. Close and reopen it to finish updating.",
+        phase: "installed",
+        message:
+          "RaioPDF couldn't restart automatically — click Restart to try again, or close and reopen it to finish updating.",
       }));
     });
   }, []);
@@ -6320,6 +6392,18 @@ export function App() {
         documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
         workspace={workspace}
         overlay={overlay}
+        updateSlot={
+          <UpdatePill
+            status={updateStatus}
+            onDownload={() => {
+              void handleDownloadUpdate();
+            }}
+            onInstall={() => {
+              void handleInstallUpdate();
+            }}
+            onRelaunch={handleRelaunchForUpdate}
+          />
+        }
         activeLegalTool={activeLegalTool}
         activeTextEdit={activeTextEdit}
         activeEditDialogTool={activeEditDialogTool}
@@ -6437,6 +6521,9 @@ export function App() {
           onDefaultCoverStyleChange={handleDefaultCoverStyleChange}
           onCheckForUpdates={() => {
             void handleCheckForUpdates("manual");
+          }}
+          onDownloadUpdate={() => {
+            void handleDownloadUpdate();
           }}
           onInstallUpdate={() => {
             void handleInstallUpdate();

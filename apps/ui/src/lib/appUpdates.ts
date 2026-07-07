@@ -7,6 +7,8 @@ export type AppUpdatePhase =
   | "current"
   | "available"
   | "downloading"
+  | "downloaded"
+  | "installing"
   | "installed"
   | "error";
 
@@ -37,14 +39,20 @@ export async function checkForSignedUpdate(): Promise<Update | null> {
   return check({ timeout: 15_000 });
 }
 
-export async function installSignedUpdate(
+/**
+ * Downloads the update bytes only — does NOT install. The bytes are held in the
+ * plugin's in-memory `Update` handle for this session; pass the SAME handle to
+ * `installDownloadedUpdate` to finish. Nothing is written to the app or run
+ * until the user explicitly installs.
+ */
+export async function downloadSignedUpdate(
   update: Update,
   onProgress: (progress: number | null) => void,
 ): Promise<void> {
   let downloaded = 0;
   let total: number | null = null;
 
-  await update.downloadAndInstall((event: DownloadEvent) => {
+  await update.download((event: DownloadEvent) => {
     if (event.event === "Started") {
       downloaded = 0;
       total = event.data.contentLength ?? null;
@@ -60,6 +68,14 @@ export async function installSignedUpdate(
 
     onProgress(1);
   }, { timeout: 10 * 60_000 });
+}
+
+/**
+ * Runs the installer for an already-downloaded update (the same `Update` handle
+ * passed to `downloadSignedUpdate`). Only called on an explicit user action.
+ */
+export async function installDownloadedUpdate(update: Update): Promise<void> {
+  await update.install();
 }
 
 export async function relaunchForInstalledUpdate(): Promise<void> {

@@ -39,6 +39,9 @@ aren't changed.
   aligned **Left**, **Center**, or **Right**.
 - **Stamp pages** — stamp the **First page only** of each exhibit, or **Every page**.
 - **Slip sheets** — optionally insert a separator page before each exhibit.
+- **Cover style** — when slip sheets are on, choose **Minimal** for just the
+  exhibit label, **Labeled** to include the exhibit description, or **Bordered**
+  to put the label and description inside a rule.
 
 Every exhibit is bookmarked automatically, whether or not you use slip sheets.
 
@@ -48,6 +51,8 @@ Every exhibit is bookmarked automatically, whether or not you use slip sheets.
   the assembled binder is saved separately.
 - **Order is what you set.** Exhibits are labeled in the order shown, top to
   bottom — so arrange them before you build.
+- **Cover style can be a preference.** Set your usual exhibit cover style in
+  **Preferences**; you can still change it for a specific binder.
 
 ## Related
 

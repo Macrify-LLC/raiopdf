@@ -1,4 +1,4 @@
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PDF_COVER_STYLES, PdfEngineError } from "@raiopdf/engine-api";
 import {
   decodePDFRawStream,
   degrees as pdfDegrees,
@@ -17,7 +17,7 @@ import {
 } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
 import { readPdfOutline, writePdfOutlineInPlace } from "@raiopdf/engine-pdf-lib";
-import { createLocalPdfEngine, createStableExhibitIndex } from "../src/index";
+import { createLocalPdfEngine, createStableExhibitIndex, drawCoverPage } from "../src/index";
 
 describe("LocalPdfEngine", () => {
   it("reorders pages", async () => {
@@ -786,6 +786,49 @@ describe("LocalPdfEngine", () => {
     ]);
   });
 
+  it.each(PDF_COVER_STYLES)("draws a saveable one-page $id cover", async ({ id }) => {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([612, 792]);
+    const regular = await pdf.embedFont(StandardFonts.Helvetica);
+    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+    drawCoverPage(page, { regular, bold }, {
+      label: "Exhibit A",
+      description: "Deposition transcript of Jane Doe",
+      style: id,
+    });
+
+    const saved = await PDFDocument.load(await pdf.save());
+
+    expect(saved.getPageCount()).toBe(1);
+  });
+
+  it("keeps the minimal slip-sheet content identical to the prior centered-label output", async () => {
+    const engine = createLocalPdfEngine();
+    const mainBytes = await createPdf([[612, 792]]);
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+    const main = await engine.open(mainBytes);
+
+    const defaultBinder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit A", description: "Deposition transcript" }],
+      { slipSheets: true, index: { enabled: false } },
+    );
+    const minimalBinder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit A", description: "Deposition transcript" }],
+      { slipSheets: true, index: { enabled: false }, coverStyle: "minimal" },
+    );
+    const defaultBytes = await engine.saveToBytes(defaultBinder);
+    const minimalBytes = await engine.saveToBytes(minimalBinder);
+    const legacyContent = await createLegacyMinimalSlipSheetContent(mainBytes, "Exhibit A");
+
+    await expectPageSizes(defaultBytes, [[612, 792], [612, 792], [612, 792]]);
+    await expectPageSizes(minimalBytes, [[612, 792], [612, 792], [612, 792]]);
+    expect(await readDecodedPageContent(defaultBytes, 1)).toBe(legacyContent);
+    expect(await readDecodedPageContent(minimalBytes, 1)).toBe(legacyContent);
+  });
+
   it("builds an exhibit binder without slip sheets after the generated index", async () => {
     const engine = createLocalPdfEngine();
     const main = await engine.open(await createPdf([[200, 300], [210, 300]]));
@@ -932,6 +975,36 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+async function createLegacyMinimalSlipSheetContent(mainBytes: Uint8Array, label: string): Promise<string> {
+  const main = await PDFDocument.load(mainBytes);
+  const output = await PDFDocument.create();
+
+  await copyAllPagesForTest(output, main);
+  const mainFirstPage = output.getPage(0);
+  const slipSheet = output.addPage([mainFirstPage.getWidth(), mainFirstPage.getHeight()]);
+  const font = await output.embedFont(StandardFonts.Helvetica);
+  const fontSize = 11;
+  const textWidth = font.widthOfTextAtSize(label, fontSize);
+
+  slipSheet.drawText(label, {
+    x: (slipSheet.getWidth() - textWidth) / 2,
+    y: (slipSheet.getHeight() - fontSize) / 2,
+    size: fontSize,
+    font,
+    color: rgb(0.08, 0.08, 0.08),
+  });
+
+  return readDecodedPageContent(await output.save(), 1);
+}
+
+async function copyAllPagesForTest(output: PDFDocument, source: PDFDocument): Promise<void> {
+  const pages = await output.copyPages(source, source.getPageIndices());
+
+  for (const page of pages) {
+    output.addPage(page);
+  }
 }
 
 async function createPdfWithOutline(): Promise<Uint8Array> {

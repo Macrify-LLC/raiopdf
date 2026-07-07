@@ -226,6 +226,30 @@ export type PdfImagePageInput = {
   format: PdfImagePageFormat;
 };
 
+export type PdfCoverStyle = "minimal" | "labeled" | "bordered";
+
+export const PDF_COVER_STYLES: readonly {
+  id: PdfCoverStyle;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: "minimal",
+    label: "Minimal",
+    description: "Centered exhibit label only",
+  },
+  {
+    id: "labeled",
+    label: "Labeled",
+    description: "Exhibit label with a short description",
+  },
+  {
+    id: "bordered",
+    label: "Bordered",
+    description: "Exhibit label and description inside a rule",
+  },
+];
+
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
@@ -242,6 +266,7 @@ export type PdfBinderIndexOptions = {
 
 export type PdfBinderOptions = {
   slipSheets: boolean;
+  coverStyle?: PdfCoverStyle | undefined;
   index?: PdfBinderIndexOptions | undefined;
   placement?: PdfStampPlacement | undefined;
   stampPages?: PdfPageSelection | undefined;

@@ -93,12 +93,17 @@ import {
   type DrawColor,
   type DrawTarget,
 } from "./drawTarget";
+import { drawCoverPage } from "./coverStyles";
+import { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 
 export {
   createAnnotationAppearanceTarget,
   createPageDrawTarget,
   drawAnnotationAppearanceOnPage,
 } from "./drawTarget";
+export { drawCoverPage, type CoverDrawFonts, type CoverDrawInput } from "./coverStyles";
+export type { PdfCoverStyle } from "@raiopdf/engine-api";
+export { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 
 type StoredDocument = {
   bytes: Uint8Array;
@@ -861,7 +866,11 @@ export class LocalPdfEngine implements PdfEngine {
     const mainFirstPage = output.getPage(0);
     const slipSheetSize: [number, number] = [mainFirstPage.getWidth(), mainFirstPage.getHeight()];
     const stampOptions = normalizeBinderStampOptions(options);
+    const coverStyle = options.coverStyle ?? "minimal";
     const stampFont = await output.embedFont(StandardFonts.Helvetica);
+    const stampBoldFont = coverStyle === "minimal"
+      ? stampFont
+      : await output.embedFont(StandardFonts.HelveticaBold);
 
     if (indexOptions.enabled) {
       const indexLayout = await createStableExhibitIndex({
@@ -892,14 +901,10 @@ export class LocalPdfEngine implements PdfEngine {
 
       if (options.slipSheets) {
         const slipSheet = output.addPage(slipSheetSize);
-        const fontSize = stampOptions.fontSizePt;
-        const textWidth = stampFont.widthOfTextAtSize(exhibit.label, fontSize);
-        slipSheet.drawText(exhibit.label, {
-          x: (slipSheet.getWidth() - textWidth) / 2,
-          y: (slipSheet.getHeight() - fontSize) / 2,
-          size: fontSize,
-          font: stampFont,
-          color: STAMP_COLOR,
+        drawCoverPage(slipSheet, { regular: stampFont, bold: stampBoldFont }, {
+          label: exhibit.label,
+          description: exhibit.description,
+          style: coverStyle,
         });
       }
 
@@ -3532,36 +3537,6 @@ function displayIndexDescription(font: PDFFont, entry: ExhibitIndexEntry): strin
   return sanitizeIndexTextForFont(font, entry.label);
 }
 
-function sanitizeIndexTextForFont(font: PDFFont, text: string): string {
-  let sanitized = "";
-
-  for (const character of text) {
-    if (isWhitespace(character) || isControlCharacter(character)) {
-      sanitized += " ";
-      continue;
-    }
-
-    try {
-      font.widthOfTextAtSize(character, 1);
-      sanitized += character;
-    } catch {
-      sanitized += " ";
-    }
-  }
-
-  return sanitized.replace(/\s+/gu, " ").trim();
-}
-
-function isWhitespace(character: string): boolean {
-  return /\s/u.test(character);
-}
-
-function isControlCharacter(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-
-  return codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f);
-}
-
 function drawRightAlignedText(
   page: ReturnType<PDFDocument["getPage"]>,
   font: PDFFont,
@@ -3579,21 +3554,6 @@ function drawRightAlignedText(
     font,
     color: STAMP_COLOR,
   });
-}
-
-function fitTextToWidth(font: PDFFont, text: string, fontSize: number, maxWidth: number): string {
-  if (font.widthOfTextAtSize(text, fontSize) <= maxWidth) {
-    return text;
-  }
-
-  const marker = "...";
-  let fitted = text;
-
-  while (fitted.length > 0 && font.widthOfTextAtSize(`${fitted}${marker}`, fontSize) > maxWidth) {
-    fitted = fitted.slice(0, -1);
-  }
-
-  return fitted.length === 0 ? "" : `${fitted}${marker}`;
 }
 
 function formatBinderPageRange(start: number, end: number): string {

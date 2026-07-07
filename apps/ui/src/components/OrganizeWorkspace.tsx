@@ -8,6 +8,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from "react";
+import type { PdfCoverStyle } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { ResizePreset } from "../lib/cropResize";
 import { isTextEntryTarget } from "../lib/domGuards";
@@ -21,6 +22,7 @@ import {
   type FileAddInput,
 } from "../lib/readFileForAdd";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
+import { generateCoverPdf } from "../lib/coverPreview";
 import type { DocumentState } from "../hooks/useDocument";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
@@ -37,8 +39,10 @@ import {
   RotateIcon,
   SplitIcon,
 } from "../icons";
+import { SlipSheetIcon } from "../icons/SlipSheetIcon";
+import { CoverStylePicker } from "./CoverStylePicker";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { hasOpenDialogStackEntry } from "./FloatingDialog";
+import { FloatingDialog, hasOpenDialogStackEntry } from "./FloatingDialog";
 import { IconButton } from "./IconButton";
 import "./OrganizeWorkspace.css";
 
@@ -118,6 +122,7 @@ export interface OrganizeWorkspaceProps {
     options: { cropMarginIn: number; resizePreset: ResizePreset },
   ) => Promise<boolean>;
   onHelpRequested?: (() => void) | undefined;
+  defaultCoverStyle?: PdfCoverStyle | undefined;
 }
 
 export function OrganizeWorkspace({
@@ -142,6 +147,7 @@ export function OrganizeWorkspace({
   onExportPageAsImage,
   onCropResize,
   onHelpRequested,
+  defaultCoverStyle,
 }: OrganizeWorkspaceProps) {
   const title = getFlowTitle(flow);
 
@@ -177,6 +183,7 @@ export function OrganizeWorkspace({
         delegatedOps={delegatedOps}
         onExportPageAsImage={onExportPageAsImage}
         onHelpRequested={onHelpRequested}
+        defaultCoverStyle={defaultCoverStyle}
       />
     );
   }
@@ -221,6 +228,7 @@ function OrganizePagesGrid({
   delegatedOps,
   onExportPageAsImage,
   onHelpRequested,
+  defaultCoverStyle = "minimal",
 }: {
   document: DocumentState;
   pdfDocument: PDFDocumentProxy | null;
@@ -240,6 +248,7 @@ function OrganizePagesGrid({
   delegatedOps: OrganizeDelegatedOps | null;
   onExportPageAsImage?: ((pageIndex: number) => Promise<boolean>) | undefined;
   onHelpRequested?: (() => void) | undefined;
+  defaultCoverStyle?: PdfCoverStyle | undefined;
 }) {
   const insertInputRef = useRef<HTMLInputElement>(null);
   const [draggingPageIndex, setDraggingPageIndex] = useState<number | null>(null);
@@ -258,6 +267,11 @@ function OrganizePagesGrid({
   // is the honest, cheap stand-in for a real FLIP-style move animation.
   const [settledPageIndex, setSettledPageIndex] = useState<number | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
+  const [slipSheetOpen, setSlipSheetOpen] = useState(false);
+  const [slipSheetLabel, setSlipSheetLabel] = useState("Exhibit A");
+  const [slipSheetDescription, setSlipSheetDescription] = useState("");
+  const [slipSheetStyle, setSlipSheetStyle] = useState<PdfCoverStyle>(defaultCoverStyle);
+  const [slipSheetInserting, setSlipSheetInserting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const pages = Array.from({ length: document.pageCount }, (_, index) => index);
   const selectedIndexes = [...selectedPageIndexes].sort((left, right) => left - right);
@@ -267,6 +281,7 @@ function OrganizePagesGrid({
   const canMoveDown = selectedIndexes.some((pageIndex) => (
     pageIndex < document.pageCount - 1 && !selectedPageIndexes.has(pageIndex + 1)
   ));
+  const canInsertSlipSheet = document.source?.kind === "memory";
 
   // Delete/Backspace removes the selected pages (with confirmation --
   // page deletion is destructive). Ignored while typing into one of this
@@ -393,6 +408,41 @@ function OrganizePagesGrid({
     }
   }
 
+  async function insertSlipSheet() {
+    const label = slipSheetLabel.trim();
+
+    if (!label || slipSheetInserting) {
+      setStatus("Enter a slip sheet label.");
+      return;
+    }
+
+    setSlipSheetInserting(true);
+    setStatus("Inserting slip sheet...");
+
+    try {
+      const bytes = await generateCoverPdf({
+        label,
+        description: slipSheetDescription.trim() || undefined,
+        style: slipSheetStyle,
+      });
+      const inserted = await onInsert({
+        bytes,
+        name: `${label}.pdf`,
+        path: null,
+      }, insertAt);
+
+      setStatus(inserted ? "Inserted slip sheet opened as the working document." : "The slip sheet could not be inserted.");
+
+      if (inserted) {
+        setSlipSheetOpen(false);
+      }
+    } catch {
+      setStatus("The slip sheet could not be inserted.");
+    } finally {
+      setSlipSheetInserting(false);
+    }
+  }
+
   async function exportSelectionAsImage() {
     const pageIndex = selectedIndexes[0];
 
@@ -503,6 +553,16 @@ function OrganizePagesGrid({
           <InsertIcon size={15} />
           Insert from File
         </button>
+        <button
+          type="button"
+          className="organize-secondary"
+          onClick={() => setSlipSheetOpen(true)}
+          disabled={!canInsertSlipSheet}
+          title={canInsertSlipSheet ? "Insert a generated slip sheet at the selected position." : "Available for standard documents."}
+        >
+          <SlipSheetIcon size={15} />
+          Insert Slip Sheet
+        </button>
         <button type="button" className="organize-secondary" onClick={() => setSplitOpen(true)}>
           <SplitIcon size={15} />
           Split Document...
@@ -534,6 +594,59 @@ function OrganizePagesGrid({
           </div>
           <SplitFlow document={document} onSplit={onSplit} />
         </div>
+      ) : null}
+
+      {slipSheetOpen ? (
+        <FloatingDialog
+          title="Insert slip sheet"
+          eyebrow="Organize"
+          width="md"
+          onClose={() => setSlipSheetOpen(false)}
+        >
+          <div className="organize-slip-sheet">
+            <label className="organize-field">
+              <span>Label</span>
+              <input
+                value={slipSheetLabel}
+                onChange={(event) => setSlipSheetLabel(event.currentTarget.value)}
+                disabled={slipSheetInserting}
+              />
+            </label>
+            <label className="organize-field">
+              <span>Description</span>
+              <input
+                value={slipSheetDescription}
+                onChange={(event) => setSlipSheetDescription(event.currentTarget.value)}
+                disabled={slipSheetInserting}
+              />
+            </label>
+            <CoverStylePicker
+              value={slipSheetStyle}
+              onChange={setSlipSheetStyle}
+              sampleLabel={slipSheetLabel || "Exhibit A"}
+              sampleDescription={slipSheetDescription || "Deposition transcript of Jane Doe"}
+            />
+            <div className="organize-slip-sheet__actions">
+              <button
+                type="button"
+                className="organize-secondary"
+                onClick={() => setSlipSheetOpen(false)}
+                disabled={slipSheetInserting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="organize-primary"
+                onClick={() => void insertSlipSheet()}
+                disabled={slipSheetInserting || slipSheetLabel.trim().length === 0}
+              >
+                <SlipSheetIcon size={16} />
+                Insert
+              </button>
+            </div>
+          </div>
+        </FloatingDialog>
       ) : null}
 
       <div

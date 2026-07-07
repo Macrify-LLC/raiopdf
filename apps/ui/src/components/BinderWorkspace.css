@@ -365,6 +365,11 @@
   gap: var(--space-2);
 }
 
+.binder-cover-style {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .binder-preset-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

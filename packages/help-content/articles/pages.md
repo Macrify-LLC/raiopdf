@@ -19,8 +19,15 @@ big document into parts, or save a page as an image.
    remove one.
 3. Drag a page onto another spot to reorder.
 4. Use the toolbar for the rest: **Rotate**, **Delete**, **Extract**,
-   **Insert from File**, **Split Document...**, **Export page as image...**, and
-   **Move Up** / **Move Down**.
+   **Insert from File**, **Insert Slip Sheet**, **Split Document...**,
+   **Export page as image...**, and **Move Up** / **Move Down**.
+
+## Insert a slip sheet
+
+Use **Insert Slip Sheet** when you need a standalone exhibit cover page inside
+the current document. Pick the page position, enter the exhibit label, add an
+optional description, choose a cover style, and click **Insert**. The generated
+page is inserted into the open document.
 
 ## What to know
 
@@ -31,6 +38,9 @@ big document into parts, or save a page as an image.
   right away.
 - **A document keeps at least one page** — you can't delete them all, and deleting
   asks you to confirm first.
+- **Slip sheet insertion is for standard documents.** Very large streamed
+  documents keep using file-based tools, so generated in-memory slip sheets are
+  unavailable there for now.
 
 ## Related
 

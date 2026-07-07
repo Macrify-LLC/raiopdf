@@ -14,6 +14,7 @@ use range_read::{
 };
 use serde::Serialize;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     env, fs,
     io::{self, Write},
@@ -680,7 +681,7 @@ fn save_pdf_into_dir(
     let directory_grant = required_header(&request, HEADER_DIRECTORY_GRANT)?;
     let file_name = required_header(&request, HEADER_FILE_NAME)?;
     let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
-    let path = write_pdf_bytes_into_directory(&directory, &file_name, raw_pdf_bytes(&request)?)?;
+    let path = write_pdf_bytes_into_directory(&directory, &file_name, &raw_pdf_bytes(&request)?)?;
 
     saved_pdf(&path, file_grants.inner())
 }
@@ -737,7 +738,7 @@ fn save_pdf_dialog(
     };
 
     let path = path.into_path().map_err(|error| error.to_string())?;
-    write_pdf_bytes_atomic(&path, raw_pdf_bytes(&request)?)?;
+    write_pdf_bytes_atomic(&path, &raw_pdf_bytes(&request)?)?;
 
     Ok(Some(saved_pdf(&path, file_grants.inner())?))
 }
@@ -779,7 +780,7 @@ fn save_pdf_to_path(
 ) -> Result<SavedPdf, String> {
     let file_grant = required_header(&request, HEADER_FILE_GRANT)?;
     let entry = file_grants.resolve_entry(&file_grant)?;
-    write_pdf_bytes_atomic_if_unchanged(&entry, raw_pdf_bytes(&request)?)?;
+    write_pdf_bytes_atomic_if_unchanged(&entry, &raw_pdf_bytes(&request)?)?;
 
     saved_pdf(&entry.path, file_grants.inner())
 }
@@ -806,12 +807,37 @@ fn open_source_licenses(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Could not open open-source notices: {error}"))
 }
 
-fn raw_pdf_bytes<'a>(request: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err("Expected raw PDF bytes".to_string());
-    };
+fn raw_pdf_bytes<'a>(request: &'a tauri::ipc::Request<'_>) -> Result<Cow<'a, [u8]>, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(Cow::Borrowed(bytes.as_slice())),
+        // Tauri downgrades the binary IPC channel to `postMessage` when the raw
+        // custom-protocol fetch is blocked (e.g. the WebView CSP does not allow
+        // `http://ipc.localhost`), serializing the bytes as a JSON number array.
+        // Accept that fallback shape so a save survives the downgrade instead of
+        // failing after the Save dialog. The tauri.conf.json CSP entry keeps the
+        // fast raw path available; this is belt-and-braces for the fallback.
+        tauri::ipc::InvokeBody::Json(value) => Ok(Cow::Owned(json_pdf_bytes(value)?)),
+        #[allow(unreachable_patterns)]
+        _ => Err("Expected raw PDF bytes".to_string()),
+    }
+}
 
-    Ok(bytes)
+/// Decode a JSON number array (the `postMessage` IPC fallback shape) into raw
+/// bytes. Every element must be an integer in `0..=255`.
+fn json_pdf_bytes(value: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| "Expected raw PDF bytes".to_string())?;
+    array
+        .iter()
+        .map(|entry| {
+            entry
+                .as_u64()
+                .filter(|byte| *byte <= u8::MAX as u64)
+                .map(|byte| byte as u8)
+                .ok_or_else(|| "Expected raw PDF bytes".to_string())
+        })
+        .collect()
 }
 
 fn required_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<String, String> {
@@ -1947,6 +1973,21 @@ mod tests {
         .expect("readable PDF should spawn");
 
         assert_eq!(spawned_path, Some(path));
+    }
+
+    #[test]
+    fn json_pdf_bytes_decodes_number_array_fallback() {
+        // The `postMessage` IPC fallback delivers bytes as a JSON number array.
+        let value = serde_json::json!([37, 80, 68, 70]); // "%PDF"
+        assert_eq!(json_pdf_bytes(&value).expect("decode"), b"%PDF");
+    }
+
+    #[test]
+    fn json_pdf_bytes_rejects_non_array_and_out_of_range_values() {
+        assert!(json_pdf_bytes(&serde_json::json!("not-an-array")).is_err());
+        assert!(json_pdf_bytes(&serde_json::json!([256])).is_err());
+        assert!(json_pdf_bytes(&serde_json::json!([-1])).is_err());
+        assert!(json_pdf_bytes(&serde_json::json!([1, "x", 3])).is_err());
     }
 
     #[test]

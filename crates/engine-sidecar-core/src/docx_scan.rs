@@ -151,6 +151,8 @@ fn is_markup_element(name: &[u8], comments_part: bool) -> bool {
             | b"tcPrChange"
             | b"sectPrChange"
             | b"numberingChange"
+            | b"numPrChange"
+            | b"tblGridChange"
             | b"commentReference"
             | b"commentRangeStart"
             | b"commentRangeEnd"

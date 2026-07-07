@@ -91,6 +91,13 @@ struct SavedPdf {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SavedDocx {
+    name: String,
+    file_grant: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PickedDirectory {
     grant: String,
     path: String,
@@ -701,6 +708,36 @@ fn save_pdf_dialog(
 }
 
 #[tauri::command]
+fn save_docx_dialog(
+    app: tauri::AppHandle,
+    source_grant: String,
+    suggested_name: String,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<SavedDocx>, String> {
+    let entry = file_grants.resolve_entry(&source_grant)?;
+    ensure_docx_source(&entry.path)?;
+    let suggested_name = ensure_docx_extension(&suggested_name);
+    let Some(destination) = app
+        .dialog()
+        .file()
+        .add_filter("Word Document", &["docx"])
+        .set_file_name(suggested_name)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+
+    let destination = destination.into_path().map_err(|error| error.to_string())?;
+    if is_same_file(&entry.path, &destination) {
+        ensure_grant_file_unchanged(&entry)?;
+        return Ok(Some(saved_docx(&destination, file_grants.inner())?));
+    }
+
+    atomic_copy_docx_grant_if_unchanged(&entry, &destination)?;
+    Ok(Some(saved_docx(&destination, file_grants.inner())?))
+}
+
+#[tauri::command]
 fn save_pdf_to_path(
     request: tauri::ipc::Request<'_>,
     file_grants: tauri::State<'_, FileGrants>,
@@ -1054,6 +1091,65 @@ fn atomic_copy_grant_if_unchanged_new(
         })
 }
 
+fn atomic_copy_docx_grant_if_unchanged(
+    entry: &FileGrantEntry,
+    destination: &Path,
+) -> Result<(), String> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let mut input = fs::File::open(&entry.path).map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    apply_replacement_permissions(&temp, permissions).map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.flush().map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+    temp.as_file().sync_all().map_err(|error| {
+        format!(
+            "Failed to save Word document at {}: {error}",
+            destination.to_string_lossy()
+        )
+    })?;
+
+    ensure_grant_file_unchanged(entry)?;
+    persist_atomic_file(temp, destination)
+        .and_then(|_| sync_parent_dir(parent))
+        .map_err(|error| {
+            format!(
+                "Failed to save Word document at {}: {error}",
+                destination.to_string_lossy()
+            )
+        })
+}
+
 fn persist_atomic_file(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), std::io::Error> {
     temp.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -1160,6 +1256,26 @@ fn saved_pdf(path: &Path, file_grants: &FileGrants) -> Result<SavedPdf, String> 
         name: file_name(path),
         file_grant: file_grants.grant(path.to_path_buf())?,
     })
+}
+
+fn saved_docx(path: &Path, file_grants: &FileGrants) -> Result<SavedDocx, String> {
+    Ok(SavedDocx {
+        name: file_name(path),
+        file_grant: file_grants.grant(path.to_path_buf())?,
+    })
+}
+
+fn ensure_docx_source(path: &Path) -> Result<(), String> {
+    let extension_ok = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("docx"))
+        .unwrap_or(false);
+    if extension_ok {
+        Ok(())
+    } else {
+        Err("Source file is not a Word document.".to_string())
+    }
 }
 
 fn validate_output_directory(path: &Path) -> Result<PathBuf, String> {
@@ -1432,6 +1548,14 @@ fn ensure_pdf_extension(file_name: &str) -> String {
     }
 }
 
+fn ensure_docx_extension(file_name: &str) -> String {
+    if file_name.to_ascii_lowercase().ends_with(".docx") {
+        file_name.to_string()
+    } else {
+        format!("{file_name}.docx")
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -1525,6 +1649,7 @@ pub fn run() {
             pick_pdfs_for_add,
             convert_docx_for_add,
             save_pdf_dialog,
+            save_docx_dialog,
             save_pdf_to_path,
             save_pdf_copy_dialog,
             pick_output_directory,
@@ -1573,7 +1698,9 @@ pub fn run() {
             print::print_pdf,
             print::print_cancel,
             word::word_capability,
-            word::word_convert_docx
+            word::word_convert_docx,
+            word::word_pdf_has_text_layer,
+            word::word_reflow_pdf_to_docx
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

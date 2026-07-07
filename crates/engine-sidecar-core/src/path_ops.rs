@@ -23,11 +23,16 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     thread,
 };
 
 use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_entries};
+
+static TEXT_LAYER_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -877,6 +882,54 @@ pub fn document_facts(toolchain: &PathOpsToolchain, input: &Path) -> OpResult<Do
     arguments.push(path_arg(input));
     let output = run_qpdf(toolchain, arguments)?;
     parse_document_facts(&output.stdout, size_bytes)
+}
+
+/// Probe whether a standalone PDF path has an extractable text layer.
+///
+/// This intentionally does not use `document_facts`, which is qpdf metadata
+/// only. Ghostscript's `txtwrite` device extracts existing text; a non-empty
+/// extraction means the PDF has searchable text for reflow preflight purposes.
+pub fn pdf_has_text_layer(toolchain: &PathOpsToolchain, input: &Path) -> OpResult<bool> {
+    require_input_file(input)?;
+    let temp_dir = TextLayerTempDir::create()?;
+    let output_txt = temp_dir.path().join("extracted.txt");
+    run_ghostscript(toolchain, txt_extract_gs_args(input, &output_txt))?;
+    let extracted =
+        fs::read(&output_txt).map_err(|error| PathOpError::io("read extracted text", error))?;
+    Ok(extracted_text_has_text_layer(&String::from_utf8_lossy(
+        &extracted,
+    )))
+}
+
+pub fn extracted_text_has_text_layer(extracted: &str) -> bool {
+    !extracted.trim().is_empty()
+}
+
+struct TextLayerTempDir {
+    path: PathBuf,
+}
+
+impl TextLayerTempDir {
+    fn create() -> OpResult<Self> {
+        let sequence = TEXT_LAYER_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "raiopdf-text-layer-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path)
+            .map_err(|error| PathOpError::io("create text-layer temp dir", error))?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TextLayerTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 const LETTER_WIDTH_PT: f64 = 612.0;
@@ -3047,6 +3100,13 @@ mod tests {
     }
 
     #[test]
+    fn extracted_text_decision_treats_any_non_whitespace_as_text_layer() {
+        assert!(!extracted_text_has_text_layer(""));
+        assert!(!extracted_text_has_text_layer(" \r\n\t\u{c} "));
+        assert!(extracted_text_has_text_layer("RaioPDF searchable text"));
+    }
+
+    #[test]
     fn range_string_collapses_runs() {
         assert_eq!(one_based_range_string(&[0, 1, 2, 3, 4]).unwrap(), "1-5");
         assert_eq!(one_based_range_string(&[0, 2, 3, 8]).unwrap(), "1,3-4,9");
@@ -3295,6 +3355,18 @@ mod tests {
             eprintln!("skipping toolchain-backed path-op test: qpdf/ghostscript not found");
             None
         }
+    }
+
+    #[test]
+    fn pdf_text_layer_probe_distinguishes_text_and_image_only_fixtures() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        assert!(pdf_has_text_layer(&toolchain, &root.join("text-layer.pdf")).unwrap());
+        assert!(!pdf_has_text_layer(&toolchain, &root.join("image-only.pdf")).unwrap());
     }
 
     struct TestDir(PathBuf);

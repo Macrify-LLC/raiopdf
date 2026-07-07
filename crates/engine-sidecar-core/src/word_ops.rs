@@ -51,6 +51,7 @@ pub const ERR_WORD_TRUST_CENTER_BLOCKED: &str = "WORD_TRUST_CENTER_BLOCKED";
 pub const ERR_WORD_ENTERPRISE_BLOCKED: &str = "WORD_ENTERPRISE_BLOCKED";
 pub const ERR_WORD_FILE_LOCKED: &str = "WORD_FILE_LOCKED";
 pub const ERR_WORD_EXPORT_FAILED: &str = "WORD_EXPORT_FAILED";
+pub const ERR_WORD_SAVE_FAILED: &str = "WORD_SAVE_FAILED";
 
 pub const DEFAULT_WORD_CONVERSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PID_PREFIX: &str = "@@RAIOPDF_WORD_PID@@";
@@ -154,6 +155,21 @@ pub fn convert_docx_to_pdf(input: &Path, output: &Path, markup: MarkupMode) -> O
     convert_docx_to_pdf_with_toolchain(&toolchain, input, output, markup)
 }
 
+pub fn convert_pdf_to_docx(input: &Path, output: &Path) -> OpResult<()> {
+    #[cfg(windows)]
+    {
+        convert_pdf_to_docx_windows(input, output, DEFAULT_WORD_CONVERSION_TIMEOUT)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (input, output);
+        Err(word_error(
+            ERR_WORD_NOT_SUPPORTED,
+            "Word PDF reflow is only available on Windows.",
+        ))
+    }
+}
+
 pub fn convert_docx_to_pdf_with_toolchain(
     toolchain: &PathOpsToolchain,
     input: &Path,
@@ -199,6 +215,23 @@ pub fn build_word_conversion_input_json(
         input_path,
         output_path,
         markup: markup.as_script_value(),
+    })
+    .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
+}
+
+pub fn build_word_reflow_input_json(input: &Path, output: &Path) -> OpResult<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InputWire<'a> {
+        input_path: &'a str,
+        output_path: &'a str,
+    }
+
+    let input_path = path_to_utf8(input, "input")?;
+    let output_path = path_to_utf8(output, "output")?;
+    serde_json::to_string(&InputWire {
+        input_path,
+        output_path,
     })
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
@@ -293,6 +326,10 @@ pub fn build_word_conversion_script() -> &'static str {
     WORD_CONVERSION_SCRIPT
 }
 
+pub fn build_word_reflow_script() -> &'static str {
+    WORD_REFLOW_SCRIPT
+}
+
 #[cfg(windows)]
 fn convert_docx_to_pdf_windows(
     toolchain: &PathOpsToolchain,
@@ -375,6 +412,72 @@ fn convert_docx_to_pdf_windows(
     Ok(())
 }
 
+#[cfg(windows)]
+fn convert_pdf_to_docx_windows(input: &Path, output: &Path, timeout: Duration) -> OpResult<()> {
+    require_pdf_input(input)?;
+    require_docx_output(output)?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| word_error(path_ops::ERR_IO, format!("create output dir: {error}")))?;
+    }
+
+    let _automation_guard = WORD_AUTOMATION_MUTEX
+        .lock()
+        .map_err(|_| word_error(path_ops::ERR_IO, "Word automation mutex poisoned"))?;
+
+    let temp_dir = WordTempDir::create("raiopdf-word-reflow")?;
+    let script_path = temp_dir.path().join("reflow-pdf.ps1");
+    let input_json_path = temp_dir.path().join("input.json");
+
+    fs::write(&script_path, build_word_reflow_script())
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word script: {error}")))?;
+    fs::write(
+        &input_json_path,
+        build_word_reflow_input_json(input, output)?,
+    )
+    .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word input JSON: {error}")))?;
+
+    let args = word_powershell_args(&script_path, &input_json_path);
+    let run = match run_word_powershell(&args, timeout) {
+        Ok(run) => run,
+        Err(error) => {
+            let _ = fs::remove_file(output);
+            return Err(error);
+        }
+    };
+    if run.timed_out {
+        let _ = fs::remove_file(output);
+        return Err(word_error(
+            ERR_WORD_TIMEOUT,
+            format!(
+                "Word PDF reflow timed out after {} seconds.",
+                timeout.as_secs()
+            ),
+        ));
+    }
+    if !run.status_success {
+        let _ = fs::remove_file(output);
+        return Err(word_error(
+            path_ops::ERR_OP_FAILED,
+            format!("PowerShell exited unsuccessfully: {}", run.stderr.trim()),
+        ));
+    }
+    let outcome = match parse_word_script_stdout(&run.stdout) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = fs::remove_file(output);
+            return Err(error);
+        }
+    };
+    if let WordScriptResult::Err { code, message } = outcome.result {
+        let _ = fs::remove_file(output);
+        return Err(word_error(word_error_code(&code), message));
+    }
+
+    require_nonempty_docx(output)?;
+    Ok(())
+}
+
 fn short_reason(reason: &str) -> Option<String> {
     let compact = reason.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.is_empty() {
@@ -444,6 +547,7 @@ fn word_error_code(code: &str) -> &'static str {
         ERR_WORD_ENTERPRISE_BLOCKED => ERR_WORD_ENTERPRISE_BLOCKED,
         ERR_WORD_FILE_LOCKED => ERR_WORD_FILE_LOCKED,
         ERR_WORD_EXPORT_FAILED => ERR_WORD_EXPORT_FAILED,
+        ERR_WORD_SAVE_FAILED => ERR_WORD_SAVE_FAILED,
         ERR_WORD_AUTOMATION_FAILED => ERR_WORD_AUTOMATION_FAILED,
         ERR_WORD_TIMEOUT => ERR_WORD_TIMEOUT,
         _ => ERR_WORD_AUTOMATION_FAILED,
@@ -475,6 +579,46 @@ fn require_docx_input(input: &Path) -> OpResult<()> {
 }
 
 #[cfg(windows)]
+fn require_pdf_input(input: &Path) -> OpResult<()> {
+    let metadata = fs::metadata(input)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("stat PDF input: {error}")))?;
+    if !metadata.is_file() {
+        return Err(word_error(
+            path_ops::ERR_INVALID_INPUT,
+            "PDF input is not a file.",
+        ));
+    }
+    if input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(true)
+    {
+        return Err(word_error(
+            path_ops::ERR_INVALID_INPUT,
+            "Word reflow requires a .pdf input.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_docx_output(output: &Path) -> OpResult<()> {
+    if output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("docx"))
+        .unwrap_or(true)
+    {
+        return Err(word_error(
+            path_ops::ERR_INVALID_INPUT,
+            "Word reflow requires a .docx output.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn scrub_word_pdf(toolchain: &PathOpsToolchain, input: &Path, output: &Path) -> OpResult<()> {
     path_ops::scrub_metadata(toolchain, input, output)
 }
@@ -487,6 +631,19 @@ fn require_nonempty_pdf(path: &Path) -> OpResult<()> {
         return Err(word_error(
             path_ops::ERR_OP_FAILED,
             "Word conversion did not produce a valid PDF.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_nonempty_docx(path: &Path) -> OpResult<()> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("stat converted DOCX: {error}")))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err(word_error(
+            path_ops::ERR_OP_FAILED,
+            "Word reflow did not produce a non-empty DOCX.",
         ));
     }
     Ok(())
@@ -730,6 +887,82 @@ try {
 }
 "#;
 
+const WORD_REFLOW_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$inputJsonPath = $args[0]
+
+function Convert-RaioWordErrorCode([string] $message) {
+  $lower = $message.ToLowerInvariant()
+  if ($lower.Contains('protected view')) { return 'WORD_PROTECTED_VIEW' }
+  if ($lower.Contains('password') -or $lower.Contains('encrypted')) { return 'WORD_PASSWORD_PROTECTED' }
+  if ($lower.Contains('repair') -or $lower.Contains('corrupt') -or $lower.Contains('damaged')) { return 'WORD_REPAIR_REQUIRED' }
+  if ($lower.Contains('trust center') -or $lower.Contains('file block')) { return 'WORD_TRUST_CENTER_BLOCKED' }
+  if ($lower.Contains('policy') -or $lower.Contains('administrator') -or $lower.Contains('blocked')) { return 'WORD_ENTERPRISE_BLOCKED' }
+  if ($lower.Contains('locked') -or $lower.Contains('permission') -or $lower.Contains('in use')) { return 'WORD_FILE_LOCKED' }
+  if ($lower.Contains('save') -or $lower.Contains('saveas')) { return 'WORD_SAVE_FAILED' }
+  return 'WORD_AUTOMATION_FAILED'
+}
+
+function Write-RaioResult([bool] $ok, [string] $code, [string] $message, $winwordPid) {
+  $result = @{
+    ok = $ok
+    code = $code
+    message = $message
+    winwordPid = $winwordPid
+  }
+  Write-Output ('@@RAIOPDF_WORD_RESULT@@ ' + ($result | ConvertTo-Json -Compress))
+}
+
+$word = $null
+$doc = $null
+$winwordPid = $null
+$ok = $false
+$code = $null
+$message = $null
+
+try {
+  $input = Get-Content -LiteralPath $inputJsonPath -Raw | ConvertFrom-Json
+  $inputPath = [string] $input.inputPath
+  $outputPath = [string] $input.outputPath
+
+  $before = @(Get-Process -Name WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  $word = New-Object -ComObject Word.Application -ErrorAction Stop
+  $after = @(Get-Process -Name WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  $newPid = $after | Where-Object { $before -notcontains $_ } | Select-Object -First 1
+  if ($null -ne $newPid) {
+    $winwordPid = [int] $newPid
+    Write-Output ('@@RAIOPDF_WORD_PID@@ ' + $winwordPid)
+  }
+
+  $word.AutomationSecurity = 3
+  $word.Visible = $false
+  $word.DisplayAlerts = 0
+
+  $doc = $word.Documents.Open($inputPath, $false, $true, $false)
+  $doc.SaveAs2($outputPath, 16)
+  $ok = $true
+} catch {
+  $message = $_.Exception.Message
+  if ([string]::IsNullOrWhiteSpace($message)) {
+    $message = 'Word PDF reflow failed.'
+  }
+  $code = Convert-RaioWordErrorCode $message
+} finally {
+  if ($null -ne $doc) {
+    try { $doc.Close($false) | Out-Null } catch {}
+    try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } catch {}
+  }
+  if ($null -ne $word) {
+    try { $word.Quit() | Out-Null } catch {}
+    try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } catch {}
+  }
+  [GC]::Collect()
+  [GC]::WaitForPendingFinalizers()
+  Write-RaioResult $ok $code $message $winwordPid
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,6 +1021,19 @@ mod tests {
         assert_eq!(
             json,
             r#"{"inputPath":"C:\\cases\\input doc.docx","outputPath":"C:\\cases\\out doc.pdf","markup":"showMarkup"}"#
+        );
+    }
+
+    #[test]
+    fn builds_reflow_json_input_without_shell_quoting_paths() {
+        let json = build_word_reflow_input_json(
+            Path::new(r"C:\cases\input scan.pdf"),
+            Path::new(r"C:\cases\out editable.docx"),
+        )
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"inputPath":"C:\\cases\\input scan.pdf","outputPath":"C:\\cases\\out editable.docx"}"#
         );
     }
 
@@ -885,6 +1131,22 @@ mod tests {
         assert!(script.contains("@@RAIOPDF_WORD_RESULT@@"));
     }
 
+    #[test]
+    fn reflow_script_contains_required_safety_contract() {
+        let script = build_word_reflow_script();
+        assert!(script.contains("$word.AutomationSecurity = 3"));
+        assert!(script.contains("$word.Visible = $false"));
+        assert!(script.contains("$word.DisplayAlerts = 0"));
+        assert!(script.contains("$word.Documents.Open($inputPath, $false, $true, $false)"));
+        assert!(script.contains("$doc.SaveAs2($outputPath, 16)"));
+        assert!(!script.contains("ExportAsFixedFormat"));
+        assert!(!script.contains("SaveAs2($outputPath, 17)"));
+        assert!(script.contains("$doc.Close($false)"));
+        assert!(script.contains("$word.Quit()"));
+        assert!(script.contains("@@RAIOPDF_WORD_PID@@"));
+        assert!(script.contains("@@RAIOPDF_WORD_RESULT@@"));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn non_windows_probe_is_not_applicable() {
@@ -908,6 +1170,10 @@ mod tests {
             MarkupMode::Final,
         )
         .unwrap_err();
+        assert_eq!(error.code, ERR_WORD_NOT_SUPPORTED);
+
+        let error =
+            convert_pdf_to_docx(Path::new("input.pdf"), Path::new("output.docx")).unwrap_err();
         assert_eq!(error.code, ERR_WORD_NOT_SUPPORTED);
     }
 
@@ -955,6 +1221,37 @@ mod tests {
             fs::read(final_pdf).expect("read final pdf"),
             fs::read(markup_pdf).expect("read markup pdf")
         );
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn word_pdf_reflow_canary_self_gates_on_word_capability() {
+        let capability = word_capability(true).expect("Word capability probe should run");
+        if capability.state != WordCapabilityState::Available {
+            eprintln!(
+                "skipping Word PDF reflow canary: {:?} {:?}",
+                capability.state, capability.reason
+            );
+            return;
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        let temp =
+            std::env::temp_dir().join(format!("raiopdf-word-reflow-canary-{}", std::process::id()));
+        fs::create_dir_all(&temp).expect("canary temp dir");
+        let output = temp.join("text-layer.docx");
+        convert_pdf_to_docx(&root.join("text-layer.pdf"), &output).expect("PDF reflows to DOCX");
+
+        let bytes = fs::metadata(&output).expect("stat reflow docx").len();
+        assert!(bytes > 0);
+        let file = fs::File::open(&output).expect("open reflow docx");
+        let mut archive = zip::ZipArchive::new(file).expect("reflow output is a zip");
+        archive
+            .by_name("word/document.xml")
+            .expect("reflow output contains word/document.xml");
         let _ = fs::remove_dir_all(temp);
     }
 }

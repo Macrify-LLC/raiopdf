@@ -5,6 +5,7 @@ import { CoverStylePicker } from "./CoverStylePicker";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import { Switch } from "./Switch";
 import type { AppUpdateStatus } from "../lib/appUpdates";
+import { getWordCapability, type WordCapability } from "../lib/wordCapability";
 import "./SettingsDialog.css";
 
 export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify";
@@ -59,6 +60,11 @@ export function SettingsDialog({
   const [offerCrashReports, setOfferCrashReports] = useState(true);
   const [crashReportsLoading, setCrashReportsLoading] = useState(isTauriRuntime());
   const [crashReportsStatus, setCrashReportsStatus] = useState<string | null>(null);
+  const [wordCapability, setWordCapability] = useState<WordCapability>(() =>
+    isTauriRuntime() ? { state: "notDetected", reason: null } : { state: "notApplicable", reason: null },
+  );
+  const [wordCapabilityLoading, setWordCapabilityLoading] = useState(isTauriRuntime());
+  const [wordCapabilityStatus, setWordCapabilityStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -91,6 +97,36 @@ export function SettingsDialog({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const capability = await getWordCapability(false);
+        if (!disposed) {
+          setWordCapability(capability);
+          setWordCapabilityStatus(null);
+        }
+      } catch {
+        if (!disposed) {
+          setWordCapabilityStatus("Word integration could not be checked.");
+        }
+      } finally {
+        if (!disposed) {
+          setWordCapabilityLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   function handleToggleCrashReports(next: boolean) {
     if (!isTauriRuntime()) {
       setOfferCrashReports(next);
@@ -112,6 +148,27 @@ export function SettingsDialog({
         setCrashReportsStatus("Crash report preference could not be saved.");
       } finally {
         setCrashReportsLoading(false);
+      }
+    })();
+  }
+
+  function handleTestWordCapability() {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    setWordCapabilityLoading(true);
+    setWordCapabilityStatus(null);
+
+    void (async () => {
+      try {
+        const capability = await getWordCapability(true);
+        setWordCapability(capability);
+        setWordCapabilityStatus(null);
+      } catch {
+        setWordCapabilityStatus("Word integration test could not run.");
+      } finally {
+        setWordCapabilityLoading(false);
       }
     })();
   }
@@ -186,6 +243,30 @@ export function SettingsDialog({
               size="sm"
             />
           </div>
+          <section className="settings-dialog__section" aria-labelledby="word-integration-heading">
+            <span>
+              <strong id="word-integration-heading">Word integration</strong>
+              <small>{formatWordCapabilityDetail(wordCapability)}</small>
+            </span>
+            <div className="settings-dialog__actions">
+              <button
+                type="button"
+                className="settings-dialog__button"
+                onClick={handleTestWordCapability}
+                disabled={
+                  wordCapabilityLoading ||
+                  !isTauriRuntime() ||
+                  wordCapability.state === "notApplicable"
+                }
+              >
+                Test
+              </button>
+            </div>
+            <small className="settings-dialog__status" role="status">
+              {wordCapabilityLoading ? "Checking..." : formatWordCapabilityLabel(wordCapability)}
+              {wordCapabilityStatus ? ` ${wordCapabilityStatus}` : ""}
+            </small>
+          </section>
           <section className="settings-dialog__section" aria-labelledby="diagnostics-heading">
             <span>
               <strong id="diagnostics-heading">Diagnostics</strong>
@@ -251,6 +332,36 @@ function isTauriRuntime(): boolean {
 
 function formatUpdateStatus(status: AppUpdateStatus): string {
   return status.message;
+}
+
+function formatWordCapabilityLabel(capability: WordCapability): string {
+  switch (capability.state) {
+    case "available":
+      return "Available";
+    case "detected":
+      return "Detected";
+    case "unavailable":
+      return "Unavailable";
+    case "notDetected":
+      return "Not detected";
+    case "notApplicable":
+      return "Not applicable";
+  }
+}
+
+function formatWordCapabilityDetail(capability: WordCapability): string {
+  switch (capability.state) {
+    case "available":
+      return "Microsoft Word started successfully.";
+    case "detected":
+      return "Microsoft Word is registered. Test to confirm it can start.";
+    case "unavailable":
+      return capability.reason ?? "Microsoft Word is registered but could not start.";
+    case "notDetected":
+      return "Microsoft Word was not found.";
+    case "notApplicable":
+      return "Word integration is only available on Windows.";
+  }
 }
 
 /**

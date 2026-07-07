@@ -1,5 +1,6 @@
 pub mod path_ops;
 pub mod print_ops;
+pub mod word_ops;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::{Deserialize, Serialize};

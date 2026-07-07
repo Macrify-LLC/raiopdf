@@ -21,8 +21,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(windows)]
-use crate::path_ops::run_command;
 use crate::path_ops::{
     self, args, path_arg, run_ghostscript, OpResult, PathOpError, PathOpsToolchain,
     ERR_INVALID_INPUT,
@@ -107,7 +105,7 @@ pub fn parse_printer_list_json(json: &str) -> OpResult<Vec<PrinterInfo>> {
 /// dependencies; the JSON parsing above is fixture-tested.
 #[cfg(windows)]
 pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
-    let output = run_powershell(
+    let output = path_ops::run_powershell(
         "Get-CimInstance -ClassName Win32_Printer | Select-Object Name,Default | ConvertTo-Json -Compress",
     )?;
     parse_printer_list_json(&String::from_utf8_lossy(&output.stdout))
@@ -124,24 +122,6 @@ pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
 /// Whether the native print pipeline exists on this platform at all.
 pub const fn platform_supported() -> bool {
     cfg!(windows)
-}
-
-#[cfg(windows)]
-fn run_powershell(script: &str) -> OpResult<std::process::Output> {
-    let arguments: Vec<OsString> = [
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        script,
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
-    let output = run_command(Path::new("powershell.exe"), &arguments, None, &[])?;
-    path_ops::expect_success("powershell", &output)?;
-    Ok(output)
 }
 
 // ---------------------------------------------------------------------------

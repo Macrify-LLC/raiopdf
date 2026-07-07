@@ -472,6 +472,24 @@ pub(crate) fn run_command(
     })
 }
 
+#[cfg(windows)]
+pub(crate) fn run_powershell(script: &str) -> OpResult<Output> {
+    let arguments: Vec<OsString> = [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    let output = run_command(Path::new("powershell.exe"), &arguments, None, &[])?;
+    expect_success("powershell", &output)?;
+    Ok(output)
+}
+
 fn run_command_with_ocr_progress<F>(
     program: &Path,
     args: &[OsString],

@@ -324,7 +324,7 @@ pub fn printto_powershell_command(part: &Path, printer: &str) -> String {
 /// explicit user choice exists.
 #[cfg(windows)]
 pub fn default_pdf_handler_prog_id() -> OpResult<Option<String>> {
-    let output = run_powershell(
+    let output = path_ops::run_powershell(
         "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.pdf\\UserChoice' -ErrorAction SilentlyContinue).ProgId",
     )?;
     let prog_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -363,7 +363,7 @@ pub fn ensure_printto_fallback_allowed() -> OpResult<()> {
 /// Hand one split part to the OS print pipeline.
 #[cfg(windows)]
 pub fn print_part_via_printto(part: &Path, printer: &str) -> OpResult<()> {
-    run_powershell(&printto_powershell_command(part, printer))?;
+    path_ops::run_powershell(&printto_powershell_command(part, printer))?;
     Ok(())
 }
 

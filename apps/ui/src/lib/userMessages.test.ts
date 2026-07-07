@@ -50,6 +50,31 @@ describe("userMessages", () => {
     );
   });
 
+  it("maps a missing bundled tool to an install-integrity message, not reopen-the-PDF", () => {
+    expect(formatWorkflowError("qpdf binary not found in payload", "Nope")).toBe(
+      "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.",
+    );
+    expect(
+      formatWorkflowError("bundled Node/MCP one-shot runtime not found", "Nope"),
+    ).toBe(
+      "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.",
+    );
+  });
+
+  it("still maps a genuinely missing file (including a lost grant) to reopen-the-PDF", () => {
+    expect(formatWorkflowError("File grant not found", "Nope")).toBe(
+      "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",
+    );
+    expect(formatWorkflowError("ENOENT: no such file or directory", "Nope")).toBe(
+      "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",
+    );
+    // A user file that merely contains the word "binary" must not be mistaken
+    // for a missing bundled tool — the predicate keys on "binary not found".
+    expect(formatWorkflowError("binary.pdf not found", "Nope")).toBe(
+      "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",
+    );
+  });
+
   it("falls back for unknown objects", () => {
     expect(formatWorkflowError({ message: "/tmp/raw" }, "The operation failed.")).toBe(
       "The operation failed.",

@@ -203,7 +203,7 @@ import { extractPrintableRange } from "./lib/printRange";
 import { writeProductionLastUsed } from "./lib/productionHints";
 import { resolveProtectedPdfBytes, type ProtectedPdfSource } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
-import { recordDiagnosticEvent } from "./lib/diagnostics";
+import { logWorkflowFailure, recordDiagnosticEvent } from "./lib/diagnostics";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -1261,6 +1261,7 @@ export function App() {
         result,
       });
     } catch (error) {
+      logWorkflowFailure("production.failed", error);
       const message = formatWorkflowError(error, "Production package could not be built.");
       setProductionProgress({
         running: false,
@@ -1308,6 +1309,7 @@ export function App() {
         result,
       });
     } catch (error) {
+      logWorkflowFailure("batch.failed", error);
       const message = formatWorkflowError(error, "Batch cleanup could not be completed.");
       setBatchCleanupProgress({
         running: false,
@@ -2469,9 +2471,7 @@ export function App() {
           message,
         });
 
-        void recordDiagnosticEvent("ocr.failed", message, [
-          error instanceof Error && error.stack ? error.stack : null,
-        ]);
+        logWorkflowFailure("ocr.failed", error);
       })
       .finally(clearBusyGuard);
   }, [document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, engineDelegatedGrant, getOpenToken, isCurrentDocument, openPathOpOutput, pdfDocument, replaceBytes, streamedDocument]);
@@ -4254,6 +4254,7 @@ export function App() {
       setRedactionPhase("verified");
       setRedactionMessage(formatRedactionVerificationSuccess(verified));
     } catch (error) {
+      logWorkflowFailure("redaction.failed", error);
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
         : formatWorkflowError(error, "Redaction could not finish. The document was left unchanged.");
@@ -5759,6 +5760,7 @@ export function App() {
         return;
       }
 
+      logWorkflowFailure("filing.failed", error);
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
         : formatWorkflowError(error, "The filing copy could not be prepared.");
@@ -5873,6 +5875,7 @@ export function App() {
         const converted = await engineBridge.convertToPdfA(sourceBytes, flavor);
         await filePort.saveFile(converted, suggestedName, null);
       } catch (error: unknown) {
+        logWorkflowFailure("pdfa.failed", error);
         setError(
           isEngineBridgeUnavailableError(error)
             ? error.message

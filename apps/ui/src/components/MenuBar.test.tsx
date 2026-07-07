@@ -64,7 +64,7 @@ describe("MenuBar", () => {
 
     click(getTrigger("File"));
 
-    for (const label of ["Save", "Save As...", "Export PDF/A...", "Print...", "Protect (passwords)...", "Document Properties"]) {
+    for (const label of ["Save", "Save As...", "Export PDF/A...", "Export Editable Word (.docx)...", "Print...", "Protect (passwords)...", "Document Properties"]) {
       expect(getMenuItem(label).disabled).toBe(true);
     }
 

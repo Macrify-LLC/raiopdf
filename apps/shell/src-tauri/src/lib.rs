@@ -123,6 +123,14 @@ struct PickedPdfs {
     threshold_bytes: u64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedPdfForWord {
+    grant: String,
+    name: String,
+    size_bytes: u64,
+}
+
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum PickedAddSource {
@@ -440,6 +448,33 @@ fn pick_pdfs_for_add(
     Ok(Some(PickedPdfs {
         files,
         threshold_bytes,
+    }))
+}
+
+#[tauri::command]
+fn pick_pdf_for_word(
+    app: tauri::AppHandle,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<PickedPdfForWord>, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("PDF", &["pdf"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    require_pdf_extension(&path)?;
+    let size_bytes = fs::metadata(&path)
+        .map_err(|error| format!("Failed to stat file at {}: {error}", path.to_string_lossy()))?
+        .len();
+
+    Ok(Some(PickedPdfForWord {
+        grant: file_grants.grant(path.clone())?,
+        name: file_name(&path),
+        size_bytes,
     }))
 }
 
@@ -1647,6 +1682,7 @@ pub fn run() {
             read_opened_pdf_bytes,
             read_pdf_range,
             pick_pdfs_for_add,
+            pick_pdf_for_word,
             convert_docx_for_add,
             save_pdf_dialog,
             save_docx_dialog,
@@ -1730,6 +1766,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:save-as", "Save As...")
         .separator()
         .text("file:export-pdfa", "Export PDF/A...")
+        .text("file:export-docx", "Export Editable Word (.docx)...")
         .text("file:print", "Print...")
         .text("file:protect", "Protect (passwords)...")
         .text("file:properties", "Document Properties")

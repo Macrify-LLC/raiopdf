@@ -235,6 +235,13 @@ import {
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { planOcrRun } from "./lib/ocrRunPlan";
 import { verifyOcrTextLayer } from "./lib/ocrVerification";
+import {
+  WORD_REFLOW_EXPERIMENTAL_LABEL,
+  pdfGrantHasTextLayer,
+  pickStandalonePdfForWord,
+  runPdfToWordReflow,
+  type WordReflowStatus,
+} from "./lib/wordReflow";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
 import { editToolStreamedGateMessage } from "./lib/editToolGate";
@@ -824,6 +831,11 @@ export function App() {
     removed: [],
     beforeBytes: null,
     afterBytes: null,
+  });
+  const [wordReflowStatus, setWordReflowStatus] = useState<WordReflowStatus>({
+    running: false,
+    message: null,
+    tone: "neutral",
   });
   const [repairCandidate, setRepairCandidate] = useState<OpenedFile | null>(null);
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPromptState | null>(null);
@@ -3851,9 +3863,11 @@ export function App() {
     // shared proxy; Compress, Repair, Merge, and Insert run file-to-file
     // through the PathOpsEngine; the Pages grid renders from the shared
     // proxy and its insert delegates too (the byte-bound grid actions keep
-    // their own honest gates). Everything else still mutates bytes — gated
-    // [R1-2].
+    // their own honest gates). PDF -> Word is standalone and picks its own
+    // source PDF, so the current document's streamed state is irrelevant.
+    // Everything else still mutates bytes — gated [R1-2].
     const streamedOrganizeAvailable =
+      toolId === "pdf-to-word" ||
       toolId === "properties" ||
       (pathOpsGrant !== null && (
         toolId === "compress" ||
@@ -5816,6 +5830,81 @@ export function App() {
     }
   }, [editing]);
 
+  const exportDocx = useCallback(() => {
+    if (!document.source) {
+      setError("Open a PDF before exporting editable Word.");
+      return;
+    }
+
+    const grant = engineDelegatedGrant;
+    if (!grant) {
+      setError(
+        document.dirty || editing.hasUnsavedEdits
+          ? "Save the current PDF before exporting editable Word."
+          : "Exporting editable Word needs a PDF opened from this computer in the desktop app.",
+      );
+      return;
+    }
+
+    const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
+    const hasTextLayerSignal = document.textLayerCoverage
+      ? hasSearchableTextLayerCoverage(document.textLayerCoverage)
+      : document.hasTextLayer;
+
+    void runPdfToWordReflow({
+      getInput: async () => ({
+        grant,
+        name: document.fileName ?? "Document.pdf",
+      }),
+      getTextLayer: async () => hasTextLayerSignal,
+      onStatus: setWordReflowStatus,
+      suggestedName: (_input, output) => (
+        output.name || `${stripPdfExtension(document.fileName ?? "Document")}.docx`
+      ),
+    }).then((result) => {
+      if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+        return;
+      }
+
+      if (result.status === "failed" || result.status === "refused") {
+        setError(result.message);
+      }
+    });
+  }, [
+    document.dirty,
+    document.fileName,
+    document.generation,
+    document.hasTextLayer,
+    document.source,
+    document.textLayerCoverage,
+    editing.hasUnsavedEdits,
+    engineDelegatedGrant,
+    getOpenToken,
+    isCurrentDocument,
+    setError,
+  ]);
+
+  const runStandalonePdfToWord = useCallback(() => {
+    void runPdfToWordReflow({
+      getInput: async () => {
+        const picked = await pickStandalonePdfForWord();
+        return picked
+          ? {
+            grant: picked.grant,
+            name: picked.name,
+          }
+          : null;
+      },
+      getTextLayer: (input) => pdfGrantHasTextLayer(input.grant),
+      onStatus: setWordReflowStatus,
+    }).then((result) => {
+      if (result.status === "failed" || result.status === "refused") {
+        setError(result.message);
+      }
+    });
+  }, [setError]);
+
   const exportPdfA = useCallback(() => {
     const sourceBytes = document.bytes;
 
@@ -5997,6 +6086,9 @@ export function App() {
         case "file:export-pdfa":
           exportPdfA();
           break;
+        case "file:export-docx":
+          exportDocx();
+          break;
         case "file:print":
           printDocument();
           break;
@@ -6042,6 +6134,7 @@ export function App() {
     },
     [
       document.zoom,
+      exportDocx,
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,
@@ -6349,6 +6442,17 @@ export function App() {
           <DocumentPropertiesPanel
             document={document}
             metadata={metadataSummary}
+          />
+        </FloatingDialog>
+      );
+    }
+
+    if (activeOrganizeTool === "pdf-to-word") {
+      return (
+        <FloatingDialog title="PDF -> Word" eyebrow="Organize" onClose={closeWorkspace} onHelp={() => openHelp("pdf-to-word")}>
+          <PdfToWordPanel
+            status={wordReflowStatus}
+            onConvert={runStandalonePdfToWord}
           />
         </FloatingDialog>
       );
@@ -6889,6 +6993,36 @@ function SanitizePanel({
       <button type="button" className="tool-panel__primary-button" disabled={!hasDocument || !available || status.running} onClick={() => void onSanitize()}>
         Sanitize PDF
       </button>
+    </div>
+  );
+}
+
+function PdfToWordPanel({
+  status,
+  onConvert,
+}: {
+  status: WordReflowStatus;
+  onConvert: () => void;
+}) {
+  return (
+    <div className="tool-panel__inline-card">
+      <p className="tool-panel__card-copy">{WORD_REFLOW_EXPERIMENTAL_LABEL}</p>
+      <button
+        type="button"
+        className="tool-panel__primary-button"
+        disabled={status.running}
+        onClick={onConvert}
+      >
+        Choose PDF & Convert
+      </button>
+      {status.message ? (
+        <p
+          className={status.tone === "danger" ? "tool-panel__field-error" : "tool-panel__status-line"}
+          role="status"
+        >
+          {status.message}
+        </p>
+      ) : null}
     </div>
   );
 }

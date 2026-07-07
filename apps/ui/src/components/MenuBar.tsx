@@ -78,6 +78,7 @@ export function MenuBar({ hasDocument, canUndo, onCommand, onExit }: MenuBarProp
         item("Save As...", "file:save-as", !hasDocument),
         separator,
         item("Export PDF/A...", "file:export-pdfa", !hasDocument),
+        item("Export Editable Word (.docx)...", "file:export-docx", !hasDocument),
         item("Print...", "file:print", !hasDocument),
         item("Protect (passwords)...", "file:protect", !hasDocument),
         item("Document Properties", "file:properties", !hasDocument),

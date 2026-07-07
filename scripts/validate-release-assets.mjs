@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { canonicalInstallerFilename } from "./generate-latest-json.mjs";
+import { canonicalInstallerFilename, isPrereleaseTag } from "./generate-latest-json.mjs";
 import { verifyAuthenticodeSignature } from "./authenticode.mjs";
 import { verifyTauriUpdaterSignature } from "./minisign.mjs";
 
@@ -17,7 +17,13 @@ const PLATFORM = "windows-x86_64";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
 
 function parseArgs(argv) {
-  const args = { tag: undefined, dir: DEFAULT_ASSET_DIR, pinsPath: DEFAULT_PINS_PATH, github: false };
+  const args = {
+    tag: undefined,
+    dir: DEFAULT_ASSET_DIR,
+    pinsPath: DEFAULT_PINS_PATH,
+    github: false,
+    prerelease: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--tag") {
@@ -34,6 +40,8 @@ function parseArgs(argv) {
       args.pinsPath = arg.slice("--pins=".length);
     } else if (arg === "--github") {
       args.github = true;
+    } else if (arg === "--prerelease") {
+      args.prerelease = true;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -44,13 +52,14 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/validate-release-assets.mjs --tag vX.Y.Z [--dir release-assets/signed] [--pins PATH] [--github]
+  console.log(`Usage: node scripts/validate-release-assets.mjs --tag vX.Y.Z [--dir release-assets/signed] [--pins PATH] [--github] [--prerelease]
 
 Validates the canonical public release asset set locally. With --github, also
-rejects draft/prerelease GitHub Releases, checks the release asset names via gh,
-confirms GitHub's latest-release endpoint resolves to this tag, downloads the
-full public asset set, and validates those downloaded files the same way as the
-local staging dir.
+rejects draft GitHub Releases, checks the release asset names via gh, downloads
+the full public asset set, and validates those downloaded files the same way as
+the local staging dir. Stable releases also confirm GitHub's latest-release
+endpoint resolves to this tag. Prerelease tags, or --prerelease, require the
+GitHub Release to be marked prerelease and skip the stable latest-release check.
 
 Requires RAIOPDF_SIGN_EXPECTED_THUMBPRINT, RAIOPDF_SIGN_THUMBPRINT, or exact
 RAIOPDF_SIGN_EXPECTED_SUBJECT unless called from tests with the programmatic
@@ -269,7 +278,7 @@ function githubLatestReleaseMetadata() {
   return JSON.parse(raw);
 }
 
-export function validateGitHubReleaseState(release) {
+export function validateGitHubReleaseState(release, { expectedPrerelease = false } = {}) {
   if (!release || typeof release !== "object") {
     throw new Error("validate-release-assets: GitHub release metadata was not an object.");
   }
@@ -278,6 +287,14 @@ export function validateGitHubReleaseState(release) {
     throw new Error(
       `validate-release-assets: ${tagName} is still a draft. Publish it before validating updater availability with --github.`,
     );
+  }
+  if (expectedPrerelease) {
+    if (!release.isPrerelease) {
+      throw new Error(
+        `validate-release-assets: ${tagName} must be marked as a GitHub prerelease for preview validation.`,
+      );
+    }
+    return;
   }
   if (release.isPrerelease) {
     throw new Error(
@@ -336,8 +353,10 @@ export function validateReleaseAssets({
   skipAuthenticode = false,
   skipUpdaterSignature = false,
   updaterPubkey,
+  prerelease = false,
 }) {
   const version = versionFromTag(tag);
+  const expectedPrerelease = prerelease || isPrereleaseTag(tag);
   const pins = parsePins(pinsPath);
   const localNames = listLocalAssets(dir);
   validateNames(localNames, version, pins);
@@ -356,8 +375,14 @@ export function validateReleaseAssets({
 
   if (github) {
     const release = githubReleaseMetadata(tag);
-    validateGitHubReleaseState(release);
-    validateGitHubLatestRelease(tag, githubLatestReleaseMetadata());
+    validateGitHubReleaseState(release, { expectedPrerelease });
+    if (expectedPrerelease) {
+      console.log(
+        `validate-release-assets: ${tag} is a prerelease; skipping /releases/latest assertion so the stable auto-update target remains unchanged.`,
+      );
+    } else {
+      validateGitHubLatestRelease(tag, githubLatestReleaseMetadata());
+    }
     validateNames(githubAssetNames(release), version, pins);
     const downloadDir = downloadGitHubAssets(tag);
     try {

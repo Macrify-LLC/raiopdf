@@ -28,6 +28,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Classify release tag
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            echo "RAIOPDF_PREVIEW_RELEASE=true" >> "$GITHUB_ENV"
+            echo "Release tag $GITHUB_REF_NAME is a preview prerelease tag."
+          else
+            echo "RAIOPDF_PREVIEW_RELEASE=false" >> "$GITHUB_ENV"
+            echo "Release tag $GITHUB_REF_NAME is a stable release tag."
+          fi
+
       # corepack must run before setup-node: the pnpm cache resolver needs pnpm on PATH
       - name: Enable pnpm from packageManager
         run: corepack enable
@@ -443,10 +457,22 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; leaving its draft/published state unchanged."
           else
-            gh release create "$TAG" --draft --title "$TAG" --notes "Draft release for $TAG."
+            CREATE_ARGS=("$TAG" --draft --title "$TAG" --notes "Draft release for $TAG.")
+            if [[ "${RAIOPDF_PREVIEW_RELEASE:-false}" == "true" ]]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh release create "${CREATE_ARGS[@]}"
           fi
 
           echo "Unsigned installers stay as workflow artifacts only."
           echo "Prepare signed public assets locally with: pnpm prepare:release-assets -- --tag $TAG"
-          echo "Validate them with: pnpm validate:release-assets -- --tag $TAG"
+          if [[ "${RAIOPDF_PREVIEW_RELEASE:-false}" == "true" ]]; then
+            echo "Preview release: keep the GitHub Release marked prerelease."
+            echo "Validate them with: pnpm validate:release-assets -- --tag $TAG --prerelease"
+            echo "After publishing, validate GitHub assets with: pnpm validate:release-assets -- --tag $TAG --github --prerelease"
+            echo "Stable latest.json generation/upload and /releases/latest assertions are intentionally skipped for preview tags."
+          else
+            echo "Validate them with: pnpm validate:release-assets -- --tag $TAG"
+            echo "After publishing, validate GitHub assets with: pnpm validate:release-assets -- --tag $TAG --github"
+          fi
           echo "Upload the validated release-assets/signed/* files with gh release upload."

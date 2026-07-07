@@ -39,6 +39,20 @@ describe("signed release asset preparation", () => {
       () => validateGitHubReleaseState({ tagName: "v0.1.2", isDraft: false, isPrerelease: true }),
       /GitHub prerelease/,
     );
+    assert.doesNotThrow(() =>
+      validateGitHubReleaseState(
+        { tagName: "v0.2.0-beta.1", isDraft: false, isPrerelease: true },
+        { expectedPrerelease: true },
+      ),
+    );
+    assert.throws(
+      () =>
+        validateGitHubReleaseState(
+          { tagName: "v0.2.0-beta.1", isDraft: false, isPrerelease: false },
+          { expectedPrerelease: true },
+        ),
+      /must be marked as a GitHub prerelease/,
+    );
   });
 
   it("rejects a valid release tag when GitHub latest points elsewhere", () => {
@@ -170,6 +184,31 @@ describe("signed release asset preparation", () => {
     }
   });
 
+  it("accepts a semver prerelease tag with the same signed asset set", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-preview-release-assets-"));
+    try {
+      const { outDir, pinsPath } = writeValidatedReleaseAssets({
+        root,
+        tag: "v0.2.0-beta.1",
+        version: "0.2.0-beta.1",
+      });
+
+      const validated = validateReleaseAssets({
+        tag: "v0.2.0-beta.1",
+        dir: outDir,
+        pinsPath,
+        skipAuthenticode: true,
+        skipUpdaterSignature: true,
+      });
+
+      assert.equal(validated.version, "0.2.0-beta.1");
+      assert(validated.localNames.includes("RaioPDF-0.2.0-beta.1-windows-x64-setup.exe"));
+      assert(validated.localNames.includes("latest.json"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("defaults to the workspace NSIS bundle and built payload legal assets", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-release-defaults-"));
     try {
@@ -278,4 +317,88 @@ function writeLegalPayload({ legalDir, version, ghostscriptSourceSha, thirdParty
   writeFileSync(path.join(legalDir, "RELEASE-SOURCE-CORRESPONDENCE.md"), "# source\n");
   writeFileSync(path.join(legalDir, "RAIOPDF-LICENSE-NOTICES.txt"), "license notices");
   writeFileSync(path.join(sourceOffersDir, "GHOSTSCRIPT-SOURCE-OFFER.txt"), "ghostscript source offer");
+}
+
+function writeValidatedReleaseAssets({ root, tag, version }) {
+  const outDir = path.join(root, "signed");
+  const pinsPath = path.join(root, "PINS.env");
+  const ghostscriptSourceBytes = "fake ghostscript source archive";
+  const ghostscriptSourceSha = sha256Text(ghostscriptSourceBytes);
+  const installer = `RaioPDF-${version}-windows-x64-setup.exe`;
+  const signature = `${installer}.sig`;
+
+  mkdirSync(outDir, { recursive: true });
+  writePins(pinsPath, ghostscriptSourceSha);
+  writeFileSync(path.join(outDir, installer), "preview installer bytes");
+  writeFileSync(path.join(outDir, signature), "preview-updater-signature\n");
+  writeFileSync(path.join(outDir, `RaioPDF-${version}-third-party-notices.txt`), "third party notices");
+  writeFileSync(
+    path.join(outDir, `RaioPDF-${version}-component-manifest.json`),
+    `${JSON.stringify(
+      {
+        product: "RaioPDF",
+        releaseVersion: version,
+        components: [
+          { name: "RaioPDF", version, license: "GPL-3.0-only" },
+          {
+            name: "Ghostscript",
+            version: "10.07.1",
+            license: "AGPL-3.0-only",
+            source: {
+              url: "https://example.invalid/ghostscript.tar.xz",
+              sha256: ghostscriptSourceSha,
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(path.join(outDir, `RaioPDF-${version}-source-correspondence.md`), "# source\n");
+  writeFileSync(path.join(outDir, `RaioPDF-${version}-license-notices.txt`), "license notices");
+  writeFileSync(path.join(outDir, `RaioPDF-${version}-ghostscript-source-offer.txt`), "ghostscript source offer");
+  writeFileSync(path.join(outDir, "ghostscript-10.07.1-source.tar.xz"), ghostscriptSourceBytes);
+  writeFileSync(
+    path.join(outDir, "latest.json"),
+    `${JSON.stringify(
+      {
+        version,
+        pub_date: "2026-07-05T00:00:00.000Z",
+        platforms: {
+          "windows-x86_64": {
+            signature: "preview-updater-signature",
+            url: `https://github.com/Macrify-LLC/raiopdf/releases/download/${tag}/${installer}`,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const assetNames = [
+    installer,
+    signature,
+    `RaioPDF-${version}-third-party-notices.txt`,
+    `RaioPDF-${version}-component-manifest.json`,
+    `RaioPDF-${version}-source-correspondence.md`,
+    `RaioPDF-${version}-license-notices.txt`,
+    `RaioPDF-${version}-ghostscript-source-offer.txt`,
+    "ghostscript-10.07.1-source.tar.xz",
+    "latest.json",
+  ];
+  writeFileSync(
+    path.join(outDir, "SHA256SUMS.txt"),
+    `${assetNames
+      .sort((a, b) => a.localeCompare(b))
+      .map((assetName) => `${sha256File(path.join(outDir, assetName))}  ${assetName}`)
+      .join("\n")}\n`,
+  );
+
+  return { outDir, pinsPath };
+}
+
+function sha256File(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }

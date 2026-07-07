@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildLatestJsonManifest, canonicalInstallerFilename } from "./generate-latest-json.mjs";
+import {
+  buildLatestJsonManifest,
+  canonicalInstallerFilename,
+  isPrereleaseTag,
+  isSemverPrereleaseVersion,
+} from "./generate-latest-json.mjs";
 
 describe("buildLatestJsonManifest", () => {
   it("strips the leading v from the version and composes the release URL", () => {
@@ -79,5 +84,12 @@ describe("buildLatestJsonManifest", () => {
       canonicalInstallerFilename("0.1.2"),
       "RaioPDF-0.1.2-windows-x64-setup.exe",
     );
+  });
+
+  it("distinguishes semver prerelease tags from stable versions", () => {
+    assert.equal(isPrereleaseTag("v0.2.0-beta.1"), true);
+    assert.equal(isPrereleaseTag("v0.2.0-rc.1"), true);
+    assert.equal(isPrereleaseTag("v0.2.0"), false);
+    assert.equal(isSemverPrereleaseVersion("0.2.0+build.5"), false);
   });
 });

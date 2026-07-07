@@ -2,6 +2,16 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// OrganizeWorkspace now pulls in the cover-style preview chain
+// (CoverStylePicker -> PdfMiniThumb -> pdfjs), whose canvas module touches
+// DOMMatrix at import time; jsdom has no implementation and this gate test
+// never renders a preview, so a bare stub is enough. Hoisted so it lands
+// before the module graph loads.
+vi.hoisted(() => {
+  (globalThis as { DOMMatrix?: unknown }).DOMMatrix ??= class DOMMatrixStub {};
+});
+
 import type { DocumentState } from "../hooks/useDocument";
 import { setLargeDocThresholdBytes } from "../lib/largeDocThreshold";
 import { OrganizeWorkspace } from "./OrganizeWorkspace";

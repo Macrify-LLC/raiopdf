@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { loadPdfDocument, type PDFDocumentProxy } from "../lib/pdfjs";
+import "./PdfMiniThumb.css";
 
 export interface PdfMiniThumbProps {
   bytes: Uint8Array | null;
   label: string;
+  targetWidth?: number | undefined;
+  targetHeight?: number | undefined;
   /**
    * Optional pdf.js proxy already loaded for THIS document (the shared
    * document proxy from the large-PDF plan, Phase 2). When provided, the
@@ -14,7 +17,13 @@ export interface PdfMiniThumbProps {
   pdfDocument?: PDFDocumentProxy | null;
 }
 
-export function PdfMiniThumb({ bytes, label, pdfDocument = null }: PdfMiniThumbProps) {
+export function PdfMiniThumb({
+  bytes,
+  label,
+  targetWidth = 44,
+  targetHeight = 58,
+  pdfDocument = null,
+}: PdfMiniThumbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [renderError, setRenderError] = useState(false);
   const hasSource = Boolean(pdfDocument ?? bytes);
@@ -49,14 +58,20 @@ export function PdfMiniThumb({ bytes, label, pdfDocument = null }: PdfMiniThumbP
         }
 
         const baseViewport = page.getViewport({ scale: 1 });
-        const scale = Math.min(44 / baseViewport.width, 58 / baseViewport.height);
+        const scale = Math.min(targetWidth / baseViewport.width, targetHeight / baseViewport.height);
+        // Render at native device-pixel density (falling back to 1x when
+        // unavailable) so the thumbnail stays crisp on HiDPI displays --
+        // the CSS box below stays at the original, non-scaled size; only
+        // the canvas backing store gets the extra resolution.
+        const devicePixelRatio = window.devicePixelRatio || 1;
         const viewport = page.getViewport({ scale });
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
+        const renderViewport = page.getViewport({ scale: scale * devicePixelRatio });
+        canvas.width = Math.floor(renderViewport.width);
+        canvas.height = Math.floor(renderViewport.height);
         canvas.style.width = `${viewport.width}px`;
         canvas.style.height = `${viewport.height}px`;
 
-        renderTask = page.render({ canvas, viewport });
+        renderTask = page.render({ canvas, viewport: renderViewport });
         return renderTask.promise;
       })
       .catch((error: unknown) => {
@@ -72,10 +87,17 @@ export function PdfMiniThumb({ bytes, label, pdfDocument = null }: PdfMiniThumbP
       // injected proxy belongs to the caller.
       void selfLoadedDocument?.loadingTask.destroy();
     };
-  }, [bytes, pdfDocument]);
+  }, [bytes, pdfDocument, targetHeight, targetWidth]);
 
   return (
-    <span className="pdf-mini-thumb" aria-label={label}>
+    <span
+      className="pdf-mini-thumb"
+      aria-label={label}
+      style={{
+        width: `${targetWidth + 4}px`,
+        height: `${targetHeight + 4}px`,
+      }}
+    >
       {hasSource ? (
         <>
           {renderError ? (

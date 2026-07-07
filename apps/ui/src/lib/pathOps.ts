@@ -16,6 +16,7 @@ import type {
   PdfApplyEditsOptions,
   PdfBatesStampOptions,
   PdfBinderOptions,
+  PdfCoverStyle,
   PdfEdit,
   PdfPageNumbersOptions,
   PdfRedactionArea,
@@ -374,6 +375,20 @@ export interface PathOpBuildBinderExhibit {
   sourceFileName?: string | undefined;
 }
 
+function pathOpBinderOptions(options: PdfBinderOptions): PdfBinderOptions {
+  return {
+    slipSheets: options.slipSheets,
+    ...(options.coverStyle === undefined
+      ? {}
+      : { coverStyle: options.coverStyle satisfies PdfCoverStyle }),
+    ...(options.index === undefined ? {} : { index: options.index }),
+    ...(options.placement === undefined ? {} : { placement: options.placement }),
+    ...(options.stampPages === undefined ? {} : { stampPages: options.stampPages }),
+    ...(options.fontSizePt === undefined ? {} : { fontSizePt: options.fontSizePt }),
+    ...(options.marginIn === undefined ? {} : { marginIn: options.marginIn }),
+  };
+}
+
 export function pathOpBuildBinder(
   grant: PathOpsFileGrant,
   exhibits: readonly PathOpBuildBinderExhibit[],
@@ -390,7 +405,7 @@ export function pathOpBuildBinder(
         ? {}
         : { sourceFileName: exhibit.sourceFileName }),
     })),
-    options,
+    options: pathOpBinderOptions(options),
     outputName,
   });
 }

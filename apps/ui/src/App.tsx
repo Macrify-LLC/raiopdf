@@ -13,6 +13,7 @@ import type {
   PdfApplyEditsOptions,
   PdfBatesStampOptions,
   PdfBinderOptions,
+  PdfCoverStyle,
   PdfEdit,
   PdfCompressOptions,
   PdfImagePageInput,
@@ -208,6 +209,7 @@ import { prepareFilingOutputParts } from "./lib/filingOutputParts";
 import {
   readFilingPreferences,
   selectCourtProfile,
+  selectDefaultCoverStyle,
   selectDefaultPack,
   setPacketPreferences,
   setPrepStepDefaultOverrides,
@@ -898,6 +900,9 @@ export function App() {
   const handlePrepStepDefaultOverridesChange = useCallback((overrides: Partial<Record<PrepPlanStepId, boolean>>) => {
     updateFilingPreferences(setPrepStepDefaultOverrides(filingPreferences, baseFilingPack.id, overrides));
   }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
+  const handleDefaultCoverStyleChange = useCallback((style: PdfCoverStyle) => {
+    updateFilingPreferences(selectDefaultCoverStyle(filingPreferences, style));
+  }, [filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     const requestId = mcpToggleRequestRef.current + 1;
     mcpToggleRequestRef.current = requestId;
@@ -6018,6 +6023,7 @@ export function App() {
       onOpenRequested={openFile}
       onCancel={closeWorkspace}
       onHelpRequested={() => openHelp("combine-exhibits")}
+      defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
     />
   ) : activeOrganizeTool === "pages" ? (
     <OrganizeWorkspace
@@ -6042,6 +6048,7 @@ export function App() {
       onExportPageAsImage={exportPageAsImage}
       onCropResize={cropResize}
       onHelpRequested={() => openHelp("pages")}
+      defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
     />
   ) : null;
 
@@ -6253,6 +6260,7 @@ export function App() {
             delegatedOps={delegatedOrganizeOps}
             onCropResize={cropResize}
             onHelpRequested={() => openHelp(activeOrganizeTool)}
+            defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
           />
         </FloatingDialog>
       );
@@ -6425,6 +6433,8 @@ export function App() {
           diagnosticsStatus={diagnosticsStatus}
           onExportDiagnostics={handleExportDiagnostics}
           updateStatus={updateStatus}
+          defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
+          onDefaultCoverStyleChange={handleDefaultCoverStyleChange}
           onCheckForUpdates={() => {
             void handleCheckForUpdates("manual");
           }}

@@ -1,4 +1,5 @@
 import type { JurisdictionPackId, PrepPlanStepId } from "@raiopdf/rules";
+import type { PdfCoverStyle } from "@raiopdf/engine-api";
 
 const STORAGE_KEY = "raiopdf.filingPreferences.v1";
 
@@ -11,6 +12,7 @@ export interface CourtProfile {
 
 export interface FilingPreferences {
   defaultPackId?: JurisdictionPackId;
+  defaultCoverStyle?: PdfCoverStyle;
   packetLayoutMode?: "separate-files" | "combined-pdf";
   packetPrefixFilenames?: boolean;
   courtProfiles: readonly CourtProfile[];
@@ -40,6 +42,7 @@ export function readFilingPreferences(): FilingPreferences {
     const defaultPackId = typeof object.defaultPackId === "string"
       ? object.defaultPackId as JurisdictionPackId
       : undefined;
+    const defaultCoverStyle = readCoverStyle(object.defaultCoverStyle);
     const packetLayoutMode = object.packetLayoutMode === "combined-pdf" ||
       object.packetLayoutMode === "separate-files"
       ? object.packetLayoutMode
@@ -50,6 +53,7 @@ export function readFilingPreferences(): FilingPreferences {
 
     return {
       ...(defaultPackId ? { defaultPackId } : {}),
+      defaultCoverStyle,
       ...(packetLayoutMode ? { packetLayoutMode } : {}),
       ...(packetPrefixFilenames === undefined ? {} : { packetPrefixFilenames }),
       courtProfiles,
@@ -100,6 +104,16 @@ export function selectDefaultPack(
   };
 }
 
+export function selectDefaultCoverStyle(
+  preferences: FilingPreferences,
+  style: PdfCoverStyle,
+): FilingPreferences {
+  return {
+    ...preferences,
+    defaultCoverStyle: style,
+  };
+}
+
 export function selectCourtProfile(
   preferences: FilingPreferences,
   packId: JurisdictionPackId,
@@ -141,10 +155,17 @@ export function setPrepStepDefaultOverrides(
 
 function emptyPreferences(): FilingPreferences {
   return {
+    defaultCoverStyle: "minimal",
     courtProfiles: [],
     lastCourtProfileByPack: {},
     stepDefaultOverridesByPack: {},
   };
+}
+
+function readCoverStyle(value: unknown): PdfCoverStyle {
+  return value === "labeled" || value === "bordered" || value === "minimal"
+    ? value
+    : "minimal";
 }
 
 function readCourtProfile(value: unknown): CourtProfile | null {

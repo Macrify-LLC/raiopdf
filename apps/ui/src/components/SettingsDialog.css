@@ -64,6 +64,11 @@
   gap: var(--space-4);
 }
 
+.settings-dialog__row--stacked {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+
 .settings-dialog__row span,
 .settings-dialog__section span {
   display: grid;

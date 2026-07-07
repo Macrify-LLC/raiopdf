@@ -1,0 +1,30 @@
+.pdf-mini-thumb {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.pdf-mini-thumb__canvas {
+  display: block;
+}
+
+.pdf-mini-thumb__canvas[data-hidden="true"] {
+  display: none;
+}
+
+.pdf-mini-thumb__error {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-1);
+  box-sizing: border-box;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  line-height: 1.2;
+  text-align: center;
+}

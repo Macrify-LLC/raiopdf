@@ -246,13 +246,13 @@ describe("path op invoke plumbing", () => {
     await expect(pathOpBuildBinder(
       grant,
       [{ bytes: new Uint8Array([1, 2, 3]), label: "Exhibit A", sourceFileName: "a.pdf" }],
-      { slipSheets: false },
+      { slipSheets: false, coverStyle: "bordered" },
       "Main Binder.pdf",
     )).resolves.toEqual(output);
     expect(invokeMock).toHaveBeenCalledWith("path_op_build_binder", {
       grant: "grant-1",
       exhibits: [{ bytes: [1, 2, 3], label: "Exhibit A", sourceFileName: "a.pdf" }],
-      options: { slipSheets: false },
+      options: { slipSheets: false, coverStyle: "bordered" },
       outputName: "Main Binder.pdf",
     });
   });

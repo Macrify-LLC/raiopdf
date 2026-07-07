@@ -59,7 +59,7 @@ Four ways it fits into an actual day at the firm:
 | **Open it and go** | No account screen, no sign-in, no "create a free account to continue." |
 | **Drop in a scan, hit "Make Searchable"** | OCR runs entirely offline — no upload, no wait on a server. And the status bar tells you honestly whether the result can be trusted. |
 | **One click, "Prepare for Filing"** | Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, normalize every page, and split an oversized file into properly labeled, sequential, portal-compliant parts. |
-| **"Combine with Exhibits"** | Assembles a motion or brief with exhibit files in order, auto-stamped ("Exhibit A" — configurable) and auto-bookmarked. |
+| **"Combine with Exhibits"** | Assembles a motion or brief with exhibit files in order, auto-stamped ("Exhibit A" — configurable), auto-bookmarked, with selectable exhibit cover styles. |
 
 ## Features
 
@@ -68,7 +68,7 @@ Four ways it fits into an actual day at the firm:
 | Capability | What it means |
 |---|---|
 | View, search, print | Standard reading and navigation, full-document search, keyboard and Ctrl+wheel zoom |
-| Organize pages | Merge, split, reorder, extract, insert, rotate, crop, repair |
+| Organize pages | Merge, split, reorder, extract, insert, insert a slip sheet anywhere, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
 | **Edit document text** | Find and replace the real text in a typed PDF — page-scoped, case-sensitive, optional whole-word. Born-digital documents only (not scans); the text doesn't reflow, and the whole document is rewritten on save |
@@ -87,7 +87,7 @@ Four ways it fits into an actual day at the firm:
 | **Prepare for Filing** | Pick your court, get a prep checklist and a preflight report with the actual rule citations, normalize pages to the portal's requirements, and split an oversized file into properly labeled sequential parts |
 | **Jurisdiction packs** | E-filing rules for the Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS) — every constraint cites its authority and the date it was last verified. Guidance, not legal advice. |
 | **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
-| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with an optional generated index |
+| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
 | **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |

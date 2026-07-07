@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import type { PdfCoverStyle } from "@raiopdf/engine-api";
 import { AboutMacrifySection } from "./AboutMacrifySection";
+import { CoverStylePicker } from "./CoverStylePicker";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import { Switch } from "./Switch";
 import type { AppUpdateStatus } from "../lib/appUpdates";
@@ -21,6 +23,8 @@ export interface SettingsDialogProps {
   diagnosticsStatus?: string | null | undefined;
   onExportDiagnostics: () => void;
   updateStatus: AppUpdateStatus;
+  defaultCoverStyle: PdfCoverStyle;
+  onDefaultCoverStyleChange: (style: PdfCoverStyle) => void;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
   onRelaunchForUpdate: () => void;
@@ -37,6 +41,8 @@ export function SettingsDialog({
   diagnosticsStatus,
   onExportDiagnostics,
   updateStatus,
+  defaultCoverStyle,
+  onDefaultCoverStyleChange,
   onCheckForUpdates,
   onInstallUpdate,
   onRelaunchForUpdate,
@@ -169,6 +175,17 @@ export function SettingsDialog({
               <option value="florida">Florida</option>
             </select>
           </label>
+          <div className="settings-dialog__row settings-dialog__row--stacked">
+            <span>
+              <strong>Default exhibit cover style</strong>
+              <small>Used for slip sheets in Combine with Exhibits and Organize Pages</small>
+            </span>
+            <CoverStylePicker
+              value={defaultCoverStyle}
+              onChange={onDefaultCoverStyleChange}
+              size="sm"
+            />
+          </div>
           <section className="settings-dialog__section" aria-labelledby="diagnostics-heading">
             <span>
               <strong id="diagnostics-heading">Diagnostics</strong>

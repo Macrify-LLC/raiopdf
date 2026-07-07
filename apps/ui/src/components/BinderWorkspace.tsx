@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import type { PdfBinderOptions } from "@raiopdf/engine-api";
+import type { PdfBinderOptions, PdfCoverStyle } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
@@ -23,6 +23,7 @@ import {
 } from "../icons";
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import { IconButton } from "./IconButton";
+import { CoverStylePicker } from "./CoverStylePicker";
 import { LongProcessLoader } from "./LongProcessLoader";
 import "./BinderWorkspace.css";
 
@@ -39,6 +40,7 @@ interface BinderPresetV1 {
   placementAlign: PlacementAlign;
   stampPages: StampPages;
   slipSheets: boolean;
+  coverStyle?: PdfCoverStyle | undefined;
   indexEnabled: boolean;
   indexIncludeSourceFileName: boolean;
 }
@@ -67,6 +69,7 @@ export interface BinderWorkspaceProps {
   onOpenRequested: () => void;
   onCancel: () => void;
   onHelpRequested?: (() => void) | undefined;
+  defaultCoverStyle?: PdfCoverStyle | undefined;
 }
 
 export function BinderWorkspace({
@@ -76,6 +79,7 @@ export function BinderWorkspace({
   onOpenRequested,
   onCancel,
   onHelpRequested,
+  defaultCoverStyle,
 }: BinderWorkspaceProps) {
   const addInputRef = useRef<HTMLInputElement>(null);
   const [exhibits, setExhibits] = useState<ExhibitFile[]>([]);
@@ -90,6 +94,9 @@ export function BinderWorkspace({
   );
   const [stampPages, setStampPages] = useState<StampPages>(initialPreset.stampPages);
   const [slipSheets, setSlipSheets] = useState(initialPreset.slipSheets);
+  const [coverStyle, setCoverStyle] = useState<PdfCoverStyle>(
+    initialPreset.coverStyle ?? defaultCoverStyle ?? "minimal",
+  );
   const [indexEnabled, setIndexEnabled] = useState(initialPreset.indexEnabled);
   const [indexIncludeSourceFileName, setIndexIncludeSourceFileName] = useState(
     initialPreset.indexIncludeSourceFileName,
@@ -205,6 +212,7 @@ export function BinderWorkspace({
       placementAlign,
       stampPages,
       slipSheets,
+      coverStyle,
       indexEnabled,
       indexIncludeSourceFileName,
     };
@@ -217,6 +225,7 @@ export function BinderWorkspace({
     setPlacementAlign(preset.placementAlign);
     setStampPages(preset.stampPages);
     setSlipSheets(preset.slipSheets);
+    setCoverStyle(preset.coverStyle ?? defaultCoverStyle ?? "minimal");
     setIndexEnabled(preset.indexEnabled);
     setIndexIncludeSourceFileName(preset.indexIncludeSourceFileName);
   }
@@ -252,6 +261,7 @@ export function BinderWorkspace({
         })),
         {
           slipSheets,
+          coverStyle,
           index: {
             enabled: indexEnabled,
             includeSourceFileName: indexIncludeSourceFileName,
@@ -446,6 +456,19 @@ export function BinderWorkspace({
             <input type="checkbox" checked={slipSheets} onChange={(event) => setSlipSheets(event.currentTarget.checked)} disabled={building} />
             <span><SlipSheetIcon size={15} /> Slip sheets</span>
           </label>
+          {slipSheets ? (
+            <div className="binder-cover-style">
+              <p className="binder-card__label">Cover style</p>
+              <CoverStylePicker
+                value={coverStyle}
+                onChange={setCoverStyle}
+                sampleLabel={labels[0] ?? "Exhibit A"}
+                sampleDescription={exhibits[0]?.description || "Deposition transcript of Jane Doe"}
+                size="sm"
+                disabled={building}
+              />
+            </div>
+          ) : null}
           <label className="binder-toggle" title="Add a generated exhibit index near the front of the binder.">
             <input type="checkbox" checked={indexEnabled} onChange={(event) => setIndexEnabled(event.currentTarget.checked)} disabled={building} />
             <span>Exhibit Index</span>
@@ -613,6 +636,12 @@ function isBinderPreset(value: unknown): value is BinderPresetV1 {
     ) &&
     (preset.stampPages === "first" || preset.stampPages === "all") &&
     typeof preset.slipSheets === "boolean" &&
+    (
+      preset.coverStyle === undefined ||
+      preset.coverStyle === "minimal" ||
+      preset.coverStyle === "labeled" ||
+      preset.coverStyle === "bordered"
+    ) &&
     typeof preset.indexEnabled === "boolean" &&
     typeof preset.indexIncludeSourceFileName === "boolean";
 }

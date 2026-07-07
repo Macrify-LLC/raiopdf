@@ -59,6 +59,22 @@
   gap: var(--space-3);
 }
 
+.organize-slip-sheet {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.organize-slip-sheet__cover {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.organize-slip-sheet__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .organize-flow__copy,
 .organize-flow__status {
   margin: 0;

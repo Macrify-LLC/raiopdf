@@ -4,6 +4,7 @@ import { z } from "zod";
 import type {
   PdfApplyEditsOptions,
   PdfBinderOptions,
+  PdfCoverStyle,
   PdfDocumentHandle,
   PdfEdit,
   PdfEditImageFormat,
@@ -39,6 +40,9 @@ const pageSelectionSchema = z.union([
   z.literal("first"),
   z.array(z.number().int().nonnegative()),
 ]);
+const coverStyleSchema: z.ZodType<PdfCoverStyle> = z
+  .enum(["minimal", "labeled", "bordered"])
+  .describe("Slip sheet cover style. Defaults to minimal.");
 const binderIndexSchema = z.object({
   enabled: z.boolean().optional().describe("Generate an Exhibit Index. Defaults to true."),
   includeSourceFileName: z
@@ -48,6 +52,7 @@ const binderIndexSchema = z.object({
 });
 const binderOptionsSchema = z.object({
   slipSheets: z.boolean(),
+  coverStyle: coverStyleSchema.optional(),
   index: binderIndexSchema.optional(),
   placement: placementSchema.optional(),
   stampPages: pageSelectionSchema.optional(),
@@ -100,6 +105,7 @@ export const binderInputSchema = {
   index: binderIndexSchema.optional().describe("Exhibit Index options. Index generation defaults on."),
   output: absoluteOutput,
   slipSheets: z.boolean().optional().describe("Insert a labeled slip sheet before each exhibit."),
+  coverStyle: coverStyleSchema.optional(),
   placement: placementSchema.optional(),
   stampPages: pageSelectionSchema.optional(),
   fontSizePt: z.number().positive().optional(),
@@ -113,6 +119,7 @@ export interface BinderInput {
   index?: { enabled?: boolean | undefined; includeSourceFileName?: boolean | undefined } | undefined;
   output: string;
   slipSheets?: boolean | undefined;
+  coverStyle?: PdfCoverStyle | undefined;
   placement?: Placement | undefined;
   stampPages?: PageSelection | undefined;
   fontSizePt?: number | undefined;
@@ -146,6 +153,7 @@ export function handleBinder(
     });
     const result = await engine.buildBinder(mainDocument, exhibits, {
       slipSheets: input.slipSheets ?? false,
+      ...(input.coverStyle === undefined ? {} : { coverStyle: input.coverStyle }),
       ...(input.index === undefined ? {} : { index: input.index }),
       ...(input.placement === undefined ? {} : { placement: input.placement }),
       ...(input.stampPages === undefined ? {} : { stampPages: input.stampPages }),

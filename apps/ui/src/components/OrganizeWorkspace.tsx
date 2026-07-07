@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -273,6 +274,15 @@ function OrganizePagesGrid({
   const [slipSheetStyle, setSlipSheetStyle] = useState<PdfCoverStyle>(defaultCoverStyle);
   const [slipSheetInserting, setSlipSheetInserting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Stable identity -- FloatingDialog's focus-management effect keys off
+  // `onClose`'s reference (see its own module doc), so a fresh inline arrow
+  // here would re-run that effect (and re-steal focus to the dialog shell)
+  // on every keystroke/selection inside it, including the picker's own
+  // roving-focus updates. useCallback keeps the identity stable across the
+  // re-renders that Label/Description/CoverStylePicker changes trigger.
+  const closeSlipSheetDialog = useCallback(() => {
+    setSlipSheetOpen(false);
+  }, []);
   const pages = Array.from({ length: document.pageCount }, (_, index) => index);
   const selectedIndexes = [...selectedPageIndexes].sort((left, right) => left - right);
   const selectedCount = selectedIndexes.length;
@@ -558,7 +568,7 @@ function OrganizePagesGrid({
           className="organize-secondary"
           onClick={() => setSlipSheetOpen(true)}
           disabled={!canInsertSlipSheet}
-          title={canInsertSlipSheet ? "Insert a generated slip sheet at the selected position." : "Available for standard documents."}
+          title={canInsertSlipSheet ? "Insert a generated slip sheet at the selected position." : "Not yet available for very large documents opened in streaming mode."}
         >
           <SlipSheetIcon size={15} />
           Insert Slip Sheet
@@ -601,7 +611,7 @@ function OrganizePagesGrid({
           title="Insert slip sheet"
           eyebrow="Organize"
           width="md"
-          onClose={() => setSlipSheetOpen(false)}
+          onClose={closeSlipSheetDialog}
         >
           <div className="organize-slip-sheet">
             <label className="organize-field">
@@ -620,17 +630,21 @@ function OrganizePagesGrid({
                 disabled={slipSheetInserting}
               />
             </label>
-            <CoverStylePicker
-              value={slipSheetStyle}
-              onChange={setSlipSheetStyle}
-              sampleLabel={slipSheetLabel || "Exhibit A"}
-              sampleDescription={slipSheetDescription || "Deposition transcript of Jane Doe"}
-            />
+            <div className="organize-field organize-slip-sheet__cover">
+              <span>Cover style</span>
+              <CoverStylePicker
+                value={slipSheetStyle}
+                onChange={setSlipSheetStyle}
+                sampleLabel={slipSheetLabel || "Exhibit A"}
+                sampleDescription={slipSheetDescription || "Deposition transcript of Jane Doe"}
+                disabled={slipSheetInserting}
+              />
+            </div>
             <div className="organize-slip-sheet__actions">
               <button
                 type="button"
                 className="organize-secondary"
-                onClick={() => setSlipSheetOpen(false)}
+                onClick={closeSlipSheetDialog}
                 disabled={slipSheetInserting}
               >
                 Cancel

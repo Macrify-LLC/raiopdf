@@ -465,6 +465,7 @@ export function BinderWorkspace({
                 sampleLabel={labels[0] ?? "Exhibit A"}
                 sampleDescription={exhibits[0]?.description || "Deposition transcript of Jane Doe"}
                 size="sm"
+                disabled={building}
               />
             </div>
           ) : null}

@@ -101,39 +101,6 @@
   color: var(--muted);
 }
 
-.pdf-mini-thumb {
-  width: 48px;
-  height: 62px;
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.pdf-mini-thumb__canvas {
-  display: block;
-}
-
-.pdf-mini-thumb__canvas[data-hidden="true"] {
-  display: none;
-}
-
-.pdf-mini-thumb__error {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  padding: var(--space-1);
-  box-sizing: border-box;
-  color: var(--muted);
-  font-size: var(--text-2xs);
-  line-height: 1.2;
-  text-align: center;
-}
-
 .binder-main__name,
 .binder-exhibit__name {
   margin: 0;
@@ -368,6 +335,30 @@
 .binder-cover-style {
   display: grid;
   gap: var(--space-2);
+  /* A rule above (not an indent -- this column is too narrow to spend
+     horizontal space on one) reads as "this belongs to the toggle above",
+     the same grouping device the Insert Slip Sheet dialog uses. */
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  animation: binder-cover-style-in var(--duration-medium) var(--ease-out);
+}
+
+@keyframes binder-cover-style-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .binder-cover-style {
+    animation: none;
+  }
 }
 
 .binder-preset-actions {

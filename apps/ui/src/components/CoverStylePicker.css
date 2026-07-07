@@ -22,6 +22,7 @@
   min-height: 0;
   display: grid;
   justify-items: center;
+  align-content: start;
   gap: var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -33,13 +34,19 @@
   transition:
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
-.cover-style-picker__tile:hover,
-.cover-style-picker__tile:focus-visible {
+.cover-style-picker__tile:hover:not(:disabled) {
   background: var(--hover-ground);
   border-color: var(--primary);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.cover-style-picker__tile:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
 }
 
 .cover-style-picker__tile:focus-visible {
@@ -47,23 +54,116 @@
   outline-offset: 2px;
 }
 
-.cover-style-picker__tile[data-selected="true"] {
+.cover-style-picker__tile[data-selected="true"],
+.cover-style-picker__tile[data-selected="true"]:hover:not(:disabled) {
   border-color: var(--primary);
+  background: var(--accent-pale);
   box-shadow: 0 0 0 2px var(--primary);
+}
+
+.cover-style-picker__tile:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The preview stands in for a real page, so it earns the same subtle paper
+   elevation as a full page thumbnail elsewhere in the app (Organize Pages),
+   distinguishing "this is a rendered document" from a flat icon. */
+.cover-style-picker__tile .pdf-mini-thumb {
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-page);
+}
+
+/* While the async preview render is still pending, PdfMiniThumb mounts with
+   zero children (see its `hasSource` guard) -- :empty catches exactly that
+   window and shows a soft shimmer instead of a flash of blank white. It
+   clears itself the instant the canvas child is rendered in. */
+.cover-style-picker__tile .pdf-mini-thumb:empty {
+  background: linear-gradient(100deg, var(--chrome) 35%, var(--hover-ground) 50%, var(--chrome) 65%);
+  background-size: 220% 100%;
+  animation: cover-style-picker-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes cover-style-picker-shimmer {
+  from {
+    background-position: 160% 0;
+  }
+
+  to {
+    background-position: -60% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cover-style-picker__tile .pdf-mini-thumb:empty {
+    animation: none;
+    background: var(--chrome);
+  }
+}
+
+.cover-style-picker__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.cover-style-picker__radio {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--panel);
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.cover-style-picker__tile[data-selected="true"] .cover-style-picker__radio {
+  border-color: var(--primary);
+  background: var(--primary);
+  box-shadow: inset 0 0 0 2px var(--panel);
 }
 
 .cover-style-picker__label {
   max-width: 100%;
+  overflow: hidden;
   color: var(--ink);
   font-size: var(--text-xs);
   font-weight: 700;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cover-style-picker__tile[data-selected="true"] .cover-style-picker__label {
+  color: var(--primary-deep);
+}
+
+.cover-style-picker[data-size="md"] .cover-style-picker__grid {
+  gap: var(--space-3);
+}
+
+.cover-style-picker[data-size="md"] .cover-style-picker__tile {
+  padding: var(--space-3);
 }
 
 .cover-style-picker[data-size="sm"] .cover-style-picker__grid {
-  grid-template-columns: repeat(3, minmax(72px, 1fr));
+  /* Tight floor -- this size renders inside the Binder settings sidebar,
+     the narrowest spot the picker ever sits in (a third of a three-column
+     grid). 60px = the 44px-wide "sm" thumbnail plus its tile's own padding. */
+  gap: var(--space-1);
+  grid-template-columns: repeat(3, minmax(60px, 1fr));
 }
 
-.cover-style-picker[data-size="sm"] .cover-style-picker__tile {
-  padding: var(--space-1);
+/* At this width there's no room for a dot *and* a one-word label on the
+   same line -- the ring/wash/border selected-state already reads clearly
+   without it, so the dot is an "sm"-only sacrifice, not a lost signal. */
+.cover-style-picker[data-size="sm"] .cover-style-picker__radio {
+  display: none;
+}
+
+.cover-style-picker[data-size="sm"] .cover-style-picker__label {
+  font-size: var(--text-2xs);
 }

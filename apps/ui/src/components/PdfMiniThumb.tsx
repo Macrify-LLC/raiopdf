@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { loadPdfDocument, type PDFDocumentProxy } from "../lib/pdfjs";
+import "./PdfMiniThumb.css";
 
 export interface PdfMiniThumbProps {
   bytes: Uint8Array | null;
@@ -58,13 +59,19 @@ export function PdfMiniThumb({
 
         const baseViewport = page.getViewport({ scale: 1 });
         const scale = Math.min(targetWidth / baseViewport.width, targetHeight / baseViewport.height);
+        // Render at native device-pixel density (falling back to 1x when
+        // unavailable) so the thumbnail stays crisp on HiDPI displays --
+        // the CSS box below stays at the original, non-scaled size; only
+        // the canvas backing store gets the extra resolution.
+        const devicePixelRatio = window.devicePixelRatio || 1;
         const viewport = page.getViewport({ scale });
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
+        const renderViewport = page.getViewport({ scale: scale * devicePixelRatio });
+        canvas.width = Math.floor(renderViewport.width);
+        canvas.height = Math.floor(renderViewport.height);
         canvas.style.width = `${viewport.width}px`;
         canvas.style.height = `${viewport.height}px`;
 
-        renderTask = page.render({ canvas, viewport });
+        renderTask = page.render({ canvas, viewport: renderViewport });
         return renderTask.promise;
       })
       .catch((error: unknown) => {

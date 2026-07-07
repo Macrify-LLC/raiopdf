@@ -64,6 +64,11 @@
   gap: var(--space-3);
 }
 
+.organize-slip-sheet__cover {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
 .organize-slip-sheet__actions {
   display: flex;
   justify-content: flex-end;

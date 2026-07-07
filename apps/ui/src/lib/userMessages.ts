@@ -37,6 +37,19 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
     return "RaioPDF could not write there. Choose a folder you can edit and try again.";
   }
 
+  // Infrastructure / bundled-tool failures also contain "not found" ("qpdf
+  // binary not found in payload", "bundled Node/MCP one-shot runtime not
+  // found"). Those are an incomplete-install problem, not a missing user file —
+  // routing them to the "reopen the PDF" message below would send the user on a
+  // wild goose chase. Catch them first with honest, actionable guidance.
+  if (
+    message.includes("not found in payload") ||
+    message.includes("runtime not found") ||
+    (message.includes("binary") && message.includes("not found"))
+  ) {
+    return "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.";
+  }
+
   if (
     message.includes("no such file") ||
     message.includes("not found") ||

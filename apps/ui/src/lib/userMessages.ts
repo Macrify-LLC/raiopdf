@@ -45,7 +45,7 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
   if (
     message.includes("not found in payload") ||
     message.includes("runtime not found") ||
-    (message.includes("binary") && message.includes("not found"))
+    message.includes("binary not found")
   ) {
     return "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.";
   }

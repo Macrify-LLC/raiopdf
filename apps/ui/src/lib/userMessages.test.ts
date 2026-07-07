@@ -68,6 +68,11 @@ describe("userMessages", () => {
     expect(formatWorkflowError("ENOENT: no such file or directory", "Nope")).toBe(
       "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",
     );
+    // A user file that merely contains the word "binary" must not be mistaken
+    // for a missing bundled tool — the predicate keys on "binary not found".
+    expect(formatWorkflowError("binary.pdf not found", "Nope")).toBe(
+      "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",
+    );
   });
 
   it("falls back for unknown objects", () => {

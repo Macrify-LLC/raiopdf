@@ -20,7 +20,9 @@ import {
   pickPdfsForAdd,
   readFileForAdd,
   tooLargeToAddMessage,
+  type DocxConversionProgressRow,
   type FileAddInput,
+  type PickPdfsForAddOptions,
 } from "../lib/readFileForAdd";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import { generateCoverPdf } from "../lib/coverPreview";
@@ -71,6 +73,8 @@ interface GrantEntry {
 
 const DELEGATED_BROWSER_FILE_MESSAGE =
   "Files dropped from the browser can't be added to a very large document — choose them with the file picker instead.";
+const ADD_FILE_ACCEPT = "application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx";
+const WORD_UNAVAILABLE_MESSAGE = "Word integration not available. Word documents were not added.";
 
 async function resolveSlipSheetPageSize(
   pdfDocument: PDFDocumentProxy | null,
@@ -299,6 +303,7 @@ function OrganizePagesGrid({
   const [slipSheetStyle, setSlipSheetStyle] = useState<PdfCoverStyle>(defaultCoverStyle);
   const [slipSheetInserting, setSlipSheetInserting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [docxRows, setDocxRows] = useState<readonly DocxConversionProgressRow[]>([]);
   // Stable identity -- FloatingDialog's focus-management effect keys off
   // `onClose`'s reference (see its own module doc), so a fresh inline arrow
   // here would re-run that effect (and re-steal focus to the dialog shell)
@@ -429,7 +434,8 @@ function OrganizePagesGrid({
   async function chooseInsertFile() {
     // Tauri: grant-returning picker (no eager byte read); browser or a shell
     // without pick_pdfs_for_add falls back to the DOM file input.
-    const picks = await pickPdfsForAdd();
+    setDocxRows([]);
+    const picks = await pickPdfsForAdd(docxAddOptions(setStatus, setDocxRows));
 
     if (picks === null) {
       insertInputRef.current?.click();
@@ -582,7 +588,7 @@ function OrganizePagesGrid({
           ref={insertInputRef}
           className="organize-file-input"
           type="file"
-          accept="application/pdf"
+          accept={ADD_FILE_ACCEPT}
           aria-label="Insert PDF in Organize Pages"
           onChange={handleInsertFile}
         />
@@ -619,6 +625,7 @@ function OrganizePagesGrid({
         </button>
       </div>
 
+      <DocxConversionRows rows={docxRows} />
       {status ? <p className="organize-flow__status" role="status">{status}</p> : null}
 
       {splitOpen ? (
@@ -903,6 +910,7 @@ function MergeFlow({
   const inputRef = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<MergeEntry[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [docxRows, setDocxRows] = useState<readonly DocxConversionProgressRow[]>([]);
   const totalFiles = entries.length + (document.source ? 1 : 0);
 
   async function addPdfInputs(inputs: readonly FileAddInput[]) {
@@ -958,7 +966,8 @@ function MergeFlow({
   async function addPdfs() {
     // Tauri: grant-returning picker (no eager byte read); browser or a shell
     // without pick_pdfs_for_add falls back to the DOM file input.
-    const picks = await pickPdfsForAdd();
+    setDocxRows([]);
+    const picks = await pickPdfsForAdd(docxAddOptions(setStatus, setDocxRows));
 
     if (picks === null) {
       inputRef.current?.click();
@@ -994,11 +1003,12 @@ function MergeFlow({
           </p>
         ))}
       </div>
-      <input ref={inputRef} className="organize-file-input" type="file" accept="application/pdf" multiple aria-label="Add PDFs to merge" onChange={handleFiles} />
+      <input ref={inputRef} className="organize-file-input" type="file" accept={ADD_FILE_ACCEPT} multiple aria-label="Add PDFs to merge" onChange={handleFiles} />
       <button type="button" className="organize-secondary" onClick={() => void addPdfs()}>
         <PlusIcon size={15} />
         Add PDFs...
       </button>
+      <DocxConversionRows rows={docxRows} />
       <ActionStatus message={status} />
       <button type="button" className="organize-primary" onClick={merge} disabled={entries.length === 0}>
         <CombineExhibitsIcon size={16} />
@@ -1062,6 +1072,7 @@ function InsertFlow({
   const [insertAfter, setInsertAfter] = useState(String(document.currentPage));
   const [touched, setTouched] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [docxRows, setDocxRows] = useState<readonly DocxConversionProgressRow[]>([]);
   const pageNumber = Number(insertAfter);
   const error = getInsertError(insertAfter, document.pageCount);
 
@@ -1110,7 +1121,8 @@ function InsertFlow({
   async function choosePdf() {
     // Tauri: grant-returning picker (no eager byte read); browser or a shell
     // without pick_pdfs_for_add falls back to the DOM file input.
-    const picks = await pickPdfsForAdd();
+    setDocxRows([]);
+    const picks = await pickPdfsForAdd(docxAddOptions(setStatus, setDocxRows));
 
     if (picks === null) {
       inputRef.current?.click();
@@ -1155,7 +1167,7 @@ function InsertFlow({
 
   return (
     <div className="organize-flow">
-      <input ref={inputRef} className="organize-file-input" type="file" accept="application/pdf" aria-label="Choose PDF to insert" onChange={handleFile} />
+      <input ref={inputRef} className="organize-file-input" type="file" accept={ADD_FILE_ACCEPT} aria-label="Choose PDF to insert" onChange={handleFile} />
       <button type="button" className="organize-secondary" onClick={() => void choosePdf()}>
         <InsertIcon size={15} />
         Choose PDF...
@@ -1167,6 +1179,7 @@ function InsertFlow({
             : `${entry.name}${formatEntryPages(entry.pageCount)}`}
         </p>
       ) : null}
+      <DocxConversionRows rows={docxRows} />
       <label className="organize-field">
         <span>Insert after page</span>
         <input value={insertAfter} inputMode="numeric" onBlur={() => setTouched(true)} onChange={(event) => setInsertAfter(event.currentTarget.value)} />
@@ -1288,6 +1301,35 @@ function PageRangeFlow({
 
 function ActionStatus({ message }: { message: string | null }) {
   return message ? <p className="organize-flow__status" role="status">{message}</p> : null;
+}
+
+function DocxConversionRows({ rows }: { rows: readonly DocxConversionProgressRow[] }) {
+  return rows.length > 0 ? (
+    <div className="organize-file-list" role="list" aria-label="Word conversion progress">
+      {rows.map((row) => (
+        <p key={row.id} role="listitem">
+          {row.name} · {row.message}
+        </p>
+      ))}
+    </div>
+  ) : null;
+}
+
+function docxAddOptions(
+  setStatus: (message: string | null) => void,
+  setRows: (rows: readonly DocxConversionProgressRow[]) => void,
+): PickPdfsForAddOptions {
+  return {
+    onDocxRowsChange: setRows,
+    onWordUnavailable: (message) => setStatus(message || WORD_UNAVAILABLE_MESSAGE),
+    onDocxErrors: (errors) => {
+      if (errors.length === 1 && errors[0]) {
+        setStatus(`"${errors[0].name}" could not be converted from Word.`);
+      } else if (errors.length > 1) {
+        setStatus(`${errors.length} Word documents could not be converted.`);
+      }
+    },
+  };
 }
 
 type AddPdfOutcome =

@@ -73,7 +73,7 @@ interface GrantEntry {
 
 const DELEGATED_BROWSER_FILE_MESSAGE =
   "Files dropped from the browser can't be added to a very large document — choose them with the file picker instead.";
-const ADD_FILE_ACCEPT = "application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx";
+const ADD_FILE_ACCEPT = "application/pdf,.pdf";
 const WORD_UNAVAILABLE_MESSAGE = "Word integration not available. Word documents were not added.";
 
 async function resolveSlipSheetPageSize(

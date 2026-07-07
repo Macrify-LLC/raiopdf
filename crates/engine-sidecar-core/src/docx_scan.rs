@@ -37,6 +37,7 @@ where
     };
 
     let parts = inspected_word_parts(&mut archive);
+    let mut inspected_part = false;
     for part_name in parts {
         let mut xml = String::new();
         match archive.by_name(&part_name) {
@@ -49,13 +50,17 @@ where
         }
 
         match scan_word_xml_part(&xml, is_comments_part(&part_name)) {
-            PartScan::Clean => {}
+            PartScan::Clean => inspected_part = true,
             PartScan::HasMarkup => return MarkupScan::HasMarkup,
             PartScan::Uninspectable => return MarkupScan::Uninspectable,
         }
     }
 
-    MarkupScan::Clean
+    if inspected_part {
+        MarkupScan::Clean
+    } else {
+        MarkupScan::Uninspectable
+    }
 }
 
 fn inspected_word_parts<R>(archive: &mut ZipArchive<R>) -> Vec<String>
@@ -75,7 +80,7 @@ fn is_inspected_word_part(name: &str) -> bool {
     }
     matches!(
         name,
-        "word/document.xml" | "word/footnotes.xml" | "word/endnotes.xml"
+        "word/document.xml" | "word/footnotes.xml" | "word/endnotes.xml" | "word/numbering.xml"
     ) || name.starts_with("word/header")
         || name.starts_with("word/footer")
         || is_comments_part(name)
@@ -139,6 +144,15 @@ fn is_markup_element(name: &[u8], comments_part: bool) -> bool {
             | b"del"
             | b"moveFrom"
             | b"moveTo"
+            | b"pPrChange"
+            | b"rPrChange"
+            | b"tblPrChange"
+            | b"trPrChange"
+            | b"tcPrChange"
+            | b"sectPrChange"
+            | b"numberingChange"
+            | b"numPrChange"
+            | b"tblGridChange"
             | b"commentReference"
             | b"commentRangeStart"
             | b"commentRangeEnd"
@@ -152,13 +166,34 @@ fn local_name(name: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::{
+        io::{Cursor, Write},
+        path::PathBuf,
+    };
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
             .join(name)
+    }
+
+    fn docx_zip(parts: &[(&str, &str)]) -> Cursor<Vec<u8>> {
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut bytes);
+            let options = SimpleFileOptions::default();
+            for (name, contents) in parts {
+                writer.start_file(*name, options).expect("start zip file");
+                writer
+                    .write_all(contents.as_bytes())
+                    .expect("write zip file");
+            }
+            writer.finish().expect("finish zip");
+        }
+        bytes.set_position(0);
+        bytes
     }
 
     #[test]
@@ -191,6 +226,13 @@ mod tests {
     }
 
     #[test]
+    fn zip_without_inspectable_word_part_fails_closed() {
+        let docx = docx_zip(&[("[Content_Types].xml", r#"<Types></Types>"#)]);
+
+        assert_eq!(scan_docx_markup_reader(docx), MarkupScan::Uninspectable);
+    }
+
+    #[test]
     fn malformed_inspected_xml_fails_closed() {
         let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"#;
         assert_eq!(scan_word_xml_part(xml, false), PartScan::Uninspectable);
@@ -206,5 +248,33 @@ mod tests {
             </w:document>
         "#;
         assert_eq!(scan_word_xml_part(xml, false), PartScan::HasMarkup);
+    }
+
+    #[test]
+    fn formatting_only_revisions_are_markup() {
+        let document_xml = r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:pPr>
+                    <w:pPrChange w:id="1" w:author="reviewer">
+                      <w:pPr/>
+                    </w:pPrChange>
+                  </w:pPr>
+                  <w:r>
+                    <w:rPr>
+                      <w:rPrChange w:id="2" w:author="reviewer">
+                        <w:rPr/>
+                      </w:rPrChange>
+                    </w:rPr>
+                    <w:t>same text</w:t>
+                  </w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+        "#;
+        let docx = docx_zip(&[("word/document.xml", document_xml)]);
+
+        assert_eq!(scan_docx_markup_reader(docx), MarkupScan::HasMarkup);
     }
 }

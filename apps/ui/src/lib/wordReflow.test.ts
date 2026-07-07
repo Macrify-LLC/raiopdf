@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FileGrant, SavedFile } from "./filePort";
 import {
   resolveWordReflowOcrFirst,
+  resolveWordReflowTextLayerSignal,
   runPdfToWordReflow,
   shouldRefuseWordReflow,
   type ScannedPdfChoice,
@@ -123,5 +124,22 @@ describe("word reflow decisions", () => {
 
     expect(testDeps.reflowPdfToDocx).toHaveBeenCalledWith("pdf-grant", false);
     expect(resolveWordReflowOcrFirst(false, "convertAnyway")).toBe(false);
+  });
+
+  it("falls back to probing the grant when the cached text-layer signal is unknown", async () => {
+    const testDeps = deps();
+    const probeGrant = vi.fn(async () => false);
+
+    await runPdfToWordReflow(
+      {
+        getInput: async () => ({ grant: grant("pdf-grant"), name: "scan.pdf" }),
+        getTextLayer: (input) => resolveWordReflowTextLayerSignal(input, null, probeGrant),
+      },
+      testDeps,
+    );
+
+    expect(probeGrant).toHaveBeenCalledWith("pdf-grant");
+    expect(testDeps.promptScannedPdf).toHaveBeenCalledTimes(1);
+    expect(testDeps.reflowPdfToDocx).toHaveBeenCalledWith("pdf-grant", true);
   });
 });

@@ -30,6 +30,10 @@ const POINTS_PER_INCH = 72;
 export const STREAMED_STEP_UNAVAILABLE_REASON =
   "not available for very large files yet";
 
+/** Disabled-checkbox reason for streamed docs that do not have a shell grant. */
+export const STREAMED_NO_GRANT_STEP_UNAVAILABLE_REASON =
+  "Reopen this large PDF with File > Open in the desktop app to run filing steps.";
+
 /** Detail for checks the facts-based preflight cannot evaluate. */
 export const STREAMED_CHECK_NOT_EVALUATED =
   "Not evaluated for very large files.";
@@ -103,12 +107,16 @@ export function annotateStreamedPreflight(report: PreflightReport): PreflightRep
 export function buildStreamedUnavailableSteps(
   prepPlan: readonly PrepPlanStep[],
   status: PathOpsStatus | null,
+  options: { hasGrant?: boolean } = {},
 ): ReadonlyMap<PrepPlanStepId, string> {
   const unavailable = new Map<PrepPlanStepId, string>();
+  const reason = options.hasGrant === false
+    ? STREAMED_NO_GRANT_STEP_UNAVAILABLE_REASON
+    : STREAMED_STEP_UNAVAILABLE_REASON;
 
   for (const step of prepPlan) {
-    if (!status || !isFilingStepEnabled(status, step.id)) {
-      unavailable.set(step.id, STREAMED_STEP_UNAVAILABLE_REASON);
+    if (options.hasGrant === false || !status || !isFilingStepEnabled(status, step.id)) {
+      unavailable.set(step.id, reason);
     }
   }
 

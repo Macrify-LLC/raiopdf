@@ -32,6 +32,7 @@ import {
   DEFAULT_LARGE_DOC_THRESHOLD_BYTES,
   FileRangeError,
   isFileChangedError,
+  openedPdfFromTauri,
   readBrowserFileSource,
   readPdfRange,
   readPickedFileSource,
@@ -39,6 +40,10 @@ import {
   type FileGrant,
   type PickedDirectory,
 } from "./filePort";
+import {
+  getLargeDocThresholdBytes,
+  setLargeDocThresholdBytes,
+} from "./largeDocThreshold";
 
 function makeFile(sizeBytes: number, name = "doc.pdf"): File {
   return new File([new Uint8Array(sizeBytes)], name, { type: "application/pdf" });
@@ -47,6 +52,7 @@ function makeFile(sizeBytes: number, name = "doc.pdf"): File {
 beforeEach(() => {
   invokeState.calls.length = 0;
   invokeState.handler = undefined;
+  setLargeDocThresholdBytes(null);
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
@@ -155,6 +161,27 @@ describe("readPickedFileSource", () => {
       name: "appendix.pdf",
       sizeBytes: 64,
     });
+    expect(invokeState.calls).toHaveLength(0);
+  });
+});
+
+describe("openedPdfFromTauri", () => {
+  it("keeps a shell-opened large PDF as a grant and adopts the shell threshold", async () => {
+    const result = await openedPdfFromTauri({
+      bytesToken: null,
+      fileGrant: "drop-grant",
+      name: "large.pdf",
+      sizeBytes: 128,
+      thresholdBytes: 64,
+    });
+
+    expect(result).toEqual({
+      kind: "rangeGrant",
+      grant: "drop-grant",
+      name: "large.pdf",
+      sizeBytes: 128,
+    });
+    expect(getLargeDocThresholdBytes()).toBe(64);
     expect(invokeState.calls).toHaveLength(0);
   });
 });

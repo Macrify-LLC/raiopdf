@@ -292,6 +292,23 @@ fn open_pdf_dialog(
     )?))
 }
 
+fn open_dropped_pdf_for_path(
+    path: PathBuf,
+    pending_pdf_bytes: &PendingPdfBytes,
+    file_grants: &FileGrants,
+) -> Result<OpenedPdf, String> {
+    opened_pdf_for_path(path, pending_pdf_bytes, file_grants)
+}
+
+#[tauri::command]
+fn open_dropped_pdf(
+    path: PathBuf,
+    pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<OpenedPdf, String> {
+    open_dropped_pdf_for_path(path, pending_pdf_bytes.inner(), file_grants.inner())
+}
+
 #[tauri::command]
 fn take_startup_pdf(
     startup_pdf: tauri::State<'_, StartupPdf>,
@@ -1229,6 +1246,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf_dialog,
+            open_dropped_pdf,
             take_startup_pdf,
             open_pdf_in_new_window_dialog,
             open_in_new_window,
@@ -1467,6 +1485,46 @@ mod tests {
         .expect("readable PDF should spawn");
 
         assert_eq!(spawned_path, Some(path));
+    }
+
+    #[test]
+    fn open_dropped_pdf_rejects_non_pdf_paths() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("case.txt");
+        fs::write(&path, b"not a pdf").expect("write text");
+        let pending = PendingPdfBytes::default();
+        let grants = FileGrants::default();
+
+        let error = match open_dropped_pdf_for_path(path, &pending, &grants) {
+            Ok(_) => panic!("non-PDF drops should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "Selected file is not a PDF");
+    }
+
+    #[test]
+    fn open_dropped_pdf_returns_grant_for_above_threshold_pdf() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("large.pdf");
+        let file = fs::File::create(&path).expect("create sparse pdf");
+        file.set_len(large_doc_threshold_bytes() + 1)
+            .expect("set sparse pdf length");
+        let pending = PendingPdfBytes::default();
+        let grants = FileGrants::default();
+
+        let opened = open_dropped_pdf_for_path(path.clone(), &pending, &grants)
+            .expect("large dropped PDF should open");
+
+        assert_eq!(opened.name, "large.pdf");
+        assert_eq!(opened.size_bytes, large_doc_threshold_bytes() + 1);
+        assert!(opened.bytes_token.is_none());
+        assert_eq!(
+            grants
+                .resolve(&opened.file_grant)
+                .expect("grant should resolve"),
+            path
+        );
     }
 
     #[test]

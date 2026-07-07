@@ -153,6 +153,7 @@ import {
   type PickedDirectory,
   type SavedFile,
 } from "./lib/filePort";
+import { listenForDesktopPdfDrops } from "./lib/tauriDropOpen";
 import {
   pickFileForAdd,
   tooLargeToAddMessage,
@@ -798,9 +799,11 @@ export function App() {
   // available — computed from `path_ops_status`, never a hand list.
   const streamedFilingUnavailableSteps = useMemo(
     () => (streamedDocument
-      ? buildStreamedUnavailableSteps(filingPrepPlan, pathOpsFilingStatus)
+      ? buildStreamedUnavailableSteps(filingPrepPlan, pathOpsFilingStatus, {
+        hasGrant: pathOpsGrant !== null,
+      })
       : undefined),
-    [filingPrepPlan, pathOpsFilingStatus, streamedDocument],
+    [filingPrepPlan, pathOpsFilingStatus, pathOpsGrant, streamedDocument],
   );
   const [scrubState, setScrubState] = useState<{
     scrubbing: boolean;
@@ -2991,6 +2994,34 @@ export function App() {
     },
     [openFileSource, setError],
   );
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void listenForDesktopPdfDrops(
+      openFileSource,
+      () => {
+        if (!disposed) {
+          setError("This PDF could not be opened. The file may be corrupt or unsupported.");
+        }
+      },
+    )
+      .then((registered) => {
+        if (disposed) {
+          registered?.();
+          return;
+        }
+
+        unlisten = registered;
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openFileSource, setError]);
 
   const handleThumbnailClick = useCallback(
     (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => {

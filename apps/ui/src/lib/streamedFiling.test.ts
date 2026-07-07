@@ -7,6 +7,7 @@ import type {
 } from "./pathOps";
 import {
   STREAMED_CHECK_NOT_EVALUATED,
+  STREAMED_NO_GRANT_STEP_UNAVAILABLE_REASON,
   STREAMED_STEP_UNAVAILABLE_REASON,
   annotateStreamedPreflight,
   buildPrepareFilingPlan,
@@ -159,6 +160,16 @@ describe("buildStreamedUnavailableSteps (closed-form rule wiring [R7-1])", () =>
   it("fails closed while the status is still loading (null)", () => {
     const unavailable = buildStreamedUnavailableSteps(plan, null);
     expect(unavailable.size).toBe(plan.length);
+    expect(unavailable.get("split-by-size")).toBe(STREAMED_STEP_UNAVAILABLE_REASON);
+  });
+
+  it("uses a clearer reason when a streamed document has no shell grant", () => {
+    const unavailable = buildStreamedUnavailableSteps(plan, null, { hasGrant: false });
+
+    expect(unavailable.size).toBe(plan.length);
+    expect(Array.from(unavailable.values())).toEqual(
+      Array(plan.length).fill(STREAMED_NO_GRANT_STEP_UNAVAILABLE_REASON),
+    );
   });
 });
 

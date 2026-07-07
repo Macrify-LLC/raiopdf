@@ -396,7 +396,7 @@ interface TauriPickedDirectory {
   path: string;
 }
 
-interface TauriOpenedPdf {
+export interface TauriOpenedPdf {
   bytesToken: string | null;
   fileGrant: string;
   name: string;
@@ -411,7 +411,7 @@ interface TauriSavedPdf {
 
 export type BinaryInvokeResponse = ArrayBuffer | Uint8Array | number[];
 
-async function openedPdfFromTauri(selected: TauriOpenedPdf): Promise<OpenedFileSource> {
+export async function openedPdfFromTauri(selected: TauriOpenedPdf): Promise<OpenedFileSource> {
   // Adopt the shell's authoritative threshold for all UI-side branches.
   setLargeDocThresholdBytes(selected.thresholdBytes);
 

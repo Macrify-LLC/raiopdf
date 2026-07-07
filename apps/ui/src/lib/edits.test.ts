@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   annotationSavePlanHasChanges,
   buildAnnotationSavePlan,
-  computeHighlightLineRects,
-  computeTextMarkupLineRects,
+  clipMarkupRectsToDragBand,
+  computeTextMarkupSelectionRects,
   excerpt,
   normalizePdfRectFromPoints,
   pendingEditsFromRaioAnnotations,
@@ -595,58 +595,123 @@ describe("buildAnnotationSavePlan", () => {
   });
 });
 
-describe("computeTextMarkupLineRects", () => {
+describe("computeTextMarkupSelectionRects", () => {
+  // PDF user space: bottom-left origin, y increases upward, so a higher y is
+  // higher on the page. Default line runs x=50..250 unless widened.
   const line = (y: number, x = 50, w = 200, h = 12): PageTextBox => ({ x, y, w, h });
 
-  it("produces one union rect per intersected text line", () => {
-    const textBoxes = [
-      line(700, 50, 90),
-      line(700, 150, 100),
-      line(680),
-      line(400), // far away, outside the band
-    ];
-    const band = { x: 40, y: 675, w: 300, h: 45 };
-
-    const rects = computeTextMarkupLineRects(band, textBoxes);
-
-    expect(rects).toHaveLength(2);
-    // Top-to-bottom reading order: the y=700 line first.
-    expect(rects[0]).toMatchObject({ x: 50, y: 700, w: 200 });
-    expect(rects[1]).toMatchObject({ x: 50, y: 680 });
-  });
-
-  it("clips upright line rects to the drag band instead of the whole text run", () => {
+  it("hugs the caret span on a single-line selection", () => {
     const textBoxes = [line(700, 50, 500)];
-    const band = { x: 60, y: 695, w: 120, h: 20 };
 
-    const rects = computeTextMarkupLineRects(band, textBoxes);
+    const rects = computeTextMarkupSelectionRects(
+      { x: 120, y: 706 },
+      { x: 300, y: 706 },
+      textBoxes,
+    );
 
-    expect(rects).toEqual([{ x: 60, y: 700, w: 120, h: 12 }]);
+    expect(rects).toEqual([{ x: 120, y: 700, w: 180, h: 12 }]);
   });
 
-  it("clusters sideways (rotated page) lines by x instead of y", () => {
-    const verticalLine = (x: number): PageTextBox => ({ x, y: 100, w: 12, h: 200 });
-    const textBoxes = [verticalLine(300), verticalLine(340)];
-    const band = { x: 290, y: 90, w: 70, h: 220 };
+  it("runs from the start caret to end-of-line, then line-start to the end caret", () => {
+    const textBoxes = [line(700, 50, 500), line(680, 50, 500)];
 
-    const rects = computeTextMarkupLineRects(band, textBoxes, true);
+    const rects = computeTextMarkupSelectionRects(
+      { x: 300, y: 706 }, // start, on the top line
+      { x: 200, y: 684 }, // end, on the bottom line
+      textBoxes,
+    );
 
-    expect(rects).toHaveLength(2);
+    expect(rects).toEqual([
+      { x: 300, y: 700, w: 250, h: 12 }, // top: caret -> end of line
+      { x: 50, y: 680, w: 150, h: 12 }, // bottom: line start -> caret
+    ]);
   });
 
-  it("clips sideways line rects along the rotated reading axis", () => {
-    const textBoxes: PageTextBox[] = [{ x: 300, y: 100, w: 12, h: 260 }];
-    const band = { x: 290, y: 150, w: 40, h: 80 };
+  it("spans interior lines to their full text width, not the caret column", () => {
+    const textBoxes = [line(700, 50, 200), line(680, 50, 500), line(660, 50, 200)];
 
-    const rects = computeTextMarkupLineRects(band, textBoxes, true);
+    const rects = computeTextMarkupSelectionRects(
+      { x: 150, y: 706 },
+      { x: 200, y: 664 },
+      textBoxes,
+    );
 
-    expect(rects).toEqual([{ x: 300, y: 150, w: 12, h: 80 }]);
+    // The middle line covers its whole run (w=500) even though both carets
+    // sit in a narrow column — the old bounding-box behavior clipped it.
+    expect(rects[1]).toEqual({ x: 50, y: 680, w: 500, h: 12 });
+    expect(rects[0]).toEqual({ x: 150, y: 700, w: 100, h: 12 });
+    expect(rects[2]).toEqual({ x: 50, y: 660, w: 150, h: 12 });
   });
 
-  it("returns nothing when the band misses all text", () => {
+  it("is direction-independent (dragging up gives the same shape)", () => {
+    const textBoxes = [line(700, 50, 500), line(680, 50, 500)];
+    const downward = computeTextMarkupSelectionRects(
+      { x: 300, y: 706 },
+      { x: 200, y: 684 },
+      textBoxes,
+    );
+    const upward = computeTextMarkupSelectionRects(
+      { x: 200, y: 684 },
+      { x: 300, y: 706 },
+      textBoxes,
+    );
+
+    expect(upward).toEqual(downward);
+  });
+
+  it("flows along the rotated axis on sideways pages", () => {
+    const column = (x: number): PageTextBox => ({ x, y: 100, w: 12, h: 260 });
+    const textBoxes = [column(300), column(340)];
+
+    const rects = computeTextMarkupSelectionRects(
+      { x: 306, y: 200 },
+      { x: 346, y: 300 },
+      textBoxes,
+      true,
+    );
+
+    expect(rects).toEqual([
+      { x: 300, y: 200, w: 12, h: 160 },
+      { x: 340, y: 100, w: 12, h: 200 },
+    ]);
+  });
+
+  it("returns nothing when the drag misses every line", () => {
     expect(
-      computeHighlightLineRects({ x: 0, y: 0, w: 10, h: 10 }, [line(700)]),
+      computeTextMarkupSelectionRects({ x: 0, y: 0 }, { x: 5, y: 5 }, [line(700)]),
     ).toEqual([]);
+    expect(computeTextMarkupSelectionRects({ x: 0, y: 0 }, { x: 5, y: 5 }, [])).toEqual([]);
+  });
+});
+
+describe("clipMarkupRectsToDragBand", () => {
+  it("drops lines outside the drag's cross-line span (greedy whitespace selection)", () => {
+    const rects = [
+      { x: 10, y: 105, w: 100, h: 12 }, // inside the band
+      { x: 10, y: 300, w: 100, h: 12 }, // far below — browser over-selection
+    ];
+    const band = { x: 0, y: 100, w: 500, h: 30 };
+
+    expect(clipMarkupRectsToDragBand(rects, band)).toEqual([{ x: 10, y: 105, w: 100, h: 12 }]);
+  });
+
+  it("keeps a single line for a thin same-line drag via the half-line tolerance", () => {
+    const rects = [{ x: 10, y: 100, w: 200, h: 12 }];
+    const band = { x: 20, y: 104, w: 120, h: 0 };
+
+    expect(clipMarkupRectsToDragBand(rects, band)).toEqual(rects);
+  });
+
+  it("clips along the x axis on sideways pages", () => {
+    const rects = [
+      { x: 100, y: 10, w: 12, h: 200 }, // inside
+      { x: 400, y: 10, w: 12, h: 200 }, // outside
+    ];
+    const band = { x: 90, y: 0, w: 40, h: 300 };
+
+    expect(clipMarkupRectsToDragBand(rects, band, true)).toEqual([
+      { x: 100, y: 10, w: 12, h: 200 },
+    ]);
   });
 });
 

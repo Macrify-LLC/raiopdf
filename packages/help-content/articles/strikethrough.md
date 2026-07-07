@@ -16,7 +16,10 @@ becomes a real PDF annotation you can toggle, delete, or flatten later.
 1. Choose **Strikethrough**, from the toolbar or the **Edit** tools.
 2. Drag across the text you want to mark.
 3. Pick a color if you want something other than the default black.
-4. To remove one, click a strikethrough you've added.
+4. To remove one, double-click a strikethrough you've added.
+
+**Or skip the tool:** with the **Select** tool, select text, then **right-click**
+and choose **Strike through**. Right-click a strikethrough to **Remove** it.
 
 ## What to know
 

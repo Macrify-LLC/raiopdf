@@ -11,7 +11,8 @@ import {
 } from "react";
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
-  computeTextMarkupLineRects,
+  clipMarkupRectsToDragBand,
+  computeTextMarkupSelectionRects,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
@@ -20,7 +21,6 @@ import {
   type PendingCallout,
   type PendingComment,
   type PendingEdit,
-  type PendingEditStatus,
   type PendingShape,
   type PendingStamp,
   type PendingTextBox,
@@ -178,7 +178,6 @@ export interface EditLayerProps {
 export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const [textBoxes, setTextBoxes] = useState<readonly PageTextBox[]>([]);
-  const [textMarkupDraft, setTextMarkupDraft] = useState<ViewportRect | null>(null);
   const [textLayerError, setTextLayerError] = useState<string | null>(null);
   const [drawDraft, setDrawDraft] = useState<readonly ViewportPoint[] | null>(null);
   const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null);
@@ -188,10 +187,10 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [stampGhost, setStampGhost] = useState<StampGhost | null>(null);
-  const [itemContextMenu, setItemContextMenu] = useState<{
+  const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    editId: string;
+    items: ContextMenuItem[];
   } | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
   const drawPointsRef = useRef<ViewportPoint[]>([]);
@@ -203,7 +202,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     addEdit,
     updateEdit,
     removeEdit,
-    setEditStatus,
     // Selection is shared editing state (not per-layer) because one
     // EditLayer mounts per visible page in the continuous-scroll viewer.
     selectedEditId: selectedId,
@@ -215,6 +213,11 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     () => pendingEdits.filter((edit) => edit.pageIndex === pageIndex),
     [pageIndex, pendingEdits],
   );
+  // The double-click markup-removal handler lives in a window listener whose
+  // effect does not re-subscribe on every edit; this ref keeps it reading the
+  // current page edits instead of a stale snapshot.
+  const pageEditsRef = useRef(pageEdits);
+  pageEditsRef.current = pageEdits;
 
   // Loaded eagerly per page so the first text-markup drag never races the
   // async text-layer read.
@@ -250,7 +253,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   }, [page]);
 
   useEffect(() => {
-    setTextMarkupDraft(null);
     setDrawDraft(null);
     setShapeDraft(null);
     setCalloutPlacementDraft(null);
@@ -258,7 +260,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setCommentDraft(null);
     setDragPreview(null);
     setStampGhost(null);
-    setItemContextMenu(null);
+    setContextMenu(null);
     dragStartRef.current = null;
     drawPointsRef.current = [];
     itemDragRef.current = null;
@@ -305,6 +307,14 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       }
 
       if (!selectedIdOnThisPage || isTextEntryTarget(event.target) || hasOpenDialogStackEntry()) {
+        return;
+      }
+
+      // Pinned items are locked: unpin first (they can't be selected while
+      // pinned, but guard anyway so the pin contract holds everywhere).
+      const selected = pageEditsRef.current.find((edit) => edit.id === selectedIdOnThisPage);
+
+      if (selected?.pinned === true) {
         return;
       }
 
@@ -400,7 +410,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       }
 
       dragStartRef.current = point;
-      setTextMarkupDraft(null);
     }
 
     function handlePointerUp(event: PointerEvent) {
@@ -410,62 +419,107 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         return;
       }
 
-      const end = getClientLayerPoint(event.clientX, event.clientY);
-      const textMarkupTool = activeTextMarkupTool;
       dragStartRef.current = null;
-      setTextMarkupDraft(null);
+      const end = getClientLayerPoint(event.clientX, event.clientY);
 
-      window.setTimeout(() => {
+      // A drag creates markup; a bare click (no movement) does not — removal
+      // is the deliberate double-click below, so a stray click never deletes.
+      // Gating on the drag distance also means the word-selection a
+      // double-click leaves behind can't be mistaken for a fresh highlight.
+      if (end) {
+        const band = pointsToViewportRect(start, end);
+
+        if (band.width < 3 && band.height < 3) {
+          window.getSelection()?.removeAllRanges();
+          return;
+        }
+      }
+
+      // Prefer the live text selection so the committed markup matches exactly
+      // the reading-order selection the user saw while dragging, instead of a
+      // bounding box that swallows the whitespace between the two columns.
+      const layer = layerRef.current;
+      let rects: PdfSpaceRect[] = layer ? markupRectsFromSelection(layer, viewport) : [];
+
+      if (rects.length === 0) {
+        // No usable selection (e.g. a page whose text layer failed to load):
+        // fall back to reading-order geometry from the drag endpoints.
         if (!end) {
           window.getSelection()?.removeAllRanges();
           return;
         }
 
-        const band = pointsToViewportRect(start, end);
-
-        if (band.width < 3 && band.height < 3) {
-          removeTextMarkupAtPoint(end, textMarkupTool);
-          window.getSelection()?.removeAllRanges();
-          return;
-        }
-
-        const rects = computeTextMarkupLineRects(
-          viewportRectToPdfRect(band, viewport),
+        rects = computeTextMarkupSelectionRects(
+          viewportPointToPdfPoint(start, viewport),
+          viewportPointToPdfPoint(end, viewport),
           textBoxes,
           sideways,
         );
+      }
 
-        if (rects.length === 0) {
-          editing.setMessage(
-            `No text under that drag — ${textMarkupPlural(textMarkupTool)} attach to text lines.`,
-          );
-          window.getSelection()?.removeAllRanges();
-          return;
-        }
+      // Bound the result to the drag's line span. Dragging into whitespace lets
+      // the browser's text selection run greedily to the end of the page; this
+      // keeps only the lines the drag actually crossed (full reading-order width
+      // preserved — the clip is on the cross-line axis only).
+      if (end) {
+        rects = clipMarkupRectsToDragBand(
+          rects,
+          viewportRectToPdfRect(pointsToViewportRect(start, end), viewport),
+          sideways,
+        );
+      }
 
-        addTextMarkup(textMarkupTool, rects);
+      if (rects.length === 0) {
+        editing.setMessage(
+          `No text under that drag — ${textMarkupPlural(activeTextMarkupTool)} attach to text lines.`,
+        );
         window.getSelection()?.removeAllRanges();
-      }, 0);
+        return;
+      }
+
+      addTextMarkup(activeTextMarkupTool, rects);
+      window.getSelection()?.removeAllRanges();
+    }
+
+    // Double-click an existing markup to remove it — deliberate, so reading
+    // over a page never deletes a highlight by accident.
+    function handleDoubleClick(event: MouseEvent) {
+      const point = getClientLayerPoint(event.clientX, event.clientY, { requireInside: true });
+
+      if (!point) {
+        return;
+      }
+
+      const pdfPoint = viewportPointToPdfPoint(point, viewport);
+      const hit = textMarkupAtPoint(pageEditsRef.current, pdfPoint, activeTextMarkupTool);
+
+      if (hit) {
+        removeEdit(hit.id);
+        editing.setMessage(null);
+        window.getSelection()?.removeAllRanges();
+      }
     }
 
     function handlePointerCancel() {
       dragStartRef.current = null;
-      setTextMarkupDraft(null);
     }
 
     window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointerup", handlePointerUp, true);
     window.addEventListener("pointercancel", handlePointerCancel, true);
+    window.addEventListener("dblclick", handleDoubleClick, true);
 
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointerup", handlePointerUp, true);
       window.removeEventListener("pointercancel", handlePointerCancel, true);
+      window.removeEventListener("dblclick", handleDoubleClick, true);
     };
   }, [
     addTextMarkup,
     editing,
     getClientLayerPoint,
+    removeEdit,
     sideways,
     textBoxes,
     tool,
@@ -498,25 +552,46 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           return null;
         }
 
-        addEdit({
-          kind: "callout",
-          id: newEditId(),
-          pageIndex,
-          rect,
-          tip: viewportPointToPdfPoint(draft.tip, viewport),
-          text,
-          fontSizePt: draft.fontSizePt,
-          ...(draft.color ? { color: draft.color } : {}),
-          fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
-          bold: Boolean(draft.bold),
-          italic: Boolean(draft.italic),
-          align: draft.align ?? DEFAULT_TEXT_ALIGN,
-          strokeWidthPt: draft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
-          ...(draft.strokeColor ? { strokeColor: draft.strokeColor } : {}),
-          arrowhead: draft.arrowhead ?? true,
-          boxBorder: draft.boxBorder ?? true,
-          ...(draft.boxFill ? { boxFill: draft.boxFill } : {}),
-        });
+        if (draft.editId) {
+          // Re-editing an existing callout: update text/box in place and leave
+          // the leader's `tip` (and stroke/arrowhead/fill) untouched via spread,
+          // so the callout keeps pointing at the same target.
+          updateEdit(draft.editId, (edit) =>
+            edit.kind === "callout"
+              ? {
+                  ...edit,
+                  rect,
+                  text,
+                  fontSizePt: draft.fontSizePt,
+                  ...(draft.color ? { color: draft.color } : {}),
+                  fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+                  bold: Boolean(draft.bold),
+                  italic: Boolean(draft.italic),
+                  align: draft.align ?? DEFAULT_TEXT_ALIGN,
+                }
+              : edit,
+          );
+        } else {
+          addEdit({
+            kind: "callout",
+            id: newEditId(),
+            pageIndex,
+            rect,
+            tip: viewportPointToPdfPoint(draft.tip, viewport),
+            text,
+            fontSizePt: draft.fontSizePt,
+            ...(draft.color ? { color: draft.color } : {}),
+            fontFamily: draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+            bold: Boolean(draft.bold),
+            italic: Boolean(draft.italic),
+            align: draft.align ?? DEFAULT_TEXT_ALIGN,
+            strokeWidthPt: draft.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+            ...(draft.strokeColor ? { strokeColor: draft.strokeColor } : {}),
+            arrowhead: draft.arrowhead ?? true,
+            boxBorder: draft.boxBorder ?? true,
+            ...(draft.boxFill ? { boxFill: draft.boxFill } : {}),
+          });
+        }
       } else if (draft.editId) {
         updateEdit(draft.editId, (edit) =>
           edit.kind === "textBox"
@@ -660,13 +735,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
-    if (isTextMarkupTool(tool)) {
-      dragStartRef.current = point;
-      setTextMarkupDraft({ left: point.x, top: point.y, width: 0, height: 0 });
-      event.currentTarget.setPointerCapture(event.pointerId);
-      return;
-    }
-
     if (tool === "draw") {
       drawPointsRef.current = [point];
       setDrawDraft([point]);
@@ -791,11 +859,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
-    if (isTextMarkupTool(tool) && dragStartRef.current) {
-      setTextMarkupDraft(pointsToViewportRect(dragStartRef.current, point));
-      return;
-    }
-
     if (tool === "draw" && drawPointsRef.current.length > 0) {
       const lastPoint = drawPointsRef.current.at(-1);
 
@@ -844,57 +907,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   function handleLayerPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const point = getLayerPoint(event);
-
-    if (isTextMarkupTool(tool) && dragStartRef.current) {
-      const textMarkupTool = tool;
-      const start = dragStartRef.current;
-      dragStartRef.current = null;
-      setTextMarkupDraft(null);
-
-      if (!point) {
-        return;
-      }
-
-      const band = pointsToViewportRect(start, point);
-
-      if (band.width < 3 && band.height < 3) {
-        removeTextMarkupAtPoint(point, textMarkupTool);
-        return;
-      }
-
-      const rects = computeTextMarkupLineRects(
-        viewportRectToPdfRect(band, viewport),
-        textBoxes,
-        sideways,
-      );
-
-      if (rects.length === 0) {
-        editing.setMessage(
-          `No text under that drag — ${textMarkupPlural(textMarkupTool)} attach to text lines.`,
-        );
-        return;
-      }
-
-      editing.setMessage(null);
-      if (textMarkupTool === "highlight") {
-        addEdit({
-          kind: "highlight",
-          id: newEditId(),
-          pageIndex,
-          rects,
-          ...editing.highlightStyle,
-        });
-      } else {
-        addEdit({
-          kind: textMarkupTool,
-          id: newEditId(),
-          pageIndex,
-          rects,
-          ...editing.textMarkupStyles[textMarkupTool],
-        });
-      }
-      return;
-    }
 
     if (tool === "draw" && drawPointsRef.current.length > 0) {
       const points = drawPointsRef.current;
@@ -992,23 +1004,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
   function handleLayerPointerCancel() {
     dragStartRef.current = null;
     drawPointsRef.current = [];
-    setTextMarkupDraft(null);
     setDrawDraft(null);
     setShapeDraft(null);
     setCalloutPlacementDraft(null);
-  }
-
-  function removeTextMarkupAtPoint(point: ViewportPoint, kind: TextMarkupToolId) {
-    const pdfPoint = viewportPointToPdfPoint(point, viewport);
-    const hit = pageEdits.find(
-      (edit) =>
-        edit.kind === kind &&
-        edit.rects.some((rect) => pdfRectContainsPoint(rect, pdfPoint)),
-    );
-
-    if (hit) {
-      removeEdit(hit.id);
-    }
   }
 
   function removeShapeAtPoint(point: ViewportPoint, shape: PendingShape["shape"]) {
@@ -1017,7 +1015,16 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     for (let index = pageEdits.length - 1; index >= 0; index -= 1) {
       const edit = pageEdits[index];
 
-      if (edit?.kind === "shape" && edit.shape === shape && shapeHitTest(edit, pdfPoint)) {
+      // Skip pinned shapes: they're locked, and (unlike text boxes) shapes get
+      // no click-through CSS, so a pinned shape's pointerdown bubbles here — it
+      // must not be deleted by a same-kind-tool click. Mirrors the `removable`
+      // guard on the shape's own click handler.
+      if (
+        edit?.kind === "shape" &&
+        edit.pinned !== true &&
+        edit.shape === shape &&
+        shapeHitTest(edit, pdfPoint)
+      ) {
         removeEdit(edit.id);
         return;
       }
@@ -1026,11 +1033,17 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   function beginItemDrag(
     event: ReactPointerEvent<HTMLElement | SVGElement>,
-    edit: PendingTextBox | PendingStamp | PendingShape,
+    edit: PendingTextBox | PendingStamp | PendingShape | PendingCallout,
     mode: "move" | "resize",
     corner: ResizeCorner | null = null,
   ) {
     if (event.button !== 0) {
+      return;
+    }
+
+    // A pinned item is locked in place — CSS makes its body click-through, but
+    // guard here too so it can never be dragged even if a handler still fires.
+    if (edit.pinned === true) {
       return;
     }
 
@@ -1063,7 +1076,8 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         startClientX: event.clientX,
         startClientY: event.clientY,
         startRect: pdfRectToViewportRect(rect, viewport),
-        aspectRatio: edit.kind === "textBox" || edit.kind === "shape" ? null : edit.aspectRatio,
+        aspectRatio:
+          edit.kind === "image" || edit.kind === "signature" ? edit.aspectRatio : null,
         moved: false,
       };
     }
@@ -1145,10 +1159,13 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               viewport,
             );
       const pdfRect = viewportRectToPdfRect(rect, viewport);
+      // A callout drag moves only its box; its `tip` stays put so the leader
+      // re-anchors to the same target point.
       updateEdit(drag.id, (edit) =>
         edit.kind === "textBox" ||
         edit.kind === "image" ||
         edit.kind === "signature" ||
+        edit.kind === "callout" ||
         (edit.kind === "shape" && !isLinePendingShape(edit))
           ? { ...edit, rect: pdfRect }
           : edit,
@@ -1177,10 +1194,168 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     suppressPlacement();
   }
 
+  function openCalloutForEditing(edit: PendingCallout) {
+    setSelectedId(null);
+    setTextDraft({
+      kind: "callout",
+      editId: edit.id,
+      rect: pdfRectToViewportRect(edit.rect, viewport),
+      tip: pdfPointToViewport(edit.tip, viewport),
+      text: edit.text,
+      fontSizePt: edit.fontSizePt,
+      ...(edit.color ? { color: edit.color } : {}),
+      fontFamily: edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
+      bold: Boolean(edit.bold),
+      italic: Boolean(edit.italic),
+      align: edit.align ?? DEFAULT_TEXT_ALIGN,
+      strokeWidthPt: edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT,
+      ...(edit.strokeColor ? { strokeColor: edit.strokeColor } : {}),
+      arrowhead: edit.arrowhead ?? true,
+      boxBorder: edit.boxBorder ?? true,
+      ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
+    });
+    suppressPlacement();
+  }
+
   function openCommentForEditing(edit: PendingComment) {
     setCommentDraft({ editId: edit.id, at: edit.at, text: edit.text });
     suppressPlacement();
   }
+
+  // Pinning locks an item (click-through, no drag/delete) — a user action kept
+  // separate from `status` so imported (applied) annotations stay interactive.
+  // Pinning also drops the item out of the selection, otherwise its chrome
+  // would linger and Delete could still target it.
+  const setPinned = useCallback(
+    (id: string, pinned: boolean) => {
+      updateEdit(id, (edit) => ({ ...edit, pinned }));
+
+      if (pinned && selectedId === id) {
+        setSelectedId(null);
+      }
+    },
+    [selectedId, setSelectedId, updateEdit],
+  );
+
+  // Unified right-click menu. A window-level capture listener is the only way to
+  // see every right-click: in Select mode the layer is pointer-events:none
+  // except interactive items, and markups + the selectable text layer sit
+  // beneath it, so element-level onContextMenu can't reach them. The handler is
+  // reassigned each render (fresh pageEdits/closures); the listener subscribes
+  // once. Pinned items are click-through, so they're skipped in the geometric
+  // hit-test — a right-click over a pinned annotation falls through to the
+  // markup or text selection underneath (unpin via the badge's left-click).
+  const contextMenuHandlerRef = useRef<(event: MouseEvent) => void>(() => {});
+  contextMenuHandlerRef.current = (event: MouseEvent) => {
+    // Stay out of the way of an open inline editor (so its native paste menu
+    // works and Delete/Pin can't mutate the box being typed into) and while a
+    // dialog owns the canvas. A right-click inside a text field is never ours.
+    if (
+      textDraft ||
+      commentDraft ||
+      isTextEntryTarget(event.target) ||
+      hasOpenDialogStackEntry()
+    ) {
+      return;
+    }
+
+    const point = getClientLayerPoint(event.clientX, event.clientY, { requireInside: true });
+
+    if (!point) {
+      return;
+    }
+
+    const pdfPoint = viewportPointToPdfPoint(point, viewport);
+    const edits = pageEditsRef.current;
+    let items: ContextMenuItem[] | null = null;
+    let selectId: string | null = null;
+
+    // 1. Topmost UNPINNED floating item / shape under the cursor.
+    for (let index = edits.length - 1; index >= 0; index -= 1) {
+      const edit = edits[index];
+
+      if (!edit || edit.pinned === true || !editHitTest(edit, pdfPoint)) {
+        continue;
+      }
+
+      items = buildEditContextMenu(edit, {
+        removeEdit,
+        setPinned,
+        openTextBoxForEditing,
+        openCalloutForEditing,
+        openCommentForEditing,
+      });
+      selectId = edit.kind === "comment" ? null : edit.id;
+      break;
+    }
+
+    // 2. Existing markup under the cursor.
+    if (!items) {
+      const markup = textMarkupAtPoint(edits, pdfPoint);
+
+      if (markup) {
+        items = [
+          {
+            label: `Remove ${textMarkupLabel(markup.kind).toLowerCase()}`,
+            danger: true,
+            onSelect: () => removeEdit(markup.id),
+          },
+        ];
+      }
+    }
+
+    // 3. Any active text selection on this page → copy it, or mark it up
+    // without switching tools. `selectedText` is captured now because clicking
+    // a menu item collapses the selection before the action runs.
+    if (!items) {
+      const layer = layerRef.current;
+      const selectionRects = layer ? markupRectsFromSelection(layer, viewport) : [];
+
+      if (selectionRects.length > 0) {
+        const selectedText = window.getSelection()?.toString() ?? "";
+        const markupFromSelection = (kind: TextMarkupToolId) => () => {
+          addTextMarkup(kind, selectionRects);
+          window.getSelection()?.removeAllRanges();
+        };
+
+        items = [
+          {
+            label: "Copy",
+            onSelect: () => {
+              if (selectedText) {
+                void navigator.clipboard?.writeText(selectedText).catch(() => undefined);
+              }
+            },
+          },
+          { label: "Highlight", onSelect: markupFromSelection("highlight") },
+          { label: "Underline", onSelect: markupFromSelection("underline") },
+          { label: "Strike through", onSelect: markupFromSelection("strikethrough") },
+        ];
+      }
+    }
+
+    if (!items || items.length === 0) {
+      return; // Nothing to offer — leave the platform default alone.
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (selectId) {
+      setSelectedId(selectId);
+    }
+
+    setContextMenu({ x: event.clientX, y: event.clientY, items });
+  };
+
+  useEffect(() => {
+    function handleContextMenu(event: MouseEvent) {
+      contextMenuHandlerRef.current(event);
+    }
+
+    window.addEventListener("contextmenu", handleContextMenu, true);
+    return () => window.removeEventListener("contextmenu", handleContextMenu, true);
+  }, []);
 
   const interactive = tool !== "select";
   const inkEdits = pageEdits.filter((edit) => edit.kind === "ink");
@@ -1200,13 +1375,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       {pageEdits.map((edit) => {
         if (isPendingTextMarkup(edit)) {
           return (
-            <TextMarkupOverlay
-              key={edit.id}
-              edit={edit}
-              viewport={viewport}
-              scale={scale}
-              removable={tool === edit.kind}
-            />
+            <TextMarkupOverlay key={edit.id} edit={edit} viewport={viewport} scale={scale} />
           );
         }
 
@@ -1243,26 +1412,37 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
                 )
               }
               onRemove={() => removeEdit(edit.id)}
-              onStatusChange={(status) => setEditStatus(edit.id, status)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedId(edit.id);
-                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-              }}
+              onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
             />
           );
         }
 
         if (edit.kind === "callout") {
+          // While this callout's inline editor is open, the draft renders the
+          // box + leader; hide the placed overlay so they don't double up.
+          if (textDraft?.editId === edit.id) {
+            return null;
+          }
+
           return (
             <CalloutOverlay
               key={edit.id}
               edit={edit}
               viewport={viewport}
               scale={scale}
-              removable={tool === "callout"}
+              selected={selectedId === edit.id}
+              previewRect={
+                dragPreview?.id === edit.id && dragPreview.kind === "rect"
+                  ? dragPreview.rect
+                  : null
+              }
+              onPointerDown={(event) => beginItemDrag(event, edit, "move")}
+              onPointerMove={handleItemPointerMove}
+              onPointerUp={handleItemPointerUp}
+              onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
+              onEditRequested={() => openCalloutForEditing(edit)}
               onRemove={() => removeEdit(edit.id)}
+              onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
             />
           );
         }
@@ -1284,13 +1464,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onPointerUp={handleItemPointerUp}
               onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
               onRemove={() => removeEdit(edit.id)}
-              onStatusChange={(status) => setEditStatus(edit.id, status)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setSelectedId(edit.id);
-                setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-              }}
+              onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
             />
           );
         }
@@ -1367,12 +1541,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           onPointerMove={handleItemPointerMove}
           onPointerUp={handleItemPointerUp}
           onRemove={removeEdit}
-          onContextMenu={(event, edit) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setSelectedId(edit.id);
-            setItemContextMenu({ x: event.clientX, y: event.clientY, editId: edit.id });
-          }}
         />
       ) : null}
 
@@ -1381,17 +1549,6 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           draft={calloutPlacementDraft}
           scale={scale}
           editing={editing}
-        />
-      ) : null}
-
-      {textMarkupDraft ? (
-        <span
-          className="edit-layer__highlight-draft"
-          style={highlightStyle(
-            textMarkupDraft,
-            activeTextMarkupDraftColor(tool, editing),
-            activeTextMarkupDraftOpacity(tool, editing),
-          )}
         />
       ) : null}
 
@@ -1460,95 +1617,149 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         />
       ) : null}
 
-      {itemContextMenu ? (
+      {contextMenu ? (
         <ContextMenu
-          x={itemContextMenu.x}
-          y={itemContextMenu.y}
-          items={buildItemContextMenuItems(itemContextMenu.editId, pendingEdits, removeEdit, setEditStatus)}
-          onClose={() => setItemContextMenu(null)}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
         />
       ) : null}
     </div>
   );
 }
 
-function buildItemContextMenuItems(
-  editId: string,
-  pendingEdits: readonly PendingEdit[],
-  removeEdit: (id: string) => void,
-  setEditStatus: EditingState["setEditStatus"],
-): ContextMenuItem[] {
-  const edit = pendingEdits.find((candidate) => candidate.id === editId);
-  const isApplied = edit?.status === "applied";
+/**
+ * Topmost text markup whose rects contain the point, optionally restricted to
+ * one kind. Shared by the double-click removal and the right-click menu.
+ */
+function textMarkupAtPoint(
+  edits: readonly PendingEdit[],
+  point: PdfSpacePoint,
+  kind?: TextMarkupToolId,
+): Extract<PendingEdit, { kind: TextMarkupToolId }> | null {
+  for (let index = edits.length - 1; index >= 0; index -= 1) {
+    const edit = edits[index];
 
-  return [
-    {
-      label: isApplied ? "Unpin" : "Pin",
-      onSelect: () => setEditStatus(editId, isApplied ? "draft" : "applied"),
-    },
-    {
-      label: "Delete",
-      danger: true,
-      onSelect: () => removeEdit(editId),
-    },
-  ];
+    if (
+      edit &&
+      isPendingTextMarkup(edit) &&
+      (kind === undefined || edit.kind === kind) &&
+      edit.rects.some((rect) => pdfRectContainsPoint(rect, point))
+    ) {
+      return edit;
+    }
+  }
+
+  return null;
 }
 
+/**
+ * Hit-tests one pending edit against a PDF-space point: floating boxes and
+ * shapes by geometry, a comment by its icon rect. Markup and ink are not
+ * hit-tested here (markup has its own path; ink has no menu).
+ */
+function editHitTest(edit: PendingEdit, point: PdfSpacePoint): boolean {
+  switch (edit.kind) {
+    case "textBox":
+    case "callout":
+    case "image":
+    case "signature":
+      return pdfRectContainsPoint(edit.rect, point);
+    case "comment":
+      return pdfRectContainsPoint(
+        { x: edit.at.x, y: edit.at.y, w: COMMENT_ICON_SIZE_PT, h: COMMENT_ICON_SIZE_PT },
+        point,
+      );
+    case "shape":
+      return shapeHitTest(edit, point);
+    default:
+      return false;
+  }
+}
+
+/**
+ * The right-click menu for an unpinned floating item or shape. Pinned items are
+ * excluded upstream (they're click-through), so everything reaching here is
+ * unpinned: Pin + Delete for all, plus Edit text / Open note for the kinds that
+ * have an inline editor. Comments aren't in the pin model — Open + Delete only.
+ */
+function buildEditContextMenu(
+  edit: PendingEdit,
+  actions: {
+    removeEdit: (id: string) => void;
+    setPinned: (id: string, pinned: boolean) => void;
+    openTextBoxForEditing: (edit: PendingTextBox) => void;
+    openCalloutForEditing: (edit: PendingCallout) => void;
+    openCommentForEditing: (edit: PendingComment) => void;
+  },
+): ContextMenuItem[] {
+  if (edit.kind === "comment") {
+    return [
+      { label: "Open note", onSelect: () => actions.openCommentForEditing(edit) },
+      { label: "Delete", danger: true, onSelect: () => actions.removeEdit(edit.id) },
+    ];
+  }
+
+  const items: ContextMenuItem[] = [];
+
+  if (edit.kind === "textBox") {
+    items.push({ label: "Edit text", onSelect: () => actions.openTextBoxForEditing(edit) });
+  }
+
+  if (edit.kind === "callout") {
+    items.push({ label: "Edit text", onSelect: () => actions.openCalloutForEditing(edit) });
+  }
+
+  items.push({ label: "Pin", onSelect: () => actions.setPinned(edit.id, true) });
+  items.push({ label: "Delete", danger: true, onSelect: () => actions.removeEdit(edit.id) });
+
+  return items;
+}
+
+// Text markup renders as page-anchored decoration only; removal is the
+// window-level double-click handler on the active markup tool (the layer is
+// pointer-events:none in markup mode so the browser drives text selection).
 function TextMarkupOverlay({
   edit,
   viewport,
   scale,
-  removable,
 }: {
   edit: Extract<PendingEdit, { kind: TextMarkupToolId }>;
   viewport: PageViewport;
   scale: number;
-  removable: boolean;
 }) {
   if (edit.kind !== "highlight") {
     const color = pdfEditColorToHex(edit.color ?? DEFAULT_TEXT_MARKUP_COLOR);
     const strokeWidth = (edit.thicknessPt ?? DEFAULT_TEXT_MARKUP_THICKNESS_PT) * scale;
 
     return (
-      <>
-        <svg
-          className="edit-layer__text-markup-lines"
-          width={viewport.width}
-          height={viewport.height}
-          viewBox={`0 0 ${viewport.width} ${viewport.height}`}
-          aria-hidden="true"
-        >
-          {edit.rects.map((rect, rectIndex) => {
-            const lineY = edit.kind === "underline" ? rect.y : rect.y + rect.h * 0.5;
-            const [startX, startY] = viewport.convertToViewportPoint(rect.x, lineY);
-            const [endX, endY] = viewport.convertToViewportPoint(rect.x + rect.w, lineY);
+      <svg
+        className="edit-layer__text-markup-lines"
+        width={viewport.width}
+        height={viewport.height}
+        viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+        aria-hidden="true"
+      >
+        {edit.rects.map((rect, rectIndex) => {
+          const lineY = edit.kind === "underline" ? rect.y : rect.y + rect.h * 0.5;
+          const [startX, startY] = viewport.convertToViewportPoint(rect.x, lineY);
+          const [endX, endY] = viewport.convertToViewportPoint(rect.x + rect.w, lineY);
 
-            return (
-              <line
-                key={`${edit.id}-${rectIndex}`}
-                x1={startX}
-                y1={startY}
-                x2={endX}
-                y2={endY}
-                stroke={color}
-                strokeWidth={strokeWidth}
-                strokeLinecap="butt"
-              />
-            );
-          })}
-        </svg>
-        {removable
-          ? edit.rects.map((rect, rectIndex) => (
-              <span
-                key={`${edit.id}-hit-${rectIndex}`}
-                className="edit-layer__text-markup-hit"
-                data-removable="true"
-                style={toOverlayStyle(pdfRectToViewportRect(rect, viewport))}
-                title={`Click to remove this ${textMarkupLabel(edit.kind).toLowerCase()}`}
-              />
-            ))
-          : null}
-      </>
+          return (
+            <line
+              key={`${edit.id}-${rectIndex}`}
+              x1={startX}
+              y1={startY}
+              x2={endX}
+              y2={endY}
+              stroke={color}
+              strokeWidth={strokeWidth}
+              strokeLinecap="butt"
+            />
+          );
+        })}
+      </svg>
     );
   }
 
@@ -1558,13 +1769,11 @@ function TextMarkupOverlay({
         <span
           key={`${edit.id}-${rectIndex}`}
           className="edit-layer__highlight"
-          data-removable={removable ? "true" : undefined}
           style={highlightStyle(
             pdfRectToViewportRect(rect, viewport),
             edit.color ?? DEFAULT_HIGHLIGHT_COLOR,
             edit.opacity ?? DEFAULT_HIGHLIGHT_OPACITY,
           )}
-          title={removable ? "Click to remove this highlight" : undefined}
         />
       ))}
     </>
@@ -1584,7 +1793,6 @@ function ShapeSvgOverlay({
   onPointerMove,
   onPointerUp,
   onRemove,
-  onContextMenu,
 }: {
   shapes: readonly PendingShape[];
   draft: ShapeDraft | null;
@@ -1598,7 +1806,6 @@ function ShapeSvgOverlay({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: (id: string) => void;
-  onContextMenu: (event: ReactMouseEvent<SVGElement>, edit: PendingShape) => void;
 }) {
   return (
     <svg
@@ -1616,12 +1823,15 @@ function ShapeSvgOverlay({
           scale={scale}
           selected={selectedId === shape.id}
           preview={dragPreview?.id === shape.id ? dragPreview : null}
-          removable={isShapeTool(activeTool) && shapeKindFromTool(activeTool) === shape.shape}
+          removable={
+            shape.pinned !== true &&
+            isShapeTool(activeTool) &&
+            shapeKindFromTool(activeTool) === shape.shape
+          }
           onPointerDown={(event) => onBeginDrag(event, shape)}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onRemove={() => onRemove(shape.id)}
-          onContextMenu={(event) => onContextMenu(event, shape)}
         />
       ))}
       {draft ? <ShapeDraftElement draft={draft} scale={scale} editing={editing} /> : null}
@@ -1640,7 +1850,6 @@ function ShapeElement({
   onPointerMove,
   onPointerUp,
   onRemove,
-  onContextMenu,
 }: {
   shape: PendingShape;
   viewport: PageViewport;
@@ -1652,7 +1861,6 @@ function ShapeElement({
   onPointerMove: (event: ReactPointerEvent<SVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGElement>) => void;
   onRemove: () => void;
-  onContextMenu: (event: ReactMouseEvent<SVGElement>) => void;
 }) {
   const displayShape = shapeWithPreview(shape, preview, viewport);
   const stroke = pdfEditColorToHex(shape.strokeColor ?? DEFAULT_SHAPE_STROKE_COLOR);
@@ -1668,7 +1876,6 @@ function ShapeElement({
     onPointerDown,
     onPointerMove,
     onPointerUp,
-    onContextMenu,
     onClick: removable
       ? (event: ReactMouseEvent<SVGElement>) => {
           event.stopPropagation();
@@ -1936,24 +2143,6 @@ function arrowHeadPoints(
   return `${to.x},${to.y} ${left.x},${left.y} ${right.x},${right.y}`;
 }
 
-function activeTextMarkupDraftColor(tool: string, editing: EditingState): PdfEditColor {
-  if (tool === "highlight") {
-    return editing.highlightStyle.color ?? DEFAULT_HIGHLIGHT_COLOR;
-  }
-
-  if (tool === "underline" || tool === "strikethrough") {
-    return editing.textMarkupStyles[tool].color ?? DEFAULT_TEXT_MARKUP_COLOR;
-  }
-
-  return DEFAULT_HIGHLIGHT_COLOR;
-}
-
-function activeTextMarkupDraftOpacity(tool: string, editing: EditingState): number {
-  return tool === "highlight"
-    ? editing.highlightStyle.opacity ?? DEFAULT_HIGHLIGHT_OPACITY
-    : 0.2;
-}
-
 function textMarkupLabel(tool: TextMarkupToolId): string {
   switch (tool) {
     case "highlight":
@@ -1973,19 +2162,36 @@ function CalloutOverlay({
   edit,
   viewport,
   scale,
-  removable,
+  selected,
+  previewRect,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onResizeStart,
+  onEditRequested,
   onRemove,
+  onTogglePin,
 }: {
   edit: PendingCallout;
   viewport: PageViewport;
   scale: number;
-  removable: boolean;
+  selected: boolean;
+  previewRect: ViewportRect | null;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
+  onEditRequested: () => void;
   onRemove: () => void;
+  onTogglePin: () => void;
 }) {
-  const rect = pdfRectToViewportRect(edit.rect, viewport);
+  // The box follows the drag preview; the tip stays put, so the leader
+  // re-anchors to the same target while the box moves.
+  const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
   const tip = pdfPointToViewport(edit.tip, viewport);
   const strokeColor = edit.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR;
   const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
+  const pinned = edit.pinned === true;
   const font = useTextBoxPreviewFont(
     edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
     Boolean(edit.bold),
@@ -2013,27 +2219,24 @@ function CalloutOverlay({
         arrowhead={edit.arrowhead ?? true}
         width={viewport.width}
         height={viewport.height}
-        removable={removable}
-        onRemove={onRemove}
       />
       <div
         className="edit-layer__item edit-layer__callout-box"
-        data-removable={removable ? "true" : undefined}
+        data-selected={selected ? "true" : undefined}
+        data-status={edit.status}
+      data-pinned={pinned ? "true" : undefined}
         style={{
           ...toOverlayStyle(rect),
           ...(edit.boxFill ? { backgroundColor: pdfEditColorToHex(edit.boxFill) } : {}),
           borderColor: pdfEditColorToHex(strokeColor),
         }}
-        title={removable ? "Click to remove this callout" : undefined}
-        onPointerDown={removable ? (event) => event.stopPropagation() : undefined}
-        onClick={
-          removable
-            ? (event) => {
-                event.stopPropagation();
-                onRemove();
-              }
-            : undefined
-        }
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          onEditRequested();
+        }}
       >
         <span
           className="edit-layer__text-content"
@@ -2045,6 +2248,12 @@ function CalloutOverlay({
             </span>
           ))}
         </span>
+        <PinControls
+          pinned={pinned}
+          onTogglePin={onTogglePin}
+          onRemove={onRemove}
+        />
+        {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
       </div>
     </>
   );
@@ -2096,8 +2305,6 @@ function CalloutLeaderSvg({
   arrowhead,
   width,
   height,
-  removable = false,
-  onRemove,
 }: {
   rect: ViewportRect;
   tip: ViewportPoint;
@@ -2107,8 +2314,6 @@ function CalloutLeaderSvg({
   arrowhead: boolean;
   width: number;
   height: number;
-  removable?: boolean;
-  onRemove?: () => void;
 }) {
   const anchor = computeCalloutLeaderAnchor(rect, tip);
   const stroke = pdfEditColorToHex(strokeColor);
@@ -2136,20 +2341,6 @@ function CalloutLeaderSvg({
           fill={stroke}
           stroke={stroke}
           strokeWidth={0}
-        />
-      ) : null}
-      {removable ? (
-        <line
-          className="edit-layer__callout-hit-line"
-          x1={anchor.x}
-          y1={anchor.y}
-          x2={tip.x}
-          y2={tip.y}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onRemove?.();
-          }}
         />
       ) : null}
     </svg>
@@ -2204,8 +2395,7 @@ function TextBoxOverlay({
   onFontSizeChange,
   onTextStyleChange,
   onRemove,
-  onStatusChange,
-  onContextMenu,
+  onTogglePin,
 }: {
   edit: PendingTextBox;
   viewport: PageViewport;
@@ -2220,10 +2410,10 @@ function TextBoxOverlay({
   onFontSizeChange: (fontSizePt: number) => void;
   onTextStyleChange: (style: TextBoxStyleUpdate) => void;
   onRemove: () => void;
-  onStatusChange: (status: PendingEditStatus) => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
+  onTogglePin: () => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const pinned = edit.pinned === true;
   const font = useTextBoxPreviewFont(
     edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
     Boolean(edit.bold),
@@ -2245,6 +2435,7 @@ function TextBoxOverlay({
       className="edit-layer__item edit-layer__text-box"
       data-selected={selected ? "true" : undefined}
       data-status={edit.status}
+      data-pinned={pinned ? "true" : undefined}
       style={{
         ...toOverlayStyle(rect),
         ...textBoxBackgroundStyle(edit),
@@ -2252,7 +2443,6 @@ function TextBoxOverlay({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onContextMenu={onContextMenu}
       onDoubleClick={(event) => {
         event.stopPropagation();
         onEditRequested();
@@ -2268,7 +2458,7 @@ function TextBoxOverlay({
           </span>
         ))}
       </span>
-      {selected ? (
+      {selected && !pinned ? (
         <ItemChrome
           fontSizePt={edit.fontSizePt}
           onFontSizeChange={onFontSizeChange}
@@ -2277,12 +2467,14 @@ function TextBoxOverlay({
           italic={Boolean(edit.italic)}
           align={edit.align ?? DEFAULT_TEXT_ALIGN}
           onTextStyleChange={onTextStyleChange}
-          onRemove={onRemove}
-          onStatusChange={onStatusChange}
-          pinned={edit.status === "applied"}
         />
       ) : null}
-      {selected ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
+      <PinControls
+        pinned={pinned}
+        onTogglePin={onTogglePin}
+        onRemove={onRemove}
+      />
+      {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
     </div>
   );
 }
@@ -2297,8 +2489,7 @@ function StampOverlay({
   onPointerUp,
   onResizeStart,
   onRemove,
-  onStatusChange,
-  onContextMenu,
+  onTogglePin,
 }: {
   edit: PendingStamp;
   viewport: PageViewport;
@@ -2309,21 +2500,21 @@ function StampOverlay({
   onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
   onRemove: () => void;
-  onStatusChange: (status: PendingEditStatus) => void;
-  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
+  onTogglePin: () => void;
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const pinned = edit.pinned === true;
 
   return (
     <div
       className="edit-layer__item edit-layer__stamp"
       data-selected={selected ? "true" : undefined}
       data-status={edit.status}
+      data-pinned={pinned ? "true" : undefined}
       style={toOverlayStyle(rect)}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onContextMenu={onContextMenu}
     >
       <img
         className="edit-layer__stamp-image"
@@ -2331,14 +2522,12 @@ function StampOverlay({
         alt={edit.kind === "signature" ? "Pending signature" : "Pending image"}
         draggable={false}
       />
-      {selected ? (
-        <ItemChrome
-          onRemove={onRemove}
-          onStatusChange={onStatusChange}
-          pinned={edit.status === "applied"}
-        />
-      ) : null}
-      {selected ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
+      <PinControls
+        pinned={pinned}
+        onTogglePin={onTogglePin}
+        onRemove={onRemove}
+      />
+      {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
     </div>
   );
 }
@@ -2394,6 +2583,9 @@ function CommentPin({
   );
 }
 
+// The text-styling toolbar for a selected, unpinned text box. Pin and remove
+// affordances live in PinControls (shown on every floating item so its pinned
+// state reads at a glance).
 function ItemChrome({
   fontSizePt,
   onFontSizeChange,
@@ -2402,63 +2594,106 @@ function ItemChrome({
   italic,
   align,
   onTextStyleChange,
-  onRemove,
-  onStatusChange,
-  pinned,
 }: {
-  fontSizePt?: number;
-  onFontSizeChange?: (fontSizePt: number) => void;
-  fontFamily?: PdfTextBoxFontFamily;
-  bold?: boolean;
-  italic?: boolean;
-  align?: PdfTextBoxAlign;
-  onTextStyleChange?: (style: TextBoxStyleUpdate) => void;
-  onRemove: () => void;
-  onStatusChange: (status: PendingEditStatus) => void;
-  pinned: boolean;
+  fontSizePt: number;
+  onFontSizeChange: (fontSizePt: number) => void;
+  fontFamily: PdfTextBoxFontFamily;
+  bold: boolean;
+  italic: boolean;
+  align: PdfTextBoxAlign;
+  onTextStyleChange: (style: TextBoxStyleUpdate) => void;
 }) {
   return (
     <span className="edit-layer__item-chrome" onPointerDown={(event) => event.stopPropagation()}>
-      {fontSizePt !== undefined && onFontSizeChange ? (
-        <select
-          className="edit-layer__font-size"
-          aria-label="Font size"
-          value={fontSizePt}
-          onChange={(event) => onFontSizeChange(Number(event.target.value))}
-        >
-          {TEXT_BOX_FONT_SIZES.map((size) => (
-            <option key={size} value={size}>
-              {size} pt
-            </option>
-          ))}
-        </select>
-      ) : null}
-      {fontFamily && align && onTextStyleChange ? (
-        <TextBoxStyleControls
-          fontFamily={fontFamily}
-          bold={Boolean(bold)}
-          italic={Boolean(italic)}
-          align={align}
-          onChange={onTextStyleChange}
-        />
-      ) : null}
-      <button
-        type="button"
-        className="edit-layer__item-pin"
-        aria-label={pinned ? "Unpin pending edit" : "Pin pending edit"}
-        onClick={() => onStatusChange(pinned ? "draft" : "applied")}
+      <select
+        className="edit-layer__font-size"
+        aria-label="Font size"
+        value={fontSizePt}
+        onChange={(event) => onFontSizeChange(Number(event.target.value))}
       >
-        {pinned ? "Unpin" : "Pin"}
-      </button>
-      <button
-        type="button"
-        className="edit-layer__item-remove"
-        aria-label="Remove pending edit"
-        onClick={onRemove}
-      >
-        ×
-      </button>
+        {TEXT_BOX_FONT_SIZES.map((size) => (
+          <option key={size} value={size}>
+            {size} pt
+          </option>
+        ))}
+      </select>
+      <TextBoxStyleControls
+        fontFamily={fontFamily}
+        bold={bold}
+        italic={italic}
+        align={align}
+        onChange={onTextStyleChange}
+      />
     </span>
+  );
+}
+
+/**
+ * The pin badge (and, when unpinned, the remove X) shown on every floating
+ * annotation. A pinned item's body is click-through so it never intercepts
+ * clicks meant for the text underneath; the badge stays clickable so it can be
+ * unpinned. Removal is deliberately gated behind unpinning — the X only
+ * appears once the item is unpinned.
+ */
+function PinControls({
+  pinned,
+  onTogglePin,
+  onRemove,
+}: {
+  pinned: boolean;
+  onTogglePin: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <span className="edit-layer__pin-controls" onPointerDown={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        className="edit-layer__pin-badge"
+        data-pinned={pinned ? "true" : undefined}
+        aria-label={pinned ? "Unpin annotation" : "Pin annotation"}
+        aria-pressed={pinned}
+        title={
+          pinned
+            ? "Pinned — locked in place and click-through. Click to unpin."
+            : "Pin so it stays put and stops catching clicks."
+        }
+        onClick={(event) => {
+          event.stopPropagation();
+          onTogglePin();
+        }}
+      >
+        <PinGlyph filled={pinned} />
+      </button>
+      {pinned ? null : (
+        <button
+          type="button"
+          className="edit-layer__pin-remove"
+          aria-label="Remove annotation"
+          title="Remove"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
+        >
+          ×
+        </button>
+      )}
+    </span>
+  );
+}
+
+function PinGlyph({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" width={11} height={11} aria-hidden="true" focusable="false">
+      <path
+        d="M8 1.5c-2.35 0-4.25 1.9-4.25 4.25 0 3.2 4.25 8.75 4.25 8.75s4.25-5.55 4.25-8.75C12.25 3.4 10.35 1.5 8 1.5z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth={1.4}
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="5.75" r="1.6" fill={filled ? "var(--panel, #fff)" : "currentColor"} />
+    </svg>
   );
 }
 
@@ -2983,6 +3218,101 @@ function resizeRect(
     width: Math.min(width, viewport.width),
     height: Math.min(height, viewport.height),
   };
+}
+
+/**
+ * Turns the live DOM text selection into per-line PDF rects for this page's
+ * layer. Reading `Selection.getClientRects()` means the committed markup hugs
+ * exactly the reading-order run the browser highlighted while dragging — first
+ * line from the caret to line end, interior lines full width, last line to the
+ * end caret — with page rotation handled by the viewport corner-mapping.
+ * Client rects are clipped to this layer, so a selection dragged across a page
+ * boundary only contributes the portion that lands on this page.
+ */
+function markupRectsFromSelection(
+  layer: HTMLElement,
+  viewport: PageViewport,
+): PdfSpaceRect[] {
+  const selection = window.getSelection();
+
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return [];
+  }
+
+  const bounds = layer.getBoundingClientRect();
+  const clientRects: DOMRect[] = [];
+
+  for (let rangeIndex = 0; rangeIndex < selection.rangeCount; rangeIndex += 1) {
+    for (const rect of Array.from(selection.getRangeAt(rangeIndex).getClientRects())) {
+      const overlapsPage =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.right > bounds.left &&
+        rect.left < bounds.right &&
+        rect.bottom > bounds.top &&
+        rect.top < bounds.bottom;
+
+      if (overlapsPage) {
+        clientRects.push(rect);
+      }
+    }
+  }
+
+  if (clientRects.length === 0) {
+    return [];
+  }
+
+  return mergeClientRectsIntoLines(clientRects)
+    .map((rect) => {
+      const left = clamp(rect.left - bounds.left, 0, bounds.width);
+      const top = clamp(rect.top - bounds.top, 0, bounds.height);
+      const right = clamp(rect.right - bounds.left, 0, bounds.width);
+      const bottom = clamp(rect.bottom - bounds.top, 0, bounds.height);
+
+      return viewportRectToPdfRect(
+        { left, top, width: right - left, height: bottom - top },
+        viewport,
+      );
+    })
+    .filter((rect) => rect.w > 0 && rect.h > 0);
+}
+
+/** Unions the per-span client rects of a selection into one rect per line. */
+function mergeClientRectsIntoLines(
+  rects: readonly DOMRect[],
+): { left: number; top: number; right: number; bottom: number }[] {
+  const sorted = [...rects].sort((left, right) => left.top - right.top || left.left - right.left);
+  const lines: { left: number; top: number; right: number; bottom: number }[] = [];
+
+  for (const rect of sorted) {
+    const line = lines.find((candidate) => {
+      const lineHeight = Math.min(candidate.bottom - candidate.top, rect.height);
+      const verticalOverlap =
+        Math.min(candidate.bottom, rect.bottom) - Math.max(candidate.top, rect.top);
+
+      if (verticalOverlap <= lineHeight * 0.5) {
+        return false;
+      }
+
+      // Same visual line — but only union runs that are horizontally
+      // contiguous. A wide horizontal gap is a multi-column gutter; merging
+      // across it would paint the highlight over the whitespace between the
+      // columns. A normal inter-word/run gap is well under one line height.
+      const horizontalGap = Math.max(rect.left - candidate.right, candidate.left - rect.right, 0);
+      return horizontalGap <= lineHeight;
+    });
+
+    if (line) {
+      line.left = Math.min(line.left, rect.left);
+      line.right = Math.max(line.right, rect.right);
+      line.top = Math.min(line.top, rect.top);
+      line.bottom = Math.max(line.bottom, rect.bottom);
+    } else {
+      lines.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+    }
+  }
+
+  return lines;
 }
 
 type TextContentItemLike = {

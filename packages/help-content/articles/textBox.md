@@ -22,6 +22,12 @@ becomes a real PDF annotation.
 ## What to know
 
 - **It's held until you Save,** then saved as a PDF annotation.
+- **Drag to move it; the corner handles resize it.** Select the box first.
+- **Pin it to lock it.** Click the pin badge in the box's corner to lock the
+  box in place — a pinned box can't be moved or edited and lets clicks pass
+  through to whatever's underneath. Click the pin again to unpin.
+- **Remove it with the ×.** An unpinned box shows a small × next to its pin;
+  click it to delete. Unpin first to reveal the ×.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   text boxes when printing, or turn it off before saving new text boxes.
 - **Flatten markup makes it permanent.** Use **Flatten markup** when you want

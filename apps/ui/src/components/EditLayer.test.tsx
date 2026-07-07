@@ -224,6 +224,36 @@ describe("EditLayer shape removal", () => {
     expect(rects[0]?.getAttribute("x")).toBe("10");
   });
 
+  it("keeps a pinned shape when a same-kind-tool click lands on it", async () => {
+    // Regression: shapes get no click-through CSS, so a pinned shape's
+    // pointerdown reaches the layer; a same-kind-tool click then runs the
+    // tiny-drag removal path, which must skip pinned shapes.
+    await renderEditLayer(
+      [
+        {
+          kind: "shape",
+          id: "pinned-rect",
+          pageIndex: 0,
+          pinned: true,
+          shape: "rect",
+          rect: { x: 20, y: 20, w: 60, h: 40 },
+        },
+      ],
+      "shapeRect", // same kind → an unpinned shape here would be deleted
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 40, 40); // inside the shape
+      dispatchPointerEvent(layer!, "pointerup", 40, 40); // no drag → remove path
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelectorAll("svg.edit-layer__shapes rect")).toHaveLength(1);
+  });
+
   it("clamps captured shape drags that end past the page edge", async () => {
     await renderEditLayer([], "shapeRect");
 
@@ -327,7 +357,7 @@ describe("EditLayer shape removal", () => {
     );
   });
 
-  it("removes a pending callout as one box-and-leader unit", async () => {
+  it("removes a pending callout as one box-and-leader unit via its X", async () => {
     await renderEditLayer(
       [
         {
@@ -340,22 +370,53 @@ describe("EditLayer shape removal", () => {
           fontSizePt: 12,
         },
       ],
-      "callout",
+      "select",
     );
 
     expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(1);
     expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(1);
 
-    const box = container?.querySelector<HTMLElement>(".edit-layer__callout-box");
-    expect(box).not.toBeNull();
+    const remove = container?.querySelector<HTMLElement>(".edit-layer__pin-remove");
+    expect(remove).not.toBeNull();
 
     await act(async () => {
-      box!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      remove!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
 
     expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(0);
     expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(0);
+  });
+
+  it("keeps a pinned callout's X hidden until it is unpinned", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-pinned",
+          pageIndex: 0,
+          pinned: true,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Locked",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    // Pinned: only the pin badge, no X.
+    expect(container?.querySelector(".edit-layer__pin-remove")).toBeNull();
+    const badge = container?.querySelector<HTMLElement>(".edit-layer__pin-badge[data-pinned='true']");
+    expect(badge).not.toBeNull();
+
+    // Unpin, and the X appears.
+    await act(async () => {
+      badge!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelector(".edit-layer__pin-remove")).not.toBeNull();
   });
 
   it("previews callout leaders from the nearest box boundary point", async () => {
@@ -390,8 +451,7 @@ describe("EditLayer shape removal", () => {
       "callout",
     );
 
-    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])]
-      .filter((line) => !line.classList.contains("edit-layer__callout-hit-line"));
+    const leaders = [...(container?.querySelectorAll(".edit-layer__callout-leader line") ?? [])];
 
     expect(leaders).toHaveLength(cases.length);
 
@@ -437,16 +497,47 @@ describe("EditLayer shape removal", () => {
     expect(visibleLine?.getAttribute("y2")).toBe("90");
   });
 
-  it("keeps applied overlay items movable", async () => {
+  it("locks a pinned overlay item against dragging", async () => {
     await renderEditLayer(
       [
         {
           kind: "textBox",
           id: "applied-text",
           pageIndex: 0,
-          status: "applied",
+          pinned: true,
           rect: { x: 20, y: 20, w: 80, h: 30 },
           text: "Applied",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const textBox = container?.querySelector<HTMLElement>(".edit-layer__text-box");
+    expect(textBox).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(textBox!, "pointerdown", 25, 25);
+      dispatchPointerEvent(textBox!, "pointermove", 45, 35);
+      dispatchPointerEvent(textBox!, "pointerup", 45, 35);
+      await Promise.resolve();
+    });
+
+    // Pinned items are locked in place; the drag is a no-op.
+    expect(textBox?.style.left).toBe("20px");
+    expect(textBox?.style.top).toBe("20px");
+  });
+
+  it("keeps an unpinned overlay item draggable", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "textBox",
+          id: "draft-text",
+          pageIndex: 0,
+          pinned: false,
+          rect: { x: 20, y: 20, w: 80, h: 30 },
+          text: "Draft",
           fontSizePt: 12,
         },
       ],
@@ -520,6 +611,347 @@ describe("EditLayer shape removal", () => {
     expect(container?.querySelector(".edit-layer__stamp[data-selected='true']")).not.toBeNull();
   });
 
+  it("right-click on an unpinned callout offers Edit text, Pin and Delete", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-menu",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Note",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40); // inside the callout rect
+      await Promise.resolve();
+    });
+
+    expect(contextMenuLabels(container)).toEqual(["Edit text", "Pin", "Delete"]);
+  });
+
+  it("right-click on a pinned callout falls through (no item menu)", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-pinned-menu",
+          pageIndex: 0,
+          pinned: true,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Locked",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40);
+      await Promise.resolve();
+    });
+
+    // Pinned items are click-through: no item menu, and with nothing beneath,
+    // no context menu at all.
+    expect(container?.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("clicking a context-menu item never falls through to start a placement", async () => {
+    // Regression: with an interactive tool active the edit layer owns
+    // pointerdown; a menu rendered inside it must absorb the item-click's
+    // pointerdown or the click starts a new placement and captures the pointer.
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-menu-passthrough",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Note",
+          fontSizePt: 12,
+        },
+      ],
+      "callout", // the callout tool is active, so the layer is interactive
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40); // inside the callout rect
+      await Promise.resolve();
+    });
+
+    const menuItem = container?.querySelector<HTMLElement>(".context-menu__item");
+    expect(menuItem).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(menuItem!, "pointerdown", 50, 40);
+      await Promise.resolve();
+    });
+
+    // The pointerdown was absorbed by the menu: no callout placement draft
+    // started underneath it.
+    expect(container?.querySelector(".edit-layer__callout-placement")).toBeNull();
+  });
+
+  it("double-clicking a placed callout opens its inline text editor", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-dblclick",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Before",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const box = container?.querySelector<HTMLElement>(".edit-layer__callout-box");
+    expect(box).not.toBeNull();
+
+    await act(async () => {
+      box!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    // The inline editor is open (a draft box with a textarea), and the placed
+    // overlay is hidden so the two don't stack.
+    const textarea = container?.querySelector<HTMLTextAreaElement>(".edit-layer__text-input");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe("Before");
+    expect(container?.querySelectorAll(".edit-layer__callout-box")).toHaveLength(1);
+    expect(
+      container?.querySelector(".edit-layer__callout-box.edit-layer__text-draft"),
+    ).not.toBeNull();
+    // The leader still draws while editing so the callout keeps its target.
+    expect(container?.querySelector(".edit-layer__callout-leader")).not.toBeNull();
+  });
+
+  it("Edit text on a callout menu edits the text in place, keeping the tip", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-edit-menu",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Before",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 50, 40); // inside the callout rect
+      await Promise.resolve();
+    });
+
+    const editItem = [...(container?.querySelectorAll(".context-menu__item") ?? [])].find(
+      (item) => item.textContent === "Edit text",
+    );
+    expect(editItem).toBeTruthy();
+
+    await act(async () => {
+      editItem!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const textarea = container?.querySelector<HTMLTextAreaElement>(".edit-layer__text-input");
+    expect(textarea).not.toBeNull();
+
+    // Retype the note and commit with Enter.
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setValue?.call(textarea, "After");
+      textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      textarea!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    // The editor closed and the placed callout now shows the new text — with a
+    // single box and its leader still anchored at the original tip.
+    expect(container?.querySelector(".edit-layer__text-input")).toBeNull();
+    const boxes = [...(container?.querySelectorAll(".edit-layer__callout-box") ?? [])];
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]?.textContent).toContain("After");
+    expect(container?.querySelectorAll(".edit-layer__callout-leader")).toHaveLength(1);
+  });
+
+  it("right-click on a highlight offers to remove it", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "highlight",
+          id: "hl-menu",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 100, h: 12 }],
+        },
+      ],
+      "select",
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 40, 16); // inside the highlight rect
+      await Promise.resolve();
+    });
+
+    expect(contextMenuLabels(container)).toEqual(["Remove highlight"]);
+
+    const remove = container?.querySelector<HTMLElement>(".context-menu__item");
+    await act(async () => {
+      remove!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelectorAll(".edit-layer__highlight")).toHaveLength(0);
+  });
+
+  it("right-click with a text selection offers markup and creates it", async () => {
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: false,
+      getRangeAt: () => ({
+        getClientRects: () => [
+          { left: 10, top: 20, right: 90, bottom: 32, width: 80, height: 12 },
+        ],
+      }),
+      removeAllRanges: () => undefined,
+    } as unknown as Selection);
+
+    await renderEditLayer([], "select");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5); // not over any item — selection path
+      await Promise.resolve();
+    });
+
+    expect(contextMenuLabels(container)).toEqual([
+      "Copy",
+      "Highlight",
+      "Underline",
+      "Strike through",
+    ]);
+
+    const highlight = [...(container?.querySelectorAll<HTMLElement>(".context-menu__item") ?? [])].find(
+      (item) => item.textContent === "Highlight",
+    );
+    await act(async () => {
+      highlight!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelectorAll(".edit-layer__highlight").length).toBeGreaterThan(0);
+  });
+
+  it("does not union a multi-column selection across the gutter", async () => {
+    // Two runs on the same visual line but in different columns (a wide
+    // horizontal gap). They must stay two rects, not one that paints the gutter.
+    const addEdit = vi.fn();
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: false,
+      getRangeAt: () => ({
+        getClientRects: () => [
+          { left: 10, top: 20, right: 90, bottom: 32, width: 80, height: 12 },
+          { left: 150, top: 20, right: 230, bottom: 32, width: 80, height: 12 },
+        ],
+      }),
+      removeAllRanges: () => undefined,
+    } as unknown as Selection);
+
+    await renderEditLayer([], "select", { addEdit });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5); // selection path, not over an item
+      await Promise.resolve();
+    });
+
+    const highlight = [
+      ...(container?.querySelectorAll<HTMLElement>(".context-menu__item") ?? []),
+    ].find((item) => item.textContent === "Highlight");
+    await act(async () => {
+      highlight!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(addEdit).toHaveBeenCalledTimes(1);
+    const rects = addEdit.mock.calls[0]?.[0]?.rects as { x: number; y: number; w: number; h: number }[];
+    expect(rects).toHaveLength(2);
+    // Neither rect spans the ~60px gutter between the columns.
+    for (const rect of rects) {
+      expect(rect.w).toBeLessThan(100);
+    }
+  });
+
+  it("ignores right-clicks inside a text field so the native menu survives", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "callout",
+          id: "callout-guard",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 90, h: 40 },
+          tip: { x: 160, y: 80 },
+          text: "Note",
+          fontSizePt: 12,
+        },
+      ],
+      "select",
+    );
+
+    // A text field over the annotation (mimics an open inline editor). Even
+    // though the point is inside the callout, the handler must bail.
+    const field = document.createElement("textarea");
+    container!.appendChild(field);
+
+    await act(async () => {
+      dispatchContextMenu(field, 50, 40);
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelector(".context-menu")).toBeNull();
+  });
+
   async function renderEditLayer(
     initialEdits: readonly PendingEdit[],
     tool: EditingState["tool"] = "shapeRect",
@@ -572,6 +1004,8 @@ function EditLayerHarness({
           ),
         draftEditCount: pendingEdits.filter((edit) => edit.status !== "applied").length,
         appliedEditCount: pendingEdits.filter((edit) => edit.status === "applied").length,
+        highlightStyle: {},
+        textMarkupStyles: { underline: {}, strikethrough: {} },
         applyPending: () =>
           setPendingEdits((current) =>
             current.map((edit) => ({ ...edit, status: "applied" })),
@@ -629,6 +1063,18 @@ function dispatchPointerEvent(
 
   Object.defineProperty(event, "pointerId", { value: 1 });
   target.dispatchEvent(event);
+}
+
+function dispatchContextMenu(target: Element, clientX: number, clientY: number): void {
+  target.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, clientX, clientY, button: 2 }),
+  );
+}
+
+function contextMenuLabels(container: HTMLElement | null): string[] {
+  return [...(container?.querySelectorAll(".context-menu__item") ?? [])].map(
+    (item) => item.textContent ?? "",
+  );
 }
 
 function stubLayerBounds(layer: HTMLElement): void {

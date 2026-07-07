@@ -196,6 +196,13 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       style={{ left: `${position.left}px`, top: `${position.top}px` }}
       onKeyDown={handleKeyDown}
       onContextMenu={(event) => event.preventDefault()}
+      // The menu can render inside an interactive layer (e.g. EditLayer with a
+      // shape/callout tool active) whose own pointerdown handler would start a
+      // placement and capture the pointer, swallowing the item click. Absorb
+      // the pointerdown here so selecting an item never falls through to the
+      // content behind the menu. Outside-click dismissal is unaffected — it
+      // runs on a window-level capture listener, before this bubble handler.
+      onPointerDown={(event) => event.stopPropagation()}
     >
       {items.map((item, index) => (
         <button

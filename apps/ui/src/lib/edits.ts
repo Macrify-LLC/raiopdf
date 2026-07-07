@@ -18,7 +18,7 @@ import {
   DEFAULT_SHAPE_STROKE_WIDTH_PT,
   DEFAULT_TEXT_COLOR,
 } from "./editStyles";
-import { pdfRectsIntersect, type PdfSpaceRect } from "./viewportGeometry";
+import { clamp } from "./viewportGeometry";
 
 /**
  * Pending-edit model: every add-content item lives in UI state as an overlay
@@ -52,6 +52,14 @@ interface PendingEditBase {
   id: string;
   pageIndex: number;
   status?: PendingEditStatus;
+  /**
+   * User-applied lock, distinct from `status`. A pinned floating annotation is
+   * locked in place and click-through so it stops intercepting clicks meant for
+   * the text underneath — see the pin affordances in EditLayer. Imported
+   * annotations come back interactive (unpinned) even though their `status` is
+   * `applied`; pinning is only ever the user's explicit action.
+   */
+  pinned?: boolean;
   annotId?: string;
   annotSource?: "raio";
   sourceBaseline?: string;
@@ -542,96 +550,186 @@ export interface PageTextBox {
   h: number;
 }
 
+/** One clustered line of page text, in PDF user-space points. */
+interface MarkupLine {
+  /** Center along the block (cross-line) axis. */
+  blockCenter: number;
+  /** Extent along the block axis (the line's thickness band). */
+  blockMin: number;
+  blockMax: number;
+  /** Extent along the inline (reading) axis — the line's actual text run. */
+  inlineMin: number;
+  inlineMax: number;
+}
+
 /**
- * Turns a drag band into one rectangle per highlighted text line.
+ * Builds text-hugging markup rects for a drag from `anchor` to `focus`, in
+ * reading order: the first line runs from the start caret to end-of-line, any
+ * interior lines span their full text width, and the last line runs from
+ * line-start to the end caret. This mirrors a native text selection rather
+ * than the drag's bounding box, so multi-line markup never bleeds into the
+ * whitespace between the two caret columns.
  *
- * Text runs intersecting the band cluster by their position along the line
- * axis (`y` for upright pages, `x` for sideways pages); each cluster unions
- * into a single line rect. Returns rects in top-to-bottom reading order.
+ * This is the deterministic fallback the edit layer uses when the live DOM
+ * text selection is unavailable (e.g. a page whose text layer failed to
+ * render). When the selection exists, the caller derives rects straight from
+ * it so the committed markup matches exactly what the user saw highlighted.
+ *
+ * Geometry is PDF user-space (bottom-left origin). `sideways` flips the block
+ * and inline axes for `/Rotate` 90/270 pages.
  */
-export function computeTextMarkupLineRects(
-  band: PdfSpaceRect,
+export function computeTextMarkupSelectionRects(
+  anchor: PdfEditPoint,
+  focus: PdfEditPoint,
   textBoxes: readonly PageTextBox[],
   sideways = false,
 ): PdfEditRect[] {
-  const hits = textBoxes
-    .map((box) => clipTextMarkupBoxToBand(box, band, sideways))
-    .filter((box): box is PageTextBox => box !== null);
+  const lines = clusterTextLines(textBoxes, sideways);
 
-  if (hits.length === 0) {
+  if (lines.length === 0) {
     return [];
   }
 
-  const lineKey = (box: PageTextBox) => (sideways ? box.x + box.w / 2 : box.y + box.h / 2);
-  const lineThickness = (box: PageTextBox) => (sideways ? box.w : box.h);
-  const sorted = [...hits].sort((left, right) => lineKey(left) - lineKey(right));
+  const blockOf = (point: PdfEditPoint) => (sideways ? point.x : point.y);
+  const inlineOf = (point: PdfEditPoint) => (sideways ? point.y : point.x);
+  const anchorBlock = blockOf(anchor);
+  const focusBlock = blockOf(focus);
+  const blockLow = Math.min(anchorBlock, focusBlock);
+  const blockHigh = Math.max(anchorBlock, focusBlock);
+
+  // Lines whose thickness band overlaps the dragged block interval — the
+  // lines the caret actually swept across.
+  const covered = lines.filter(
+    (line) => line.blockMax >= blockLow && line.blockMin <= blockHigh,
+  );
+
+  if (covered.length === 0) {
+    return [];
+  }
+
+  // Reading order top-to-bottom: descending block for upright pages (higher on
+  // the page first), ascending for sideways.
+  const ordered = [...covered].sort((left, right) =>
+    sideways ? left.blockCenter - right.blockCenter : right.blockCenter - left.blockCenter,
+  );
+  const anchorIsTop = sideways ? anchorBlock <= focusBlock : anchorBlock >= focusBlock;
+  const startInline = inlineOf(anchorIsTop ? anchor : focus);
+  const endInline = inlineOf(anchorIsTop ? focus : anchor);
+
+  const rects: PdfEditRect[] = [];
+
+  ordered.forEach((line, index) => {
+    let spanMin: number;
+    let spanMax: number;
+
+    if (ordered.length === 1) {
+      spanMin = Math.min(startInline, endInline);
+      spanMax = Math.max(startInline, endInline);
+    } else if (index === 0) {
+      spanMin = startInline;
+      spanMax = line.inlineMax;
+    } else if (index === ordered.length - 1) {
+      spanMin = line.inlineMin;
+      spanMax = endInline;
+    } else {
+      spanMin = line.inlineMin;
+      spanMax = line.inlineMax;
+    }
+
+    spanMin = clamp(spanMin, line.inlineMin, line.inlineMax);
+    spanMax = clamp(spanMax, line.inlineMin, line.inlineMax);
+
+    if (spanMax - spanMin <= 0) {
+      return;
+    }
+
+    rects.push(
+      sideways
+        ? {
+            x: line.blockMin,
+            y: spanMin,
+            w: line.blockMax - line.blockMin,
+            h: spanMax - spanMin,
+          }
+        : {
+            x: spanMin,
+            y: line.blockMin,
+            w: spanMax - spanMin,
+            h: line.blockMax - line.blockMin,
+          },
+    );
+  });
+
+  return rects;
+}
+
+/**
+ * Drops markup line-rects that fall outside the drag's cross-line span. The
+ * browser extends a text selection greedily when a drag starts or ends in
+ * whitespace (pdf.js snaps to the nearest text and can run to end-of-page), so
+ * without this a whitespace drag highlights far more than it covered. Only the
+ * block (cross-line) axis is clipped; each kept line keeps its full
+ * reading-order width. `band` is the drag's bounding box in PDF space.
+ */
+export function clipMarkupRectsToDragBand(
+  rects: readonly PdfEditRect[],
+  band: PdfEditRect,
+  sideways = false,
+): PdfEditRect[] {
+  const bandMin = sideways ? band.x : band.y;
+  const bandMax = sideways ? band.x + band.w : band.y + band.h;
+
+  return rects.filter((rect) => {
+    const rectMin = sideways ? rect.x : rect.y;
+    const rectMax = sideways ? rect.x + rect.w : rect.y + rect.h;
+    // A full line of slack, so a line the user watched get selected is never
+    // dropped just because the drag was released in the whitespace gap next to
+    // it — while the greedy runaway (many lines to end-of-page) is still cut.
+    const tolerance = rectMax - rectMin;
+
+    return rectMax >= bandMin - tolerance && rectMin <= bandMax + tolerance;
+  });
+}
+
+function clusterTextLines(
+  textBoxes: readonly PageTextBox[],
+  sideways: boolean,
+): MarkupLine[] {
+  if (textBoxes.length === 0) {
+    return [];
+  }
+
+  const blockCenter = (box: PageTextBox) => (sideways ? box.x + box.w / 2 : box.y + box.h / 2);
+  const thickness = (box: PageTextBox) => (sideways ? box.w : box.h);
+  const sorted = [...textBoxes].sort((left, right) => blockCenter(left) - blockCenter(right));
   const clusters: PageTextBox[][] = [];
 
   for (const box of sorted) {
     const lastCluster = clusters.at(-1);
     const lastBox = lastCluster?.at(-1);
     const tolerance = lastBox
-      ? Math.max(lineThickness(box), lineThickness(lastBox), 4) * 0.6
+      ? Math.max(thickness(box), thickness(lastBox), 4) * 0.6
       : 0;
 
-    if (lastCluster && lastBox && Math.abs(lineKey(box) - lineKey(lastBox)) <= tolerance) {
+    if (lastCluster && lastBox && Math.abs(blockCenter(box) - blockCenter(lastBox)) <= tolerance) {
       lastCluster.push(box);
     } else {
       clusters.push([box]);
     }
   }
 
-  return clusters
-    .map((cluster) => unionBoxes(cluster))
-    .sort((left, right) => right.y + right.h - (left.y + left.h));
-}
+  return clusters.map((cluster) => {
+    const blockMin = Math.min(...cluster.map((box) => (sideways ? box.x : box.y)));
+    const blockMax = Math.max(...cluster.map((box) => (sideways ? box.x + box.w : box.y + box.h)));
+    const inlineMin = Math.min(...cluster.map((box) => (sideways ? box.y : box.x)));
+    const inlineMax = Math.max(...cluster.map((box) => (sideways ? box.y + box.h : box.x + box.w)));
 
-export const computeHighlightLineRects = computeTextMarkupLineRects;
-
-function clipTextMarkupBoxToBand(
-  box: PageTextBox,
-  band: PdfSpaceRect,
-  sideways: boolean,
-): PageTextBox | null {
-  if (!pdfRectsIntersect(band, box)) {
-    return null;
-  }
-
-  if (sideways) {
-    const y = Math.max(box.y, band.y);
-    const maxY = Math.min(box.y + box.h, band.y + band.h);
-    return {
-      ...box,
-      y,
-      h: Math.max(1, maxY - y),
-    };
-  }
-
-  const x = Math.max(box.x, band.x);
-  const maxX = Math.min(box.x + box.w, band.x + band.w);
-  return {
-    ...box,
-    x,
-    w: Math.max(1, maxX - x),
-  };
+    return { blockCenter: (blockMin + blockMax) / 2, blockMin, blockMax, inlineMin, inlineMax };
+  });
 }
 
 function editColorsEqual(left: PdfEditColor, right: PdfEditColor): boolean {
   return left.r === right.r && left.g === right.g && left.b === right.b;
-}
-
-function unionBoxes(boxes: readonly PageTextBox[]): PdfEditRect {
-  const x = Math.min(...boxes.map((box) => box.x));
-  const y = Math.min(...boxes.map((box) => box.y));
-  const maxX = Math.max(...boxes.map((box) => box.x + box.w));
-  const maxY = Math.max(...boxes.map((box) => box.y + box.h));
-
-  return {
-    x,
-    y,
-    w: Math.max(1, maxX - x),
-    h: Math.max(1, maxY - y),
-  };
 }
 
 /** Decodes a data URL into raw bytes (used for signature images). */

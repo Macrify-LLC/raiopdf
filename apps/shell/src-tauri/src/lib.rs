@@ -1283,7 +1283,8 @@ pub fn run() {
             print::print_list_printers,
             print::print_pdf,
             print::print_cancel,
-            word::word_capability
+            word::word_capability,
+            word::word_convert_docx
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")

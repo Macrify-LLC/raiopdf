@@ -1,3 +1,4 @@
+pub mod docx_scan;
 pub mod path_ops;
 pub mod print_ops;
 pub mod word_ops;

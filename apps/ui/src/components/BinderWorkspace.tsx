@@ -7,7 +7,9 @@ import {
   pickPdfsForAdd,
   readFileForAdd,
   tooLargeToAddMessage,
+  type DocxConversionProgressRow,
   type FileAddInput,
+  type PickPdfsForAddOptions,
 } from "../lib/readFileForAdd";
 import {
   ArrowDownIcon,
@@ -31,6 +33,8 @@ type IdentifierStyle = "letters" | "numbers";
 type PlacementEdge = "header" | "footer";
 type PlacementAlign = "left" | "center" | "right";
 type StampPages = "first" | "all";
+
+const ADD_FILE_ACCEPT = "application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx";
 
 interface BinderPresetV1 {
   version: 1;
@@ -102,6 +106,7 @@ export function BinderWorkspace({
     initialPreset.indexIncludeSourceFileName,
   );
   const [status, setStatus] = useState<string | null>(null);
+  const [docxRows, setDocxRows] = useState<readonly DocxConversionProgressRow[]>([]);
   const [building, setBuilding] = useState(false);
   const mainName = document.fileName ?? "Untitled.pdf";
   const mainPages = document.pageCount;
@@ -163,7 +168,8 @@ export function BinderWorkspace({
   async function addExhibits() {
     // Tauri: grant-returning picker (no eager byte read); browser or a shell
     // without pick_pdfs_for_add falls back to the DOM file input.
-    const picks = await pickPdfsForAdd();
+    setDocxRows([]);
+    const picks = await pickPdfsForAdd(docxAddOptions(setStatus, setDocxRows));
 
     if (picks === null) {
       addInputRef.current?.click();
@@ -402,7 +408,7 @@ export function BinderWorkspace({
             ref={addInputRef}
             className="binder-workspace__file-input"
             type="file"
-            accept="application/pdf"
+            accept={ADD_FILE_ACCEPT}
             multiple
             aria-label="Add exhibits"
             onChange={handleAddFiles}
@@ -418,6 +424,7 @@ export function BinderWorkspace({
             <PlusIcon size={15} />
             Add exhibits...
           </button>
+          <DocxConversionRows rows={docxRows} />
         </section>
 
         <section className="binder-card binder-card--settings" aria-label="Binder settings">
@@ -536,6 +543,35 @@ export function BinderWorkspace({
 type ExhibitAddOutcome =
   | { status: "ok"; exhibit: ExhibitFile }
   | { status: "tooLarge"; name: string };
+
+function DocxConversionRows({ rows }: { rows: readonly DocxConversionProgressRow[] }) {
+  return rows.length > 0 ? (
+    <div className="binder-exhibits" role="list" aria-label="Word conversion progress">
+      {rows.map((row) => (
+        <p key={row.id} className="binder-exhibits__empty" role="listitem">
+          {row.name} · {row.message}
+        </p>
+      ))}
+    </div>
+  ) : null;
+}
+
+function docxAddOptions(
+  setStatus: (message: string | null) => void,
+  setRows: (rows: readonly DocxConversionProgressRow[]) => void,
+): PickPdfsForAddOptions {
+  return {
+    onDocxRowsChange: setRows,
+    onWordUnavailable: (message) => setStatus(message || "Word integration not available. Word documents were not added."),
+    onDocxErrors: (errors) => {
+      if (errors.length === 1 && errors[0]) {
+        setStatus(`"${errors[0].name}" could not be converted from Word.`);
+      } else if (errors.length > 1) {
+        setStatus(`${errors.length} Word documents could not be converted.`);
+      }
+    },
+  };
+}
 
 async function readExhibitFile(input: FileAddInput): Promise<ExhibitAddOutcome> {
   const result = await readFileForAdd(input);

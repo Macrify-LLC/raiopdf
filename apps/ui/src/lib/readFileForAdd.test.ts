@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDocxMarkupGate,
+  mergeConvertedDocxPicks,
   pickFileForAdd,
   pickPdfsForAdd,
   readFileForAdd,
@@ -12,6 +14,10 @@ const invokeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => vi.fn()),
 }));
 
 const THRESHOLD = 64;
@@ -149,6 +155,113 @@ describe("pickPdfsForAdd", () => {
     setLargeDocThresholdBytes(null);
   });
 
+  it("converts clean DOCX picks without showing the markup gate", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const confirmDocxMarkup = vi.fn();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          thresholdBytes: THRESHOLD,
+          files: [
+            { grant: "pdf-1", name: "a.pdf", sizeBytes: 10, source: "pdf" },
+            { grant: "docx-1", name: "b.docx", sizeBytes: 20, source: "docx", markupScan: "clean" },
+          ],
+        };
+      }
+      if (command === "word_capability") {
+        return { state: "available", reason: null };
+      }
+      if (command === "convert_docx_for_add") {
+        return {
+          files: [{
+            grant: "converted-1",
+            name: "b.pdf",
+            sizeBytes: 30,
+            source: "pdf",
+            convertedFromGrant: "docx-1",
+          }],
+          errors: [],
+        };
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await expect(pickPdfsForAdd({ confirmDocxMarkup })).resolves.toEqual([
+      { grant: "pdf-1", name: "a.pdf", sizeBytes: 10 },
+      { grant: "converted-1", name: "b.pdf", sizeBytes: 30 },
+    ]);
+    expect(confirmDocxMarkup).not.toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("convert_docx_for_add", {
+      files: [{ grant: "docx-1", name: "b.docx" }],
+      markup: "final",
+    });
+  });
+
+  it("runs one batch gate for markup or uninspectable DOCX picks", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const confirmDocxMarkup = vi.fn(async () => "showMarkup" as const);
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          thresholdBytes: THRESHOLD,
+          files: [
+            { grant: "docx-1", name: "tracked.docx", sizeBytes: 20, source: "docx", markupScan: "hasMarkup" },
+            { grant: "docx-2", name: "locked.docx", sizeBytes: 20, source: "docx", markupScan: "uninspectable" },
+          ],
+        };
+      }
+      if (command === "word_capability") {
+        return { state: "available", reason: null };
+      }
+      if (command === "convert_docx_for_add") {
+        return { files: [], errors: [] };
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await pickPdfsForAdd({ confirmDocxMarkup });
+
+    expect(confirmDocxMarkup).toHaveBeenCalledWith({
+      markupCount: 1,
+      uninspectableCount: 1,
+      markupFiles: ["tracked.docx"],
+      uninspectableFiles: ["locked.docx"],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("convert_docx_for_add", {
+      files: [
+        { grant: "docx-1", name: "tracked.docx" },
+        { grant: "docx-2", name: "locked.docx" },
+      ],
+      markup: "showMarkup",
+    });
+  });
+
+  it("refuses DOCX conversion when Word is unavailable but keeps picked PDFs", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const onWordUnavailable = vi.fn();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          thresholdBytes: THRESHOLD,
+          files: [
+            { grant: "pdf-1", name: "a.pdf", sizeBytes: 10, source: "pdf" },
+            { grant: "docx-1", name: "b.docx", sizeBytes: 20, source: "docx", markupScan: "clean" },
+          ],
+        };
+      }
+      if (command === "word_capability") {
+        return { state: "notApplicable", reason: null };
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await expect(pickPdfsForAdd({ onWordUnavailable })).resolves.toEqual([
+      { grant: "pdf-1", name: "a.pdf", sizeBytes: 10 },
+    ]);
+    expect(onWordUnavailable).toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("convert_docx_for_add", expect.anything());
+  });
+
   it("treats a null pick result as a cancel (empty array)", async () => {
     (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockResolvedValue(null);
@@ -238,5 +351,41 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
 describe("tooLargeToAddMessage", () => {
   it("names the file in the gate copy", () => {
     expect(tooLargeToAddMessage("big.pdf")).toBe('"big.pdf" is too large to add here.');
+  });
+});
+
+describe("DOCX add gate helpers", () => {
+  it("does not gate clean DOCX batches", () => {
+    expect(buildDocxMarkupGate([
+      { grant: "g", name: "clean.docx", sizeBytes: 1, source: "docx", markupScan: "clean" },
+    ])).toBeNull();
+  });
+
+  it("gates both markup and uninspectable classifications", () => {
+    expect(buildDocxMarkupGate([
+      { grant: "a", name: "tracked.docx", sizeBytes: 1, source: "docx", markupScan: "hasMarkup" },
+      { grant: "b", name: "bad.docx", sizeBytes: 1, source: "docx", markupScan: "uninspectable" },
+    ])).toEqual({
+      markupCount: 1,
+      uninspectableCount: 1,
+      markupFiles: ["tracked.docx"],
+      uninspectableFiles: ["bad.docx"],
+    });
+  });
+
+  it("preserves original order while dropping failed DOCX conversions", () => {
+    expect(mergeConvertedDocxPicks(
+      [
+        { grant: "pdf", name: "a.pdf", sizeBytes: 1, source: "pdf" },
+        { grant: "docx-failed", name: "b.docx", sizeBytes: 2, source: "docx" },
+        { grant: "docx-ok", name: "c.docx", sizeBytes: 3, source: "docx" },
+      ],
+      [
+        { grant: "converted", name: "c.pdf", sizeBytes: 4, convertedFromGrant: "docx-ok" },
+      ],
+    )).toEqual([
+      { grant: "pdf", name: "a.pdf", sizeBytes: 1 },
+      { grant: "converted", name: "c.pdf", sizeBytes: 4 },
+    ]);
   });
 });

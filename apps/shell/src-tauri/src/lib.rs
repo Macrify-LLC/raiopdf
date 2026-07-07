@@ -7,6 +7,7 @@ mod sidecar;
 mod word;
 
 use diagnostics::AppDiagnostics;
+use engine_sidecar_core::{docx_scan, word_ops as core_word};
 use range_read::{
     large_doc_threshold_bytes, range_call_cap_bytes, read_file_range, snapshot_file, FileSnapshot,
     RangeReadError,
@@ -101,6 +102,11 @@ struct PickedPdf {
     grant: String,
     name: String,
     size_bytes: u64,
+    source: PickedAddSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    markup_scan: Option<docx_scan::MarkupScan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    converted_from_grant: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +115,65 @@ struct PickedPdfs {
     files: Vec<PickedPdf>,
     threshold_bytes: u64,
 }
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum PickedAddSource {
+    Pdf,
+    Docx,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocxAddInput {
+    grant: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocxAddBatchResult {
+    files: Vec<PickedPdf>,
+    errors: Vec<DocxAddError>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocxAddError {
+    grant: String,
+    name: String,
+    code: String,
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocxConvertProgressPayload {
+    index: usize,
+    total: usize,
+    file: String,
+    phase: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocxConvertDonePayload {
+    index: usize,
+    total: usize,
+    file: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+const DOCX_CONVERT_PROGRESS_EVENT: &str = "docx-convert:progress";
+const DOCX_CONVERT_FILE_DONE_EVENT: &str = "docx-convert:file-done";
 
 impl PendingPdfBytes {
     fn insert(&self, bytes: Vec<u8>) -> Result<String, String> {
@@ -337,7 +402,7 @@ fn pick_pdfs_for_add(
     let Some(paths) = app
         .dialog()
         .file()
-        .add_filter("PDF", &["pdf"])
+        .add_filter("PDF or Word", &["pdf", "docx"])
         .blocking_pick_files()
     else {
         return Ok(None);
@@ -348,14 +413,20 @@ fn pick_pdfs_for_add(
 
     for path in paths {
         let path = path.into_path().map_err(|error| error.to_string())?;
-        require_pdf_extension(&path)?;
+        require_pdf_or_docx_extension(&path)?;
         let size_bytes = fs::metadata(&path)
-            .map_err(|error| format!("Failed to stat PDF at {}: {error}", path.to_string_lossy()))?
+            .map_err(|error| format!("Failed to stat file at {}: {error}", path.to_string_lossy()))?
             .len();
+        let source = picked_add_source(&path);
+        let markup_scan =
+            matches!(source, PickedAddSource::Docx).then(|| docx_scan::scan_docx_markup(&path));
         files.push(PickedPdf {
             grant: file_grants.grant(path.clone())?,
             name: file_name(&path),
             size_bytes,
+            source,
+            markup_scan,
+            converted_from_grant: None,
         });
     }
 
@@ -363,6 +434,98 @@ fn pick_pdfs_for_add(
         files,
         threshold_bytes,
     }))
+}
+
+#[tauri::command]
+async fn convert_docx_for_add(
+    app: tauri::AppHandle,
+    file_grants: tauri::State<'_, FileGrants>,
+    files: Vec<DocxAddInput>,
+    markup: core_word::MarkupMode,
+) -> Result<DocxAddBatchResult, engine_sidecar_core::path_ops::PathOpError> {
+    let total = files.len();
+    let mut converted = Vec::with_capacity(total);
+    let mut errors = Vec::new();
+
+    for (zero_index, file) in files.into_iter().enumerate() {
+        let index = zero_index + 1;
+        let _ = app.emit(
+            DOCX_CONVERT_PROGRESS_EVENT,
+            DocxConvertProgressPayload {
+                index,
+                total,
+                file: file.name.clone(),
+                phase: "startingWord".to_string(),
+            },
+        );
+
+        let input = match file_grants.resolve(&file.grant) {
+            Ok(input) => input,
+            Err(message) => {
+                let error = DocxAddError {
+                    grant: file.grant,
+                    name: file.name,
+                    code: "INVALID_INPUT".to_string(),
+                    message,
+                };
+                emit_docx_done_error(&app, index, total, &error);
+                errors.push(error);
+                continue;
+            }
+        };
+
+        let _ = app.emit(
+            DOCX_CONVERT_PROGRESS_EVENT,
+            DocxConvertProgressPayload {
+                index,
+                total,
+                file: file.name.clone(),
+                phase: "converting".to_string(),
+            },
+        );
+
+        match convert_one_docx_for_add(&app, file_grants.inner(), &input, &file.name, markup).await
+        {
+            Ok(output) => {
+                let _ = app.emit(
+                    DOCX_CONVERT_FILE_DONE_EVENT,
+                    DocxConvertDonePayload {
+                        index,
+                        total,
+                        file: file.name,
+                        status: "ok".to_string(),
+                        grant: Some(output.grant.clone()),
+                        name: Some(output.name.clone()),
+                        page_count: Some(output.page_count),
+                        error: None,
+                    },
+                );
+                converted.push(PickedPdf {
+                    grant: output.grant,
+                    name: output.name,
+                    size_bytes: output.size_bytes,
+                    source: PickedAddSource::Pdf,
+                    markup_scan: None,
+                    converted_from_grant: Some(file.grant),
+                });
+            }
+            Err(error) => {
+                let error = DocxAddError {
+                    grant: file.grant,
+                    name: file.name,
+                    code: error.code.to_string(),
+                    message: error.message,
+                };
+                emit_docx_done_error(&app, index, total, &error);
+                errors.push(error);
+            }
+        }
+    }
+
+    Ok(DocxAddBatchResult {
+        files: converted,
+        errors,
+    })
 }
 
 /// Ranged read for the streamed viewer. Raw binary response; bounds are
@@ -1066,6 +1229,103 @@ fn sanitize_pdf_file_name(file_name: &str) -> String {
     ensure_pdf_extension(&sanitized)
 }
 
+struct ConvertedDocxForAdd {
+    grant: String,
+    name: String,
+    size_bytes: u64,
+    page_count: u32,
+}
+
+async fn convert_one_docx_for_add(
+    app: &tauri::AppHandle,
+    file_grants: &FileGrants,
+    input: &Path,
+    source_name: &str,
+    markup: core_word::MarkupMode,
+) -> Result<ConvertedDocxForAdd, engine_sidecar_core::path_ops::PathOpError> {
+    let toolchain = path_ops::discover_toolchain(app);
+    let work_dir = path_ops::OpWorkDir::create(app)?;
+    let output_name = converted_pdf_name_for_word_input(input, source_name);
+    let output_path = work_dir.path().join(&output_name);
+
+    let (page_count, size_bytes) = {
+        let input = input.to_path_buf();
+        let output_path = output_path.clone();
+        let toolchain_for_work = toolchain.clone();
+        path_ops::on_blocking_pool(move || {
+            core_word::convert_docx_to_pdf_with_toolchain(
+                &toolchain_for_work,
+                &input,
+                &output_path,
+                markup,
+            )?;
+            let page_count =
+                engine_sidecar_core::path_ops::page_count(&toolchain_for_work, &output_path)?;
+            let size_bytes = fs::metadata(&output_path)
+                .map(|metadata| metadata.len())
+                .map_err(|error| engine_sidecar_core::path_ops::PathOpError {
+                    code: "IO_ERROR",
+                    message: format!("cannot stat converted PDF: {error}"),
+                })?;
+            Ok((page_count, size_bytes))
+        })
+        .await?
+    };
+
+    let grant = file_grants.grant(output_path).map_err(|message| {
+        engine_sidecar_core::path_ops::PathOpError {
+            code: "IO_ERROR",
+            message,
+        }
+    })?;
+    work_dir.keep();
+
+    Ok(ConvertedDocxForAdd {
+        grant,
+        name: output_name,
+        size_bytes,
+        page_count,
+    })
+}
+
+fn emit_docx_done_error(app: &tauri::AppHandle, index: usize, total: usize, error: &DocxAddError) {
+    let _ = app.emit(
+        DOCX_CONVERT_FILE_DONE_EVENT,
+        DocxConvertDonePayload {
+            index,
+            total,
+            file: error.name.clone(),
+            status: "error".to_string(),
+            grant: None,
+            name: None,
+            page_count: None,
+            error: Some(error.message.clone()),
+        },
+    );
+}
+
+fn converted_pdf_name_for_word_input(input: &Path, fallback_name: &str) -> String {
+    let stem = input
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .or_else(|| {
+            Path::new(fallback_name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+        })
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or("converted");
+    let sanitized = stem
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    format!("{sanitized}.pdf")
+}
+
 fn require_pdf_extension(path: &Path) -> Result<(), String> {
     if path
         .extension()
@@ -1076,6 +1336,34 @@ fn require_pdf_extension(path: &Path) -> Result<(), String> {
     }
 
     Err("Selected file is not a PDF".to_string())
+}
+
+fn require_pdf_or_docx_extension(path: &Path) -> Result<(), String> {
+    if is_pdf_path(path) || is_docx_path(path) {
+        return Ok(());
+    }
+
+    Err("Selected file is not a PDF or Word document".to_string())
+}
+
+fn picked_add_source(path: &Path) -> PickedAddSource {
+    if is_docx_path(path) {
+        PickedAddSource::Docx
+    } else {
+        PickedAddSource::Pdf
+    }
+}
+
+fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn is_docx_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("docx"))
 }
 
 fn validate_pdf_file_arg(path: &Path) -> Result<PathBuf, String> {
@@ -1235,6 +1523,7 @@ pub fn run() {
             read_opened_pdf_bytes,
             read_pdf_range,
             pick_pdfs_for_add,
+            convert_docx_for_add,
             save_pdf_dialog,
             save_pdf_to_path,
             save_pdf_copy_dialog,
@@ -1419,6 +1708,32 @@ mod tests {
 
         assert!(path.is_none());
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn main_document_arg_stays_pdf_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let docx = dir.path().join("source.docx");
+        fs::write(&docx, b"not a real docx").expect("write docx");
+
+        let error = validate_pdf_file_arg(&docx).expect_err("DOCX is not a main-document input");
+
+        assert_eq!(error, "Selected file is not a PDF");
+    }
+
+    #[test]
+    fn add_picker_extension_gate_accepts_pdf_and_docx_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pdf = dir.path().join("case.PDF");
+        let docx = dir.path().join("exhibit.DOCX");
+        let txt = dir.path().join("notes.txt");
+
+        assert!(require_pdf_or_docx_extension(&pdf).is_ok());
+        assert!(require_pdf_or_docx_extension(&docx).is_ok());
+        assert_eq!(
+            require_pdf_or_docx_extension(&txt).expect_err("text should be rejected"),
+            "Selected file is not a PDF or Word document",
+        );
     }
 
     #[test]

@@ -46,6 +46,9 @@ export interface PickedPdfForAdd {
   grant: FileGrant;
   name: string;
   sizeBytes: number;
+  source?: "pdf" | "docx";
+  markupScan?: "clean" | "hasMarkup" | "uninspectable" | null;
+  convertedFromGrant?: string | null;
 }
 
 export interface PickedPdfsForAdd {

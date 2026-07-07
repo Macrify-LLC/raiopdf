@@ -157,6 +157,7 @@ import {
   pickFileForAdd,
   tooLargeToAddMessage,
   type FileAddResult,
+  type PickPdfsForAddOptions,
 } from "./lib/readFileForAdd";
 import {
   listenOcrProgress,
@@ -2894,9 +2895,46 @@ export function App() {
     });
   }, [setError]);
 
+  function packageDocxAddOptions(
+    setProgress: (progress: { running: boolean; message: string | null; result: null }) => void,
+    noun: string,
+  ): PickPdfsForAddOptions {
+    return {
+      onDocxRowsChange: (rows) => {
+        const active = rows.find((row) => row.status === "running")
+          ?? rows.find((row) => row.status === "queued")
+          ?? rows.at(-1);
+        setProgress({
+          running: false,
+          message: active ? `${active.name}: ${active.message}` : null,
+          result: null,
+        });
+      },
+      onWordUnavailable: (message) => {
+        setProgress({
+          running: false,
+          message: message || `Word integration not available. Word documents were not added to the ${noun}.`,
+          result: null,
+        });
+      },
+      onDocxErrors: (errors) => {
+        if (errors.length === 0) {
+          return;
+        }
+        setProgress({
+          running: false,
+          message: errors.length === 1 && errors[0]
+            ? `"${errors[0].name}" could not be converted from Word.`
+            : `${errors.length} Word documents could not be converted.`,
+          result: null,
+        });
+      },
+    };
+  }
+
   const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
-      return await pickFileForAdd();
+      return await pickFileForAdd(packageDocxAddOptions(setProductionProgress, "production set"));
     } catch {
       setProductionProgress({
         running: false,
@@ -2912,7 +2950,7 @@ export function App() {
       // The workspace consumes the FileAddResult directly: descriptor adds
       // carry the grant (batch cleanup is path-based end-to-end), and the
       // browser tooLarge case renders its own honest gate.
-      return await pickFileForAdd();
+      return await pickFileForAdd(packageDocxAddOptions(setBatchCleanupProgress, "batch"));
     } catch {
       setBatchCleanupProgress({
         running: false,
@@ -2925,7 +2963,7 @@ export function App() {
 
   const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile | null> => {
     try {
-      const result = await pickFileForAdd();
+      const result = await pickFileForAdd(packageDocxAddOptions(setFilingPacketProgress, "filing packet"));
       if (!result) {
         return null;
       }

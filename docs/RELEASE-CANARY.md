@@ -231,6 +231,25 @@ background** → progress → **Install now** → **Restart RaioPDF**; confirm i
 new version and the pill is gone. Nothing should install without an explicit click, and the
 pill should reappear on every launch until the update is installed.
 
+### Preview release channel
+
+Use a preview release when an advanced build should be available from GitHub Releases
+without becoming the stable auto-update target:
+
+```bash
+git tag vX.Y.Z-beta.N
+pnpm build:shell:signed
+pnpm prepare:release-assets -- --tag vX.Y.Z-beta.N
+pnpm validate:release-assets -- --tag vX.Y.Z-beta.N --prerelease
+gh release upload vX.Y.Z-beta.N release-assets/signed/* --clobber
+pnpm validate:release-assets -- --tag vX.Y.Z-beta.N --github --prerelease
+```
+
+Mark the GitHub Release as **Prerelease**. Preview users download the installer manually
+from that release page. Stable users are not auto-updated to preview builds because the
+desktop updater reads GitHub's `/releases/latest/download/latest.json`, and GitHub's
+latest-release endpoint skips prereleases.
+
 ## The MCP connector canary
 
 The same "prove the advertised feature works in the real artifact" discipline applies to

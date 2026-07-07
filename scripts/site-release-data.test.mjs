@@ -52,6 +52,23 @@ describe("site release data", () => {
     assert.equal(info.downloadUrl, undefined);
   });
 
+  it("keeps the stable download when a newer preview release exists", async () => {
+    const stable = releaseFixture({ version: "0.1.2", id: 12 });
+    const preview = releaseFixture({ version: "0.2.0-beta.1", id: 13, prerelease: true });
+    const api = loadApi({
+      latest: stable.release,
+      releases: [preview.release, stable.release],
+      textAssets: new Map([...stable.textAssets, ...preview.textAssets]),
+    });
+
+    const info = await api.loadReleaseInfo();
+
+    assert.equal(info.available, true);
+    assert.equal(info.version, "0.1.2");
+    assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
+    assert.equal(info.releaseUrl, stable.release.html_url);
+  });
+
   it("stays pending when a required compliance asset is missing", async () => {
     const fixture = releaseFixture({ missing: ["RaioPDF-0.1.2-component-manifest.json"] });
     const api = loadApi({

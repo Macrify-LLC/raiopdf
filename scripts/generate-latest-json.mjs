@@ -8,6 +8,7 @@ const REPO = "Macrify-LLC/raiopdf";
 const PLATFORM = "windows-x86_64";
 const LATEST_JSON = "latest.json";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
+const SEMVER_PRERELEASE = /^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(?:\+[0-9A-Za-z.-]+)?$/;
 const CANONICAL_INSTALLER_RE =
   /^RaioPDF-([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)-windows-x64-setup\.exe$/;
 const NSIS_DIR = fileURLToPath(
@@ -32,6 +33,22 @@ function normalizeTag(tag) {
     );
   }
   return { tag: normalized, version };
+}
+
+export function isSemverPrereleaseVersion(version) {
+  requireNonEmptyString("version", version);
+  if (!SEMVER.test(version)) {
+    throw new Error(
+      `generate-latest-json: version must be semver like 1.2.3 (got ${JSON.stringify(
+        version,
+      )}).`,
+    );
+  }
+  return SEMVER_PRERELEASE.test(version);
+}
+
+export function isPrereleaseTag(tag) {
+  return isSemverPrereleaseVersion(normalizeTag(tag).version);
 }
 
 export function canonicalInstallerFilename(version) {
@@ -256,6 +273,19 @@ function main() {
   }
 
   const resolved = normalizeTag(tag);
+  if (isSemverPrereleaseVersion(resolved.version)) {
+    console.log(
+      `generate-latest-json: refusing to write or upload stable ${LATEST_JSON} for prerelease tag ${resolved.tag}.`,
+    );
+    console.log(
+      "generate-latest-json: stable auto-update uses /releases/latest/download/latest.json, and GitHub /latest skips prereleases.",
+    );
+    console.log(
+      "generate-latest-json: stable latest.json was left untouched; publish preview assets on a GitHub prerelease for manual download instead.",
+    );
+    return;
+  }
+
   const { exeFilename: sourceExeFilename, sigPath } = findNsisArtifacts(NSIS_DIR);
   const publicExeFilename = canonicalInstallerFilename(resolved.version);
   const signature = readFileSync(sigPath, "utf8").trim();

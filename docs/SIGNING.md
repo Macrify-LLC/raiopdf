@@ -135,10 +135,10 @@ SHA256SUMS.txt
 ```
 
 The updater endpoint uses GitHub's `/releases/latest/download/latest.json` URL, so
-`latest.json` must be uploaded to the latest **published, non-prerelease** GitHub
-Release. Product copy can call this an alpha, but do not toggle GitHub's
-"pre-release" state unless the updater endpoint changes; a draft, prerelease, or older
-release will not serve updates to shipped apps.
+stable `latest.json` must be uploaded to the latest **published, non-prerelease**
+GitHub Release. Product copy can call a stable release an alpha, but only toggle
+GitHub's "pre-release" state for preview builds that users download manually. A draft,
+prerelease, or older release will not serve updates to shipped apps.
 
 CI's unsigned draft-release flow (`.github/workflows/release.yml`) intentionally does
 **not** upload `.exe` release assets and does **not** generate `latest.json`. If the

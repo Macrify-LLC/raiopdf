@@ -1122,10 +1122,15 @@ export function App() {
   }, [handleDownloadUpdate]);
   const handleRelaunchForUpdate = useCallback(() => {
     void relaunchForInstalledUpdate().catch(() => {
+      // The update is already installed — only the restart failed. Stay in
+      // "installed" (whose pill/Settings action is "Restart") so the button
+      // retries the relaunch rather than routing to the generic error state,
+      // whose "Try again" would start a pointless fresh download.
       setUpdateStatus((current) => ({
         ...current,
-        phase: "error",
-        message: "RaioPDF could not restart automatically. Close and reopen it to finish updating.",
+        phase: "installed",
+        message:
+          "RaioPDF couldn't restart automatically — click Restart to try again, or close and reopen it to finish updating.",
       }));
     });
   }, []);

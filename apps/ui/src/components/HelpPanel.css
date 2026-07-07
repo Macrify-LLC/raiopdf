@@ -1,6 +1,7 @@
 .help-panel {
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 430px;
   max-height: min(620px, calc(100vh - 260px));
   overflow: hidden;
@@ -8,6 +9,7 @@
 
 .help-panel__index {
   min-width: 0;
+  min-height: 0;
   padding-right: var(--space-4);
   border-right: 1px solid var(--border-soft);
   overflow: auto;
@@ -115,6 +117,7 @@
 
 .help-panel__article {
   min-width: 0;
+  min-height: 0;
   overflow: auto;
   padding-left: var(--space-4);
 }
@@ -196,6 +199,7 @@
 @media (max-width: 760px) {
   .help-panel {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
     max-height: min(620px, calc(100vh - 220px));
   }
 

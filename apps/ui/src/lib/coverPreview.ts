@@ -6,9 +6,10 @@ export async function generateCoverPdf(input: {
   label: string;
   description?: string | undefined;
   style: PdfCoverStyle;
+  pageSize?: [number, number] | undefined;
 }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const page = doc.addPage([612, 792]);
+  const page = doc.addPage(input.pageSize ?? [612, 792]);
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
 

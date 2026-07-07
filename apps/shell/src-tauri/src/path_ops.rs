@@ -187,6 +187,8 @@ pub enum BinderPageSelection {
 #[serde(rename_all = "camelCase")]
 pub struct BuildBinderOptions {
     slip_sheets: bool,
+    #[serde(rename = "coverStyle", skip_serializing_if = "Option::is_none")]
+    cover_style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     index: Option<BinderIndexOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1728,6 +1730,7 @@ mod tests {
             }],
             options: BuildBinderOptions {
                 slip_sheets: false,
+                cover_style: None,
                 index: Some(BinderIndexOptions {
                     enabled: None,
                     include_source_file_name: None,
@@ -1752,11 +1755,47 @@ mod tests {
             .expect("index object");
 
         assert_eq!(options.get("slipSheets"), Some(&serde_json::json!(false)));
+        assert!(!options.contains_key("coverStyle"));
         assert!(!options.contains_key("placement"));
         assert!(!options.contains_key("stampPages"));
         assert!(!options.contains_key("fontSizePt"));
         assert!(!options.contains_key("marginIn"));
         assert!(!index.contains_key("enabled"));
         assert!(!index.contains_key("includeSourceFileName"));
+    }
+
+    #[test]
+    fn build_binder_one_shot_payload_preserves_cover_style() {
+        let request = BuildBinderOneShotInput {
+            main_path: "/tmp/main.pdf".to_string(),
+            exhibits: vec![BuildBinderOneShotExhibit {
+                path: "/tmp/exhibit.pdf".to_string(),
+                label: "Exhibit A".to_string(),
+                description: None,
+                source_file_name: None,
+            }],
+            options: BuildBinderOptions {
+                slip_sheets: true,
+                cover_style: Some("bordered".to_string()),
+                index: None,
+                placement: None,
+                stamp_pages: None,
+                font_size_pt: None,
+                margin_in: None,
+            },
+            output_path: "/tmp/binder.pdf".to_string(),
+            max_input_bytes: 10_000_000,
+        };
+
+        let payload = serde_json::to_value(request).expect("serialize request");
+        let options = payload
+            .get("options")
+            .and_then(serde_json::Value::as_object)
+            .expect("options object");
+
+        assert_eq!(
+            options.get("coverStyle"),
+            Some(&serde_json::json!("bordered"))
+        );
     }
 }

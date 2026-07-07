@@ -72,6 +72,31 @@ interface GrantEntry {
 const DELEGATED_BROWSER_FILE_MESSAGE =
   "Files dropped from the browser can't be added to a very large document — choose them with the file picker instead.";
 
+async function resolveSlipSheetPageSize(
+  pdfDocument: PDFDocumentProxy | null,
+  insertAtPageIndex: number,
+  pageCount: number,
+): Promise<[number, number] | undefined> {
+  if (!pdfDocument || pageCount < 1) {
+    return undefined;
+  }
+
+  const pageIndex = Math.min(Math.max(insertAtPageIndex, 0), pageCount - 1);
+
+  try {
+    const page = await pdfDocument.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: 1 });
+
+    if (viewport.width > 0 && viewport.height > 0) {
+      return [viewport.width, viewport.height];
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 /** Grant-based add path: descriptors only, page count by grant, no bytes. */
 async function readGrantEntry(input: FileAddInput): Promise<GrantEntry | null> {
   if (input instanceof File) {
@@ -430,10 +455,12 @@ function OrganizePagesGrid({
     setStatus("Inserting slip sheet...");
 
     try {
+      const pageSize = await resolveSlipSheetPageSize(pdfDocument, insertAt, document.pageCount);
       const bytes = await generateCoverPdf({
         label,
         description: slipSheetDescription.trim() || undefined,
         style: slipSheetStyle,
+        pageSize,
       });
       const inserted = await onInsert({
         bytes,

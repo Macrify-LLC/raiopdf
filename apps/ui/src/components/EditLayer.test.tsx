@@ -224,6 +224,36 @@ describe("EditLayer shape removal", () => {
     expect(rects[0]?.getAttribute("x")).toBe("10");
   });
 
+  it("keeps a pinned shape when a same-kind-tool click lands on it", async () => {
+    // Regression: shapes get no click-through CSS, so a pinned shape's
+    // pointerdown reaches the layer; a same-kind-tool click then runs the
+    // tiny-drag removal path, which must skip pinned shapes.
+    await renderEditLayer(
+      [
+        {
+          kind: "shape",
+          id: "pinned-rect",
+          pageIndex: 0,
+          pinned: true,
+          shape: "rect",
+          rect: { x: 20, y: 20, w: 60, h: 40 },
+        },
+      ],
+      "shapeRect", // same kind → an unpinned shape here would be deleted
+    );
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 40, 40); // inside the shape
+      dispatchPointerEvent(layer!, "pointerup", 40, 40); // no drag → remove path
+      await Promise.resolve();
+    });
+
+    expect(container?.querySelectorAll("svg.edit-layer__shapes rect")).toHaveLength(1);
+  });
+
   it("clamps captured shape drags that end past the page edge", async () => {
     await renderEditLayer([], "shapeRect");
 
@@ -848,6 +878,49 @@ describe("EditLayer shape removal", () => {
     });
 
     expect(container?.querySelectorAll(".edit-layer__highlight").length).toBeGreaterThan(0);
+  });
+
+  it("does not union a multi-column selection across the gutter", async () => {
+    // Two runs on the same visual line but in different columns (a wide
+    // horizontal gap). They must stay two rects, not one that paints the gutter.
+    const addEdit = vi.fn();
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: false,
+      getRangeAt: () => ({
+        getClientRects: () => [
+          { left: 10, top: 20, right: 90, bottom: 32, width: 80, height: 12 },
+          { left: 150, top: 20, right: 230, bottom: 32, width: 80, height: 12 },
+        ],
+      }),
+      removeAllRanges: () => undefined,
+    } as unknown as Selection);
+
+    await renderEditLayer([], "select", { addEdit });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5); // selection path, not over an item
+      await Promise.resolve();
+    });
+
+    const highlight = [
+      ...(container?.querySelectorAll<HTMLElement>(".context-menu__item") ?? []),
+    ].find((item) => item.textContent === "Highlight");
+    await act(async () => {
+      highlight!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(addEdit).toHaveBeenCalledTimes(1);
+    const rects = addEdit.mock.calls[0]?.[0]?.rects as { x: number; y: number; w: number; h: number }[];
+    expect(rects).toHaveLength(2);
+    // Neither rect spans the ~60px gutter between the columns.
+    for (const rect of rects) {
+      expect(rect.w).toBeLessThan(100);
+    }
   });
 
   it("ignores right-clicks inside a text field so the native menu survives", async () => {

@@ -1015,7 +1015,16 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     for (let index = pageEdits.length - 1; index >= 0; index -= 1) {
       const edit = pageEdits[index];
 
-      if (edit?.kind === "shape" && edit.shape === shape && shapeHitTest(edit, pdfPoint)) {
+      // Skip pinned shapes: they're locked, and (unlike text boxes) shapes get
+      // no click-through CSS, so a pinned shape's pointerdown bubbles here — it
+      // must not be deleted by a same-kind-tool click. Mirrors the `removable`
+      // guard on the shape's own click handler.
+      if (
+        edit?.kind === "shape" &&
+        edit.pinned !== true &&
+        edit.shape === shape &&
+        shapeHitTest(edit, pdfPoint)
+      ) {
         removeEdit(edit.id);
         return;
       }
@@ -3277,8 +3286,20 @@ function mergeClientRectsIntoLines(
 
   for (const rect of sorted) {
     const line = lines.find((candidate) => {
-      const overlap = Math.min(candidate.bottom, rect.bottom) - Math.max(candidate.top, rect.top);
-      return overlap > Math.min(candidate.bottom - candidate.top, rect.height) * 0.5;
+      const lineHeight = Math.min(candidate.bottom - candidate.top, rect.height);
+      const verticalOverlap =
+        Math.min(candidate.bottom, rect.bottom) - Math.max(candidate.top, rect.top);
+
+      if (verticalOverlap <= lineHeight * 0.5) {
+        return false;
+      }
+
+      // Same visual line — but only union runs that are horizontally
+      // contiguous. A wide horizontal gap is a multi-column gutter; merging
+      // across it would paint the highlight over the whitespace between the
+      // columns. A normal inter-word/run gap is well under one line height.
+      const horizontalGap = Math.max(rect.left - candidate.right, candidate.left - rect.right, 0);
+      return horizontalGap <= lineHeight;
     });
 
     if (line) {

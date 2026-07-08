@@ -406,6 +406,7 @@ interface FilingFactsCache {
 interface FilingFactsOptions {
   fileBytes: number;
   filename?: string;
+  pdfaClaimed?: boolean;
   pdfaCompliant?: boolean;
   pdfDocument?: PDFDocumentProxy | null;
   occupiedRegionPages?: "first" | "all";
@@ -7382,6 +7383,7 @@ function filingFactsCacheKey(options: FilingFactsOptions): string {
   return JSON.stringify({
     fileBytes: options.fileBytes,
     filename: options.filename ?? null,
+    pdfaClaimed: options.pdfaClaimed ?? null,
     pdfaCompliant: options.pdfaCompliant ?? null,
     occupiedRegionPages: options.occupiedRegionPages ?? "all",
   });
@@ -7406,10 +7408,17 @@ async function readFilingFacts(
     // destroy, so the Prepare click's impact gate doesn't need a parse of its own.
     conversionImpactCache.set(bytes, assessPdfAConversionImpact(pdf));
 
-    // A PDF/A conformance claim requires an XMP pdfaid identification, so its absence
-    // is a definitive "not PDF/A"; the claim itself is only what the document reports.
-    facts.pdfaCompliant = options.pdfaCompliant ?? (readPdfAIdentification(pdf) !== null);
+    // A PDF/A conformance claim requires an XMP pdfaid identification. The claim
+    // itself is only what the document reports; validator-backed compliance is
+    // a separate fact and should not be inferred here.
+    facts.pdfaClaimed = options.pdfaClaimed ?? (readPdfAIdentification(pdf) !== null);
+    if (options.pdfaCompliant !== undefined) {
+      facts.pdfaCompliant = options.pdfaCompliant;
+    }
   } catch {
+    if (options.pdfaClaimed !== undefined) {
+      facts.pdfaClaimed = options.pdfaClaimed;
+    }
     if (options.pdfaCompliant !== undefined) {
       facts.pdfaCompliant = options.pdfaCompliant;
     }

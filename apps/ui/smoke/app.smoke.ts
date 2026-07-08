@@ -717,9 +717,12 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await page.getByRole("button", { name: "Prefiling check", exact: true }).click();
 
   const lawRows = page.locator('.filing-row[data-kind="rule"]');
+  const portalRows = page.locator('.filing-row[data-kind="portal"]');
   await expect(lawRows.filter({ hasText: "Letter portrait pages" })).toHaveAttribute("data-status", "warn");
   await expect(lawRows.locator(".filing-row__chip", { hasText: "warning" })).toHaveCount(0);
-  await expect(page.locator('.filing-row[data-kind="portal"] .filing-row__chip', { hasText: "warning" })).toHaveCount(2);
+  await expect(portalRows.locator(".filing-row__chip", { hasText: "warning" })).toHaveCount(1);
+  await expect(portalRows.filter({ hasText: "PDF/A preference" })).toHaveAttribute("data-status", "unknown");
+  await expect(portalRows.filter({ hasText: "PDF/A preference" })).toContainText("compliance facts were not provided");
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Make Filing-Ready" }).click();

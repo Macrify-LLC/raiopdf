@@ -23,6 +23,51 @@ const ONE_BY_ONE_PNG = Uint8Array.from(Buffer.from(
 ));
 
 describe("document fact extractors", () => {
+  it("reports PDF/A XMP identification as a claim, not compliance", async () => {
+    const elementPdf = await PDFDocument.create();
+    elementPdf.addPage([612, 792]);
+    setCatalogXmp(elementPdf, `
+      <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+            <pdfaid:part>2</pdfaid:part>
+            <pdfaid:conformance>B</pdfaid:conformance>
+          </rdf:Description>
+        </rdf:RDF>
+      </x:xmpmeta>
+    `);
+
+    const attributePdf = await PDFDocument.create();
+    attributePdf.addPage([612, 792]);
+    setCatalogXmp(attributePdf, `
+      <x:xmpmeta xmlns:x="adobe:ns:meta/">
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
+            pdfaid:part="1" pdfaid:conformance="b"/>
+        </rdf:RDF>
+      </x:xmpmeta>
+    `);
+
+    await expect(buildDocumentFacts(await elementPdf.save({ useObjectStreams: false }))).resolves.toMatchObject({
+      pdfaClaimed: true,
+    });
+    await expect(buildDocumentFacts(await attributePdf.save({ useObjectStreams: false }))).resolves.toMatchObject({
+      pdfaClaimed: true,
+    });
+
+    const facts = await buildDocumentFacts(await elementPdf.save({ useObjectStreams: false }));
+    expect(Object.hasOwn(facts, "pdfaCompliant")).toBe(false);
+  });
+
+  it("reports parseable PDFs without pdfaid metadata as not claiming PDF/A", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]);
+
+    await expect(buildDocumentFacts(await pdf.save({ useObjectStreams: false }))).resolves.toMatchObject({
+      pdfaClaimed: false,
+    });
+  });
+
   it("extracts active content, embedded files, forms, annotations, signatures, and redaction signals", async () => {
     const pdf = await PDFDocument.create();
     const page = pdf.addPage([612, 792]);
@@ -259,6 +304,14 @@ describe("document fact extractors", () => {
     expect(hasEmbeddedSignatureMarkers(signatureFacts)).toBe(true);
   });
 });
+
+function setCatalogXmp(pdf: PDFDocument, xmp: string): void {
+  const stream = pdf.context.stream(new TextEncoder().encode(xmp), {
+    Type: "Metadata",
+    Subtype: "XML",
+  });
+  pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(stream));
+}
 
 function syntheticPdfWithEncrypt(encryptValue: string, encryptObject = ""): Uint8Array {
   const objects = [

@@ -231,6 +231,9 @@ export type DocumentFacts = {
   filename?: string;
   fileBytes?: number;
   searchableText?: boolean;
+  /** XMP pdfaid identification is present; this is a document claim, not validation. */
+  pdfaClaimed?: boolean;
+  /** Validator-backed PDF/A result. Undefined means no validator result was provided. */
   pdfaCompliant?: boolean;
   clerkStampSpaceBlank?: boolean;
   encryptionState?: EncryptionState;

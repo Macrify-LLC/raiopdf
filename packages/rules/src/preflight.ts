@@ -315,19 +315,28 @@ export function shouldConvertToPdfA(pack: JurisdictionPack): boolean {
 
 function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
   const { stance, flavor } = pack.pdfa;
+  const pdfaClaimed = document.pdfaClaimed ?? false;
+  const pdfaValidated = document.pdfaCompliant;
 
   if (stance === "prohibited") {
-    if (document.pdfaCompliant === true) {
+    if (pdfaValidated === true) {
       return buildCheck(pack, "pdfa", {
         status: "warn",
-        detail: "This portal rejects PDF/A files. Re-export the document as a standard PDF before filing.",
+        detail: "This portal rejects validated PDF/A files. Re-export the document as a standard PDF before filing.",
       });
     }
 
-    if (document.pdfaCompliant === undefined) {
+    if (pdfaClaimed) {
+      return buildCheck(pack, "pdfa", {
+        status: "warn",
+        detail: "This portal rejects PDF/A files and the document claims PDF/A in its metadata. Re-export the document as a standard PDF before filing.",
+      });
+    }
+
+    if (document.pdfaClaimed !== false) {
       return buildCheck(pack, "pdfa", {
         status: "unknown",
-        detail: "This portal rejects PDF/A files and no compliance facts were provided.",
+        detail: "This portal rejects PDF/A files and no PDF/A claim or validation facts were provided.",
       });
     }
 
@@ -347,18 +356,29 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   if (stance === "accepted") {
     return buildCheck(pack, "pdfa", {
       status: "pass",
-      detail: "PDF/A is accepted but carries no benefit here; the filing copy is left as a standard PDF.",
+      detail: pdfaValidated === true
+        ? "PDF/A is accepted but carries no benefit here; the validated PDF/A filing copy is left unchanged."
+        : pdfaClaimed
+          ? "PDF/A is accepted but carries no benefit here; the PDF/A-claimed filing copy is left unchanged."
+          : "PDF/A is accepted but carries no benefit here; the filing copy is left as a standard PDF.",
     });
   }
 
-  if (document.pdfaCompliant === true) {
+  if (pdfaValidated === true) {
     return buildCheck(pack, "pdfa", {
       status: "pass",
-      detail: `The document is reported PDF/A compliant for ${stance} flavor ${flavor}.`,
+      detail: `The document has been validated as PDF/A compliant for ${stance} flavor ${flavor}.`,
     });
   }
 
-  if (document.pdfaCompliant === undefined) {
+  if (pdfaValidated === undefined) {
+    if (pdfaClaimed) {
+      return buildCheck(pack, "pdfa", {
+        status: "unknown",
+        detail: `The document claims PDF/A in its metadata, but PDF/A ${flavor} compliance has not been independently validated.`,
+      });
+    }
+
     return buildCheck(pack, "pdfa", {
       status: "unknown",
       detail: `PDF/A ${flavor} compliance facts were not provided.`,
@@ -368,8 +388,8 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   return buildCheck(pack, "pdfa", {
     status: "warn",
     detail: stance === "required"
-      ? `PDF/A ${flavor} is required and the document is reported non-compliant.`
-      : `PDF/A ${flavor} is preferred by the portal and the document is reported non-compliant.`,
+      ? `PDF/A ${flavor} is required and the document failed PDF/A validation.`
+      : `PDF/A ${flavor} is preferred by the portal and the document failed PDF/A validation.`,
   });
 }
 

@@ -100,6 +100,7 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
     expect(mapped.signatureDetection).toEqual(facts.signatureDetection);
     // Facts qpdf cannot provide stay undefined — unknown, never passed.
     expect(mapped.searchableText).toBeUndefined();
+    expect(mapped.pdfaClaimed).toBeUndefined();
     expect(mapped.pdfaCompliant).toBeUndefined();
   });
 

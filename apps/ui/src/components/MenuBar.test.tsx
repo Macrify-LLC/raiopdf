@@ -64,7 +64,7 @@ describe("MenuBar", () => {
 
     click(getTrigger("File"));
 
-    for (const label of ["Save", "Save As...", "Export PDF/A (archival format)...", "Export Editable Word (.docx)...", "Print...", "Protect (passwords)...", "Document Properties"]) {
+    for (const label of ["Save", "Save As...", "Export PDF/A (archival format)...", "Export Editable Word (.docx, experimental)...", "Print...", "Protect (passwords)...", "Document Properties"]) {
       expect(getMenuItem(label).disabled).toBe(true);
     }
 
@@ -74,6 +74,34 @@ describe("MenuBar", () => {
 
     click(getMenuItem("Save"));
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("disables Export to Word with an in-label reason when Microsoft Word is absent", () => {
+    const onCommand = vi.fn();
+    render({ hasDocument: true, canUndo: false, wordAvailable: false, onCommand });
+
+    click(getTrigger("File"));
+
+    // The gray-out reason lives in the label because disabled menu items don't
+    // surface hover tooltips.
+    const exportWord = getMenuItem("Export Editable Word (.docx) — requires Microsoft Word");
+    expect(exportWord.disabled).toBe(true);
+
+    click(exportWord);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("enables Export to Word (with an experimental note) when Word is present and a document is open", () => {
+    const onCommand = vi.fn();
+    render({ hasDocument: true, canUndo: false, wordAvailable: true, onCommand });
+
+    click(getTrigger("File"));
+
+    const exportWord = getMenuItem("Export Editable Word (.docx, experimental)...");
+    expect(exportWord.disabled).toBe(false);
+
+    click(exportWord);
+    expect(onCommand).toHaveBeenCalledWith("file:export-docx");
   });
 
   it("enables View document actions only once a document is open", () => {
@@ -152,6 +180,7 @@ describe("MenuBar", () => {
   interface RenderProps {
     hasDocument: boolean;
     canUndo: boolean;
+    wordAvailable?: boolean;
     onCommand?: (command: string) => void;
     onExit?: () => void;
   }
@@ -172,11 +201,12 @@ describe("MenuBar", () => {
     });
   }
 
-  function Harness({ hasDocument, canUndo, onCommand, onExit }: RenderProps) {
+  function Harness({ hasDocument, canUndo, wordAvailable = true, onCommand, onExit }: RenderProps) {
     return (
       <MenuBar
         hasDocument={hasDocument}
         canUndo={canUndo}
+        wordAvailable={wordAvailable}
         onCommand={onCommand ?? (() => undefined)}
         onExit={onExit ?? (() => undefined)}
       />

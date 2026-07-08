@@ -57,14 +57,29 @@ export interface MenuBarProps {
   hasDocument: boolean;
   /** Gates Edit > Undo -- mirrors `undoLastPendingEdit`'s own no-op guard. */
   canUndo: boolean;
+  /**
+   * Whether Microsoft Word was detected on this PC. The Word-dependent items
+   * (PDF -> editable Word export) drive an installed copy of Word, so they are
+   * disabled when it is absent. Defaults `true` so non-desktop / not-yet-probed
+   * callers don't gray them prematurely -- App passes the real probe result.
+   */
+  wordAvailable?: boolean;
   /** Shared dispatch -- the same function the Tauri `raiopdf-menu` listener calls. */
   onCommand: (command: string) => void;
   /** Only reachable from this bar (see module doc) -- native Exit bypasses the frontend entirely. */
   onExit: () => void;
 }
 
-export function MenuBar({ hasDocument, canUndo, onCommand, onExit }: MenuBarProps) {
+export function MenuBar({ hasDocument, canUndo, wordAvailable = true, onCommand, onExit }: MenuBarProps) {
   const desktopRuntime = isTauriRuntime();
+  // "Export to editable Word" runs an installed copy of Microsoft Word (COM
+  // automation) -- it can't work without it. When Word is absent we disable the
+  // item and say why *in the label*, because disabled menu items don't surface
+  // a hover tooltip. When Word is present it stays gated on an open document,
+  // and carries an "experimental" note (Word's PDF reflow is approximate).
+  const exportWordItem: MenuItemDef = wordAvailable
+    ? item("Export Editable Word (.docx, experimental)...", "file:export-docx", !hasDocument)
+    : item("Export Editable Word (.docx) — requires Microsoft Word", "file:export-docx", true);
   const menus: readonly MenuDef[] = [
     {
       id: "file",
@@ -78,7 +93,7 @@ export function MenuBar({ hasDocument, canUndo, onCommand, onExit }: MenuBarProp
         item("Save As...", "file:save-as", !hasDocument),
         separator,
         item("Export PDF/A (archival format)...", "file:export-pdfa", !hasDocument),
-        item("Export Editable Word (.docx)...", "file:export-docx", !hasDocument),
+        exportWordItem,
         item("Print...", "file:print", !hasDocument),
         item("Protect (passwords)...", "file:protect", !hasDocument),
         item("Document Properties", "file:properties", !hasDocument),

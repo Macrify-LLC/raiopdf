@@ -148,6 +148,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     onOutlineChange: () => Promise.resolve(true),
     ocrState: { phase: "idle", message: null },
     ocrAvailable: false,
+    wordAvailable: true,
     ocrStarting: false,
     documentBanner: null,
     workspace: null,

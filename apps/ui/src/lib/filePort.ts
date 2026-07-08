@@ -62,6 +62,14 @@ export interface PickedPdfForWord {
   sizeBytes: number;
 }
 
+export interface PickedDocxForImport {
+  grant: FileGrant;
+  name: string;
+  sizeBytes: number;
+  /** Tracked-changes scan result, so the caller can gate final-vs-show-markup. */
+  markupScan: "clean" | "hasMarkup" | "uninspectable";
+}
+
 export interface FilePort {
   openFile: () => Promise<OpenedFileSource | null>;
   pickDirectory: () => Promise<PickedDirectory | null>;
@@ -210,6 +218,23 @@ export async function pickPdfForWord(): Promise<PickedPdfForWord | null> {
       grant: selected.grant as FileGrant,
       name: selected.name,
       sizeBytes: selected.sizeBytes,
+    }
+    : null;
+}
+
+export async function pickDocxForImport(): Promise<PickedDocxForImport | null> {
+  if (!isTauriRuntime()) {
+    throw new Error("pickDocxForImport is desktop-only.");
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const selected = await invoke<PickedDocxForImport | null>("pick_docx_for_import");
+  return selected
+    ? {
+      grant: selected.grant as FileGrant,
+      name: selected.name,
+      sizeBytes: selected.sizeBytes,
+      markupScan: selected.markupScan,
     }
     : null;
 }

@@ -104,6 +104,32 @@ describe("MenuBar", () => {
     expect(onCommand).toHaveBeenCalledWith("file:export-docx");
   });
 
+  it("enables Import Word Document with no document open (it starts fresh) when Word is present", () => {
+    const onCommand = vi.fn();
+    render({ hasDocument: false, canUndo: false, wordAvailable: true, onCommand });
+
+    click(getTrigger("File"));
+
+    const importWord = getMenuItem("Import Word Document (.docx, experimental)...");
+    expect(importWord.disabled).toBe(false);
+
+    click(importWord);
+    expect(onCommand).toHaveBeenCalledWith("file:import-docx");
+  });
+
+  it("disables Import Word Document with an in-label reason when Microsoft Word is absent", () => {
+    const onCommand = vi.fn();
+    render({ hasDocument: true, canUndo: false, wordAvailable: false, onCommand });
+
+    click(getTrigger("File"));
+
+    const importWord = getMenuItem("Import Word Document (.docx) — requires Microsoft Word");
+    expect(importWord.disabled).toBe(true);
+
+    click(importWord);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
   it("enables View document actions only once a document is open", () => {
     render({ hasDocument: false, canUndo: false });
 

@@ -1254,4 +1254,50 @@ mod tests {
             .expect("reflow output contains word/document.xml");
         let _ = fs::remove_dir_all(temp);
     }
+
+    /// End-to-end round-trip of both Word features a user can invoke: import a
+    /// `.docx` (DOCX -> PDF, the Import Word Document path) and then export it
+    /// back to editable Word (PDF -> DOCX, the reflow path). Self-gates on Word
+    /// like the other canaries, so it runs locally where Word is installed and
+    /// skips cleanly where it isn't (e.g. CI).
+    #[cfg(windows)]
+    #[test]
+    fn word_export_import_roundtrip_canary_self_gates_on_word_capability() {
+        let capability = word_capability(true).expect("Word capability probe should run");
+        if capability.state != WordCapabilityState::Available {
+            eprintln!(
+                "skipping Word export/import round-trip canary: {:?} {:?}",
+                capability.state, capability.reason
+            );
+            return;
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        let temp = std::env::temp_dir().join(format!(
+            "raiopdf-word-roundtrip-canary-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).expect("canary temp dir");
+
+        // Import: DOCX -> PDF (what "Import Word Document" runs).
+        let imported_pdf = temp.join("roundtrip.pdf");
+        convert_docx_to_pdf(&root.join("clean.docx"), &imported_pdf, MarkupMode::Final)
+            .expect("clean DOCX imports to PDF");
+        let pdf_bytes = fs::read(&imported_pdf).expect("read imported pdf");
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+
+        // Export: PDF -> DOCX (what "Export Editable Word" runs).
+        let exported_docx = temp.join("roundtrip.docx");
+        convert_pdf_to_docx(&imported_pdf, &exported_docx)
+            .expect("imported PDF exports back to DOCX");
+        let docx_file = fs::File::open(&exported_docx).expect("open round-trip docx");
+        let mut archive = zip::ZipArchive::new(docx_file).expect("round-trip output is a zip");
+        archive
+            .by_name("word/document.xml")
+            .expect("round-trip output contains word/document.xml");
+
+        let _ = fs::remove_dir_all(temp);
+    }
 }

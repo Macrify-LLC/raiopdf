@@ -26,3 +26,27 @@ export function getWordCapability(force = false): Promise<WordCapability> {
 export function isWordPresent(capability: WordCapability): boolean {
   return capability.state === "detected" || capability.state === "available";
 }
+
+/**
+ * The click-time gate for actually running a Word conversion: refuse unless Word
+ * launched cleanly (`available`). Stricter than `isWordPresent` (which also
+ * accepts a merely-registered `detected` Word) — a registered Word can still
+ * fail to start, so any real conversion re-checks with `force: true` first.
+ */
+export function shouldRefuseWord(capability: WordCapability): boolean {
+  return capability.state !== "available";
+}
+
+/**
+ * The canonical "Word can't run" message. Callers add their own context sentence
+ * (e.g. "The document was not imported.") so all Word surfaces read consistently.
+ */
+export function wordUnavailableMessage(capability: WordCapability): string {
+  if (capability.state === "notApplicable") {
+    return "Microsoft Word isn't available on this computer.";
+  }
+  if (capability.reason) {
+    return `Microsoft Word isn't available: ${capability.reason}`;
+  }
+  return "Microsoft Word isn't available.";
+}

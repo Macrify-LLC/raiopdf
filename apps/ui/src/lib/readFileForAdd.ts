@@ -38,7 +38,12 @@ import {
   getLargeDocThresholdBytes,
   setLargeDocThresholdBytes,
 } from "./largeDocThreshold";
-import { getWordCapability, type WordCapability } from "./wordCapability";
+import {
+  getWordCapability,
+  shouldRefuseWord,
+  wordUnavailableMessage as wordUnavailableSummary,
+  type WordCapability,
+} from "./wordCapability";
 
 /** Contract of one entry returned by the shell's `pick_pdfs_for_add` command. */
 export interface PickedPdfForAdd {
@@ -212,7 +217,7 @@ async function normalizePickedFilesForAdd(
   }
 
   const capability = await getWordCapability(true);
-  if (capability.state !== "available") {
+  if (shouldRefuseWord(capability)) {
     options.onWordUnavailable?.(wordUnavailableMessage(capability), capability);
     return pdfFiles.map(stripInternalPickFields);
   }
@@ -384,18 +389,10 @@ async function convertDocxForAdd(
 }
 
 function wordUnavailableMessage(capability: WordCapability): string {
-  if (capability.state === "notApplicable") {
-    return "Word integration is not available on this computer. Word documents were not added.";
-  }
-
-  if (capability.reason) {
-    return `Word integration not available: ${capability.reason}`;
-  }
-
-  return "Word integration not available. Word documents were not added.";
+  return `${wordUnavailableSummary(capability)} Word documents were not added.`;
 }
 
-async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMarkupMode> {
+export async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMarkupMode> {
   if (typeof document === "undefined") {
     return "final";
   }

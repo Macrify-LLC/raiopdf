@@ -204,6 +204,7 @@ import {
   type PathOpsStatus,
 } from "./lib/pathOps";
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
+import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
 import {
   annotateStreamedPreflight,
@@ -1635,6 +1636,12 @@ export function App() {
     async (
       output: { outputGrant: FileGrant; name: string; sizeBytes: number },
       expected: DocumentIdentityGuard,
+      // `openInNewTab` is for outputs that are a NEW independent document (e.g.
+      // an imported Word file) rather than a reopen of the op's own source: open
+      // it in a new tab when a document is already present, exactly like File ->
+      // Open, so it never replaces/clobbers an unsaved active tab. Defaults off,
+      // so in-place reopens (OCR, decrypt, ...) keep replacing the active tab.
+      options: { openInNewTab?: boolean } = {},
     ) => {
       const staleResult = {
         status: "failed" as const,
@@ -1654,7 +1661,10 @@ export function App() {
         return releaseStaleOutput();
       }
 
-      if (plan.mode === "memory") {
+      // The in-memory reopen (openDocumentFile) always replaces the active tab.
+      // For a NEW independent document (openInNewTab) that would clobber an open
+      // doc, so skip it and use the streamed open below, which supports new-tab.
+      if (plan.mode === "memory" && !options.openInNewTab) {
         // Same per-open resets as `openOpenedFile` — this IS a fresh open.
         ocrRunRef.current += 1;
         ocrActiveRef.current = false;
@@ -1688,12 +1698,15 @@ export function App() {
         }
       }
 
-      return openStreamedSource({
-        kind: "rangeGrant",
-        grant: output.outputGrant,
-        name: output.name,
-        sizeBytes: output.sizeBytes,
-      });
+      return openStreamedSource(
+        {
+          kind: "rangeGrant",
+          grant: output.outputGrant,
+          name: output.name,
+          sizeBytes: output.sizeBytes,
+        },
+        { openInNewTab: options.openInNewTab ?? false },
+      );
     },
     [isCurrentDocument, openDocumentFile, openStreamedSource, resetLegalState],
   );
@@ -6250,6 +6263,38 @@ export function App() {
     });
   }, [setError]);
 
+  const importWordDocument = useCallback(() => {
+    void runWordDocumentImport({ onStatus: setWordReflowStatus }).then(async (result) => {
+      if (result.status === "unavailable" || result.status === "failed") {
+        setError(result.message);
+        return;
+      }
+      if (result.status !== "converted") {
+        return;
+      }
+      // Import opens the converted PDF as a NEW document, like File -> Open: in
+      // a new tab when something is already open (never replacing an unsaved
+      // active tab), or in place when nothing is open. Capture the identity
+      // guard at open time so switching documents during the long conversion
+      // doesn't discard the import.
+      const reopened = await openPathOpOutput(
+        result.output,
+        { openToken: getOpenToken(), generation: documentGenerationRef.current },
+        { openInNewTab: true },
+      );
+      if (reopened.status === "failed") {
+        setWordReflowStatus({ running: false, tone: "danger", message: reopened.error });
+        setError(reopened.error);
+        return;
+      }
+      setWordReflowStatus({
+        running: false,
+        tone: "ok",
+        message: `Imported ${result.sourceName}. ${WORD_REFLOW_EXPERIMENTAL_LABEL}`,
+      });
+    });
+  }, [getOpenToken, openPathOpOutput, setError]);
+
   const exportPdfA = useCallback(() => {
     const sourceBytes = document.bytes;
 
@@ -6434,6 +6479,9 @@ export function App() {
         case "file:export-docx":
           exportDocx();
           break;
+        case "file:import-docx":
+          importWordDocument();
+          break;
         case "file:print":
           printDocument();
           break;
@@ -6480,6 +6528,7 @@ export function App() {
     [
       document.zoom,
       exportDocx,
+      importWordDocument,
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,

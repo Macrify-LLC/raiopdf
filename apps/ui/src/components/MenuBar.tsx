@@ -80,6 +80,12 @@ export function MenuBar({ hasDocument, canUndo, wordAvailable = true, onCommand,
   const exportWordItem: MenuItemDef = wordAvailable
     ? item("Export Editable Word (.docx, experimental)...", "file:export-docx", !hasDocument)
     : item("Export Editable Word (.docx) — requires Microsoft Word", "file:export-docx", true);
+  // Import runs Word to convert a .docx to PDF and opens the result as a new
+  // document, so it needs Word but not an already-open document -- unlike the
+  // other File items it's enabled with nothing open.
+  const importWordItem: MenuItemDef = wordAvailable
+    ? item("Import Word Document (.docx, experimental)...", "file:import-docx", false)
+    : item("Import Word Document (.docx) — requires Microsoft Word", "file:import-docx", true);
   const menus: readonly MenuDef[] = [
     {
       id: "file",
@@ -89,6 +95,7 @@ export function MenuBar({ hasDocument, canUndo, wordAvailable = true, onCommand,
         ...(desktopRuntime
           ? [item("Open in New Window...", "file:open-new-window")]
           : []),
+        importWordItem,
         item("Save", "file:save", !hasDocument),
         item("Save As...", "file:save-as", !hasDocument),
         separator,

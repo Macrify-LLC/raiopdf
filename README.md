@@ -133,6 +133,8 @@ Optionally, an off-by-default "bring your own AI" connector — bundled right in
 
 The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed Windows installer when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 
+What changed in each release is recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## License
 
 RaioPDF is licensed under [GPL-3.0](LICENSE). It bundles third-party components under their own licenses (MIT Stirling-PDF engine, Apache-2.0 Tesseract and PDF.js, AGPL Ghostscript, and others) — see [`licenses/THIRD-PARTY.md`](licenses/THIRD-PARTY.md) for full third-party notices.

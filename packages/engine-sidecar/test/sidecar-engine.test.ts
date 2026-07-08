@@ -340,7 +340,7 @@ describe("SidecarPdfEngine", () => {
     expect(result.replacedCounts).toBeNull();
     expect(result.warnings).toEqual([{
       code: "COUNTS_UNAVAILABLE",
-      message: expect.stringContaining("does not report replacement counts"),
+      message: expect.stringContaining("can't confirm exactly how many matches were replaced"),
     }]);
     expect(calls[0]?.url).toBe("http://127.0.0.1:8080/api/v1/general/edit-text");
     expectFormField(calls[0], "edits", JSON.stringify([
@@ -863,7 +863,7 @@ describe("SidecarPdfEngine", () => {
     // Ghostscript reason, not just the bare "Unprocessable Entity" status text.
     await expect(engine.convertToPdfA(document, { flavor: "pdfa-2b" })).rejects.toMatchObject({
       message:
-        "Stirling PDF request failed: ghostscript PDF/A conversion failed (exit status: 1): input file is encrypted",
+        "RaioPDF couldn't complete that: ghostscript PDF/A conversion failed (exit status: 1): input file is encrypted",
     });
   });
 

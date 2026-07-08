@@ -68,7 +68,7 @@ export function PrintDialog({
           setUnavailableReason(
             !status.platformSupported
               ? "Native printing isn't available on this platform yet."
-              : "Native printing needs the bundled Ghostscript, which wasn't found.",
+              : "Printing isn't available right now — your RaioPDF installation may be incomplete; reinstalling should fix it. You can still print a page range instead.",
           );
           setPhase("unavailable");
           return;

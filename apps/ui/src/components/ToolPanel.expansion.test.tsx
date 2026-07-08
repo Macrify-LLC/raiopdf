@@ -137,7 +137,7 @@ describe("ToolPanel inline tool expansions", () => {
         activeOrganizeTool="compress"
         sidecarStatus={{
           running: true,
-          message: "Compressing in the desktop engine...",
+          message: "Compressing...",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -147,7 +147,7 @@ describe("ToolPanel inline tool expansions", () => {
 
     expect(document.querySelectorAll('[aria-label="Help: Compress"]').length).toBe(1);
     expect(document.querySelector('[role="img"][aria-label="Compressing PDF"]')).not.toBeNull();
-    expect(document.body.textContent).toContain("Compressing in the desktop engine...");
+    expect(document.body.textContent).toContain("Compressing...");
     // Busy means no double-submit -- the trigger button is disabled while running.
     expect(getButton("Compress PDF").disabled).toBe(true);
   });

@@ -26,7 +26,7 @@ export function EditTextReviewDialog({
       >
         <LongProcessLoader
           phaseLabel="Staging replacement"
-          message="Rewriting a review copy in the local PDF engine."
+          message="Preparing a preview of your changes."
           detail="There is no progress feed for this operation; image-heavy documents can take a few minutes."
         />
       </FloatingDialog>

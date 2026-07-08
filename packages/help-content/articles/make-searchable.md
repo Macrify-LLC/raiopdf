@@ -25,8 +25,8 @@ machine.
 
 ## What to know
 
-- **It runs on your computer.** The text recognition happens locally, with a
-  built-in toolchain. Your pages are never uploaded.
+- **It runs on your computer.** The text recognition happens locally, using
+  tools built into RaioPDF. Your pages are never uploaded.
 - **The page looks the same.** OCR adds a hidden text layer behind the image — it
   doesn't alter how the document looks. Afterward you can search it and select
   text.

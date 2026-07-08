@@ -237,14 +237,14 @@ describe("resolvePrepPlan", () => {
       },
     });
 
-    expect(byId(plan, "make-searchable").impact).toBe("Text layer looks unreliable - re-OCR is recommended.");
+    expect(byId(plan, "make-searchable").impact).toBe("The hidden searchable text looks garbled - running Make Searchable again is recommended.");
   });
 
   it("degrades honestly when Phase 1b fact fields are not available yet", () => {
     const plan = resolvePrepPlan(getPack("florida"), baseFacts);
 
-    expect(byId(plan, "sanitize-content").impact).toContain("cannot compute active-content");
-    expect(byId(plan, "convert-pdfa").impact).toContain("cannot compute PDF/A conversion impact");
+    expect(byId(plan, "sanitize-content").impact).toContain("can't yet report what this step will affect");
+    expect(byId(plan, "convert-pdfa").impact).toContain("can't yet report what converting to PDF/A will affect");
   });
 });
 

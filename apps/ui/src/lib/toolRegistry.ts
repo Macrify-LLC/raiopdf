@@ -27,8 +27,8 @@ export const LEGAL_TOOLS = [
 export const ORGANIZE_TOOLS = [
   { id: "pages", label: "Organize Pages", group: "organize", helpArticleId: "pages", description: "Select, reorder, rotate, delete, extract, or split pages." },
   { id: "pdf-to-word", label: "PDF -> Word", group: "organize", helpArticleId: "pdf-to-word", description: "Convert one PDF to an editable Word document." },
-  { id: "compress", label: "Compress...", group: "organize", helpArticleId: "compress", description: "Reduce file size through the desktop engine while preserving a PDF output." },
-  { id: "repair", label: "Repair...", group: "organize", helpArticleId: "repair", description: "Ask the desktop engine to rebuild a PDF that will not open cleanly." },
+  { id: "compress", label: "Compress...", group: "organize", helpArticleId: "compress", description: "Reduce a PDF's file size." },
+  { id: "repair", label: "Repair...", group: "organize", helpArticleId: "repair", description: "Rebuild a PDF that won't open cleanly." },
   { id: "merge", label: "Merge PDFs...", group: "organize", helpArticleId: "merge", description: "Append other PDFs after the current document." },
   { id: "insert", label: "Insert from File...", group: "organize", helpArticleId: "insert", description: "Insert pages from another PDF at the selected position." },
   { id: "insert-images", label: "Insert images as pages...", group: "organize", helpArticleId: "insert-images", description: "Convert image files into PDF pages and insert them." },
@@ -76,7 +76,7 @@ export const COMMAND_BAR_EDIT_TOOLS = [
 ] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 
 export const HELP_ONLY_TOOL_ENTRIES = [
-  { id: "make-searchable", label: "Make Searchable (OCR)", group: "comment-ocr", helpArticleId: "make-searchable", description: "Run OCR through the desktop engine and verify the output has searchable text." },
+  { id: "make-searchable", label: "Make Searchable (OCR)", group: "comment-ocr", helpArticleId: "make-searchable", description: "Make a scanned PDF searchable, and confirm the text came through." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_REGISTRY = [

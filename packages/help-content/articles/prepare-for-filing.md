@@ -29,7 +29,8 @@ an afternoon. This does it for you.
    anything the portal won't accept.
 4. Click the action button to build it. Depending on what the file needs, it
    reads **Make Filing-Ready** (when there's cleanup to do) or **Export PDF/A for
-   ePortal** (when it's already in shape).
+   ePortal** (when it's already in shape). PDF/A is the long-term archival format
+   portals ask for.
 
 You get back a filing-ready file. If the document was too big for the portal,
 you get it split into properly labeled, sequential parts instead.

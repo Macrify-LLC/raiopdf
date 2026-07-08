@@ -38,9 +38,8 @@ page is inserted into the open document.
   right away.
 - **A document keeps at least one page** — you can't delete them all, and deleting
   asks you to confirm first.
-- **Slip sheet insertion is for standard documents.** Very large streamed
-  documents keep using file-based tools, so generated in-memory slip sheets are
-  unavailable there for now.
+- **Slip sheet insertion isn't available for very large PDFs yet.** For files
+  that big, use **Insert from File** with a cover-page PDF instead.
 
 ## Related
 

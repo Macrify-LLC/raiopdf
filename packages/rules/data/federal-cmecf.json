@@ -67,7 +67,7 @@
     },
     {
       "id": "flatten-forms",
-      "label": "Flatten fillable forms",
+      "label": "Lock fillable form fields",
       "kind": "portal",
       "authority": "PACER CM/ECF troubleshooting FAQ",
       "lastVerified": "2026-07-02",

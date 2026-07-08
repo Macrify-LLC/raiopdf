@@ -382,7 +382,7 @@ export const PrepareForFilingWorkspace = forwardRef<
       return;
     }
     if (packetFiles.some((file) => !file.path)) {
-      setPacketMessage("Packet builder needs PDFs opened from local desktop paths.");
+      setPacketMessage("Open these PDFs from the desktop app (not dragged from a browser) so RaioPDF can find them on disk.");
       return;
     }
     onPacketPreferencesChange?.({ layoutMode: packetLayoutMode, prefixFilenames: packetPrefixFilenames });
@@ -642,7 +642,7 @@ export const PrepareForFilingWorkspace = forwardRef<
 
         {!pdfAAvailable && prepPlan.some((step) => step.id === "convert-pdfa" && checkedSteps.has(step.id)) ? (
           <p className="filing-card__unavailable" role="status">
-            PDF/A export is available in the desktop app. Normalize and split remain available here.
+            Saving as PDF/A (archival format) only works in the installed RaioPDF app. Standardizing page size and splitting remain available here.
           </p>
         ) : null}
 
@@ -767,8 +767,8 @@ function ImpactWarning({
       <p className="filing-impact__hint">
         {hasMarkupChoice
           ? impact.normalizePagesSelected
-            ? "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations — but Normalize pages will bake kept markup into the filing copy."
-            : "Flattening makes your RaioPDF markup permanent in the filing copy. Keeping leaves it as live annotations."
+            ? "Making your markup permanent merges it into the filing copy. Keeping it leaves it as editable markup — but standardizing page size will merge kept markup into the filing copy anyway."
+            : "Making your markup permanent merges it into the filing copy. Keeping it leaves it as editable markup."
           : impact.unappliedRedactionMarks > 0
           ? "Apply your redactions first, then run Prepare for Filing again."
           : "If these features are load-bearing — an unsigned form, a signature you need intact — cancel and handle them first."}
@@ -791,7 +791,7 @@ function ImpactWarning({
               className="filing-card__ghost-button"
               onClick={() => onContinue("flatten")}
             >
-              Flatten them
+              Make them permanent
             </button>
           </>
         ) : (
@@ -899,7 +899,7 @@ function PacketBuilderPanel({
           <input
             value={outputDir}
             onChange={(event) => onOutputDirChange(event.currentTarget.value)}
-            placeholder="/absolute/path/to/empty-folder"
+            placeholder="Choose an empty folder..."
           />
         </label>
         <label>
@@ -988,7 +988,7 @@ function describeImpact(impact: FilingImpactState): string[] {
 
   if (impact.markupAnnotationCount > 0) {
     lines.push(
-      `${formatCount(impact.markupAnnotationCount, "RaioPDF markup annotation")} can be flattened into the filing copy or kept as a live annotation.`,
+      `${formatCount(impact.markupAnnotationCount, "RaioPDF markup annotation")} can be merged permanently into the filing copy or kept as editable markup.`,
     );
   }
 
@@ -1006,7 +1006,7 @@ function describeImpact(impact: FilingImpactState): string[] {
 
   if (conversion?.formFields) {
     lines.push(
-      `${formatCount(conversion.formFields, "interactive form field")} would be flattened or removed by PDF/A conversion.`,
+      `${formatCount(conversion.formFields, "interactive form field")} would be merged into the page or removed by PDF/A conversion.`,
     );
   }
 

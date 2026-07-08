@@ -32,7 +32,7 @@ export const unknownPack: JurisdictionPack = {
     unknownConstraint("encryption", "Encryption and restrictions", "portal"),
     unknownConstraint("embedded-files", "Embedded files", "portal"),
     unknownConstraint("metadata-scrub", "Metadata scrub", "portal"),
-    unknownConstraint("flatten-forms", "Flatten forms", "portal"),
+    unknownConstraint("flatten-forms", "Lock fillable form fields", "portal"),
     unknownConstraint("envelope-size", "Envelope size cap", "portal"),
     unknownConstraint("selection-filenames", "Selected filename limits", "portal"),
     unknownConstraint("filename-collisions", "Filename collisions", "portal"),

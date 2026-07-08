@@ -19,10 +19,10 @@ or copied from.
 
 ## Why it's not here yet
 
-The PDF engine RaioPDF uses today doesn't do encryption, so there's no safe way
-to actually protect a file with a password. Rather than pretend, the controls are
-shown but disabled. If you open **Document Properties**, a PDF will always report
-as "Not encrypted" for the same reason.
+RaioPDF can't yet encrypt a file, so there's no safe way to actually protect one
+with a password. Rather than pretend, the controls are shown but disabled. If you
+open **Document Properties**, a PDF will always report as "Not encrypted" for the
+same reason.
 
 We'd rather leave it off than ship a lock that doesn't lock.
 

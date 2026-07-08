@@ -200,8 +200,8 @@ export function OpenRaioToAiSection({
           ) : null}
 
           <p className="open-raio-to-ai__how">
-            How it works: this starts a small local connector that only talks to the AI client
-            that launched it, over stdio — no network port, nothing reaches the internet. Full
+            How it works: this starts a small local connector that only talks to the AI app
+            that launched it — no network connection, nothing reaches the internet. Full
             details, including what to do if a request refuses to run, live in{" "}
             <a
               className="open-raio-to-ai__doc-link"

@@ -61,6 +61,37 @@ describe("userMessages", () => {
     );
   });
 
+  it("maps bare bundled-tool names to the reinstall message", () => {
+    const reinstall =
+      "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.";
+    expect(formatWorkflowError("qpdf produced an empty compressed PDF.", "Nope")).toBe(
+      reinstall,
+    );
+    expect(
+      formatWorkflowError("Native printing needs the bundled Ghostscript.", "Nope"),
+    ).toBe(reinstall);
+    expect(formatWorkflowError("OCRmyPDF exited with status 1", "Nope")).toBe(reinstall);
+    expect(
+      formatWorkflowError("Main PDF is too large through the Node lane.", "Nope"),
+    ).toBe(reinstall);
+    expect(
+      formatWorkflowError(
+        "RaioPDF MCP binary is not configured; set RAIOPDF_MCP_BIN.",
+        "Nope",
+      ),
+    ).toBe(reinstall);
+  });
+
+  it("maps generic engine failures to the reworked fallback without leaking terms", () => {
+    const generic = "Something went wrong running this. Close and reopen RaioPDF, then try again.";
+    expect(formatWorkflowError("Stirling PDF request failed.", "Nope")).toBe(generic);
+    expect(formatWorkflowError("Local engine request failed.", "Nope")).toBe(generic);
+    expect(formatWorkflowError("failed to spawn sidecar process", "Nope")).toBe(generic);
+    expect(formatWorkflowError("Stirling PDF request failed.", "Nope")).not.toContain(
+      "Stirling",
+    );
+  });
+
   it("still maps a genuinely missing file (including a lost grant) to reopen-the-PDF", () => {
     expect(formatWorkflowError("File grant not found", "Nope")).toBe(
       "RaioPDF could not find one of the selected files. Reopen the PDF and try again.",

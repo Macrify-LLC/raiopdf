@@ -50,7 +50,7 @@ describe("ToolPanel", () => {
       "Prepare for Filing",
       "Bates Numbering",
       "Make Searchable (OCR)",
-      "Force re-OCR text layer",
+      "Redo searchable text",
     ];
 
     for (const label of declutteredLabels) {

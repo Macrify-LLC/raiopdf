@@ -41,11 +41,19 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
   // binary not found in payload", "bundled Node/MCP one-shot runtime not
   // found"). Those are an incomplete-install problem, not a missing user file —
   // routing them to the "reopen the PDF" message below would send the user on a
-  // wild goose chase. Catch them first with honest, actionable guidance.
+  // wild goose chase. Catch them first with honest, actionable guidance. The
+  // bare tool names (qpdf/ghostscript/ocrmypdf), the "node lane" size-limit
+  // wording, and "is not configured" all point at a missing or broken built-in
+  // tool, so they route to the same reinstall guidance.
   if (
     message.includes("not found in payload") ||
     message.includes("runtime not found") ||
-    message.includes("binary not found")
+    message.includes("binary not found") ||
+    message.includes("qpdf") ||
+    message.includes("ghostscript") ||
+    message.includes("ocrmypdf") ||
+    message.includes("node lane") ||
+    message.includes("is not configured")
   ) {
     return "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.";
   }
@@ -72,11 +80,13 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
     message.includes("spawn") ||
     message.includes("sidecar") ||
     message.includes("desktop engine") ||
+    message.includes("local engine") ||
+    message.includes("stirling") ||
     message.includes("tauri") ||
     message.includes("ipc") ||
     message.includes("invoke")
   ) {
-    return "This operation needs the desktop engine. Open RaioPDF as the desktop app and try again.";
+    return "Something went wrong running this. Close and reopen RaioPDF, then try again.";
   }
 
   if (containsFilePath(raw)) {

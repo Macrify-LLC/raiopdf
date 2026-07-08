@@ -143,7 +143,7 @@
     },
     {
       "id": "flatten-forms",
-      "label": "Flatten forms",
+      "label": "Lock fillable form fields",
       "kind": "portal",
       "authority": "Florida Courts Technology Standards v4.0, adopted May 2025",
       "lastVerified": "2026-07-02",

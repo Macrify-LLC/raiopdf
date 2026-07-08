@@ -16,7 +16,7 @@ export interface PasswordDialogProps {
 }
 
 const RUNNING_STATUS_LABEL: Record<PasswordDialogRunningPhase, string> = {
-  "starting-engine": "Starting the PDF engine…",
+  "starting-engine": "Getting things ready…",
   unlocking: "Unlocking the document…",
 };
 

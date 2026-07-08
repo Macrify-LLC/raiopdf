@@ -1,7 +1,7 @@
 import type { EditToolId } from "./edits";
 
 export const STREAMED_SIGNATURE_GATE_MESSAGE =
-  "Signatures on very large documents are coming. They currently require flattening, which is not yet available for streamed files.";
+  "Signing very large documents is coming soon — it isn't available for files this size yet.";
 
 export function editToolStreamedGateMessage(
   toolId: EditToolId,

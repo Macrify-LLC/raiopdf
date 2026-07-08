@@ -339,7 +339,7 @@ async function processFile(
         sourceFilename,
         sourceSha256,
         status: "failed",
-        reason: "Encrypted input requires the desktop sidecar engine to remove encryption.",
+        reason: "This PDF is password-protected. Open it in RaioPDF, enter the password, then run the cleanup again.",
         operations: ["remove-encryption"],
         ocrDecision: encryptedPlan.ocrDecision,
         warnings: encryptedWarnings,
@@ -381,7 +381,7 @@ async function processFile(
       sourceFilename,
       sourceSha256,
       status: "failed",
-      reason: "Encrypted input could not be converted to an unencrypted filing copy.",
+      reason: "Couldn't remove the password protection from this PDF. Open it in RaioPDF, enter the password, and try again.",
       operations: ["remove-encryption"],
       ocrDecision: plan.ocrDecision,
       signatureInvalidated,
@@ -868,7 +868,7 @@ function requireOcrEngine(engine: PdfEngine | BatchCleanupSidecarEngine): BatchC
     return engine;
   }
 
-  throw new Error("OCR requires the desktop sidecar engine.");
+  throw new Error("OCR isn't available right now. Restart RaioPDF and try again.");
 }
 
 function selectEngineForOperation(
@@ -881,7 +881,7 @@ function selectEngineForOperation(
   }
 
   if (!sidecarEngine) {
-    throw new Error(`${operationLabel(operation)} requires the desktop sidecar engine.`);
+    throw new Error(`${operationLabel(operation)} isn't available right now. Restart RaioPDF and try again.`);
   }
 
   return sidecarEngine;
@@ -897,7 +897,7 @@ function validateSidecarAvailability(
 
   const sidecarOperation = operations.find((operation) => SIDE_CAR_OPERATIONS.has(operation));
   if (sidecarOperation) {
-    throw new Error(`${operationLabel(sidecarOperation)} requires the desktop sidecar engine.`);
+    throw new Error(`${operationLabel(sidecarOperation)} isn't available right now. Restart RaioPDF and try again.`);
   }
 }
 

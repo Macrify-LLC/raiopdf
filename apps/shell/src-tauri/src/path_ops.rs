@@ -1156,7 +1156,7 @@ pub async fn path_op_build_binder(
     if exhibits.is_empty() {
         return Err(PathOpError {
             code: core_ops::ERR_INVALID_INPUT,
-            message: "build_binder requires at least one exhibit".to_string(),
+            message: "Add at least one exhibit before combining.".to_string(),
         });
     }
 
@@ -1165,13 +1165,15 @@ pub async fn path_op_build_binder(
     if !toolchain.node_one_shot {
         return Err(PathOpError {
             code: core_ops::ERR_TOOLCHAIN_MISSING,
-            message: "bundled Node/MCP one-shot runtime not found".to_string(),
+            message:
+                "RaioPDF's built-in tools could not be started. Reinstall RaioPDF and try again."
+                    .to_string(),
         });
     }
     if toolchain.qpdf.is_none() {
         return Err(PathOpError {
             code: core_ops::ERR_TOOLCHAIN_MISSING,
-            message: "qpdf binary not found in payload".to_string(),
+            message: "A built-in PDF tool is missing from your installation. Reinstall RaioPDF and try again.".to_string(),
         });
     }
 
@@ -1193,8 +1195,8 @@ pub async fn path_op_build_binder(
         return Err(PathOpError {
             code: core_ops::ERR_INVALID_INPUT,
             message: format!(
-                "Main PDF is too large for Combine with Exhibits through the Node lane ({} > {}).",
-                before.len, max_input_bytes
+                "This PDF is too large for Combine with Exhibits (limit about {} MB). Try splitting it first.",
+                max_input_bytes / (1024 * 1024)
             ),
         });
     }
@@ -1254,9 +1256,10 @@ pub async fn path_op_build_binder(
                         message,
                     })?;
             let output: BuildBinderOneShotOutput =
-                serde_json::from_slice(&stdout).map_err(|error| PathOpError {
+                serde_json::from_slice(&stdout).map_err(|_| PathOpError {
                     code: core_ops::ERR_OP_FAILED,
-                    message: format!("failed to parse build_binder result: {error}"),
+                    message: "RaioPDF couldn't finish building that package. Please try again."
+                        .to_string(),
                 })?;
             if !output.ok {
                 return Err(format_node_one_shot_error("build_binder", output.error));
@@ -1264,7 +1267,7 @@ pub async fn path_op_build_binder(
             if output.output.as_deref() != Some(output_path.to_string_lossy().as_ref()) {
                 return Err(PathOpError {
                     code: core_ops::ERR_OP_FAILED,
-                    message: "build_binder result did not confirm the expected output path"
+                    message: "RaioPDF couldn't finish building that package. Please try again."
                         .to_string(),
                 });
             }
@@ -1322,7 +1325,7 @@ pub async fn path_op_apply_edits(
     if payload.edits.is_empty() {
         return Err(PathOpError {
             code: core_ops::ERR_INVALID_INPUT,
-            message: "apply_edits requires at least one edit".to_string(),
+            message: "There are no edits to apply.".to_string(),
         });
     }
 
@@ -1331,13 +1334,15 @@ pub async fn path_op_apply_edits(
     if !toolchain.node_one_shot {
         return Err(PathOpError {
             code: core_ops::ERR_TOOLCHAIN_MISSING,
-            message: "bundled Node/MCP one-shot runtime not found".to_string(),
+            message:
+                "RaioPDF's built-in tools could not be started. Reinstall RaioPDF and try again."
+                    .to_string(),
         });
     }
     if toolchain.qpdf.is_none() {
         return Err(PathOpError {
             code: core_ops::ERR_TOOLCHAIN_MISSING,
-            message: "qpdf binary not found in payload".to_string(),
+            message: "A built-in PDF tool is missing from your installation. Reinstall RaioPDF and try again.".to_string(),
         });
     }
 
@@ -1359,8 +1364,8 @@ pub async fn path_op_apply_edits(
         return Err(PathOpError {
             code: core_ops::ERR_INVALID_INPUT,
             message: format!(
-                "Main PDF is too large for streamed editing through the Node lane ({} > {}).",
-                before.len, max_input_bytes
+                "This PDF is too large to edit (limit about {} MB). Try splitting it first.",
+                max_input_bytes / (1024 * 1024)
             ),
         });
     }
@@ -1394,9 +1399,10 @@ pub async fn path_op_apply_edits(
                         message,
                     })?;
             let output: ApplyEditsOneShotOutput =
-                serde_json::from_slice(&stdout).map_err(|error| PathOpError {
+                serde_json::from_slice(&stdout).map_err(|_| PathOpError {
                     code: core_ops::ERR_OP_FAILED,
-                    message: format!("failed to parse apply_edits result: {error}"),
+                    message: "RaioPDF couldn't finish applying your edits. Please try again."
+                        .to_string(),
                 })?;
             if !output.ok {
                 return Err(format_node_one_shot_error("apply_edits", output.error));
@@ -1404,7 +1410,7 @@ pub async fn path_op_apply_edits(
             if output.output.as_deref() != Some(output_path.to_string_lossy().as_ref()) {
                 return Err(PathOpError {
                     code: core_ops::ERR_OP_FAILED,
-                    message: "apply_edits result did not confirm the expected output path"
+                    message: "RaioPDF couldn't finish applying your edits. Please try again."
                         .to_string(),
                 });
             }

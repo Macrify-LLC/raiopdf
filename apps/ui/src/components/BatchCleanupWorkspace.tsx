@@ -156,7 +156,7 @@ export function BatchCleanupWorkspace({
       return;
     }
     if (files.some((file) => !file.path)) {
-      setLocalMessage("Batch cleanup needs PDFs opened from local desktop paths.");
+      setLocalMessage("Open these PDFs from the desktop app (not dragged from a browser) so RaioPDF can find them on disk.");
       return;
     }
 
@@ -271,7 +271,7 @@ export function BatchCleanupWorkspace({
             <input
               value={outputDir}
               onChange={(event) => setOutputDir(event.target.value)}
-              placeholder="/absolute/path/to/empty-folder"
+              placeholder="Choose an empty folder..."
             />
           </label>
         </div>
@@ -290,11 +290,11 @@ export function BatchCleanupWorkspace({
         </label>
         <div className="batch-workspace__checks">
           <Checkbox label="Compress" title="Reduce file size after cleanup." checked={compress} onChange={setCompress} />
-          <Checkbox label="Sanitize active content" title="Remove active content such as JavaScript, launch actions, links, and attachments." checked={sanitize} onChange={setSanitize} />
+          <Checkbox label="Sanitize active content" title="Remove things that can run or open on their own — embedded scripts, auto-open actions, links, and attachments." checked={sanitize} onChange={setSanitize} />
           <Checkbox label="Scrub metadata" title="Remove document metadata fields without changing page content." checked={scrubMetadata} onChange={setScrubMetadata} />
           <Checkbox label="Repair" title="Try to rebuild PDFs that fail to open cleanly before other steps run." checked={repair} onChange={setRepair} />
           <Checkbox label="Split by size" title="Split outputs into filing-size parts when they exceed the selected cap." checked={splitBySize} onChange={setSplitBySize} />
-          <Checkbox label="Normalize pages" title="Normalize page boxes and orientation before writing outputs." checked={normalizePages} onChange={setNormalizePages} />
+          <Checkbox label="Standardize page size & orientation" title="Make every page a consistent size and upright before saving." checked={normalizePages} onChange={setNormalizePages} />
         </div>
         {splitBySize ? (
           <label className="batch-workspace__number" title="Maximum size for each split output part.">

@@ -94,7 +94,7 @@ describe("force OCR controls", () => {
       />,
     );
 
-    const button = getButton("Force re-OCR text layer");
+    const button = getButton("Redo searchable text");
     expect(button.disabled).toBe(false);
 
     click(button);
@@ -106,7 +106,7 @@ describe("force OCR controls", () => {
     render(<ToolPanelHarness ocrState={{ phase: "confirm", message: null }} />);
 
     expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
-    expect(getButton("Force re-OCR text layer").disabled).toBe(true);
+    expect(getButton("Redo searchable text").disabled).toBe(true);
     expect(document.body.textContent).not.toContain("Making searchable");
   });
 
@@ -163,7 +163,7 @@ describe("force OCR controls", () => {
   it("shows OCR errors as a neutral note when the desktop engine is unavailable, not an alarming one", () => {
     render(
       <ToolPanelHarness
-        ocrState={{ phase: "error", message: "This action is available in the desktop app." }}
+        ocrState={{ phase: "error", message: "This tool only works in the installed RaioPDF app." }}
         ocrAvailable={false}
       />,
     );
@@ -213,7 +213,7 @@ describe("force OCR controls", () => {
         printMarkupAnnotations={true}
         onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
         onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
-        markupAnnotationMessage="Flattened RaioPDF markup into permanent page content."
+        markupAnnotationMessage="Merged 1 markup item permanently into the page."
       />,
     );
 
@@ -221,11 +221,11 @@ describe("force OCR controls", () => {
     expect(switchButton?.getAttribute("aria-checked")).toBe("true");
 
     click(switchButton as HTMLButtonElement);
-    click(getButton("Flatten markup"));
+    click(getButton("Make markup permanent"));
 
     expect(onPrintMarkupAnnotationsChange).toHaveBeenCalledWith(false);
     expect(onFlattenMarkupAnnotations).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("Flattened RaioPDF markup");
+    expect(document.body.textContent).toContain("Merged 1 markup item");
   });
 
   it("shows the whole-document force OCR interstitial before running", () => {
@@ -246,7 +246,7 @@ describe("force OCR controls", () => {
       "the PDF may be larger",
     );
 
-    click(getButton("Rebuild Text Layer"));
+    click(getButton("Redo Searchable Text"));
 
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });

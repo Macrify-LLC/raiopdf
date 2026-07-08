@@ -41,7 +41,7 @@ test("Prepare for Filing: normalizes landscape to letter-portrait AND splits by 
   // split-by-size — both of which are pdf-lib operations. Deselect the
   // engine-backed steps (PDF/A convert, sanitize, scrub) so this test isn't
   // coupled to those endpoints; they're covered by the engine-ops canary.
-  for (const step of ["Convert to PDFA-2B", "Sanitize active and embedded content", "Scrub metadata"]) {
+  for (const step of ["Convert to PDF/A archival format (PDFA-2B)", "Sanitize active and embedded content", "Scrub metadata"]) {
     const checkbox = page.getByRole("checkbox", { name: step });
     if ((await checkbox.count()) > 0 && (await checkbox.isChecked())) {
       await checkbox.uncheck();

@@ -227,8 +227,8 @@ describe("PrepareForFilingWorkspace", () => {
 
     expect(html).not.toContain("Prohibited");
     expect(html).not.toContain("Not needed");
-    expect(articleContaining(html, "Flatten forms")).toContain('data-disabled="false"');
-    expect(rowContaining(html, "Flatten forms")).not.toMatch(/<input[^>]*disabled/);
+    expect(articleContaining(html, "Lock fillable form fields")).toContain('data-disabled="false"');
+    expect(rowContaining(html, "Lock fillable form fields")).not.toMatch(/<input[^>]*disabled/);
   });
 
   it("shows advisory flags when expected or recommended steps are unchecked", () => {
@@ -287,7 +287,7 @@ describe("PrepareForFilingWorkspace", () => {
     click(getButtonByLabel("Expected by this jurisdiction for Scrub metadata"));
     expect(document.body.textContent).toContain("This jurisdiction expects this step.");
 
-    click(getButtonByLabel("Recommended by this jurisdiction for Convert to PDFA-2B"));
+    click(getButtonByLabel("Recommended by this jurisdiction for Convert to PDF/A archival format (PDFA-2B)"));
     expect(document.body.textContent).toContain("Recommended for this jurisdiction.");
     expect(document.body.textContent).toContain("verified");
   });
@@ -363,10 +363,10 @@ describe("PrepareForFilingWorkspace", () => {
       />,
     );
 
-    const flattenCheckbox = getCheckbox("Flatten forms");
+    const flattenCheckbox = getCheckbox("Lock fillable form fields");
     expect(flattenCheckbox.disabled).toBe(false);
     click(flattenCheckbox);
-    click(getButtonByLabel("Pack guidance differs from this selection for Flatten forms"));
+    click(getButtonByLabel("Pack guidance differs from this selection for Lock fillable form fields"));
 
     expect(document.body.textContent).toContain(
       "Raio research indicates this step is not preferred in this jurisdiction.",
@@ -403,7 +403,7 @@ describe("PrepareForFilingWorkspace", () => {
       />,
     );
 
-    click(getCheckbox("Convert to PDFA-2B"));
+    click(getCheckbox("Convert to PDF/A archival format (PDFA-2B)"));
     click(getButton("Set current selections as my defaults for this pack"));
 
     expect(onStepDefaultOverridesChange).toHaveBeenCalledWith(expect.objectContaining({
@@ -447,7 +447,7 @@ describe("PrepareForFilingWorkspace", () => {
     );
 
     expect(document.body.textContent).toContain("RaioPDF markup annotation");
-    click(getButton("Flatten them"));
+    click(getButton("Make them permanent"));
 
     expect(onPrepare).toHaveBeenCalledTimes(1);
     expect(onPrepare.mock.calls[0]?.[1]).toMatchObject({
@@ -489,7 +489,7 @@ describe("PrepareForFilingWorkspace", () => {
     );
 
     expect(document.body.textContent).toContain(
-      "Normalize pages will bake kept markup into the filing copy",
+      "standardizing page size will merge kept markup into the filing copy anyway",
     );
   });
 
@@ -533,7 +533,7 @@ describe("PrepareForFilingWorkspace", () => {
     const primaryButton = html.slice(buttonIndex, html.indexOf(">", buttonIndex));
     expect(primaryButton).not.toContain("disabled");
     // A step the rule disabled renders as a locked row.
-    expect(articleContaining(html, "Convert to PDFA")).toContain('data-disabled="true"');
+    expect(articleContaining(html, "Convert to PDF/A archival format")).toContain('data-disabled="true"');
     // The empty state must not claim no document is open.
     expect(html).not.toContain("Open a PDF before preparing a filing copy.");
   });

@@ -71,7 +71,7 @@ function SearchabilityChip({
   if (status.state === "garbled") {
     const garbledPageCount = status.garbledPages.length;
     const totalPages = status.quality.totalPages;
-    const garbledLabel = `Text layer looks garbled on ${garbledPageCount} of ${totalPages} pages — re-OCR recommended`;
+    const garbledLabel = `The hidden searchable text looks garbled on ${garbledPageCount} of ${totalPages} pages — running Make Searchable again is recommended`;
 
     return (
       <button

@@ -102,7 +102,7 @@ declare global {
 }
 
 export class EngineBridgeUnavailableError extends Error {
-  constructor(message = "This action is available in the desktop app.") {
+  constructor(message = "This tool only works in the installed RaioPDF app.") {
     super(message);
     this.name = "EngineBridgeUnavailableError";
   }
@@ -210,7 +210,7 @@ export function useEngineBridge(): EngineBridge {
         throw caught;
       }
 
-      const message = "The PDF engine could not be started.";
+      const message = "RaioPDF couldn't get ready to work on PDFs. Close and reopen the app, then try again.";
       if (isCurrentEngineGeneration(generation)) {
         setError(message);
       }

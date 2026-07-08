@@ -374,7 +374,7 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await expect(page.getByText("1 area will be permanently removed")).toBeVisible();
   await page.locator(".tool-panel__danger-button", { hasText: "Apply Redactions" }).click();
 
-  await expect(page.getByText("Redacted and verified: text layer verified clean; redacted page images replaced; annotations cleaned; metadata scrubbed.")).toBeVisible();
+  await expect(page.getByText("Redacted and verified: hidden text confirmed removed; redacted page images replaced; annotations cleaned; metadata scrubbed.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
   await expect.poll(() => getRedactionCallCount(page)).toBe(1);
 });
@@ -895,9 +895,9 @@ test("flattens pending markup into page content on an annotation-free PDF", asyn
 
   const toolPanel = page.locator(".tool-panel");
   await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
-  await toolPanel.getByRole("button", { name: "Flatten RaioPDF markup annotations" }).click();
+  await toolPanel.getByRole("button", { name: "Make markup permanent" }).click();
   await expect(
-    toolPanel.getByText("Flattened 1 annotation into permanent page content."),
+    toolPanel.getByText("Merged 1 markup item permanently into the page."),
   ).toBeVisible();
 
   const saved = await savePdf(page);
@@ -926,9 +926,9 @@ test("flattens reopened imported markup once without re-appending it", async ({ 
 
   const toolPanel = page.locator(".tool-panel");
   await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
-  await toolPanel.getByRole("button", { name: "Flatten RaioPDF markup annotations" }).click();
+  await toolPanel.getByRole("button", { name: "Make markup permanent" }).click();
   await expect(
-    toolPanel.getByText("Flattened 1 annotation into permanent page content."),
+    toolPanel.getByText("Merged 1 markup item permanently into the page."),
   ).toBeVisible();
 
   const flattened = await savePdf(page);

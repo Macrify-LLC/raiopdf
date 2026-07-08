@@ -69,10 +69,10 @@ for (const name of garbleFixtures) {
       ((await canvasRegion.innerText()).match(COMMON_WORDS) ?? []).length;
     const before = await commonWordCount();
 
-    // Force re-OCR (NOT plain "Make Searchable", which SKIPS pages that already
-    // carry a — broken — text layer). Confirm via "Rebuild Text Layer".
-    await page.getByRole("button", { name: "Force re-OCR text layer" }).click();
-    await page.getByRole("button", { name: "Rebuild Text Layer", exact: true }).click();
+    // Redo searchable text (NOT plain "Make Searchable", which SKIPS pages that
+    // already carry a — broken — text layer). Confirm via "Redo Searchable Text".
+    await page.getByRole("button", { name: "Redo searchable text" }).click();
+    await page.getByRole("button", { name: "Redo Searchable Text", exact: true }).click();
 
     // Outcome: the rebuilt text layer now renders real, readable words. Poll the
     // rendered text (reliable) with a generous budget for a many-page scan.

@@ -21,7 +21,7 @@ RaioPDF shows the before-and-after size so you can see how much it saved.
 
 ## What to know
 
-- **It runs on your machine**, using the built-in engine — nothing is uploaded.
+- **It runs on your machine**, inside RaioPDF — nothing is uploaded.
 - **Lower quality** makes a smaller file but a less sharp one; **higher quality**
   keeps it crisp but larger. Try a middle setting first.
 - **It changes the open document.** Save to keep it — use **Save As** to keep the

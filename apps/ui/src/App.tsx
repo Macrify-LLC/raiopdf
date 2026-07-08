@@ -5779,16 +5779,22 @@ export function App() {
             phase: "normalizing",
             message: "Verifying the filing copy text layer...",
           });
-          const filingTextLayerCoverage = await inspectTextLayer(ocrResult.bytes);
-          const filingOcrVerification = verifyOcrTextLayer(
-            filingTextLayerCoverage,
-            filingOcrPlan.ocrType,
-          );
           // Advisory: a less-than-perfect text layer rides along as a warning on
-          // the output, it never blocks the save.
-          const filingOcrNotice = filingOcrVerificationNotice(filingOcrVerification);
-          if (filingOcrNotice) {
-            filingOcrNotices.push(filingOcrNotice);
+          // the output, it never blocks the save. An unparseable OCR result can't be
+          // inspected at all — treat that as a notice too (matching the per-part
+          // output check), never an abort that leaves the user with no file.
+          try {
+            const filingTextLayerCoverage = await inspectTextLayer(ocrResult.bytes);
+            const filingOcrVerification = verifyOcrTextLayer(
+              filingTextLayerCoverage,
+              filingOcrPlan.ocrType,
+            );
+            const filingOcrNotice = filingOcrVerificationNotice(filingOcrVerification);
+            if (filingOcrNotice) {
+              filingOcrNotices.push(filingOcrNotice);
+            }
+          } catch {
+            filingOcrNotices.push("The filing copy text layer could not be verified.");
           }
 
           if (!isCurrentFilingRun()) {

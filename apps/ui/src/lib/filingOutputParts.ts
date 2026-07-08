@@ -6,7 +6,7 @@ import type {
 } from "@raiopdf/engine-api";
 import type { JurisdictionPack } from "@raiopdf/rules";
 
-type FilingPartEngine = Pick<PdfEngine, "pageCount" | "saveToBytes" | "splitByMaxBytes">;
+type FilingPartEngine = Pick<PdfEngine, "pageCount" | "saveToBytes" | "splitByMaxBytes" | "close">;
 
 export interface PreparedFilingOutputPart {
   bytes: Uint8Array;
@@ -56,21 +56,33 @@ export async function prepareFilingOutputParts({
     ? splitResult.parts.map((part) => part.document)
     : [];
 
-  const parts = await Promise.all(
-    splitResult.parts.map(async (part, index) => {
-      const splitBytes = await engine.saveToBytes(part.document);
-      const bytes = pdfAConversion
-        ? await pdfAConversion.convert(splitBytes, pdfAConversion.flavor)
-        : splitBytes;
+  let parts: readonly PreparedFilingOutputPart[];
+  try {
+    parts = await Promise.all(
+      splitResult.parts.map(async (part, index) => {
+        const splitBytes = await engine.saveToBytes(part.document);
+        const bytes = pdfAConversion
+          ? await pdfAConversion.convert(splitBytes, pdfAConversion.flavor)
+          : splitBytes;
 
-      return {
-        bytes,
-        fileName: formatFileName(baseName, pack, index + 1, splitResult.parts.length),
-        pageIndexes: part.pageIndexes,
-        oversized: part.oversized || (splitBySize && bytes.byteLength > splitTargetBytes),
-      };
-    }),
-  );
+        return {
+          bytes,
+          fileName: formatFileName(baseName, pack, index + 1, splitResult.parts.length),
+          pageIndexes: part.pageIndexes,
+          oversized: part.oversized || (splitBySize && bytes.byteLength > splitTargetBytes),
+        };
+      }),
+    );
+  } catch (error) {
+    // A save/convert failure here throws before we can return handlesToClose to the
+    // caller, so the split-part handles created by splitByMaxBytes would leak. Close
+    // them ourselves before re-throwing. (Empty in the single-part path, where the
+    // part reuses the caller-owned document.)
+    await Promise.all(
+      handlesToClose.map((handle) => engine.close(handle).catch(() => undefined)),
+    );
+    throw error;
+  }
 
   return {
     parts,

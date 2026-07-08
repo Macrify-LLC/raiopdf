@@ -110,7 +110,10 @@ export function verifyOcrTextLayer(
   };
 }
 
-export function filingOcrVerificationFailureMessage(result: OcrVerificationResult): string | null {
+// Advisory only: describes an imperfect OCR result so the filing output can carry
+// the warning, never to block the save. Filing rules — and the quality checks that
+// gate them — are advisory; the user is always in charge of producing the file.
+export function filingOcrVerificationNotice(result: OcrVerificationResult): string | null {
   if (result.status === "verified") {
     return null;
   }
@@ -120,35 +123,35 @@ export function filingOcrVerificationFailureMessage(result: OcrVerificationResul
     ? "OCR finished, but the filing copy still has imperfect searchable text."
     : "OCR ran, but the filing copy is still not fully searchable.";
 
-  return `${prefix} ${issueSummary} The filing copy was not saved.`;
+  return `${prefix} ${issueSummary} Review the affected pages before relying on the text.`;
 }
 
-export async function verifyFilingOcrOutputParts(
+// Returns one advisory notice per output part that isn't cleanly searchable (empty
+// array when every part is verified). Never throws on a quality failure — an
+// unverifiable part becomes a notice too, so the save still proceeds.
+export async function collectFilingOcrOutputPartNotices(
   parts: readonly FilingOcrOutputPart[],
   mode: OcrVerificationMode,
   inspectPartTextLayer: (bytes: Uint8Array) => Promise<TextLayerCoverage>,
-): Promise<void> {
-  for (const part of parts) {
-    const coverage = await inspectOutputPartTextLayer(part, inspectPartTextLayer);
-    const failureMessage = filingOcrVerificationFailureMessage(verifyOcrTextLayer(coverage, mode));
+): Promise<string[]> {
+  const notices: string[] = [];
 
-    if (failureMessage) {
-      throw new Error(`${part.fileName}: ${failureMessage}`);
+  for (const part of parts) {
+    let coverage: TextLayerCoverage;
+    try {
+      coverage = await inspectPartTextLayer(part.bytes);
+    } catch {
+      notices.push(`${part.fileName}: The filing copy text layer could not be verified.`);
+      continue;
+    }
+
+    const notice = filingOcrVerificationNotice(verifyOcrTextLayer(coverage, mode));
+    if (notice) {
+      notices.push(`${part.fileName}: ${notice}`);
     }
   }
-}
 
-async function inspectOutputPartTextLayer(
-  part: FilingOcrOutputPart,
-  inspectPartTextLayer: (bytes: Uint8Array) => Promise<TextLayerCoverage>,
-): Promise<TextLayerCoverage> {
-  try {
-    return await inspectPartTextLayer(part.bytes);
-  } catch {
-    throw new Error(
-      `${part.fileName}: The filing copy text layer could not be verified. The filing copy was not saved.`,
-    );
-  }
+  return notices;
 }
 
 function formatIssueSummary({

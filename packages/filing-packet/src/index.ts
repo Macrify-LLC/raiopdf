@@ -137,11 +137,6 @@ interface PreparedDocument {
   handlesForCombined: readonly PdfDocumentHandle[];
 }
 
-type PendingPacketFile = {
-  outputName: string;
-  bytes: number;
-};
-
 const DEFAULT_APP_VERSION = "0.1.0";
 const MANIFEST_PDF_NAME = "filing-packet-manifest.pdf";
 const PACKET_JSON_NAME = "filing-packet.json";
@@ -191,7 +186,6 @@ export async function buildFilingPacket(
 
     let combinedPdf: string | null = null;
     if (options.layoutMode === "separate-files") {
-      assertPacketHardCaps(pendingSeparateFiles(preparedDocuments), options.pack);
       for (const prepared of preparedDocuments) {
         const documentFiles: FilingPacketOutputFile[] = [];
         for (let outputIndex = 0; outputIndex < prepared.outputs.length; outputIndex += 1) {
@@ -231,10 +225,6 @@ export async function buildFilingPacket(
         (sum, document) => sum + document.outputs.reduce((documentSum, output) => documentSum + output.pages, 0),
         0,
       );
-      assertPacketHardCaps([{
-        outputName: "filing-packet.pdf",
-        bytes: combinedBytes.byteLength,
-      }], options.pack);
       const entry = await session.addUploadFile(combinedBytes, "filing-packet.pdf", {
         pages: combinedPageCount,
         sourceFilename: "filing-packet.pdf",
@@ -571,12 +561,10 @@ function normalizeInput(input: BuildFilingPacketInput): NormalizedInput {
     throw new Error("Court profile maxEnvelopeBytes must be a positive integer.");
   }
 
-  const pack = applyCourtProfile(getPack(input.packId), input.courtProfile);
-
   return {
     sources: input.sources,
     outputDir: input.outputDir,
-    pack,
+    pack: applyCourtProfile(getPack(input.packId), input.courtProfile),
     layoutMode: input.layoutMode ?? "separate-files",
     prefixFilenames: input.prefixFilenames ?? true,
     appVersion: input.appVersion ?? DEFAULT_APP_VERSION,
@@ -757,46 +745,6 @@ function packetSelectionChecks(
   };
 
   return preflight({ pages: [] }, pack, selection).selectionChecks ?? [];
-}
-
-function pendingSeparateFiles(documents: readonly PreparedDocument[]): readonly PendingPacketFile[] {
-  return documents.flatMap((document) =>
-    document.outputs.flatMap((output, index) => {
-      const bytes = document.outputBytes[index];
-      return bytes
-        ? [{ outputName: output.outputName, bytes: bytes.byteLength }]
-        : [];
-    }));
-}
-
-function assertPacketHardCaps(
-  files: readonly PendingPacketFile[],
-  pack: JurisdictionPack,
-): void {
-  if (pack.maxFileBytes !== undefined) {
-    const maxFileBytes = pack.maxFileBytes;
-    const overFileCap = files.filter((file) => file.bytes > maxFileBytes);
-    if (overFileCap.length > 0) {
-      throw new Error(
-        `Filing packet was not written because ${describePendingFiles(overFileCap)} exceeded the ${formatBytes(maxFileBytes)} portal cap.`,
-      );
-    }
-  }
-
-  if (pack.maxEnvelopeBytes !== undefined) {
-    const envelopeBytes = files.reduce((sum, file) => sum + file.bytes, 0);
-    if (envelopeBytes > pack.maxEnvelopeBytes) {
-      throw new Error(
-        `Filing packet was not written because the selected files total ${formatBytes(envelopeBytes)}, exceeding the ${formatBytes(pack.maxEnvelopeBytes)} envelope cap.`,
-      );
-    }
-  }
-}
-
-function describePendingFiles(files: readonly PendingPacketFile[]): string {
-  return files
-    .map((file) => `${file.outputName} (${formatBytes(file.bytes)})`)
-    .join(", ");
 }
 
 function toPacketJson(

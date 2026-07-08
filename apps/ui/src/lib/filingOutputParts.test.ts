@@ -30,7 +30,6 @@ describe("prepareFilingOutputParts", () => {
       [partTwo, splitPartTwoBytes],
     ]);
     const engine = {
-      close: vi.fn(async () => undefined),
       pageCount: vi.fn(async () => 4),
       saveToBytes: vi.fn(async (document: PdfDocumentHandle) => bytesByHandle.get(document) ?? new Uint8Array()),
       splitByMaxBytes: vi.fn(async (document: PdfDocumentHandle, maxBytes: number) => {
@@ -54,7 +53,8 @@ describe("prepareFilingOutputParts", () => {
           ],
         };
       }),
-    } satisfies Pick<PdfEngine, "close" | "pageCount" | "saveToBytes" | "splitByMaxBytes">;
+      close: vi.fn(async () => undefined),
+    } satisfies Pick<PdfEngine, "pageCount" | "saveToBytes" | "splitByMaxBytes" | "close">;
     const convert = vi.fn(async (bytes: Uint8Array, flavor: PdfAFlavor) => {
       expect(flavor).toBe("pdfa-2b");
 
@@ -70,7 +70,7 @@ describe("prepareFilingOutputParts", () => {
     });
     const pack = {
       ...getPack(),
-      maxFileBytes: 20,
+      maxFileBytes: splitTargetBytes,
       recommendedMaxFileBytes: splitTargetBytes,
     } satisfies JurisdictionPack;
 
@@ -91,7 +91,6 @@ describe("prepareFilingOutputParts", () => {
     });
 
     expect(prepared.handlesToClose).toEqual([partOne, partTwo]);
-    expect(engine.close).not.toHaveBeenCalled();
     expect(convert).toHaveBeenCalledTimes(2);
     expect(convert.mock.calls.map(([bytes]) => bytes)).toEqual([
       splitPartOneBytes,
@@ -134,7 +133,7 @@ describe("prepareFilingOutputParts", () => {
 
     expect(finalReport.checks.find((check) => check.checkId === "file-size")).toMatchObject({
       status: "warn",
-      detail: expect.stringContaining("recommended"),
+      detail: expect.stringContaining("exceeding"),
     });
     expect(finalReport.checks.find((check) => check.checkId === "pdfa")).toMatchObject({
       status: "unknown",
@@ -142,43 +141,43 @@ describe("prepareFilingOutputParts", () => {
     });
   });
 
-  it("rejects output parts over a hard portal cap before they can be saved", async () => {
+  it("closes the split-part handles when a part conversion fails", async () => {
     const source = handle("source");
-    const part = handle("part");
-    const convertedBytes = new Uint8Array(11);
+    const partOne = handle("part-one");
+    const partTwo = handle("part-two");
+    const close = vi.fn(async (_document: PdfDocumentHandle) => undefined);
     const engine = {
-      close: vi.fn(async () => undefined),
-      pageCount: vi.fn(async () => 1),
-      saveToBytes: vi.fn(async () => new Uint8Array(9)),
+      pageCount: vi.fn(async () => 4),
+      saveToBytes: vi.fn(async () => new Uint8Array(4)),
       splitByMaxBytes: vi.fn(async () => ({
-        parts: [{
-          document: part,
-          pageIndexes: [0],
-          byteLength: 9,
-          oversized: false,
-        }],
+        parts: [
+          { document: partOne, pageIndexes: [0, 1], byteLength: 4, oversized: false },
+          { document: partTwo, pageIndexes: [2, 3], byteLength: 4, oversized: false },
+        ],
       })),
-    } satisfies Pick<PdfEngine, "close" | "pageCount" | "saveToBytes" | "splitByMaxBytes">;
-    const pack = {
-      ...getPack(),
-      maxFileBytes: 10,
-      recommendedMaxFileBytes: 10,
-    } satisfies JurisdictionPack;
+      close,
+    } satisfies Pick<PdfEngine, "pageCount" | "saveToBytes" | "splitByMaxBytes" | "close">;
+    const convert = vi.fn(async () => {
+      throw new Error("conversion boom");
+    });
 
-    await expect(prepareFilingOutputParts({
-      engine,
-      document: source,
-      splitBySize: true,
-      splitTargetBytes: 10,
-      baseName: "motion",
-      pack,
-      pdfAConversion: {
-        flavor: "pdfa-2b",
-        convert: vi.fn(async () => convertedBytes),
-      },
-      formatFileName: (baseName) => `${baseName}.pdf`,
-    })).rejects.toThrow(/exceeded the 0\.00 MB portal cap/);
-    expect(engine.close).toHaveBeenCalledWith(part);
+    await expect(
+      prepareFilingOutputParts({
+        engine,
+        document: source,
+        splitBySize: true,
+        splitTargetBytes: 10,
+        baseName: "motion",
+        pack: getPack(),
+        pdfAConversion: { flavor: "pdfa-2b", convert },
+        formatFileName: (baseName, _pack, partNumber, totalParts) => (
+          `${baseName} - part ${partNumber} of ${totalParts}.pdf`
+        ),
+      }),
+    ).rejects.toThrow("conversion boom");
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close.mock.calls.map(([document]) => document)).toEqual([partOne, partTwo]);
   });
 });
 

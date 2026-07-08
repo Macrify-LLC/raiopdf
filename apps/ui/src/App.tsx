@@ -161,6 +161,7 @@ import {
   type PickPdfsForAddOptions,
 } from "./lib/readFileForAdd";
 import {
+  describeOcrProgress,
   listenOcrProgress,
   newOcrJobToken,
   type OcrProgressEvent,
@@ -5447,7 +5448,44 @@ export function App() {
         message: "Preparing the filing copy in the local engine — very large files run file-to-file, nothing loads into memory...",
       });
 
-      const result = await pathOpPrepareFiling(grant, plan);
+      // The whole streamed pipeline (sanitize → normalize → OCR → scrub →
+      // split) runs as one opaque engine call, so OCR — by far the slowest
+      // step on a large scan — is the only sub-step that can report itself.
+      // Subscribe to its per-page events so the loader shows "page X of Y"
+      // instead of sitting on the same line for minutes. No OCR step, no token.
+      const willOcr = selectedSteps.has("make-searchable");
+      const ocrJobToken = willOcr ? newOcrJobToken() : null;
+      let unlistenOcrProgress: (() => void) | null = null;
+      if (ocrJobToken) {
+        try {
+          unlistenOcrProgress = await listenOcrProgress(ocrJobToken, (event) => {
+            if (!isCurrentFilingRun()) {
+              return;
+            }
+            const progress =
+              typeof event.total === "number" && event.total > 0
+                ? { current: event.completed, total: event.total, unit: event.unit || "page" }
+                : null;
+            // Only advance from the pre-OCR "normalizing" state or a prior OCR
+            // tick — never resurrect the "ocr" phase after the run has moved
+            // on to verifying/done/error via a late-delivered event.
+            setFilingProgress((current) =>
+              current.phase === "normalizing" || current.phase === "ocr"
+                ? { phase: "ocr", message: describeOcrProgress(event), progress }
+                : current,
+            );
+          });
+        } catch {
+          // Progress is additive — the filing run still proceeds without events.
+        }
+      }
+
+      let result: Awaited<ReturnType<typeof pathOpPrepareFiling>>;
+      try {
+        result = await pathOpPrepareFiling(grant, plan, ocrJobToken ?? undefined);
+      } finally {
+        unlistenOcrProgress?.();
+      }
 
       if (!isCurrentFilingRun()) {
         return;
@@ -5752,8 +5790,12 @@ export function App() {
         }
 
         if (selectedSteps.has("make-searchable")) {
+          // Byte pipeline: OCR runs in-memory via the sidecar, which doesn't
+          // stream per-page events, so there's no page count here — but flag
+          // the OCR phase so the loader highlights the "Making searchable" step
+          // (the slowest one) rather than leaving "Normalize" lit through it.
           setFilingProgress({
-            phase: "normalizing",
+            phase: "ocr",
             message: "Making the filing copy searchable...",
           });
           const [workingBytes, workingPageCount] = await Promise.all([

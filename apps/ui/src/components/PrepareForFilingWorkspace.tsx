@@ -22,12 +22,13 @@ import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
 import { LoadingSun } from "./LoadingSun";
-import { LongProcessLoader, type LongProcessStep } from "./LongProcessLoader";
+import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
 import "./PrepareForFilingWorkspace.css";
 
 export type FilingProgressPhase =
   | "idle"
   | "normalizing"
+  | "ocr"
   | "splitting"
   | "converting"
   | "verifying"
@@ -37,6 +38,12 @@ export type FilingProgressPhase =
 export interface FilingProgressState {
   phase: FilingProgressPhase;
   message: string | null;
+  /**
+   * Optional determinate progress for a phase that streams sub-steps — today
+   * only OCR, which emits per-page events so a very large scan shows
+   * "page X of Y" and a moving bar instead of a frozen spinner.
+   */
+  progress?: LongProcessProgress | null;
 }
 
 export interface FilingOutputPart {
@@ -420,6 +427,7 @@ export const PrepareForFilingWorkspace = forwardRef<
               phaseLabel={formatProgressLabel(progress.phase)}
               message={progress.message ?? formatProgressLabel(progress.phase)}
               steps={filingProgressSteps(progress.phase)}
+              progress={progress.progress ?? null}
             />
           </div>
         </div>
@@ -1693,6 +1701,10 @@ function formatProgressLabel(phase: FilingProgressPhase): string {
     return "Normalizing";
   }
 
+  if (phase === "ocr") {
+    return "Making searchable";
+  }
+
   if (phase === "splitting") {
     return "Splitting";
   }
@@ -1718,6 +1730,7 @@ function formatProgressLabel(phase: FilingProgressPhase): string {
 
 function isFilingProgressActive(phase: FilingProgressPhase): boolean {
   return phase === "normalizing" ||
+    phase === "ocr" ||
     phase === "splitting" ||
     phase === "converting" ||
     phase === "verifying";
@@ -1826,10 +1839,11 @@ function capitalize(value: string): string {
   return value.length === 0 ? value : `${value[0]!.toUpperCase()}${value.slice(1)}`;
 }
 
-const PHASE_SEQUENCE = ["normalizing", "splitting", "converting", "verifying"] as const;
+const PHASE_SEQUENCE = ["normalizing", "ocr", "splitting", "converting", "verifying"] as const;
 
 const PHASE_STEP_LABEL: Record<(typeof PHASE_SEQUENCE)[number], string> = {
   normalizing: "Normalize",
+  ocr: "OCR",
   splitting: "Split",
   converting: "Convert",
   verifying: "Verify",

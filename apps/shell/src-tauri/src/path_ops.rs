@@ -1559,6 +1559,7 @@ pub async fn path_op_prepare_filing(
     grants: tauri::State<'_, FileGrants>,
     grant: String,
     plan: core_ops::PrepareFilingPlan,
+    job_token: Option<String>,
 ) -> Result<PrepareFilingResponse, PathOpError> {
     let input = resolve_grant(&grants, &grant)?;
     let toolchain = discover_toolchain(&app);
@@ -1568,6 +1569,7 @@ pub async fn path_op_prepare_filing(
     let out_dir = OpWorkDir::create(&app)?;
     let before = snapshot(&input)?;
     let started = Instant::now();
+    let progress_app = app.clone();
 
     let outcome = {
         let input = input.clone();
@@ -1576,8 +1578,37 @@ pub async fn path_op_prepare_filing(
         let toolchain = toolchain.clone();
         let plan = plan.clone();
         on_blocking_pool(move || {
-            let outcome =
-                core_ops::prepare_filing(&toolchain, &input, &plan, &stage_path, &out_path)?;
+            // Forward per-page OCR progress to the webview only when the caller
+            // passed a job token (mirrors `path_op_ocr`); otherwise a no-op.
+            // The OCR step is the only sub-step of this otherwise-opaque
+            // pipeline that can report itself on a very large scan.
+            let on_ocr_progress: Box<dyn FnMut(core_ops::OcrProgress) + Send> = match job_token {
+                Some(token) => {
+                    let app = progress_app;
+                    Box::new(move |progress: core_ops::OcrProgress| {
+                        let _ = app.emit(
+                            OCR_PROGRESS_EVENT,
+                            OcrProgressPayload {
+                                job_token: token.clone(),
+                                phase: progress.phase,
+                                description: progress.description,
+                                completed: progress.completed,
+                                total: progress.total,
+                                unit: progress.unit,
+                            },
+                        );
+                    })
+                }
+                None => Box::new(|_progress| {}),
+            };
+            let outcome = core_ops::prepare_filing(
+                &toolchain,
+                &input,
+                &plan,
+                &stage_path,
+                &out_path,
+                on_ocr_progress,
+            )?;
             ensure_unchanged(&input, before)?;
             Ok(outcome)
         })

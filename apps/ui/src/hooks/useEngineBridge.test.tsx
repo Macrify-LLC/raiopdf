@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useEffect, type ReactNode } from "react";
+import { StrictMode, act, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfEngineError } from "@raiopdf/engine-api";
@@ -262,6 +262,57 @@ describe("useEngineBridge runOcr", () => {
     expect(sidecarState.instances).toHaveLength(1);
   });
 
+  it("does not install a sidecar engine after unmounting during start", async () => {
+    const startCalled = createDeferred<void>();
+    const startResponse = createDeferred<{
+      port: number;
+      token: string;
+      ocrToolchain: { available: boolean; missing: string[] };
+    }>();
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command === "engine_start") {
+        startCalled.resolve();
+        return await startResponse.promise as T;
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    };
+
+    const bridge = renderHookValue();
+
+    act(() => {
+      bridge.warmEngine();
+    });
+    await act(async () => {
+      await startCalled.promise;
+    });
+    act(() => {
+      root?.unmount();
+      root = null;
+    });
+    await act(async () => {
+      startResponse.resolve({
+        port: 1234,
+        token: "test-token",
+        ocrToolchain: { available: true, missing: [] },
+      });
+      await startResponse.promise;
+    });
+
+    expect(sidecarState.instances).toHaveLength(0);
+  });
+
+  it("survives StrictMode effect replay before starting the engine", async () => {
+    const bridge = renderHookValue({ strict: true });
+
+    await act(async () => {
+      await bridge.runOcr(new Uint8Array([1]));
+    });
+
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);
+  });
+
   it("does not retry a non-connection failure (e.g. a genuinely bad PDF)", async () => {
     // No .cause chain -- this is what a real Stirling HTTP error response
     // looks like (throwResponseError never sets `cause`), distinct from a
@@ -288,9 +339,13 @@ describe("useEngineBridge runOcr", () => {
     expect(sidecarState.instances[0]?.ocrCalls).toHaveLength(1);
   });
 
-  function renderHookValue(): EngineBridge {
+  function renderHookValue(options: { strict?: boolean } = {}): EngineBridge {
     let bridge: EngineBridge | null = null;
-    render(<Harness onReady={(value) => { bridge = value; }} />);
+    render(
+      options.strict
+        ? <StrictMode><Harness onReady={(value) => { bridge = value; }} /></StrictMode>
+        : <Harness onReady={(value) => { bridge = value; }} />,
+    );
 
     if (!bridge) {
       throw new Error("Engine bridge was not rendered.");
@@ -662,4 +717,15 @@ function Harness({ onReady }: { onReady: (bridge: EngineBridge) => void }) {
   }, [bridge, onReady]);
 
   return null;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
 }

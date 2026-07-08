@@ -1,4 +1,9 @@
-import { getWordCapability, type WordCapability } from "./wordCapability";
+import {
+  getWordCapability,
+  shouldRefuseWord,
+  wordUnavailableMessage,
+  type WordCapability,
+} from "./wordCapability";
 import {
   pickPdfForWord,
   saveDocxGrant,
@@ -59,20 +64,8 @@ export interface WordReflowDeps {
   showWordUnavailable: (message: string, capability: WordCapability) => void;
 }
 
-export function shouldRefuseWordReflow(capability: WordCapability): boolean {
-  return capability.state !== "available";
-}
-
 export function wordReflowUnavailableMessage(capability: WordCapability): string {
-  if (capability.state === "notApplicable") {
-    return "Word integration is not available on this computer. PDF was not converted to Word.";
-  }
-
-  if (capability.reason) {
-    return `Word integration not available: ${capability.reason}`;
-  }
-
-  return "Word integration not available. PDF was not converted to Word.";
+  return `${wordUnavailableMessage(capability)} The PDF was not converted to Word.`;
 }
 
 export function resolveWordReflowOcrFirst(
@@ -106,7 +99,7 @@ export async function runPdfToWordReflow(
     }
 
     const capability = await deps.getCapability(true);
-    if (shouldRefuseWordReflow(capability)) {
+    if (shouldRefuseWord(capability)) {
       const message = wordReflowUnavailableMessage(capability);
       options.onWordUnavailable?.(message, capability);
       deps.showWordUnavailable(message, capability);

@@ -194,6 +194,7 @@ import {
   type PathOpsStatus,
 } from "./lib/pathOps";
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
+import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
 import {
   annotateStreamedPreflight,
@@ -6147,6 +6148,37 @@ export function App() {
     });
   }, [setError]);
 
+  const importWordDocument = useCallback(() => {
+    void runWordDocumentImport({ onStatus: setWordReflowStatus }).then(async (result) => {
+      if (result.status === "unavailable" || result.status === "failed") {
+        setError(result.message);
+        return;
+      }
+      if (result.status !== "converted") {
+        return;
+      }
+      // Import opens the converted PDF as a new document, like File -> Open --
+      // it has no relationship to whatever happened to be open, so capture the
+      // identity guard now (at open time) rather than before the pick. That way
+      // switching documents during the long Word conversion doesn't discard the
+      // import; it just opens the result.
+      const reopened = await openPathOpOutput(result.output, {
+        openToken: getOpenToken(),
+        generation: documentGenerationRef.current,
+      });
+      if (reopened.status === "failed") {
+        setWordReflowStatus({ running: false, tone: "danger", message: reopened.error });
+        setError(reopened.error);
+        return;
+      }
+      setWordReflowStatus({
+        running: false,
+        tone: "ok",
+        message: `Imported ${result.sourceName}. ${WORD_REFLOW_EXPERIMENTAL_LABEL}`,
+      });
+    });
+  }, [getOpenToken, openPathOpOutput, setError]);
+
   const exportPdfA = useCallback(() => {
     const sourceBytes = document.bytes;
 
@@ -6331,6 +6363,9 @@ export function App() {
         case "file:export-docx":
           exportDocx();
           break;
+        case "file:import-docx":
+          importWordDocument();
+          break;
         case "file:print":
           printDocument();
           break;
@@ -6377,6 +6412,7 @@ export function App() {
     [
       document.zoom,
       exportDocx,
+      importWordDocument,
       exportPdfA,
       fitToPageWidth,
       handleExportDiagnostics,

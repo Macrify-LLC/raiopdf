@@ -150,6 +150,18 @@ struct PickedPdfForWord {
     size_bytes: u64,
 }
 
+/// A single `.docx` the user picked to import (convert to PDF and open). Carries
+/// the tracked-changes scan so the UI can gate final-vs-show-markup before the
+/// conversion, mirroring the docx add-into-existing-PDF flow.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedDocxForImport {
+    grant: String,
+    name: String,
+    size_bytes: u64,
+    markup_scan: docx_scan::MarkupScan,
+}
+
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum PickedAddSource {
@@ -750,6 +762,35 @@ fn pick_pdf_for_word(
         grant: file_grants.grant(path.clone())?,
         name: file_name(&path),
         size_bytes,
+    }))
+}
+
+#[tauri::command]
+fn pick_docx_for_import(
+    app: tauri::AppHandle,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<Option<PickedDocxForImport>, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("Word Document", &["docx"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    require_docx_extension(&path)?;
+    let size_bytes = fs::metadata(&path)
+        .map_err(|_| READ_PDF_ERROR.to_string())?
+        .len();
+    let markup_scan = docx_scan::scan_docx_markup(&path);
+
+    Ok(Some(PickedDocxForImport {
+        grant: file_grants.grant(path.clone())?,
+        name: file_name(&path),
+        size_bytes,
+        markup_scan,
     }))
 }
 
@@ -1727,6 +1768,14 @@ fn require_pdf_or_docx_extension(path: &Path) -> Result<(), String> {
     Err("Selected file is not a PDF or Word document".to_string())
 }
 
+fn require_docx_extension(path: &Path) -> Result<(), String> {
+    if is_docx_path(path) {
+        return Ok(());
+    }
+
+    Err("Selected file is not a Word document".to_string())
+}
+
 fn picked_add_source(path: &Path) -> PickedAddSource {
     if is_docx_path(path) {
         PickedAddSource::Docx
@@ -1918,6 +1967,7 @@ pub fn run() {
             read_pdf_range,
             pick_pdfs_for_add,
             pick_pdf_for_word,
+            pick_docx_for_import,
             convert_docx_for_add,
             save_pdf_dialog,
             save_docx_dialog,

@@ -25,9 +25,14 @@ machine, nothing uploaded.
   document, from the document menu or as a standalone tool. Scanned PDFs get an offer to
   OCR first so there's real text to export. Experimental — check the result before you
   rely on it.
-- **Open Word documents as PDFs, with a tracked-changes check.** Bring a `.docx` into
-  RaioPDF and work with it as a PDF. Before you file, RaioPDF scans for leftover tracked
-  changes and comments so a redline doesn't go out by accident.
+- **Import a Word document (.docx) — a first-class "Import Word Document" menu item.**
+  Open a `.docx` straight into RaioPDF as a PDF (you no longer have to add it into an
+  already-open document). Before converting, RaioPDF scans for leftover tracked changes
+  and comments so a redline doesn't go out by accident.
+- **Word features require Microsoft Word, and say so.** Both directions run through your
+  own installed copy of Microsoft Word — nothing is uploaded. If Word isn't installed the
+  menu items gray out and tell you why, and both are labeled *experimental* since Word's
+  conversion is approximate.
 - **Update notifications.** An unobtrusive pill appears when a new version is available;
   downloading and installing it stays an explicit, one-tap-at-a-time choice — nothing
   updates behind your back.

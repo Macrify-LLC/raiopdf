@@ -5,12 +5,11 @@ import {
   resolveWordReflowOcrFirst,
   resolveWordReflowTextLayerSignal,
   runPdfToWordReflow,
-  shouldRefuseWordReflow,
   type ScannedPdfChoice,
   type WordReflowDeps,
   type WordReflowOutput,
 } from "./wordReflow";
-import type { WordCapability } from "./wordCapability";
+import { shouldRefuseWord, type WordCapability } from "./wordCapability";
 
 const grant = (value: string) => value as FileGrant;
 
@@ -63,13 +62,13 @@ describe("word reflow decisions", () => {
     );
 
     expect(result.status).toBe("refused");
-    expect(shouldRefuseWordReflow(unavailable)).toBe(true);
+    expect(shouldRefuseWord(unavailable)).toBe(true);
     expect(getTextLayer).not.toHaveBeenCalled();
     expect(testDeps.promptScannedPdf).not.toHaveBeenCalled();
     expect(testDeps.reflowPdfToDocx).not.toHaveBeenCalled();
     expect(testDeps.saveDocx).not.toHaveBeenCalled();
     expect(testDeps.showWordUnavailable).toHaveBeenCalledWith(
-      "Word integration not available: Microsoft Word was not found.",
+      "Microsoft Word isn't available: Microsoft Word was not found. The PDF was not converted to Word.",
       unavailable,
     );
   });

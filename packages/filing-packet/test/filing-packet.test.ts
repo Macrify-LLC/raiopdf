@@ -85,7 +85,7 @@ describe("buildFilingPacket", () => {
     const result = await buildFilingPacket({
       sources: [{ path: motion }, { path: exhibit }],
       outputDir,
-      packId: "florida",
+      packId: "federal-cmecf",
       layoutMode: "combined-pdf",
       prefixFilenames: false,
       checklist: {
@@ -107,6 +107,87 @@ describe("buildFilingPacket", () => {
       pages: 3,
     });
     expect(await exists(path.join(outputDir, "upload", "filing-packet.pdf"))).toBe(true);
+  });
+
+  it("allows combined-PDF mode under a hard per-file cap", async () => {
+    const motion = await writePdf("Motion.pdf", ["Motion"]);
+    const outputDir = path.join(dir, "combined-capped");
+
+    const result = await buildFilingPacket({
+      sources: [{ path: motion }],
+      outputDir,
+      packId: "florida",
+      layoutMode: "combined-pdf",
+      courtProfile: {
+        maxFileBytes: 10_000_000,
+      },
+      checklist: {
+        selectedStepIds: ["normalize-pages"],
+      },
+    });
+
+    expect(result.combinedPdf).toBe("upload/filing-packet.pdf");
+    expect(await exists(path.join(outputDir, "upload", "filing-packet.pdf"))).toBe(true);
+  });
+
+  it("rejects over-cap combined-PDF packets before writing upload files", async () => {
+    const motion = await writePdf("Motion.pdf", ["Motion"]);
+    const outputDir = path.join(dir, "combined-over-cap");
+
+    await expect(buildFilingPacket({
+      sources: [{ path: motion }],
+      outputDir,
+      packId: "florida",
+      layoutMode: "combined-pdf",
+      courtProfile: {
+        maxFileBytes: 100,
+      },
+      checklist: {
+        selectedStepIds: ["normalize-pages"],
+      },
+    })).rejects.toThrow(/exceeded the 0\.00 MB portal cap/);
+
+    expect(await exists(path.join(outputDir, "upload", "filing-packet.pdf"))).toBe(false);
+  });
+
+  it("rejects over-cap packet outputs before writing upload files", async () => {
+    const motion = await writePdf("Motion.pdf", ["Motion"]);
+    const outputDir = path.join(dir, "over-cap");
+
+    await expect(buildFilingPacket({
+      sources: [{ path: motion }],
+      outputDir,
+      packId: "florida",
+      courtProfile: {
+        maxFileBytes: 100,
+      },
+      checklist: {
+        selectedStepIds: ["normalize-pages"],
+      },
+    })).rejects.toThrow(/exceeded the 0\.00 MB portal cap/);
+
+    expect(await exists(path.join(outputDir, "upload", "01 - Motion.pdf"))).toBe(false);
+  });
+
+  it("rejects over-cap packet envelopes before writing upload files", async () => {
+    const motion = await writePdf("Motion.pdf", ["Motion"]);
+    const exhibit = await writePdf("Exhibit.pdf", ["Exhibit"]);
+    const outputDir = path.join(dir, "over-envelope");
+
+    await expect(buildFilingPacket({
+      sources: [{ path: motion }, { path: exhibit }],
+      outputDir,
+      packId: "federal-cmecf",
+      courtProfile: {
+        maxEnvelopeBytes: 100,
+      },
+      checklist: {
+        selectedStepIds: ["normalize-pages"],
+      },
+    })).rejects.toThrow(/exceeding the 0\.00 MB envelope cap/);
+
+    expect(await exists(path.join(outputDir, "upload", "01 - Motion.pdf"))).toBe(false);
+    expect(await exists(path.join(outputDir, "upload", "02 - Exhibit.pdf"))).toBe(false);
   });
 
   it("reports aggregate output warnings against the original split part number", async () => {

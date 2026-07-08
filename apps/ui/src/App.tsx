@@ -5463,6 +5463,17 @@ export function App() {
           result.parts.length,
         ),
       }));
+      const hardCapMessage = filingOutputHardCapMessage(
+        result.parts.map((part, index) => ({
+          fileName: saveParts[index]?.fileName ?? part.name,
+          byteLength: part.byteLength,
+        })),
+        filingPack,
+      );
+      if (hardCapMessage) {
+        setFilingProgress({ phase: "error", message: hardCapMessage });
+        return;
+      }
       const savedOutput = await saveStreamedOutputParts(saveParts, isCurrentFilingRun);
 
       if (!isCurrentFilingRun()) {
@@ -5849,6 +5860,11 @@ export function App() {
           pageIndexes: part.pageIndexes,
           oversized: part.oversized,
         }));
+        const hardCapMessage = filingOutputHardCapMessage(outputParts, filingPack);
+        if (hardCapMessage) {
+          setFilingProgress({ phase: "error", message: hardCapMessage });
+          return;
+        }
 
         const savedOutput = await saveByteOutputParts(convertedParts, isCurrentFilingRun);
 
@@ -7614,6 +7630,36 @@ function formatFilingOutputName(
     .replace("{name}", baseName)
     .replace("{n}", String(partNumber))
     .replace("{total}", String(totalParts))}.pdf`;
+}
+
+function filingOutputHardCapMessage(
+  parts: readonly Pick<FilingOutputPart, "fileName" | "byteLength">[],
+  pack: JurisdictionPack,
+): string | null {
+  if (pack.maxFileBytes !== undefined) {
+    const maxFileBytes = pack.maxFileBytes;
+    const overFileCap = parts.filter((part) => part.byteLength > maxFileBytes);
+    if (overFileCap.length > 0) {
+      return `Filing output was not saved because ${describeFilingParts(overFileCap)} exceeded the ${formatBytes(maxFileBytes)} portal cap.`;
+    }
+  }
+
+  if (pack.maxEnvelopeBytes !== undefined) {
+    const envelopeBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
+    if (envelopeBytes > pack.maxEnvelopeBytes) {
+      return `Filing output was not saved because the selected files total ${formatBytes(envelopeBytes)}, exceeding the ${formatBytes(pack.maxEnvelopeBytes)} envelope cap.`;
+    }
+  }
+
+  return null;
+}
+
+function describeFilingParts(
+  parts: readonly Pick<FilingOutputPart, "fileName" | "byteLength">[],
+): string {
+  return parts
+    .map((part) => `${part.fileName} (${formatBytes(part.byteLength)})`)
+    .join(", ");
 }
 
 interface SaveBytesPart {

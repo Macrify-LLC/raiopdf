@@ -8,6 +8,7 @@ import type { EngineBridge } from "./useEngineBridge";
 
 const sidecarState = vi.hoisted(() => ({
   instances: [] as Array<{
+    cancelCalls: string[];
     inspectTextMapCalls: unknown[];
     ocrCalls: unknown[];
     replaceSelectedTextCalls: unknown[];
@@ -28,6 +29,7 @@ const sidecarState = vi.hoisted(() => ({
 
 vi.mock("@raiopdf/engine-sidecar", () => {
   class SidecarPdfEngine {
+    readonly cancelCalls: string[] = [];
     readonly inspectTextMapCalls: unknown[] = [];
     readonly ocrCalls: unknown[] = [];
     readonly replaceSelectedTextCalls: unknown[] = [];
@@ -55,6 +57,12 @@ vi.mock("@raiopdf/engine-sidecar", () => {
         bytes: new Uint8Array([9]),
         pageCount: options.knownPageCount ?? 1,
       };
+    }
+
+    async cancelLocalJob(jobToken: string) {
+      this.cancelCalls.push(jobToken);
+
+      return true;
     }
 
     async removeEncryption(_bytes: Uint8Array, password: string) {
@@ -192,6 +200,7 @@ describe("useEngineBridge runOcr", () => {
 
   it("passes force-ocr through to the sidecar", async () => {
     const bridge = renderHookValue();
+    const abortController = new AbortController();
     let result: Awaited<ReturnType<EngineBridge["runOcr"]>> | undefined;
 
     await act(async () => {
@@ -199,6 +208,8 @@ describe("useEngineBridge runOcr", () => {
         ocrType: "force-ocr",
         pageCount: 4,
         pageIndexes: [0, 2],
+        jobToken: "ocr-job-1",
+        signal: abortController.signal,
       });
     });
 
@@ -207,7 +218,24 @@ describe("useEngineBridge runOcr", () => {
       ocrType: "force-ocr",
       knownPageCount: 4,
       pageIndexes: [0, 2],
+      jobToken: "ocr-job-1",
+      signal: abortController.signal,
     });
+  });
+
+  it("cancels against the current sidecar engine without starting a new one", async () => {
+    const bridge = renderHookValue();
+
+    await expect(bridge.cancelLocalJob("missing-job")).resolves.toBe(false);
+    expect(sidecarState.instances).toHaveLength(0);
+
+    await act(async () => {
+      await bridge.runOcr(new Uint8Array([1]));
+    });
+    await expect(bridge.cancelLocalJob("ocr-job-1")).resolves.toBe(true);
+
+    expect(sidecarState.instances).toHaveLength(1);
+    expect(sidecarState.instances[0]?.cancelCalls).toEqual(["ocr-job-1"]);
   });
 
   it("self-heals after an idle-killed engine: retries once against a fresh engine and succeeds", async () => {

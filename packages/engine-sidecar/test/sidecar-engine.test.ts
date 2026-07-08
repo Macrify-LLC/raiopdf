@@ -937,12 +937,15 @@ describe("SidecarPdfEngine", () => {
   it("runs raw-byte OCR without probing basic-info when page count is known", async () => {
     const { calls, fetchImpl } = createFetch(pdfResponse(42));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const abortController = new AbortController();
 
     const searchable = await engine.ocrBytes(bytes(1), {
       languages: ["eng"],
       ocrType: "force-ocr",
       knownPageCount: 6,
       pageIndexes: [0, 2, 3],
+      jobToken: "ocr-job-1",
+      signal: abortController.signal,
     });
 
     expect(searchable).toEqual({
@@ -955,6 +958,30 @@ describe("SidecarPdfEngine", () => {
     expect(queryValue(calls[0], "body_encoding")).toBe("base64");
     expect(queryValue(calls[0], "ocr_type")).toBe("force-ocr");
     expect(queryValue(calls[0], "page_indexes")).toBe("0,2,3");
+    expect(queryValue(calls[0], "job_token")).toBe("ocr-job-1");
+    expect(calls[0]?.init?.signal).toBe(abortController.signal);
+  });
+
+  it("cancels local sidecar jobs by token", async () => {
+    const { calls, fetchImpl } = createFetch(noContentResponse());
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.cancelLocalJob("ocr-job-1")).resolves.toBe(true);
+
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/cancel");
+    expect(queryValue(calls[0], "job_token")).toBe("ocr-job-1");
+  });
+
+  it("maps local sidecar cancellation responses to cancellation errors", async () => {
+    const { fetchImpl } = createFetch(textResponse("PATH_OP_CANCELLED", 499));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.ocrBytes(bytes(1), {
+      knownPageCount: 1,
+      jobToken: "ocr-job-1",
+    })).rejects.toMatchObject({
+      code: "PATH_OP_CANCELLED",
+    });
   });
 
   it("normalizes legacy Normal OCR mode to skip-text for the local interceptor", async () => {
@@ -1131,6 +1158,10 @@ function textResponse(body: string, status = 200): Response {
       "content-type": "text/plain",
     },
   });
+}
+
+function noContentResponse(): Response {
+  return new Response(null, { status: 204 });
 }
 
 function pdfResponse(...contents: number[]): Response {

@@ -22,15 +22,19 @@ use std::{
     fmt, fs, io,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
 
 use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_entries};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 static TEXT_LAYER_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -43,6 +47,7 @@ pub const ERR_INVALID_INPUT: &str = "INVALID_INPUT";
 pub const ERR_OP_FAILED: &str = "OP_FAILED";
 pub const ERR_VERIFICATION_FAILED: &str = "VERIFICATION_FAILED";
 pub const ERR_IO: &str = "IO_ERROR";
+pub const ERR_CANCELLED: &str = "PATH_OP_CANCELLED";
 
 /// A typed, serializable path-op error. `code` is stable API for the UI;
 /// `message` is a human-readable detail string.
@@ -74,6 +79,10 @@ impl PathOpError {
 
     fn failed(message: impl Into<String>) -> Self {
         Self::new(ERR_OP_FAILED, message)
+    }
+
+    fn cancelled(message: impl Into<String>) -> Self {
+        Self::new(ERR_CANCELLED, message)
     }
 
     fn io(context: &str, error: io::Error) -> Self {
@@ -477,6 +486,94 @@ pub(crate) fn run_command(
     })
 }
 
+fn run_command_cancelable(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<Output> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    if !prepend_path.is_empty() {
+        let mut entries = prepend_path.to_vec();
+        if let Some(inherited) = env::var_os("PATH") {
+            entries.extend(env::split_paths(&inherited));
+        }
+        if let Ok(joined) = env::join_paths(entries) {
+            command.env("PATH", joined);
+        }
+    }
+    configure_cancelable_command(&mut command);
+
+    let mut child = command.spawn().map_err(|error| {
+        PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
+    })?;
+    let mut stdout_thread = child.stdout.take().map(|mut stdout| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = stdout.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let mut stderr_thread = child.stderr.take().map(|mut stderr| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = stderr.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+
+    let status = loop {
+        if cancel_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            if let Some(handle) = stdout_thread.take() {
+                let _ = handle.join();
+            }
+            if let Some(handle) = stderr_thread.take() {
+                let _ = handle.join();
+            }
+            return Err(PathOpError::cancelled("Operation was cancelled."));
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(80)),
+            Err(error) => {
+                return Err(PathOpError::failed(format!(
+                    "{} wait failed: {error}",
+                    program.display()
+                )));
+            }
+        }
+    };
+
+    let stdout = stdout_thread
+        .take()
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_thread
+        .take()
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 #[cfg(windows)]
 pub(crate) fn run_powershell(script: &str) -> OpResult<Output> {
     let arguments: Vec<OsString> = [
@@ -501,6 +598,7 @@ fn run_command_with_ocr_progress<F>(
     current_dir: Option<&Path>,
     prepend_path: &[PathBuf],
     on_progress: F,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> OpResult<()>
 where
     F: FnMut(OcrProgress) + Send + 'static,
@@ -523,30 +621,54 @@ where
             command.env("PATH", joined);
         }
     }
-    crate::apply_platform_spawn_flags(&mut command);
+    configure_cancelable_command(&mut command);
 
     let mut child = command.spawn().map_err(|error| {
         PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
     })?;
 
     let diagnostics = Arc::new(Mutex::new(String::new()));
-    let stdout_thread = child
+    let mut stdout_thread = child
         .stdout
         .take()
         .map(|stdout| drain_plain_output(stdout, Arc::clone(&diagnostics)));
-    let stderr_thread = child
+    let mut stderr_thread = child
         .stderr
         .take()
         .map(|stderr| drain_ocr_progress_output(stderr, Arc::clone(&diagnostics), on_progress));
 
-    let status = child.wait().map_err(|error| {
-        PathOpError::failed(format!("{} wait failed: {error}", program.display()))
-    })?;
+    let status = loop {
+        if cancel_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            if let Some(handle) = stdout_thread.take() {
+                let _ = handle.join();
+            }
+            if let Some(handle) = stderr_thread.take() {
+                let _ = handle.join();
+            }
+            return Err(PathOpError::cancelled("Operation was cancelled."));
+        }
 
-    if let Some(handle) = stdout_thread {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(80)),
+            Err(error) => {
+                return Err(PathOpError::failed(format!(
+                    "{} wait failed: {error}",
+                    program.display()
+                )));
+            }
+        }
+    };
+
+    if let Some(handle) = stdout_thread.take() {
         let _ = handle.join();
     }
-    if let Some(handle) = stderr_thread {
+    if let Some(handle) = stderr_thread.take() {
         let _ = handle.join();
     }
 
@@ -566,6 +688,50 @@ where
     Err(PathOpError::failed(format!(
         "ocrmypdf failed ({status}): {detail}"
     )))
+}
+
+#[cfg(windows)]
+fn kill_child_tree(child: &mut Child) {
+    let pid = child.id().to_string();
+    let mut command = Command::new("taskkill.exe");
+    command.args(["/PID", &pid, "/T", "/F"]);
+    crate::apply_platform_spawn_flags(&mut command);
+    let _ = command.output();
+    let _ = child.kill();
+}
+
+#[cfg(not(windows))]
+fn kill_child_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let _ = Command::new("kill")
+            .args(["-TERM", process_group.as_str()])
+            .output();
+        thread::sleep(Duration::from_millis(250));
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = Command::new("kill")
+                .args(["-KILL", process_group.as_str()])
+                .output();
+        }
+    }
+    let _ = child.kill();
+}
+
+fn configure_cancelable_command(command: &mut Command) {
+    crate::apply_platform_spawn_flags(command);
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+}
+
+fn check_cancelled(cancel_flag: Option<&AtomicBool>) -> OpResult<()> {
+    if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err(PathOpError::cancelled("Operation was cancelled."));
+    }
+
+    Ok(())
 }
 
 fn drain_plain_output<R>(reader: R, diagnostics: Arc<Mutex<String>>) -> thread::JoinHandle<()>
@@ -1715,6 +1881,31 @@ pub fn ocr_with_options(
     Ok(())
 }
 
+fn ocr_with_options_cancelable(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    output_path: &Path,
+    options: &OcrOptions,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<()> {
+    require_input_file(input)?;
+    check_cancelled(cancel_flag.as_deref())?;
+    let ocrmypdf = toolchain.require_ocrmypdf()?;
+    let mut arguments = ocr_arguments(options)?;
+    arguments.push(path_arg(input));
+    arguments.push(path_arg(output_path));
+    let output = run_command_cancelable(
+        ocrmypdf,
+        &arguments,
+        None,
+        &toolchain.path_entries,
+        cancel_flag,
+    )?;
+    expect_success("ocrmypdf", &output)?;
+    require_output("ocrmypdf", output_path)?;
+    Ok(())
+}
+
 /// OCR through RaioPDF's bundled OCRmyPDF API wrapper. When the wrapper is not
 /// available (for example an external `RAIOPDF_ENGINE_OCRMYPDF` override), the
 /// operation falls back to the plain CLI path with no progress events.
@@ -1748,9 +1939,32 @@ pub fn ocr_with_options_and_progress<F>(
 where
     F: FnMut(OcrProgress) + Send + 'static,
 {
+    ocr_with_options_and_progress_cancelable(
+        toolchain,
+        input,
+        output_path,
+        options,
+        on_progress,
+        None,
+    )
+}
+
+/// OCR through the bundled progress wrapper, with optional process cancellation.
+pub fn ocr_with_options_and_progress_cancelable<F>(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    output_path: &Path,
+    options: &OcrOptions,
+    on_progress: F,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<()>
+where
+    F: FnMut(OcrProgress) + Send + 'static,
+{
     require_input_file(input)?;
+    check_cancelled(cancel_flag.as_deref())?;
     let Some(progress_runner) = toolchain.ocr_progress.as_deref() else {
-        return ocr_with_options(toolchain, input, output_path, options);
+        return ocr_with_options_cancelable(toolchain, input, output_path, options, cancel_flag);
     };
     let mut arguments = ocr_progress_arguments(options)?;
     arguments.push(path_arg(input));
@@ -1761,6 +1975,7 @@ where
         None,
         &toolchain.path_entries,
         on_progress,
+        cancel_flag,
     )?;
     require_output("ocrmypdf", output_path)?;
     Ok(())
@@ -2694,7 +2909,31 @@ pub fn prepare_filing<F>(
 where
     F: FnMut(OcrProgress) + Send + 'static,
 {
+    prepare_filing_cancelable(
+        toolchain,
+        input,
+        plan,
+        work_dir,
+        out_dir,
+        on_ocr_progress,
+        None,
+    )
+}
+
+pub fn prepare_filing_cancelable<F>(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    plan: &PrepareFilingPlan,
+    work_dir: &Path,
+    out_dir: &Path,
+    on_ocr_progress: F,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<PrepareFilingOutcome>
+where
+    F: FnMut(OcrProgress) + Send + 'static,
+{
     require_input_file(input)?;
+    check_cancelled(cancel_flag.as_deref())?;
     let mut steps = Vec::new();
     let mut current: PathBuf = input.to_path_buf();
     let mut stage = 0u32;
@@ -2705,6 +2944,7 @@ where
     };
 
     if let Some(password) = plan.decrypt_password.as_deref() {
+        check_cancelled(cancel_flag.as_deref())?;
         let output = next_stage_path("decrypt", &mut stage);
         decrypt(toolchain, &current, password, &output, work_dir)?;
         steps.push(FilingStepReport {
@@ -2715,6 +2955,7 @@ where
         current = output;
     }
     if plan.sanitize {
+        check_cancelled(cancel_flag.as_deref())?;
         let output = next_stage_path("sanitize", &mut stage);
         sanitize(toolchain, &current, &output)?;
         steps.push(FilingStepReport {
@@ -2725,6 +2966,7 @@ where
         current = output;
     }
     if plan.normalize {
+        check_cancelled(cancel_flag.as_deref())?;
         let output = next_stage_path("normalize", &mut stage);
         normalize_to_letter_portrait(toolchain, &current, &output)?;
         steps.push(FilingStepReport {
@@ -2735,17 +2977,19 @@ where
         current = output;
     }
     if plan.ocr {
+        check_cancelled(cancel_flag.as_deref())?;
         let output = next_stage_path("ocr", &mut stage);
         // Same text-preserving pass as `ocr`, but streams per-page progress so
         // the filing UI can report "page X of Y" on very large scans. Falls
         // back to a progress-less run when the bundled OCRmyPDF progress
         // wrapper isn't present in this installation.
-        ocr_with_mode_and_progress(
+        ocr_with_options_and_progress_cancelable(
             toolchain,
             &current,
             &output,
-            OcrMode::SkipText,
+            &OcrOptions::with_mode(OcrMode::SkipText),
             on_ocr_progress,
+            cancel_flag.clone(),
         )?;
         steps.push(FilingStepReport {
             step: "make-searchable",
@@ -2755,6 +2999,7 @@ where
         current = output;
     }
     if plan.scrub {
+        check_cancelled(cancel_flag.as_deref())?;
         let output = next_stage_path("scrub", &mut stage);
         scrub_metadata(toolchain, &current, &output)?;
         steps.push(FilingStepReport {
@@ -2766,6 +3011,7 @@ where
     }
 
     let parts = if let Some(max_bytes) = plan.split_max_bytes {
+        check_cancelled(cancel_flag.as_deref())?;
         let parts = split_by_max_bytes(toolchain, &current, max_bytes, out_dir)?;
         steps.push(FilingStepReport {
             step: "split-by-size",
@@ -2774,6 +3020,7 @@ where
         });
         parts
     } else {
+        check_cancelled(cancel_flag.as_deref())?;
         // Single part: rewrite through qpdf so the output is always a fresh
         // file in out_dir (never the caller's input path).
         let part_path = out_dir.join("part-001.pdf");
@@ -2791,6 +3038,7 @@ where
 
     let mut facts_report = Vec::with_capacity(parts.len());
     for (index, part) in parts.iter().enumerate() {
+        check_cancelled(cancel_flag.as_deref())?;
         let facts = document_facts(toolchain, &part.path)?;
         facts_report.push(PartPreflight {
             part_index: index as u32,

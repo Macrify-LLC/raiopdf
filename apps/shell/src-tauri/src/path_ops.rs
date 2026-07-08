@@ -21,9 +21,13 @@ use engine_sidecar_core::path_ops::{OpResult, PathOpError, PathOpsToolchain};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant, SystemTime},
 };
 use tauri::{Emitter, Manager};
@@ -44,6 +48,74 @@ pub const ERR_FILE_CHANGED: &str = "FILE_CHANGED";
 pub const PATH_OPS_DIR: &str = "path-ops";
 
 pub const OCR_PROGRESS_EVENT: &str = "raiopdf-ocr-progress";
+
+/// Cooperative cancel flags for cancellable path ops, keyed by the
+/// caller-generated job token. The UI mints the token before the command starts
+/// so it can cancel while the Tauri invoke is still pending.
+#[derive(Default)]
+pub struct PathOpJobs {
+    state: Mutex<PathOpJobState>,
+}
+
+#[derive(Default)]
+struct PathOpJobState {
+    active: HashMap<String, Arc<AtomicBool>>,
+    pending_cancelled: HashMap<String, Instant>,
+}
+
+impl PathOpJobs {
+    fn register(&self, token: &str) -> Result<Arc<AtomicBool>, PathOpError> {
+        let mut state = self.state.lock().map_err(|_| PathOpError {
+            code: core_ops::ERR_IO,
+            message: "path-op job lock poisoned".to_string(),
+        })?;
+        prune_pending_cancelled(&mut state.pending_cancelled);
+        if state.active.contains_key(token) {
+            return Err(PathOpError {
+                code: core_ops::ERR_INVALID_INPUT,
+                message: "a path operation with this token is already running".to_string(),
+            });
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        if state.pending_cancelled.remove(token).is_some() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        state.active.insert(token.to_string(), flag.clone());
+        Ok(flag)
+    }
+
+    fn cancel(&self, token: &str) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        prune_pending_cancelled(&mut state.pending_cancelled);
+        match state.active.get(token) {
+            Some(flag) => {
+                flag.store(true, Ordering::Relaxed);
+            }
+            None => {
+                state
+                    .pending_cancelled
+                    .insert(token.to_string(), Instant::now());
+            }
+        }
+        true
+    }
+
+    fn remove(&self, token: &str) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active.remove(token);
+            state.pending_cancelled.remove(token);
+        }
+    }
+}
+
+const PENDING_CANCEL_TTL: Duration = Duration::from_secs(60);
+
+fn prune_pending_cancelled(pending: &mut HashMap<String, Instant>) {
+    let now = Instant::now();
+    pending.retain(|_, cancelled_at| now.duration_since(*cancelled_at) <= PENDING_CANCEL_TTL);
+}
 
 /// All `PrepPlanStepId`s from `packages/rules`, whether or not an op
 /// implements them. The status response maps each one to its registered op
@@ -709,6 +781,11 @@ pub fn path_ops_status(app: tauri::AppHandle) -> PathOpsStatusResponse {
     }
 }
 
+#[tauri::command]
+pub fn path_op_cancel(jobs: tauri::State<'_, PathOpJobs>, job_token: String) -> bool {
+    jobs.cancel(&job_token)
+}
+
 // ---------------------------------------------------------------------------
 // Read-only ops
 // ---------------------------------------------------------------------------
@@ -782,6 +859,7 @@ pub async fn path_op_extract_pages(
 pub async fn path_op_ocr(
     app: tauri::AppHandle,
     grants: tauri::State<'_, FileGrants>,
+    jobs: tauri::State<'_, PathOpJobs>,
     grant: String,
     mode: Option<core_ops::OcrMode>,
     job_token: Option<String>,
@@ -805,7 +883,12 @@ pub async fn path_op_ocr(
         core_ops::OcrMode::ForceOcr => OpSpec::new("ocr", "ocrmypdf", "ocr").note(force_ocr_note),
     };
     let progress_app = app.clone();
-    run_single_output_op(
+    let cancel_flag = match job_token.as_deref() {
+        Some(token) => Some(jobs.register(token)?),
+        None => None,
+    };
+    let job_token_for_cleanup = job_token.clone();
+    let result = run_single_output_op(
         app,
         grants,
         grant,
@@ -813,7 +896,7 @@ pub async fn path_op_ocr(
         move |toolchain, input, output, _work_dir| {
             if let Some(job_token) = job_token {
                 let app = progress_app.clone();
-                core_ops::ocr_with_options_and_progress(
+                core_ops::ocr_with_options_and_progress_cancelable(
                     toolchain,
                     input,
                     output,
@@ -831,13 +914,18 @@ pub async fn path_op_ocr(
                             },
                         );
                     },
+                    cancel_flag,
                 )
             } else {
                 core_ops::ocr_with_options(toolchain, input, output, &options)
             }
         },
     )
-    .await
+    .await;
+    if let Some(token) = job_token_for_cleanup {
+        jobs.remove(&token);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,6 +1651,7 @@ pub async fn path_op_split_by_max_bytes(
 pub async fn path_op_prepare_filing(
     app: tauri::AppHandle,
     grants: tauri::State<'_, FileGrants>,
+    jobs: tauri::State<'_, PathOpJobs>,
     grant: String,
     plan: core_ops::PrepareFilingPlan,
     job_token: Option<String>,
@@ -1576,13 +1665,19 @@ pub async fn path_op_prepare_filing(
     let before = snapshot(&input)?;
     let started = Instant::now();
     let progress_app = app.clone();
+    let cancel_flag = match job_token.as_deref() {
+        Some(token) => Some(jobs.register(token)?),
+        None => None,
+    };
+    let job_token_for_cleanup = job_token.clone();
 
-    let outcome = {
+    let outcome_result = {
         let input = input.clone();
         let stage_path = stage_dir.path().to_path_buf();
         let out_path = out_dir.path().to_path_buf();
         let toolchain = toolchain.clone();
         let plan = plan.clone();
+        let cancel_flag = cancel_flag.clone();
         on_blocking_pool(move || {
             // Forward per-page OCR progress to the webview only when the caller
             // passed a job token (mirrors `path_op_ocr`); otherwise a no-op.
@@ -1607,19 +1702,24 @@ pub async fn path_op_prepare_filing(
                 }
                 None => Box::new(|_progress| {}),
             };
-            let outcome = core_ops::prepare_filing(
+            let outcome = core_ops::prepare_filing_cancelable(
                 &toolchain,
                 &input,
                 &plan,
                 &stage_path,
                 &out_path,
                 on_ocr_progress,
+                cancel_flag,
             )?;
             ensure_unchanged(&input, before)?;
             Ok(outcome)
         })
-        .await?
+        .await
     };
+    if let Some(token) = job_token_for_cleanup {
+        jobs.remove(&token);
+    }
+    let outcome = outcome_result?;
 
     let total_output: u64 = outcome.parts.iter().map(|part| part.byte_length).sum();
     let descriptors = split_descriptors(&grants, outcome.parts)?;

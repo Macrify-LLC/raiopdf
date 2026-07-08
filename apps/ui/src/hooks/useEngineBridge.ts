@@ -30,7 +30,9 @@ export interface RunOcrOptions {
   ocrType?: "skip-text" | "force-ocr";
   pageCount?: number;
   pageIndexes?: readonly number[];
+  jobToken?: string;
   onEngineReady?: () => void;
+  signal?: AbortSignal;
 }
 
 export interface RemoveEncryptionOptions {
@@ -64,6 +66,7 @@ export interface EngineBridge {
    */
   warmEngine: () => void;
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<RunOcrResult>;
+  cancelLocalJob: (jobToken: string) => Promise<boolean>;
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
   convertToPdfA: (bytes: Uint8Array, flavor: PdfAFlavor) => Promise<Uint8Array>;
   compress: (bytes: Uint8Array, options: PdfCompressOptions) => Promise<Uint8Array>;
@@ -289,9 +292,23 @@ export function useEngineBridge(): EngineBridge {
           ...(options.pageCount !== undefined
             ? { knownPageCount: options.pageCount }
             : {}),
+          ...(options.jobToken ? { jobToken: options.jobToken } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
         });
       }, invalidateEngine),
     [ensureEngine, invalidateEngine],
+  );
+
+  const cancelLocalJob = useCallback(
+    async (jobToken: string): Promise<boolean> => {
+      const engine = engineRef.current;
+      if (!engine) {
+        return false;
+      }
+
+      return engine.cancelLocalJob(jobToken);
+    },
+    [],
   );
 
   const redactAreas = useCallback(
@@ -455,6 +472,7 @@ export function useEngineBridge(): EngineBridge {
     error,
     warmEngine,
     runOcr,
+    cancelLocalJob,
     redactAreas,
     convertToPdfA,
     compress,

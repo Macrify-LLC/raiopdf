@@ -182,6 +182,7 @@ import {
   pathOpApplyEdits,
   pathOpBatesStamp,
   pathOpBuildBinder,
+  pathOpCancel,
   pathOpCompress,
   pathOpDecrypt,
   pathOpDocumentFacts,
@@ -196,6 +197,7 @@ import {
   pathOpSanitize,
   pathOpsStatus,
   isPathOpAvailableForInput,
+  isPathOpCancelledError,
   pathOpStatusEntry,
   pathOpWatermark,
   pathOpErrorMessage,
@@ -344,6 +346,24 @@ interface BinderProgressState {
 interface ActiveLongProcess {
   label: string;
   loader: DockedProcessLoaderProps;
+}
+
+type CancellablePathProcess = "ocr" | "prepare-filing";
+
+interface PathOpCancelState {
+  process: CancellablePathProcess;
+  jobToken: string;
+  backend: "path-op" | "sidecar-local";
+  abortController?: AbortController;
+  requested: boolean;
+}
+
+interface LastPrepareConfiguration {
+  generation: number;
+  key: string;
+  openToken: number;
+  certificate: CertificateOfServiceDraft | null;
+  options: PrepareOptions;
 }
 
 function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
@@ -708,6 +728,10 @@ export function App() {
     phase: "idle",
     message: null,
   });
+  const [pathOpCancelState, setPathOpCancelState] =
+    useState<PathOpCancelState | null>(null);
+  const [lastPrepareConfiguration, setLastPrepareConfiguration] =
+    useState<LastPrepareConfiguration | null>(null);
 
   useEffect(() => {
     if (editing.hasUnsavedEdits) {
@@ -1480,6 +1504,7 @@ export function App() {
   const preserveFilingProgressForGenerationRef = useRef<number | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
+  const pathOpCancelRequestsRef = useRef<Set<string>>(new Set());
   const droppedMaterializationRef = useRef<{
     generation: number;
     promise: Promise<OpenedFileSource | null>;
@@ -1489,6 +1514,17 @@ export function App() {
   });
   const nativeMenuCommandRef = useRef<(command: string) => void>(() => {});
   const filingEngine = useMemo(() => new LocalPdfEngine(), []);
+  const isPathOpCancelRequested = useCallback(
+    (jobToken: string | null | undefined) => (
+      !!jobToken && pathOpCancelRequestsRef.current.has(jobToken)
+    ),
+    [],
+  );
+  const clearPathOpCancelRequest = useCallback((jobToken: string | null | undefined) => {
+    if (jobToken) {
+      pathOpCancelRequestsRef.current.delete(jobToken);
+    }
+  }, []);
 
   useLayoutEffect(() => {
     documentGenerationRef.current = document.generation;
@@ -1516,6 +1552,9 @@ export function App() {
     setBinderProgress({ running: false, message: null, detail: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
+    pathOpCancelRequestsRef.current.clear();
+    setPathOpCancelState(null);
+    setLastPrepareConfiguration(null);
     setSidecarStatus({
       running: false,
       message: null,
@@ -1544,6 +1583,9 @@ export function App() {
     setBinderProgress({ running: false, message: null, detail: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
+    pathOpCancelRequestsRef.current.clear();
+    setPathOpCancelState(null);
+    setLastPrepareConfiguration(null);
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
     }
@@ -1553,6 +1595,9 @@ export function App() {
     ocrRunRef.current += 1;
     ocrActiveRef.current = false;
     setOcrState({ phase: "idle", message: null });
+    pathOpCancelRequestsRef.current.clear();
+    setPathOpCancelState(null);
+    setLastPrepareConfiguration(null);
     setForceOcrConfirmation(null);
     resetLegalState();
     setSelectedPageIndexes(next === "document" ? new Set([0]) : new Set());
@@ -2422,8 +2467,15 @@ export function App() {
         progress: null,
       });
 
+      const jobToken = newOcrJobToken();
+      setPathOpCancelState({
+        process: "ocr",
+        jobToken,
+        backend: "path-op",
+        requested: false,
+      });
+
       void (async () => {
-        const jobToken = newOcrJobToken();
         let unlisten: (() => void) | null = null;
         let outputToReleaseOnError: { outputGrant: FileGrant } | null = null;
         try {
@@ -2455,6 +2507,14 @@ export function App() {
 
           const output = await pathOpOcr(grant, runPlan.ocrType, jobToken, runPlan.pageIndexes);
           outputToReleaseOnError = output;
+          if (isPathOpCancelRequested(jobToken)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            outputToReleaseOnError = null;
+            if (isCurrentStreamedRun()) {
+              setOcrState({ phase: "idle", message: null });
+            }
+            return;
+          }
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             outputToReleaseOnError = null;
@@ -2469,6 +2529,14 @@ export function App() {
 
           const textLayerCoverage = await inspectPathOpOutputTextLayer(output);
           const verification = verifyOcrTextLayer(textLayerCoverage, ocrType);
+          if (isPathOpCancelRequested(jobToken)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+            outputToReleaseOnError = null;
+            if (isCurrentStreamedRun()) {
+              setOcrState({ phase: "idle", message: null });
+            }
+            return;
+          }
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             outputToReleaseOnError = null;
@@ -2507,6 +2575,11 @@ export function App() {
             return;
           }
 
+          if (isPathOpCancelledError(error)) {
+            setOcrState({ phase: "idle", message: null });
+            return;
+          }
+
           setOcrState({
             phase: "error",
             message: pathOpErrorMessage(error, "OCR could not finish. The document was left unchanged."),
@@ -2516,6 +2589,10 @@ export function App() {
           if (ocrRunRef.current === runId) {
             ocrActiveRef.current = false;
           }
+          setPathOpCancelState((current) => (
+            current?.jobToken === jobToken ? null : current
+          ));
+          clearPathOpCancelRequest(jobToken);
         }
       })();
       return;
@@ -2565,6 +2642,16 @@ export function App() {
       progress: null,
     });
 
+    const jobToken = newOcrJobToken();
+    const abortController = new AbortController();
+    setPathOpCancelState({
+      process: "ocr",
+      jobToken,
+      backend: "sidecar-local",
+      abortController,
+      requested: false,
+    });
+
     void waitForUiPaint()
       .then(async () => {
         if (!isCurrentRun()) {
@@ -2580,6 +2667,8 @@ export function App() {
           ocrType: runPlan.ocrType,
           ...(runPlan.pageIndexes?.length ? { pageIndexes: runPlan.pageIndexes } : {}),
           pageCount: document.pageCount,
+          jobToken,
+          signal: abortController.signal,
           onEngineReady: () => {
             if (isCurrentRun()) {
               setOcrState({
@@ -2596,6 +2685,11 @@ export function App() {
           return;
         }
 
+        if (isPathOpCancelRequested(jobToken)) {
+          setOcrState({ phase: "idle", message: null });
+          return;
+        }
+
         setOcrState({
           phase: "verifying",
           message: "Checking the searchable text...",
@@ -2609,6 +2703,11 @@ export function App() {
           textLayerCoverage,
           verification,
         };
+
+        if (isPathOpCancelRequested(jobToken)) {
+          setOcrState({ phase: "idle", message: null });
+          return;
+        }
 
         if (!isCurrentRun()) {
           return;
@@ -2677,6 +2776,11 @@ export function App() {
           return;
         }
 
+        if (isPathOpCancelledError(error)) {
+          setOcrState({ phase: "idle", message: null });
+          return;
+        }
+
         const detail = formatOcrFailureDetail(error);
         const message = detail
           ? `${OCR_FAILURE_MESSAGE} ${detail}`
@@ -2689,8 +2793,14 @@ export function App() {
 
         logWorkflowFailure("ocr.failed", error);
       })
-      .finally(clearBusyGuard);
-  }, [document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, engineDelegatedGrant, getOpenToken, isCurrentDocument, openPathOpOutput, pdfDocument, replaceBytes, streamedDocument]);
+      .finally(() => {
+        clearBusyGuard();
+        setPathOpCancelState((current) => (
+          current?.jobToken === jobToken ? null : current
+        ));
+        clearPathOpCancelRequest(jobToken);
+      });
+  }, [clearPathOpCancelRequest, document.bytes, document.generation, document.pageCount, document.textLayerCoverage, engineBridge, engineDelegatedGrant, getOpenToken, isCurrentDocument, isPathOpCancelRequested, openPathOpOutput, pdfDocument, replaceBytes, streamedDocument]);
 
   const requestForceOcr = useCallback((reason: ForceOcrConfirmationReason = "manual") => {
     if (!streamedDocument && document.bytes && engineBridge.ocrAvailable) {
@@ -2763,15 +2873,34 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const cancelOcrDialog = useCallback(() => {
-    // Dismissing mid-run (rather than at the confirm step) can't cancel the
-    // in-flight engine call -- there's no abort plumbing for that -- so this
-    // just invalidates the run the same way opening a new document does:
-    // isCurrentRun() stops applying its result once it eventually settles,
-    // and the busy guard is released immediately rather than waiting on it.
+    // The dialog is only visible for confirm/error states; active OCR is
+    // cancelled from the docked loader.
     ocrRunRef.current += 1;
     ocrActiveRef.current = false;
     setOcrState({ phase: "idle", message: null });
   }, []);
+
+  const cancelPathOperation = useCallback(() => {
+    const cancelState = pathOpCancelState;
+    if (!cancelState || cancelState.requested) {
+      return;
+    }
+
+    pathOpCancelRequestsRef.current.add(cancelState.jobToken);
+    setPathOpCancelState((current) => (
+      current?.jobToken === cancelState.jobToken
+        ? { ...current, requested: true }
+        : current
+    ));
+
+    if (cancelState.backend === "sidecar-local") {
+      cancelState.abortController?.abort();
+      void engineBridge.cancelLocalJob(cancelState.jobToken).catch(() => undefined);
+      return;
+    }
+
+    void pathOpCancel(cancelState.jobToken).catch(() => undefined);
+  }, [engineBridge, pathOpCancelState]);
 
   const confirmForceOcr = useCallback(() => {
     setForceOcrConfirmation(null);
@@ -5565,6 +5694,7 @@ export function App() {
     setFilingResult(null);
     setFilingImpact(null);
 
+    let pathOpJobToken: string | null = null;
     void (async () => {
       if (decryptPassword !== undefined && filingFacts?.signatureDetection) {
         const proceed = await confirmDecryptSignatureFactsInvalidation(
@@ -5586,6 +5716,13 @@ export function App() {
         phase: "normalizing",
         message: "Preparing your filing copy — large files are handled a piece at a time so they open smoothly...",
       });
+      pathOpJobToken = newOcrJobToken();
+      setPathOpCancelState({
+        process: "prepare-filing",
+        jobToken: pathOpJobToken,
+        backend: "path-op",
+        requested: false,
+      });
 
       // The whole streamed pipeline (sanitize → normalize → OCR → scrub →
       // split) runs as one opaque engine call, so OCR — by far the slowest
@@ -5593,7 +5730,7 @@ export function App() {
       // Subscribe to its per-page events so the loader shows "page X of Y"
       // instead of sitting on the same line for minutes. No OCR step, no token.
       const willOcr = selectedSteps.has("make-searchable");
-      const ocrJobToken = willOcr ? newOcrJobToken() : null;
+      const ocrJobToken = willOcr ? pathOpJobToken : null;
       let unlistenOcrProgress: (() => void) | null = null;
       if (ocrJobToken) {
         try {
@@ -5621,10 +5758,30 @@ export function App() {
 
       let result: Awaited<ReturnType<typeof pathOpPrepareFiling>>;
       try {
-        result = await pathOpPrepareFiling(grant, plan, ocrJobToken ?? undefined);
+        result = await pathOpPrepareFiling(grant, plan, pathOpJobToken);
       } finally {
         unlistenOcrProgress?.();
+        const finishedJobToken = pathOpJobToken;
+        setPathOpCancelState((current) => (
+          current?.jobToken === finishedJobToken ? null : current
+        ));
       }
+
+      const prepareCancelRequested = isPathOpCancelRequested(pathOpJobToken);
+      if (prepareCancelRequested) {
+        await Promise.all(
+          result.parts.map((part) => (
+            pathOpReleaseOutput(part.outputGrant).catch(() => undefined)
+          )),
+        );
+        clearPathOpCancelRequest(pathOpJobToken);
+        if (isCurrentFilingRun()) {
+          setActiveLegalTool("prepare-for-filing");
+          setFilingProgress({ phase: "idle", message: null });
+        }
+        return;
+      }
+      clearPathOpCancelRequest(pathOpJobToken);
 
       if (!isCurrentFilingRun()) {
         return;
@@ -5674,9 +5831,16 @@ export function App() {
           ? `Filing output saved to ${savedOutput.directoryPath}. For very large files, some of the pre-filing checks are skipped — review the result before filing.`
           : "Filing output saved. For very large files, some of the pre-filing checks are skipped — review the result before filing.",
       });
+      setLastPrepareConfiguration(null);
     })()
       .catch((error: unknown) => {
         if (!isCurrentFilingRun()) {
+          return;
+        }
+
+        if (isPathOpCancelledError(error)) {
+          setActiveLegalTool("prepare-for-filing");
+          setFilingProgress({ phase: "idle", message: null });
           return;
         }
 
@@ -5684,8 +5848,16 @@ export function App() {
           phase: "error",
           message: pathOpErrorMessage(error, "The filing copy could not be prepared."),
         });
+      })
+      .finally(() => {
+        const finishedJobToken = pathOpJobToken;
+        setPathOpCancelState((current) => (
+          current?.jobToken === finishedJobToken ? null : current
+        ));
+        clearPathOpCancelRequest(finishedJobToken);
       });
   }, [
+    clearPathOpCancelRequest,
     confirmDecryptSignatureFactsInvalidation,
     document.fileName,
     document.filePath,
@@ -5695,6 +5867,7 @@ export function App() {
     filingPrepPlan,
     getOpenToken,
     isCurrentDocument,
+    isPathOpCancelRequested,
     pendingRedactions.length,
   ]);
 
@@ -5716,6 +5889,19 @@ export function App() {
       if (pathOpsGrant && streamedDocument) {
         // Streamed run branch [R6-1]: the reduced, fully path-based filing
         // pipeline replaces the byte pipeline for very large documents.
+        const rememberedOptions: PrepareOptions = {
+          ...options,
+          selectedStepIds: [...options.selectedStepIds],
+        };
+        delete rememberedOptions.acknowledgeImpact;
+        delete rememberedOptions.removeEncryptionPassword;
+        setLastPrepareConfiguration({
+          generation: sourceGeneration,
+          key: `${sourceOpenToken}:${sourceGeneration}`,
+          openToken: sourceOpenToken,
+          certificate,
+          options: rememberedOptions,
+        });
         setActiveLegalTool(null);
         prepareStreamedFilingCopy(pathOpsGrant, certificate, options);
         return;
@@ -6617,6 +6803,9 @@ export function App() {
 
   const activeLongProcess = useMemo<ActiveLongProcess | null>(() => {
     if (isFilingProgressActive(filingProgress.phase)) {
+      const cancelState = pathOpCancelState?.process === "prepare-filing"
+        ? pathOpCancelState
+        : null;
       return {
         label: "Prepare for Filing",
         loader: {
@@ -6625,6 +6814,14 @@ export function App() {
           detail: document.fileSizeBytes ? `Working on ${formatBytes(document.fileSizeBytes)}` : document.fileName ?? undefined,
           steps: filingProgressSteps(filingProgress.phase),
           progress: filingProgress.progress ?? null,
+          ...(cancelState
+            ? {
+                cancelLabel: "Cancel",
+                cancelMessage: "Stops after the current tool step.",
+                cancelRequested: cancelState.requested,
+                onCancel: cancelPathOperation,
+              }
+            : {}),
         },
       };
     }
@@ -6634,6 +6831,9 @@ export function App() {
       ocrState.phase === "processing" ||
       ocrState.phase === "verifying"
     ) {
+      const cancelState = pathOpCancelState?.process === "ocr"
+        ? pathOpCancelState
+        : null;
       return {
         label: "OCR",
         loader: {
@@ -6643,6 +6843,14 @@ export function App() {
             ? `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`
             : undefined,
           progress: toLongProcessProgress(ocrState.progress ?? null),
+          ...(cancelState
+            ? {
+                cancelLabel: "Cancel",
+                cancelMessage: "Stops the OCR run.",
+                cancelRequested: cancelState.requested,
+                onCancel: cancelPathOperation,
+              }
+            : {}),
         },
       };
     }
@@ -6680,8 +6888,10 @@ export function App() {
     document.fileSizeBytes,
     document.pageCount,
     filingProgress,
+    cancelPathOperation,
     ocrState.phase,
     ocrState.progress,
+    pathOpCancelState,
     textEdit.phase,
   ]);
   const longProcessLockoutLabel = activeLongProcess
@@ -6740,6 +6950,11 @@ export function App() {
       if (isFilingProgressActive(filingProgress.phase)) {
         return null;
       }
+      const scopedPrepareConfiguration =
+        lastPrepareConfiguration?.openToken === getOpenToken() &&
+        lastPrepareConfiguration.generation === document.generation
+          ? lastPrepareConfiguration
+          : null;
 
       return (
         <FloatingDialog
@@ -6755,6 +6970,7 @@ export function App() {
           )}
         >
           <PrepareForFilingWorkspace
+            key={scopedPrepareConfiguration?.key ?? "prepare-current"}
             ref={filingWorkspaceRef}
             document={document}
             pack={filingPack}
@@ -6782,6 +6998,8 @@ export function App() {
             defaultPacketLayoutMode={filingPreferences.packetLayoutMode}
             defaultPacketPrefixFilenames={filingPreferences.packetPrefixFilenames}
             onPacketPreferencesChange={handlePacketPreferencesChange}
+            initialCertificate={scopedPrepareConfiguration?.certificate ?? null}
+            initialOptions={scopedPrepareConfiguration?.options ?? null}
             stepDefaultOverrides={filingPreferences.stepDefaultOverridesByPack[baseFilingPack.id]}
             onStepDefaultOverridesChange={handlePrepStepDefaultOverridesChange}
             onDismissImpact={() => setFilingImpact(null)}

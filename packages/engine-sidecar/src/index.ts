@@ -101,6 +101,10 @@ type TextRewritePreflight = {
   warnings: PdfReplaceTextWarning[];
 };
 
+type LocalRequestOptions = {
+  signal?: AbortSignal;
+};
+
 export type SidecarPdfEngineOptions = {
   authToken?: string;
   baseUrl: string;
@@ -121,6 +125,8 @@ export interface SidecarOcrOptions {
   ocrType?: SidecarOcrType;
   deskew?: boolean;
   pageIndexes?: readonly number[];
+  jobToken?: string;
+  signal?: AbortSignal;
 }
 
 export interface SidecarOcrBytesOptions extends SidecarOcrOptions {
@@ -1066,18 +1072,36 @@ export class SidecarPdfEngine implements PdfEngine {
     };
   }
 
+  async cancelLocalJob(jobToken: string): Promise<boolean> {
+    const response = await this.requestLocal("/local/cancel", "", {
+      job_token: jobToken,
+    });
+    if (response.status === 204) {
+      return true;
+    }
+    const text = await response.text();
+
+    return text.trim() === "true";
+  }
+
   private async postOcr(bytes: Uint8Array, options: SidecarOcrOptions): Promise<Response> {
     const languages = options.languages?.length ? options.languages : ["eng"];
     const pageIndexes = options.pageIndexes?.length
       ? options.pageIndexes.map((pageIndex) => String(pageIndex)).join(",")
       : undefined;
 
-    return this.requestLocal("/local/ocr", bytes, {
-      ocr_type: normalizeSidecarOcrType(options.ocrType),
-      languages: languages.join(","),
-      deskew: String(options.deskew ?? false),
-      ...(pageIndexes ? { page_indexes: pageIndexes } : {}),
-    });
+    return this.requestLocal(
+      "/local/ocr",
+      bytes,
+      {
+        ocr_type: normalizeSidecarOcrType(options.ocrType),
+        languages: languages.join(","),
+        deskew: String(options.deskew ?? false),
+        ...(pageIndexes ? { page_indexes: pageIndexes } : {}),
+        ...(options.jobToken ? { job_token: options.jobToken } : {}),
+      },
+      options.signal ? { signal: options.signal } : {},
+    );
   }
 
   /**
@@ -1269,6 +1293,7 @@ export class SidecarPdfEngine implements PdfEngine {
     path: string,
     body: Uint8Array | string,
     query: Record<string, string> = {},
+    options: LocalRequestOptions = {},
   ): Promise<Response> {
     let response: Response;
     const url = new URL(`${this.baseUrl}${path}`);
@@ -1281,12 +1306,19 @@ export class SidecarPdfEngine implements PdfEngine {
     }
 
     try {
-      response = await this.fetchImpl(url.href, {
+      const init: RequestInit = {
         method: "POST",
         headers: sidecarHeaders(this.authToken),
         body: requestBody,
-      });
+        ...(options.signal ? { signal: options.signal } : {}),
+      };
+      response = await this.fetchImpl(url.href, init);
     } catch (error) {
+      if (isAbortError(error)) {
+        throw new PdfEngineError("PATH_OP_CANCELLED", "Operation cancelled.", {
+          cause: error,
+        });
+      }
       throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF couldn't complete that operation. Try reopening the file.", {
         cause: error,
       });
@@ -1320,6 +1352,13 @@ function bytesToBase64(bytes: Uint8Array): string {
   }
 
   return btoa(binary);
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError";
 }
 
 function normalizeSidecarOcrType(ocrType: SidecarOcrType | undefined): "skip-text" | "force-ocr" {
@@ -2245,6 +2284,10 @@ async function throwResponseError(response: Response): Promise<never> {
     ?? (parsedError.parsedJson ? null : plainTextErrorMessage(rawBody))
     ?? response.statusText;
   const errorCode = readErrorCode(errorBody);
+  if (response.status === 499 || message === "PATH_OP_CANCELLED") {
+    throw new PdfEngineError("PATH_OP_CANCELLED", "Operation cancelled.");
+  }
+
   const code = mapHttpStatusToErrorCode(response.status, message, errorCode);
   const detail = errorCode ? `${message} (${errorCode})` : message;
 

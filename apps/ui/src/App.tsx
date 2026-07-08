@@ -193,6 +193,7 @@ import {
   type PathOpsRedactionVerification,
   type PathOpsStatus,
 } from "./lib/pathOps";
+import { getWordCapability, isWordPresent } from "./lib/wordCapability";
 import { planPathOpReopen } from "./lib/pathOpReopen";
 import {
   annotateStreamedPreflight,
@@ -860,6 +861,31 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
+  // Whether Microsoft Word was detected on this PC. Used to proactively gate the
+  // Word-only menu items (PDF -> editable Word export) so they gray out with a
+  // reason when Word isn't installed, instead of only failing after a click.
+  // Defaults `true` so nothing grays before the probe (or on non-desktop / probe
+  // error); the click-time deep capability check remains the real gate.
+  const [wordAvailable, setWordAvailable] = useState(true);
+  useEffect(() => {
+    if (!isPathOpsRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    void getWordCapability(false)
+      .then((capability) => {
+        if (!cancelled) {
+          // Presence-gate only (see `isWordPresent`): `detected` or `available`
+          // both mean Word can be attempted; the deep click-time check is the
+          // real gate before any conversion runs.
+          setWordAvailable(isWordPresent(capability));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>(() => (
     isUpdaterRuntime() ? UPDATE_IDLE_STATUS : UPDATE_UNAVAILABLE_STATUS
   ));
@@ -6749,6 +6775,7 @@ export function App() {
         onOutlineChange={replaceOutline}
         ocrState={ocrState}
         ocrAvailable={engineBridge.ocrAvailable}
+        wordAvailable={wordAvailable}
         ocrStarting={forceOcrConfirmation ? false : engineBridge.starting}
         documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
         workspace={workspace}

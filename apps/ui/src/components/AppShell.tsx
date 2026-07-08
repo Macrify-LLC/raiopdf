@@ -76,6 +76,8 @@ export interface AppShellProps {
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
   ocrState: OcrUiState;
   ocrAvailable: boolean;
+  /** Whether Microsoft Word was detected on this PC (gates the Word-dependent menu items). */
+  wordAvailable: boolean;
   ocrStarting: boolean;
   documentBanner: ReactNode;
   workspace: ReactNode;
@@ -154,6 +156,7 @@ export function AppShell({
   onOutlineChange,
   ocrState,
   ocrAvailable,
+  wordAvailable,
   ocrStarting,
   documentBanner,
   workspace,
@@ -235,6 +238,7 @@ export function AppShell({
         onOpenAbout={onOpenAbout}
         hasDocument={hasDocument}
         canUndo={canUndo}
+        wordAvailable={wordAvailable}
         onMenuCommand={onMenuCommand}
         updateSlot={updateSlot}
       />

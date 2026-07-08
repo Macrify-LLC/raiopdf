@@ -22,6 +22,8 @@ export interface TitleBarProps {
   hasDocument?: boolean;
   /** Gates Edit > Undo in the menu bar. */
   canUndo?: boolean;
+  /** Whether Microsoft Word was detected -- gates the Word-dependent menu items. */
+  wordAvailable?: boolean;
   /**
    * Shared dispatch for the menu bar -- the same function App wires to the
    * native `raiopdf-menu` Tauri event, so both entry points funnel through
@@ -40,6 +42,7 @@ export function TitleBar({
   onOpenAbout,
   hasDocument = false,
   canUndo = false,
+  wordAvailable = true,
   onMenuCommand,
   updateSlot,
 }: TitleBarProps) {
@@ -83,6 +86,7 @@ export function TitleBar({
       <MenuBar
         hasDocument={hasDocument}
         canUndo={canUndo}
+        wordAvailable={wordAvailable}
         onCommand={(command) => onMenuCommand?.(command)}
         onExit={() => void closeWindow()}
       />

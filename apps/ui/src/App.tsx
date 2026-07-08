@@ -1592,6 +1592,12 @@ export function App() {
     async (
       output: { outputGrant: FileGrant; name: string; sizeBytes: number },
       expected: DocumentIdentityGuard,
+      // `openInNewTab` is for outputs that are a NEW independent document (e.g.
+      // an imported Word file) rather than a reopen of the op's own source: open
+      // it in a new tab when a document is already present, exactly like File ->
+      // Open, so it never replaces/clobbers an unsaved active tab. Defaults off,
+      // so in-place reopens (OCR, decrypt, ...) keep replacing the active tab.
+      options: { openInNewTab?: boolean } = {},
     ) => {
       const staleResult = {
         status: "failed" as const,
@@ -1611,7 +1617,10 @@ export function App() {
         return releaseStaleOutput();
       }
 
-      if (plan.mode === "memory") {
+      // The in-memory reopen (openDocumentFile) always replaces the active tab.
+      // For a NEW independent document (openInNewTab) that would clobber an open
+      // doc, so skip it and use the streamed open below, which supports new-tab.
+      if (plan.mode === "memory" && !options.openInNewTab) {
         // Same per-open resets as `openOpenedFile` — this IS a fresh open.
         ocrRunRef.current += 1;
         ocrActiveRef.current = false;
@@ -1645,12 +1654,15 @@ export function App() {
         }
       }
 
-      return openStreamedSource({
-        kind: "rangeGrant",
-        grant: output.outputGrant,
-        name: output.name,
-        sizeBytes: output.sizeBytes,
-      });
+      return openStreamedSource(
+        {
+          kind: "rangeGrant",
+          grant: output.outputGrant,
+          name: output.name,
+          sizeBytes: output.sizeBytes,
+        },
+        { openInNewTab: options.openInNewTab ?? false },
+      );
     },
     [isCurrentDocument, openDocumentFile, openStreamedSource, resetLegalState],
   );
@@ -6157,15 +6169,16 @@ export function App() {
       if (result.status !== "converted") {
         return;
       }
-      // Import opens the converted PDF as a new document, like File -> Open --
-      // it has no relationship to whatever happened to be open, so capture the
-      // identity guard now (at open time) rather than before the pick. That way
-      // switching documents during the long Word conversion doesn't discard the
-      // import; it just opens the result.
-      const reopened = await openPathOpOutput(result.output, {
-        openToken: getOpenToken(),
-        generation: documentGenerationRef.current,
-      });
+      // Import opens the converted PDF as a NEW document, like File -> Open: in
+      // a new tab when something is already open (never replacing an unsaved
+      // active tab), or in place when nothing is open. Capture the identity
+      // guard at open time so switching documents during the long conversion
+      // doesn't discard the import.
+      const reopened = await openPathOpOutput(
+        result.output,
+        { openToken: getOpenToken(), generation: documentGenerationRef.current },
+        { openInNewTab: true },
+      );
       if (reopened.status === "failed") {
         setWordReflowStatus({ running: false, tone: "danger", message: reopened.error });
         setError(reopened.error);

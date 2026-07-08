@@ -87,4 +87,31 @@ describe("DockedProcessLoader", () => {
     expect(html).not.toContain("floating-dialog__header");
     expect(html).not.toContain("Prepare for Filing menu");
   });
+
+  it("renders a real cancel action when supplied", () => {
+    const html = renderToStaticMarkup(
+      <DockedProcessLoader
+        message="Making searchable..."
+        cancelLabel="Cancel OCR"
+        cancelMessage="Stops the OCR run."
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Cancel OCR");
+    expect(html).toContain("Stops the OCR run.");
+  });
+
+  it("disables the cancel action after cancellation is requested", () => {
+    const html = renderToStaticMarkup(
+      <DockedProcessLoader
+        message="Cancelling OCR..."
+        cancelRequested
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Cancelling...");
+    expect(html).toContain("disabled");
+  });
 });

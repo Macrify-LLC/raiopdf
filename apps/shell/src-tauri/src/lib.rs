@@ -1905,6 +1905,7 @@ pub fn run() {
             app.manage(DirectoryGrants::default());
             app.manage(DroppedUploads::default());
             app.manage(StartupPdf::default());
+            app.manage(path_ops::PathOpJobs::default());
             app.manage(print::PrintJobs::default());
             app.manage(word::WordCapabilityCache::default());
 
@@ -1991,6 +1992,7 @@ pub fn run() {
             mcp::batch_cleanup,
             mcp::build_filing_packet,
             path_ops::path_ops_status,
+            path_ops::path_op_cancel,
             path_ops::path_op_page_count,
             path_ops::path_op_document_facts,
             path_ops::path_op_decrypt,

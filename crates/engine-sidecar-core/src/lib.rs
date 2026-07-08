@@ -6,6 +6,7 @@ pub mod word_ops;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
@@ -508,6 +509,61 @@ impl ProxyHandle {
 
 struct ProxyLivenessGuard {
     alive: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct LocalJobRegistry {
+    state: Mutex<LocalJobState>,
+}
+
+#[derive(Default)]
+struct LocalJobState {
+    active: HashMap<String, Arc<AtomicBool>>,
+    pending_cancelled: HashMap<String, Instant>,
+}
+
+impl LocalJobRegistry {
+    fn register(&self, job_token: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut state = self.state.lock().expect("sidecar local job lock poisoned");
+        prune_pending_local_cancels(&mut state.pending_cancelled);
+        if state.active.contains_key(job_token) {
+            return Err("job token is already running".to_string());
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        if state.pending_cancelled.remove(job_token).is_some() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        state
+            .active
+            .insert(job_token.to_string(), Arc::clone(&flag));
+        Ok(flag)
+    }
+
+    fn cancel(&self, job_token: &str) -> bool {
+        let mut state = self.state.lock().expect("sidecar local job lock poisoned");
+        prune_pending_local_cancels(&mut state.pending_cancelled);
+        if let Some(flag) = state.active.get(job_token) {
+            flag.store(true, Ordering::Relaxed);
+        } else {
+            state
+                .pending_cancelled
+                .insert(job_token.to_string(), Instant::now());
+        }
+        true
+    }
+
+    fn remove(&self, job_token: &str) {
+        let mut state = self.state.lock().expect("sidecar local job lock poisoned");
+        state.active.remove(job_token);
+        state.pending_cancelled.remove(job_token);
+    }
+}
+
+const LOCAL_PENDING_CANCEL_TTL: Duration = Duration::from_secs(60);
+
+fn prune_pending_local_cancels(pending: &mut HashMap<String, Instant>) {
+    let now = Instant::now();
+    pending.retain(|_, cancelled_at| now.duration_since(*cancelled_at) <= LOCAL_PENDING_CANCEL_TTL);
 }
 
 impl ProxyLivenessGuard {
@@ -1341,18 +1397,21 @@ fn run_auth_proxy_inner(
     idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
 ) {
     let _alive_guard = ProxyLivenessGuard::new(alive);
+    let local_jobs = Arc::new(LocalJobRegistry::default());
 
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
                 let request_token = token.clone();
                 let request_idle = idle.as_ref().map(Arc::clone);
+                let request_local_jobs = Arc::clone(&local_jobs);
                 thread::spawn(move || {
                     let _ = proxy_client_with_activity(
                         client,
                         engine_port,
                         &request_token,
                         request_idle,
+                        request_local_jobs,
                     );
                 });
             }
@@ -1376,7 +1435,13 @@ fn stop_proxy(proxy: &Arc<Mutex<Option<ProxyHandle>>>) {
 }
 
 pub fn proxy_client(client: TcpStream, engine_port: u16, token: &str) -> io::Result<()> {
-    proxy_client_with_activity(client, engine_port, token, None)
+    proxy_client_with_activity(
+        client,
+        engine_port,
+        token,
+        None,
+        Arc::new(LocalJobRegistry::default()),
+    )
 }
 
 fn proxy_client_with_activity(
@@ -1384,6 +1449,7 @@ fn proxy_client_with_activity(
     engine_port: u16,
     token: &str,
     idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
+    local_jobs: Arc<LocalJobRegistry>,
 ) -> io::Result<()> {
     // The listener is non-blocking so the accept loop can poll the shutdown
     // flag (see `start_auth_proxy_inner`). On Windows, a socket returned by
@@ -1419,6 +1485,17 @@ fn proxy_client_with_activity(
     client.set_read_timeout(None)?;
     client.set_write_timeout(None)?;
     let _active_request = idle.map(ActiveProxyRequest::new);
+
+    // Authenticated control endpoint for engine-local jobs. This shares the
+    // same loopback port/token as `/local/ocr`, so the browser never gets a
+    // second privileged channel.
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/cancel")
+    {
+        let result = handle_local_cancel(&mut client, &request_head, &local_jobs);
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
 
     // Local, engine-side handlers that must NOT proxy to Stirling. Decrypt runs
     // the bundled, lossless qpdf: Stirling's /remove-password strips /Encrypt but
@@ -1469,7 +1546,7 @@ fn proxy_client_with_activity(
     if request_method(&request_head) == Some("POST")
         && request_path(&request_head) == Some("/local/ocr")
     {
-        let result = handle_local_ocr(&mut client, &request_head, &buffered_body);
+        let result = handle_local_ocr(&mut client, &request_head, &buffered_body, &local_jobs);
         let _ = client.shutdown(Shutdown::Write);
         return result;
     }
@@ -1686,6 +1763,29 @@ fn handle_local_compress(
     }
 }
 
+/// Handle `POST /local/cancel?job_token=...`: cooperatively cancels a running
+/// local job and returns a tiny JSON-ish boolean payload for the TypeScript
+/// caller.
+fn handle_local_cancel(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    jobs: &LocalJobRegistry,
+) -> io::Result<()> {
+    let Some(job_token) = request_query_param(request_head, "job_token") else {
+        return write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            b"missing job_token",
+        );
+    };
+
+    let _ = jobs.cancel(job_token);
+    write_local_bytes_response(client, request_head, 204, "No Content", "text/plain", b"")
+}
+
 /// Handle `POST /local/ocr`: PDF bytes in the body, optionally base64 encoded
 /// when `body_encoding=base64`; `ocr_type=skip-text|force-ocr` controls the
 /// text-layer strategy. Responds with the OCRmyPDF output (200) or plain-text
@@ -1694,6 +1794,7 @@ fn handle_local_ocr(
     client: &mut TcpStream,
     request_head: &[u8],
     buffered_body: &[u8],
+    jobs: &LocalJobRegistry,
 ) -> io::Result<()> {
     let body = match read_local_pdf_body(client, request_head, buffered_body) {
         Ok(body) => body,
@@ -1723,10 +1824,41 @@ fn handle_local_ocr(
         }
     };
 
-    match run_path_op_ocr(&body, &options) {
+    let job_token = request_query_param(request_head, "job_token");
+    let cancel_flag = match job_token {
+        Some(token) => match jobs.register(token) {
+            Ok(flag) => Some(flag),
+            Err(message) => {
+                return write_local_bytes_response(
+                    client,
+                    request_head,
+                    409,
+                    "Conflict",
+                    "text/plain",
+                    message.as_bytes(),
+                );
+            }
+        },
+        None => None,
+    };
+
+    let result = run_path_op_ocr_cancelable(&body, &options, cancel_flag);
+    if let Some(token) = job_token {
+        jobs.remove(token);
+    }
+
+    match result {
         Ok(ocr) => {
             write_local_bytes_response(client, request_head, 200, "OK", "application/pdf", &ocr)
         }
+        Err(message) if message == path_ops::ERR_CANCELLED => write_local_bytes_response(
+            client,
+            request_head,
+            499,
+            "Client Closed Request",
+            "text/plain",
+            path_ops::ERR_CANCELLED.as_bytes(),
+        ),
         Err(message) => write_local_bytes_response(
             client,
             request_head,
@@ -2243,7 +2375,11 @@ fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
     Ok(compressed)
 }
 
-fn run_path_op_ocr(pdf: &[u8], options: &path_ops::OcrOptions) -> Result<Vec<u8>, String> {
+fn run_path_op_ocr_cancelable(
+    pdf: &[u8],
+    options: &path_ops::OcrOptions,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<Vec<u8>, String> {
     let work_dir = unique_temp_dir("raiopdf-ocr");
     fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
     let _cleanup = TempDirGuard(work_dir.clone());
@@ -2253,8 +2389,21 @@ fn run_path_op_ocr(pdf: &[u8], options: &path_ops::OcrOptions) -> Result<Vec<u8>
     fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
 
     let toolchain = path_ops::PathOpsToolchain::discover(None);
-    path_ops::ocr_with_options(&toolchain, &in_path, &out_path, options)
-        .map_err(|error| error.to_string())?;
+    path_ops::ocr_with_options_and_progress_cancelable(
+        &toolchain,
+        &in_path,
+        &out_path,
+        options,
+        |_| {},
+        cancel_flag,
+    )
+    .map_err(|error| {
+        if error.code == path_ops::ERR_CANCELLED {
+            path_ops::ERR_CANCELLED.to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
 
     let ocr = fs::read(&out_path).map_err(|error| format!("read OCR output: {error}"))?;
     if ocr.is_empty() {

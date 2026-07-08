@@ -4,6 +4,7 @@ import {
   useId,
   useImperativeHandle,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -161,6 +162,8 @@ export interface PrepareForFilingWorkspaceProps {
   onPacketPreferencesChange?: (
     preferences: { layoutMode: FilingPacketLayoutMode; prefixFilenames: boolean },
   ) => void;
+  initialCertificate?: CertificateOfServiceDraft | null | undefined;
+  initialOptions?: PrepareOptions | null | undefined;
   stepDefaultOverrides?: Partial<Record<PrepPlanStepId, boolean>> | undefined;
   onStepDefaultOverridesChange?: (overrides: Partial<Record<PrepPlanStepId, boolean>>) => void;
   onDismissImpact: () => void;
@@ -210,6 +213,8 @@ export const PrepareForFilingWorkspace = forwardRef<
     defaultPacketLayoutMode = "separate-files",
     defaultPacketPrefixFilenames = true,
     onPacketPreferencesChange,
+    initialCertificate = null,
+    initialOptions = null,
     stepDefaultOverrides,
     onStepDefaultOverridesChange,
     onDismissImpact,
@@ -219,12 +224,16 @@ export const PrepareForFilingWorkspace = forwardRef<
 ) {
   const [mode, setMode] = useState<"single" | "packet">("single");
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [certificateOpen, setCertificateOpen] = useState(false);
+  const [certificateOpen, setCertificateOpen] = useState(() => Boolean(initialCertificate));
   const [checkedSteps, setCheckedSteps] = useState<Set<PrepPlanStepId>>(() => (
-    defaultCheckedSteps(prepPlan, undefined, stepDefaultOverrides)
+    initialOptions?.selectedStepIds?.length
+      ? new Set(initialOptions.selectedStepIds)
+      : defaultCheckedSteps(prepPlan, undefined, stepDefaultOverrides)
   ));
   const [stepDefaultsMessage, setStepDefaultsMessage] = useState<string | null>(null);
-  const [customSplitMegabytes, setCustomSplitMegabytes] = useState("");
+  const [customSplitMegabytes, setCustomSplitMegabytes] = useState(
+    () => initialOptions?.customSplitMegabytes?.toString() ?? "",
+  );
   const [packetFiles, setPacketFiles] = useState<FilingPacketFile[]>(() => (
     document.bytes
       ? [{
@@ -246,11 +255,13 @@ export const PrepareForFilingWorkspace = forwardRef<
   // the password on submit left the ImpactWarning continue action with
   // nothing to resend, re-tripping the remove-encryption gate.
   const [activeUnlockPassword, setActiveUnlockPassword] = useState<string | null>(null);
-  const [certificate, setCertificate] = useState<CertificateOfServiceDraft>({
-    caseCaption: "",
-    serviceList: "",
-    date: new Date().toISOString().slice(0, 10),
-  });
+  const [certificate, setCertificate] = useState<CertificateOfServiceDraft>(
+    () => initialCertificate ?? {
+      caseCaption: "",
+      serviceList: "",
+      date: new Date().toISOString().slice(0, 10),
+    },
+  );
   const latestVerified = useMemo(() => latestDate(pack.constraints), [pack.constraints]);
   const oldestVerified = useMemo(() => oldestPolicyDate(pack), [pack]);
   const activeReport = result?.report ?? report;
@@ -305,10 +316,22 @@ export const PrepareForFilingWorkspace = forwardRef<
   // restricted ("usage_restricted") files decrypt with an empty password in
   // both pipelines — never force a prompt for a password the user never set.
   const needsUnlockPassword = removeEncryptionSelected && facts?.encryptionState === "encrypted";
+  const didSeedCheckedStepsRef = useRef(false);
 
   useEffect(() => {
+    if (!didSeedCheckedStepsRef.current) {
+      didSeedCheckedStepsRef.current = true;
+      if (initialOptions?.selectedStepIds?.length) {
+        setCheckedSteps(new Set(initialOptions.selectedStepIds.filter((stepId) => {
+          const step = prepPlan.find((candidate) => candidate.id === stepId);
+          return Boolean(step) && !step?.disabledReason && !unavailableSteps.get(stepId);
+        })));
+        return;
+      }
+    }
+
     setCheckedSteps(defaultCheckedSteps(prepPlan, unavailableSteps, stepDefaultOverrides));
-  }, [prepPlan, stepDefaultOverrides, unavailableSteps]);
+  }, [initialOptions, prepPlan, stepDefaultOverrides, unavailableSteps]);
 
   useEffect(() => {
     setStepDefaultsMessage(null);

@@ -8,6 +8,10 @@ export interface DockedProcessLoaderProps {
   detail?: string | undefined;
   steps?: readonly LongProcessStep[];
   progress?: LongProcessProgress | null;
+  cancelLabel?: string | undefined;
+  cancelMessage?: string | undefined;
+  cancelRequested?: boolean | undefined;
+  onCancel?: (() => void) | undefined;
 }
 
 export function DockedProcessLoader({
@@ -16,8 +20,13 @@ export function DockedProcessLoader({
   detail,
   steps = [],
   progress = null,
+  cancelLabel = "Cancel",
+  cancelMessage,
+  cancelRequested = false,
+  onCancel,
 }: DockedProcessLoaderProps) {
   const progressValue = normalizedProgress(progress);
+  const showCancel = Boolean(onCancel);
 
   return (
     <div className="docked-process-loader" role="status" aria-live="polite">
@@ -61,6 +70,19 @@ export function DockedProcessLoader({
             {detail ? <p className="docked-process-loader__progress-text">{detail}</p> : null}
           </>
         )}
+        {showCancel ? (
+          <div className="docked-process-loader__cancel">
+            {cancelMessage ? <p>{cancelMessage}</p> : null}
+            <button
+              type="button"
+              className="docked-process-loader__cancel-button"
+              onClick={onCancel}
+              disabled={cancelRequested}
+            >
+              {cancelRequested ? "Cancelling..." : cancelLabel}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

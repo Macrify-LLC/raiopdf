@@ -24,7 +24,6 @@ const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
 export function OcrDialog({
   phase,
   pageCount,
-  progress = null,
   errorMessage = null,
   onConfirm,
   onCancel,

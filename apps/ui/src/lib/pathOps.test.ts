@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   isFilingStepEnabled,
+  isPathOpCancelledError,
   pathOpErrorMessage,
   isPathOpAvailableForInput,
   pathOpApplyEdits,
   pathOpBuildBinder,
+  pathOpCancel,
   pathOpOcr,
   pathOpRedactAreas,
   PathOpsError,
@@ -156,6 +158,16 @@ describe("pathOpErrorMessage", () => {
     ).toBe("qpdf not found");
   });
 
+  it("maps cancellation to a calm unchanged-document message", () => {
+    const error = new PathOpsError({ code: "PATH_OP_CANCELLED", message: "Operation was cancelled." });
+
+    expect(pathOpErrorMessage(error, "fallback")).toBe(
+      "Operation cancelled. The document was left unchanged.",
+    );
+    expect(isPathOpCancelledError(error)).toBe(true);
+    expect(isPathOpCancelledError(new Error("nope"))).toBe(false);
+  });
+
   it("uses the caller's fallback for everything else", () => {
     expect(
       pathOpErrorMessage(new PathOpsError({ code: "OP_FAILED", message: "stderr soup" }), "fallback"),
@@ -231,6 +243,13 @@ describe("path op invoke plumbing", () => {
       jobToken: "job-1",
       pageIndexes: [0, 2],
     });
+  });
+
+  it("invokes path_op_cancel with the running job token", async () => {
+    invokeMock.mockResolvedValueOnce(true);
+
+    await expect(pathOpCancel("job-1")).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_cancel", { jobToken: "job-1" });
   });
 
   it("invokes build_binder with exhibit bytes and options", async () => {

@@ -39,6 +39,7 @@ export type PathOpErrorCode =
   | "VERIFICATION_FAILED"
   | "IO_ERROR"
   | "FILE_CHANGED"
+  | "PATH_OP_CANCELLED"
   // Native print pipeline (print.rs shares the PathOpError wire shape).
   | "PRINT_NOT_SUPPORTED"
   | "PRINT_CANCELLED"
@@ -88,9 +89,24 @@ export function pathOpErrorMessage(error: unknown, fallback: string): string {
     if (error.code === "VERIFICATION_FAILED" || error.code === "TOOLCHAIN_MISSING") {
       return error.message;
     }
+
+    if (error.code === "PATH_OP_CANCELLED") {
+      return "Operation cancelled. The document was left unchanged.";
+    }
   }
 
   return fallback;
+}
+
+export function isPathOpCancelledError(error: unknown): boolean {
+  return (
+    error instanceof PathOpsError && error.code === "PATH_OP_CANCELLED"
+  ) || (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "PATH_OP_CANCELLED"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +332,10 @@ function isPathOpErrorPayload(value: unknown): value is PathOpErrorPayload {
 
 export function pathOpsStatus(): Promise<PathOpsStatus> {
   return invokePathOp("path_ops_status", {});
+}
+
+export function pathOpCancel(jobToken: string): Promise<boolean> {
+  return invokePathOp("path_op_cancel", { jobToken });
 }
 
 export async function pathOpPageCount(grant: PathOpsFileGrant): Promise<number> {

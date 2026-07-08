@@ -123,6 +123,48 @@
   min-width: 0;
 }
 
+.docked-process-loader__cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.docked-process-loader__cancel p {
+  margin: 0;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docked-process-loader__cancel-button {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.docked-process-loader__cancel-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.docked-process-loader__cancel-button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
 .docked-process-loader__progress-bar,
 .docked-process-loader__meter {
   width: 190px;
@@ -226,6 +268,14 @@
   .docked-process-loader__progress-text {
     max-width: none;
     text-align: left;
+  }
+
+  .docked-process-loader__cancel {
+    justify-content: flex-start;
+  }
+
+  .docked-process-loader__cancel p {
+    max-width: min(220px, 48vw);
   }
 }
 

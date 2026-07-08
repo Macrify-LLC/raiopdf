@@ -618,10 +618,46 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     let output = wait_with_optional_timeout(child, tool_name, options.timeout)?;
 
     if !output.status.success() {
-        return Err("RaioPDF couldn't complete that operation. Please try again.".to_string());
+        return Err(sanitize_one_shot_failure(&output.stderr));
     }
 
     Ok(output.stdout)
+}
+
+/// On a tool failure the one-shot MCP runtime writes a structured
+/// `{ "ok": false, "error": { "code", "message", "action" } }` blob to stderr
+/// (see apps/mcp `runOneShot` → `toolError`). Many of those failures are
+/// user-correctable — a non-empty output folder, an unwritable destination — so
+/// surfacing only a generic "please try again" strips the actionable guidance
+/// and the retry can't succeed. Recover the child's `error.message` (which the
+/// UI's `formatWorkflowError` then maps to friendly text) and fall back to the
+/// generic line only when stderr isn't the expected shape.
+fn sanitize_one_shot_failure(stderr: &[u8]) -> String {
+    const GENERIC: &str = "RaioPDF couldn't complete that operation. Please try again.";
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return GENERIC.to_string();
+    };
+    // The structured payload is a single JSON line, but tolerate leading Node
+    // warnings by scanning for the last line that parses with an error message.
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(message) = value
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            return message.to_string();
+        }
+    }
+    GENERIC.to_string()
 }
 
 fn wait_with_optional_timeout(
@@ -679,7 +715,40 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_output_dir;
+    use super::{resolve_output_dir, sanitize_one_shot_failure};
+
+    const GENERIC_FAILURE: &str = "RaioPDF couldn't complete that operation. Please try again.";
+
+    #[test]
+    fn recovers_the_structured_child_error_message() {
+        let stderr = br#"{"ok":false,"error":{"code":"ENGINE_ERROR","message":"Refusing to create a package in non-empty directory /out.","action":"Confirm RaioPDF's engine payload is installed and try again."}}"#;
+        assert_eq!(
+            sanitize_one_shot_failure(stderr),
+            "Refusing to create a package in non-empty directory /out."
+        );
+    }
+
+    #[test]
+    fn skips_leading_node_warnings_before_the_json_line() {
+        let stderr = b"(node:123) ExperimentalWarning: something\n{\"ok\":false,\"error\":{\"code\":\"PATH_POLICY\",\"message\":\"Output folder is not writable.\"}}\n";
+        assert_eq!(
+            sanitize_one_shot_failure(stderr),
+            "Output folder is not writable."
+        );
+    }
+
+    #[test]
+    fn falls_back_to_generic_when_stderr_is_not_structured() {
+        assert_eq!(sanitize_one_shot_failure(b""), GENERIC_FAILURE);
+        assert_eq!(
+            sanitize_one_shot_failure(b"segfault: core dumped"),
+            GENERIC_FAILURE
+        );
+        assert_eq!(
+            sanitize_one_shot_failure(br#"{"ok":false,"error":{"code":"ENGINE_ERROR"}}"#),
+            GENERIC_FAILURE
+        );
+    }
 
     #[test]
     fn accepts_an_output_dir_that_already_exists() {

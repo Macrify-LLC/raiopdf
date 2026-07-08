@@ -37,21 +37,19 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
     return "RaioPDF could not write there. Choose a folder you can edit and try again.";
   }
 
-  // Infrastructure / bundled-tool failures also contain "not found" ("qpdf
-  // binary not found in payload", "bundled Node/MCP one-shot runtime not
-  // found"). Those are an incomplete-install problem, not a missing user file —
-  // routing them to the "reopen the PDF" message below would send the user on a
-  // wild goose chase. Catch them first with honest, actionable guidance. The
-  // bare tool names (qpdf/ghostscript/ocrmypdf), the "node lane" size-limit
-  // wording, and "is not configured" all point at a missing or broken built-in
-  // tool, so they route to the same reinstall guidance.
+  // Incomplete-install failures also contain "not found" ("qpdf binary not found
+  // in payload", "bundled Node/MCP one-shot runtime not found"). Those are an
+  // install-integrity problem, not a missing user file — routing them to the
+  // "reopen the PDF" message below would send the user on a wild goose chase.
+  // Catch them first with honest, actionable guidance. Key ONLY on missing-tool
+  // phrasing here — a bare tool name is not enough. The same names appear in
+  // ordinary operation failures ("qpdf --decrypt failed" on a wrong password,
+  // "ghostscript PDF/A conversion failed"), which are document problems, not a
+  // broken install; those fall through to the document/generic buckets below.
   if (
     message.includes("not found in payload") ||
     message.includes("runtime not found") ||
     message.includes("binary not found") ||
-    message.includes("qpdf") ||
-    message.includes("ghostscript") ||
-    message.includes("ocrmypdf") ||
     message.includes("node lane") ||
     message.includes("is not configured")
   ) {
@@ -84,7 +82,16 @@ export function formatWorkflowError(error: unknown, fallback: string): string {
     message.includes("stirling") ||
     message.includes("tauri") ||
     message.includes("ipc") ||
-    message.includes("invoke")
+    message.includes("invoke") ||
+    // A built-in tool ran but the operation itself failed (e.g. "qpdf produced an
+    // empty compressed PDF", "ghostscript PDF/A conversion failed", "OCRmyPDF
+    // exited with status 1"). Not a broken install and not a document we can name
+    // a cause for — give the neutral retry message, and keep the raw dependency
+    // name out of the user's face. (Wrong-password / corrupt-PDF failures that
+    // also mention these tools are caught by the document bucket above.)
+    message.includes("qpdf") ||
+    message.includes("ghostscript") ||
+    message.includes("ocrmypdf")
   ) {
     return "Something went wrong running this. Close and reopen RaioPDF, then try again.";
   }

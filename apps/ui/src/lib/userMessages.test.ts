@@ -61,16 +61,9 @@ describe("userMessages", () => {
     );
   });
 
-  it("maps bare bundled-tool names to the reinstall message", () => {
+  it("maps missing-tool / not-configured phrases to the reinstall message", () => {
     const reinstall =
       "RaioPDF's built-in tools could not be found. Your installation may be incomplete — reinstall RaioPDF and try again.";
-    expect(formatWorkflowError("qpdf produced an empty compressed PDF.", "Nope")).toBe(
-      reinstall,
-    );
-    expect(
-      formatWorkflowError("Native printing needs the bundled Ghostscript.", "Nope"),
-    ).toBe(reinstall);
-    expect(formatWorkflowError("OCRmyPDF exited with status 1", "Nope")).toBe(reinstall);
     expect(
       formatWorkflowError("Main PDF is too large through the Node lane.", "Nope"),
     ).toBe(reinstall);
@@ -80,6 +73,32 @@ describe("userMessages", () => {
         "Nope",
       ),
     ).toBe(reinstall);
+  });
+
+  it("routes tool-name operation failures to the neutral retry message, not reinstall", () => {
+    // A bare tool name in an *operation* failure is not an incomplete-install
+    // signal. It must not claim the app is broken — and it must not leak the
+    // dependency name to the user.
+    const generic = "Something went wrong running this. Close and reopen RaioPDF, then try again.";
+    for (const raw of [
+      "qpdf produced an empty compressed PDF.",
+      "ghostscript PDF/A conversion failed (1): driver quirk",
+      "OCRmyPDF exited with status 1",
+    ]) {
+      const result = formatWorkflowError(raw, "Nope");
+      expect(result).toBe(generic);
+      expect(result.toLowerCase()).not.toContain("qpdf");
+      expect(result.toLowerCase()).not.toContain("ghostscript");
+      expect(result.toLowerCase()).not.toContain("ocrmypdf");
+    }
+  });
+
+  it("maps a wrong password reported through qpdf to the document message, not reinstall", () => {
+    // qpdf surfaces a wrong password as "qpdf --decrypt failed (2): invalid
+    // password" — the tool name must not send the user to reinstall.
+    expect(
+      formatWorkflowError("qpdf --decrypt failed (2): invalid password", "Nope"),
+    ).toBe("One of the PDFs could not be read. It may be encrypted, corrupt, or unsupported.");
   });
 
   it("maps generic engine failures to the reworked fallback without leaking terms", () => {

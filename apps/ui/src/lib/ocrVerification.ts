@@ -27,6 +27,11 @@ export type OcrVerificationResult =
 
 export type OcrVerificationMode = "skip-text" | "force-ocr";
 
+export interface FilingOcrOutputPart {
+  bytes: Uint8Array;
+  fileName: string;
+}
+
 export function verifyOcrTextLayer(
   coverage: TextLayerCoverage,
   mode: OcrVerificationMode = "skip-text",
@@ -103,6 +108,91 @@ export function verifyOcrTextLayer(
     trivialTextImagePages,
     message: `OCR ran, but ${formatPageCount(imageOnlyPages)} still ${imageOnlyPages === 1 ? "has" : "have"} no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.`,
   };
+}
+
+export function filingOcrVerificationFailureMessage(result: OcrVerificationResult): string | null {
+  if (result.status === "verified") {
+    return null;
+  }
+
+  const issueSummary = formatIssueSummary(result);
+  const prefix = result.status === "warning"
+    ? "OCR finished, but the filing copy still has imperfect searchable text."
+    : "OCR ran, but the filing copy is still not fully searchable.";
+
+  return `${prefix} ${issueSummary} The filing copy was not saved.`;
+}
+
+export async function verifyFilingOcrOutputParts(
+  parts: readonly FilingOcrOutputPart[],
+  mode: OcrVerificationMode,
+  inspectPartTextLayer: (bytes: Uint8Array) => Promise<TextLayerCoverage>,
+): Promise<void> {
+  for (const part of parts) {
+    const coverage = await inspectOutputPartTextLayer(part, inspectPartTextLayer);
+    const failureMessage = filingOcrVerificationFailureMessage(verifyOcrTextLayer(coverage, mode));
+
+    if (failureMessage) {
+      throw new Error(`${part.fileName}: ${failureMessage}`);
+    }
+  }
+}
+
+async function inspectOutputPartTextLayer(
+  part: FilingOcrOutputPart,
+  inspectPartTextLayer: (bytes: Uint8Array) => Promise<TextLayerCoverage>,
+): Promise<TextLayerCoverage> {
+  try {
+    return await inspectPartTextLayer(part.bytes);
+  } catch {
+    throw new Error(
+      `${part.fileName}: The filing copy text layer could not be verified. The filing copy was not saved.`,
+    );
+  }
+}
+
+function formatIssueSummary({
+  garbledPages,
+  imageOnlyPages,
+  trivialTextImagePages,
+}: {
+  garbledPages: number;
+  imageOnlyPages: number;
+  trivialTextImagePages: number;
+}): string {
+  const issues: string[] = [];
+
+  if (imageOnlyPages > 0) {
+    issues.push(`${formatPageCount(imageOnlyPages)} still ${imageOnlyPages === 1 ? "has" : "have"} no searchable text`);
+  }
+
+  if (garbledPages > 0) {
+    issues.push(`${formatPageCount(garbledPages)} still ${garbledPages === 1 ? "has" : "have"} garbled text`);
+  }
+
+  if (trivialTextImagePages > 0) {
+    issues.push(`${formatPageCount(trivialTextImagePages)} still ${trivialTextImagePages === 1 ? "has" : "have"} only a tiny text layer over scanned page images`);
+  }
+
+  return issues.length > 0
+    ? `${formatList(issues)}.`
+    : "The text layer could not be verified.";
+}
+
+function formatList(items: readonly string[]): string {
+  if (items.length === 0) {
+    return "";
+  }
+
+  if (items.length === 1) {
+    return items[0] ?? "";
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 function formatPageCount(count: number): string {

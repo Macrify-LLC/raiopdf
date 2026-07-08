@@ -235,7 +235,11 @@ import {
 } from "./lib/textLayer";
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { planOcrRun } from "./lib/ocrRunPlan";
-import { verifyOcrTextLayer } from "./lib/ocrVerification";
+import {
+  filingOcrVerificationFailureMessage,
+  verifyFilingOcrOutputParts,
+  verifyOcrTextLayer,
+} from "./lib/ocrVerification";
 import {
   WORD_REFLOW_EXPERIMENTAL_LABEL,
   pdfGrantHasTextLayer,
@@ -5663,6 +5667,7 @@ export function App() {
       }
 
       let workingHandle: PdfDocumentHandle;
+      let filingOcrType: OcrType | null = null;
       const closeHandles: PdfDocumentHandle[] = [];
 
       try {
@@ -5757,11 +5762,35 @@ export function App() {
             document.textLayerCoverage?.garbledPages.length ? "force-ocr" : "skip-text",
             document.textLayerCoverage,
           );
+          filingOcrType = filingOcrPlan.ocrType;
           const ocrResult = await engineBridge.runOcr(workingBytes, {
             ocrType: filingOcrPlan.ocrType,
             ...(filingOcrPlan.pageIndexes?.length ? { pageIndexes: filingOcrPlan.pageIndexes } : {}),
             pageCount: workingPageCount,
           });
+
+          if (!isCurrentFilingRun()) {
+            return;
+          }
+
+          setFilingProgress({
+            phase: "normalizing",
+            message: "Verifying the filing copy text layer...",
+          });
+          const filingTextLayerCoverage = await inspectTextLayer(ocrResult.bytes);
+          const filingOcrVerification = verifyOcrTextLayer(
+            filingTextLayerCoverage,
+            filingOcrPlan.ocrType,
+          );
+          const filingOcrFailureMessage = filingOcrVerificationFailureMessage(filingOcrVerification);
+          if (filingOcrFailureMessage) {
+            throw new Error(filingOcrFailureMessage);
+          }
+
+          if (!isCurrentFilingRun()) {
+            return;
+          }
+
           workingHandle = await reopenFilingHandle(
             filingEngine,
             closeHandles,
@@ -5825,8 +5854,27 @@ export function App() {
 
         setFilingProgress({
           phase: "verifying",
-          message: "Re-running preflight on the output files...",
+          message: selectedSteps.has("make-searchable")
+            ? "Verifying searchable text on the output files..."
+            : "Re-running preflight on the output files...",
         });
+
+        if (selectedSteps.has("make-searchable")) {
+          await verifyFilingOcrOutputParts(
+            convertedParts,
+            filingOcrType ?? "skip-text",
+            inspectTextLayer,
+          );
+
+          if (!isCurrentFilingRun()) {
+            return;
+          }
+
+          setFilingProgress({
+            phase: "verifying",
+            message: "Re-running preflight on the output files...",
+          });
+        }
 
         let finalReport: PreflightReport;
         try {

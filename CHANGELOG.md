@@ -38,8 +38,16 @@ machine, nothing uploaded.
   updates behind your back.
 - **Prepare for Filing shows per-page OCR progress** instead of a single indefinite
   spinner, so you can see a long scan actually moving.
+- **Cancel a long operation.** OCR, Prepare for Filing, and the Word conversions can now
+  be cancelled mid-run — the work stops promptly and any tool it started (including a
+  hidden Microsoft Word) is shut down, instead of leaving you to wait out a stuck run.
 
 ### Changed
+
+- **Progress shows in a docked bar, not a blocking popup.** Long operations now report
+  progress in a bar pinned to the bottom of the viewer, with a Cancel button, so your
+  document stays visible and you never have to drag a dialog out of the way. Document-facts
+  checks show as a loading overlay on the prep checklist instead of a bare spinner.
 
 - **Prepare for Filing always produces your file.** Court/portal rules and the OCR
   quality check are now **advisory** — RaioPDF still warns you, loudly, when a file is

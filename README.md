@@ -30,7 +30,7 @@
 
 <br>
 
-> **Public alpha — version 0.1.0.** Download the signed Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
+> **Public alpha — version 0.1.2.** Download the signed Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
 
 ## The philosophy
 
@@ -129,7 +129,7 @@ Optionally, an off-by-default "bring your own AI" connector — bundled right in
 
 ## Status
 
-**Public alpha, version 0.1.0.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is signed, the maintainer signing pipeline is local-only, and signed update checks are wired into the desktop app. Windows ships first; macOS is planned with no committed date.
+**Public alpha, version 0.1.2.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is signed, the maintainer signing pipeline is local-only, and signed update checks are wired into the desktop app. Windows ships first; macOS is planned with no committed date.
 
 The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed Windows installer when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 

@@ -260,7 +260,7 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
 });
 
-test("cancelling the OCR dialog mid-run discards the stale OCR result", async ({ page }) => {
+test("mutating the document mid-OCR discards the stale OCR result", async ({ page }) => {
   const sourcePdf = await createPdf([200]);
   const searchablePdf = await createTextPdf("Verified OCR text");
   await installOcrBridgeMock(page, searchablePdf, {
@@ -274,9 +274,8 @@ test("cancelling the OCR dialog mid-run discards the stale OCR result", async ({
   await page.getByRole("button", { name: "Make searchable", exact: true }).click();
   await expect(page.getByText("Making searchable…")).toBeVisible();
 
-  // The run is modal now; dismissing the dialog invalidates the run, then the
-  // document can be mutated freely. The late OCR result must be discarded.
-  await page.getByRole("button", { name: "Close Make Searchable" }).click();
+  // The run is docked and non-modal now; the document can still be mutated
+  // while OCR works. The late OCR result must be discarded.
   await page.getByRole("button", { name: "Rotate selected pages" }).click();
 
   await expect.poll(() => getOcrCallCount(page)).toBe(1);

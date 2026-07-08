@@ -66,6 +66,7 @@ export function computePageLayout(
   zoom: number,
   measured: boolean,
   topInset = 0,
+  bottomInset = 0,
 ): PageLayout {
   const items: PageLayoutItem[] = [];
   let top = PAGE_LIST_PADDING + topInset;
@@ -86,7 +87,7 @@ export function computePageLayout(
   return {
     items,
     baseDims,
-    totalHeight: contentBottom + PAGE_LIST_PADDING,
+    totalHeight: contentBottom + PAGE_LIST_PADDING + bottomInset,
     maxWidth,
     maxBaseWidth,
     measured,

@@ -93,6 +93,7 @@ export interface CommandBarProps {
    * this is just a second door into the identical dialog.
    */
   onPrepareForFiling?: (() => void) | undefined;
+  longProcessLockoutLabel?: string | null | undefined;
 }
 
 export function CommandBar({
@@ -123,10 +124,12 @@ export function CommandBar({
   onSearchClear,
   onHelp,
   onPrepareForFiling,
+  longProcessLockoutLabel = null,
 }: CommandBarProps) {
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
   const skipNextPageBlurCommitRef = useRef(false);
   const pageInputWidth = `${Math.max(1, String(pageCount).length, pageInputValue.length)}ch`;
+  const longProcessLocked = Boolean(longProcessLockoutLabel);
 
   useEffect(() => {
     setPageInputValue(String(currentPage));
@@ -359,15 +362,21 @@ export function CommandBar({
           exactly when `hasDocument` flips raced the canvas/edit-layer
           measurements that also fire off that same transition and made
           click-to-place tools (comment pins) miss their target. */}
-      <button
-        type="button"
-        className="command-bar__filing-cta"
-        disabled={!hasDocument}
-        onClick={onPrepareForFiling}
-      >
-        <BoltIcon variant="outline" size={14} />
-        Make Filing Ready
-      </button>
+      <div className="command-bar__filing-lockout">
+        <button
+          type="button"
+          className="command-bar__filing-cta"
+          disabled={!hasDocument || longProcessLocked}
+          title={longProcessLockoutLabel ?? undefined}
+          onClick={onPrepareForFiling}
+        >
+          <BoltIcon variant="outline" size={14} />
+          Make Filing Ready
+        </button>
+        {longProcessLockoutLabel ? (
+          <span className="command-bar__lockout-note">{longProcessLockoutLabel}</span>
+        ) : null}
+      </div>
     </div>
   );
 }

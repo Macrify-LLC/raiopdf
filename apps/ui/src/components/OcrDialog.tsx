@@ -1,15 +1,16 @@
 import { FloatingDialog } from "./FloatingDialog";
-import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
+import type { LongProcessProgress } from "./LongProcessLoader";
 import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
 import "./OcrDialog.css";
 
 export type OcrDialogRunningPhase = "starting-engine" | "processing" | "verifying";
-export type OcrDialogPhase = "confirm" | OcrDialogRunningPhase;
+export type OcrDialogPhase = "confirm" | OcrDialogRunningPhase | "error";
 
 export interface OcrDialogProps {
   phase: OcrDialogPhase;
   pageCount: number;
   progress?: OcrProgressEvent | null;
+  errorMessage?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -24,10 +25,15 @@ export function OcrDialog({
   phase,
   pageCount,
   progress = null,
+  errorMessage = null,
   onConfirm,
   onCancel,
 }: OcrDialogProps) {
-  const isRunning = phase !== "confirm";
+  const isRunning = phase !== "confirm" && phase !== "error";
+
+  if (isRunning) {
+    return null;
+  }
 
   return (
     <FloatingDialog
@@ -38,33 +44,29 @@ export function OcrDialog({
       onClose={onCancel}
     >
       <div className="ocr-dialog" data-phase={phase}>
-        {isRunning ? (
-          <LongProcessLoader
-            key={phase}
-            message={formatOcrRunningMessage(phase, progress)}
-            progress={toLongProcessProgress(progress)}
-            hideProgressText={hasDeterminateProgress(progress)}
-          />
-        ) : (
-          <div className="ocr-dialog__form">
-            <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
-            {/*
-              v1 ships all-pages only (DECIDED 2026-07-03). This is the seam
-              for a future page-range selector -- it slots in here, between
-              the page count line and the action row, without changing the
-              rest of the flow.
-            */}
-            <div className="ocr-dialog__range-slot" aria-hidden="true" />
-            <div className="ocr-dialog__actions">
-              <button type="button" className="ocr-dialog__secondary-button" onClick={onCancel}>
-                Cancel
-              </button>
-              <button type="button" className="ocr-dialog__primary-button" onClick={onConfirm}>
-                Make searchable
-              </button>
-            </div>
+        <div className="ocr-dialog__form">
+          <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
+          {phase === "error" ? (
+            <p className="ocr-dialog__error" role="alert">
+              {errorMessage ?? "OCR could not finish. Check the document and try again."}
+            </p>
+          ) : null}
+          {/*
+            v1 ships all-pages only (DECIDED 2026-07-03). This is the seam
+            for a future page-range selector -- it slots in here, between
+            the page count line and the action row, without changing the
+            rest of the flow.
+          */}
+          <div className="ocr-dialog__range-slot" aria-hidden="true" />
+          <div className="ocr-dialog__actions">
+            <button type="button" className="ocr-dialog__secondary-button" onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="button" className="ocr-dialog__primary-button" onClick={onConfirm}>
+              {phase === "error" ? "Try again" : "Make searchable"}
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </FloatingDialog>
   );
@@ -78,14 +80,14 @@ function formatPageCountCopy(pageCount: number): string {
   return `All ${pageCount} ${pageCount === 1 ? "page" : "pages"} will be processed.`;
 }
 
-function formatOcrRunningMessage(
+export function formatOcrRunningMessage(
   phase: OcrDialogRunningPhase,
   progress: OcrProgressEvent | null,
 ): string {
   return progress ? describeOcrProgress(progress) : RUNNING_STATUS_LABEL[phase];
 }
 
-function toLongProcessProgress(progress: OcrProgressEvent | null): LongProcessProgress | null {
+export function toLongProcessProgress(progress: OcrProgressEvent | null): LongProcessProgress | null {
   if (!hasDeterminateProgress(progress)) {
     return null;
   }

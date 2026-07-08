@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { LongProcessLoader } from "./LongProcessLoader";
+import { DockedProcessLoader } from "./DockedProcessLoader";
 
 describe("LongProcessLoader", () => {
   it("renders counted progress and optional steps", () => {
@@ -61,5 +62,29 @@ describe("LongProcessLoader", () => {
 
     expect(invalid).not.toContain("0 pages");
     expect(percent).toContain("49%");
+  });
+});
+
+describe("DockedProcessLoader", () => {
+  it("renders phase, horizontal steps, and determinate progress without dialog chrome", () => {
+    const html = renderToStaticMarkup(
+      <DockedProcessLoader
+        phaseLabel="Make Searchable"
+        message="Making searchable: 2 of 5 pages"
+        progress={{ current: 2, total: 5, unit: "page" }}
+        steps={[
+          { id: "ocr", label: "OCR", state: "active" },
+          { id: "verify", label: "Verify", state: "pending" },
+        ]}
+      />,
+    );
+
+    expect(html).toContain("docked-process-loader");
+    expect(html).toContain("Make Searchable");
+    expect(html).toContain("Making searchable: 2 of 5 pages");
+    expect(html).toContain("2 of 5 pages");
+    expect(html).toContain('data-state="active"');
+    expect(html).not.toContain("floating-dialog__header");
+    expect(html).not.toContain("Prepare for Filing menu");
   });
 });

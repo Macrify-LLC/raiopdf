@@ -147,6 +147,7 @@ export interface ToolPanelProps {
   ocrState: OcrUiState;
   ocrAvailable: boolean;
   ocrStarting: boolean;
+  suppressOcrErrorNotice?: boolean | undefined;
   activeEditTool: EditToolId;
   activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
@@ -187,6 +188,7 @@ export interface ToolPanelProps {
   onPrintMarkupAnnotationsChange: (next: boolean) => void;
   onFlattenMarkupAnnotations: () => void;
   markupAnnotationMessage: string | null;
+  longProcessLockoutLabel?: string | null | undefined;
 }
 
 export function ToolPanel({
@@ -195,6 +197,7 @@ export function ToolPanel({
   ocrState,
   ocrAvailable,
   ocrStarting,
+  suppressOcrErrorNotice = false,
   activeEditTool,
   activeTextEdit = false,
   activeEditDialogTool,
@@ -229,12 +232,14 @@ export function ToolPanel({
   onPrintMarkupAnnotationsChange,
   onFlattenMarkupAnnotations,
   markupAnnotationMessage,
+  longProcessLockoutLabel = null,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
     (edit): edit is Extract<PendingEdit, { kind: "comment" }> => edit.kind === "comment",
   );
   const pendingContentEdits = pendingEdits.filter((edit) => edit.kind !== "comment");
+  const longProcessLocked = Boolean(longProcessLockoutLabel);
 
   function toggleGroup(group: GroupId) {
     setOpenGroup((current) => (current === group ? null : group));
@@ -243,6 +248,9 @@ export function ToolPanel({
   return (
     <aside className="tool-panel" aria-label="Tools">
       <p className="tool-panel__heading">Tools</p>
+      {longProcessLockoutLabel ? (
+        <p className="tool-panel__lockout-note" role="status">{longProcessLockoutLabel}</p>
+      ) : null}
 
       <AccordionGroup
         id="edit"
@@ -263,6 +271,7 @@ export function ToolPanel({
                 label={tool.label}
                 description={tool.description}
                 selected={selected}
+                disabled={tool.id === "edit-text" && longProcessLocked}
                 onSelect={() => {
                   if (tool.id === "edit-text") {
                     onTextEditSelected?.();
@@ -395,17 +404,17 @@ export function ToolPanel({
           icon={<OcrSearchIcon size={16} />}
           label={MAKE_SEARCHABLE_TOOL.label}
           description={MAKE_SEARCHABLE_TOOL.description}
-          disabled={isOcrActive(ocrState.phase, ocrStarting)}
+          disabled={longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
         />
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
           label="Redo searchable text"
           description="Rebuild the invisible searchable text by re-rendering the whole file."
-          disabled={!hasDocument || isOcrActive(ocrState.phase, ocrStarting)}
+          disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onForceOcr}
         />
-        {ocrState.phase === "done" || ocrState.phase === "error" ? (
+        {ocrState.phase === "done" || (ocrState.phase === "error" && !suppressOcrErrorNotice) ? (
           <OcrResultNotice ocrState={ocrState} ocrAvailable={ocrAvailable} />
         ) : null}
       </div>
@@ -430,6 +439,10 @@ export function ToolPanel({
                 label={tool.label}
                 description={tool.description}
                 selected={selected}
+                disabled={
+                  longProcessLocked &&
+                  (tool.id === "prepare-for-filing" || tool.id === "combine-exhibits")
+                }
                 onSelect={() => onLegalToolSelected(tool.id)}
               />
               {tool.id === "redact" && selected ? (

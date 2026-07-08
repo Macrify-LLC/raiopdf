@@ -4,30 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import { OcrDialog } from "./OcrDialog";
 
 describe("OcrDialog", () => {
-  it("renders OCR progress when a path operation reports it", () => {
+  it("renders the confirm form", () => {
     const html = renderToStaticMarkup(
       <OcrDialog
-        phase="processing"
+        phase="confirm"
         pageCount={5}
-        progress={{
-          jobToken: "job-1",
-          phase: "ocr",
-          description: "OCR",
-          completed: 2.5,
-          total: 5,
-          unit: "page",
-        }}
         onConfirm={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
 
-    expect(html).toContain("Making searchable: 2 of 5 pages");
-    expect(html).toContain("long-process-loader__progress-bar");
-    expect(html).toContain("width:30px;height:30px");
+    expect(html).toContain("All 5 pages will be processed.");
+    expect(html).toContain("Make searchable");
   });
 
-  it("communicates engine startup inside the OCR dialog while the run is starting", () => {
+  it("returns no dialog for running phases", () => {
     const html = renderToStaticMarkup(
       <OcrDialog
         phase="starting-engine"
@@ -37,8 +28,21 @@ describe("OcrDialog", () => {
       />,
     );
 
-    expect(html).toContain("Getting things ready");
-    expect(html).toContain("role=\"status\"");
-    expect(html).toContain("data-phase=\"starting-engine\"");
+    expect(html).toBe("");
+  });
+
+  it("restores the configure dialog with the OCR error", () => {
+    const html = renderToStaticMarkup(
+      <OcrDialog
+        phase="error"
+        pageCount={2}
+        errorMessage="OCR could not finish."
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("OCR could not finish.");
+    expect(html).toContain("Try again");
   });
 });

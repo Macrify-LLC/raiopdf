@@ -167,6 +167,7 @@ export async function buildFilingPacket(
   const documents: FilingPacketDocumentResult[] = [];
   const allOutputFiles: FilingPacketOutputFile[] = [];
   const combinedHandles: PdfDocumentHandle[] = [];
+  let finalized = false;
 
   try {
     for (let index = 0; index < options.sources.length; index += 1) {
@@ -314,6 +315,7 @@ export async function buildFilingPacket(
     session.recordDetail("filingPacket", packetJson);
 
     await session.finalize();
+    finalized = true;
     const manifest = await readPackageManifest(options.outputDir);
 
     return {
@@ -330,6 +332,9 @@ export async function buildFilingPacket(
   } finally {
     for (const item of opened.reverse()) {
       await item.engine.close(item.handle).catch(() => undefined);
+    }
+    if (!finalized) {
+      await session.abort().catch(() => undefined);
     }
   }
 }

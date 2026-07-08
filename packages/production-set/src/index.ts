@@ -82,6 +82,19 @@ interface OpenedHandle {
   handle: PdfDocumentHandle;
 }
 
+interface ProductionSourcePlan {
+  sourcePath: string;
+  sourceFilename: string;
+  sourceSha256: string;
+  original: PdfDocumentHandle;
+  pages: number;
+  firstNumber: number;
+  lastNumber: number;
+  batesStart: string;
+  batesEnd: string;
+  designation: string;
+}
+
 interface NormalizedInput {
   sources: readonly ProductionSourceInput[];
   outputDir: string;
@@ -107,45 +120,37 @@ export async function buildProductionSet(
   engine: PdfEngine = createLocalPdfEngine(),
 ): Promise<ProductionSetResult> {
   const options = normalizeInput(input);
-  const session = createPackage(options.outputDir, {
-    appVersion: options.appVersion,
-    createdAt: options.createdAt,
-    confirmCurrentRequirements:
-      "Confirm current production protocol, protective order, and delivery format before service.",
-  });
   const opened: OpenedHandle[] = [];
   const stampedForCombined: PdfDocumentHandle[] = [];
   const files: ProductionSetFileResult[] = [];
   const volumeArtifacts: VolumeUploadArtifact[] = [];
-  let running = options.start;
   const volume: VolumeState | null = options.volumeBytes === null ? null : createVolume(1);
+  let session: ReturnType<typeof createPackage> | undefined;
+  let finalized = false;
 
   try {
-    for (const source of options.sources) {
-      const sourcePath = path.resolve(source.path);
-      const sourceBytes = await fs.readFile(sourcePath);
-      const sourceSha256 = sha256Hex(sourceBytes);
-      const sourceFilename = path.basename(sourcePath);
-      const original = await engine.open(sourceBytes);
-      opened.push({ handle: original });
-      const pages = await engine.pageCount(original);
-      const firstNumber = running;
-      const lastNumber = running + pages - 1;
-      assertBatesFits(options.digits, lastNumber);
+    const sourcePlans = await prepareProductionSourcePlans(options, engine, opened);
+    session = createPackage(options.outputDir, {
+      appVersion: options.appVersion,
+      createdAt: options.createdAt,
+      confirmCurrentRequirements:
+        "Confirm current production protocol, protective order, and delivery format before service.",
+    });
+    const running = sourcePlans.length === 0 ? options.start : sourcePlans[sourcePlans.length - 1]!.lastNumber + 1;
 
-      let produced = await engine.batesStamp(original, {
+    for (const plan of sourcePlans) {
+      let produced = await engine.batesStamp(plan.original, {
         prefix: options.prefix,
-        start: firstNumber,
+        start: plan.firstNumber,
         digits: options.digits,
         placement: BATES_PLACEMENT,
         fontSizePt: 10,
       });
       opened.push({ handle: produced });
 
-      const designation = normalizeDesignation(source.designation);
-      if (designation !== "") {
+      if (plan.designation !== "") {
         produced = await engine.stampText(produced, {
-          text: designation,
+          text: plan.designation,
           pageIndexes: "all",
           placement: DESIGNATION_PLACEMENT,
           fontSizePt: 10,
@@ -154,18 +159,16 @@ export async function buildProductionSet(
       }
 
       const outputBytes = await engine.saveToBytes(produced);
-      const batesStart = formatBates(options.prefix, firstNumber, options.digits);
-      const batesEnd = formatBates(options.prefix, lastNumber, options.digits);
-      const outputName = `${batesStart} - ${batesEnd} - ${safePdfName(sourceFilename)}`;
+      const outputName = `${plan.batesStart} - ${plan.batesEnd} - ${safePdfName(plan.sourceFilename)}`;
       const volumeName = assignVolume(volume, outputName, outputBytes.byteLength, options.volumeBytes);
       const packageName = volumeName === null ? outputName : `${volumeName}/${outputName}`;
       const entry = await session.addUploadFile(outputBytes, packageName, {
-        pages,
-        sourceFilename,
-        sourceSha256,
-        batesStart,
-        batesEnd,
-        designation,
+        pages: plan.pages,
+        sourceFilename: plan.sourceFilename,
+        sourceSha256: plan.sourceSha256,
+        batesStart: plan.batesStart,
+        batesEnd: plan.batesEnd,
+        designation: plan.designation,
       });
       volumeArtifacts.push({
         outputName,
@@ -174,23 +177,22 @@ export async function buildProductionSet(
       });
 
       files.push({
-        sourcePath,
-        sourceFilename,
-        sourceSha256,
+        sourcePath: plan.sourcePath,
+        sourceFilename: plan.sourceFilename,
+        sourceSha256: plan.sourceSha256,
         outputName,
         packageRelativePath: entry.relativePath,
-        batesStart,
-        batesEnd,
-        firstNumber,
-        lastNumber,
-        pages,
-        designation,
+        batesStart: plan.batesStart,
+        batesEnd: plan.batesEnd,
+        firstNumber: plan.firstNumber,
+        lastNumber: plan.lastNumber,
+        pages: plan.pages,
+        designation: plan.designation,
         sha256: entry.sha256,
         bytes: entry.bytes,
         volume: volumeName,
       });
       stampedForCombined.push(produced);
-      running = lastNumber + 1;
     }
 
     const indexRows = files.map(toIndexRow);
@@ -299,6 +301,7 @@ export async function buildProductionSet(
     });
 
     await session.finalize();
+    finalized = true;
     const manifest = await readPackageManifest(options.outputDir);
 
     return {
@@ -319,6 +322,58 @@ export async function buildProductionSet(
     for (const { handle } of opened.reverse()) {
       await engine.close(handle).catch(() => undefined);
     }
+    if (!finalized && session !== undefined) {
+      await session.abort().catch(() => undefined);
+    }
+  }
+}
+
+async function prepareProductionSourcePlans(
+  options: NormalizedInput,
+  engine: PdfEngine,
+  opened: OpenedHandle[],
+): Promise<ProductionSourcePlan[]> {
+  const scanned: Array<Omit<ProductionSourcePlan, "firstNumber" | "lastNumber" | "batesStart" | "batesEnd">> = [];
+
+  try {
+    for (const source of options.sources) {
+      const sourcePath = path.resolve(source.path);
+      const sourceBytes = await fs.readFile(sourcePath);
+      const original = await engine.open(sourceBytes);
+      opened.push({ handle: original });
+
+      scanned.push({
+        sourcePath,
+        sourceFilename: path.basename(sourcePath),
+        sourceSha256: sha256Hex(sourceBytes),
+        original,
+        pages: await engine.pageCount(original),
+        designation: normalizeDesignation(source.designation),
+      });
+    }
+
+    const totalPages = scanned.reduce((sum, source) => sum + source.pages, 0);
+    assertBatesFits(options.digits, options.start + totalPages - 1);
+
+    let running = options.start;
+    return scanned.map((source) => {
+      const firstNumber = running;
+      const lastNumber = firstNumber + source.pages - 1;
+      running = lastNumber + 1;
+
+      return {
+        ...source,
+        firstNumber,
+        lastNumber,
+        batesStart: formatBates(options.prefix, firstNumber, options.digits),
+        batesEnd: formatBates(options.prefix, lastNumber, options.digits),
+      };
+    });
+  } catch (error) {
+    for (const { handle } of opened.splice(0).reverse()) {
+      await engine.close(handle).catch(() => undefined);
+    }
+    throw error;
   }
 }
 

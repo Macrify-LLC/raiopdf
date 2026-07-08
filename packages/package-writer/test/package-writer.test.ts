@@ -11,17 +11,24 @@ describe("package writer", () => {
   it("creates the package layout", async () => {
     const rootDir = await packageRoot();
 
-    createPackage(rootDir, meta());
+    const session = createPackage(rootDir, meta());
 
+    await expect(readdir(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await session.finalize();
     await expect(readdir(join(rootDir, "upload"))).resolves.toEqual([]);
-    await expect(readdir(join(rootDir, "raio-manifest"))).resolves.toEqual([]);
+    await expect(readdir(join(rootDir, "raio-manifest"))).resolves.toEqual([
+      "README.txt",
+      "checksums.txt",
+      "manifest.json",
+    ]);
   });
 
   it("writes upload files with SHA-256 and byte counts", async () => {
-    const rootDir = await packageRoot();
-    const sourcePath = join(rootDir, "source.pdf");
+    const workspace = await packageWorkspace();
+    const sourcePath = join(workspace, "source.pdf");
     await writeFile(sourcePath, "abc");
-    const session = createPackage(join(rootDir, "package"), meta());
+    const rootDir = join(workspace, "package");
+    const session = createPackage(rootDir, meta());
 
     const entry = await session.addUploadFile(sourcePath, "VOL001/filing.pdf", {
       pages: 2,
@@ -38,26 +45,30 @@ describe("package writer", () => {
       pages: 2,
       description: "Complaint",
     });
-    await expect(readFile(join(rootDir, "package", "upload", "VOL001", "filing.pdf"), "utf8"))
+    await expect(readFile(join(rootDir, "upload", "VOL001", "filing.pdf"), "utf8")).rejects
+      .toMatchObject({ code: "ENOENT" });
+    await session.finalize();
+    await expect(readFile(join(rootDir, "upload", "VOL001", "filing.pdf"), "utf8"))
       .resolves.toBe("abc");
   });
 
   it("writes root documents and keeps source paths out of README and checksums", async () => {
-    const rootDir = await packageRoot();
-    const sourcePath = join(rootDir, "source-with-sensitive-path.pdf");
+    const workspace = await packageWorkspace();
+    const sourcePath = join(workspace, "source-with-sensitive-path.pdf");
     await writeFile(sourcePath, "abc");
-    const session = createPackage(join(rootDir, "package"), meta());
+    const rootDir = join(workspace, "package");
+    const session = createPackage(rootDir, meta());
 
     await session.addUploadFile(sourcePath, "filing.pdf");
     await session.addRootDocument("Manifest.pdf", new TextEncoder().encode("index"));
     await session.finalize();
 
     const readme = await readFile(
-      join(rootDir, "package", "raio-manifest", "README.txt"),
+      join(rootDir, "raio-manifest", "README.txt"),
       "utf8",
     );
     const checksums = await readFile(
-      join(rootDir, "package", "raio-manifest", "checksums.txt"),
+      join(rootDir, "raio-manifest", "checksums.txt"),
       "utf8",
     );
 
@@ -85,6 +96,7 @@ describe("package writer", () => {
         sourcePath: "/sensitive/source/path.pdf",
       }),
     ).rejects.toThrow(/must not contain absolute paths/);
+    await session.abort();
   });
 
   it("rejects control characters in package output paths", async () => {
@@ -102,6 +114,7 @@ describe("package writer", () => {
       await expect(session.addUploadFile(bytes(testCase.label), testCase.name)).rejects.toThrow(
         /control characters/,
       );
+      await session.abort();
     }
   });
 
@@ -176,7 +189,7 @@ describe("package writer", () => {
 
   it("rejects truncated manifests", async () => {
     const rootDir = await packageRoot();
-    await mkdir(join(rootDir, "raio-manifest"));
+    await mkdir(join(rootDir, "raio-manifest"), { recursive: true });
     await writeFile(
       join(rootDir, "raio-manifest", "manifest.json"),
       `${JSON.stringify({ manifestVersion: 1 })}\n`,
@@ -224,18 +237,60 @@ describe("package writer", () => {
 
   it("refuses dirty target directories", async () => {
     const rootDir = await packageRoot();
-    createPackage(rootDir, meta());
+    const session = createPackage(rootDir, meta());
 
-    expect(() => createPackage(rootDir, meta())).toThrow(/non-empty directory/);
+    expect(() => createPackage(rootDir, meta())).toThrow(/already targeting/);
+    await session.abort();
 
     const dirtyRoot = await packageRoot();
+    await mkdir(dirtyRoot);
     await writeFile(join(dirtyRoot, "leftover.txt"), "dirty");
 
     expect(() => createPackage(dirtyRoot, meta())).toThrow(/non-empty directory/);
   });
+
+  it("accepts an existing empty target directory by claiming it before staging", async () => {
+    const rootDir = await packageRoot();
+    await mkdir(rootDir);
+
+    const session = createPackage(rootDir, meta());
+
+    await expect(readdir(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await session.addUploadFile(bytes("abc"), "filing.pdf");
+    await session.finalize();
+    await expect(readFile(join(rootDir, "upload", "filing.pdf"), "utf8")).resolves.toBe("abc");
+  });
+
+  it("removes staging and lock directories on abort", async () => {
+    const workspace = await packageWorkspace();
+    const rootDir = join(workspace, "package");
+    const session = createPackage(rootDir, meta());
+
+    await session.addUploadFile(bytes("abc"), "filing.pdf");
+    await session.abort();
+
+    await expect(readdir(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readdir(workspace)).resolves.toEqual([]);
+  });
+
+  it("deletes staging when final publish fails", async () => {
+    const workspace = await packageWorkspace();
+    const rootDir = join(workspace, "package");
+    const session = createPackage(rootDir, meta());
+
+    await session.addUploadFile(bytes("abc"), "filing.pdf");
+    await mkdir(rootDir);
+
+    await expect(session.finalize()).rejects.toThrow(/target path already exists/);
+    await expect(readdir(workspace)).resolves.toEqual(["package"]);
+  });
 });
 
 async function packageRoot(): Promise<string> {
+  return join(await packageWorkspace(), "package");
+}
+
+async function packageWorkspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "raiopdf-package-writer-"));
 }
 

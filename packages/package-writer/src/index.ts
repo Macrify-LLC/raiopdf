@@ -3,11 +3,14 @@ import {
   createReadStream,
   createWriteStream,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
+  rmSync,
+  rmdirSync,
   statSync,
 } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -96,6 +99,7 @@ export type PackageSession = {
   recordCheck(entry: PackageCheckEntry): void;
   recordDetail(key: string, value: JsonValue): void;
   finalize(): Promise<PackageManifest>;
+  abort(): Promise<void>;
 };
 
 const MANIFEST_VERSION = 1;
@@ -118,6 +122,8 @@ const RESERVED_UPLOAD_INFO_KEYS = new Set([
 
 class NodePackageSession implements PackageSession {
   private readonly rootDir: string;
+  private readonly stageDir: string;
+  private readonly lockDir: string;
   private readonly uploadDir: string;
   private readonly manifestDir: string;
   private readonly provenance: PackageManifest["provenance"];
@@ -129,27 +135,58 @@ class NodePackageSession implements PackageSession {
   private readonly details: Record<string, JsonValue> = {};
   private readonly writtenRelativePaths = new Set<string>();
   private finalized = false;
+  private aborted = false;
+  private failed = false;
 
   constructor(rootDir: string, meta: PackageProvenance) {
     this.rootDir = resolve(rootDir);
-    this.uploadDir = join(this.rootDir, UPLOAD_DIR_NAME);
-    this.manifestDir = join(this.rootDir, MANIFEST_DIR_NAME);
     this.provenance = normalizeProvenance(meta);
 
     if (existsSync(this.rootDir)) {
       const rootStat = statSync(this.rootDir);
       if (!rootStat.isDirectory()) {
-        throw new Error(`Refusing to create a package: ${this.rootDir} is not a directory.`);
+        throw new Error(`Refusing to create a package: target path already exists at ${this.rootDir}.`);
       }
 
       const entries = readdirSync(this.rootDir);
       if (entries.length > 0) {
         throw new Error(`Refusing to create a package in non-empty directory: ${this.rootDir}`);
       }
+
+      rmdirSync(this.rootDir);
     }
 
-    mkdirSync(this.uploadDir, { recursive: true });
-    mkdirSync(this.manifestDir, { recursive: true });
+    const parentDir = dirname(this.rootDir);
+    const rootName = basename(this.rootDir);
+    mkdirSync(parentDir, { recursive: true });
+    this.lockDir = join(parentDir, `.${rootName}.lock`);
+    try {
+      mkdirSync(this.lockDir);
+    } catch (error) {
+      throw new Error(
+        `Refusing to create a package: another package session is already targeting ${this.rootDir}.`,
+        { cause: error },
+      );
+    }
+
+    let stageDir: string | undefined;
+    try {
+      stageDir = mkdtempSync(join(parentDir, `.${rootName}.tmp-`));
+      this.stageDir = stageDir;
+      this.uploadDir = join(stageDir, UPLOAD_DIR_NAME);
+      this.manifestDir = join(stageDir, MANIFEST_DIR_NAME);
+      mkdirSync(this.uploadDir, { recursive: true });
+      mkdirSync(this.manifestDir, { recursive: true });
+    } catch (error) {
+      if (stageDir !== undefined) {
+        rmSync(stageDir, { recursive: true, force: true });
+      }
+      rmSync(this.lockDir, { recursive: true, force: true });
+      throw new Error(
+        `Failed to initialize package staging for ${this.rootDir}.`,
+        { cause: error },
+      );
+    }
   }
 
   async addUploadFile(
@@ -195,7 +232,7 @@ class NodePackageSession implements PackageSession {
     const normalizedName = normalizeRootDocumentName(name);
     const relativePath = normalizedName;
     this.reservePath(relativePath);
-    const targetPath = join(this.rootDir, normalizedName);
+    const targetPath = join(this.stageDir, normalizedName);
     const hashResult = await writeBytesWithHash(bytes, targetPath);
     const entry: RootDocumentEntry = {
       name: normalizedName,
@@ -251,7 +288,6 @@ class NodePackageSession implements PackageSession {
 
   async finalize(): Promise<PackageManifest> {
     this.assertOpen();
-    this.finalized = true;
 
     const manifest: PackageManifest = {
       manifestVersion: MANIFEST_VERSION,
@@ -264,22 +300,49 @@ class NodePackageSession implements PackageSession {
       details: this.details,
     };
 
-    const manifestPath = join(this.manifestDir, MANIFEST_FILE_NAME);
-    const readmePath = join(this.manifestDir, README_FILE_NAME);
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
-    await writeFile(readmePath, `${MANIFEST_README}\n`, { flag: "wx" });
+    try {
+      const manifestPath = join(this.manifestDir, MANIFEST_FILE_NAME);
+      const readmePath = join(this.manifestDir, README_FILE_NAME);
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
+      await writeFile(readmePath, `${MANIFEST_README}\n`, { flag: "wx" });
 
-    const checksumEntries = await this.collectChecksumEntries();
-    const checksumLines = checksumEntries
-      .map((entry) => `${entry.sha256}  ${entry.relativePath}`)
-      .join("\n");
-    await writeFile(
-      join(this.manifestDir, CHECKSUMS_FILE_NAME),
-      `${checksumLines}${checksumLines.length === 0 ? "" : "\n"}`,
-      { flag: "wx" },
-    );
+      const checksumEntries = await this.collectChecksumEntries();
+      const checksumLines = checksumEntries
+        .map((entry) => `${entry.sha256}  ${entry.relativePath}`)
+        .join("\n");
+      await writeFile(
+        join(this.manifestDir, CHECKSUMS_FILE_NAME),
+        `${checksumLines}${checksumLines.length === 0 ? "" : "\n"}`,
+        { flag: "wx" },
+      );
 
-    return manifest;
+      // Keep publication portable: Node rename is atomic within one directory, but replacing
+      // an existing directory is not safe across Windows/open-handle cases.
+      if (existsSync(this.rootDir)) {
+        throw new Error(
+          `Refusing to publish package: target path already exists at ${this.rootDir}. ` +
+            "Atomic package finalization does not replace existing directories or open handles.",
+        );
+      }
+
+      await rename(this.stageDir, this.rootDir);
+      await this.removeLockDir();
+      this.finalized = true;
+      return manifest;
+    } catch (error) {
+      this.failed = true;
+      await this.cleanupSessionPaths();
+      throw error;
+    }
+  }
+
+  async abort(): Promise<void> {
+    if (this.finalized || this.aborted) {
+      return;
+    }
+
+    this.aborted = true;
+    await this.cleanupSessionPaths();
   }
 
   private reservePath(relativePath: string): void {
@@ -293,6 +356,12 @@ class NodePackageSession implements PackageSession {
   private assertOpen(): void {
     if (this.finalized) {
       throw new Error("Package session has already been finalized.");
+    }
+    if (this.aborted) {
+      throw new Error("Package session has been aborted.");
+    }
+    if (this.failed) {
+      throw new Error("Package session has failed and its staging directory was removed.");
     }
   }
 
@@ -312,6 +381,22 @@ class NodePackageSession implements PackageSession {
     ];
 
     return entries.sort((a, b) => compareRelativePath(a.relativePath, b.relativePath));
+  }
+
+  private async removeStageDir(): Promise<void> {
+    await rm(this.stageDir, { recursive: true, force: true });
+  }
+
+  private async removeLockDir(): Promise<void> {
+    await rm(this.lockDir, { recursive: true, force: true });
+  }
+
+  private async cleanupSessionPaths(): Promise<void> {
+    const results = await Promise.allSettled([this.removeStageDir(), this.removeLockDir()]);
+    const rejection = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (rejection) {
+      throw rejection.reason;
+    }
   }
 }
 

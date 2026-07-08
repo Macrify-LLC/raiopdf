@@ -6,7 +6,8 @@ import type {
 } from "@raiopdf/engine-api";
 import type { JurisdictionPack } from "@raiopdf/rules";
 
-type FilingPartEngine = Pick<PdfEngine, "pageCount" | "saveToBytes" | "splitByMaxBytes">;
+type FilingPartEngine = Pick<PdfEngine, "close" | "pageCount" | "saveToBytes" | "splitByMaxBytes">;
+type SplitResult = { parts: readonly PdfSplitPart[] };
 
 export interface PreparedFilingOutputPart {
   bytes: Uint8Array;
@@ -56,32 +57,67 @@ export async function prepareFilingOutputParts({
     ? splitResult.parts.map((part) => part.document)
     : [];
 
-  const parts = await Promise.all(
-    splitResult.parts.map(async (part, index) => {
-      const splitBytes = await engine.saveToBytes(part.document);
-      const bytes = pdfAConversion
-        ? await pdfAConversion.convert(splitBytes, pdfAConversion.flavor)
-        : splitBytes;
+  try {
+    const parts = await Promise.all(
+      splitResult.parts.map(async (part, index) => {
+        const splitBytes = await engine.saveToBytes(part.document);
+        const bytes = pdfAConversion
+          ? await pdfAConversion.convert(splitBytes, pdfAConversion.flavor)
+          : splitBytes;
 
-      return {
-        bytes,
-        fileName: formatFileName(baseName, pack, index + 1, splitResult.parts.length),
-        pageIndexes: part.pageIndexes,
-        oversized: part.oversized || (splitBySize && bytes.byteLength > splitTargetBytes),
-      };
-    }),
+        return {
+          bytes,
+          fileName: formatFileName(baseName, pack, index + 1, splitResult.parts.length),
+          pageIndexes: part.pageIndexes,
+          oversized: part.oversized || (splitBySize && bytes.byteLength > splitTargetBytes),
+        };
+      }),
+    );
+    assertNoHardCapViolations(parts, pack);
+
+    return {
+      parts,
+      handlesToClose,
+    };
+  } catch (error) {
+    await Promise.all(handlesToClose.map((handle) => engine.close(handle).catch(() => undefined)));
+    throw error;
+  }
+}
+
+function assertNoHardCapViolations(
+  parts: readonly PreparedFilingOutputPart[],
+  pack: JurisdictionPack,
+): void {
+  if (pack.maxFileBytes === undefined) {
+    return;
+  }
+
+  const maxFileBytes = pack.maxFileBytes;
+  const overCap = parts.filter((part) => part.bytes.byteLength > maxFileBytes);
+  if (overCap.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `Filing output was not saved because ${describeOverCapParts(overCap)} exceeded the ${formatBytes(maxFileBytes)} portal cap.`,
   );
+}
 
-  return {
-    parts,
-    handlesToClose,
-  };
+function describeOverCapParts(parts: readonly PreparedFilingOutputPart[]): string {
+  return parts
+    .map((part) => `${part.fileName} (${formatBytes(part.bytes.byteLength)})`)
+    .join(", ");
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 async function singleFilingPart(
   engine: Pick<PdfEngine, "pageCount" | "saveToBytes">,
   document: PdfDocumentHandle,
-): Promise<{ parts: readonly PdfSplitPart[] }> {
+): Promise<SplitResult> {
   const bytes = await engine.saveToBytes(document);
   const pageCount = await engine.pageCount(document);
 

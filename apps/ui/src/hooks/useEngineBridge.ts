@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
 import type {
   PdfAFlavor,
@@ -108,6 +108,13 @@ export class EngineBridgeUnavailableError extends Error {
   }
 }
 
+class EngineStartSupersededError extends Error {
+  constructor() {
+    super("Engine start was superseded.");
+    this.name = "EngineStartSupersededError";
+  }
+}
+
 export function isEngineBridgeUnavailableError(
   error: unknown,
 ): error is EngineBridgeUnavailableError {
@@ -121,6 +128,8 @@ export function useEngineBridge(): EngineBridge {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<SidecarPdfEngine | null>(null);
+  const engineGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
   const ocrToolchainMissingRef = useRef<readonly string[]>([]);
   // Dedupe concurrent ensureEngine() callers behind one in-flight start so
   // two operations kicked off back-to-back don't both invoke engine_start.
@@ -128,18 +137,39 @@ export function useEngineBridge(): EngineBridge {
   // later attempts.
   const inFlightStartRef = useRef<Promise<SidecarPdfEngine> | null>(null);
 
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      engineGenerationRef.current += 1;
+      engineRef.current = null;
+      inFlightStartRef.current = null;
+    };
+  }, []);
+
+  const isCurrentEngineGeneration = useCallback((generation: number): boolean => (
+    mountedRef.current && engineGenerationRef.current === generation
+  ), []);
+
   const setMissingOcrToolchain = useCallback((missing: readonly string[]) => {
     ocrToolchainMissingRef.current = missing;
     setOcrToolchainMissing(missing);
   }, []);
 
   const startEngine = useCallback(async (): Promise<SidecarPdfEngine> => {
+    const generation = engineGenerationRef.current + 1;
+    engineGenerationRef.current = generation;
     setStarting(true);
     setError(null);
 
     try {
       const invoke = await getTauriInvoke();
       const response = await invoke<EngineStartResponse>("engine_start");
+
+      if (!isCurrentEngineGeneration(generation)) {
+        throw new EngineStartSupersededError();
+      }
 
       if (response.disabled) {
         // Genuine "no engine in this installation" — the only case that
@@ -173,17 +203,33 @@ export function useEngineBridge(): EngineBridge {
 
       return engine;
     } catch (caught) {
+      if (caught instanceof EngineStartSupersededError) {
+        throw caught;
+      }
       if (caught instanceof EngineBridgeUnavailableError) {
         throw caught;
       }
 
       const message = "The PDF engine could not be started.";
-      setError(message);
+      if (isCurrentEngineGeneration(generation)) {
+        setError(message);
+      }
       throw new Error(message, { cause: caught });
     } finally {
-      setStarting(false);
+      if (isCurrentEngineGeneration(generation)) {
+        setStarting(false);
+      }
     }
-  }, [setMissingOcrToolchain]);
+  }, [isCurrentEngineGeneration, setMissingOcrToolchain]);
+
+  const invalidateEngine = useCallback((engine: SidecarPdfEngine): void => {
+    if (engineRef.current !== engine) {
+      return;
+    }
+
+    engineGenerationRef.current += 1;
+    engineRef.current = null;
+  }, []);
 
   const ensureEngine = useCallback((): Promise<SidecarPdfEngine> => {
     if (!runtimeAvailable || disabled) {
@@ -222,7 +268,7 @@ export function useEngineBridge(): EngineBridge {
 
   const runOcr = useCallback(
     (bytes: Uint8Array, options: RunOcrOptions = {}) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         if (ocrToolchainMissingRef.current.length > 0) {
           throw new EngineBridgeUnavailableError(
             "OCR toolchain missing from this installation.",
@@ -244,13 +290,13 @@ export function useEngineBridge(): EngineBridge {
             ? { knownPageCount: options.pageCount }
             : {}),
         });
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const redactAreas = useCallback(
     (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -262,13 +308,13 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const convertToPdfA = useCallback(
     (bytes: Uint8Array, flavor: PdfAFlavor) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -283,13 +329,13 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const compress = useCallback(
     (bytes: Uint8Array, options: PdfCompressOptions) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -301,23 +347,23 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const removeEncryption = useCallback(
     (bytes: Uint8Array, password: string, options: RemoveEncryptionOptions = {}) =>
-      withEngineRetry(ensureEngine, engineRef, (engine) => {
+      withEngineRetry(ensureEngine, (engine) => {
         options.onEngineReady?.();
 
         return engine.removeEncryption(bytes, password);
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const sanitize = useCallback(
     (bytes: Uint8Array, options: PdfSanitizeOptions = {}) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -333,19 +379,19 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const repair = useCallback(
     (bytes: Uint8Array) =>
-      withEngineRetry(ensureEngine, engineRef, (engine) => engine.repairBytes(bytes)),
-    [ensureEngine],
+      withEngineRetry(ensureEngine, (engine) => engine.repairBytes(bytes), invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const replaceText = useCallback(
     (bytes: Uint8Array, options: ReplaceTextBridgeOptions) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -362,13 +408,13 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const inspectTextMap = useCallback(
     (bytes: Uint8Array, options: PdfInspectTextMapOptions = {}) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
 
         try {
@@ -376,13 +422,13 @@ export function useEngineBridge(): EngineBridge {
         } finally {
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   const replaceSelectedText = useCallback(
     (bytes: Uint8Array, options: ReplaceSelectedTextBridgeOptions) =>
-      withEngineRetry(ensureEngine, engineRef, async (engine) => {
+      withEngineRetry(ensureEngine, async (engine) => {
         const sourceHandle = await engine.open(bytes);
         let outputHandle: PdfDocumentHandle | null = null;
 
@@ -398,8 +444,8 @@ export function useEngineBridge(): EngineBridge {
           await closeHandle(engine, outputHandle);
           await closeHandle(engine, sourceHandle);
         }
-      }),
-    [ensureEngine],
+      }, invalidateEngine),
+    [ensureEngine, invalidateEngine],
   );
 
   return {
@@ -432,8 +478,8 @@ export function useEngineBridge(): EngineBridge {
  */
 async function withEngineRetry<T>(
   ensureEngine: () => Promise<SidecarPdfEngine>,
-  engineRef: MutableRefObject<SidecarPdfEngine | null>,
   run: (engine: SidecarPdfEngine) => Promise<T>,
+  invalidateEngine: (engine: SidecarPdfEngine) => void,
 ): Promise<T> {
   const engine = await ensureEngine();
 
@@ -444,11 +490,7 @@ async function withEngineRetry<T>(
       throw error;
     }
 
-    // Generation-safe: a concurrent caller may already have installed a
-    // fresh engine while this one was failing -- don't wipe that out.
-    if (engineRef.current === engine) {
-      engineRef.current = null;
-    }
+    invalidateEngine(engine);
 
     const freshEngine = await ensureEngine();
 

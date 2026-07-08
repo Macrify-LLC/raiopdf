@@ -1,4 +1,5 @@
 import {
+  decodePDFRawStream,
   PDFArray,
   PDFBool,
   PDFDict,
@@ -7,7 +8,9 @@ import {
   PDFName,
   PDFNull,
   PDFNumber,
+  PDFRawStream,
   PDFRef,
+  PDFStream,
   PDFString,
   type PDFObject,
 } from "pdf-lib";
@@ -94,6 +97,7 @@ export async function buildDocumentFacts(
   const facts: DocumentFacts = {
     ...base,
     pages: readPageFacts(pdf),
+    pdfaClaimed: readPdfAClaimed(pdf),
   };
 
   try {
@@ -608,6 +612,46 @@ function asDict(object: PDFObject): PDFDict | undefined {
 
 function nameValue(name: PDFName | undefined): string | undefined {
   return name?.decodeText();
+}
+
+function readPdfAClaimed(pdf: PDFDocument): boolean {
+  const xmp = readCatalogXmp(pdf);
+
+  if (!xmp) {
+    return false;
+  }
+
+  return matchXmpValue(xmp, "part", /\d+/) !== null;
+}
+
+function readCatalogXmp(pdf: PDFDocument): string | null {
+  try {
+    const stream = pdf.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+
+    if (!(stream instanceof PDFRawStream)) {
+      return null;
+    }
+
+    const contents = stream.dict.has(PDFName.of("Filter"))
+      ? decodePDFRawStream(stream).decode()
+      : stream.contents;
+
+    return new TextDecoder("utf-8", { fatal: false }).decode(contents);
+  } catch {
+    return null;
+  }
+}
+
+function matchXmpValue(xmp: string, tag: string, valuePattern: RegExp): string | null {
+  const element = new RegExp(`<pdfaid:${tag}[^>]*>\\s*(${valuePattern.source})\\s*<`).exec(xmp);
+
+  if (element?.[1]) {
+    return element[1];
+  }
+
+  const attribute = new RegExp(`pdfaid:${tag}\\s*=\\s*"(${valuePattern.source})"`).exec(xmp);
+
+  return attribute?.[1] ?? null;
 }
 
 function normalizeRotation(angle: number): number {

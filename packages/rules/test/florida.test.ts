@@ -9,6 +9,7 @@ import {
   unknownPack,
   verifyAppDataPackIntegrity,
   verifyBundledPackIntegrity,
+  type DocumentFacts,
   type PackManifest,
   type PdfAStance,
 } from "../src/index";
@@ -526,12 +527,12 @@ describe("Florida jurisdiction pack", () => {
     })).toBe(false);
   });
 
-  it("preflights PDF/A per stance without ever converting outside the allow-list", () => {
+  it("preflights PDF/A claims separately from validator-backed compliance", () => {
     const packWithStance = (stance: PdfAStance) => ({
       ...floridaPack,
       pdfa: { ...floridaPack.pdfa, stance },
     });
-    const facts = (pdfaCompliant: boolean | undefined) => ({
+    const facts = (pdfa: Pick<DocumentFacts, "pdfaClaimed" | "pdfaCompliant">) => ({
       pages: [
         {
           pageIndex: 0,
@@ -539,22 +540,48 @@ describe("Florida jurisdiction pack", () => {
           orientation: "portrait" as const,
         },
       ],
-      ...(pdfaCompliant === undefined ? {} : { pdfaCompliant }),
+      ...pdfa,
     });
-    const pdfaStatus = (stance: PdfAStance, pdfaCompliant: boolean | undefined) =>
-      preflight(facts(pdfaCompliant), packWithStance(stance))
-        .checks.find((check) => check.checkId === "pdfa")?.status;
+    const pdfaCheck = (stance: PdfAStance, pdfa: Pick<DocumentFacts, "pdfaClaimed" | "pdfaCompliant">) =>
+      preflight(facts(pdfa), packWithStance(stance))
+        .checks.find((check) => check.checkId === "pdfa");
 
-    expect(pdfaStatus("required", false)).toBe("warn");
-    expect(pdfaStatus("preferred", false)).toBe("warn");
-    expect(pdfaStatus("preferred", true)).toBe("pass");
-    expect(pdfaStatus("accepted", false)).toBe("pass");
-    expect(pdfaStatus("unknown", false)).toBe("unknown");
-    // A prohibited portal treats an already-PDF/A document as outstanding portal work,
-    // and refuses to call unverified facts safe.
-    expect(pdfaStatus("prohibited", true)).toBe("warn");
-    expect(pdfaStatus("prohibited", false)).toBe("pass");
-    expect(pdfaStatus("prohibited", undefined)).toBe("unknown");
+    expect(pdfaCheck("required", { pdfaCompliant: false })).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("failed PDF/A validation"),
+    });
+    expect(pdfaCheck("preferred", { pdfaCompliant: true })).toMatchObject({
+      status: "pass",
+      detail: expect.stringContaining("validated as PDF/A compliant"),
+    });
+    expect(pdfaCheck("preferred", { pdfaClaimed: true })).toMatchObject({
+      status: "unknown",
+      detail: expect.stringContaining("claims PDF/A"),
+    });
+    expect(pdfaCheck("preferred", { pdfaClaimed: true, pdfaCompliant: false })).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("failed PDF/A validation"),
+    });
+    expect(pdfaCheck("preferred", { pdfaClaimed: false })).toMatchObject({
+      status: "unknown",
+      detail: expect.stringContaining("compliance facts were not provided"),
+    });
+    expect(pdfaCheck("accepted", { pdfaClaimed: true })).toMatchObject({ status: "pass" });
+    expect(pdfaCheck("unknown", { pdfaClaimed: true })).toMatchObject({ status: "unknown" });
+    expect(pdfaCheck("prohibited", { pdfaCompliant: true })).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("validated PDF/A"),
+    });
+    expect(pdfaCheck("prohibited", { pdfaClaimed: true })).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("claims PDF/A"),
+    });
+    expect(pdfaCheck("prohibited", { pdfaCompliant: false })).toMatchObject({
+      status: "unknown",
+      detail: expect.stringContaining("no PDF/A claim"),
+    });
+    expect(pdfaCheck("prohibited", { pdfaClaimed: false })).toMatchObject({ status: "pass" });
+    expect(pdfaCheck("prohibited", {})).toMatchObject({ status: "unknown" });
   });
 
   it("rejects packs whose pdfa stance is missing or invalid", () => {

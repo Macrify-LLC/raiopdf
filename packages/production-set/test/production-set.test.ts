@@ -49,6 +49,23 @@ describe("buildProductionSet", () => {
     await expectPageContentToContainLabel(firstOutput, 1, "SMITH0008");
   });
 
+  it("validates the full Bates range before creating output", async () => {
+    const first = await makePdf("first.pdf", 1);
+    const second = await makePdf("second.pdf", 2);
+    const outputDir = path.join(dir, "package");
+
+    await expect(buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "RANGE",
+      start: 98,
+      digits: 2,
+    })).rejects.toThrow(/Bates numbers exceed/);
+
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(dir)).resolves.toEqual(["first.pdf", "second.pdf"]);
+  });
+
   it("stamps whole-document confidentiality designations", async () => {
     const source = await makePdf("secret.pdf", 2);
     const outputDir = path.join(dir, "package");

@@ -168,6 +168,12 @@ const DEFAULT_COMPRESSION_QUALITY = 5;
 const DEFAULT_SPLIT_SIZE_MB = 25;
 const SIDE_CAR_OPERATIONS = new Set(["remove-encryption", "repair", "sanitize", "ocr", "compress", "pdfa"]);
 
+class BatchPackageWriteError extends Error {
+  constructor(readonly originalError: unknown) {
+    super("Batch package write failed.");
+  }
+}
+
 export async function runBatchCleanup(
   input: BatchCleanupInput,
   engines: BatchCleanupEngines = {},
@@ -192,60 +198,68 @@ export async function runBatchCleanup(
   });
   const files: BatchCleanupFileResult[] = [];
   const outputNames = new Set<string>();
+  let finalized = false;
 
-  for (const source of options.sources) {
-    files.push(await processFile(source, options, localEngine, sidecarEngine, session, outputNames));
-  }
+  try {
+    for (const source of options.sources) {
+      files.push(await processFile(source, options, localEngine, sidecarEngine, session, outputNames));
+    }
 
-  const reportJson = toMachineReport(options, files);
-  const reportJsonEntry = await session.addManifestJson("batch-report.json", reportJson);
-  const reportPdfEntry = await session.addRootDocument(
-    "batch-report.pdf",
-    await createBatchReportPdf(options, files),
-  );
+    const reportJson = toMachineReport(options, files);
+    const reportJsonEntry = await session.addManifestJson("batch-report.json", reportJson);
+    const reportPdfEntry = await session.addRootDocument(
+      "batch-report.pdf",
+      await createBatchReportPdf(options, files),
+    );
 
-  session.recordDetail("batchSources", files.map((file) => ({
-    sourcePath: file.sourcePath,
-    sourceFilename: file.sourceFilename,
-    sourceSha256: file.sourceSha256,
-    status: file.status,
-    reason: file.reason,
-    signatureInvalidated: file.signatureInvalidated,
-    signatureDetection: file.signatureDetection,
-    outputs: file.outputs.map((output) => ({
-      outputName: output.outputName,
-      packageRelativePath: output.packageRelativePath,
-      pages: output.pages,
-      bytes: output.bytes,
-      sha256: output.sha256,
-    })),
-  })));
-  session.recordDetail("batchOptions", {
-    packId: options.pack?.id ?? null,
-    operations: operationsToJson(options.operations),
-  });
-  if (input.operations?.splitSizeMb !== undefined) {
-    session.recordOverride({
-      type: "batch-split-size",
-      valueMb: input.operations.splitSizeMb,
+    session.recordDetail("batchSources", files.map((file) => ({
+      sourcePath: file.sourcePath,
+      sourceFilename: file.sourceFilename,
+      sourceSha256: file.sourceSha256,
+      status: file.status,
+      reason: file.reason,
+      signatureInvalidated: file.signatureInvalidated,
+      signatureDetection: file.signatureDetection,
+      outputs: file.outputs.map((output) => ({
+        outputName: output.outputName,
+        packageRelativePath: output.packageRelativePath,
+        pages: output.pages,
+        bytes: output.bytes,
+        sha256: output.sha256,
+      })),
+    })));
+    session.recordDetail("batchOptions", {
+      packId: options.pack?.id ?? null,
+      operations: operationsToJson(options.operations),
     });
+    if (input.operations?.splitSizeMb !== undefined) {
+      session.recordOverride({
+        type: "batch-split-size",
+        valueMb: input.operations.splitSizeMb,
+      });
+    }
+    session.recordCheck({
+      checkId: "batch-serial-execution",
+      status: "pass",
+      detail: "Batch cleanup runs one file at a time; a file failure does not stop the queue.",
+    });
+
+    await session.finalize();
+    finalized = true;
+    const manifest = await readPackageManifest(options.outputDir);
+
+    return {
+      packageRoot: path.resolve(options.outputDir),
+      files,
+      reportPdf: reportPdfEntry.relativePath,
+      reportJson: reportJsonEntry.relativePath,
+      manifest,
+    };
+  } finally {
+    if (!finalized) {
+      await session.abort().catch(() => undefined);
+    }
   }
-  session.recordCheck({
-    checkId: "batch-serial-execution",
-    status: "pass",
-    detail: "Batch cleanup runs one file at a time; a file failure does not stop the queue.",
-  });
-
-  await session.finalize();
-  const manifest = await readPackageManifest(options.outputDir);
-
-  return {
-    packageRoot: path.resolve(options.outputDir),
-    files,
-    reportPdf: reportPdfEntry.relativePath,
-    reportJson: reportJsonEntry.relativePath,
-    manifest,
-  };
 }
 
 function normalizeInput(
@@ -412,15 +426,12 @@ async function processFile(
         continue;
       }
       const outputName = reserveOutputName(outputNameFor(sourceFilename, produced.length, index), outputNames);
-      const entry = await session.addUploadFile(item.bytes, outputName, {
-        pages: item.pages,
+      const entry = await addBatchUploadFile(session, item, outputName, {
         sourceFilename,
         sourceSha256,
         operations: plan.operations,
         signatureInvalidated,
         signatureDetection,
-        ...(item.pageIndexes === undefined ? {} : { pageIndexes: [...item.pageIndexes] }),
-        ...(item.oversized === undefined ? {} : { oversized: item.oversized }),
       });
       outputs.push({
         outputName,
@@ -448,6 +459,10 @@ async function processFile(
       outputs,
     });
   } catch (error) {
+    if (error instanceof BatchPackageWriteError) {
+      throw error.originalError;
+    }
+
     return fileResult({
       sourcePath,
       sourceFilename,
@@ -462,6 +477,34 @@ async function processFile(
       facts: reportFacts,
       outputs: [],
     });
+  }
+}
+
+async function addBatchUploadFile(
+  session: ReturnType<typeof createPackage>,
+  item: ProducedPdf,
+  outputName: string,
+  info: {
+    sourceFilename: string;
+    sourceSha256: string;
+    operations: readonly string[];
+    signatureInvalidated: boolean;
+    signatureDetection: SignatureDetectionFacts | null;
+  },
+) {
+  try {
+    return await session.addUploadFile(item.bytes, outputName, {
+      pages: item.pages,
+      sourceFilename: info.sourceFilename,
+      sourceSha256: info.sourceSha256,
+      operations: [...info.operations],
+      signatureInvalidated: info.signatureInvalidated,
+      signatureDetection: info.signatureDetection,
+      ...(item.pageIndexes === undefined ? {} : { pageIndexes: [...item.pageIndexes] }),
+      ...(item.oversized === undefined ? {} : { oversized: item.oversized }),
+    });
+  } catch (error) {
+    throw new BatchPackageWriteError(error);
   }
 }
 

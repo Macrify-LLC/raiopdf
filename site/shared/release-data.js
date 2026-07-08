@@ -96,6 +96,92 @@
     };
   }
 
+  // --- Compact "Latest update" notes ---------------------------------------
+  // Our GitHub Release bodies are written Keep-a-Changelog style
+  // (### Added / ### Changed / ### Fixed …). The landing card shows a compact
+  // slice of the newest release's notes; everything is parsed to PLAIN TEXT so
+  // the caller can insert it via textContent — zero HTML-injection surface.
+  const NOTE_SECTIONS = ["Added", "Changed", "Fixed", "Removed", "Security", "Deprecated"];
+  const NOTE_MAX_SECTIONS = 2;
+  const NOTE_MAX_ITEMS_PER_SECTION = 3;
+
+  function stripInlineMarkdown(text) {
+    return (text || "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // [label](url) -> label
+      .replace(/`([^`]+)`/g, "$1") // `code` -> code
+      .replace(/\*\*([^*]+)\*\*/g, "$1") // **bold** -> bold
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // A release bullet often leads with a bold summary ("**Export to Word.** …").
+  // Prefer that lead as the crisp one-line item; otherwise take the first sentence.
+  function compactBullet(rawText) {
+    const boldLead = /^\*\*([^*]+?)\*\*/.exec(rawText);
+    if (boldLead) return stripInlineMarkdown(boldLead[1]).replace(/[.:]\s*$/, "");
+    const plain = stripInlineMarkdown(rawText);
+    const firstSentence = plain.split(/\.\s/)[0];
+    return firstSentence ? firstSentence.replace(/\.$/, "") : plain;
+  }
+
+  function extractHeadline(markdown) {
+    const beforeFirstHeading = markdown.split(/\n#{1,6}\s/)[0];
+    const bold = /\*\*([^*]+)\*\*/.exec(beforeFirstHeading);
+    return bold ? stripInlineMarkdown(bold[1]) : null;
+  }
+
+  /**
+   * Parses a GitHub release body into a compact, plain-text shape for the card:
+   *   { headline: string|null, sections: [{ title, items: [string] }] }
+   * Returns null when there's nothing worth showing. Never throws.
+   */
+  function parseReleaseNotesCompact(markdown) {
+    if (!markdown || typeof markdown !== "string") return null;
+    const sections = [];
+    let current = null;
+    let bulletBuf = [];
+
+    function flushBullet() {
+      if (current && bulletBuf.length && current.items.length < NOTE_MAX_ITEMS_PER_SECTION) {
+        current.items.push(compactBullet(bulletBuf.join(" ").trim()));
+      }
+      bulletBuf = [];
+    }
+
+    for (const line of markdown.split(/\r?\n/)) {
+      const heading = /^#{2,6}\s+(.+?)\s*$/.exec(line);
+      if (heading) {
+        flushBullet();
+        const title = heading[1].trim();
+        const known = NOTE_SECTIONS.find((s) => s.toLowerCase() === title.toLowerCase());
+        if (known && sections.length < NOTE_MAX_SECTIONS) {
+          current = { title: known, items: [] };
+          sections.push(current);
+        } else {
+          current = null; // unknown section, or past the cap — stop collecting
+        }
+        continue;
+      }
+      const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (bullet) {
+        flushBullet();
+        bulletBuf = [bullet[1]];
+        continue;
+      }
+      if (/^\s+\S/.test(line) && bulletBuf.length) {
+        bulletBuf.push(line.trim()); // indented wrap — continuation of the bullet
+        continue;
+      }
+      flushBullet(); // blank line or prose ends the current bullet
+    }
+    flushBullet();
+
+    const filled = sections.filter((s) => s.items.length > 0);
+    const headline = extractHeadline(markdown);
+    if (!headline && filled.length === 0) return null;
+    return { headline, sections: filled };
+  }
+
   async function fetchLatestRelease() {
     const res = await fetch(`${API_BASE}/releases/latest`, { headers: GH_HEADERS });
     if (!res.ok) return null;
@@ -143,6 +229,8 @@
         version: release ? versionFromRelease(release) : null,
         publishedAt: release ? release.published_at : null,
         releaseUrl: release ? release.html_url : null,
+        releaseName: release ? release.name || release.tag_name : null,
+        notesMarkdown: release ? release.body : null,
         totalDownloads,
       };
     }
@@ -153,6 +241,8 @@
       version: assetSet.version,
       publishedAt: release.published_at,
       releaseUrl: release.html_url,
+      releaseName: release.name || release.tag_name,
+      notesMarkdown: release.body,
       downloadUrl: assetSet.installer.browser_download_url,
       downloadName: assetSet.installer.name,
       sizeBytes: assetSet.installer.size,
@@ -198,6 +288,7 @@
 
   global.RaioRelease = {
     loadReleaseInfo,
+    parseReleaseNotesCompact,
     formatBytes,
     formatDate,
     animateCount,

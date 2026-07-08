@@ -271,6 +271,11 @@
   }
   .btn--primary:hover{ box-shadow:0 22px 50px -10px rgba(245,185,66,.75); transform:translateY(-2px); }
   .btn--primary svg{ width:18px; height:18px; }
+  .btn__badge{
+    font-size:9.5px; font-weight:800; letter-spacing:.09em; text-transform:uppercase;
+    line-height:1; color:var(--navy-deep); background:rgba(11,26,46,.14);
+    border:1px solid rgba(11,26,46,.24); border-radius:999px; padding:4px 8px;
+  }
   .btn--outline{
     background:transparent; color:#fff; border:1.5px solid rgba(255,255,255,.4);
     transition:background-color .2s ease, border-color .2s ease, color .2s ease;
@@ -295,6 +300,7 @@
   @keyframes pulse-dot{ 0%,100%{ opacity:.35; } 50%{ opacity:1; } }
 
   .download-meta{ margin-top:14px; font-size:13px; color:rgba(255,255,255,.65); letter-spacing:.01em; }
+  .download-caption{ margin-top:6px; font-size:12.5px; color:rgba(255,255,255,.55); line-height:1.5; max-width:40ch; }
   .download-verify{ display:inline-block; margin-top:8px; font-size:13px; color:var(--light-blue); text-decoration:underline; text-underline-offset:3px; }
   .download-verify:hover{ color:var(--gold); }
 
@@ -318,6 +324,35 @@
     color:var(--text-primary); margin-top:10px; line-height:1.15;
   }
   .section-head p{ margin-top:12px; font-size:16px; color:var(--text-muted); max-width:52ch; }
+
+  /* ---------- latest update (compact release-notes card) ---------- */
+  .latest-update{ padding:0 24px clamp(32px, 5vw, 48px); background:var(--bg-alt); }
+  .update-card{
+    max-width:720px; background:#fff; border:1px solid var(--border); border-left:4px solid var(--gold-deep);
+    border-radius:16px; padding:26px 32px; box-shadow:0 10px 34px -18px rgba(11,26,46,.16);
+  }
+  .update-card__head{
+    display:flex; align-items:baseline; flex-wrap:wrap; justify-content:space-between; gap:8px 16px;
+    margin-bottom:14px;
+  }
+  .update-card__version{ font-size:13px; font-weight:700; color:var(--text-muted); white-space:nowrap; }
+  .update-card__headline{
+    font-family:var(--font-editorial); font-weight:400; font-size:17px;
+    line-height:1.45; color:var(--text-primary); margin-bottom:18px;
+  }
+  .update-card__sections{ display:grid; gap:16px; }
+  .update-card__section h3{
+    font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--gold-deep); margin-bottom:8px;
+  }
+  .update-card__section ul{ list-style:none; margin:0; padding:0; display:grid; gap:5px; }
+  .update-card__section li{ position:relative; padding-left:16px; font-size:14px; line-height:1.55; color:var(--text-body); }
+  .update-card__section li::before{ content:"•"; position:absolute; left:0; color:var(--gold-deep); }
+  .update-card__link{
+    display:inline-block; margin-top:20px; font-size:13.5px; font-weight:700;
+    color:var(--primary); text-decoration:underline; text-underline-offset:2px;
+  }
+  .update-card__link:hover{ color:var(--secondary); }
 
   /* ---------- philosophy section ---------- */
   .philosophy{ position:relative; overflow:hidden; background:var(--bg-alt); }
@@ -468,6 +503,7 @@
     .outcomes-grid{ grid-template-columns:1fr; }
     .outcomes-grid .outcome-card--wide{ grid-column:span 1; }
     .download-panel{ padding:22px; }
+    .update-card{ padding:20px 20px; }
     .footer__bottom{ flex-direction:column; }
     .philosophy__letter{ padding-left:18px; }
     .faq__item summary{ padding:16px 18px; gap:14px; }
@@ -746,6 +782,7 @@
       <img class="nav__logo" src="./assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
     </a>
     <nav class="nav__links" aria-label="Primary">
+      <a id="navWhatsNew" class="is-hidden" href="#latest-update">What's new</a>
       <a href="#outcomes">Features</a>
       <a href="#faq">FAQ</a>
       <a href="#inputs">How it works</a>
@@ -802,8 +839,10 @@
           <a class="btn btn--primary" id="downloadBtn" href="https://github.com/Macrify-LLC/raiopdf/releases" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
             Download for Windows
+            <span class="btn__badge">Alpha</span>
           </a>
           <p class="download-meta" id="downloadMeta"></p>
+          <p class="download-caption" id="downloadCaption">Public alpha — expect rough edges. Your files never leave your machine.</p>
           <a class="download-verify is-hidden" id="downloadVerify" href="#" target="_blank" rel="noopener">Verify the download (SHA-256) →</a>
         </div>
 
@@ -872,6 +911,22 @@
     <div class="sundiv-horizon-glow-bar"></div>
     <div class="sundiv-horizon-line"></div>
   </div>
+
+  <!-- latest update: newest release notes, compact — populated by shared/release-data.js,
+       stays hidden (and the "What's new" nav link stays hidden) if there's nothing parseable -->
+  <section class="latest-update is-hidden" id="latest-update" aria-labelledby="latest-update-heading">
+    <div class="container">
+      <div class="update-card">
+        <div class="update-card__head">
+          <span class="eyebrow" id="latest-update-heading">Latest update</span>
+          <span class="update-card__version" id="updateVersion"></span>
+        </div>
+        <p class="update-card__headline is-hidden" id="updateHeadline"></p>
+        <div class="update-card__sections" id="updateSections"></div>
+        <a class="update-card__link" id="updateNotesLink" href="#" target="_blank" rel="noopener">Full release notes →</a>
+      </div>
+    </div>
+  </section>
 
   <section class="outcomes" id="outcomes">
     <div class="container">
@@ -1241,6 +1296,65 @@
       counterEl.classList.add("is-hidden");
     }
 
+    // "Latest update" card — compact slice of the newest release's notes.
+    // Fails silently: any missing piece leaves the section (and its nav link)
+    // hidden rather than showing a broken or half-empty card.
+    function renderLatestUpdate(info) {
+      var section = document.getElementById("latest-update");
+      var navLink = document.getElementById("navWhatsNew");
+      var versionEl = document.getElementById("updateVersion");
+      var headlineEl = document.getElementById("updateHeadline");
+      var sectionsEl = document.getElementById("updateSections");
+      var linkEl = document.getElementById("updateNotesLink");
+      if (!section || !navLink || !versionEl || !headlineEl || !sectionsEl || !linkEl) return;
+      if (!info || !info.notesMarkdown) return;
+
+      var parsed = window.RaioRelease.parseReleaseNotesCompact(info.notesMarkdown);
+      if (!parsed || !parsed.sections || !parsed.sections.length) return;
+
+      var versionParts = [];
+      if (info.version) versionParts.push("v" + info.version);
+      if (info.publishedAt) versionParts.push(window.RaioRelease.formatDate(info.publishedAt));
+      versionEl.textContent = versionParts.join(" · ");
+
+      if (parsed.headline) {
+        headlineEl.textContent = parsed.headline;
+        headlineEl.classList.remove("is-hidden");
+      } else {
+        headlineEl.classList.add("is-hidden");
+      }
+
+      sectionsEl.textContent = "";
+      parsed.sections.forEach(function (sec) {
+        var wrap = document.createElement("div");
+        wrap.className = "update-card__section";
+
+        var h3 = document.createElement("h3");
+        h3.textContent = sec.title;
+        wrap.appendChild(h3);
+
+        var ul = document.createElement("ul");
+        sec.items.forEach(function (item) {
+          var li = document.createElement("li");
+          li.textContent = item;
+          ul.appendChild(li);
+        });
+        wrap.appendChild(ul);
+
+        sectionsEl.appendChild(wrap);
+      });
+
+      if (info.releaseUrl) {
+        linkEl.href = info.releaseUrl;
+        linkEl.classList.remove("is-hidden");
+      } else {
+        linkEl.classList.add("is-hidden");
+      }
+
+      section.classList.remove("is-hidden");
+      navLink.classList.remove("is-hidden");
+    }
+
     if (window.RaioRelease && typeof window.RaioRelease.loadReleaseInfo === "function") {
       window.RaioRelease.loadReleaseInfo()
         .then(function (info) {
@@ -1273,6 +1387,13 @@
             }
           } else {
             showPending();
+          }
+
+          try {
+            renderLatestUpdate(info);
+          } catch (e) {
+            // Release notes didn't parse into anything showable — the card
+            // (and its nav link) simply stay hidden.
           }
         })
         .catch(showPending);

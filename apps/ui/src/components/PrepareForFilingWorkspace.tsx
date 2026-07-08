@@ -53,6 +53,8 @@ export interface FilingResultState {
   savedDirectoryPath?: string | null;
   skippedSteps: readonly string[];
   overrides: readonly string[];
+  // Advisory OCR text-layer notices. The file is always produced; these never block it.
+  notices?: readonly string[];
 }
 
 export type FilingPacketLayoutMode = "separate-files" | "combined-pdf";
@@ -1637,6 +1639,15 @@ function ResultCard({
           </div>
         ))}
       </div>
+      {result.notices && result.notices.length > 0 ? (
+        <div className="filing-result__notices" role="note" aria-label="Advisory notices">
+          {result.notices.map((notice) => (
+            <p key={notice} className="filing-result__notice">
+              ⚠ {notice}
+            </p>
+          ))}
+        </div>
+      ) : null}
       <div className="filing-result__footer">
         {result.savedDirectoryPath ? (
           <p className="filing-result__fine filing-result__saved-path">

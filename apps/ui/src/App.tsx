@@ -236,8 +236,8 @@ import {
 import { countRaioPdfMarkupAnnotations } from "./lib/markupAnnotations";
 import { planOcrRun } from "./lib/ocrRunPlan";
 import {
-  filingOcrVerificationFailureMessage,
-  verifyFilingOcrOutputParts,
+  collectFilingOcrOutputPartNotices,
+  filingOcrVerificationNotice,
   verifyOcrTextLayer,
 } from "./lib/ocrVerification";
 import {
@@ -5669,6 +5669,7 @@ export function App() {
 
       let workingHandle: PdfDocumentHandle;
       let filingOcrType: OcrType | null = null;
+      const filingOcrNotices: string[] = [];
       const closeHandles: PdfDocumentHandle[] = [];
 
       try {
@@ -5783,9 +5784,11 @@ export function App() {
             filingTextLayerCoverage,
             filingOcrPlan.ocrType,
           );
-          const filingOcrFailureMessage = filingOcrVerificationFailureMessage(filingOcrVerification);
-          if (filingOcrFailureMessage) {
-            throw new Error(filingOcrFailureMessage);
+          // Advisory: a less-than-perfect text layer rides along as a warning on
+          // the output, it never blocks the save.
+          const filingOcrNotice = filingOcrVerificationNotice(filingOcrVerification);
+          if (filingOcrNotice) {
+            filingOcrNotices.push(filingOcrNotice);
           }
 
           if (!isCurrentFilingRun()) {
@@ -5861,10 +5864,14 @@ export function App() {
         });
 
         if (selectedSteps.has("make-searchable")) {
-          await verifyFilingOcrOutputParts(
-            convertedParts,
-            filingOcrType ?? "skip-text",
-            inspectTextLayer,
+          // Advisory: collect a per-part notice for any output that isn't cleanly
+          // searchable, but always keep going — the file gets produced either way.
+          filingOcrNotices.push(
+            ...(await collectFilingOcrOutputPartNotices(
+              convertedParts,
+              filingOcrType ?? "skip-text",
+              inspectTextLayer,
+            )),
           );
 
           if (!isCurrentFilingRun()) {
@@ -5919,6 +5926,7 @@ export function App() {
             packDefaultSplitBytes: filingPack.recommendedMaxFileBytes ?? filingPack.maxFileBytes ?? null,
             scrubbedBeforePdfA: selectedSteps.has("scrub-metadata") && selectedSteps.has("convert-pdfa"),
           }),
+          notices: filingOcrNotices,
         });
         setFilingProgress({
           phase: "done",

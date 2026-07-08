@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  filingOcrVerificationFailureMessage,
-  verifyFilingOcrOutputParts,
+  collectFilingOcrOutputPartNotices,
+  filingOcrVerificationNotice,
   verifyOcrTextLayer,
 } from "./ocrVerification";
 import type { TextLayerCoverage } from "@raiopdf/rules";
@@ -166,7 +166,7 @@ describe("verifyOcrTextLayer", () => {
     expect(result.message).toContain("Warning: 1 page may still have imperfect text");
   });
 
-  it("lets filing workflows continue only after verified OCR output", () => {
+  it("returns no notice when the filing OCR output is fully verified", () => {
     const result = verifyOcrTextLayer(coverage({
       imageOnlyPages: [],
       mixedPages: [],
@@ -174,10 +174,10 @@ describe("verifyOcrTextLayer", () => {
       garbledPages: [],
     }));
 
-    expect(filingOcrVerificationFailureMessage(result)).toBeNull();
+    expect(filingOcrVerificationNotice(result)).toBeNull();
   });
 
-  it("formats filing OCR failures without promising an output was saved", () => {
+  it("formats an advisory notice that never claims the output was withheld", () => {
     const result = verifyOcrTextLayer(coverage({
       imageOnlyPages: [1],
       mixedPages: [],
@@ -185,12 +185,12 @@ describe("verifyOcrTextLayer", () => {
       garbledPages: [],
     }));
 
-    expect(filingOcrVerificationFailureMessage(result)).toBe(
-      "OCR ran, but the filing copy is still not fully searchable. 1 page still has no searchable text. The filing copy was not saved.",
+    expect(filingOcrVerificationNotice(result)).toBe(
+      "OCR ran, but the filing copy is still not fully searchable. 1 page still has no searchable text. Review the affected pages before relying on the text.",
     );
   });
 
-  it("treats force OCR warnings as unverified for filing output", () => {
+  it("surfaces force OCR warnings as an advisory notice for filing output", () => {
     const result = verifyOcrTextLayer(coverage({
       imageOnlyPages: [],
       mixedPages: [],
@@ -205,12 +205,12 @@ describe("verifyOcrTextLayer", () => {
       }],
     }), "force-ocr");
 
-    expect(filingOcrVerificationFailureMessage(result)).toBe(
-      "OCR finished, but the filing copy still has imperfect searchable text. 1 page still has garbled text. The filing copy was not saved.",
+    expect(filingOcrVerificationNotice(result)).toBe(
+      "OCR finished, but the filing copy still has imperfect searchable text. 1 page still has garbled text. Review the affected pages before relying on the text.",
     );
   });
 
-  it("verifies each final filing output part before saving", async () => {
+  it("returns no notices when every final filing output part is verified", async () => {
     const firstPartBytes = new Uint8Array([1]);
     const secondPartBytes = new Uint8Array([2]);
     const inspectPartTextLayer = vi.fn()
@@ -227,16 +227,16 @@ describe("verifyOcrTextLayer", () => {
         garbledPages: [],
       }));
 
-    await expect(verifyFilingOcrOutputParts([
+    await expect(collectFilingOcrOutputPartNotices([
       { bytes: firstPartBytes, fileName: "part-1.pdf" },
       { bytes: secondPartBytes, fileName: "part-2.pdf" },
-    ], "skip-text", inspectPartTextLayer)).resolves.toBeUndefined();
+    ], "skip-text", inspectPartTextLayer)).resolves.toEqual([]);
 
     expect(inspectPartTextLayer).toHaveBeenNthCalledWith(1, firstPartBytes);
     expect(inspectPartTextLayer).toHaveBeenNthCalledWith(2, secondPartBytes);
   });
 
-  it("rejects a final filing output part with failed searchable text verification", async () => {
+  it("returns an advisory notice for a final part with imperfect searchable text", async () => {
     const inspectPartTextLayer = vi.fn().mockResolvedValue(coverage({
       imageOnlyPages: [0],
       mixedPages: [],
@@ -244,14 +244,14 @@ describe("verifyOcrTextLayer", () => {
       garbledPages: [],
     }));
 
-    await expect(verifyFilingOcrOutputParts([
+    await expect(collectFilingOcrOutputPartNotices([
       { bytes: new Uint8Array([1]), fileName: "part-1.pdf" },
-    ], "skip-text", inspectPartTextLayer)).rejects.toThrow(
-      "part-1.pdf: OCR ran, but the filing copy is still not fully searchable. 1 page still has no searchable text. The filing copy was not saved.",
-    );
+    ], "skip-text", inspectPartTextLayer)).resolves.toEqual([
+      "part-1.pdf: OCR ran, but the filing copy is still not fully searchable. 1 page still has no searchable text. Review the affected pages before relying on the text.",
+    ]);
   });
 
-  it("rejects final force OCR output warnings for filing output", async () => {
+  it("returns an advisory notice for final force OCR output warnings", async () => {
     const inspectPartTextLayer = vi.fn().mockResolvedValue(coverage({
       imageOnlyPages: [],
       mixedPages: [],
@@ -266,21 +266,21 @@ describe("verifyOcrTextLayer", () => {
       }],
     }));
 
-    await expect(verifyFilingOcrOutputParts([
+    await expect(collectFilingOcrOutputPartNotices([
       { bytes: new Uint8Array([1]), fileName: "part-2.pdf" },
-    ], "force-ocr", inspectPartTextLayer)).rejects.toThrow(
-      "part-2.pdf: OCR finished, but the filing copy still has imperfect searchable text. 1 page still has garbled text. The filing copy was not saved.",
-    );
+    ], "force-ocr", inspectPartTextLayer)).resolves.toEqual([
+      "part-2.pdf: OCR finished, but the filing copy still has imperfect searchable text. 1 page still has garbled text. Review the affected pages before relying on the text.",
+    ]);
   });
 
-  it("blocks filing output when final text-layer inspection fails", async () => {
+  it("returns a notice (never throws) when final text-layer inspection fails", async () => {
     const inspectPartTextLayer = vi.fn().mockRejectedValue(new Error("parse failed"));
 
-    await expect(verifyFilingOcrOutputParts([
+    await expect(collectFilingOcrOutputPartNotices([
       { bytes: new Uint8Array([1]), fileName: "part-1.pdf" },
-    ], "skip-text", inspectPartTextLayer)).rejects.toThrow(
-      "part-1.pdf: The filing copy text layer could not be verified. The filing copy was not saved.",
-    );
+    ], "skip-text", inspectPartTextLayer)).resolves.toEqual([
+      "part-1.pdf: The filing copy text layer could not be verified.",
+    ]);
   });
 });
 

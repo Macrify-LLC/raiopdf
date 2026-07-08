@@ -1067,6 +1067,20 @@
   animation: filing-panel-in var(--duration-fast) ease;
 }
 
+/* Full-workspace takeover while a run is in flight -- centers the shared
+   long-process loader (same one OCR uses) instead of a small inline panel, so
+   the screen clearly reads as "working" rather than sitting idle. */
+.filing-progress--running {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  padding: var(--space-6) var(--space-4);
+  border: none;
+  background: transparent;
+  animation: none;
+}
+
 .filing-progress[data-phase="done"],
 .filing-result {
   border-color: var(--ok-bg);

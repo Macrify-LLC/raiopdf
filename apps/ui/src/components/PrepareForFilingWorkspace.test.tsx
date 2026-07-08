@@ -95,6 +95,41 @@ describe("PrepareForFilingWorkspace", () => {
     expect(html).toContain("Saved to /tmp/filing-output.");
   });
 
+  it("takes the workspace over with the shared loader while a run is active", () => {
+    const pack = getPack();
+    const html = renderToStaticMarkup(
+      <PrepareForFilingWorkspace
+        document={mockDocument}
+        pack={pack}
+        prepPlan={resolvePrepPlan(pack, mockFacts)}
+        courtProfiles={[]}
+        selectedCourtProfile={null}
+        facts={mockFacts}
+        report={null}
+        loadingReport={false}
+        progress={{ phase: "normalizing", message: "Preparing the filing copy…" }}
+        result={null}
+        impact={null}
+        pdfAAvailable
+        compressAvailable
+        onPackChange={() => undefined}
+        onCourtProfileSelect={() => undefined}
+        onCourtProfileSave={() => undefined}
+        onPrepare={() => undefined}
+        onDismissImpact={() => undefined}
+        onCompressFirst={() => undefined}
+      />,
+    );
+
+    // The shared long-process loader (the one OCR uses) is present...
+    expect(html).toContain("long-process-loader");
+    expect(html).toContain("filing-progress--running");
+    expect(html).toContain("Preparing the filing copy…");
+    // ...and the checklist chrome is swapped out, not left sitting behind it.
+    expect(html).not.toContain("Prepare mode");
+    expect(html).not.toContain("View the rules applied");
+  });
+
   it("shows a filing-check read failure near the preflight checks", () => {
     const pack = getPack();
     const html = renderToStaticMarkup(

@@ -2140,6 +2140,14 @@ export function App() {
     return () => {
       disposed = true;
       controller.abort();
+      // The abort kills this in-flight materialization, so drop the ref now
+      // rather than waiting for the (disposed) promise's `finally`. Otherwise
+      // reopening Prepare for the same dropped PDF before the abort settles hits
+      // the generation guard above, returns early, and never restarts — leaving
+      // the document a `rangeFile` with the checklist disabled. [Codex #187 P2]
+      if (droppedMaterializationRef.current?.generation === sourceGeneration) {
+        droppedMaterializationRef.current = null;
+      }
     };
   }, [
     activeLegalTool,

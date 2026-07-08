@@ -66,8 +66,8 @@ describe("CrashReportDialog", () => {
 
     clickButton("View exactly what will be sent");
 
-    expect(getButton("Hide payload").getAttribute("aria-expanded")).toBe("true");
-    expect(getPayload()?.id).toBe(getButton("Hide payload").getAttribute("aria-controls"));
+    expect(getButton("Hide details").getAttribute("aria-expanded")).toBe("true");
+    expect(getPayload()?.id).toBe(getButton("Hide details").getAttribute("aria-controls"));
     expect(getPayload()?.tabIndex).toBe(0);
     expect(getPayload()?.textContent).toBe(formatCrashReportPreview(payload));
     expect(getPayload()?.textContent).toContain(payload.body);
@@ -301,7 +301,7 @@ function findButton(name: string): HTMLButtonElement | null {
 }
 
 function getPayload(): HTMLElement | null {
-  return document.querySelector("[aria-label='Crash report payload']");
+  return document.querySelector("[aria-label='Crash report details']");
 }
 
 function createDeferred<T>() {

@@ -165,7 +165,7 @@ describe("pathOpErrorMessage", () => {
 
   it("keeps the desktop-only message for PathOpsUnavailableError", () => {
     expect(pathOpErrorMessage(new PathOpsUnavailableError(), "fallback")).toBe(
-      "Path-based engine ops are only available in the desktop app.",
+      "This tool only works in the installed RaioPDF app.",
     );
   });
 });

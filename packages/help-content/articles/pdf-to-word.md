@@ -8,8 +8,8 @@ order: 25
 
 # PDF -> Word
 
-PDF -> Word creates a `.docx` copy from a PDF using Microsoft Word's PDF reflow
-engine.
+PDF -> Word creates a `.docx` copy from a PDF. It uses Microsoft Word to do the
+conversion, so Word must be installed.
 
 ## How to do it
 

@@ -377,19 +377,20 @@ pub fn build_production_set(
         volume_size_mb,
     };
     let stdout = run_mcp_one_shot("build_production_set", &input)?;
-    let output: ProductionSetOneShotOutput = serde_json::from_slice(&stdout)
-        .map_err(|error| format!("failed to parse build_production_set result: {error}"))?;
+    let output: ProductionSetOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
+        "RaioPDF couldn't finish building that package. Please try again.".to_string()
+    })?;
 
     if !output.ok {
         return Err(format_tool_error("build_production_set", output.error));
     }
 
-    let package_root = output
-        .package_root
-        .ok_or_else(|| "build_production_set result did not include packageRoot".to_string())?;
-    let next_number = output
-        .next_number
-        .ok_or_else(|| "build_production_set result did not include nextNumber".to_string())?;
+    let package_root = output.package_root.ok_or_else(|| {
+        "RaioPDF couldn't finish building that package. Please try again.".to_string()
+    })?;
+    let next_number = output.next_number.ok_or_else(|| {
+        "RaioPDF couldn't finish building that package. Please try again.".to_string()
+    })?;
     let file_count = output.outputs.as_ref().map_or(0, Vec::len);
 
     Ok(ProductionSetShellOutput {
@@ -421,23 +422,24 @@ pub fn batch_cleanup(
         operations,
     };
     let stdout = run_mcp_one_shot("batch_cleanup", &input)?;
-    let output: BatchCleanupOneShotOutput = serde_json::from_slice(&stdout)
-        .map_err(|error| format!("failed to parse batch_cleanup result: {error}"))?;
+    let output: BatchCleanupOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
+        "RaioPDF couldn't finish building that package. Please try again.".to_string()
+    })?;
 
     if !output.ok {
         return Err(format_tool_error("batch_cleanup", output.error));
     }
 
     Ok(BatchCleanupShellOutput {
-        package_root: output
-            .package_root
-            .ok_or_else(|| "batch_cleanup result did not include packageRoot".to_string())?,
-        report_pdf: output
-            .report_pdf
-            .ok_or_else(|| "batch_cleanup result did not include reportPdf".to_string())?,
-        report_json: output
-            .report_json
-            .ok_or_else(|| "batch_cleanup result did not include reportJson".to_string())?,
+        package_root: output.package_root.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
+        report_pdf: output.report_pdf.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
+        report_json: output.report_json.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
         files: output.files.unwrap_or_default(),
     })
 }
@@ -479,24 +481,25 @@ pub fn build_filing_packet(
         split_size_mb,
     };
     let stdout = run_mcp_one_shot("build_filing_packet", &input)?;
-    let output: FilingPacketOneShotOutput = serde_json::from_slice(&stdout)
-        .map_err(|error| format!("failed to parse build_filing_packet result: {error}"))?;
+    let output: FilingPacketOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
+        "RaioPDF couldn't finish building that package. Please try again.".to_string()
+    })?;
 
     if !output.ok {
         return Err(format_tool_error("build_filing_packet", output.error));
     }
 
     Ok(FilingPacketShellOutput {
-        package_root: output
-            .package_root
-            .ok_or_else(|| "build_filing_packet result did not include packageRoot".to_string())?,
+        package_root: output.package_root.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
         outputs: output.outputs.unwrap_or_default(),
-        manifest_pdf: output
-            .manifest_pdf
-            .ok_or_else(|| "build_filing_packet result did not include manifestPdf".to_string())?,
-        packet_json: output
-            .packet_json
-            .ok_or_else(|| "build_filing_packet result did not include packetJson".to_string())?,
+        manifest_pdf: output.manifest_pdf.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
+        packet_json: output.packet_json.ok_or_else(|| {
+            "RaioPDF couldn't finish building that package. Please try again.".to_string()
+        })?,
         combined_pdf: output.combined_pdf,
     })
 }
@@ -580,7 +583,7 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     options: McpOneShotOptions,
 ) -> Result<Vec<u8>, String> {
     let binary = resolve_mcp_binary().ok_or_else(|| {
-        "RaioPDF MCP binary is not configured; set RAIOPDF_MCP_BIN or install the bundled MCP executable."
+        "RaioPDF's built-in tools are missing. Your installation may be incomplete — reinstall RaioPDF and try again."
             .to_string()
     })?;
     let mut command = Command::new(&binary);
@@ -596,11 +599,8 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     }
     apply_platform_spawn_flags(&mut command);
 
-    let mut child = command.spawn().map_err(|error| {
-        format!(
-            "failed to launch RaioPDF MCP at {}: {error}",
-            binary.to_string_lossy()
-        )
+    let mut child = command.spawn().map_err(|_| {
+        "RaioPDF couldn't start its built-in tools. Reinstall RaioPDF and try again.".to_string()
     })?;
 
     let payload = serde_json::to_vec(input)
@@ -618,15 +618,46 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     let output = wait_with_optional_timeout(child, tool_name, options.timeout)?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("{tool_name} failed with status {}", output.status)
-        } else {
-            stderr
-        });
+        return Err(sanitize_one_shot_failure(&output.stderr));
     }
 
     Ok(output.stdout)
+}
+
+/// On a tool failure the one-shot MCP runtime writes a structured
+/// `{ "ok": false, "error": { "code", "message", "action" } }` blob to stderr
+/// (see apps/mcp `runOneShot` → `toolError`). Many of those failures are
+/// user-correctable — a non-empty output folder, an unwritable destination — so
+/// surfacing only a generic "please try again" strips the actionable guidance
+/// and the retry can't succeed. Recover the child's `error.message` (which the
+/// UI's `formatWorkflowError` then maps to friendly text) and fall back to the
+/// generic line only when stderr isn't the expected shape.
+fn sanitize_one_shot_failure(stderr: &[u8]) -> String {
+    const GENERIC: &str = "RaioPDF couldn't complete that operation. Please try again.";
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return GENERIC.to_string();
+    };
+    // The structured payload is a single JSON line, but tolerate leading Node
+    // warnings by scanning for the last line that parses with an error message.
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(message) = value
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            return message.to_string();
+        }
+    }
+    GENERIC.to_string()
 }
 
 fn wait_with_optional_timeout(
@@ -650,18 +681,11 @@ fn wait_with_optional_timeout(
             }
             Ok(None) if started.elapsed() >= timeout => {
                 let _ = child.kill();
-                let output = child.wait_with_output().map_err(|error| {
-                    format!("failed to read timed-out {tool_name} response: {error}")
-                })?;
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                return Err(if stderr.is_empty() {
-                    format!("{tool_name} timed out after {} seconds", timeout.as_secs())
-                } else {
-                    format!(
-                        "{tool_name} timed out after {} seconds: {stderr}",
-                        timeout.as_secs()
-                    )
-                });
+                let _ = child.wait_with_output();
+                return Err(
+                    "That took too long and was stopped. Try again, or with fewer or smaller files."
+                        .to_string(),
+                );
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(error) => {
@@ -691,7 +715,40 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_output_dir;
+    use super::{resolve_output_dir, sanitize_one_shot_failure};
+
+    const GENERIC_FAILURE: &str = "RaioPDF couldn't complete that operation. Please try again.";
+
+    #[test]
+    fn recovers_the_structured_child_error_message() {
+        let stderr = br#"{"ok":false,"error":{"code":"ENGINE_ERROR","message":"Refusing to create a package in non-empty directory /out.","action":"Confirm RaioPDF's engine payload is installed and try again."}}"#;
+        assert_eq!(
+            sanitize_one_shot_failure(stderr),
+            "Refusing to create a package in non-empty directory /out."
+        );
+    }
+
+    #[test]
+    fn skips_leading_node_warnings_before_the_json_line() {
+        let stderr = b"(node:123) ExperimentalWarning: something\n{\"ok\":false,\"error\":{\"code\":\"PATH_POLICY\",\"message\":\"Output folder is not writable.\"}}\n";
+        assert_eq!(
+            sanitize_one_shot_failure(stderr),
+            "Output folder is not writable."
+        );
+    }
+
+    #[test]
+    fn falls_back_to_generic_when_stderr_is_not_structured() {
+        assert_eq!(sanitize_one_shot_failure(b""), GENERIC_FAILURE);
+        assert_eq!(
+            sanitize_one_shot_failure(b"segfault: core dumped"),
+            GENERIC_FAILURE
+        );
+        assert_eq!(
+            sanitize_one_shot_failure(br#"{"ok":false,"error":{"code":"ENGINE_ERROR"}}"#),
+            GENERIC_FAILURE
+        );
+    }
 
     #[test]
     fn accepts_an_output_dir_that_already_exists() {

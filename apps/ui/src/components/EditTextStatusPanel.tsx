@@ -25,7 +25,7 @@ export function EditTextStatusPanel({
         <IconButton icon={<HelpIcon size={14} />} label="Help: Edit document text" onClick={onHelp} />
       </div>
       <p className="tool-panel__card-copy">{TEXT_EDIT_ADVISORY}</p>
-      <p className="tool-panel__note">Preview match counts are estimates; the review re-reads the staged PDF and is authoritative.</p>
+      <p className="tool-panel__note">Preview match counts are estimates; the review re-reads your document and shows the exact results.</p>
       {textEdit.selectedReplacementText ? (
         <p className="tool-panel__status-line" role="status">
           Selected for replacement: {textEdit.selectedReplacementText}

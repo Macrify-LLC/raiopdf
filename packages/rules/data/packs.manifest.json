@@ -3,11 +3,11 @@
   "packs": {
     "federal-cmecf": {
       "file": "federal-cmecf.json",
-      "sha256": "ff7b63ad8e9d5d346e3fddb1c3cb961c27743d502d92636a5362ccd0c2d2e85d"
+      "sha256": "b7cff8cbcaf6444fab0f04e61a4658da75fc058bd2009d733bb1a1be9eb27e53"
     },
     "florida": {
       "file": "florida.json",
-      "sha256": "83c9e7fc7eeec64a88820d6ce151a1255ccc8bbaab39d2c7dae641262c6fe5d0"
+      "sha256": "ad95dbda556e92228453b14a9fd43bb2167217a5f29117450a7a158dbe8c907c"
     },
     "georgia-efilega": {
       "file": "georgia-efilega.json",

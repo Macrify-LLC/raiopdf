@@ -140,13 +140,13 @@ export function CanvasWell({
                 60px without an ambient font-size to resolve against, so
                 this wrapper sets one explicitly. */}
             <span className="canvas-well__engine-starting-sun">
-              <LoadingSun size={60} label="Starting the PDF engine" />
+              <LoadingSun size={60} label="Getting things ready" />
             </span>
             {/* Deliberately a real ellipsis (not "...") so this never
-                collides with the OCR panel's own "Starting the PDF
-                engine..." status text -- see smoke test coverage on that
+                collides with the OCR panel's own "Getting things
+                ready..." status text -- see smoke test coverage on that
                 exact string. */}
-            <p className="canvas-well__engine-starting-text">Starting the PDF engine…</p>
+            <p className="canvas-well__engine-starting-text">Getting things ready…</p>
           </div>
         </div>
       ) : null}
@@ -274,7 +274,7 @@ function AnnotationActionBar({
         className="legal-mode-bar__button"
         onClick={onFlattenMarkupAnnotations}
       >
-        Flatten
+        Make markup permanent
       </button>
     </div>
   );

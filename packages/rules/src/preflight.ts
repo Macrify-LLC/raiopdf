@@ -24,7 +24,7 @@ export function preflight(
         checkId: constraint.id,
         label: constraint.label,
         authority: constraint.authority,
-        detail: "This check is unknown because the jurisdiction pack failed integrity verification.",
+        detail: "RaioPDF couldn't verify its rule set for this court, so this check was skipped. Reinstall or update RaioPDF.",
         kind: constraint.kind,
         status: "unknown",
       })),
@@ -110,7 +110,7 @@ function checkPageSizeAndOrientation(
   if (document.pages.length === 0) {
     return buildCheck(pack, "page-size-orientation", {
       status: "unknown",
-      detail: "No page facts were provided for page-size and orientation validation.",
+      detail: "RaioPDF couldn't read this document's pages, so it couldn't check page size and orientation.",
     });
   }
 
@@ -126,21 +126,21 @@ function checkSearchableText(document: DocumentFacts, pack: JurisdictionPack): P
   if (pack.ocr.stance === "unknown") {
     return buildCheck(pack, "searchable-text", {
       status: "unknown",
-      detail: "This jurisdiction's searchable-text stance is unverified.",
+      detail: "RaioPDF doesn't have a confirmed rule for this court on searchable text, so it can't check it. Confirm the court's requirement yourself.",
     });
   }
 
   if (pack.ocr.stance === "accepted" || pack.ocr.stance === "prohibited") {
     return buildCheck(pack, "searchable-text", {
       status: "pass",
-      detail: "Searchable text is not required for this jurisdiction pack.",
+      detail: "Searchable text is not required by this court's rules.",
     });
   }
 
   if (document.searchableText === undefined) {
     return buildCheck(pack, "searchable-text", {
       status: "unknown",
-      detail: "No searchable-text facts were provided.",
+      detail: "RaioPDF couldn't tell whether this document has searchable text.",
     });
   }
 
@@ -163,15 +163,15 @@ function searchableTextWarningDetail(document: DocumentFacts): string {
 
   if (garbledPages > 0) {
     const totalText = totalPages > 0 ? ` on ${garbledPages} of ${totalPages} pages` : "";
-    return `The document's text layer looks unreliable${totalText}; re-OCR is recommended.`;
+    return `The document's hidden searchable text looks garbled${totalText}; running Make Searchable again is recommended.`;
   }
 
   if (trivialTextImagePages > 0) {
     const totalText = totalPages > 0 ? ` on ${trivialTextImagePages} of ${totalPages} pages` : "";
-    return `The document has only a tiny text layer over scanned page images${totalText}; Force OCR is recommended.`;
+    return `The document has only a thin layer of searchable text over scanned page images${totalText}; running Make Searchable again is recommended.`;
   }
 
-  return "The document facts report no searchable text.";
+  return "No searchable text was found in this document.";
 }
 
 function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): PreflightCheck {
@@ -181,7 +181,7 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
   if (document.fileBytes === undefined) {
     return buildCheck(pack, "file-size", {
       status: "unknown",
-      detail: "No file-size facts were provided.",
+      detail: "RaioPDF couldn't read this document's file size.",
     });
   }
 
@@ -213,7 +213,7 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
   if (recommendedMaxFileBytes === undefined && maxFileBytes === undefined) {
     return buildCheck(pack, "file-size", {
       status: "unknown",
-      detail: "This jurisdiction pack has no configured file-size limit.",
+      detail: "RaioPDF has no file-size rule on record for this court.",
     });
   }
 
@@ -223,7 +223,7 @@ function checkFileSize(document: DocumentFacts, pack: JurisdictionPack): Preflig
     if (hardMaxFileBytes === undefined) {
       return buildCheck(pack, "file-size", {
         status: "unknown",
-        detail: "This jurisdiction pack has no configured file-size limit.",
+        detail: "RaioPDF has no file-size rule on record for this court.",
       });
     }
 
@@ -243,14 +243,14 @@ function checkFilename(document: DocumentFacts, pack: JurisdictionPack): Preflig
   if (!pack.filenameMaxChars && !pack.filenameCharset) {
     return buildCheck(pack, "filename", {
       status: "pass",
-      detail: "This jurisdiction pack has no filename length or character-set limit.",
+      detail: "RaioPDF has no filename rule on record for this court.",
     });
   }
 
   if (!document.filename) {
     return buildCheck(pack, "filename", {
       status: "unknown",
-      detail: "No filename fact was provided.",
+      detail: "RaioPDF couldn't read this document's filename.",
     });
   }
 
@@ -269,8 +269,8 @@ function checkClerkStampSpace(document: DocumentFacts, pack: JurisdictionPack): 
     return buildCheck(pack, "clerk-stamp-space", {
       status: document.clerkStampSpaceBlank ? "pass" : "warn",
       detail: document.clerkStampSpaceBlank
-        ? "The first-page clerk stamp space is reported blank."
-        : "The first-page clerk stamp space is reported occupied.",
+        ? "The clerk's stamp area on the first page is clear."
+        : "The clerk's stamp area on the first page has content in it. Clear that corner before filing.",
     });
   }
 
@@ -286,7 +286,7 @@ function checkClerkStampSpace(document: DocumentFacts, pack: JurisdictionPack): 
   if (!firstPage.occupiedRegions) {
     return buildCheck(pack, "clerk-stamp-space", {
       status: "unknown",
-      detail: "No first-page occupancy facts were provided for geometric stamp-space validation.",
+      detail: "RaioPDF couldn't check whether the clerk's stamp area on the first page is clear.",
     });
   }
 
@@ -296,8 +296,8 @@ function checkClerkStampSpace(document: DocumentFacts, pack: JurisdictionPack): 
   return buildCheck(pack, "clerk-stamp-space", {
     status: overlaps ? "warn" : "pass",
     detail: overlaps
-      ? "Text or image facts overlap the required first-page top-right 3 x 3 in clerk stamp space."
-      : "No text or image facts overlap the required first-page top-right 3 x 3 in clerk stamp space.",
+      ? "Content on the first page reaches into the top-right 3x3-inch area the clerk reserves for its stamp. Clear that corner before filing."
+      : "The top-right 3x3-inch area the clerk reserves for its stamp is clear on the first page.",
   });
 }
 
@@ -349,7 +349,7 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   if (stance === "unknown") {
     return buildCheck(pack, "pdfa", {
       status: "unknown",
-      detail: "This jurisdiction's PDF/A stance is unverified; no conversion is performed.",
+      detail: "RaioPDF doesn't have a confirmed PDF/A rule for this court, so it can't check it and performs no conversion. Confirm the court's requirement yourself.",
     });
   }
 
@@ -367,7 +367,7 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
   if (pdfaValidated === true) {
     return buildCheck(pack, "pdfa", {
       status: "pass",
-      detail: `The document has been validated as PDF/A compliant for ${stance} flavor ${flavor}.`,
+      detail: `The document has been validated as PDF/A compliant for the ${stance} archival format (${flavor}).`,
     });
   }
 
@@ -375,21 +375,21 @@ function checkPdfA(document: DocumentFacts, pack: JurisdictionPack): PreflightCh
     if (pdfaClaimed) {
       return buildCheck(pack, "pdfa", {
         status: "unknown",
-        detail: `The document claims PDF/A in its metadata, but PDF/A ${flavor} compliance has not been independently validated.`,
+        detail: `The document claims PDF/A in its metadata, but PDF/A archival format (${flavor}) compliance has not been independently validated.`,
       });
     }
 
     return buildCheck(pack, "pdfa", {
       status: "unknown",
-      detail: `PDF/A ${flavor} compliance facts were not provided.`,
+      detail: `PDF/A archival format (${flavor}) compliance facts were not provided.`,
     });
   }
 
   return buildCheck(pack, "pdfa", {
     status: "warn",
     detail: stance === "required"
-      ? `PDF/A ${flavor} is required and the document failed PDF/A validation.`
-      : `PDF/A ${flavor} is preferred by the portal and the document failed PDF/A validation.`,
+      ? `PDF/A archival format (${flavor}) is required and the document failed PDF/A validation.`
+      : `PDF/A archival format (${flavor}) is preferred by the portal and the document failed PDF/A validation.`,
   });
 }
 
@@ -397,7 +397,7 @@ function checkActiveContent(document: DocumentFacts, pack: JurisdictionPack): Pr
   if (pack.activeContent.stance === "unknown") {
     return buildCheck(pack, "active-content", {
       status: "unknown",
-      detail: "This jurisdiction's active-content stance is unverified.",
+      detail: "RaioPDF doesn't have a confirmed rule for this court on active content, so it can't check it. Confirm the court's requirement yourself.",
       authority: pack.activeContent.authority,
       label: "Active content",
       kind: "portal",
@@ -407,7 +407,7 @@ function checkActiveContent(document: DocumentFacts, pack: JurisdictionPack): Pr
   if (hasFactError(document, "activeContentSignals") || !document.activeContentSignals) {
     return buildCheck(pack, "active-content", {
       status: "unknown",
-      detail: "Active-content facts could not be verified by the local detector.",
+      detail: "RaioPDF couldn't check this document for active content. Review it before filing.",
       authority: pack.activeContent.authority,
       label: "Active content",
       kind: "portal",
@@ -419,8 +419,8 @@ function checkActiveContent(document: DocumentFacts, pack: JurisdictionPack): Pr
   return buildCheck(pack, "active-content", {
     status: prohibited && document.activeContentSignals.possiblyPresent ? "warn" : "pass",
     detail: document.activeContentSignals.possiblyPresent
-      ? `The document has active-content presence signal(s): ${signals}.`
-      : "The local detector found no active-content presence signals.",
+      ? `This document contains active content (such as scripts or embedded actions): ${signals}. Many portals reject it — remove it before filing.`
+      : "No active content (scripts or embedded actions) was found.",
     authority: pack.activeContent.authority,
     label: "Active content",
     kind: "portal",
@@ -431,7 +431,7 @@ function checkEncryption(document: DocumentFacts, pack: JurisdictionPack): Prefl
   if (pack.encryption.stance === "unknown") {
     return buildCheck(pack, "encryption", {
       status: "unknown",
-      detail: "This jurisdiction's encryption stance is unverified.",
+      detail: "RaioPDF doesn't have a confirmed rule for this court on password protection or access restrictions, so it can't check it. Confirm the court's requirement yourself.",
       authority: pack.encryption.authority,
       label: "Encryption and restrictions",
       kind: "portal",
@@ -441,7 +441,7 @@ function checkEncryption(document: DocumentFacts, pack: JurisdictionPack): Prefl
   if (document.encryptionState === undefined || document.encryptionState === "detector_failed") {
     return buildCheck(pack, "encryption", {
       status: "unknown",
-      detail: "Encryption facts could not be verified by the local detector.",
+      detail: "RaioPDF couldn't check whether this document is password-protected. Review it before filing.",
       authority: pack.encryption.authority,
       label: "Encryption and restrictions",
       kind: "portal",
@@ -453,8 +453,10 @@ function checkEncryption(document: DocumentFacts, pack: JurisdictionPack): Prefl
   return buildCheck(pack, "encryption", {
     status: pack.encryption.stance === "prohibited" && hasRestriction ? "warn" : "pass",
     detail: hasRestriction
-      ? `The document encryption state is ${document.encryptionState}.`
-      : "The local detector found no PDF encryption trailer entry.",
+      ? document.encryptionState === "encrypted"
+        ? "This document is password-protected."
+        : "This document restricts copying or editing."
+      : "This document is not password-protected or access-restricted.",
     authority: pack.encryption.authority,
     label: "Encryption and restrictions",
     kind: "portal",
@@ -465,7 +467,7 @@ function checkEmbeddedFiles(document: DocumentFacts, pack: JurisdictionPack): Pr
   if (pack.embeddedFiles.stance === "unknown") {
     return buildCheck(pack, "embedded-files", {
       status: "unknown",
-      detail: "This jurisdiction's embedded-file stance is unverified.",
+      detail: "RaioPDF doesn't have a confirmed rule for this court on attached or embedded files, so it can't check it. Confirm the court's requirement yourself.",
       authority: pack.embeddedFiles.authority,
       label: "Embedded files",
       kind: "portal",
@@ -475,7 +477,7 @@ function checkEmbeddedFiles(document: DocumentFacts, pack: JurisdictionPack): Pr
   if (hasFactError(document, "embeddedFileCount") || document.embeddedFileCount === undefined) {
     return buildCheck(pack, "embedded-files", {
       status: "unknown",
-      detail: "Embedded-file facts could not be verified by the local detector.",
+      detail: "RaioPDF couldn't check this document for attached or embedded files. Review it before filing.",
       authority: pack.embeddedFiles.authority,
       label: "Embedded files",
       kind: "portal",
@@ -485,8 +487,8 @@ function checkEmbeddedFiles(document: DocumentFacts, pack: JurisdictionPack): Pr
   return buildCheck(pack, "embedded-files", {
     status: pack.embeddedFiles.stance === "prohibited" && document.embeddedFileCount > 0 ? "warn" : "pass",
     detail: document.embeddedFileCount > 0
-      ? `The document has ${document.embeddedFileCount} embedded file presence signal(s).`
-      : "The local detector found no EmbeddedFiles name-tree entries or FileAttachment annotations.",
+      ? `This document has ${document.embeddedFileCount} attached or embedded file(s).`
+      : "No attached or embedded files were found in this document.",
     authority: pack.embeddedFiles.authority,
     label: "Embedded files",
     kind: "portal",
@@ -497,8 +499,8 @@ function checkMetadataScrub(_document: DocumentFacts, pack: JurisdictionPack): P
   return buildCheck(pack, "metadata-scrub", {
     status: "unknown",
     detail: pack.metadataScrub.stance === "unknown"
-      ? "This jurisdiction's metadata-scrub stance is unverified."
-      : "Metadata scrubbing is not reliably verifiable from local document facts; confirm manually.",
+      ? "RaioPDF doesn't have a confirmed rule for this court on metadata scrubbing, so it can't check it. Confirm the court's requirement yourself."
+      : "RaioPDF can't confirm whether hidden metadata was fully removed. Check it manually before filing.",
     authority: pack.metadataScrub.authority,
     label: "Metadata scrub",
     kind: "portal",
@@ -509,9 +511,9 @@ function checkFlattenForms(document: DocumentFacts, pack: JurisdictionPack): Pre
   if (pack.flattenForms.stance === "unknown") {
     return buildCheck(pack, "flatten-forms", {
       status: "unknown",
-      detail: "This jurisdiction's form-flattening stance is unverified.",
+      detail: "RaioPDF doesn't have a confirmed rule for this court on locking form fields, so it can't check it. Confirm the court's requirement yourself.",
       authority: pack.flattenForms.authority,
-      label: "Flatten forms",
+      label: "Lock fillable form fields",
       kind: "portal",
     });
   }
@@ -519,9 +521,9 @@ function checkFlattenForms(document: DocumentFacts, pack: JurisdictionPack): Pre
   if (hasFactError(document, "formFields") || !document.formFields) {
     return buildCheck(pack, "flatten-forms", {
       status: "unknown",
-      detail: "Form-field facts could not be verified by the local detector.",
+      detail: "RaioPDF couldn't check this document for fillable form fields. Review it before filing.",
       authority: pack.flattenForms.authority,
-      label: "Flatten forms",
+      label: "Lock fillable form fields",
       kind: "portal",
     });
   }
@@ -530,10 +532,10 @@ function checkFlattenForms(document: DocumentFacts, pack: JurisdictionPack): Pre
   return buildCheck(pack, "flatten-forms", {
     status: pack.flattenForms.stance === "prohibited" && hasFields ? "warn" : "pass",
     detail: hasFields
-      ? `The document has ${document.formFields.count} form field(s); filled fields present: ${document.formFields.anyFilled ? "yes" : "no"}.`
-      : "The local detector found no AcroForm fields.",
+      ? `This document has ${document.formFields.count} fillable form field(s)${document.formFields.anyFilled ? ", some already filled in" : ""}.`
+      : "No fillable form fields were found in this document.",
     authority: pack.flattenForms.authority,
-    label: "Flatten forms",
+    label: "Lock fillable form fields",
     kind: "portal",
   });
 }
@@ -550,15 +552,15 @@ function buildUnknownSelectionChecks(pack: JurisdictionPack): readonly Preflight
   return [
     buildCheck(pack, "envelope-size", {
       status: "unknown",
-      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+      detail: "RaioPDF couldn't verify its rule set for this court, so this check was skipped. Reinstall or update RaioPDF.",
     }),
     buildCheck(pack, "selection-filenames", {
       status: "unknown",
-      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+      detail: "RaioPDF couldn't verify its rule set for this court, so this check was skipped. Reinstall or update RaioPDF.",
     }),
     buildCheck(pack, "filename-collisions", {
       status: "unknown",
-      detail: "This selection check is unknown because the jurisdiction pack failed integrity verification.",
+      detail: "RaioPDF couldn't verify its rule set for this court, so this check was skipped. Reinstall or update RaioPDF.",
     }),
   ];
 }
@@ -567,7 +569,7 @@ function checkEnvelopeSize(selection: SelectionFacts, pack: JurisdictionPack): P
   if (!pack.maxEnvelopeBytes) {
     return buildCheck(pack, "envelope-size", {
       status: "pass",
-      detail: "This jurisdiction pack has no configured envelope-size cap.",
+      detail: "RaioPDF has no combined upload-size limit on record for this court.",
     });
   }
 
@@ -578,7 +580,7 @@ function checkEnvelopeSize(selection: SelectionFacts, pack: JurisdictionPack): P
   if (filesWithoutSizes.length > 0) {
     return buildCheck(pack, "envelope-size", {
       status: "unknown",
-      detail: `No file-size facts were provided for ${filesWithoutSizes.length} selected file(s).`,
+      detail: `RaioPDF couldn't read the file size of ${filesWithoutSizes.length} selected file(s).`,
     });
   }
 
@@ -597,7 +599,7 @@ function checkSelectionFilenames(selection: SelectionFacts, pack: JurisdictionPa
   if (!pack.filenameMaxChars && !pack.filenameCharset) {
     return buildCheck(pack, "selection-filenames", {
       status: "pass",
-      detail: "This jurisdiction pack has no filename length or character-set limit.",
+      detail: "RaioPDF has no filename rule on record for this court.",
     });
   }
 

@@ -62,7 +62,7 @@ export class PathOpsError extends Error {
 
 export class PathOpsUnavailableError extends Error {
   constructor() {
-    super("Path-based engine ops are only available in the desktop app.");
+    super("This tool only works in the installed RaioPDF app.");
     this.name = "PathOpsUnavailableError";
   }
 }

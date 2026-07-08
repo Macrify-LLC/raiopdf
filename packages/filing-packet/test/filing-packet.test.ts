@@ -148,9 +148,9 @@ describe("buildFilingPacket", () => {
     expect(result.files.map((file) => file.outputName)).toContain("01 - Motion to Compel - Part 3 of 3.pdf");
     expect(searchableText).toMatchObject({
       status: "warn",
-      detail: "Part 3: The document facts report no searchable text.",
+      detail: "Part 3: No searchable text was found in this document.",
     });
-    expect(searchableText?.detail).not.toContain("Part 1: The document facts report no searchable text.");
+    expect(searchableText?.detail).not.toContain("Part 1: No searchable text was found in this document.");
     expect(extractTextLayerCoverageForPart).toHaveBeenCalledTimes(3);
   });
 

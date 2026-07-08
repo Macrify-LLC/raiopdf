@@ -425,7 +425,7 @@ export async function openFileInNewWindow(): Promise<boolean> {
 
 export async function openGrantInNewWindow(fileGrant: FileGrant): Promise<void> {
   if (!isTauriRuntime()) {
-    throw new Error("Open in New Window is only available in the desktop app.");
+    throw new Error("Open in New Window only works in the installed RaioPDF app.");
   }
 
   const { invoke } = await import("@tauri-apps/api/core");

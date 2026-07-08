@@ -135,7 +135,7 @@ export function CrashReportDialog({
           <span>App version</span>
           <span>OS</span>
           <span>Crash details</span>
-          <span>Scrubbed log tail</span>
+          <span>Recent activity log (personal details removed)</span>
         </div>
 
         <button
@@ -145,7 +145,7 @@ export function CrashReportDialog({
           aria-controls={payloadId}
           onClick={() => setShowPayload((current) => !current)}
         >
-          {showPayload ? "Hide payload" : "View exactly what will be sent"}
+          {showPayload ? "Hide details" : "View exactly what will be sent"}
           <ChevronDownIcon
             size={16}
             className="crash-report-dialog__chevron"
@@ -157,7 +157,7 @@ export function CrashReportDialog({
           <pre
             id={payloadId}
             className="crash-report-dialog__payload"
-            aria-label="Crash report payload"
+            aria-label="Crash report details"
             tabIndex={0}
           >
             {formatCrashReportPreview(payload)}

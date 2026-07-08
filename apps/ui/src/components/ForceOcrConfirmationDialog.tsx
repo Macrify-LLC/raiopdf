@@ -13,7 +13,7 @@ export function ForceOcrConfirmationDialog({
 }: ForceOcrConfirmationDialogProps) {
   return (
     <FloatingDialog
-      title={reason === "garbled" ? "Fix Garbled Text" : "Force Re-OCR Text Layer"}
+      title={reason === "garbled" ? "Fix Garbled Text" : "Redo Searchable Text"}
       eyebrow="Searchability"
       width="sm"
       scrim
@@ -22,7 +22,7 @@ export function ForceOcrConfirmationDialog({
     >
       <div className="force-ocr-confirmation">
         <p>
-          RaioPDF will rebuild the invisible searchable text layer for the whole document. The visible pages should not change.
+          RaioPDF will rebuild the hidden searchable text for the whole document. The visible pages should not change.
         </p>
         <p>
           Because the whole file is re-rendered, this is slower than ordinary OCR and the PDF may be larger.
@@ -32,7 +32,7 @@ export function ForceOcrConfirmationDialog({
             Cancel
           </button>
           <button type="button" className="force-ocr-confirmation__primary-button" onClick={onConfirm}>
-            Rebuild Text Layer
+            Redo Searchable Text
           </button>
         </div>
       </div>

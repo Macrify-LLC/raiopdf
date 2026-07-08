@@ -880,7 +880,7 @@ function clonePdfObjectGraph(
   if (object instanceof PDFRawStream) {
     const dict = clonePdfObjectGraph(source, output, object.dict, refs);
     if (!(dict instanceof PDFDict)) {
-      throw new Error("PDF stream dictionary did not clone to a dictionary.");
+      throw new Error("RaioPDF hit an internal error opening that file. Reopen it and try again.");
     }
 
     return PDFRawStream.of(dict, object.contents.slice());
@@ -1034,7 +1034,7 @@ function writeOutlineTarget(
   if (item.target.kind === "named") {
     const rawTarget = rawTargetsById.get(item.target.preserveId);
     if (!rawTarget && item.target.resolvedPageIndex === undefined) {
-      throw new Error(`Cannot safely preserve bookmark target for "${item.title}".`);
+      throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
     }
     dict.set(PDFName.of("Dest"), PDFString.of(item.target.name));
     return;
@@ -1050,13 +1050,13 @@ function writeOutlineTarget(
 
   const rawTarget = rawTargetsById.get(item.target.preserveId);
   if (!rawTarget) {
-    throw new Error(`Cannot safely preserve bookmark target for "${item.title}".`);
+    throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
   }
 
   if (rawTarget.dest) {
     const dest = cloneRawOutlineObjectForContext(pdf, rawTarget.dest, rawTarget.sameDocument === true);
     if (!dest) {
-      throw new Error(`Cannot safely preserve bookmark target for "${item.title}".`);
+      throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
     }
     dict.set(PDFName.of("Dest"), dest);
     return;
@@ -1065,7 +1065,7 @@ function writeOutlineTarget(
   if (rawTarget.action) {
     const action = cloneRawOutlineObjectForContext(pdf, rawTarget.action, rawTarget.sameDocument === true);
     if (!action) {
-      throw new Error(`Cannot safely preserve bookmark target for "${item.title}".`);
+      throw new Error(`This bookmark ("${item.title}") couldn't be saved because it points to a place that no longer exists. Edit or remove it and try again.`);
     }
     dict.set(PDFName.of("A"), action);
     return;
@@ -1350,7 +1350,7 @@ function outlineRevision(items: readonly PdfOutlineItem[], openMode: PdfOutlineO
 
 function assertPageIndex(pageIndex: number, pageCount: number, title: string): void {
   if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pageCount) {
-    throw new Error(`Bookmark "${title}" points outside the document.`);
+    throw new Error(`This bookmark ("${title}") points to a page that no longer exists. Edit or remove it and try again.`);
   }
 }
 

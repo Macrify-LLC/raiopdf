@@ -20,7 +20,7 @@ describe("StatusBar searchability chip", () => {
 
     expect(html).toContain("<button");
     expect(html).toContain('data-status="garbled"');
-    expect(html).toContain("Text layer looks garbled on 2 of 5 pages — re-OCR recommended");
+    expect(html).toContain("The hidden searchable text looks garbled on 2 of 5 pages — running Make Searchable again is recommended");
   });
 
   it("renders the image-only neutral state", () => {

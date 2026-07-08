@@ -98,20 +98,19 @@ impl RangeReadError {
         }
     }
 
-    fn out_of_bounds(offset: u64, length: u64, len: u64) -> Self {
+    fn out_of_bounds(_offset: u64, _length: u64, _len: u64) -> Self {
         Self {
             code: RangeReadErrorCode::OutOfBounds,
-            message: format!(
-                "Requested range {offset}..{} is outside the file (length {len}).",
-                offset.saturating_add(length)
-            ),
+            message: "RaioPDF couldn't read part of this document. Reopen it and try again."
+                .to_string(),
         }
     }
 
-    fn range_too_large(length: u64, cap: u64) -> Self {
+    fn range_too_large(_length: u64, _cap: u64) -> Self {
         Self {
             code: RangeReadErrorCode::RangeTooLarge,
-            message: format!("Requested {length} bytes exceeds the per-call cap of {cap} bytes."),
+            message: "RaioPDF couldn't read part of this document. Reopen it and try again."
+                .to_string(),
         }
     }
 
@@ -133,10 +132,10 @@ impl RangeReadError {
         }
     }
 
-    fn io(error: &std::io::Error) -> Self {
+    fn io(_error: &std::io::Error) -> Self {
         Self {
             code: RangeReadErrorCode::Io,
-            message: format!("Failed to read PDF range: {error}"),
+            message: "RaioPDF couldn't read this document. Reopen it and try again.".to_string(),
         }
     }
 }

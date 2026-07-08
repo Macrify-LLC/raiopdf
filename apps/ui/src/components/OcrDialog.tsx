@@ -15,7 +15,7 @@ export interface OcrDialogProps {
 }
 
 const RUNNING_STATUS_LABEL: Record<OcrDialogRunningPhase, string> = {
-  "starting-engine": "Starting the PDF engine…",
+  "starting-engine": "Getting things ready…",
   processing: "Making searchable…",
   verifying: "Verifying…",
 };

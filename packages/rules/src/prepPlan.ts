@@ -47,14 +47,14 @@ export function resolvePrepPlan(
     }, facts),
     policyStep({
       id: "flatten-forms",
-      label: "Flatten forms",
+      label: "Lock fillable form fields",
       policy: pack.flattenForms,
       destructive: true,
       impact: formImpact,
     }, facts),
     policyStep({
       id: "convert-pdfa",
-      label: `Convert to ${pack.pdfa.flavor.toUpperCase()}`,
+      label: `Convert to PDF/A archival format (${pack.pdfa.flavor.toUpperCase()})`,
       policy: pack.pdfa,
       destructive: true,
       impact: conversionImpact,
@@ -89,7 +89,7 @@ function normalizeStep(pack: JurisdictionPack): PrepPlanStep {
 
   return {
     id: "normalize-pages",
-    label: "Normalize pages",
+    label: "Standardize page size & orientation",
     stance: "standard",
     actionStance: "standard",
     condition: `${pack.pageSize.w} x ${pack.pageSize.h} in ${pack.orientation}`,
@@ -98,7 +98,7 @@ function normalizeStep(pack: JurisdictionPack): PrepPlanStep {
     prepDefault: "on",
     defaultChecked: true,
     destructive: false,
-    impact: "Pages will be rendered onto the pack's filing page size and orientation.",
+    impact: "Pages will be resized to this court's required page size and orientation.",
   };
 }
 
@@ -152,7 +152,7 @@ function splitStep(pack: JurisdictionPack): PrepPlanStep {
     defaultChecked: hasConfiguredCap,
     destructive: false,
     impact: hasConfiguredCap
-      ? `Output parts will use the pack's ${formatBytes(pack.recommendedMaxFileBytes ?? pack.maxFileBytes!)} default cap unless you override it for this run.`
+      ? `Output parts will use this court's ${formatBytes(pack.recommendedMaxFileBytes ?? pack.maxFileBytes!)} default cap unless you override it for this run.`
       : "No numeric file-size cap is configured yet.",
   };
 }
@@ -170,7 +170,7 @@ function encryptionImpact(facts: DocumentFacts): string {
     return "Raio could not verify encryption state; encrypted input will be reported as a warning if it cannot be opened.";
   }
 
-  return "Raio cannot compute encryption state until the encrypted-file fact extractor lands.";
+  return "RaioPDF can't confirm whether this file is password-protected.";
 }
 
 function sanitizeImpact(facts: DocumentFacts): string {
@@ -186,7 +186,7 @@ function sanitizeImpact(facts: DocumentFacts): string {
   }
 
   if (lines.length === 0) {
-    return "Raio cannot compute active-content or embedded-file impact until richer local fact extractors land.";
+    return "RaioPDF can't yet report what this step will affect in this document. Review it before running.";
   }
 
   return `${lines.join(", ")} detected - sanitizing removes supported active or embedded content.`;
@@ -201,10 +201,10 @@ function searchableImpact(facts: DocumentFacts): string {
     const garbledPages = facts.textLayerCoverage?.garbledPages.length ?? 0;
 
     if (garbledPages > 0) {
-      return "Text layer looks unreliable - re-OCR is recommended.";
+      return "The hidden searchable text looks garbled - running Make Searchable again is recommended.";
     }
 
-    return "No searchable text detected - OCR may add a text layer.";
+    return "No searchable text found - Make Searchable can add it.";
   }
 
   return "Raio cannot verify searchable-text coverage for this document yet.";
@@ -217,10 +217,10 @@ function formImpact(facts: DocumentFacts): string {
     }
 
     const filled = facts.formFields.anyFilled ? " including filled fields" : "";
-    return `${facts.formFields.count} form field${facts.formFields.count === 1 ? "" : "s"} detected${filled} - flattening makes them no longer editable.`;
+    return `${facts.formFields.count} form field${facts.formFields.count === 1 ? "" : "s"} detected${filled} - locking them means they can no longer be edited.`;
   }
 
-  return "Raio cannot compute form-field impact until richer local fact extractors land.";
+  return "RaioPDF can't yet report what this step will affect in this document. Review it before running.";
 }
 
 function conversionImpact(facts: DocumentFacts): string {
@@ -246,7 +246,7 @@ function conversionImpact(facts: DocumentFacts): string {
   }
 
   if (lines.length === 0) {
-    return "Raio cannot compute PDF/A conversion impact until richer local fact extractors land; review annotations, signatures, form fields, and redaction marks before running.";
+    return "RaioPDF can't yet report what converting to PDF/A will affect in this document. Review annotations, signatures, form fields, and redaction marks before running.";
   }
 
   return `${lines.join(", ")} detected - conversion may invalidate or remove them.`;

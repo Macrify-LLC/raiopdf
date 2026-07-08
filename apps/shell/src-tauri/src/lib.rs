@@ -212,16 +212,20 @@ const DOCX_CONVERT_FILE_DONE_EVENT: &str = "docx-convert:file-done";
 impl PendingPdfBytes {
     fn insert(&self, bytes: Vec<u8>) -> Result<String, String> {
         let token = self.next_token.fetch_add(1, Ordering::Relaxed).to_string();
-        let mut pending = self.bytes.lock().map_err(|_| "PDF cache lock poisoned")?;
+        let mut pending = self.bytes.lock().map_err(|_| {
+            "RaioPDF hit an internal error opening that file. Reopen it and try again."
+        })?;
         pending.insert(token.clone(), bytes);
         Ok(token)
     }
 
     fn remove(&self, token: &str) -> Result<Vec<u8>, String> {
-        let mut pending = self.bytes.lock().map_err(|_| "PDF cache lock poisoned")?;
-        pending
-            .remove(token)
-            .ok_or_else(|| "PDF bytes token not found".to_string())
+        let mut pending = self.bytes.lock().map_err(|_| {
+            "RaioPDF hit an internal error opening that file. Reopen it and try again."
+        })?;
+        pending.remove(token).ok_or_else(|| {
+            "RaioPDF couldn't process this PDF. It may be corrupt or unsupported.".to_string()
+        })
     }
 }
 
@@ -274,7 +278,7 @@ impl DroppedUploads {
             }
         }
 
-        Err("Could not allocate a dropped PDF upload token".to_string())
+        Err("RaioPDF couldn't prepare that PDF. Try again.".to_string())
     }
 
     fn append_upload(&self, token: &str, bytes: &[u8]) -> Result<(), String> {
@@ -293,7 +297,7 @@ impl DroppedUploads {
             .ok_or_else(|| "Dropped PDF upload size overflow".to_string())?;
 
         if next_len > upload.expected_total {
-            return Err("Dropped PDF upload exceeded its declared size".to_string());
+            return Err("RaioPDF couldn't prepare that PDF. Try again.".to_string());
         }
 
         upload.file.write_all(bytes).map_err(|error| {
@@ -485,7 +489,7 @@ fn opened_pdf_for_path(
     // the heap on open.
     let threshold_bytes = large_doc_threshold_bytes();
     let size_bytes = fs::metadata(&path)
-        .map_err(|error| format!("Failed to stat PDF at {}: {error}", path.to_string_lossy()))?
+        .map_err(|_| READ_PDF_ERROR.to_string())?
         .len();
 
     // Snapshot BEFORE any read so the grant is minted from exactly this baseline
@@ -496,16 +500,9 @@ fn opened_pdf_for_path(
     // process content the user never saw.
     let snapshot_before = snapshot_file(&path).ok();
     let bytes_token = if size_bytes < threshold_bytes {
-        let bytes = fs::read(&path).map_err(|error| {
-            format!("Failed to read PDF at {}: {error}", path.to_string_lossy())
-        })?;
+        let bytes = fs::read(&path).map_err(|_| READ_PDF_ERROR.to_string())?;
         if let Some(before) = snapshot_before {
-            let after = snapshot_file(&path).map_err(|error| {
-                format!(
-                    "Failed to verify PDF at {}: {error}",
-                    path.to_string_lossy()
-                )
-            })?;
+            let after = snapshot_file(&path).map_err(|_| READ_PDF_ERROR.to_string())?;
             if after != before {
                 return Err("This file changed while it was being opened — reopen it.".to_string());
             }
@@ -708,7 +705,7 @@ fn pick_pdfs_for_add(
         let path = path.into_path().map_err(|error| error.to_string())?;
         require_pdf_or_docx_extension(&path)?;
         let size_bytes = fs::metadata(&path)
-            .map_err(|error| format!("Failed to stat file at {}: {error}", path.to_string_lossy()))?
+            .map_err(|_| READ_PDF_ERROR.to_string())?
             .len();
         let source = picked_add_source(&path);
         let markup_scan =
@@ -746,7 +743,7 @@ fn pick_pdf_for_word(
     let path = path.into_path().map_err(|error| error.to_string())?;
     require_pdf_extension(&path)?;
     let size_bytes = fs::metadata(&path)
-        .map_err(|error| format!("Failed to stat file at {}: {error}", path.to_string_lossy()))?
+        .map_err(|_| READ_PDF_ERROR.to_string())?
         .len();
 
     Ok(Some(PickedPdfForWord {
@@ -1215,9 +1212,19 @@ fn hex_value(byte: u8) -> Result<u8, String> {
     }
 }
 
+/// Plain-language messages for file-IO failures. None of these leak a
+/// filesystem path or a raw OS error code to the user.
+const SAVE_PDF_ERROR: &str =
+    "RaioPDF couldn't save this PDF. Check that the folder is writable and try again.";
+const READ_PDF_ERROR: &str =
+    "RaioPDF couldn't read this PDF. Check that the file is still there and try again.";
+const SAVE_WORD_ERROR: &str =
+    "RaioPDF couldn't save this Word document. Check that the folder is writable and try again.";
+const OUTPUT_FOLDER_ERROR: &str =
+    "RaioPDF couldn't use that output folder. Choose a different folder and try again.";
+
 fn write_pdf_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    atomic_write_file(path, bytes)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
+    atomic_write_file(path, bytes).map_err(|_| SAVE_PDF_ERROR.to_string())
 }
 
 fn write_pdf_bytes_into_directory(
@@ -1234,8 +1241,7 @@ fn write_pdf_bytes_into_directory_path(
     bytes: &[u8],
 ) -> Result<PathBuf, String> {
     let path = collision_free_output_pdf_path(directory, file_name)?;
-    atomic_write_new_file(&path, bytes)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    atomic_write_new_file(&path, bytes).map_err(|_| SAVE_PDF_ERROR.to_string())?;
     Ok(path)
 }
 
@@ -1307,30 +1313,22 @@ fn atomic_copy_file(source: &Path, destination: &Path) -> Result<(), std::io::Er
 }
 
 fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Result<(), String> {
-    let path = fs::canonicalize(&entry.path).map_err(|error| {
-        format!(
-            "Failed to write PDF at {}: {error}",
-            entry.path.to_string_lossy()
-        )
-    })?;
+    let path = fs::canonicalize(&entry.path).map_err(|_| SAVE_PDF_ERROR.to_string())?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let permissions = replacement_permissions(&path, None)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    let permissions =
+        replacement_permissions(&path, None).map_err(|_| SAVE_PDF_ERROR.to_string())?;
     let mut temp = replacement_temp_file(parent, permissions.as_ref())
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
     temp.write_all(bytes)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
-    apply_replacement_permissions(&temp, permissions)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
-    temp.flush()
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    apply_replacement_permissions(&temp, permissions).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    temp.flush().map_err(|_| SAVE_PDF_ERROR.to_string())?;
     temp.as_file()
         .sync_all()
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
 
     let backup = backup_path_for(&path);
-    fs::rename(&path, &backup)
-        .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))?;
+    fs::rename(&path, &backup).map_err(|_| SAVE_PDF_ERROR.to_string())?;
 
     let result = (|| {
         let backup_entry = FileGrantEntry {
@@ -1340,25 +1338,18 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
         ensure_grant_file_unchanged(&backup_entry)?;
         persist_atomic_file_noclobber(temp, &path)
             .and_then(|_| sync_parent_dir(parent))
-            .map_err(|error| format!("Failed to write PDF at {}: {error}", path.to_string_lossy()))
+            .map_err(|_| SAVE_PDF_ERROR.to_string())
     })();
 
     match result {
         Ok(()) => {
-            fs::remove_file(&backup).map_err(|error| {
-                format!(
-                    "Failed to remove old PDF at {}: {error}",
-                    backup.to_string_lossy()
-                )
-            })?;
+            fs::remove_file(&backup).map_err(|_| SAVE_PDF_ERROR.to_string())?;
             Ok(())
         }
         Err(error) => {
-            restore_staged_original(&backup, &path).map_err(|restore_error| {
-                format!(
-                    "{error} Original file could not be restored from {}: {restore_error}",
-                    backup.to_string_lossy()
-                )
+            restore_staged_original(&backup, &path).map_err(|_| {
+                "RaioPDF couldn't save this PDF, and the original file couldn't be restored. Check the folder and try again."
+                    .to_string()
             })?;
             Err(error)
         }
@@ -1370,58 +1361,22 @@ fn atomic_copy_grant_if_unchanged(
     destination: &Path,
 ) -> Result<(), String> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    let mut input = fs::File::open(&entry.path).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    apply_replacement_permissions(&temp, permissions).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.flush().map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.as_file().sync_all().map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
+    let mut input = fs::File::open(&entry.path).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let permissions = replacement_permissions(destination, Some(&entry.path))
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    apply_replacement_permissions(&temp, permissions).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    temp.flush().map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
 
     ensure_grant_file_unchanged(entry)?;
     persist_atomic_file(temp, destination)
         .and_then(|_| sync_parent_dir(parent))
-        .map_err(|error| {
-            format!(
-                "Failed to save PDF copy at {}: {error}",
-                destination.to_string_lossy()
-            )
-        })
+        .map_err(|_| SAVE_PDF_ERROR.to_string())
 }
 
 fn atomic_copy_grant_if_unchanged_new(
@@ -1429,58 +1384,22 @@ fn atomic_copy_grant_if_unchanged_new(
     destination: &Path,
 ) -> Result<(), String> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    let mut input = fs::File::open(&entry.path).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    apply_replacement_permissions(&temp, permissions).map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.flush().map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.as_file().sync_all().map_err(|error| {
-        format!(
-            "Failed to save PDF copy at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
+    let mut input = fs::File::open(&entry.path).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let permissions = replacement_permissions(destination, Some(&entry.path))
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    apply_replacement_permissions(&temp, permissions).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    temp.flush().map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
 
     ensure_grant_file_unchanged(entry)?;
     persist_atomic_file_noclobber(temp, destination)
         .and_then(|_| sync_parent_dir(parent))
-        .map_err(|error| {
-            format!(
-                "Failed to save PDF copy at {}: {error}",
-                destination.to_string_lossy()
-            )
-        })
+        .map_err(|_| SAVE_PDF_ERROR.to_string())
 }
 
 fn atomic_copy_docx_grant_if_unchanged(
@@ -1488,58 +1407,22 @@ fn atomic_copy_docx_grant_if_unchanged(
     destination: &Path,
 ) -> Result<(), String> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-    let mut input = fs::File::open(&entry.path).map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let permissions = replacement_permissions(destination, Some(&entry.path)).map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    let mut temp = replacement_temp_file(parent, permissions.as_ref()).map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    io::copy(&mut input, temp.as_file_mut()).map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    apply_replacement_permissions(&temp, permissions).map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.flush().map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
-    temp.as_file().sync_all().map_err(|error| {
-        format!(
-            "Failed to save Word document at {}: {error}",
-            destination.to_string_lossy()
-        )
-    })?;
+    let mut input = fs::File::open(&entry.path).map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    let permissions = replacement_permissions(destination, Some(&entry.path))
+        .map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    let mut temp = replacement_temp_file(parent, permissions.as_ref())
+        .map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    io::copy(&mut input, temp.as_file_mut()).map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    apply_replacement_permissions(&temp, permissions).map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    temp.flush().map_err(|_| SAVE_WORD_ERROR.to_string())?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|_| SAVE_WORD_ERROR.to_string())?;
 
     ensure_grant_file_unchanged(entry)?;
     persist_atomic_file(temp, destination)
         .and_then(|_| sync_parent_dir(parent))
-        .map_err(|error| {
-            format!(
-                "Failed to save Word document at {}: {error}",
-                destination.to_string_lossy()
-            )
-        })
+        .map_err(|_| SAVE_WORD_ERROR.to_string())
 }
 
 fn persist_atomic_file(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), std::io::Error> {
@@ -1671,18 +1554,8 @@ fn ensure_docx_source(path: &Path) -> Result<(), String> {
 }
 
 fn validate_output_directory(path: &Path) -> Result<PathBuf, String> {
-    let path = fs::canonicalize(path).map_err(|error| {
-        format!(
-            "Failed to resolve output folder at {}: {error}",
-            path.to_string_lossy()
-        )
-    })?;
-    let metadata = fs::metadata(&path).map_err(|error| {
-        format!(
-            "Failed to read output folder at {}: {error}",
-            path.to_string_lossy()
-        )
-    })?;
+    let path = fs::canonicalize(path).map_err(|_| OUTPUT_FOLDER_ERROR.to_string())?;
+    let metadata = fs::metadata(&path).map_err(|_| OUTPUT_FOLDER_ERROR.to_string())?;
 
     if !metadata.is_dir() {
         return Err("Selected output location is not a folder".to_string());

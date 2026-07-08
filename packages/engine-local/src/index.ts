@@ -234,7 +234,7 @@ export class LocalPdfEngine implements PdfEngine {
   async removeEncryption(_bytes: PdfBytes, _password: string): Promise<Uint8Array> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "The local pdf-lib engine cannot remove PDF encryption; use the sidecar engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -493,7 +493,7 @@ export class LocalPdfEngine implements PdfEngine {
 
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF/A conversion requires the desktop sidecar engine; the local pdf-lib engine cannot produce PDF/A output.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -503,7 +503,7 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF compression requires the desktop sidecar engine; the local pdf-lib engine cannot downsample arbitrary PDF content.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -513,14 +513,14 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfSanitizeResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF sanitizing requires the desktop sidecar engine; the local pdf-lib engine cannot remove active document content safely.",
+      "That operation isn't available for this document.",
     );
   }
 
   async repair(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF repair requires the desktop sidecar engine; the local pdf-lib engine only opens already-readable PDFs.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -530,7 +530,7 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfReplaceTextResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF text replacement requires the desktop sidecar engine; the local pdf-lib engine cannot re-encode arbitrary glyph runs.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -540,7 +540,7 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfInspectTextMapResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "PDF text-map inspection requires the desktop sidecar engine; the local pdf-lib engine cannot read rewrite-safe glyph runs.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -550,7 +550,7 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<PdfReplaceSelectedTextResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Selected PDF text replacement requires the desktop sidecar engine; the local pdf-lib engine cannot re-encode arbitrary glyph runs.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -699,7 +699,7 @@ export class LocalPdfEngine implements PdfEngine {
   ): Promise<readonly PdfTextRegion[]> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Region text extraction is unavailable in the local engine; verify redaction output with pdf.js.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -3762,7 +3762,7 @@ function assertNonEmptyText(text: string): void {
 function unsupportedTrueRedaction(): PdfEngineError {
   return new PdfEngineError(
     "UNSUPPORTED",
-    "True redaction requires the desktop engine; the local engine cannot safely remove underlying PDF content.",
+    "True redaction isn't available for this document.",
   );
 }
 

@@ -350,14 +350,14 @@ type ForceOcrConfirmationReason = "garbled" | "manual";
 
 function delegatedOcrProcessingMessage(ocrType: OcrType): string {
   return ocrType === "force-ocr"
-    ? "Rebuilding the searchable text layer — the local engine re-renders the file itself."
-    : "Making searchable — the local engine works on the file itself.";
+    ? "Rebuilding the searchable text — RaioPDF re-reads every page."
+    : "Making searchable — this all happens on your computer.";
 }
 
 function memoryOcrProcessingMessage(ocrType: OcrType): string {
   return ocrType === "force-ocr"
-    ? "Rebuilding the searchable text layer — the whole file is being re-rendered."
-    : "Making searchable — page-by-page work happens in the engine.";
+    ? "Rebuilding the searchable text — the whole file is being re-read."
+    : "Making searchable — working through the pages one at a time.";
 }
 
 async function inspectPathOpOutputTextLayer(output: {
@@ -650,7 +650,7 @@ export function App() {
   }, [confirmSignatureInvalidation, document.bytes, document.fileName, document.filePath]);
   const confirmTextEditPdfAIdentificationRemoval = useCallback(
     () => Promise.resolve(window.confirm(
-      "Editing removes this file's PDF/A marking — you can convert again afterward.",
+      "Editing will drop this file's PDF/A (archival) format — you can convert it back afterward.",
     )),
     [],
   );
@@ -957,12 +957,12 @@ export function App() {
           );
           if (mcpToggleRequestRef.current === requestId) {
             setMcpEnabled(status.enabled);
-            setMcpStatus("Connector setting could not be saved. The switch was restored to the saved setting.");
+            setMcpStatus("That setting couldn't be saved. The switch was put back to its last saved state.");
           }
         } catch {
           if (mcpToggleRequestRef.current === requestId) {
             setMcpEnabled(!next);
-            setMcpStatus("Connector setting could not be saved. Try again from the desktop app.");
+            setMcpStatus("That setting couldn't be saved. The switch was put back to its last saved state.");
           }
         }
       }
@@ -1749,7 +1749,7 @@ export function App() {
           // path-based through the local engine — point at it.
           setError(
             source.kind === "rangeGrant" && isPathOpsRuntime()
-              ? "This large PDF could not be opened for streaming view. It may be malformed — try Organize → Repair, which runs through the local engine."
+              ? "This large PDF could not be opened for streaming view. It may be malformed — try Organize → Repair to fix it."
               : "This large PDF could not be opened for streaming view. It may be malformed.",
           );
         });
@@ -2331,7 +2331,7 @@ export function App() {
 
       setOcrState({
         phase: "starting-engine",
-        message: "Starting the PDF engine...",
+        message: "Getting things ready...",
         progress: null,
       });
 
@@ -2376,7 +2376,7 @@ export function App() {
 
           setOcrState({
             phase: "verifying",
-            message: "Verifying the text layer...",
+            message: "Checking the searchable text...",
             progress: null,
           });
 
@@ -2447,7 +2447,7 @@ export function App() {
         phase: "error",
         message: engineBridge.available
           ? "OCR toolchain missing from this installation."
-          : "This action is available in the desktop app.",
+          : "This tool only works in the installed RaioPDF app.",
       });
       return;
     }
@@ -2474,7 +2474,7 @@ export function App() {
 
     setOcrState({
       phase: "starting-engine",
-      message: "Starting the PDF engine...",
+      message: "Getting things ready...",
       progress: null,
     });
 
@@ -2511,7 +2511,7 @@ export function App() {
 
         setOcrState({
           phase: "verifying",
-          message: "Verifying the text layer...",
+          message: "Checking the searchable text...",
           progress: null,
         });
 
@@ -2641,7 +2641,7 @@ export function App() {
         phase: "error",
         message: engineBridge.available
           ? "OCR toolchain missing from this installation."
-          : "This action is available in the desktop app.",
+          : "This tool only works in the installed RaioPDF app.",
       });
       return;
     }
@@ -3410,7 +3410,7 @@ export function App() {
         }
 
         if (pendingApply.flatten || planHasFormValues(pendingApply.plan.appendEdits)) {
-          setError("Form filling is not available for streamed documents yet.");
+          setError("Form filling is not available for very large documents yet.");
           return null;
         }
 
@@ -3418,7 +3418,7 @@ export function App() {
           pendingApply.plan.updateEdits.length > 0 ||
           pendingApply.plan.deleteAnnotIds.length > 0
         ) {
-          setError("Editing existing annotations on streamed documents is not available yet.");
+          setError("Editing existing annotations on very large documents is not available yet.");
           return null;
         }
 
@@ -3437,7 +3437,7 @@ export function App() {
         savingRef.current = true;
         setSidecarStatus({
           running: true,
-          message: "Saving edits through the local Node engine...",
+          message: "Saving your edits...",
           removed: [],
           beforeBytes: document.fileSizeBytes,
           afterBytes: null,
@@ -3616,7 +3616,7 @@ export function App() {
 
     if (!sourceBytes && !annotationSavePlanHasChanges(savePlan)) {
       setMarkupAnnotationMessage(
-        streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before flattening markup.",
+        streamedDocument ? STREAMED_DOCUMENT_GATE_MESSAGE : "Open a PDF before making markup permanent.",
       );
       return;
     }
@@ -3629,7 +3629,7 @@ export function App() {
         savePlan.appendEdits.length;
 
       if (annotationSavePlanHasChanges(savePlan)) {
-        setMarkupAnnotationMessage("Flattening pending annotations...");
+        setMarkupAnnotationMessage("Merging your markup into the page...");
         const applied = await applyAnnotationSavePlan({
           appendEdits: savePlan.appendEdits,
           updateEdits: savePlan.updateEdits,
@@ -3640,7 +3640,7 @@ export function App() {
         });
 
         if (!applied) {
-          setMarkupAnnotationMessage("Pending annotations were not flattened.");
+          setMarkupAnnotationMessage("Your markup couldn't be merged into the page. Your document was left unchanged — try again.");
           return;
         }
       }
@@ -3650,18 +3650,18 @@ export function App() {
         return;
       }
 
-      setMarkupAnnotationMessage("Flattening markup annotations...");
+      setMarkupAnnotationMessage("Merging your markup into the page...");
       const flattened = await flattenMarkupAnnotations();
       setMarkupAnnotationMessage(
         flattened
-          ? `Flattened ${targetAnnotationCount} ${targetAnnotationCount === 1 ? "annotation" : "annotations"} into permanent page content.`
-          : "Markup annotations were not flattened.",
+          ? `Merged ${targetAnnotationCount} ${targetAnnotationCount === 1 ? "markup item" : "markup items"} permanently into the page.`
+          : "Your markup couldn't be merged into the page.",
       );
       if (flattened) {
         editing.clearPendingEdits();
       }
     })().catch(() => {
-      setMarkupAnnotationMessage("Markup annotations could not be flattened.");
+      setMarkupAnnotationMessage("Your markup couldn't be merged into the page. Your document was left unchanged — try again.");
     });
   }, [
     applyAnnotationSavePlan,
@@ -3760,7 +3760,7 @@ export function App() {
   const printDocument = useCallback(() => {
     if (streamedDocument) {
       if (editing.hasUnsavedEdits) {
-        setError("Save the pending edits before printing this streamed document.");
+        setError("Save the pending edits before printing this very large document.");
         return;
       }
 
@@ -3819,7 +3819,7 @@ export function App() {
 
       setSidecarStatus({
         running: true,
-        message: "Building binder through the local Node engine...",
+        message: "Building your exhibit binder...",
         removed: [],
         beforeBytes: document.fileSizeBytes,
         afterBytes: null,
@@ -3865,7 +3865,7 @@ export function App() {
 
         const message = pathOpErrorMessage(
           error,
-          "The binder could not be built through the local Node engine. The document was left unchanged.",
+          "The exhibit binder could not be built. Your document was left unchanged — check the source files and try again.",
         );
         setSidecarStatus({
           running: false,
@@ -4137,7 +4137,7 @@ export function App() {
         // at the delegated alternative instead of a generic "could not be
         // split".
         setError(
-          "Splitting a very large document by page ranges isn't available yet. Prepare for Filing can split it by size through the local engine.",
+          "Splitting a very large document by page ranges isn't available yet. Use Prepare for Filing to split it by size instead.",
         );
         return null;
       }
@@ -4252,7 +4252,7 @@ export function App() {
       // it needs a shell grant, not the sidecar bridge.
       if (!pathOpsGrant) {
         setRedactionPhase("error");
-        setRedactionMessage("This action is available in the desktop app.");
+        setRedactionMessage("This tool only works in the installed RaioPDF app.");
         return;
       }
     } else if (!document.bytes) {
@@ -4261,7 +4261,7 @@ export function App() {
       return;
     } else if (!engineBridge.available) {
       setRedactionPhase("error");
-      setRedactionMessage("This action is available in the desktop app.");
+      setRedactionMessage("This tool only works in the installed RaioPDF app.");
       return;
     }
 
@@ -4297,7 +4297,7 @@ export function App() {
       // to verify) rejects with VERIFICATION_FAILED and no output grant ever
       // exists, so an unverified result can never be committed.
       setRedactionPhase("applying");
-      setRedactionMessage("Applying redactions in the local engine and verifying the redacted output file...");
+      setRedactionMessage("Applying redactions and confirming the removed text is really gone...");
 
       try {
         const result = await pathOpRedactAreas(pathOpsGrant, areas);
@@ -4337,7 +4337,7 @@ export function App() {
     }
 
     setRedactionPhase("applying");
-    setRedactionMessage("Applying redactions and verifying text layer, page images, annotations, and metadata...");
+    setRedactionMessage("Applying redactions and double-checking the text, images, markup, and hidden info are all clean...");
 
     try {
       const redactedTerms = pdfDocument
@@ -4427,7 +4427,7 @@ export function App() {
         batesApplyingRef.current = true;
         setBatesState({
           applying: true,
-          message: "Applying Bates numbers through the local engine...",
+          message: "Applying Bates numbers...",
         });
 
         try {
@@ -4529,7 +4529,7 @@ export function App() {
         // (openToken, generation) stale guard.
         setSidecarStatus({
           running: true,
-          message: "Applying page numbers through the local engine...",
+          message: "Applying page numbers...",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -4624,7 +4624,7 @@ export function App() {
         // the standard stale guard.
         setSidecarStatus({
           running: true,
-          message: "Applying watermark through the local engine...",
+          message: "Applying watermark...",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -4720,7 +4720,7 @@ export function App() {
         const beforeBytes = document.fileSizeBytes;
         setSidecarStatus({
           running: true,
-          message: "Compressing through the local engine...",
+          message: "Compressing...",
           removed: [],
           beforeBytes,
           afterBytes: null,
@@ -4745,7 +4745,7 @@ export function App() {
 
           setSidecarStatus({
             running: false,
-            message: "Compression complete — very large files use the engine's structural pass; image downsampling is not applied.",
+            message: "Compression complete. Very large files get lighter cleanup only, so scanned images aren't shrunk as much.",
             removed: [],
             beforeBytes,
             afterBytes: output.sizeBytes,
@@ -4782,7 +4782,7 @@ export function App() {
       if (!engineBridge.available) {
         setSidecarStatus({
           running: false,
-          message: "This action is available in the desktop app.",
+          message: "This tool only works in the installed RaioPDF app.",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -4792,7 +4792,7 @@ export function App() {
 
       setSidecarStatus({
         running: true,
-        message: "Compressing in the desktop engine...",
+        message: "Compressing...",
         removed: [],
         beforeBytes: sourceBytes.byteLength,
         afterBytes: null,
@@ -4852,7 +4852,7 @@ export function App() {
       // survive it.
       setSidecarStatus({
         running: true,
-        message: "Sanitizing through the local engine...",
+        message: "Sanitizing...",
         removed: [],
         beforeBytes: null,
         afterBytes: null,
@@ -4914,7 +4914,7 @@ export function App() {
     if (!engineBridge.available) {
       setSidecarStatus({
         running: false,
-        message: "This action is available in the desktop app.",
+        message: "This tool only works in the installed RaioPDF app.",
         removed: [],
         beforeBytes: null,
         afterBytes: null,
@@ -4924,7 +4924,7 @@ export function App() {
 
     setSidecarStatus({
       running: true,
-      message: "Sanitizing in the desktop engine...",
+      message: "Sanitizing...",
       removed: [],
       beforeBytes: null,
       afterBytes: null,
@@ -4989,7 +4989,7 @@ export function App() {
         const beforeBytes = document.fileSizeBytes;
         setSidecarStatus({
           running: true,
-          message: "Repairing through the local engine...",
+          message: "Repairing...",
           removed: [],
           beforeBytes,
           afterBytes: null,
@@ -5060,7 +5060,7 @@ export function App() {
       if (!engineBridge.available) {
         setSidecarStatus({
           running: false,
-          message: "This action is available in the desktop app.",
+          message: "This tool only works in the installed RaioPDF app.",
           removed: [],
           beforeBytes: null,
           afterBytes: null,
@@ -5070,7 +5070,7 @@ export function App() {
 
       setSidecarStatus({
         running: true,
-        message: "Repairing in the desktop engine...",
+        message: "Repairing...",
         removed: [],
         beforeBytes: source.bytes.byteLength,
         afterBytes: null,
@@ -5445,7 +5445,7 @@ export function App() {
 
       setFilingProgress({
         phase: "normalizing",
-        message: "Preparing the filing copy in the local engine — very large files run file-to-file, nothing loads into memory...",
+        message: "Preparing your filing copy — large files are handled a piece at a time so they open smoothly...",
       });
 
       // The whole streamed pipeline (sanitize → normalize → OCR → scrub →
@@ -5493,7 +5493,7 @@ export function App() {
 
       setFilingProgress({
         phase: "verifying",
-        message: "Saving the output parts and reading the facts-based output preflight...",
+        message: "Saving the output parts and running the final checks...",
       });
 
       const baseName = stripPdfExtension(document.fileName ?? "Untitled");
@@ -5532,8 +5532,8 @@ export function App() {
       setFilingProgress({
         phase: "done",
         message: savedOutput.directoryPath
-          ? `Filing output saved to ${savedOutput.directoryPath}. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.`
-          : "Filing output saved. The output preflight is facts-based for very large files — checks the engine can't compute were not evaluated.",
+          ? `Filing output saved to ${savedOutput.directoryPath}. For very large files, some of the pre-filing checks are skipped — review the result before filing.`
+          : "Filing output saved. For very large files, some of the pre-filing checks are skipped — review the result before filing.",
       });
     })()
       .catch((error: unknown) => {
@@ -5596,7 +5596,7 @@ export function App() {
     if (convertOutputToPdfA && !engineBridge.available) {
       setFilingProgress({
         phase: "error",
-        message: "PDF/A export is available in the desktop app.",
+        message: "Saving as PDF/A (archival format) only works in the installed RaioPDF app.",
       });
       return;
     }
@@ -5637,7 +5637,7 @@ export function App() {
         if (!engineBridge.available) {
           setFilingProgress({
             phase: "error",
-            message: "Encryption removal is available in the desktop app.",
+            message: "Removing password protection only works in the installed RaioPDF app.",
           });
           return;
         }
@@ -5717,7 +5717,7 @@ export function App() {
         if (markupAnnotationChoice === "flatten") {
           setFilingProgress({
             phase: "normalizing",
-            message: "Flattening RaioPDF markup annotations for filing...",
+            message: "Making your markup permanent for filing...",
           });
           const flattenedMarkupHandle = await filingEngine.flattenMarkupAnnotations(workingHandle);
           closeHandles.push(flattenedMarkupHandle);
@@ -5777,7 +5777,7 @@ export function App() {
           setFilingProgress({
             phase: "normalizing",
             message: selectedSteps.has("convert-pdfa")
-              ? "Scrubbing metadata before PDF/A conversion rewrites conformance metadata..."
+              ? "Removing hidden document info before converting to PDF/A (archival format)..."
               : "Scrubbing metadata...",
           });
           const scrubbedHandle = await filingEngine.scrubMetadata(workingHandle);
@@ -5819,7 +5819,7 @@ export function App() {
 
           setFilingProgress({
             phase: "normalizing",
-            message: "Verifying the filing copy text layer...",
+            message: "Checking the filing copy's searchable text...",
           });
           // Advisory: a less-than-perfect text layer rides along as a warning on
           // the output, it never blocks the save. An unparseable OCR result can't be
@@ -5853,7 +5853,7 @@ export function App() {
         if (selectedSteps.has("flatten-forms")) {
           setFilingProgress({
             phase: "normalizing",
-            message: "Flattening form fields...",
+            message: "Locking the form fields...",
           });
           const flattenedHandle = await filingEngine.flattenForm(workingHandle);
           closeHandles.push(flattenedHandle);
@@ -5878,8 +5878,8 @@ export function App() {
           setFilingProgress({
             phase: "converting",
             message: selectedSteps.has("split-by-size")
-              ? "Converting each split filing part to PDF/A in the desktop engine..."
-              : "Converting the filing copy to PDF/A in the desktop engine...",
+              ? "Converting each split filing part to PDF/A (archival format)..."
+              : "Converting the filing copy to PDF/A (archival format)...",
           });
         }
         const preparedOutput = await prepareFilingOutputParts({
@@ -6132,7 +6132,7 @@ export function App() {
     }
 
     if (!engineBridge.available) {
-      setError("Exporting to PDF/A needs the desktop app's bundled engine.");
+      setError("Saving as PDF/A (the long-term archival format) isn't available in this version of RaioPDF.");
       return;
     }
 
@@ -6149,7 +6149,7 @@ export function App() {
         const confirmed = window.confirm(
           `${unappliedRedactionMarks} pending redaction `
             + `${unappliedRedactionMarks === 1 ? "mark has" : "marks have"} not been applied. `
-            + "Exporting PDF/A now saves a copy of the current PDF bytes, so those visible boxes "
+            + "Exporting PDF/A now saves a copy of the document exactly as it looks now, so those boxes "
             + "will be omitted and the underlying content will remain in the export. Export anyway?",
         );
 
@@ -6166,7 +6166,7 @@ export function App() {
 
       if ((impact && hasPdfAConversionImpact(impact)) || markupAnnotationCount > 0) {
         const confirmed = window.confirm(
-          "Converting to PDF/A flattens form fields and interactive annotations into the page. "
+          "Converting to PDF/A merges form fields and interactive markup permanently into the page. "
             + "The exported copy keeps how they look, but they'll no longer be fillable or editable. "
             + "Export anyway?",
         );
@@ -7075,7 +7075,7 @@ function streamedBinderGateMessage(status: PathOpsStatus | null, sizeBytes: numb
   }
   const entry = pathOpStatusEntry(status, "build_binder");
   if (!entry?.available) {
-    return "Combine with Exhibits for large documents needs the bundled Node binder engine, which is not available in this app install.";
+    return "Combining large documents into an exhibit binder isn't available in this version of RaioPDF. Reinstalling the latest version may add it.";
   }
   if (entry.maxInputBytes !== null && sizeBytes !== null && sizeBytes > entry.maxInputBytes) {
     return `Combine with Exhibits can process large main PDFs up to ${formatBytes(entry.maxInputBytes)}. This document is ${formatBytes(sizeBytes)}.`;
@@ -7096,7 +7096,7 @@ function streamedEditingGateMessage(
   }
   const entry = pathOpStatusEntry(status, "apply_edits");
   if (!entry?.available) {
-    return "Editing large documents needs the bundled Node editing engine, which is not available in this app install.";
+    return "Editing very large documents isn't available in this version of RaioPDF. Reinstalling the latest version may add it.";
   }
   if (entry.maxInputBytes !== null && sizeBytes !== null && sizeBytes > entry.maxInputBytes) {
     return `Editing large documents supports PDFs up to ${formatBytes(entry.maxInputBytes)}. This document is ${formatBytes(sizeBytes)}.`;
@@ -7123,7 +7123,7 @@ function formatStreamedRedactionSuccess(verification: PathOpsRedactionVerificati
     `Redacted and verified in the output file: ${passed.length} of ${areaCount} ` +
     `${areaCount === 1 ? "area" : "areas"} verified clean` +
     (pages.length > 0 ? ` (page${pages.length === 1 ? "" : "s"} ${pages.join(", ")})` : "") +
-    ". Redacted pages were rasterized — run Make Searchable to restore text search on them. " +
+    ". Redacted pages were turned into images to guarantee the text is gone — run Make Searchable if you need to search them again. " +
     "Your original file is untouched; the redacted copy opened as a new document, use Save As to keep it."
   );
 }
@@ -7396,7 +7396,7 @@ function filingRunOverrides({
   }
 
   if (scrubbedBeforePdfA) {
-    overrides.push("metadata scrub ran before PDF/A conversion so the converter can write PDF/A conformance metadata");
+    overrides.push("hidden info was removed first so the PDF/A archival format could be written correctly");
   }
 
   return overrides;
@@ -7688,7 +7688,7 @@ function runFilingPreflight(
 
 function formatRedactionVerificationSuccess(result: RedactionVerificationResult): string {
   const textLayer = result.textLayer.status === "pass"
-    ? "text layer verified clean"
+    ? "hidden text confirmed removed"
     : "no source text was extractable from marked areas";
 
   return (

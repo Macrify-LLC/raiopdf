@@ -319,7 +319,7 @@ describe("Florida jurisdiction pack", () => {
 
     expect(searchable).toMatchObject({
       status: "warn",
-      detail: "The document's text layer looks unreliable on 1 of 2 pages; re-OCR is recommended.",
+      detail: "The document's hidden searchable text looks garbled on 1 of 2 pages; running Make Searchable again is recommended.",
     });
   });
 

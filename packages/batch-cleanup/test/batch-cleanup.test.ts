@@ -96,7 +96,7 @@ describe("runBatchCleanup", () => {
     }, { local: new RecordingEngine() });
 
     expect(result.files[0]!.status).toBe("failed");
-    expect(result.files[0]!.reason).toMatch(/sanitize requires the desktop sidecar engine/i);
+    expect(result.files[0]!.reason).toMatch(/sanitize isn't available right now/i);
     expect(result.manifest.uploadFiles).toHaveLength(0);
   });
 

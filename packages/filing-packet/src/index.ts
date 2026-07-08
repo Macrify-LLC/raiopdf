@@ -396,7 +396,7 @@ async function prepareDocument({
         record(step, "run", "Pages normalized to the pack page size and orientation.");
       } else if (step.id === "sanitize-content") {
         if (!sidecarEngine) {
-          record(step, "unsupported", "Sanitize requires the desktop sidecar engine.");
+          record(step, "unsupported", "Couldn't clean active/embedded content this run — that tool wasn't available. Restart RaioPDF and rebuild the packet.");
           continue;
         }
         const sidecarDocument = await reopenInEngine(workingEngine, sidecarEngine, working);
@@ -410,10 +410,10 @@ async function prepareDocument({
         record(step, "run", `Sanitized content; removed ${sanitized.removed.length} item type(s).`);
       } else if (step.id === "scrub-metadata") {
         replaceWorking(await workingEngine.scrubMetadata(working), workingEngine);
-        record(step, "run", "Metadata scrubbed where supported by the local engine.");
+        record(step, "run", "Hidden metadata removed where RaioPDF was able to remove it.");
       } else if (step.id === "make-searchable") {
         if (!sidecarEngine) {
-          record(step, "unsupported", "Make Searchable requires the desktop sidecar engine.");
+          record(step, "unsupported", "Couldn't run OCR this run — that tool wasn't available. Restart RaioPDF and rebuild the packet.");
           continue;
         }
         const sidecarDocument = await reopenInEngine(workingEngine, sidecarEngine, working);
@@ -468,7 +468,7 @@ async function prepareDocument({
     if (convertOutput) {
       if (!sidecarEngine) {
         if (convertStep) {
-          record(convertStep, "unsupported", "PDF/A conversion requires the desktop sidecar engine.");
+          record(convertStep, "unsupported", "Couldn't convert to the archival PDF/A format this run — that tool wasn't available. Restart RaioPDF and rebuild the packet.");
         }
       } else {
         const sidecarDocument = await reopenInEngine(outputEngine, sidecarEngine, outputHandle);

@@ -395,7 +395,7 @@ function OrganizePagesGrid({
           return;
         }
 
-        setStatus("Inserting pages through the local engine...");
+        setStatus("Inserting pages...");
         const inserted = await delegatedOps.insert(entry.grant, insertAt);
         setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted.");
         return;
@@ -601,7 +601,7 @@ function OrganizePagesGrid({
           className="organize-secondary"
           onClick={() => setSlipSheetOpen(true)}
           disabled={!canInsertSlipSheet}
-          title={canInsertSlipSheet ? "Insert a generated slip sheet at the selected position." : "Not yet available for very large documents opened in streaming mode."}
+          title={canInsertSlipSheet ? "Insert a generated slip sheet at the selected position." : "Not yet available for very large documents."}
         >
           <SlipSheetIcon size={15} />
           Insert Slip Sheet
@@ -983,7 +983,7 @@ function MergeFlow({
       return;
     }
 
-    setStatus(delegatedMerge ? "Merging PDFs through the local engine..." : "Merging PDFs...");
+    setStatus(delegatedMerge ? "Merging PDFs..." : "Merging PDFs...");
     const merged = delegatedMerge
       ? await delegatedMerge(entries.flatMap((entry) => (entry.kind === "grant" ? [entry.grant] : [])))
       : await onMerge(entries.flatMap((entry) => (entry.kind === "bytes" ? [entry.file] : [])));
@@ -1154,7 +1154,7 @@ function InsertFlow({
         return;
       }
 
-      setStatus("Inserting pages through the local engine...");
+      setStatus("Inserting pages...");
       const inserted = await delegatedInsert(entry.grant, pageNumber);
       setStatus(inserted ? "Inserted pages opened as the working document." : "The selected file could not be inserted. Check the file and try again.");
       return;

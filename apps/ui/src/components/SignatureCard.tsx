@@ -255,7 +255,7 @@ export function SignatureCard({ editing }: SignatureCardProps) {
             checked={editing.flattenOnSave}
             onChange={(event) => editing.setFlattenOnSave(event.target.checked)}
           />
-          Flatten on save
+          Make signature permanent on save
         </label>
         <p className="signature-card__note">Saved signatures stay on this computer.</p>
       </div>

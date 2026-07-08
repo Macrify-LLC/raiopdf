@@ -400,7 +400,7 @@ export function ToolPanel({
         />
         <ToolRow
           icon={<OcrSearchIcon size={16} />}
-          label="Force re-OCR text layer"
+          label="Redo searchable text"
           description="Rebuild the invisible searchable text by re-rendering the whole file."
           disabled={!hasDocument || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onForceOcr}
@@ -530,10 +530,10 @@ function MarkupAnnotationControls({
           type="button"
           className="tool-panel__secondary-button"
           disabled={!hasDocument}
-          aria-label="Flatten RaioPDF markup annotations"
+          aria-label="Make markup permanent"
           onClick={onFlattenMarkupAnnotations}
         >
-          Flatten markup
+          Make markup permanent
         </button>
       </div>
       {message ? (
@@ -588,7 +588,7 @@ function RedactionStatusPanel({
   }
 
   if (!state.available) {
-    return <InlineMessage tone="neutral" message="This action is available in the desktop app." />;
+    return <InlineMessage tone="neutral" message="This tool only works in the installed RaioPDF app." />;
   }
 
   if (state.phase === "confirming") {
@@ -1280,7 +1280,7 @@ function CompressPanel({
 export function DesktopCapabilityMessage() {
   return (
     <p className="tool-panel__status-line">
-      This action is available in the desktop app.
+      This tool only works in the installed RaioPDF app.
     </p>
   );
 }

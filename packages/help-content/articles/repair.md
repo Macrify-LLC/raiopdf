@@ -8,8 +8,8 @@ order: 80
 
 # Repair
 
-Some PDFs are built in unusual ways and won't open properly. Repair asks the
-built-in engine to rebuild the file so it opens cleanly.
+Some PDFs are built in unusual ways and won't open properly. Repair rebuilds the
+file so it opens cleanly.
 
 ## How to do it
 
@@ -21,7 +21,7 @@ yourself:
 
 ## What to know
 
-- **It runs on your machine**, using the built-in engine.
+- **It runs on your machine**, inside RaioPDF.
 - **The repaired version opens as a new file.** When you **Save**, RaioPDF asks
   for a new file name, so your original is left as it was.
 

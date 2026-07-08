@@ -37,7 +37,7 @@ describe("AppShell", () => {
     );
 
     expect(html).toContain("canvas-well__engine-starting");
-    expect(html).toContain("Starting the PDF engine");
+    expect(html).toContain("Getting things ready");
   });
 
   it("suppresses the canvas engine-starting overlay while the OCR dialog is running", () => {
@@ -94,7 +94,7 @@ describe("AppShell", () => {
 
     expect(html).toContain("Pin all (1)");
     expect(html).toContain("Unpin all");
-    expect(html).toContain("Flatten");
+    expect(html).toContain("Make markup permanent");
   });
 
   it("renders interactive document tabs with close labels", () => {

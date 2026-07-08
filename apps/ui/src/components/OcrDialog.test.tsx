@@ -37,7 +37,7 @@ describe("OcrDialog", () => {
       />,
     );
 
-    expect(html).toContain("Starting the PDF engine");
+    expect(html).toContain("Getting things ready");
     expect(html).toContain("role=\"status\"");
     expect(html).toContain("data-phase=\"starting-engine\"");
   });

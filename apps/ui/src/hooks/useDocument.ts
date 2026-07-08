@@ -51,11 +51,11 @@ export type DocumentSource =
 
 /**
  * Gate copy for every mutation path while a streamed document is open. The
- * named alternatives run file-to-file through the local engine (Phase 3 path
- * ops) and never require materializing the document in memory.
+ * named alternatives run file-to-file (Phase 3 path ops) and never require
+ * materializing the document in memory.
  */
 export const STREAMED_DOCUMENT_GATE_MESSAGE =
-  "This document is too large for some in-memory tools. Annotation editing, exhibits, split, extract, compress, repair, OCR, redaction, Bates stamps, page numbers, and watermarks run through the local engine when this desktop app has file access; document text editing, form filling, flattening, crop/rotate, image insertion, and password protection are still unavailable for streamed documents.";
+  "This document is very large, so some tools are turned off for it. Available: exhibits, split, extract, compress, repair, Make Searchable (OCR), redaction, Bates stamps, page numbers, and watermarks. Not available for files this size: text editing, form filling, crop/rotate, adding images, and password protection.";
 
 export interface DocumentState {
   bytes: Uint8Array | null;

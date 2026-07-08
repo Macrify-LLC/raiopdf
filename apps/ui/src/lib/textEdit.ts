@@ -157,7 +157,7 @@ export function deriveTextEditGate({
   }
 
   if (!engineAvailable) {
-    return { blocked: true, message: "This action is available in the desktop app.", notes: [] };
+    return { blocked: true, message: "This tool only works in the installed RaioPDF app.", notes: [] };
   }
 
   if (streamed) {

@@ -644,7 +644,7 @@ export function useTextEdit({
           const confirmed = await confirmPdfAIdentificationRemoval();
           if (!confirmed) {
             setPhase("idle");
-            setMessage("Text editing was cancelled; the PDF/A document was not modified.");
+            setMessage("Text editing was cancelled; the PDF/A (archival format) document was not modified.");
             return;
           }
           allowPdfAIdentificationRemoval = true;

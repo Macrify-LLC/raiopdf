@@ -77,7 +77,7 @@ describe("PasswordDialog", () => {
     renderDialog({ phase: "starting-engine", error: null, onSubmit: () => undefined });
 
     expect(document.querySelector("[role='status']")?.textContent).toBe(
-      "Starting the PDF engine…",
+      "Getting things ready…",
     );
   });
 

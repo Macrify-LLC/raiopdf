@@ -419,7 +419,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar crop operations are unsupported until the Stirling PDF crop endpoint contract is verified.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -430,7 +430,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar resize operations are unsupported until the Stirling PDF scale-pages endpoint contract is verified.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -440,7 +440,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar page normalization is unsupported until the Stirling PDF scale-pages endpoint contract is verified.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -450,7 +450,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfSplitByMaxBytesResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar byte-capped splitting is unsupported; use the local engine for deterministic page-boundary packing.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -722,7 +722,7 @@ export class SidecarPdfEngine implements PdfEngine {
       replacedCounts: null,
       warnings: [{
         code: "COUNTS_UNAVAILABLE",
-        message: "The text engine returned edited bytes but does not report replacement counts.",
+        message: "Your text changes were applied. RaioPDF can't confirm exactly how many matches were replaced.",
       }, ...output.warnings],
     };
   }
@@ -880,7 +880,7 @@ export class SidecarPdfEngine implements PdfEngine {
     if (hasNewNotoBaseFont(preflight.inputBaseFonts, outputBaseFonts)) {
       warnings.push({
         code: "FALLBACK_FONT_POSSIBLE",
-        message: "The output references a Noto fallback font that was not present in the input, so affected pages may have been re-laid out.",
+        message: "Some text used a substitute font, so a few pages may look slightly different. Review them before relying on the file.",
       });
     }
 
@@ -935,7 +935,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<readonly PdfTextRegion[]> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Region text extraction is unavailable in the sidecar engine; verify redaction output with pdf.js.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -976,7 +976,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar binder creation is unsupported because Stirling PDF cannot create caller-defined exhibit outline entries.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -986,7 +986,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Simple page numbering is handled by the local pdf-lib engine for deterministic page-by-page stamping.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -996,7 +996,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Watermarking is handled by the local pdf-lib engine so text placement stays rotation-aware.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1007,7 +1007,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfOutlineWriteResult> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Image-page insertion is handled by the local pdf-lib engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1095,7 +1095,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Add-content edits are applied by the local pdf-lib engine; the sidecar round-trip adds nothing.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1104,7 +1104,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<readonly PdfRaioAnnotationImport[]> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "RaioPDF annotation read-back is handled by the local pdf-lib engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1116,7 +1116,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "RaioPDF annotation updates are handled by the local pdf-lib engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1126,7 +1126,7 @@ export class SidecarPdfEngine implements PdfEngine {
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "RaioPDF annotation deletes are handled by the local pdf-lib engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1139,14 +1139,14 @@ export class SidecarPdfEngine implements PdfEngine {
   async flattenForm(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Form flattening is handled by the local pdf-lib engine; the sidecar round-trip adds nothing.",
+      "That operation isn't available for this document.",
     );
   }
 
   async flattenMarkupAnnotations(_document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Markup annotation flattening is handled by the local pdf-lib engine.",
+      "That operation isn't available for this document.",
     );
   }
 
@@ -1184,7 +1184,7 @@ export class SidecarPdfEngine implements PdfEngine {
     if (pageCount === null) {
       throw new PdfEngineError(
         "INVALID_DOCUMENT",
-        "Stirling PDF did not return a readable page count.",
+        "RaioPDF couldn't read this file's page count. It may be corrupt or unsupported.",
       );
     }
 
@@ -1246,7 +1246,7 @@ export class SidecarPdfEngine implements PdfEngine {
         body,
       });
     } catch (error) {
-      throw new PdfEngineError("INVALID_DOCUMENT", "Stirling PDF request failed.", {
+      throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF's PDF engine couldn't complete that. Try reopening the file.", {
         cause: error,
       });
     }
@@ -1287,7 +1287,7 @@ export class SidecarPdfEngine implements PdfEngine {
         body: requestBody,
       });
     } catch (error) {
-      throw new PdfEngineError("INVALID_DOCUMENT", "Local engine request failed.", {
+      throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF couldn't complete that operation. Try reopening the file.", {
         cause: error,
       });
     }
@@ -2000,7 +2000,7 @@ function assertRasterizedTextRedaction(options: PdfRedactTextOptions): void {
   if (options.rasterize !== true) {
     throw new PdfEngineError(
       "UNSUPPORTED",
-      "Sidecar text redaction requires rasterize=true so Stirling removes recoverable text by converting pages to images.",
+      "That operation isn't available for this document.",
     );
   }
 }
@@ -2166,7 +2166,7 @@ async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
   } catch (error) {
-    throw new PdfEngineError("INVALID_DOCUMENT", "Stirling PDF returned invalid JSON.", {
+    throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF got an unreadable response while working on this file. Try reopening it.", {
       cause: error,
     });
   }
@@ -2248,7 +2248,7 @@ async function throwResponseError(response: Response): Promise<never> {
   const code = mapHttpStatusToErrorCode(response.status, message, errorCode);
   const detail = errorCode ? `${message} (${errorCode})` : message;
 
-  throw new PdfEngineError(code, `Stirling PDF request failed: ${detail}`);
+  throw new PdfEngineError(code, `RaioPDF couldn't complete that: ${detail}`);
 }
 
 async function readResponseText(response: Response): Promise<string | null> {

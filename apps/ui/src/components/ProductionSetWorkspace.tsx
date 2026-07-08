@@ -355,7 +355,7 @@ export function ProductionSetWorkspace({
             <input
               value={outputDir}
               onChange={(event) => setOutputDir(event.target.value)}
-              placeholder="/absolute/path/to/empty-folder"
+              placeholder="Choose an empty folder..."
             />
           </label>
         </div>

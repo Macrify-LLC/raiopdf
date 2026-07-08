@@ -1240,6 +1240,14 @@ function PrepChecklist({
     });
   }
 
+  function toggleStep(stepId: PrepPlanStepId) {
+    if (loadingReport) {
+      return;
+    }
+
+    onToggle(stepId);
+  }
+
   return (
     <section className="filing-prep" aria-label="Preparation checklist" aria-busy={loadingReport}>
       <div className="filing-prep__header">
@@ -1266,7 +1274,7 @@ function PrepChecklist({
           </div>
         ) : null}
       </div>
-      <div className="filing-prep__rows" role="list">
+      <div className="filing-prep__rows" role="list" inert={loadingReport}>
         {steps.map((step) => (
           <PrepStepRow
             key={step.id}
@@ -1278,7 +1286,7 @@ function PrepChecklist({
             onToggleExpanded={() => toggleExpanded(step.id)}
             customSplitMegabytes={customSplitMegabytes}
             onCustomSplitMegabytesChange={onCustomSplitMegabytesChange}
-            onToggle={() => onToggle(step.id)}
+            onToggle={() => toggleStep(step.id)}
           />
         ))}
       </div>

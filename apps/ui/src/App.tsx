@@ -62,6 +62,9 @@ import {
 import {
   PrepareForFilingWorkspace,
   FilingOverflowMenu,
+  filingProgressSteps,
+  formatProgressLabel,
+  isFilingProgressActive,
   type CertificateOfServiceDraft,
   type FilingImpactState,
   type FilingPacketBuildInput,
@@ -96,10 +99,17 @@ import { EditTextReviewDialog } from "./components/EditTextReviewDialog";
 import { FloatingDialog, hasOpenDialogStackEntry } from "./components/FloatingDialog";
 import { ForceOcrConfirmationDialog } from "./components/ForceOcrConfirmationDialog";
 import { HelpPanel } from "./components/HelpPanel";
-import { OcrDialog, type OcrDialogPhase } from "./components/OcrDialog";
+import {
+  OcrDialog,
+  formatOcrRunningMessage,
+  toLongProcessProgress,
+  type OcrDialogPhase,
+} from "./components/OcrDialog";
 import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
 import { PrintDialog } from "./components/PrintDialog";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
+import { DockedProcessLoader } from "./components/DockedProcessLoader";
+import type { DockedProcessLoaderProps } from "./components/DockedProcessLoader";
 import {
   isEngineBridgeUnavailableError,
   useEngineBridge,
@@ -324,12 +334,24 @@ export interface OcrUiState {
   progress?: OcrProgressEvent | null;
 }
 
+interface BinderProgressState {
+  running: boolean;
+  message: string | null;
+  detail: string | null;
+}
+
+interface ActiveLongProcess {
+  label: string;
+  loader: DockedProcessLoaderProps;
+}
+
 function isOcrDialogPhase(phase: OcrPhase): phase is OcrDialogPhase {
   return (
     phase === "confirm" ||
     phase === "starting-engine" ||
     phase === "processing" ||
-    phase === "verifying"
+    phase === "verifying" ||
+    phase === "error"
   );
 }
 
@@ -782,6 +804,11 @@ export function App() {
     message: null,
     result: null,
   });
+  const [binderProgress, setBinderProgress] = useState<BinderProgressState>({
+    running: false,
+    message: null,
+    detail: null,
+  });
   const [productionProgress, setProductionProgress] = useState<ProductionSetProgress>({
     running: false,
     message: null,
@@ -812,6 +839,21 @@ export function App() {
     () => resolvePrepPlan(filingPack, filingFacts ?? emptyDocumentFacts(document)),
     [document.fileName, document.fileSizeBytes, filingFacts, filingPack],
   );
+
+  useEffect(() => {
+    if (filingProgress.phase === "done" || filingProgress.phase === "error") {
+      setActiveLegalTool("prepare-for-filing");
+    }
+  }, [filingProgress.phase]);
+
+  const longProcessRunning = isFilingProgressActive(filingProgress.phase) ||
+    filingPacketProgress.running ||
+    binderProgress.running ||
+    ocrState.phase === "starting-engine" ||
+    ocrState.phase === "processing" ||
+    ocrState.phase === "verifying" ||
+    textEdit.phase === "staging" ||
+    textEdit.phase === "applying";
   // Streamed checklist enablement is the closed-form rule [R7-1]: a step is
   // enabled ⟺ a registered path op implements it AND its toolchain is
   // available — computed from `path_ops_status`, never a hand list.
@@ -1470,6 +1512,7 @@ export function App() {
     setFilingResult(null);
     setFilingImpact(null);
     setFilingPacketProgress({ running: false, message: null, result: null });
+    setBinderProgress({ running: false, message: null, detail: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
     setSidecarStatus({
@@ -1497,6 +1540,7 @@ export function App() {
     setFilingResult(null);
     setFilingImpact(null);
     setFilingPacketProgress({ running: false, message: null, result: null });
+    setBinderProgress({ running: false, message: null, detail: null });
     setProductionProgress({ running: false, message: null, result: null });
     setBatchCleanupProgress({ running: false, message: null, result: null });
     if (!preserveFilingProgress) {
@@ -1972,6 +2016,10 @@ export function App() {
   }, [editing]);
 
   const requestTextEditMode = useCallback(() => {
+    if (longProcessRunning) {
+      return;
+    }
+
     if (activeTextEdit) {
       setActiveTextEdit(false);
       return;
@@ -1988,7 +2036,7 @@ export function App() {
     }
 
     enterTextEditMode();
-  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, setError, streamedDocument, textEdit.gate.message]);
+  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, longProcessRunning, setError, streamedDocument, textEdit.gate.message]);
 
   const saveAnnotationsAndEnterTextEdit = useCallback(async () => {
     const pendingApply = editing.collectAnnotationSavePlan();
@@ -2640,6 +2688,10 @@ export function App() {
   }, [document.bytes, engineBridge, streamedDocument]);
 
   const openOcrDialog = useCallback((ocrType: OcrType) => {
+    if (longProcessRunning) {
+      return;
+    }
+
     if (streamedDocument) {
       if (!pathOpsGrant) {
         setOcrState({ phase: "error", message: STREAMED_DOCUMENT_GATE_MESSAGE });
@@ -2680,7 +2732,7 @@ export function App() {
     // won't start.
     engineBridge.warmEngine();
     setOcrState({ phase: "confirm", message: null });
-  }, [document.bytes, engineBridge, pathOpsGrant, streamedDocument]);
+  }, [document.bytes, engineBridge, longProcessRunning, pathOpsGrant, streamedDocument]);
 
   const makeSearchable = useCallback(() => {
     const status = deriveTextLayerStatus(document.textLayerCoverage);
@@ -3822,39 +3874,69 @@ export function App() {
       const sourceBytes = document.bytes;
       const sourceOpenToken = getOpenToken();
       const sourceGeneration = document.generation;
+      const detail = `${stripPdfExtension(document.fileName ?? "Untitled")} + ${exhibits.length} ${
+        exhibits.length === 1 ? "exhibit" : "exhibits"
+      }`;
 
-      if (sourceBytes) {
-        return buildBinderInMemory(exhibits, options, fileName);
-      }
-
-      if (!streamedDocument || !pathOpsGrant) {
-        setError(streamedDocument
-          ? STREAMED_DOCUMENT_GATE_MESSAGE
-          : "Open a PDF before building an exhibit binder.");
-        return false;
-      }
-
-      if (!isPathOpAvailableForInput(
-        pathOpsGeneralStatus,
-        "build_binder",
-        document.fileSizeBytes,
-      )) {
-        setError(streamedBinderGateMessage(pathOpsGeneralStatus, document.fileSizeBytes));
-        return false;
-      }
-
-      setSidecarStatus({
+      setBinderProgress({
         running: true,
-        message: "Building your exhibit binder...",
-        removed: [],
-        beforeBytes: document.fileSizeBytes,
-        afterBytes: null,
+        message: "Building binder...",
+        detail,
       });
 
       try {
+        if (sourceBytes) {
+          const built = await buildBinderInMemory(exhibits, options, fileName);
+          setBinderProgress({
+            running: false,
+            message: built ? "Binder built." : "The binder could not be built.",
+            detail,
+          });
+          if (!built) {
+            setActiveLegalTool("combine-exhibits");
+          }
+          return built;
+        }
+
+        if (!streamedDocument || !pathOpsGrant) {
+          setError(streamedDocument
+            ? STREAMED_DOCUMENT_GATE_MESSAGE
+            : "Open a PDF before building an exhibit binder.");
+          setBinderProgress({
+            running: false,
+            message: streamedDocument
+              ? STREAMED_DOCUMENT_GATE_MESSAGE
+              : "Open a PDF before building an exhibit binder.",
+            detail,
+          });
+          setActiveLegalTool("combine-exhibits");
+          return false;
+        }
+
+        if (!isPathOpAvailableForInput(
+          pathOpsGeneralStatus,
+          "build_binder",
+          document.fileSizeBytes,
+        )) {
+          const message = streamedBinderGateMessage(pathOpsGeneralStatus, document.fileSizeBytes);
+          setError(message);
+          setBinderProgress({ running: false, message, detail });
+          setActiveLegalTool("combine-exhibits");
+          return false;
+        }
+
+        setSidecarStatus({
+          running: true,
+          message: "Building your exhibit binder...",
+          removed: [],
+          beforeBytes: document.fileSizeBytes,
+          afterBytes: null,
+        });
+
         const output = await pathOpBuildBinder(pathOpsGrant, exhibits, options, fileName);
 
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setBinderProgress({ running: false, message: null, detail: null });
           return true;
         }
 
@@ -3873,6 +3955,8 @@ export function App() {
             beforeBytes: document.fileSizeBytes,
             afterBytes: null,
           });
+          setBinderProgress({ running: false, message, detail });
+          setActiveLegalTool("combine-exhibits");
           return false;
         }
 
@@ -3883,9 +3967,15 @@ export function App() {
           beforeBytes: document.fileSizeBytes,
           afterBytes: output.sizeBytes,
         });
+        setBinderProgress({
+          running: false,
+          message: "Binder built.",
+          detail,
+        });
         return true;
       } catch (error) {
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setBinderProgress({ running: false, message: null, detail: null });
           return true;
         }
 
@@ -3901,12 +3991,15 @@ export function App() {
           afterBytes: null,
         });
         setError(message);
+        setBinderProgress({ running: false, message, detail });
+        setActiveLegalTool("combine-exhibits");
         return false;
       }
     },
     [
       buildBinderInMemory,
       document.bytes,
+      document.fileName,
       document.fileSizeBytes,
       document.generation,
       getOpenToken,
@@ -3971,6 +4064,13 @@ export function App() {
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
+      if (
+        longProcessRunning &&
+        (toolId === "prepare-for-filing" || toolId === "combine-exhibits")
+      ) {
+        return;
+      }
+
       // Streamed mode: tools whose flow now runs file-to-file through the
       // PathOpsEngine (or that were already path/proxy-based) are open;
       // everything still byte-based stays gated with the message naming
@@ -3998,7 +4098,7 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [document.fileSizeBytes, editing, pathOpsGeneralStatus, pathOpsGrant, setError, streamedDocument],
+    [document.fileSizeBytes, editing, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
@@ -5603,6 +5703,7 @@ export function App() {
       if (pathOpsGrant && streamedDocument) {
         // Streamed run branch [R6-1]: the reduced, fully path-based filing
         // pipeline replaces the byte pipeline for very large documents.
+        setActiveLegalTool(null);
         prepareStreamedFilingCopy(pathOpsGrant, certificate, options);
         return;
       }
@@ -5640,6 +5741,7 @@ export function App() {
       phase: "normalizing",
       message: "Preparing the filing copy from the selected checklist...",
     });
+    setActiveLegalTool(null);
 
     void (async () => {
       let filingSourceBytes = sourceBytes;
@@ -5727,6 +5829,7 @@ export function App() {
             normalizePagesSelected: selectedSteps.has("normalize-pages"),
           });
           setFilingProgress({ phase: "idle", message: null });
+          setActiveLegalTool("prepare-for-filing");
           return;
         }
       }
@@ -6463,6 +6566,81 @@ export function App() {
     <EditModeBar editing={editingForShell} />
   ) : null;
 
+  const activeLongProcess = useMemo<ActiveLongProcess | null>(() => {
+    if (isFilingProgressActive(filingProgress.phase)) {
+      return {
+        label: "Prepare for Filing",
+        loader: {
+          phaseLabel: formatProgressLabel(filingProgress.phase),
+          message: filingProgress.message ?? formatProgressLabel(filingProgress.phase),
+          detail: document.fileSizeBytes ? `Working on ${formatBytes(document.fileSizeBytes)}` : document.fileName ?? undefined,
+          steps: filingProgressSteps(filingProgress.phase),
+          progress: filingProgress.progress ?? null,
+        },
+      };
+    }
+
+    if (
+      ocrState.phase === "starting-engine" ||
+      ocrState.phase === "processing" ||
+      ocrState.phase === "verifying"
+    ) {
+      return {
+        label: "OCR",
+        loader: {
+          phaseLabel: "Make Searchable",
+          message: formatOcrRunningMessage(ocrState.phase, ocrState.progress ?? null),
+          detail: document.pageCount > 0
+            ? `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`
+            : undefined,
+          progress: toLongProcessProgress(ocrState.progress ?? null),
+        },
+      };
+    }
+
+    if (binderProgress.running) {
+      return {
+        label: "Combine with Exhibits",
+        loader: {
+          phaseLabel: "Building binder",
+          message: binderProgress.message ?? "Building binder...",
+          detail: binderProgress.detail ?? undefined,
+        },
+      };
+    }
+
+    if (textEdit.phase === "staging" || textEdit.phase === "applying") {
+      return {
+        label: "Find & Replace",
+        loader: {
+          phaseLabel: textEdit.phase === "staging" ? "Staging replacement" : "Applying replacement",
+          message: textEdit.phase === "staging"
+            ? "Preparing a preview of your changes."
+            : "Opening the edited PDF as a Save As copy.",
+          detail: textEdit.phase === "staging"
+            ? "Image-heavy documents can take a few minutes."
+            : "Save will prompt for a destination.",
+        },
+      };
+    }
+
+    return null;
+  }, [
+    binderProgress,
+    document.fileName,
+    document.fileSizeBytes,
+    document.pageCount,
+    filingProgress,
+    ocrState.phase,
+    ocrState.progress,
+    textEdit.phase,
+  ]);
+  const longProcessLockoutLabel = activeLongProcess
+    ? `Paused while ${activeLongProcess.label} runs`
+    : filingPacketProgress.running
+      ? "Paused while Filing Packet runs"
+    : null;
+
   const workspace = activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
@@ -6504,10 +6682,16 @@ export function App() {
 
   function getFloatingDialog() {
     if (activeTextEdit) {
-      return <EditTextReviewDialog textEdit={textEdit} />;
+      return textEdit.phase === "staging" || textEdit.phase === "applying"
+        ? null
+        : <EditTextReviewDialog textEdit={textEdit} />;
     }
 
     if (activeLegalTool === "prepare-for-filing") {
+      if (isFilingProgressActive(filingProgress.phase)) {
+        return null;
+      }
+
       return (
         <FloatingDialog
           title="Prepare for Filing"
@@ -6780,6 +6964,12 @@ export function App() {
         documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
         workspace={workspace}
         overlay={overlay}
+        processLoader={
+          activeLongProcess ? (
+            <DockedProcessLoader {...activeLongProcess.loader} />
+          ) : null
+        }
+        longProcessLockoutLabel={longProcessLockoutLabel}
         updateSlot={
           <UpdatePill
             status={updateStatus}
@@ -6841,6 +7031,7 @@ export function App() {
           phase={ocrState.phase}
           pageCount={document.pageCount}
           progress={ocrState.progress ?? null}
+          errorMessage={ocrState.message}
           onConfirm={confirmOcrDialog}
           onCancel={cancelOcrDialog}
         />

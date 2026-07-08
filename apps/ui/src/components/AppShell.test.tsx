@@ -115,6 +115,21 @@ describe("AppShell", () => {
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain("beta.pdf");
   });
+
+  it("renders the long-process lockout note", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          longProcessLockoutLabel: "Paused while OCR runs",
+        })}
+      />,
+    );
+
+    expect(html).toContain("Paused while OCR runs");
+    expect(html).toContain("command-bar__lockout-note");
+    expect(html).toContain("tool-panel__lockout-note");
+  });
 });
 
 function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {

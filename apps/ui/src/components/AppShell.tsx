@@ -38,7 +38,8 @@ function isOcrDialogPhase(phase: OcrUiState["phase"]): boolean {
     phase === "confirm" ||
     phase === "starting-engine" ||
     phase === "processing" ||
-    phase === "verifying"
+    phase === "verifying" ||
+    phase === "error"
   );
 }
 
@@ -82,6 +83,8 @@ export interface AppShellProps {
   documentBanner: ReactNode;
   workspace: ReactNode;
   overlay: ReactNode;
+  processLoader?: ReactNode;
+  longProcessLockoutLabel?: string | null | undefined;
   /** Update indicator (UpdatePill) rendered in the title bar's meta area. */
   updateSlot?: ReactNode;
   activeLegalTool: string | null;
@@ -161,6 +164,8 @@ export function AppShell({
   documentBanner,
   workspace,
   overlay,
+  processLoader,
+  longProcessLockoutLabel = null,
   updateSlot,
   activeLegalTool,
   activeTextEdit = false,
@@ -270,6 +275,7 @@ export function AppShell({
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
         onPrepareForFiling={() => onLegalToolSelected("prepare-for-filing")}
+        longProcessLockoutLabel={longProcessLockoutLabel}
       />
       <div className="app-shell__document-banner">{documentBanner}</div>
       <div className="app-shell__body">
@@ -292,6 +298,7 @@ export function AppShell({
         <CanvasWell
           workspace={workspace}
           overlay={overlay}
+          processLoader={processLoader}
           onOpenRequested={requestOpen}
           onHelpRequested={onHelpRequested}
           onFileDropped={onFileDropped}
@@ -325,6 +332,7 @@ export function AppShell({
           ocrState={ocrState}
           ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
+          suppressOcrErrorNotice={ocrState.phase === "error"}
           activeEditTool={editing.tool}
           activeTextEdit={activeTextEdit}
           activeEditDialogTool={activeEditDialogTool}
@@ -359,6 +367,7 @@ export function AppShell({
           onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
           onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
           markupAnnotationMessage={markupAnnotationMessage}
+          longProcessLockoutLabel={longProcessLockoutLabel}
         />
       </div>
       <StatusBar

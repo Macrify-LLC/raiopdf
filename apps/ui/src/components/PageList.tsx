@@ -56,6 +56,8 @@ export interface PageListProps {
   scrollIntent?: PageScrollIntent | null;
   /** Extra top inset inside the scroller (e.g. when a mode bar overlays it). */
   topInset?: number;
+  /** Extra bottom inset inside the scroller (e.g. when a docked footer overlays it). */
+  bottomInset?: number;
   onVisiblePageChange?: ((page: number) => void) | undefined;
   onZoomIn?: (() => void) | undefined;
   onZoomOut?: (() => void) | undefined;
@@ -96,6 +98,7 @@ export function PageList({
   fitWidth = false,
   scrollIntent = null,
   topInset = 0,
+  bottomInset = 0,
   onVisiblePageChange,
   onZoomIn,
   onZoomOut,
@@ -231,8 +234,8 @@ export function PageList({
   }, [pdfDocument]);
 
   const layout: PageLayout | null = useMemo(
-    () => (sizes ? computePageLayout(sizes.dims, zoom, sizes.measured, topInset) : null),
-    [sizes, topInset, zoom],
+    () => (sizes ? computePageLayout(sizes.dims, zoom, sizes.measured, topInset, bottomInset) : null),
+    [bottomInset, sizes, topInset, zoom],
   );
 
   const syncViewRect = useCallback(() => {

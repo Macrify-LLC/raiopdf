@@ -17,6 +17,7 @@ export type { PendingRedactionOverlay } from "./PageView";
 /** Height reserved for the floating mode bar above the first page. */
 const MODE_BAR_INSET = 44;
 const STACKED_MODE_BAR_INSET = 88;
+const PROCESS_LOADER_INSET = 88;
 
 export interface CanvasWellProps {
   onOpenRequested?: (() => void) | undefined;
@@ -36,6 +37,7 @@ export interface CanvasWellProps {
   onRenderError?: ((message: string) => void) | undefined;
   workspace?: ReactNode;
   overlay?: ReactNode;
+  processLoader?: ReactNode;
   redactionMode?: boolean;
   modeBar?: ReactNode;
   onFlattenMarkupAnnotations?: (() => void) | undefined;
@@ -77,6 +79,7 @@ export function CanvasWell({
   onRenderError,
   workspace = null,
   overlay = null,
+  processLoader = null,
   redactionMode = false,
   modeBar = null,
   onFlattenMarkupAnnotations,
@@ -182,6 +185,7 @@ export function CanvasWell({
                   ? MODE_BAR_INSET
                   : 0
             }
+            bottomInset={processLoader ? PROCESS_LOADER_INSET : 0}
             onVisiblePageChange={onVisiblePageChange}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}
@@ -234,6 +238,11 @@ export function CanvasWell({
           ) : null}
         </div>
       )}
+      {processLoader ? (
+        <div className="canvas-well__process-loader-slot">
+          {processLoader}
+        </div>
+      ) : null}
       {overlay}
     </section>
   );

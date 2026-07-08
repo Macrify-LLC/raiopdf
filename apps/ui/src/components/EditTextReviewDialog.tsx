@@ -50,7 +50,7 @@ export function EditTextReviewDialog({
     );
   }
 
-  if (textEdit.phase !== "review" || !textEdit.staged) {
+  if ((textEdit.phase !== "review" && textEdit.phase !== "error") || !textEdit.staged) {
     return null;
   }
 
@@ -61,6 +61,9 @@ export function EditTextReviewDialog({
       width="lg"
       onClose={textEdit.cancelReview}
     >
+      {textEdit.phase === "error" && textEdit.message ? (
+        <p className="tool-panel__field-error" role="alert">{textEdit.message}</p>
+      ) : null}
       <ReviewBody staged={textEdit.staged} onApply={textEdit.apply} onCancel={textEdit.cancelReview} />
     </FloatingDialog>
   );

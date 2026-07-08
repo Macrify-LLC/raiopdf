@@ -405,36 +405,6 @@ export const PrepareForFilingWorkspace = forwardRef<
     });
   }
 
-  // While a single-document filing run is in flight, take the whole workspace
-  // over with the shared long-process loader -- the same treatment OCR and the
-  // other engine jobs get -- instead of leaving an inline loader buried at the
-  // bottom of the checklist where the screen reads as "nothing is happening".
-  if (isFilingProgressActive(progress.phase)) {
-    return (
-      <section className="filing-workspace" aria-label="Prepare for Filing">
-        <div className="filing-card">
-          <p className="filing-card__document-line">
-            <BoltIcon variant="outline" size={14} />
-            <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
-            <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
-          </p>
-          <div
-            className="filing-progress filing-progress--running"
-            data-phase={progress.phase}
-            aria-live="polite"
-          >
-            <LongProcessLoader
-              phaseLabel={formatProgressLabel(progress.phase)}
-              message={progress.message ?? formatProgressLabel(progress.phase)}
-              steps={filingProgressSteps(progress.phase)}
-              progress={progress.progress ?? null}
-            />
-          </div>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section className="filing-workspace" aria-label="Prepare for Filing">
       <div className="filing-card">
@@ -943,6 +913,8 @@ function PacketBuilderPanel({
       </div>
       {progress.running ? (
         <div className="filing-progress" data-phase="active" aria-live="polite">
+          {/* TODO(docked-loader): Filing Packet owns packet file/order/output state inside this panel;
+              lift that form state before dismissing the configure dialog for a docked run. */}
           <LongProcessLoader
             phaseLabel="Building packet"
             message={localMessage ?? progress.message ?? "Writing packet files..."}
@@ -1709,7 +1681,7 @@ function formatStatus(check: PreflightCheck): string {
   return "OK";
 }
 
-function formatProgressLabel(phase: FilingProgressPhase): string {
+export function formatProgressLabel(phase: FilingProgressPhase): string {
   if (phase === "normalizing") {
     return "Normalizing";
   }
@@ -1741,7 +1713,7 @@ function formatProgressLabel(phase: FilingProgressPhase): string {
   return "Ready";
 }
 
-function isFilingProgressActive(phase: FilingProgressPhase): boolean {
+export function isFilingProgressActive(phase: FilingProgressPhase): boolean {
   return phase === "normalizing" ||
     phase === "ocr" ||
     phase === "splitting" ||
@@ -1862,7 +1834,7 @@ const PHASE_STEP_LABEL: Record<(typeof PHASE_SEQUENCE)[number], string> = {
   verifying: "Verify",
 };
 
-function filingProgressSteps(phase: FilingProgressPhase): LongProcessStep[] {
+export function filingProgressSteps(phase: FilingProgressPhase): LongProcessStep[] {
   const currentIndex = PHASE_SEQUENCE.findIndex((step) => step === phase);
 
   return PHASE_SEQUENCE.map((step, index) => ({

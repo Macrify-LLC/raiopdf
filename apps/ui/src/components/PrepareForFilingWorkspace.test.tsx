@@ -95,7 +95,7 @@ describe("PrepareForFilingWorkspace", () => {
     expect(html).toContain("Saved to /tmp/filing-output.");
   });
 
-  it("takes the workspace over with the shared loader while a run is active", () => {
+  it("leaves running Prepare progress to the docked app footer", () => {
     const pack = getPack();
     const html = renderToStaticMarkup(
       <PrepareForFilingWorkspace
@@ -121,13 +121,11 @@ describe("PrepareForFilingWorkspace", () => {
       />,
     );
 
-    // The shared long-process loader (the one OCR uses) is present...
-    expect(html).toContain("long-process-loader");
-    expect(html).toContain("filing-progress--running");
+    expect(html).not.toContain("long-process-loader");
+    expect(html).not.toContain("filing-progress--running");
     expect(html).toContain("Preparing the filing copy…");
-    // ...and the checklist chrome is swapped out, not left sitting behind it.
-    expect(html).not.toContain("Prepare mode");
-    expect(html).not.toContain("View the rules applied");
+    expect(html).toContain("Prepare mode");
+    expect(html).toContain("View the rules applied");
   });
 
   it("shows a filing-check read failure near the preflight checks", () => {

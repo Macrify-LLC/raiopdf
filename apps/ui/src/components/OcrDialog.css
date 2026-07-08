@@ -20,6 +20,17 @@
   margin: 0;
 }
 
+.ocr-dialog__error {
+  margin: 0;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
+}
+
 /* Empty on purpose today -- the seam a future page-range selector slots
    into without reshaping the confirm step around it. */
 .ocr-dialog__range-slot:empty {

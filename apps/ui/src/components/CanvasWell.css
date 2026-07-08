@@ -202,6 +202,23 @@
   box-shadow: var(--shadow-control);
 }
 
+.canvas-well__process-loader-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.canvas-well__process-loader-slot > * {
+  pointer-events: auto;
+}
+
+.canvas-well:has(.canvas-well__process-loader-slot) .canvas-well__message--floating {
+  bottom: 88px;
+}
+
 /*
  * The engine-starting moment gets real room: a dim scrim over the whole
  * well plus a centered card, instead of the 13px inline sun the OCR status

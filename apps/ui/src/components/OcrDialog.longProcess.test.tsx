@@ -1,29 +1,26 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { OcrDialog } from "./OcrDialog";
+import {
+  formatOcrRunningMessage,
+  toLongProcessProgress,
+} from "./OcrDialog";
 
 describe("OcrDialog long-process loader", () => {
-  it("passes path-operation progress into the reusable long-process loader", () => {
-    const html = renderToStaticMarkup(
-      <OcrDialog
-        phase="processing"
-        pageCount={5}
-        progress={{
-          jobToken: "job-1",
-          phase: "ocr",
-          description: "OCR",
-          completed: 2.5,
-          total: 5,
-          unit: "page",
-        }}
-        onConfirm={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
+  it("formats OCR progress for the docked loader", () => {
+    const progress = {
+      jobToken: "job-1",
+      phase: "ocr" as const,
+      description: "OCR",
+      completed: 2.5,
+      total: 5,
+      unit: "page",
+    };
 
-    expect(html).toContain("long-process-loader");
-    expect(html).toContain("Making searchable: 2 of 5 pages");
-    expect(html).toContain("long-process-loader__progress-bar");
+    expect(formatOcrRunningMessage("processing", progress)).toBe("Making searchable: 2 of 5 pages");
+    expect(toLongProcessProgress(progress)).toEqual({
+      current: 2.5,
+      total: 5,
+      unit: "page",
+    });
   });
 });

@@ -320,6 +320,7 @@
 /* ---- Prep checklist -- the hero of the workspace. ---- */
 
 .filing-prep {
+  position: relative;
   display: grid;
   gap: var(--space-2);
   border: 1px solid var(--border-soft);
@@ -388,6 +389,39 @@
 .filing-prep__rows {
   display: grid;
   gap: var(--space-2);
+}
+
+.filing-prep__loading {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  top: calc(var(--space-3) + 32px);
+  bottom: var(--space-3);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--chrome) 82%, transparent);
+  backdrop-filter: saturate(0.7) blur(0.5px);
+  cursor: progress;
+}
+
+.filing-prep__loading-inner {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.filing-prep__loading-label {
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.filing-prep__loading-subtext {
+  color: var(--muted);
+  font-size: var(--text-2xs);
 }
 
 /* Item 6/7: one line per rule at rest -- name + status chip + a chevron

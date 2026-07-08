@@ -490,6 +490,7 @@ export const PrepareForFilingWorkspace = forwardRef<
           checkedSteps={checkedSteps}
           unavailableSteps={unavailableSteps}
           hasResult={hasFilingResult}
+          loadingReport={loadingReport}
           customSplitMegabytes={customSplitMegabytes}
           onCustomSplitMegabytesChange={setCustomSplitMegabytes}
           stepDefaultsMessage={stepDefaultsMessage}
@@ -643,7 +644,6 @@ export const PrepareForFilingWorkspace = forwardRef<
         ) : null}
 
         <PrefilingCheckSection
-          loadingReport={loadingReport}
           reportError={reportError}
           checks={activeReport?.checks}
           selectionChecks={activeReport?.selectionChecks}
@@ -1196,6 +1196,7 @@ function PrepChecklist({
   checkedSteps,
   unavailableSteps,
   hasResult,
+  loadingReport,
   customSplitMegabytes,
   onCustomSplitMegabytesChange,
   stepDefaultsMessage,
@@ -1207,6 +1208,7 @@ function PrepChecklist({
   checkedSteps: ReadonlySet<PrepPlanStepId>;
   unavailableSteps: ReadonlyMap<PrepPlanStepId, string>;
   hasResult: boolean;
+  loadingReport: boolean;
   customSplitMegabytes: string;
   onCustomSplitMegabytesChange: (value: string) => void;
   stepDefaultsMessage: string | null;
@@ -1238,8 +1240,16 @@ function PrepChecklist({
     });
   }
 
+  function toggleStep(stepId: PrepPlanStepId) {
+    if (loadingReport) {
+      return;
+    }
+
+    onToggle(stepId);
+  }
+
   return (
-    <section className="filing-prep" aria-label="Preparation checklist">
+    <section className="filing-prep" aria-label="Preparation checklist" aria-busy={loadingReport}>
       <div className="filing-prep__header">
         <div>
           <p className="filing-prep__title">Prep checklist</p>
@@ -1264,7 +1274,7 @@ function PrepChecklist({
           </div>
         ) : null}
       </div>
-      <div className="filing-prep__rows" role="list">
+      <div className="filing-prep__rows" role="list" inert={loadingReport}>
         {steps.map((step) => (
           <PrepStepRow
             key={step.id}
@@ -1276,10 +1286,21 @@ function PrepChecklist({
             onToggleExpanded={() => toggleExpanded(step.id)}
             customSplitMegabytes={customSplitMegabytes}
             onCustomSplitMegabytesChange={onCustomSplitMegabytesChange}
-            onToggle={() => onToggle(step.id)}
+            onToggle={() => toggleStep(step.id)}
           />
         ))}
       </div>
+      {loadingReport ? (
+        <div className="filing-prep__loading">
+          <div className="filing-prep__loading-inner" role="status" aria-live="polite">
+            <LoadingSun size={26} label="Reading document facts" />
+            <p className="filing-prep__loading-label">Reading document facts…</p>
+            <p className="filing-prep__loading-subtext">
+              Checking size and page format before updating this checklist.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1495,17 +1516,15 @@ function formatCount(count: number, noun: string): string {
  * there's already a completed result (the user just ran Prepare for Filing
  * and almost certainly wants to see the verification) -- a one-time initial
  * default, not a live subscription, so a manual collapse afterward sticks.
- * Loading/error status stays outside the collapse: those are live signals,
- * not detail to look up on demand.
+ * Error status stays outside the collapse: it is a live signal, not detail to
+ * look up on demand.
  */
 function PrefilingCheckSection({
-  loadingReport,
   reportError,
   checks,
   selectionChecks,
   defaultOpen,
 }: {
-  loadingReport: boolean;
   reportError?: string | null;
   checks: readonly PreflightCheck[] | undefined;
   selectionChecks: readonly PreflightCheck[] | undefined;
@@ -1541,12 +1560,6 @@ function PrefilingCheckSection({
           What a clerk might flag -- none of it blocks your export.
         </p>
       </div>
-      {loadingReport ? (
-        <p className="filing-card__status" role="status">
-          <LoadingSun size={14} label="Reading document facts" />
-          Reading document facts...
-        </p>
-      ) : null}
       {reportError ? (
         <p className="filing-card__status" role="status">
           {reportError}

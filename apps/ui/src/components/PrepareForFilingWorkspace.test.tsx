@@ -567,6 +567,10 @@ describe("PrepareForFilingWorkspace", () => {
     const buttonIndex = html.indexOf('class="filing-card__primary-button"');
     const primaryButton = html.slice(buttonIndex, html.indexOf(">", buttonIndex));
     expect(primaryButton).toContain("disabled");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('class="filing-prep__loading"');
+    expect(html).toContain("Reading document facts…");
+    expect(html).not.toContain("Reading document facts...");
   });
 
   it("does not force a password prompt for owner-restricted (usage_restricted) facts", () => {

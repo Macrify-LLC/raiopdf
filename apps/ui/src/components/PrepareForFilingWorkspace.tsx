@@ -396,6 +396,35 @@ export const PrepareForFilingWorkspace = forwardRef<
     });
   }
 
+  // While a single-document filing run is in flight, take the whole workspace
+  // over with the shared long-process loader -- the same treatment OCR and the
+  // other engine jobs get -- instead of leaving an inline loader buried at the
+  // bottom of the checklist where the screen reads as "nothing is happening".
+  if (isFilingProgressActive(progress.phase)) {
+    return (
+      <section className="filing-workspace" aria-label="Prepare for Filing">
+        <div className="filing-card">
+          <p className="filing-card__document-line">
+            <BoltIcon variant="outline" size={14} />
+            <span className="filing-card__document-name">{document.fileName ?? "No document"}</span>
+            <span className="filing-card__document-meta">{formatPageCount(document.pageCount)}</span>
+          </p>
+          <div
+            className="filing-progress filing-progress--running"
+            data-phase={progress.phase}
+            aria-live="polite"
+          >
+            <LongProcessLoader
+              phaseLabel={formatProgressLabel(progress.phase)}
+              message={progress.message ?? formatProgressLabel(progress.phase)}
+              steps={filingProgressSteps(progress.phase)}
+            />
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="filing-workspace" aria-label="Prepare for Filing">
       <div className="filing-card">
@@ -647,20 +676,12 @@ export const PrepareForFilingWorkspace = forwardRef<
           <RulesApplied pack={pack} />
         ) : null}
 
+        {/* Active runs take the workspace over above (shared loader); this block
+            only carries the terminal done/error status back inline. */}
         {progress.message ? (
           <div className="filing-progress" data-phase={progress.phase} aria-live="polite">
-            {isFilingProgressActive(progress.phase) ? (
-              <LongProcessLoader
-                phaseLabel={formatProgressLabel(progress.phase)}
-                message={progress.message}
-                steps={filingProgressSteps(progress.phase)}
-              />
-            ) : (
-              <>
-                <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
-                <p>{progress.message}</p>
-              </>
-            )}
+            <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
+            <p>{progress.message}</p>
           </div>
         ) : null}
 

@@ -153,6 +153,7 @@ import {
   type PickedDirectory,
   type SavedFile,
 } from "./lib/filePort";
+import { materializeDroppedFileGrant } from "./lib/dropMaterialize";
 import {
   pickFileForAdd,
   tooLargeToAddMessage,
@@ -292,6 +293,7 @@ const AVAILABLE_FILING_PACKS: readonly JurisdictionPack[] = listPacks();
 const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
 const OCR_FAILURE_MESSAGE = "Couldn't make this document searchable.";
+const DROPPED_PDF_MATERIALIZE_MESSAGE = "Preparing this document for filing…";
 
 declare global {
   interface Window {
@@ -502,6 +504,7 @@ export function App() {
     switchTab: switchDocumentTab,
     closeTab: closeDocumentTab,
     setStreamedPageCount,
+    upgradeStreamedFileToGrant,
     replaceBytes,
     getOpenToken,
     setCurrentPage,
@@ -1402,6 +1405,10 @@ export function App() {
   const preserveFilingProgressForGenerationRef = useRef<number | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
+  const droppedMaterializationRef = useRef<{
+    generation: number;
+    promise: Promise<OpenedFileSource | null>;
+  } | null>(null);
   const filingFactsCacheRef = useRef<FilingFactsCache>({
     byBytes: new WeakMap(),
   });
@@ -2048,6 +2055,109 @@ export function App() {
       disposed = true;
     };
   }, [document.bytes, pdfDocument, streamedDocument]);
+
+  useEffect(() => {
+    if (activeLegalTool !== "prepare-for-filing") {
+      return;
+    }
+
+    const source = document.source;
+    if (source?.kind !== "rangeFile" || !isTauriRuntime()) {
+      return;
+    }
+
+    const sourceGeneration = document.generation;
+    const sourceOpenToken = getOpenToken();
+    if (droppedMaterializationRef.current?.generation === sourceGeneration) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let disposed = false;
+    const promise = materializeDroppedFileGrant(source.file, controller.signal);
+    droppedMaterializationRef.current = { generation: sourceGeneration, promise };
+    setFilingReport(null);
+    setFilingFacts(null);
+    setPathOpsFilingStatus(null);
+    setFilingReportLoading(true);
+    setFilingReportError(null);
+    setFilingProgress((current) => (
+      current.phase === "idle"
+        ? { phase: "normalizing", message: DROPPED_PDF_MATERIALIZE_MESSAGE }
+        : current
+    ));
+
+    void promise
+      .then((materialized) => {
+        if (materialized?.kind !== "rangeGrant") {
+          return;
+        }
+
+        if (disposed || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          void pathOpReleaseOutput(materialized.grant).catch(() => undefined);
+          return;
+        }
+
+        upgradeStreamedFileToGrant(
+          {
+            grant: materialized.grant,
+            sizeBytes: materialized.sizeBytes,
+            name: materialized.name,
+          },
+          { openToken: sourceOpenToken, generation: sourceGeneration },
+        );
+      })
+      .catch((error: unknown) => {
+        if (disposed || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          return;
+        }
+
+        setFilingReport(null);
+        setFilingFacts(null);
+        setFilingReportError(formatWorkflowError(
+          error,
+          "RaioPDF could not prepare this dropped PDF for filing. Try opening it with File > Open.",
+        ));
+        setFilingProgress({
+          phase: "error",
+          message: "RaioPDF could not prepare this dropped PDF for filing.",
+        });
+      })
+      .finally(() => {
+        if (droppedMaterializationRef.current?.generation === sourceGeneration) {
+          droppedMaterializationRef.current = null;
+        }
+
+        if (!disposed && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setFilingReportLoading(false);
+          setFilingProgress((current) => (
+            current.phase === "normalizing" && current.message === DROPPED_PDF_MATERIALIZE_MESSAGE
+              ? { phase: "idle", message: null }
+              : current
+          ));
+        }
+      });
+
+    return () => {
+      disposed = true;
+      controller.abort();
+      // The abort kills this in-flight materialization, so drop the ref now
+      // rather than waiting for the (disposed) promise's `finally`. Otherwise
+      // reopening Prepare for the same dropped PDF before the abort settles hits
+      // the generation guard above, returns early, and never restarts — leaving
+      // the document a `rangeFile` with the checklist disabled. [Codex #187 P2]
+      if (droppedMaterializationRef.current?.generation === sourceGeneration) {
+        droppedMaterializationRef.current = null;
+      }
+    };
+  }, [
+    activeLegalTool,
+    document.generation,
+    document.source,
+    getOpenToken,
+    isCurrentDocument,
+    upgradeStreamedFileToGrant,
+  ]);
 
   useEffect(() => {
     let disposed = false;

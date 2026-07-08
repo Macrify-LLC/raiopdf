@@ -21,12 +21,7 @@ import {
   readPdfRange,
   type FileGrant,
 } from "./filePort";
-
-/**
- * Starting chunk size: 1 MB. Tune against WebView2 IPC throughput on the
- * canary fixtures (docs/RELEASE-CANARY.md) before changing.
- */
-export const STREAMED_RANGE_CHUNK_SIZE = 1 << 20;
+export { STREAMED_RANGE_CHUNK_SIZE } from "./streamedChunks";
 
 type RangeReader = (begin: number, end: number) => Promise<Uint8Array>;
 

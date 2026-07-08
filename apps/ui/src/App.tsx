@@ -3857,7 +3857,6 @@ export function App() {
         message: "Building binder...",
         detail,
       });
-      setActiveLegalTool(null);
 
       try {
         if (sourceBytes) {

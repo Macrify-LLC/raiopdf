@@ -6,11 +6,32 @@ use engine_sidecar_core::word_ops::{self as core_word, MarkupMode, WordCapabilit
 use serde::Serialize;
 use std::{fs, path::Path, sync::Mutex, time::Instant};
 
+use tauri::Manager;
+
+use crate::diagnostics::AppDiagnostics;
 use crate::path_ops::{
     discover_toolchain, ensure_grant_snapshot_unchanged, ensure_unchanged, on_blocking_pool,
     snapshot, OpReport, OpWorkDir, PathOpOutput,
 };
 use crate::FileGrants;
+
+/// One-line diagnostics summary for a failed Word command. Word conversions run
+/// a hidden Microsoft Word and can fail in ways the friendly UI message hides
+/// (timeout, protected view, automation error) — this preserves the real code +
+/// message + elapsed time in app.log so a failure is diagnosable after the fact.
+fn word_error_log_message(op: &str, error: &PathOpError, elapsed_ms: u128) -> String {
+    format!(
+        "{op} failed [{}] after {elapsed_ms}ms: {}",
+        error.code, error.message
+    )
+}
+
+fn log_word_error(app: &tauri::AppHandle, op: &str, started: Instant, error: &PathOpError) {
+    let _ = app.state::<AppDiagnostics>().record_shell_event(
+        "word_error",
+        &word_error_log_message(op, error, started.elapsed().as_millis()),
+    );
+}
 
 #[derive(Default)]
 pub struct WordCapabilityCache {
@@ -135,7 +156,8 @@ pub async fn word_convert_docx(
                 })?;
             Ok((page_count, output_size))
         })
-        .await?
+        .await
+        .inspect_err(|error| log_word_error(&app, "word_convert_docx", started, error))?
     };
 
     let output_grant = grants
@@ -208,7 +230,8 @@ pub async fn word_reflow_pdf_to_docx(
                     message: format!("cannot stat converted DOCX: {error}"),
                 })
         })
-        .await?
+        .await
+        .inspect_err(|error| log_word_error(&app, "word_reflow_pdf_to_docx", started, error))?
     };
 
     let output_grant = grants
@@ -316,6 +339,19 @@ fn reflow_pdf_to_docx_with_optional_ocr(
 mod tests {
     use super::*;
     use engine_sidecar_core::word_ops::WordCapabilityState;
+
+    #[test]
+    fn word_error_log_message_keeps_code_message_and_elapsed() {
+        let error = PathOpError {
+            code: "WORD_TIMEOUT",
+            message: "Word conversion timed out after 120 seconds.".to_string(),
+        };
+        assert_eq!(
+            word_error_log_message("word_convert_docx", &error, 120_042),
+            "word_convert_docx failed [WORD_TIMEOUT] after 120042ms: \
+Word conversion timed out after 120 seconds.",
+        );
+    }
 
     #[test]
     fn forced_word_capability_bypasses_cached_authoritative_result() {

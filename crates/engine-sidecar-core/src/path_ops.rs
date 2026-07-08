@@ -2683,13 +2683,17 @@ pub struct PrepareFilingOutcome {
 /// pipeline: decrypt → sanitize → normalize → OCR → scrub → split, then a
 /// facts-based preflight per part. All intermediates live in `work_dir`; final
 /// parts land in `out_dir`.
-pub fn prepare_filing(
+pub fn prepare_filing<F>(
     toolchain: &PathOpsToolchain,
     input: &Path,
     plan: &PrepareFilingPlan,
     work_dir: &Path,
     out_dir: &Path,
-) -> OpResult<PrepareFilingOutcome> {
+    on_ocr_progress: F,
+) -> OpResult<PrepareFilingOutcome>
+where
+    F: FnMut(OcrProgress) + Send + 'static,
+{
     require_input_file(input)?;
     let mut steps = Vec::new();
     let mut current: PathBuf = input.to_path_buf();
@@ -2732,7 +2736,17 @@ pub fn prepare_filing(
     }
     if plan.ocr {
         let output = next_stage_path("ocr", &mut stage);
-        ocr(toolchain, &current, &output)?;
+        // Same text-preserving pass as `ocr`, but streams per-page progress so
+        // the filing UI can report "page X of Y" on very large scans. Falls
+        // back to a progress-less run when the bundled OCRmyPDF progress
+        // wrapper isn't present in this installation.
+        ocr_with_mode_and_progress(
+            toolchain,
+            &current,
+            &output,
+            OcrMode::SkipText,
+            on_ocr_progress,
+        )?;
         steps.push(FilingStepReport {
             step: "make-searchable",
             tool: "ocrmypdf",
@@ -3713,6 +3727,7 @@ mod tests {
             },
             work.path(),
             out.path(),
+            |_| {},
         )
         .unwrap();
         assert_eq!(single.parts.len(), 1);
@@ -3741,6 +3756,7 @@ mod tests {
             },
             work2.path(),
             out2.path(),
+            |_| {},
         )
         .unwrap();
         assert!(split.parts.len() >= 2);
@@ -4512,7 +4528,7 @@ mod tests {
                 split_max_bytes: Some(cap),
             };
             let started = std::time::Instant::now();
-            let outcome = prepare_filing(&toolchain, &fixture, &plan, &stage_dir, &out_dir)
+            let outcome = prepare_filing(&toolchain, &fixture, &plan, &stage_dir, &out_dir, |_| {})
                 .unwrap_or_else(|error| {
                     panic!("{} prepare_filing failed: {error}", fixture.display())
                 });

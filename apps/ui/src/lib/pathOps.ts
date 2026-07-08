@@ -449,8 +449,15 @@ export function pathOpSplitByMaxBytes(
 export function pathOpPrepareFiling(
   grant: PathOpsFileGrant,
   plan: PathOpsPrepareFilingPlan,
+  jobToken?: string,
 ): Promise<PathOpsPrepareFilingResult> {
-  return invokePathOp("path_op_prepare_filing", { grant, plan });
+  // When present, the shell emits per-page OCR progress under this token so
+  // the filing loader can report "page X of Y" during the make-searchable step.
+  return invokePathOp("path_op_prepare_filing", {
+    grant,
+    plan,
+    ...(jobToken ? { jobToken } : {}),
+  });
 }
 
 /** OCR text-layer strategy, mirroring the byte engine's `OcrType`. */

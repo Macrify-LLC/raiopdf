@@ -99,6 +99,25 @@ describe("useDocument streamed mode", () => {
     expect(engineState.openCalls).toHaveLength(0);
   });
 
+  it("opens a streamed source dirty when markDirty is set (unsaved OCR working copy)", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile(
+        {
+          source: { kind: "rangeGrant", grant: "ocr-out" as FileGrant, sizeBytes: 50_000_000 },
+          name: "Scan.pdf",
+          path: "ocr-out",
+        },
+        { markDirty: true },
+      );
+    });
+
+    // Marked dirty so Close prompts to save — the OCR result is backed only by
+    // a temp file and would otherwise be discarded silently.
+    expect(getHook().document.dirty).toBe(true);
+  });
+
   it("commits the pdf.js page count only for the matching generation", async () => {
     mount();
 

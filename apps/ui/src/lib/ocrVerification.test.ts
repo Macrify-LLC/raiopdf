@@ -117,7 +117,7 @@ describe("verifyOcrTextLayer", () => {
     expect(result.message).toContain("1 page still has no searchable text");
   });
 
-  it("fails normal OCR when a mostly scanned page kept only a trivial text layer", () => {
+  it("warns (but keeps the output) when normal OCR leaves only a trivial text layer over a scan", () => {
     const result = verifyOcrTextLayer(coverage({
       imageOnlyPages: [],
       mixedPages: [0],
@@ -131,14 +131,46 @@ describe("verifyOcrTextLayer", () => {
     }), "skip-text");
 
     expect(result).toMatchObject({
-      status: "failed",
+      status: "warning",
+      pageCount: 3,
+      rebuiltPages: 3,
       garbledPages: 0,
       imageOnlyPages: 0,
       trivialTextImagePages: 1,
     });
-    expect(result.message).toContain("Normal OCR may have skipped page 1");
-    expect(result.message).toContain("tiny text layer over a scanned page image");
+    expect(result.message).toContain("Made a searchable copy of 3 pages");
+    expect(result.message).toContain("thin text layer over a scanned page image");
     expect(result.message).toContain("Run Force OCR");
+    expect(result.message).not.toContain("kept unchanged");
+
+    const replaceDocument = vi.fn();
+    if (result.status !== "failed") {
+      replaceDocument();
+    }
+
+    expect(replaceDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fails normal OCR when a trivial-text page comes with a genuinely unreadable page", () => {
+    const result = verifyOcrTextLayer(coverage({
+      imageOnlyPages: [2],
+      mixedPages: [0],
+      textPages: [1],
+      garbledPages: [],
+      trivialTextImagePages: [{
+        pageIndex: 0,
+        textCharacterCount: 8,
+        imageCoverageRatio: 0.96,
+      }],
+    }), "skip-text");
+
+    expect(result).toMatchObject({
+      status: "failed",
+      garbledPages: 0,
+      imageOnlyPages: 1,
+      trivialTextImagePages: 1,
+    });
+    expect(result.message).toContain("Normal OCR may have skipped page 1");
     expect(result.message).toContain("The original was kept unchanged");
   });
 

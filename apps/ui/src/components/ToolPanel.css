@@ -114,6 +114,11 @@
   background: var(--danger-bg);
 }
 
+.tool-panel__inline-card[data-tone="caution"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
 .tool-panel__card-header {
   display: flex;
   align-items: flex-start;
@@ -157,6 +162,11 @@
 .tool-panel__inline-card[data-tone="danger"] .tool-panel__card-title,
 .tool-panel__inline-card[data-tone="danger"] .tool-panel__card-copy {
   color: var(--danger);
+}
+
+.tool-panel__inline-card[data-tone="caution"] .tool-panel__card-title,
+.tool-panel__inline-card[data-tone="caution"] .tool-panel__card-copy {
+  color: var(--warn);
 }
 
 .tool-panel__note,

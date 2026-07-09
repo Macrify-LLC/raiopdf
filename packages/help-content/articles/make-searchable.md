@@ -33,6 +33,13 @@ machine.
 - **It checks its own work.** RaioPDF confirms a real, readable text layer was
   actually added. If OCR comes up empty, it leaves your document unchanged and
   tells you, rather than handing you a file that isn't really searchable.
+- **A few pages with thin text over a scan get a heads-up, not a wall.** Normal OCR
+  leaves pages that already carry a sliver of text alone, so a mostly-scanned page under
+  a thin text layer comes through as-is. RaioPDF still hands you the searchable copy and
+  names those pages, with a nudge to run **Force OCR** on them if you need real text
+  there too.
+- **Your OCR'd copy is treated as unsaved.** It opens as a fresh document, so closing it
+  prompts you to save first — use **Save As** to keep it.
 - **You only need it for scans.** A PDF that already has real text is searchable
   as-is.
 

@@ -13,6 +13,16 @@ fades as download volume accrues.
 
 ## [Unreleased]
 
+### Changed
+
+- **Make Searchable keeps the searchable copy when a few pages have thin text over a
+  scan.** When normal OCR skips pages that already carry a sliver of text over a scanned
+  image, RaioPDF now hands you the searchable copy anyway with a light heads-up naming
+  those pages (and pointing to Force OCR to rebuild them), instead of refusing the whole
+  result and keeping the original.
+- **A freshly OCR'd document now counts as unsaved,** so closing it prompts you to save
+  first — the OCR work can't be discarded by accident.
+
 ## [0.1.2] - 2026-07-08
 
 Third public alpha. Headline: **Word support, both directions** — turn a PDF into an

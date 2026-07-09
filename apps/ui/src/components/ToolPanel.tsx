@@ -578,8 +578,13 @@ function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
     return <InlineMessage tone="neutral" message={message} />;
   }
 
+  // A "done" result that finished with imperfect pages carries a "caution"
+  // tone (light amber) instead of the green success tone -- the searchable
+  // copy was still produced, but the notice reads as a heads-up, not a win.
+  const doneTone = ocrState.tone === "caution" ? "caution" : "ok";
+
   return (
-    <InlineMessage tone={ocrState.phase === "done" ? "ok" : "danger"} message={message} />
+    <InlineMessage tone={ocrState.phase === "done" ? doneTone : "danger"} message={message} />
   );
 }
 
@@ -983,7 +988,7 @@ export function InlineMessage({
   tone,
   message,
 }: {
-  tone: "neutral" | "ok" | "danger";
+  tone: "neutral" | "ok" | "danger" | "caution";
   message: string;
 }) {
   return (

@@ -71,12 +71,17 @@ Searchable</strong> fixes that with OCR (optical character recognition — the c
 reading the text in the image) and adds an invisible text layer, all on your own
 machine.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Open the scanned PDF.</li><li>Click <strong>Make Searchable (OCR)</strong> in the Tools panel.</li><li>Wait while it works — you'll see it move through <strong>Starting</strong>,
 <strong>Processing</strong>, and <strong>Verifying</strong>.</li><li>When it says <strong>Searchable — verified</strong>, use <strong>Save</strong> (or <strong>Save As</strong>) to keep
-the searchable version.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>It runs on your computer.</strong> The text recognition happens locally, with a
-built-in toolchain. Your pages are never uploaded.</li><li><strong>The page looks the same.</strong> OCR adds a hidden text layer behind the image — it
+the searchable version.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>It runs on your computer.</strong> The text recognition happens locally, using
+tools built into RaioPDF. Your pages are never uploaded.</li><li><strong>The page looks the same.</strong> OCR adds a hidden text layer behind the image — it
 doesn't alter how the document looks. Afterward you can search it and select
 text.</li><li><strong>It checks its own work.</strong> RaioPDF confirms a real, readable text layer was
 actually added. If OCR comes up empty, it leaves your document unchanged and
-tells you, rather than handing you a file that isn't really searchable.</li><li><strong>You only need it for scans.</strong> A PDF that already has real text is searchable
+tells you, rather than handing you a file that isn't really searchable.</li><li><strong>A few pages with thin text over a scan get a heads-up, not a wall.</strong> Normal OCR
+leaves pages that already carry a sliver of text alone, so a mostly-scanned page under
+a thin text layer comes through as-is. RaioPDF still hands you the searchable copy and
+names those pages, with a nudge to run <strong>Force OCR</strong> on them if you need real text
+there too.</li><li><strong>Your OCR'd copy is treated as unsaved.</strong> It opens as a fresh document, so closing it
+prompts you to save first — use <strong>Save As</strong> to keep it.</li><li><strong>You only need it for scans.</strong> A PDF that already has real text is searchable
 as-is.</li></ul></div>
         <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/scanner-2425.html">2.425 Scanner</a> — after OCR, scan for sensitive information</li><li><a href="/help/data-stays-local.html">Your data never leaves your computer</a> — why OCR is offline</li></ul></div>
         <nav class="help-pager" aria-label="More in this category">

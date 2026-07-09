@@ -145,6 +145,23 @@ describe("force OCR controls", () => {
     expect(notice?.textContent).toContain("Warning: 1 page may still have imperfect text.");
   });
 
+  it("renders a caution-toned notice when OCR finished with a thin-text warning", () => {
+    render(
+      <ToolPanelHarness
+        ocrState={{
+          phase: "done",
+          tone: "caution",
+          message: "Made a searchable copy of 4 pages. Heads up: pages 2, 3, 5, and 6 already have a thin text layer over a scanned page image, so normal OCR left those pages as-is. Run Force OCR to rebuild them.",
+        }}
+      />,
+    );
+
+    const notice = document.querySelector('.tool-panel__inline-card[data-tone="caution"]');
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Made a searchable copy of 4 pages.");
+    expect(document.querySelector('.tool-panel__inline-card[data-tone="ok"]')).toBeNull();
+  });
+
   it("surfaces OCR engine error details instead of only the generic failure", () => {
     render(
       <ToolPanelHarness

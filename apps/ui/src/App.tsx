@@ -336,6 +336,13 @@ export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
   progress?: OcrProgressEvent | null;
+  /**
+   * Severity of a terminal "done" result. A clean rebuild is "ok" (success);
+   * a rebuild that finished with imperfect pages (e.g. a thin text layer over a
+   * scan that normal OCR left as-is) is "caution" — the searchable copy is
+   * still produced, but the notice reads as a light warning, not success.
+   */
+  tone?: "ok" | "caution";
 }
 
 interface BinderProgressState {
@@ -1631,7 +1638,7 @@ export function App() {
   const openStreamedSource = useCallback(
     (
       source: Exclude<OpenedFileSource, { kind: "memory" }>,
-      options: { openInNewTab?: boolean } = {},
+      options: { openInNewTab?: boolean; markDirty?: boolean } = {},
     ) => {
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
@@ -1652,7 +1659,10 @@ export function App() {
               name: source.name,
               path: null,
             },
-        { openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active" },
+        {
+          openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
+          ...(options.markDirty ? { markDirty: true } : {}),
+        },
       ).then((result) => {
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
@@ -1687,7 +1697,9 @@ export function App() {
       // it in a new tab when a document is already present, exactly like File ->
       // Open, so it never replaces/clobbers an unsaved active tab. Defaults off,
       // so in-place reopens (OCR, decrypt, ...) keep replacing the active tab.
-      options: { openInNewTab?: boolean } = {},
+      // `markDirty` opens the reopened copy dirty so Close prompts to save — for
+      // outputs that are an unsaved working copy (OCR), not a saved artifact.
+      options: { openInNewTab?: boolean; markDirty?: boolean } = {},
     ) => {
       const staleResult = {
         status: "failed" as const,
@@ -1720,11 +1732,14 @@ export function App() {
         setPasswordPrompt(null);
         setRepairCandidate(null);
 
-        const result = await openDocumentFile({
-          bytes: plan.bytes,
-          name: output.name,
-          path: null,
-        });
+        const result = await openDocumentFile(
+          {
+            bytes: plan.bytes,
+            name: output.name,
+            path: null,
+          },
+          options.markDirty ? { markDirty: true } : {},
+        );
 
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
@@ -1751,7 +1766,10 @@ export function App() {
           name: output.name,
           sizeBytes: output.sizeBytes,
         },
-        { openInNewTab: options.openInNewTab ?? false },
+        {
+          openInNewTab: options.openInNewTab ?? false,
+          ...(options.markDirty ? { markDirty: true } : {}),
+        },
       );
     },
     [isCurrentDocument, openDocumentFile, openStreamedSource, resetLegalState],
@@ -2554,10 +2572,17 @@ export function App() {
             return;
           }
 
-          const reopened = await openPathOpOutput(output, {
-            openToken: sourceOpenToken,
-            generation: sourceGeneration,
-          });
+          const reopened = await openPathOpOutput(
+            output,
+            {
+              openToken: sourceOpenToken,
+              generation: sourceGeneration,
+            },
+            // The OCR result is an unsaved working copy backed only by a temp
+            // file — open it dirty so Close prompts to save and the work isn't
+            // silently discarded.
+            { markDirty: true },
+          );
           outputToReleaseOnError = null;
           if (reopened.status !== "opened") {
             return;
@@ -2566,6 +2591,7 @@ export function App() {
           setOcrState({
             phase: "done",
             message: `${verification.message} It opened as a new document. Use Save As to keep it.`,
+            tone: verification.status === "warning" ? "caution" : "ok",
           });
         } catch (error: unknown) {
           if (outputToReleaseOnError) {
@@ -2759,6 +2785,7 @@ export function App() {
         setOcrState({
           phase: "done",
           message: workflowResult.verification.message,
+          tone: workflowResult.verification.status === "warning" ? "caution" : "ok",
         });
       })
       .catch((error: unknown) => {

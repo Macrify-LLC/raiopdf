@@ -78,6 +78,29 @@ export function verifyOcrTextLayer(
     };
   }
 
+  // Normal (skip-text) OCR deliberately leaves pages that already carry text
+  // untouched, so a page that's mostly a scanned image under a thin text layer
+  // comes through unchanged. On its own that's a soft imperfection, not a
+  // failure: every other page was still made searchable, so keep the OCR'd copy
+  // and surface a light warning that points at Force OCR for those pages —
+  // rather than discarding the whole result. (When OCR also left genuinely
+  // unreadable pages behind — garbled or image-only — it still fails below and
+  // keeps the original.)
+  if (trivialTextImagePages > 0 && garbledPages === 0 && imageOnlyPages === 0) {
+    const affectedPages = coverage.trivialTextImagePages
+      ?.map((page) => page.pageIndex)
+      .sort((a, b) => a - b) ?? [];
+    return {
+      status: "warning",
+      pageCount,
+      rebuiltPages: pageCount,
+      garbledPages,
+      imageOnlyPages,
+      trivialTextImagePages,
+      message: `Made a searchable copy of ${formatPageCount(pageCount)}. Heads up: ${formatPageIndexes(affectedPages)} already ${trivialTextImagePages === 1 ? "has" : "have"} a thin text layer over a scanned page image, so normal OCR left ${trivialTextImagePages === 1 ? "that page" : "those pages"} as-is. Run Force OCR to rebuild ${trivialTextImagePages === 1 ? "it" : "them"}.`,
+    };
+  }
+
   if (trivialTextImagePages > 0) {
     const affectedPages = coverage.trivialTextImagePages
       ?.map((page) => page.pageIndex)

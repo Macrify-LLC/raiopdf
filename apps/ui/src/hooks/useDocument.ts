@@ -197,6 +197,14 @@ export interface OpenFileOptions {
 
 export interface OpenStreamedFileOptions {
   openMode?: "replace-active" | "new-tab";
+  /**
+   * Marks the newly opened streamed document dirty immediately instead of
+   * clean. Streamed path ops normally reopen a generated copy as a clean
+   * document, but an OCR result is a fresh, unsaved working copy backed only by
+   * a temp file — marking it dirty makes Close prompt to save so the OCR work
+   * isn't silently discarded.
+   */
+  markDirty?: boolean;
 }
 
 export interface DocumentTabState {
@@ -1006,7 +1014,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
         generation,
         // Streamed path ops reopen generated copies. The source itself stays
         // clean, but UI overlays may mark the tab dirty until Save routes
-        // them through apply_edits.
+        // them through apply_edits. A caller can also open the copy dirty
+        // (markDirty) when it's an unsaved working copy — e.g. an OCR result —
+        // so Close prompts to save.
+        dirty: options.markDirty ?? false,
         fileName: input.name,
         filePath: input.path,
         fileSizeBytes: input.source.sizeBytes,

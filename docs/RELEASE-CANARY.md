@@ -151,20 +151,18 @@ pnpm exec playwright test smoke/streamed-large.smoke.ts
 #     target and far below the file size:
 pnpm exec playwright test smoke/streamed-memory.smoke.ts
 
-# 3. Path-op acceptance (split-by-max-bytes parts pass qpdf --check;
-#    prepare_filing normalize+split with per-part facts preflight):
+# 3. Path-op acceptance (selected-page extract, page-range split,
+#    split-by-max-bytes parts passing qpdf --check, and prepare_filing
+#    normalize+split with per-part facts preflight):
 RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload \
 RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
-```
 
-For streamed Combine with Exhibits, use a large main PDF from
-`RAIOPDF_CANARY_FIXTURES_DIR` (at or below the Node-lane ceiling) plus one or more
-small exhibit PDFs. Open the main file so it uses streamed/range mode, add the
-exhibits, build the binder, and confirm the output opens as a new document with
-the exhibit index/stamps/bookmarks present. The expected user-facing result is
-the Save As funnel: the original large PDF is untouched, and the generated binder
-must be saved explicitly to keep it.
+# 4. Node-lane large-file canary (large binder under aggregate cap,
+#    aggregate-cap rejection, and large overlay apply/save):
+RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
+  pnpm --filter @raiopdf/mcp test:canary --run test/large-file.canary.ts
+```
 
 When the REAL 283 MB / 2,556-page appendix or 59 MB agenda fixtures are on
 disk, point `RAIOPDF_LARGE_FIXTURES_DIR` at your own local, private fixture folder
@@ -177,9 +175,10 @@ pnpm canary:large
 ```
 
 `canary:large` scans the folder recursively for PDFs at least 40 MB by default,
-then runs the path-based filing pipeline (`normalize-pages` + `split-by-size`)
-against each one. That folder is maintainer-local, contains real legal examples, and
-must never be committed. If `RAIOPDF_LARGE_FIXTURE` or
+then runs selected-page extraction, page-range split, and the path-based filing
+pipeline (`normalize-pages` + `split-by-size`) against each one. That folder is
+maintainer-local, contains real legal examples, and must never be committed. If
+`RAIOPDF_LARGE_FIXTURE` or
 `RAIOPDF_LARGE_FIXTURES_DIR` is set but no matching PDFs are found, the canary
 fails instead of silently passing.
 
@@ -192,6 +191,16 @@ fails instead of silently passing.
 | Browser streamed open + render + windowed search | passed; page 1 rendered from the range transport, `MARKER-1` visible, lazy search hit |
 | **Memory ceiling (CDP JSHeapUsedSize)** | **peak 10.9 MB heap, 5.5 MB attributable to the doc** — vs. a whole-file-in-memory approach that would sit at 2–3× the 270 MB file. The streaming architecture holds. |
 
+**Recorded run (2026-07-08, large parity canaries, synthetic 60 MB / 60 pp):**
+
+| Scenario | Result |
+|---|---|
+| Path-op selected-page extract | 3 selected pages in ~98 ms, output passed `qpdf --check` |
+| Path-op page-range split | 2 requested range groups / 5 pages in ~190 ms, every output passed `qpdf --check` |
+| Path-op split-by-max-bytes | 62,947,498 B / 60 pp -> 2 parts in ~11 s |
+| Path-op prepare_filing (normalize+split) | 2 parts + 2 facts rows in ~5 s, preflight all within-cap |
+| Node-lane large binder/apply-edits | `large-file.canary.ts`: binder under aggregate cap, aggregate-cap rejection, and overlay apply/save all passed |
+
 **Measured vs. not.** These ran in **real Chromium** driving the **browser-runtime**
 range transport (`File.slice`-backed `RaioPdfRangeTransport`) — the same transport class
 the Tauri grant path uses, exercising the streaming architecture end to end. The memory
@@ -200,7 +209,9 @@ for "is the file being materialized" — it excludes canvas bitmap memory and th
 worker heap, which live off the main heap by design. **Still not exercised headlessly:**
 packaged-Tauri over real **WebView2 IPC** ranged reads, and full renderer-process RSS
 sampling — both require a live desktop session and are the one honest gap remaining from
-the streamed-viewer validation.
+the streamed-viewer validation. Native print of large PDFs is also a desktop/WebView
+acceptance item; the automated large canaries cover the extract/apply primitives but do
+not drive an operating-system print dialog.
 
 ### Covered by the mocked breadth suite (CI, every PR)
 

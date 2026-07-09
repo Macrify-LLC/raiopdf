@@ -33,6 +33,7 @@ use std::{
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
+use crate::range_read::large_doc_threshold_bytes;
 use crate::FileGrants;
 
 const NODE_LANE_MAX_BYTES_ENV: &str = "RAIOPDF_NODE_LANE_MAX_BYTES";
@@ -213,12 +214,26 @@ pub struct PrepareFilingResponse {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BuildBinderExhibitPayload {
-    pub bytes: Vec<u8>,
-    pub label: String,
-    pub description: Option<String>,
-    pub source_file_name: Option<String>,
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BuildBinderExhibitPayload {
+    Bytes {
+        bytes: Vec<u8>,
+        label: String,
+        description: Option<String>,
+        source_file_name: Option<String>,
+    },
+    Grant {
+        grant: String,
+        size_bytes: u64,
+        page_count: Option<u32>,
+        label: String,
+        description: Option<String>,
+        source_file_name: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -346,10 +361,19 @@ pub struct ToolchainStatus {
 pub struct PathOpsStatusResponse {
     pub ops: Vec<core_ops::PathOpStatus>,
     pub toolchain: ToolchainStatus,
+    pub resources: PathOpsResourceStatus,
     /// PrepPlanStepId → registered op name (null when no path op implements
     /// the step). The streamed filing checklist enables a step ⟺ this maps to
     /// an op AND that op is available.
     pub filing_steps: BTreeMap<&'static str, Option<&'static str>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathOpsResourceStatus {
+    pub large_doc_threshold_bytes: u64,
+    pub node_lane_max_bytes: u64,
+    pub temp_dir_available_bytes: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +396,12 @@ fn path_ops_root(app: &tauri::AppHandle) -> OpResult<PathBuf> {
             message: format!("app data dir unavailable: {error}"),
         })?
         .join(PATH_OPS_DIR))
+}
+
+fn temp_dir_available_bytes(app: &tauri::AppHandle) -> Option<u64> {
+    let root = path_ops_root(app).ok()?;
+    fs::create_dir_all(&root).ok()?;
+    fs2::available_space(root).ok()
 }
 
 /// Startup sweep (large-pdf-handling housekeeping): file grants live only in
@@ -777,6 +807,11 @@ pub fn path_ops_status(app: tauri::AppHandle) -> PathOpsStatusResponse {
             node: toolchain.node_one_shot,
         },
         ops,
+        resources: PathOpsResourceStatus {
+            large_doc_threshold_bytes: large_doc_threshold_bytes(),
+            node_lane_max_bytes: max_input_bytes,
+            temp_dir_available_bytes: temp_dir_available_bytes(&app),
+        },
         filing_steps,
     }
 }
@@ -1278,45 +1313,75 @@ pub async fn path_op_build_binder(
     };
     let output_path = work_dir.path().join(safe_output_name);
     let before = snapshot(&input)?;
+    ensure_grant_snapshot_unchanged(&grants, &grant, &before)?;
     let max_input_bytes = node_lane_max_bytes();
-    if before.len > max_input_bytes {
+
+    let started = Instant::now();
+    let mut total_input_bytes = before.len;
+    let mut watched_inputs = vec![(input.clone(), before)];
+    let mut exhibit_inputs = Vec::with_capacity(exhibits.len());
+
+    for (index, exhibit) in exhibits.into_iter().enumerate() {
+        match exhibit {
+            BuildBinderExhibitPayload::Bytes {
+                bytes,
+                label,
+                description,
+                source_file_name,
+            } => {
+                total_input_bytes = total_input_bytes.saturating_add(bytes.len() as u64);
+                let path = work_dir
+                    .path()
+                    .join(format!("exhibit-{:03}.pdf", index + 1));
+                fs::write(&path, &bytes).map_err(|error| PathOpError {
+                    code: core_ops::ERR_IO,
+                    message: format!("failed to write exhibit temp file: {error}"),
+                })?;
+                exhibit_inputs.push(BuildBinderOneShotExhibit {
+                    path: path_to_utf8(path, "Exhibit temp")?,
+                    label,
+                    description,
+                    source_file_name,
+                });
+            }
+            BuildBinderExhibitPayload::Grant {
+                grant: exhibit_grant,
+                size_bytes,
+                page_count,
+                label,
+                description,
+                source_file_name,
+            } => {
+                let path = resolve_grant(&grants, &exhibit_grant)?;
+                let exhibit_before = snapshot(&path)?;
+                ensure_grant_snapshot_unchanged(&grants, &exhibit_grant, &exhibit_before)?;
+                total_input_bytes =
+                    total_input_bytes.saturating_add(if size_bytes == exhibit_before.len {
+                        size_bytes
+                    } else {
+                        exhibit_before.len
+                    });
+                let _ = page_count;
+                watched_inputs.push((path.clone(), exhibit_before));
+                exhibit_inputs.push(BuildBinderOneShotExhibit {
+                    path: path_to_utf8(path, "Exhibit")?,
+                    label,
+                    description,
+                    source_file_name,
+                });
+            }
+        }
+    }
+
+    if total_input_bytes > max_input_bytes {
         return Err(PathOpError {
             code: core_ops::ERR_INVALID_INPUT,
             message: format!(
-                "This PDF is too large for Combine with Exhibits (limit about {} MB). Try splitting it first.",
+                "This binder is too large for Combine with Exhibits (combined input limit about {} MB). Try fewer exhibits or split the PDFs first.",
                 max_input_bytes / (1024 * 1024)
             ),
         });
     }
-
-    let started = Instant::now();
-    let exhibit_inputs = exhibits
-        .into_iter()
-        .enumerate()
-        .map(|(index, exhibit)| {
-            let path = work_dir
-                .path()
-                .join(format!("exhibit-{:03}.pdf", index + 1));
-            fs::write(&path, &exhibit.bytes).map_err(|error| PathOpError {
-                code: core_ops::ERR_IO,
-                message: format!("failed to write exhibit temp file: {error}"),
-            })?;
-            Ok(BuildBinderOneShotExhibit {
-                path: path_to_utf8(path, "Exhibit temp")?,
-                label: exhibit.label,
-                description: exhibit.description,
-                source_file_name: exhibit.source_file_name,
-            })
-        })
-        .collect::<OpResult<Vec<_>>>()?;
-    let exhibit_size: u64 = exhibit_inputs
-        .iter()
-        .filter_map(|exhibit| {
-            fs::metadata(&exhibit.path)
-                .ok()
-                .map(|metadata| metadata.len())
-        })
-        .sum();
 
     let request = BuildBinderOneShotInput {
         main_path: path_to_utf8(input.clone(), "Main document")?,
@@ -1325,17 +1390,16 @@ pub async fn path_op_build_binder(
         output_path: path_to_utf8(output_path.clone(), "Binder output")?,
         max_input_bytes,
     };
-    let total_work_size = before.len.saturating_add(exhibit_size);
-    let timeout = node_lane_timeout(total_work_size);
+    let timeout = node_lane_timeout(total_input_bytes);
     let mcp_options = crate::mcp::McpOneShotOptions {
         timeout: Some(timeout),
         node_options: Some(node_options_heap_arg()),
     };
 
     let (page_count, output_size) = {
-        let input = input.clone();
         let output_path = output_path.clone();
         let toolchain = toolchain.clone();
+        let watched_inputs = watched_inputs;
         on_blocking_pool(move || {
             let stdout =
                 crate::mcp::run_mcp_one_shot_with_options("build_binder", &request, mcp_options)
@@ -1359,7 +1423,9 @@ pub async fn path_op_build_binder(
                         .to_string(),
                 });
             }
-            ensure_unchanged(&input, before)?;
+            for (path, before) in watched_inputs {
+                ensure_unchanged(&path, before)?;
+            }
             let page_count = core_ops::page_count(&toolchain, &output_path)?;
             let output_size = fs::metadata(&output_path)
                 .map(|metadata| metadata.len())
@@ -1388,7 +1454,7 @@ pub async fn path_op_build_binder(
             op: "build_binder",
             tool: "node",
             duration_ms: started.elapsed().as_millis() as u64,
-            input_size_bytes: before.len + exhibit_size,
+            input_size_bytes: total_input_bytes,
             output_size_bytes: output_size,
             notes: vec![
                 format!("Node heap capped with --max-old-space-size={NODE_LANE_HEAP_MB}"),
@@ -1853,6 +1919,54 @@ mod tests {
             releasable_output_dir(Path::new("/data/path-ops/uuid-1/nested/out.pdf"), root),
             None,
         );
+    }
+
+    #[test]
+    fn build_binder_exhibit_payload_accepts_camel_case_variant_fields() {
+        let grant: BuildBinderExhibitPayload = serde_json::from_value(serde_json::json!({
+            "kind": "grant",
+            "grant": "grant-exhibit",
+            "sizeBytes": 123456,
+            "pageCount": 7,
+            "label": "Exhibit A",
+            "description": "Large exhibit",
+            "sourceFileName": "large.pdf"
+        }))
+        .expect("deserialize grant exhibit");
+        match grant {
+            BuildBinderExhibitPayload::Grant {
+                grant,
+                size_bytes,
+                page_count,
+                source_file_name,
+                ..
+            } => {
+                assert_eq!(grant, "grant-exhibit");
+                assert_eq!(size_bytes, 123456);
+                assert_eq!(page_count, Some(7));
+                assert_eq!(source_file_name.as_deref(), Some("large.pdf"));
+            }
+            BuildBinderExhibitPayload::Bytes { .. } => panic!("expected grant exhibit"),
+        }
+
+        let bytes: BuildBinderExhibitPayload = serde_json::from_value(serde_json::json!({
+            "kind": "bytes",
+            "bytes": [1, 2, 3],
+            "label": "Exhibit B",
+            "sourceFileName": "small.pdf"
+        }))
+        .expect("deserialize byte exhibit");
+        match bytes {
+            BuildBinderExhibitPayload::Bytes {
+                bytes,
+                source_file_name,
+                ..
+            } => {
+                assert_eq!(bytes, vec![1, 2, 3]);
+                assert_eq!(source_file_name.as_deref(), Some("small.pdf"));
+            }
+            BuildBinderExhibitPayload::Grant { .. } => panic!("expected byte exhibit"),
+        }
     }
 
     #[test]

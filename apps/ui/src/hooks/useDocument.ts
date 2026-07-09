@@ -55,7 +55,7 @@ export type DocumentSource =
  * materializing the document in memory.
  */
 export const STREAMED_DOCUMENT_GATE_MESSAGE =
-  "This document is very large, so some tools are turned off for it. Available: exhibits, split, extract, compress, repair, Make Searchable (OCR), redaction, Bates stamps, page numbers, and watermarks. Not available for files this size: text editing, form filling, crop/rotate, adding images, and password protection.";
+  "This document is very large, so some tools are turned off for it. In the installed app, available: exhibits, split, extract, compress, repair, Make Searchable (OCR), redaction, Bates stamps, page numbers, and watermarks. Not available for files this size: text editing, form filling, crop/rotate, adding images, and password protection.";
 
 export interface DocumentState {
   bytes: Uint8Array | null;
@@ -273,12 +273,23 @@ export interface SaveDocumentResult {
   filePath: string | null;
 }
 
-export interface BinderExhibitInput {
-  bytes: Uint8Array;
+interface BinderExhibitBase {
   label: string;
   description?: string | undefined;
   sourceFileName?: string | undefined;
 }
+
+export type BinderExhibitInput =
+  | (BinderExhibitBase & {
+    kind: "bytes";
+    bytes: Uint8Array;
+  })
+  | (BinderExhibitBase & {
+    kind: "grant";
+    grant: FileGrant;
+    sizeBytes: number;
+    pageCount: number | null;
+  });
 
 export interface UseDocumentOptions {
   protectedPdf?: {
@@ -1529,6 +1540,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         try {
           for (const exhibit of exhibits) {
+            if (exhibit.kind !== "bytes") {
+              setError("This exhibit is too large to combine with the current document. Open a large main PDF first so Combine with Exhibits can run file-to-file.");
+              return null;
+            }
+
             const prepared = await openPreparedDocument({
               bytes: exhibit.bytes,
               name: exhibit.sourceFileName ?? exhibit.label,

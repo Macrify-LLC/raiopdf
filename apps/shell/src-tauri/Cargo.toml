@@ -19,6 +19,7 @@ tauri-build = { version = "2.6.3" }
 
 [dependencies]
 engine-sidecar-core = { path = "../../../crates/engine-sidecar-core" }
+fs2 = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

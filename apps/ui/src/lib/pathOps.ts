@@ -131,11 +131,18 @@ export interface PathOpStatusEntry {
 export interface PathOpsStatus {
   ops: PathOpStatusEntry[];
   toolchain: PathOpsToolchainStatus;
+  resources?: PathOpsResourceStatus | undefined;
   /**
    * Every `PrepPlanStepId` → the registered path op implementing it, or null.
    * See `isFilingStepEnabled` for the closed-form checklist rule.
    */
   filingSteps: Record<string, string | null>;
+}
+
+export interface PathOpsResourceStatus {
+  largeDocThresholdBytes: number;
+  nodeLaneMaxBytes: number;
+  tempDirAvailableBytes: number | null;
 }
 
 export interface PathOpsPageFacts {
@@ -388,12 +395,23 @@ export function pathOpInsertPages(
   return invokePathOp("path_op_insert_pages", { grant, insertGrant, atIndex });
 }
 
-export interface PathOpBuildBinderExhibit {
-  bytes: Uint8Array;
+interface PathOpBuildBinderExhibitBase {
   label: string;
   description?: string | undefined;
   sourceFileName?: string | undefined;
 }
+
+export type PathOpBuildBinderExhibit =
+  | (PathOpBuildBinderExhibitBase & {
+    kind: "bytes";
+    bytes: Uint8Array;
+  })
+  | (PathOpBuildBinderExhibitBase & {
+    kind: "grant";
+    grant: PathOpsFileGrant;
+    sizeBytes: number;
+    pageCount: number | null;
+  });
 
 function pathOpBinderOptions(options: PdfBinderOptions): PdfBinderOptions {
   return {
@@ -418,7 +436,10 @@ export function pathOpBuildBinder(
   return invokePathOp("path_op_build_binder", {
     grant,
     exhibits: exhibits.map((exhibit) => ({
-      bytes: Array.from(exhibit.bytes),
+      kind: exhibit.kind,
+      ...(exhibit.kind === "bytes"
+        ? { bytes: Array.from(exhibit.bytes) }
+        : { grant: exhibit.grant, sizeBytes: exhibit.sizeBytes, pageCount: exhibit.pageCount }),
       label: exhibit.label,
       ...(exhibit.description === undefined ? {} : { description: exhibit.description }),
       ...(exhibit.sourceFileName === undefined

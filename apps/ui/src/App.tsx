@@ -186,6 +186,7 @@ import {
   pathOpCompress,
   pathOpDecrypt,
   pathOpDocumentFacts,
+  pathOpExtractPages,
   pathOpInsertPages,
   pathOpMerge,
   pathOpOcr,
@@ -4329,10 +4330,6 @@ export function App() {
       try {
         const output = await pathOpMerge([grant, ...addGrants]);
 
-        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          return false;
-        }
-
         const reopened = await openPathOpOutput(output, {
           openToken: sourceOpenToken,
           generation: sourceGeneration,
@@ -4368,10 +4365,6 @@ export function App() {
       try {
         const output = await pathOpInsertPages(grant, insertGrant, insertAtPageIndex);
 
-        if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          return false;
-        }
-
         const reopened = await openPathOpOutput(output, {
           openToken: sourceOpenToken,
           generation: sourceGeneration,
@@ -4388,7 +4381,59 @@ export function App() {
     [document.generation, getOpenToken, isCurrentDocument, openPathOpOutput, pathOpsGrant, setError],
   );
 
-  /** Grant-based Organize handlers, present only when the streamed current
+  /** Streamed selected-page extraction delegates to the same qpdf path op used
+   * by print-range extraction, then reopens the output through the standard
+   * guarded path-op reconcile flow. */
+  const extractCurrentPages = useCallback(
+    async (pageIndexes: readonly number[]) => {
+      if (!streamedDocument) {
+        return extractPages(pageIndexes);
+      }
+
+      const grant = pathOpsGrant;
+      const sourceOpenToken = getOpenToken();
+      const sourceGeneration = document.generation;
+
+      if (!grant) {
+        setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+        return false;
+      }
+
+      try {
+        const output = await pathOpExtractPages(grant, pageIndexes);
+        const reopened = await openPathOpOutput(output, {
+          openToken: sourceOpenToken,
+          generation: sourceGeneration,
+        });
+
+        if (reopened.status !== "opened" && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setError(reopened.status === "failed"
+            ? reopened.error
+            : "The selected pages were extracted, but the output could not be reopened.");
+        }
+
+        return reopened.status === "opened";
+      } catch (error) {
+        if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          setError(pathOpErrorMessage(error, "The selected pages could not be extracted. Check the range and try again."));
+        }
+
+        return false;
+      }
+    },
+    [
+      document.generation,
+      extractPages,
+      getOpenToken,
+      isCurrentDocument,
+      openPathOpOutput,
+      pathOpsGrant,
+      setError,
+      streamedDocument,
+    ],
+  );
+
+  /** Grant-based merge/insert handlers, present only when the streamed current
    * document can delegate (Tauri + shell grant). Browser streamed docs get
    * null and keep their gates. */
   const delegatedOrganizeOps = useMemo(
@@ -4401,13 +4446,60 @@ export function App() {
   const splitAndSavePages = useCallback(
     async (pageGroups: readonly (readonly number[])[]) => {
       if (streamedDocument) {
-        // The range-split flow is still byte-bound; the honest gate points
-        // at the delegated alternative instead of a generic "could not be
-        // split".
-        setError(
-          "Splitting a very large document by page ranges isn't available yet. Use Prepare for Filing to split it by size instead.",
-        );
-        return null;
+        const grant = pathOpsGrant;
+        const sourceOpenToken = getOpenToken();
+        const sourceGeneration = document.generation;
+
+        if (!grant) {
+          setError(STREAMED_DOCUMENT_GATE_MESSAGE);
+          return null;
+        }
+
+        const outputGrants: FileGrant[] = [];
+        let handedToSave = false;
+
+        try {
+          for (const pageIndexes of pageGroups) {
+            if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+              return null;
+            }
+
+            const output = await pathOpExtractPages(grant, pageIndexes);
+            outputGrants.push(output.outputGrant);
+
+            if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+              return null;
+            }
+          }
+
+          const baseName = stripPdfExtension(document.fileName ?? "Untitled");
+          const parts = outputGrants.map((outputGrant, index) => ({
+            grant: outputGrant,
+            fileName: formatSplitOutputFileName(baseName, index + 1, outputGrants.length),
+          }));
+
+          handedToSave = true;
+          const saved = await saveStreamedOutputParts(
+            parts,
+            () => isCurrentDocument(sourceOpenToken, sourceGeneration),
+          );
+
+          if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            return null;
+          }
+
+          return saved.files.filter(isSavedFile);
+        } catch (error) {
+          if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            setError(pathOpErrorMessage(error, "The page ranges could not be split. Check the ranges and try again."));
+          }
+
+          return null;
+        } finally {
+          if (!handedToSave) {
+            await releaseStreamedOutputGrants(outputGrants);
+          }
+        }
       }
 
       const parts = await splitPages(
@@ -4421,7 +4513,16 @@ export function App() {
 
       return (await saveByteOutputParts(parts)).files.filter(isSavedFile);
     },
-    [document.fileName, setError, splitPages, streamedDocument],
+    [
+      document.fileName,
+      document.generation,
+      getOpenToken,
+      isCurrentDocument,
+      pathOpsGrant,
+      setError,
+      splitPages,
+      streamedDocument,
+    ],
   );
 
   const cropResize = useCallback(
@@ -6926,7 +7027,7 @@ export function App() {
       onMoveSelectedDown={() => moveSelected(1)}
       onReorderPages={reorderPagesFromGrid}
       onMerge={mergeWithFiles}
-      onExtract={extractPages}
+      onExtract={extractCurrentPages}
       onSplit={splitAndSavePages}
       onInsert={insertFile}
       delegatedOps={delegatedOrganizeOps}
@@ -7164,7 +7265,7 @@ export function App() {
             document={document}
             onCancel={closeWorkspace}
             onMerge={mergeWithFiles}
-            onExtract={extractPages}
+            onExtract={extractCurrentPages}
             onSplit={splitAndSavePages}
             onInsert={insertFile}
             delegatedOps={delegatedOrganizeOps}
@@ -8274,26 +8375,30 @@ async function saveStreamedOutputParts(
   parts: readonly SaveStreamedPart[],
   shouldContinue: () => boolean = () => true,
 ): Promise<MultiPartSaveResult> {
-  const directory = parts.length > 1 ? await filePort.pickDirectory() : null;
+  try {
+    const directory = parts.length > 1 ? await filePort.pickDirectory() : null;
 
-  if (directory) {
-    return saveStreamedOutputPartsIntoDirectory(parts, directory, shouldContinue);
-  }
-
-  const files: Array<SavedFile | null> = [];
-
-  for (const part of parts) {
-    if (!shouldContinue()) {
-      break;
+    if (directory) {
+      return saveStreamedOutputPartsIntoDirectory(parts, directory, shouldContinue);
     }
 
-    files.push(await saveStreamedCopy(
-      { kind: "rangeGrant", grant: part.grant },
-      part.fileName,
-    ));
-  }
+    const files: Array<SavedFile | null> = [];
 
-  return { files, directoryPath: null };
+    for (const part of parts) {
+      if (!shouldContinue()) {
+        break;
+      }
+
+      files.push(await saveStreamedCopy(
+        { kind: "rangeGrant", grant: part.grant },
+        part.fileName,
+      ));
+    }
+
+    return { files, directoryPath: null };
+  } finally {
+    await releaseStreamedOutputGrants(parts.map((part) => part.grant));
+  }
 }
 
 async function saveStreamedOutputPartsIntoDirectory(
@@ -8316,6 +8421,10 @@ async function saveStreamedOutputPartsIntoDirectory(
   }
 
   return { files, directoryPath: directory.path };
+}
+
+async function releaseStreamedOutputGrants(grants: readonly FileGrant[]): Promise<void> {
+  await Promise.all(grants.map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)));
 }
 
 function isSavedFile(file: SavedFile | null): file is SavedFile {
@@ -8398,6 +8507,14 @@ function getOrganizeDialogTitle(flow: Exclude<OrganizeFlowId, "pages">): string 
 
 function stripPdfExtension(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "");
+}
+
+function formatSplitOutputFileName(baseName: string, partNumber: number, totalParts: number): string {
+  if (totalParts === 1) {
+    return `${baseName} - split.pdf`;
+  }
+
+  return `${baseName} - part ${partNumber} of ${totalParts}.pdf`;
 }
 
 function formatSanitizeItem(item: PdfSanitizeRemovedItem): string {

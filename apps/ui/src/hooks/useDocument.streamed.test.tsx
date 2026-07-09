@@ -48,6 +48,11 @@ describe("useDocument streamed mode", () => {
   let container: HTMLDivElement | null = null;
   let latest: UseDocumentValue | null = null;
 
+  it("scopes delegated streamed features to the installed app in gate copy", () => {
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("In the installed app, available");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("split, extract");
+  });
+
   beforeEach(() => {
     engineState.openCalls.length = 0;
     latest = null;

@@ -214,7 +214,11 @@ pub struct PrepareFilingResponse {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum BuildBinderExhibitPayload {
     Bytes {
         bytes: Vec<u8>,
@@ -1351,11 +1355,12 @@ pub async fn path_op_build_binder(
                 let path = resolve_grant(&grants, &exhibit_grant)?;
                 let exhibit_before = snapshot(&path)?;
                 ensure_grant_snapshot_unchanged(&grants, &exhibit_grant, &exhibit_before)?;
-                total_input_bytes = total_input_bytes.saturating_add(if size_bytes == exhibit_before.len {
-                    size_bytes
-                } else {
-                    exhibit_before.len
-                });
+                total_input_bytes =
+                    total_input_bytes.saturating_add(if size_bytes == exhibit_before.len {
+                        size_bytes
+                    } else {
+                        exhibit_before.len
+                    });
                 let _ = page_count;
                 watched_inputs.push((path.clone(), exhibit_before));
                 exhibit_inputs.push(BuildBinderOneShotExhibit {

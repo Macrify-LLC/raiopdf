@@ -4721,12 +4721,14 @@ mod tests {
             let extract_path = extract_dir.join("selected-pages.pdf");
             let extract_indexes = representative_page_indexes(total_pages);
             let started = std::time::Instant::now();
-            extract_pages(&toolchain, &fixture, &extract_indexes, &extract_path)
-                .unwrap_or_else(|error| {
-                    panic!("{} extract_pages failed: {error}", fixture.display())
-                });
+            extract_pages(&toolchain, &fixture, &extract_indexes, &extract_path).unwrap_or_else(
+                |error| panic!("{} extract_pages failed: {error}", fixture.display()),
+            );
             let extracted_pages = page_count(&toolchain, &extract_path).unwrap_or_else(|error| {
-                panic!("{} extracted output page_count failed: {error}", fixture.display())
+                panic!(
+                    "{} extracted output page_count failed: {error}",
+                    fixture.display()
+                )
             });
             eprintln!(
                 "[acceptance] extract_pages {}: {} selected pages in {:.1?}",
@@ -4738,7 +4740,10 @@ mod tests {
             let mut arguments = args(&["--check"]);
             arguments.push(path_arg(&extract_path));
             run_qpdf(&toolchain, arguments).unwrap_or_else(|error| {
-                panic!("{} did not pass qpdf --check: {error}", extract_path.display())
+                panic!(
+                    "{} did not pass qpdf --check: {error}",
+                    extract_path.display()
+                )
             });
 
             // 2. page-range split -> multiple qpdf-valid outputs that preserve
@@ -4756,7 +4761,10 @@ mod tests {
                     panic!("{} range split extract failed: {error}", fixture.display())
                 });
                 let output_pages = page_count(&toolchain, &output).unwrap_or_else(|error| {
-                    panic!("{} range split output page_count failed: {error}", output.display())
+                    panic!(
+                        "{} range split output page_count failed: {error}",
+                        output.display()
+                    )
                 });
                 assert_eq!(output_pages as usize, group.len());
                 range_split_pages += output_pages;

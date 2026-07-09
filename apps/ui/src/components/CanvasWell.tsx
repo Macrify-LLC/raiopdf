@@ -6,6 +6,7 @@ import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { FloatingDialog } from "./FloatingDialog";
+import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
 import { PageList } from "./PageList";
 import { SignatureCard } from "./SignatureCard";
@@ -133,6 +134,11 @@ export function CanvasWell({
               onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
             />
           ) : null}
+        </div>
+      ) : null}
+      {viewerActive && editing ? (
+        <div className="canvas-well__markup-rail-slot">
+          <FloatingMarkupToolbar editing={editing} />
         </div>
       ) : null}
       {viewerActive && engineStarting ? (

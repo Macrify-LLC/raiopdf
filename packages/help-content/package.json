@@ -18,6 +18,6 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "marked": "^16.4.1"
+    "marked": "^18.0.5"
   }
 }

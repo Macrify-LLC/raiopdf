@@ -214,7 +214,7 @@ pub struct PrepareFilingResponse {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum BuildBinderExhibitPayload {
     Bytes {
         bytes: Vec<u8>,
@@ -1914,6 +1914,54 @@ mod tests {
             releasable_output_dir(Path::new("/data/path-ops/uuid-1/nested/out.pdf"), root),
             None,
         );
+    }
+
+    #[test]
+    fn build_binder_exhibit_payload_accepts_camel_case_variant_fields() {
+        let grant: BuildBinderExhibitPayload = serde_json::from_value(serde_json::json!({
+            "kind": "grant",
+            "grant": "grant-exhibit",
+            "sizeBytes": 123456,
+            "pageCount": 7,
+            "label": "Exhibit A",
+            "description": "Large exhibit",
+            "sourceFileName": "large.pdf"
+        }))
+        .expect("deserialize grant exhibit");
+        match grant {
+            BuildBinderExhibitPayload::Grant {
+                grant,
+                size_bytes,
+                page_count,
+                source_file_name,
+                ..
+            } => {
+                assert_eq!(grant, "grant-exhibit");
+                assert_eq!(size_bytes, 123456);
+                assert_eq!(page_count, Some(7));
+                assert_eq!(source_file_name.as_deref(), Some("large.pdf"));
+            }
+            BuildBinderExhibitPayload::Bytes { .. } => panic!("expected grant exhibit"),
+        }
+
+        let bytes: BuildBinderExhibitPayload = serde_json::from_value(serde_json::json!({
+            "kind": "bytes",
+            "bytes": [1, 2, 3],
+            "label": "Exhibit B",
+            "sourceFileName": "small.pdf"
+        }))
+        .expect("deserialize byte exhibit");
+        match bytes {
+            BuildBinderExhibitPayload::Bytes {
+                bytes,
+                source_file_name,
+                ..
+            } => {
+                assert_eq!(bytes, vec![1, 2, 3]);
+                assert_eq!(source_file_name.as_deref(), Some("small.pdf"));
+            }
+            BuildBinderExhibitPayload::Grant { .. } => panic!("expected byte exhibit"),
+        }
     }
 
     #[test]

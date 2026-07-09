@@ -261,8 +261,6 @@ export function AppShell({
         pageCount={document.pageCount}
         zoom={document.zoom}
         hasDocument={hasDocument}
-        editTool={editing.tool}
-        onEditToolChange={editing.setTool}
         searchValue={documentSearch.query}
         searchResultLabel={documentSearch.resultLabel}
         searchBusy={documentSearch.status === "searching"}

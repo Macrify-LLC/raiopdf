@@ -1,0 +1,66 @@
+.floating-markup-toolbar {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.floating-markup-toolbar__item {
+  display: contents;
+}
+
+.floating-markup-toolbar__button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  box-shadow: var(--shadow-control);
+  cursor: default;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.floating-markup-toolbar__button:hover {
+  background: var(--hover-ground);
+  border-color: var(--border);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.floating-markup-toolbar__button:active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-control-active);
+}
+
+.floating-markup-toolbar__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.floating-markup-toolbar__button[data-active="true"],
+.floating-markup-toolbar__button[data-active="true"]:hover {
+  background: var(--identity-amber-soft);
+  border-color: var(--border);
+  color: var(--primary);
+  box-shadow: inset 2px 0 0 var(--identity-amber), var(--shadow-control-active);
+}
+
+.floating-markup-toolbar__divider {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--border);
+}

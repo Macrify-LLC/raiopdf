@@ -255,6 +255,28 @@ describe("PageList virtualization", () => {
     expect(scroller().scrollTop).toBe(expectedTop);
   });
 
+  it("reserves a left gutter before centering pages", async () => {
+    await renderList(createFakePdfDocument(1), { leftInset: 66 });
+
+    const content = container!.querySelector<HTMLDivElement>(".page-list__content");
+    const page = container!.querySelector<HTMLDivElement>(".page-list__page");
+
+    expect(content?.style.width).toBe("1000px");
+    expect(page?.style.left).toBe(`${66 + (1000 - 66 - PAGE_WIDTH) / 2}px`);
+  });
+
+  it("fits width to the area remaining after the left gutter", async () => {
+    const onFitZoomResolved = vi.fn();
+
+    await renderList(createFakePdfDocument(1), {
+      fitWidth: true,
+      leftInset: 66,
+      onFitZoomResolved,
+    });
+
+    expect(onFitZoomResolved).toHaveBeenLastCalledWith((1000 - 66 - 48) / PAGE_WIDTH);
+  });
+
   it("runs the static TextLayer cleanup when the document goes away", async () => {
     await renderList(createFakePdfDocument(3));
 

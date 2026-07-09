@@ -1,59 +1,19 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   BoltIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CommentIcon,
-  DrawIcon,
-  EllipseIcon,
   HelpIcon,
-  HighlightIcon,
-  ImageIcon,
-  LineIcon,
   MinusIcon,
   OpenIcon,
   PlusIcon,
   PrintIcon,
-  ArrowLineIcon,
-  RectangleIcon,
   SaveIcon,
   SearchIcon,
-  SelectTextIcon,
-  SignIcon,
-  StrikethroughIcon,
-  TextBoxIcon,
-  UnderlineIcon,
   UndoIcon,
 } from "../icons";
-import type { EditToolId } from "../lib/edits";
-import { COMMAND_BAR_EDIT_TOOLS } from "../lib/toolRegistry";
 import { IconButton } from "./IconButton";
 import "./CommandBar.css";
-
-// Short names the active tool reveals as it expands (Change 3, "Emil-style"
-// tool selection). "Select" -> "Select text" is the one deliberate deviation
-// from the registry's own `label`; every other tool's registry label is
-// already short enough to reuse as-is.
-const EDIT_TOOL_EXPAND_LABELS: Partial<Record<EditToolId, string>> = {
-  select: "Select text",
-};
-
-const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
-  select: (size) => <SelectTextIcon size={size} />,
-  highlight: (size) => <HighlightIcon size={size} />,
-  underline: (size) => <UnderlineIcon size={size} />,
-  strikethrough: (size) => <StrikethroughIcon size={size} />,
-  textBox: (size) => <TextBoxIcon size={size} />,
-  callout: (size) => <ArrowLineIcon size={size} />,
-  image: (size) => <ImageIcon size={size} />,
-  comment: (size) => <CommentIcon size={size} />,
-  draw: (size) => <DrawIcon size={size} />,
-  shapeRect: (size) => <RectangleIcon size={size} />,
-  shapeEllipse: (size) => <EllipseIcon size={size} />,
-  shapeLine: (size) => <LineIcon size={size} />,
-  shapeArrow: (size) => <ArrowLineIcon size={size} />,
-  sign: (size) => <SignIcon size={size} />,
-};
 
 export interface CommandBarProps {
   onOpen?: (() => void) | undefined;
@@ -73,8 +33,6 @@ export interface CommandBarProps {
    * has nothing to write and stays disabled while the document is open.
    */
   saveDisabled?: boolean;
-  editTool?: EditToolId;
-  onEditToolChange?: ((tool: EditToolId) => void) | undefined;
   searchValue?: string;
   searchResultLabel?: string;
   searchBusy?: boolean;
@@ -110,8 +68,6 @@ export function CommandBar({
   zoom = 1,
   hasDocument = false,
   saveDisabled = false,
-  editTool = "select",
-  onEditToolChange,
   searchValue = "",
   searchResultLabel = "",
   searchBusy = false,
@@ -134,12 +90,6 @@ export function CommandBar({
   useEffect(() => {
     setPageInputValue(String(currentPage));
   }, [currentPage]);
-
-  function toggleTool(toolId: EditToolId) {
-    // Tools are mutually exclusive toggles; re-clicking the active tool
-    // returns to Select, like every other mode toggle in the app.
-    onEditToolChange?.(editTool === toolId && toolId !== "select" ? "select" : toolId);
-  }
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
@@ -231,21 +181,9 @@ export function CommandBar({
 
       <div className="command-bar__group">
         <IconButton icon={<UndoIcon size={17} />} label="Undo" disabled />
-        {COMMAND_BAR_EDIT_TOOLS.map((tool) => (
-          <IconButton
-            key={tool.id}
-            icon={EDIT_TOOL_ICONS[tool.id](17)}
-            label={tool.label}
-            tooltip={tool.tooltip}
-            active={editTool === tool.id}
-            expandLabel={EDIT_TOOL_EXPAND_LABELS[tool.id] ?? tool.label}
-            disabled={!hasDocument && tool.id !== "select"}
-            onClick={() => toggleTool(tool.id)}
-          />
-        ))}
       </div>
 
-      <div className="command-bar__group">
+      <div className="command-bar__group command-bar__help-group">
         <IconButton icon={<HelpIcon size={17} />} label="Help" onClick={onHelp} />
       </div>
 

@@ -6,6 +6,7 @@ import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { FloatingDialog } from "./FloatingDialog";
+import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
 import { PageList } from "./PageList";
 import { SignatureCard } from "./SignatureCard";
@@ -18,6 +19,8 @@ export type { PendingRedactionOverlay } from "./PageView";
 const MODE_BAR_INSET = 44;
 const STACKED_MODE_BAR_INSET = 88;
 const PROCESS_LOADER_INSET = 88;
+// 16px rail offset + ~42px rail footprint + 8px gap before page hit-testing starts.
+const MARKUP_RAIL_PAGE_INSET = 66;
 
 export interface CanvasWellProps {
   onOpenRequested?: (() => void) | undefined;
@@ -96,6 +99,7 @@ export function CanvasWell({
   const viewerActive = hasDocument && !workspace;
   const showModeBar = Boolean(viewerActive && modeBar);
   const showAnnotationActions = Boolean(viewerActive && editing && editing.pendingEdits.length > 0);
+  const showMarkupRail = Boolean(viewerActive && editing);
   const showFloatingControls = showModeBar || showAnnotationActions;
 
   function handleDrop(event: DragEvent<HTMLElement>) {
@@ -133,6 +137,11 @@ export function CanvasWell({
               onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
             />
           ) : null}
+        </div>
+      ) : null}
+      {showMarkupRail && editing ? (
+        <div className="canvas-well__markup-rail-slot">
+          <FloatingMarkupToolbar editing={editing} />
         </div>
       ) : null}
       {viewerActive && engineStarting ? (
@@ -186,6 +195,7 @@ export function CanvasWell({
                   : 0
             }
             bottomInset={processLoader ? PROCESS_LOADER_INSET : 0}
+            leftInset={showMarkupRail ? MARKUP_RAIL_PAGE_INSET : 0}
             onVisiblePageChange={onVisiblePageChange}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}

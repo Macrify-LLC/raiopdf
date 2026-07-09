@@ -97,6 +97,51 @@ describe("AppShell", () => {
     expect(html).toContain("Make markup permanent");
   });
 
+  it("renders the floating markup toolbar for an active viewer", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: mockPdfDocument,
+          workspace: null,
+        })}
+      />,
+    );
+
+    expect(html).toContain("canvas-well__markup-rail-slot");
+    expect(html).toContain('aria-label="Markup tools"');
+  });
+
+  it("hides the floating markup toolbar without a pdf document", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: null,
+          workspace: null,
+        })}
+      />,
+    );
+
+    expect(html).not.toContain("canvas-well__markup-rail-slot");
+    expect(html).not.toContain('aria-label="Markup tools"');
+  });
+
+  it("hides the floating markup toolbar while a workspace owns the canvas", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: openDocument,
+          pdfDocument: mockPdfDocument,
+          workspace: <div>Workspace</div>,
+        })}
+      />,
+    );
+
+    expect(html).not.toContain("canvas-well__markup-rail-slot");
+    expect(html).not.toContain('aria-label="Markup tools"');
+  });
+
   it("renders interactive document tabs with close labels", () => {
     const html = renderToStaticMarkup(
       <AppShell

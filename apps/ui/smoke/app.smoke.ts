@@ -436,7 +436,7 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await openPdf(page, "edit-text-prompt.pdf", await createTextPdf("Prompt fixture."));
 
   await openEditToolPanel(page);
-  await page.locator(".command-bar").getByRole("button", { name: "Text box", exact: true }).click();
+  await selectMarkupTool(page, "Text box");
   await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
@@ -794,13 +794,12 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
     hasTextPixels: true,
   });
 
-  const commandBar = page.locator(".command-bar");
   const canvas = mainCanvas(page);
 
   // Highlight: drag a band across the text line near the top of the page.
   // Retries in case the drag lands before the page's text layer resolves —
   // a miss adds nothing, so retrying cannot double-place.
-  await commandBar.getByRole("button", { name: "Highlight", exact: true }).click();
+  await selectMarkupTool(page, "Highlight");
   await waitForCanvasPointToHitTextLayer(page, canvas, 0.08, 0.06);
   await expect(async () => {
     if ((await page.locator(".edit-layer__highlight").count()) === 0) {
@@ -812,14 +811,14 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await expect(page.locator(".edit-layer__highlight").first()).toBeVisible();
 
   // Text box: click to place, type, Enter commits.
-  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await selectMarkupTool(page, "Text box");
   await clickCanvasAt(page, canvas, 0.3, 0.4);
   await page.getByLabel("Text box content").fill("Deposition note");
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
 
   // Comment: click drops a pin, popover takes the note text.
-  await commandBar.getByRole("button", { name: "Comment", exact: true }).click();
+  await selectMarkupTool(page, "Comment");
   await clickCanvasAt(page, canvas, 0.6, 0.5);
   await page.getByLabel("Comment text").fill("Check exhibit reference");
   await page.getByRole("button", { name: "Save Note" }).click();
@@ -886,9 +885,8 @@ test("flattens pending markup into page content on an annotation-free PDF", asyn
   await page.goto("/");
   await openPdf(page, "flatten-pending-markup.pdf", await createPdf([300]));
 
-  const commandBar = page.locator(".command-bar");
   const canvas = mainCanvas(page);
-  await commandBar.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await selectMarkupTool(page, "Rectangle");
   await dragOnCanvas(page, canvas, 0.2, 0.25, 0.55, 0.45);
   await expect(page.locator("svg.edit-layer__shapes rect.edit-layer__shape-item")).toHaveCount(1);
 
@@ -909,9 +907,8 @@ test("flattens reopened imported markup once without re-appending it", async ({ 
   await page.goto("/");
   await openPdf(page, "flatten-imported-markup-source.pdf", await createPdf([300]));
 
-  const commandBar = page.locator(".command-bar");
   const canvas = mainCanvas(page);
-  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await selectMarkupTool(page, "Text box");
   await clickCanvasAt(page, canvas, 0.3, 0.4);
   await page.getByLabel("Text box content").fill("Flatten once");
   await page.getByLabel("Text box content").press("Enter");
@@ -945,9 +942,8 @@ test("places a text box rotation-correctly on a rotated page", async ({ page }) 
   await page.getByRole("button", { name: "Rotate selected pages" }).click();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
-  const commandBar = page.locator(".command-bar");
   const canvas = mainCanvas(page);
-  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await selectMarkupTool(page, "Text box");
   await clickCanvasAt(page, canvas, 0.25, 0.25);
   await page.getByLabel("Text box content").fill("ROTCHECK");
   await page.getByLabel("Text box content").press("Enter");
@@ -975,9 +971,8 @@ test("rapid double-clicks cannot double-place or double-save", async ({ page }) 
   await page.goto("/");
   await openPdf(page, "double-click.pdf", await createPdf([300]));
 
-  const commandBar = page.locator(".command-bar");
   const canvas = mainCanvas(page);
-  await commandBar.getByRole("button", { name: "Text box", exact: true }).click();
+  await selectMarkupTool(page, "Text box");
 
   // Two rapid clicks at the same spot must produce exactly one draft box.
   const box = await canvas.boundingBox();
@@ -1040,6 +1035,13 @@ async function openEditToolPanel(page: Page): Promise<void> {
   }
 
   await expect(toolPanel.locator("#accordion-panel-edit")).toBeVisible();
+}
+
+async function selectMarkupTool(page: Page, name: string): Promise<void> {
+  const toolbar = page.getByRole("toolbar", { name: "Markup tools" });
+
+  await expect(toolbar).toBeVisible();
+  await toolbar.getByRole("button", { name, exact: true }).click();
 }
 
 async function expectCommandBarPage(page: Page, currentPage: number, pageCount: number): Promise<void> {

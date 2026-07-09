@@ -41,6 +41,21 @@
   pointer-events: auto;
 }
 
+.canvas-well__markup-rail-slot {
+  position: absolute;
+  top: 50%;
+  left: var(--space-4);
+  z-index: 3;
+  max-height: calc(100% - (2 * var(--space-4)));
+  overflow-y: auto;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.canvas-well__markup-rail-slot > * {
+  pointer-events: auto;
+}
+
 .canvas-well__annotation-actions {
   display: inline-flex;
   align-items: center;

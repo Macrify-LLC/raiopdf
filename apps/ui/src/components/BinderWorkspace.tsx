@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { PdfBinderOptions, PdfCoverStyle } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
-import type { DocumentState } from "../hooks/useDocument";
+import type { BinderExhibitInput, DocumentState } from "../hooks/useDocument";
+import type { FileGrant } from "../lib/filePort";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
   pickPdfsForAdd,
@@ -49,24 +50,29 @@ interface BinderPresetV1 {
   indexIncludeSourceFileName: boolean;
 }
 
-export interface ExhibitFile {
+interface ExhibitFileBase {
   id: string;
   name: string;
   description: string;
-  bytes: Uint8Array;
-  pageCount: number;
+  pageCount: number | null;
 }
+
+export type ExhibitFile =
+  | (ExhibitFileBase & {
+    kind: "bytes";
+    bytes: Uint8Array;
+  })
+  | (ExhibitFileBase & {
+    kind: "grant";
+    grant: FileGrant;
+    sizeBytes: number;
+  });
 
 export interface BinderWorkspaceProps {
   document: DocumentState;
   pdfDocument?: PDFDocumentProxy | null | undefined;
   onBuildBinder: (
-    exhibits: readonly {
-      bytes: Uint8Array;
-      label: string;
-      description?: string | undefined;
-      sourceFileName?: string | undefined;
-    }[],
+    exhibits: readonly BinderExhibitInput[],
     options: PdfBinderOptions,
     fileName: string,
   ) => Promise<boolean>;
@@ -111,14 +117,19 @@ export function BinderWorkspace({
   const mainName = document.fileName ?? "Untitled.pdf";
   const mainPages = document.pageCount;
   const hasMainDocument = document.source !== null;
+  const allowGrantExhibits = document.source?.kind === "rangeGrant";
   const labels = useMemo(
     () => exhibits.map((_, index) => formatExhibitLabel(prefix, identifierStyle, index)),
     [exhibits, identifierStyle, prefix],
   );
+  const totalPagesExact = exhibits.every((exhibit) => exhibit.pageCount !== null);
   const totalPages = mainPages + (indexEnabled ? 1 : 0) + exhibits.reduce(
-    (total, exhibit) => total + exhibit.pageCount + (slipSheets ? 1 : 0),
+    (total, exhibit) => total + (exhibit.pageCount ?? 0) + (slipSheets ? 1 : 0),
     0,
   );
+  const totalPagesLabel = totalPagesExact
+    ? `${totalPages} ${totalPages === 1 ? "page" : "pages"}`
+    : `${totalPages}+ pages`;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -139,7 +150,7 @@ export function BinderWorkspace({
     setStatus("Reading exhibit files...");
 
     try {
-      const outcomes = await Promise.all(inputs.map(readExhibitFile));
+      const outcomes = await Promise.all(inputs.map((input) => readExhibitFile(input, allowGrantExhibits)));
       const added = outcomes.flatMap((outcome) => (outcome.status === "ok" ? [outcome.exhibit] : []));
       const rejected = outcomes.flatMap((outcome) => (outcome.status === "tooLarge" ? [outcome.name] : []));
 
@@ -260,7 +271,14 @@ export function BinderWorkspace({
     try {
       const built = await onBuildBinder(
         exhibits.map((exhibit, index) => ({
-          bytes: exhibit.bytes,
+          ...(exhibit.kind === "bytes"
+            ? { kind: "bytes" as const, bytes: exhibit.bytes }
+            : {
+              kind: "grant" as const,
+              grant: exhibit.grant,
+              sizeBytes: exhibit.sizeBytes,
+              pageCount: exhibit.pageCount,
+            }),
           label: labels[index]!,
           description: exhibit.description,
           sourceFileName: exhibit.name,
@@ -359,10 +377,13 @@ export function BinderWorkspace({
                 <span className="binder-exhibit__handle" aria-hidden="true">
                   <DragHandleIcon size={16} />
                 </span>
-                <PdfMiniThumb bytes={exhibit.bytes} label={`${exhibit.name} thumbnail`} />
+                <PdfMiniThumb
+                  bytes={exhibit.kind === "bytes" ? exhibit.bytes : null}
+                  label={`${exhibit.name} thumbnail`}
+                />
                 <div className="binder-exhibit__body">
                   <p className="binder-exhibit__name">{exhibit.name}</p>
-                  <p className="binder-exhibit__meta">{exhibit.pageCount} {exhibit.pageCount === 1 ? "page" : "pages"}</p>
+                  <p className="binder-exhibit__meta">{formatExhibitPageCount(exhibit.pageCount)}</p>
                   <span className="binder-exhibit__chip">{labels[index]}</span>
                   <label className="binder-exhibit__description">
                     <span>Description</span>
@@ -518,7 +539,7 @@ export function BinderWorkspace({
       <footer className="binder-workspace__footer">
         <div className="binder-workspace__footer-summary">
           <p>
-            {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPages} {totalPages === 1 ? "page" : "pages"}
+            {stripPdfExtension(mainName)} + {exhibits.length} {exhibits.length === 1 ? "exhibit" : "exhibits"} · {totalPagesLabel}
           </p>
           {status && !building ? (
             <p className="binder-workspace__status" role="status">
@@ -573,13 +594,25 @@ function docxAddOptions(
   };
 }
 
-async function readExhibitFile(input: FileAddInput): Promise<ExhibitAddOutcome> {
+async function readExhibitFile(input: FileAddInput, allowGrantExhibits: boolean): Promise<ExhibitAddOutcome> {
   const result = await readFileForAdd(input);
 
+  if (result.kind === "descriptor" && allowGrantExhibits) {
+    return {
+      status: "ok",
+      exhibit: {
+        id: `${result.descriptor.name}-${crypto.randomUUID()}`,
+        name: result.descriptor.name,
+        description: stripPdfExtension(result.descriptor.name),
+        kind: "grant",
+        grant: result.descriptor.grant as FileGrant,
+        sizeBytes: result.descriptor.sizeBytes,
+        pageCount: result.descriptor.pageCount,
+      },
+    };
+  }
+
   if (result.kind !== "bytes") {
-    // Binder assembly consumes full exhibit bytes in the in-memory engine, so
-    // above-threshold exhibits (browser gate or Tauri grant descriptor) stay
-    // gated until the delegated qpdf binder lands (large-PDF plan Phase 3).
     return {
       status: "tooLarge",
       name: result.kind === "descriptor" ? result.descriptor.name : result.name,
@@ -595,10 +628,19 @@ async function readExhibitFile(input: FileAddInput): Promise<ExhibitAddOutcome> 
       id: `${opened.name}-${crypto.randomUUID()}`,
       name: opened.name,
       description: stripPdfExtension(opened.name),
+      kind: "bytes",
       bytes: opened.bytes,
       pageCount: pdf.getPageCount(),
     },
   };
+}
+
+function formatExhibitPageCount(pageCount: number | null): string {
+  if (pageCount === null) {
+    return "Page count pending";
+  }
+
+  return `${pageCount} ${pageCount === 1 ? "page" : "pages"}`;
 }
 
 const BINDER_PRESET_STORAGE_KEY = "raiopdf:binder-preset:v1";

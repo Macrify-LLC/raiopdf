@@ -217,6 +217,25 @@ export async function handleBuildBinderOneShot(
     );
   }
 
+  let totalInputBytes = mainStats.size;
+  for (const exhibit of input.exhibits) {
+    const exhibitStats = await fs.stat(exhibit.path).catch((error: unknown) => {
+      throw new Error(`Exhibit PDF is not accessible: ${exhibit.path}.`, { cause: error });
+    });
+    if (!exhibitStats.isFile()) {
+      return errorResult("INVALID_ARGUMENT", `Exhibit path is not a regular file: ${exhibit.path}.`);
+    }
+    totalInputBytes += exhibitStats.size;
+  }
+
+  if (totalInputBytes > input.maxInputBytes) {
+    return errorResult(
+      "INVALID_ARGUMENT",
+      `Binder inputs are too large for build_binder (${formatBytes(totalInputBytes)} combined).`,
+      `Choose combined inputs at or below ${formatBytes(input.maxInputBytes)}.`,
+    );
+  }
+
   const engine = getLocalEngine();
   const output = await prepareOutput(input.outputPath);
   const opened: PdfDocumentHandle[] = [];

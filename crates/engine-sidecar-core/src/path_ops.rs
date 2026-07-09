@@ -4676,9 +4676,11 @@ mod tests {
     ///   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
     /// ```
     ///
-    /// Demonstrates: split-by-max-bytes producing qpdf-valid parts under the
-    /// cap, and `prepare_filing` (normalize + split) with per-part facts
-    /// preflight — the release-blocking large-file page-normalization path.
+    /// Demonstrates: selected-page extraction and page-range split by repeated
+    /// extraction on large inputs, split-by-max-bytes producing qpdf-valid parts
+    /// under the cap, and `prepare_filing` (normalize + split) with per-part
+    /// facts preflight — the release-blocking large-file page-normalization
+    /// path.
     #[test]
     #[ignore = "acceptance harness — needs RAIOPDF_LARGE_FIXTURE and the payload toolchain"]
     fn large_fixture_split_and_prepare_filing_acceptance() {
@@ -4711,7 +4713,68 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{} page_count failed: {error}", fixture.display()));
             let dir = TestDir::new("large-acceptance");
 
-            // 1. split_by_max_bytes -> contiguous, qpdf-valid parts under the cap.
+            // 1. selected-page extract -> qpdf-valid output with exactly the
+            // chosen pages. This is the core operation behind streamed
+            // Organize Pages > Extract for large PDFs.
+            let extract_dir = dir.path().join("extract");
+            fs::create_dir_all(&extract_dir).unwrap();
+            let extract_path = extract_dir.join("selected-pages.pdf");
+            let extract_indexes = representative_page_indexes(total_pages);
+            let started = std::time::Instant::now();
+            extract_pages(&toolchain, &fixture, &extract_indexes, &extract_path)
+                .unwrap_or_else(|error| {
+                    panic!("{} extract_pages failed: {error}", fixture.display())
+                });
+            let extracted_pages = page_count(&toolchain, &extract_path).unwrap_or_else(|error| {
+                panic!("{} extracted output page_count failed: {error}", fixture.display())
+            });
+            eprintln!(
+                "[acceptance] extract_pages {}: {} selected pages in {:.1?}",
+                fixture.display(),
+                extracted_pages,
+                started.elapsed(),
+            );
+            assert_eq!(extracted_pages as usize, extract_indexes.len());
+            let mut arguments = args(&["--check"]);
+            arguments.push(path_arg(&extract_path));
+            run_qpdf(&toolchain, arguments).unwrap_or_else(|error| {
+                panic!("{} did not pass qpdf --check: {error}", extract_path.display())
+            });
+
+            // 2. page-range split -> multiple qpdf-valid outputs that preserve
+            // the requested ordering. The shell/UI implementation delegates
+            // each parsed range group to extract_pages and then saves the
+            // resulting grants.
+            let range_split_dir = dir.path().join("range-split");
+            fs::create_dir_all(&range_split_dir).unwrap();
+            let range_groups = representative_range_groups(total_pages);
+            let started = std::time::Instant::now();
+            let mut range_split_pages = 0u32;
+            for (index, group) in range_groups.iter().enumerate() {
+                let output = range_split_dir.join(format!("range-part-{}.pdf", index + 1));
+                extract_pages(&toolchain, &fixture, group, &output).unwrap_or_else(|error| {
+                    panic!("{} range split extract failed: {error}", fixture.display())
+                });
+                let output_pages = page_count(&toolchain, &output).unwrap_or_else(|error| {
+                    panic!("{} range split output page_count failed: {error}", output.display())
+                });
+                assert_eq!(output_pages as usize, group.len());
+                range_split_pages += output_pages;
+                let mut arguments = args(&["--check"]);
+                arguments.push(path_arg(&output));
+                run_qpdf(&toolchain, arguments).unwrap_or_else(|error| {
+                    panic!("{} did not pass qpdf --check: {error}", output.display())
+                });
+            }
+            eprintln!(
+                "[acceptance] page-range split {}: {} groups / {} pages in {:.1?}",
+                fixture.display(),
+                range_groups.len(),
+                range_split_pages,
+                started.elapsed(),
+            );
+
+            // 3. split_by_max_bytes -> contiguous, qpdf-valid parts under the cap.
             let split_dir = dir.path().join("split");
             fs::create_dir_all(&split_dir).unwrap();
             let started = std::time::Instant::now();
@@ -4762,7 +4825,7 @@ mod tests {
                 fixture.display()
             );
 
-            // 2. prepare_filing (normalize + split) with facts preflight.
+            // 4. prepare_filing (normalize + split) with facts preflight.
             let stage_dir = dir.path().join("stage");
             let out_dir = dir.path().join("out");
             fs::create_dir_all(&stage_dir).unwrap();
@@ -4847,6 +4910,30 @@ mod tests {
         fixtures.sort();
         fixtures.dedup();
         fixtures
+    }
+
+    fn representative_page_indexes(total_pages: u32) -> Vec<u32> {
+        if total_pages <= 1 {
+            return vec![0];
+        }
+
+        let mut indexes = vec![0, total_pages / 2, total_pages - 1];
+        indexes.sort_unstable();
+        indexes.dedup();
+        indexes
+    }
+
+    fn representative_range_groups(total_pages: u32) -> Vec<Vec<u32>> {
+        if total_pages <= 1 {
+            return vec![vec![0]];
+        }
+
+        let first_group_end = total_pages.min(2);
+        let mut groups = vec![(0..first_group_end).collect::<Vec<_>>()];
+        if total_pages > first_group_end {
+            groups.push((first_group_end..total_pages.min(first_group_end + 3)).collect());
+        }
+        groups
     }
 
     fn collect_large_pdfs(dir: &Path, min_bytes: u64, out: &mut Vec<PathBuf>) {

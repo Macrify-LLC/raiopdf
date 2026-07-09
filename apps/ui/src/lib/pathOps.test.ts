@@ -264,14 +264,52 @@ describe("path op invoke plumbing", () => {
 
     await expect(pathOpBuildBinder(
       grant,
-      [{ bytes: new Uint8Array([1, 2, 3]), label: "Exhibit A", sourceFileName: "a.pdf" }],
+      [{ kind: "bytes", bytes: new Uint8Array([1, 2, 3]), label: "Exhibit A", sourceFileName: "a.pdf" }],
       { slipSheets: false, coverStyle: "bordered" },
       "Main Binder.pdf",
     )).resolves.toEqual(output);
     expect(invokeMock).toHaveBeenCalledWith("path_op_build_binder", {
       grant: "grant-1",
-      exhibits: [{ bytes: [1, 2, 3], label: "Exhibit A", sourceFileName: "a.pdf" }],
+      exhibits: [{ kind: "bytes", bytes: [1, 2, 3], label: "Exhibit A", sourceFileName: "a.pdf" }],
       options: { slipSheets: false, coverStyle: "bordered" },
+      outputName: "Main Binder.pdf",
+    });
+  });
+
+  it("invokes build_binder with grant exhibits without serializing bytes", async () => {
+    const output = {
+      outputGrant: "grant-out",
+      name: "binder.pdf",
+      sizeBytes: 20,
+      pageCount: 4,
+      opReport: { op: "build_binder", tool: "node", durationMs: 1, inputSizeBytes: 12, outputSizeBytes: 20, notes: [] },
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(pathOpBuildBinder(
+      grant,
+      [{
+        kind: "grant",
+        grant: "grant-exhibit" as typeof grant,
+        sizeBytes: 123_456,
+        pageCount: 7,
+        label: "Exhibit B",
+        sourceFileName: "b.pdf",
+      }],
+      { slipSheets: true },
+      "Main Binder.pdf",
+    )).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenCalledWith("path_op_build_binder", {
+      grant: "grant-1",
+      exhibits: [{
+        kind: "grant",
+        grant: "grant-exhibit",
+        sizeBytes: 123_456,
+        pageCount: 7,
+        label: "Exhibit B",
+        sourceFileName: "b.pdf",
+      }],
+      options: { slipSheets: true },
       outputName: "Main Binder.pdf",
     });
   });

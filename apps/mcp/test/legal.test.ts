@@ -124,6 +124,30 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(output)).rejects.toBeTruthy();
   });
 
+  it("one-shot build_binder rejects combined main and exhibit bytes over its ceiling", async () => {
+    const main = await makePdf("main.pdf", 1);
+    const exhibit = await makePdf("ex1.pdf", 1);
+    const output = path.join(dir, "binder.pdf");
+    const mainSize = (await fs.stat(main)).size;
+
+    const result = await handleBuildBinderOneShot({
+      mainPath: main,
+      exhibits: [{ path: exhibit, label: "Exhibit A" }],
+      options: { slipSheets: false },
+      outputPath: output,
+      maxInputBytes: mainSize + 1,
+    });
+
+    expect(structured(result)).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_ARGUMENT",
+        message: expect.stringContaining("combined"),
+      },
+    });
+    await expect(fs.access(output)).rejects.toBeTruthy();
+  });
+
   it("one-shot build_binder writes a binder file with optional options omitted", async () => {
     const main = await makePdf("main.pdf", 1);
     const exhibit = await makePdf("ex1.pdf", 1);

@@ -14,12 +14,13 @@ import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy } from "../lib/pdfjs";
 import {
   computeMountedRange,
+  computePageContentWidth,
+  computePageLeft,
   computePageLayout,
   findPageAtOffset,
   mostVisiblePage,
   unionRange,
   PAGE_GAP,
-  PAGE_LIST_PADDING,
   type MountedRange,
   type PageDims,
   type PageLayout,
@@ -58,6 +59,8 @@ export interface PageListProps {
   topInset?: number;
   /** Extra bottom inset inside the scroller (e.g. when a docked footer overlays it). */
   bottomInset?: number;
+  /** Extra left inset inside the scroller (e.g. when a floating rail overlays the well). */
+  leftInset?: number;
   onVisiblePageChange?: ((page: number) => void) | undefined;
   onZoomIn?: (() => void) | undefined;
   onZoomOut?: (() => void) | undefined;
@@ -99,6 +102,7 @@ export function PageList({
   scrollIntent = null,
   topInset = 0,
   bottomInset = 0,
+  leftInset = 0,
   onVisiblePageChange,
   onZoomIn,
   onZoomOut,
@@ -234,8 +238,12 @@ export function PageList({
   }, [pdfDocument]);
 
   const layout: PageLayout | null = useMemo(
-    () => (sizes ? computePageLayout(sizes.dims, zoom, sizes.measured, topInset, bottomInset) : null),
-    [bottomInset, sizes, topInset, zoom],
+    () => (
+      sizes
+        ? computePageLayout(sizes.dims, zoom, sizes.measured, topInset, bottomInset, leftInset)
+        : null
+    ),
+    [bottomInset, leftInset, sizes, topInset, zoom],
   );
 
   const syncViewRect = useCallback(() => {
@@ -354,9 +362,9 @@ export function PageList({
       return;
     }
 
-    const available = Math.max(viewRect.width - FIT_WIDTH_MARGIN, 1);
+    const available = Math.max(viewRect.width - leftInset - FIT_WIDTH_MARGIN, 1);
     onFitZoomResolved?.(available / layout.maxBaseWidth);
-  }, [fitWidth, layout, onFitZoomResolved, viewRect.width]);
+  }, [fitWidth, layout, leftInset, onFitZoomResolved, viewRect.width]);
 
   // Ctrl+wheel zoom, anchored to the point under the cursor within the
   // hovered page (falls back to the layout when hovering a gap).
@@ -490,10 +498,7 @@ export function PageList({
     return <div ref={scrollerRef} className="page-list" data-testid="page-list" />;
   }
 
-  const contentWidth = Math.max(
-    layout.maxWidth + PAGE_LIST_PADDING * 2,
-    viewRect.width,
-  );
+  const contentWidth = computePageContentWidth(layout, viewRect.width);
 
   return (
     <div
@@ -510,7 +515,7 @@ export function PageList({
       >
         {layout.items.map((item, index) => {
           const mounted = index >= effectiveRange.start && index <= effectiveRange.end;
-          const left = Math.max(PAGE_LIST_PADDING, (contentWidth - item.width) / 2);
+          const left = computePageLeft(item, layout, contentWidth);
 
           return (
             <div

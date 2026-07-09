@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   computeMountedRange,
+  computePageContentWidth,
   computePageLayout,
+  computePageLeft,
   estimateCanvasBytes,
   findPageAtOffset,
   mostVisiblePage,
@@ -51,6 +53,21 @@ describe("computePageLayout", () => {
 
     expect(layout.maxWidth).toBe(792 * 1.5);
     expect(layout.maxBaseWidth).toBe(792);
+  });
+
+  it("reserves a left inset before centering pages", () => {
+    const layout = computePageLayout([LETTER], 1, true, 0, 0, 66);
+    const compactWidth = computePageContentWidth(layout, 620);
+    const wideWidth = computePageContentWidth(layout, 1000);
+
+    expect(layout.leftInset).toBe(66);
+    expect(compactWidth).toBe(66 + 612 + PAGE_LIST_PADDING * 2);
+    expect(computePageLeft(layout.items[0]!, layout, compactWidth)).toBe(
+      66 + PAGE_LIST_PADDING,
+    );
+    expect(computePageLeft(layout.items[0]!, layout, wideWidth)).toBe(
+      66 + (1000 - 66 - 612) / 2,
+    );
   });
 });
 

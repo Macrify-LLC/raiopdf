@@ -29,6 +29,8 @@ export interface PageLayout {
   maxWidth: number;
   /** Widest page at scale 1 (fit-width divides the container by this). */
   maxBaseWidth: number;
+  /** Horizontal space reserved before the page content area. */
+  leftInset: number;
   /** False while page sizes are still first-page estimates. */
   measured: boolean;
 }
@@ -67,6 +69,7 @@ export function computePageLayout(
   measured: boolean,
   topInset = 0,
   bottomInset = 0,
+  leftInset = 0,
 ): PageLayout {
   const items: PageLayoutItem[] = [];
   let top = PAGE_LIST_PADDING + topInset;
@@ -90,8 +93,29 @@ export function computePageLayout(
     totalHeight: contentBottom + PAGE_LIST_PADDING + bottomInset,
     maxWidth,
     maxBaseWidth,
+    leftInset,
     measured,
   };
+}
+
+export function computePageContentWidth(
+  layout: PageLayout,
+  viewportWidth: number,
+): number {
+  return Math.max(
+    layout.leftInset + layout.maxWidth + PAGE_LIST_PADDING * 2,
+    viewportWidth,
+  );
+}
+
+export function computePageLeft(
+  item: PageLayoutItem,
+  layout: PageLayout,
+  contentWidth: number,
+): number {
+  const contentAreaWidth = Math.max(0, contentWidth - layout.leftInset);
+
+  return layout.leftInset + Math.max(PAGE_LIST_PADDING, (contentAreaWidth - item.width) / 2);
 }
 
 /** Index of the last page whose top is at or above `offset` (clamped). */

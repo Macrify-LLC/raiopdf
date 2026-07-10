@@ -205,8 +205,14 @@ function canonicalizeState(state: string): string {
 }
 
 function canonicalizeSection(section: string): string {
-  const normalized = collapseWhitespace(section)
-    .replace(/[.,;:]+$/u, "");
+  // Strip trailing .,;: with a linear scan rather than a `[.,;:]+$` regex,
+  // which backtracks polynomially on uncontrolled document text (ReDoS).
+  const collapsed = collapseWhitespace(section);
+  let end = collapsed.length;
+  while (end > 0 && ".,;:".includes(collapsed[end - 1]!)) {
+    end -= 1;
+  }
+  const normalized = collapsed.slice(0, end);
 
   return normalizeCommaSeparators(normalizeHyphenSeparators(normalized));
 }

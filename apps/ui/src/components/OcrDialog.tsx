@@ -1,3 +1,4 @@
+import { ErrorReportButton } from "./ErrorReportButton";
 import { FloatingDialog } from "./FloatingDialog";
 import type { LongProcessProgress } from "./LongProcessLoader";
 import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
@@ -46,9 +47,12 @@ export function OcrDialog({
         <div className="ocr-dialog__form">
           <p className="ocr-dialog__copy">{formatPageCountCopy(pageCount)}</p>
           {phase === "error" ? (
-            <p className="ocr-dialog__error" role="alert">
-              {errorMessage ?? "OCR could not finish. Check the document and try again."}
-            </p>
+            <>
+              <p className="ocr-dialog__error" role="alert">
+                {errorMessage ?? "OCR could not finish. Check the document and try again."}
+              </p>
+              <ErrorReportButton className="ocr-dialog__report" />
+            </>
           ) : null}
           {/*
             v1 ships all-pages only (DECIDED 2026-07-03). This is the seam

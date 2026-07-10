@@ -31,6 +31,13 @@
   padding: var(--space-2) var(--space-3);
 }
 
+/* The "Email a report" action sits under the error, aligned with the
+   left-aligned dialog copy rather than centered. */
+.ocr-dialog__report {
+  align-items: flex-start;
+  margin-top: calc(-1 * var(--space-1));
+}
+
 /* Empty on purpose today -- the seam a future page-range selector slots
    into without reshaping the confirm step around it. */
 .ocr-dialog__range-slot:empty {

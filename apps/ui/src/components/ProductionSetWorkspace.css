@@ -375,3 +375,9 @@ label.production-workspace__checkbox-row {
     grid-template-columns: 1fr;
   }
 }
+
+/* "Email a report" action under a failed production build, left-aligned. */
+.production-workspace__report {
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}

@@ -5,6 +5,7 @@ import type { PageScrollIntent } from "../hooks/useDocument";
 import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
+import { ErrorReportButton } from "./ErrorReportButton";
 import { FloatingDialog } from "./FloatingDialog";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
@@ -212,9 +213,10 @@ export function CanvasWell({
             lazyPageMeasurement={lazyPageMeasurement}
           />
           {error ? (
-            <p className="canvas-well__message canvas-well__message--floating" role="status">
-              {error}
-            </p>
+            <div className="canvas-well__message canvas-well__message--floating" role="alert">
+              <p className="canvas-well__message-text">{error}</p>
+              <ErrorReportButton requireDiagnostic />
+            </div>
           ) : null}
         </>
       ) : (
@@ -242,9 +244,10 @@ export function CanvasWell({
             New here? Open Help
           </button>
           {error ? (
-            <p className="canvas-well__message" role="status">
-              {error}
-            </p>
+            <div className="canvas-well__message" role="alert">
+              <p className="canvas-well__message-text">{error}</p>
+              <ErrorReportButton requireDiagnostic />
+            </div>
           ) : null}
         </div>
       )}

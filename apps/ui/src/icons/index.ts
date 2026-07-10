@@ -10,3 +10,4 @@ export * from "./SignIcon";
 export * from "./KitIcons";
 export * from "./PlugIcon";
 export * from "./CopyIcon";
+export * from "./MailIcon";

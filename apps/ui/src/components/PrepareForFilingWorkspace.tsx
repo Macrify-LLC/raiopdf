@@ -22,6 +22,7 @@ import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
+import { ErrorReportButton } from "./ErrorReportButton";
 import { LoadingSun } from "./LoadingSun";
 import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
 import "./PrepareForFilingWorkspace.css";
@@ -685,6 +686,9 @@ export const PrepareForFilingWorkspace = forwardRef<
           <div className="filing-progress" data-phase={progress.phase} aria-live="polite">
             <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
             <p>{progress.message}</p>
+            {progress.phase === "error" ? (
+              <ErrorReportButton className="filing-progress__report" />
+            ) : null}
           </div>
         ) : null}
 

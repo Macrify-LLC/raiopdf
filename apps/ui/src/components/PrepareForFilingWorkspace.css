@@ -1126,6 +1126,13 @@
   background: var(--warn-bg);
 }
 
+/* The "Email a report" action under a failed filing run, left-aligned with the
+   card copy above it. */
+.filing-progress__report {
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}
+
 .filing-progress__steps {
   display: flex;
   align-items: center;

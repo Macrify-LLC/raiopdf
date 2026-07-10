@@ -6,6 +6,7 @@ import type {
   PdfAConversionOptions,
   PdfApplyEditsOptions,
   PdfCompressOptions,
+  PdfCoverPageOptions,
   PdfDocumentHandle,
   PdfEdit,
   PdfEngine,
@@ -213,6 +214,8 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  * - buildBinder is intentionally unsupported for this engine because Stirling
  *   exposes generated merge TOCs but not caller-defined exhibit outline titles
  *   and destinations. Use the local engine for contract-complete binders.
+ * - buildCoverPage is intentionally unsupported for this engine because case
+ *   captions are generated locally without a source document or sidecar upload.
  * - ocr -> POST /local/ocr (engine-local OCRmyPDF) with the raw PDF body
  *   base64-encoded. This avoids the WebView -> auth proxy -> Stirling
  *   multipart upload path, which is fragile for force-OCR on large PDFs.
@@ -979,6 +982,15 @@ export class SidecarPdfEngine implements PdfEngine {
     _main: PdfDocumentHandle,
     _exhibits: readonly PdfBinderExhibit[],
     _options: PdfBinderOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "That operation isn't available for this document.",
+    );
+  }
+
+  async buildCoverPage(
+    _options: PdfCoverPageOptions,
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",

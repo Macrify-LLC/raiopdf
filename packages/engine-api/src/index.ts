@@ -250,6 +250,44 @@ export const PDF_COVER_STYLES: readonly {
   },
 ];
 
+export type PdfCaptionParty = {
+  role: string;
+  names: readonly string[];
+  etAl?: boolean | undefined;
+};
+
+export type PdfCaptionData = {
+  courtName: string;
+  county?: string | undefined;
+  parties: readonly PdfCaptionParty[];
+  caseNumber?: string | undefined;
+  division?: string | undefined;
+  judge?: string | undefined;
+  documentTitle: string;
+  signatureBlockLines?: readonly string[] | undefined;
+};
+
+export type PdfCaptionStyle = {
+  id: string;
+  label: string;
+  partyBlockStyle: "boxed" | "open" | "centered";
+  vsSeparator: string;
+  caseInfoAlign: "left" | "right";
+  ordering: readonly ("court" | "parties" | "caseInfo" | "title" | "signature")[];
+  margins: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+  fontFamily: PdfTextBoxFontFamily;
+};
+
+export type PdfCoverPageOptions = {
+  caption: PdfCaptionData;
+  styleId: string;
+};
+
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
@@ -1201,6 +1239,18 @@ export interface PdfEngine {
     exhibits: readonly PdfBinderExhibit[],
     options: PdfBinderOptions,
   ): Promise<PdfDocumentHandle>;
+
+  /**
+   * Builds a fresh one-page case-caption cover document.
+   *
+   * This operation does not read from or append to a source document. Engines
+   * should return a new letter-portrait PDF containing the provided court,
+   * party, case information, document title, and optional signature block using
+   * the requested caption style. Engines without local cover-page rendering may
+   * reject this with `PdfEngineError("UNSUPPORTED", ...)`; the local engine is
+   * the default caption implementation.
+   */
+  buildCoverPage(options: PdfCoverPageOptions): Promise<PdfDocumentHandle>;
 
   /**
    * Creates a new document with the provided add-content edits applied.

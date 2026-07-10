@@ -17,7 +17,14 @@ import {
 } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
 import { readPdfOutline, writePdfOutlineInPlace } from "@raiopdf/engine-pdf-lib";
-import { createLocalPdfEngine, createStableExhibitIndex, drawCoverPage } from "../src/index";
+import {
+  CAPTION_STYLES,
+  createLocalPdfEngine,
+  createStableExhibitIndex,
+  drawCoverPage,
+  resolveCaptionStyle,
+  sanitizeIndexTextForFont,
+} from "../src/index";
 
 describe("LocalPdfEngine", () => {
   it("reorders pages", async () => {
@@ -803,6 +810,55 @@ describe("LocalPdfEngine", () => {
     expect(saved.getPageCount()).toBe(1);
   });
 
+  it.each(CAPTION_STYLES)("builds a one-page $id case-caption cover", async ({ id }) => {
+    const engine = createLocalPdfEngine();
+    const cover = await engine.buildCoverPage({
+      styleId: id,
+      caption: sampleCaption(),
+    });
+    const bytes = await engine.saveToBytes(cover);
+
+    await expectPageSizes(bytes, [[612, 792]]);
+  });
+
+  it("renders searchable caption text into the generated cover page", async () => {
+    const engine = createLocalPdfEngine();
+    const cover = await engine.buildCoverPage({
+      styleId: "classic-boxed",
+      caption: sampleCaption(),
+    });
+    const bytes = await engine.saveToBytes(cover);
+
+    await expectPageContentToContainLabel(bytes, 0, "Superior Court of Fulton County");
+    await expectPageContentToContainLabel(bytes, 0, "v.");
+    await expectPageContentToContainLabel(bytes, 0, "Case No. 2026-CV-1000");
+    await expectPageContentToContainLabel(bytes, 0, "Motion for Summary Judgment");
+  });
+
+  it("falls back to the first caption style for unknown style ids", () => {
+    expect(resolveCaptionStyle("unknown-caption-style")).toBe(CAPTION_STYLES[0]);
+  });
+
+  it("sanitizes non-Latin party glyphs before drawing caption text", async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.TimesRoman);
+    const engine = createLocalPdfEngine();
+    const cover = await engine.buildCoverPage({
+      styleId: "classic-boxed",
+      caption: {
+        ...sampleCaption(),
+        parties: [
+          { role: "Plaintiff", names: ["Jane 契約 Doe"], etAl: true },
+          { role: "Defendant", names: ["Acme LLC"] },
+        ],
+      },
+    });
+    const bytes = await engine.saveToBytes(cover);
+
+    expect(sanitizeIndexTextForFont(font, "Jane 契約 Doe")).toBe("Jane Doe");
+    await expectPageContentToContainLabel(bytes, 0, "Jane Doe");
+  });
+
   it("keeps the minimal slip-sheet content identical to the prior centered-label output", async () => {
     const engine = createLocalPdfEngine();
     const mainBytes = await createPdf([[612, 792]]);
@@ -966,6 +1022,22 @@ describe("LocalPdfEngine", () => {
     });
   });
 });
+
+function sampleCaption() {
+  return {
+    courtName: "Superior Court of Fulton County",
+    county: "Fulton County",
+    parties: [
+      { role: "Plaintiff", names: ["Jane Doe"], etAl: true },
+      { role: "Defendant", names: ["Acme LLC"] },
+    ],
+    caseNumber: "2026-CV-1000",
+    division: "Civil",
+    judge: "Hon. Alex Carter",
+    documentTitle: "Motion for Summary Judgment",
+    signatureBlockLines: ["Respectfully submitted,", "Counsel for Plaintiff"],
+  };
+}
 
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();

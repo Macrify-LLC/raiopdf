@@ -47,6 +47,7 @@ import type {
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTableOfAuthoritiesOptions,
   PdfTextBoxAlign,
   PdfTextBoxEdit,
   PdfTextBoxFontFamily,
@@ -97,6 +98,7 @@ import {
 import { drawCaptionPage } from "./captionPage";
 import { resolveCaptionStyle } from "./captionStyles";
 import { drawCoverPage } from "./coverStyles";
+import { drawToaPages } from "./tableOfAuthorities";
 import { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 
 export {
@@ -107,6 +109,11 @@ export {
 export { drawCaptionPage, type CaptionDrawFonts } from "./captionPage";
 export { CAPTION_STYLES, resolveCaptionStyle } from "./captionStyles";
 export { drawCoverPage, type CoverDrawFonts, type CoverDrawInput } from "./coverStyles";
+export {
+  buildTableOfAuthoritiesSections,
+  drawToaPages,
+  formatAuthorityPageList,
+} from "./tableOfAuthorities";
 export {
   drawDotLeaderRow,
   renderStableFrontMatter,
@@ -974,6 +981,24 @@ export class LocalPdfEngine implements PdfEngine {
     const style = resolveCaptionStyle(options.styleId);
 
     drawCaptionPage(page, { regular, bold }, { ...options, styleId: style.id });
+
+    return this.store(await output.save());
+  }
+
+  async buildTableOfAuthorities(
+    document: PdfDocumentHandle,
+    options: PdfTableOfAuthoritiesOptions,
+  ): Promise<PdfDocumentHandle> {
+    const source = await this.load(document);
+    const toa = await drawToaPages(options);
+    const output = await PDFDocument.create();
+
+    await copyPagesInto(output, toa.doc, toa.doc.getPageIndices());
+    await copyPagesInto(output, source, source.getPageIndices());
+
+    const sourceOutline = readPdfOutline(source);
+    const mappedOutline = offsetPdfOutlineItems(sourceOutline.items, toa.pageCount);
+    writePdfOutlineInPlace(output, { ...sourceOutline, items: mappedOutline.items }, { preserveSource: source });
 
     return this.store(await output.save());
   }

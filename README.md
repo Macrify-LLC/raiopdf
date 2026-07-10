@@ -89,6 +89,7 @@ Four ways it fits into an actual day at the firm:
 | **Jurisdiction packs** | E-filing rules for the Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS) — every constraint cites its authority and the date it was last verified. Guidance, not legal advice. |
 | **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
 | **Case caption & cover page** | Fill a case caption once, choose a local caption style with live previews, save it as a PDF, or put it at the front of the open document |
+| **Table of Authorities** | Scan a brief for cited cases, statutes, rules, and constitutional provisions, review the hits, fix or merge them, then save the finished table or drop it onto the front of the PDF |
 | **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |

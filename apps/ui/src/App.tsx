@@ -56,6 +56,7 @@ import { AppShell } from "./components/AppShell";
 import { UpdatePill } from "./components/UpdatePill";
 import { BinderWorkspace } from "./components/BinderWorkspace";
 import { CaptionWorkspace } from "./components/CaptionWorkspace";
+import { TableOfAuthoritiesWorkspace } from "./components/TableOfAuthoritiesWorkspace";
 import {
   OrganizeWorkspace,
   type OrganizeFlowId,
@@ -7028,6 +7029,10 @@ export function App() {
     : filingPacketProgress.running
       ? "Paused while Filing Packet runs"
     : null;
+  const extractOpenDocumentPageTextByPage = useCallback(
+    (bytes: Uint8Array) => extractUiPageTextByPage(bytes, pdfDocument),
+    [pdfDocument],
+  );
 
   const workspace = activeLegalTool === "case-caption" ? (
     <CaptionWorkspace
@@ -7035,6 +7040,15 @@ export function App() {
       onPrependCaption={insertFile}
       onCancel={closeWorkspace}
       onHelpRequested={() => openHelp("case-caption")}
+    />
+  ) : activeLegalTool === "table-of-authorities" ? (
+    <TableOfAuthoritiesWorkspace
+      document={document}
+      extractPageTextByPage={extractOpenDocumentPageTextByPage}
+      onPrependTable={insertFile}
+      onForceOcr={() => requestForceOcr("garbled")}
+      onCancel={closeWorkspace}
+      onHelpRequested={() => openHelp("table-of-authorities")}
     />
   ) : activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace

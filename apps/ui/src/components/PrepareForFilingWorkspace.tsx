@@ -169,6 +169,7 @@ export interface PrepareForFilingWorkspaceProps {
   onStepDefaultOverridesChange?: (overrides: Partial<Record<PrepPlanStepId, boolean>>) => void;
   onDismissImpact: () => void;
   onCompressFirst: () => void;
+  onCaptionRequested?: (() => void) | undefined;
 }
 
 /**
@@ -220,6 +221,7 @@ export const PrepareForFilingWorkspace = forwardRef<
     onStepDefaultOverridesChange,
     onDismissImpact,
     onCompressFirst,
+    onCaptionRequested,
   }: PrepareForFilingWorkspaceProps,
   ref,
 ) {
@@ -478,6 +480,18 @@ export const PrepareForFilingWorkspace = forwardRef<
           onSelect={onCourtProfileSelect}
           onSave={onCourtProfileSave}
         />
+
+        {onCaptionRequested ? (
+          <div className="filing-card__button-row">
+            <button
+              type="button"
+              className="filing-card__secondary-button"
+              onClick={onCaptionRequested}
+            >
+              <PlusIcon size={14} /> Add caption / cover page
+            </button>
+          </div>
+        ) : null}
 
         <PrepChecklist
           steps={prepPlan}

@@ -55,6 +55,7 @@ import type {
 import { AppShell } from "./components/AppShell";
 import { UpdatePill } from "./components/UpdatePill";
 import { BinderWorkspace } from "./components/BinderWorkspace";
+import { CaptionWorkspace } from "./components/CaptionWorkspace";
 import {
   OrganizeWorkspace,
   type OrganizeFlowId,
@@ -7028,7 +7029,14 @@ export function App() {
       ? "Paused while Filing Packet runs"
     : null;
 
-  const workspace = activeLegalTool === "combine-exhibits" ? (
+  const workspace = activeLegalTool === "case-caption" ? (
+    <CaptionWorkspace
+      document={document}
+      onPrependCaption={insertFile}
+      onCancel={closeWorkspace}
+      onHelpRequested={() => openHelp("case-caption")}
+    />
+  ) : activeLegalTool === "combine-exhibits" ? (
     <BinderWorkspace
       document={document}
       pdfDocument={pdfDocument}
@@ -7037,6 +7045,7 @@ export function App() {
       onCancel={closeWorkspace}
       onHelpRequested={() => openHelp("combine-exhibits")}
       defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
+      onCaptionRequested={() => selectLegalTool("case-caption")}
     />
   ) : activeOrganizeTool === "pages" ? (
     <OrganizeWorkspace
@@ -7132,6 +7141,9 @@ export function App() {
             onStepDefaultOverridesChange={handlePrepStepDefaultOverridesChange}
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
+            onCaptionRequested={() => {
+              setActiveLegalTool("case-caption");
+            }}
           />
         </FloatingDialog>
       );
@@ -7642,7 +7654,7 @@ function batchCleanupCompletionMessage(files: readonly {
  * Cleanup and Production Set are path-based package flows; Redact, Sanitize,
  * and Bates Numbering run file-to-file).
  */
-const STREAMED_LEGAL_TOOLS_ALWAYS: readonly LegalToolId[] = ["scanner-2425", "passwords"];
+const STREAMED_LEGAL_TOOLS_ALWAYS: readonly LegalToolId[] = ["case-caption", "scanner-2425", "passwords"];
 const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
   "prepare-for-filing",
   "batch-cleanup",

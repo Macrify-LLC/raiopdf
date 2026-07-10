@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Batch Cleanup — RaioPDF Help</title>
-<meta name="description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
-<link rel="canonical" href="https://raio.macrify.me/help/batch-cleanup.html">
+<title>Case Caption — RaioPDF Help</title>
+<meta name="description" content="Fill in a matter caption once, preview the style, then save or prepend the caption page.">
+<link rel="canonical" href="https://raio.macrify.me/help/case-caption.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
-<meta property="og:url" content="https://raio.macrify.me/help/batch-cleanup.html">
-<meta property="og:title" content="Batch Cleanup — RaioPDF Help">
-<meta property="og:description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
+<meta property="og:url" content="https://raio.macrify.me/help/case-caption.html">
+<meta property="og:title" content="Case Caption — RaioPDF Help">
+<meta property="og:description" content="Fill in a matter caption once, preview the style, then save or prepend the caption page.">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Batch Cleanup — RaioPDF Help">
-<meta name="twitter:description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
+<meta name="twitter:title" content="Case Caption — RaioPDF Help">
+<meta name="twitter:description" content="Fill in a matter caption once, preview the style, then save or prepend the caption page.">
 
 <link rel="stylesheet" href="/shared/reset.css">
 <link rel="stylesheet" href="/shared/help.css">
@@ -60,32 +60,35 @@
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
         <a href="/help/#group-legal">Legal</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <span class="help-breadcrumb__current" aria-current="page">Batch Cleanup</span>
+        <span class="help-breadcrumb__current" aria-current="page">Case Caption</span>
       </nav>
 
       <div class="help-article-layout">
         <article class="help-article">
-          <div class="help-article__body"><h1>Batch Cleanup</h1><p>When you have a stack of PDFs that all need the same treatment, Batch Cleanup
-runs them through it together — no opening each one by hand. Point it at your
-files, choose the steps, and it produces a clean set in a new folder along with a
-report of what it did to each one.</p><h2 id="why-youd-use-it">Why you'd use it</h2><p>A production, a client's document dump, a folder of scans — dozens of files that
-each need OCR, compression, or their metadata scrubbed. One at a time, that's a
-lost afternoon. Batch Cleanup does the whole stack in a single run.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>In the <strong>Legal</strong> tools, choose <strong>Batch Cleanup</strong>.</li><li>Click <strong>Add PDF</strong> for each file you want included. (Files need to be opened
-from your computer.)</li><li>Choose an empty <strong>Package root folder</strong> — where the cleaned files and report
-will go.</li><li>Turn on the steps you want (below).</li><li>Click <strong>Run Batch</strong>.</li></ol><p>Each file shows its status as it goes — pending, running, done, or skipped.</p><h2 id="the-steps-you-can-turn-on">The steps you can turn on</h2><ul><li><strong>OCR</strong> — make scanned files searchable. You can OCR only image-only files,
-skip files that already have text, force it on everything, or leave it off.</li><li><strong>Compress</strong> — shrink large files.</li><li><strong>Sanitize active content</strong> — strip embedded scripts, attached files, and links.</li><li><strong>Scrub metadata</strong> — remove the hidden document information.</li><li><strong>Repair</strong> — fix files that are built in unusual ways.</li><li><strong>Split by size</strong> — break files over a size you set into parts.</li><li><strong>Normalize pages</strong> — bring pages to a consistent size.</li></ul><p>Sanitize and Scrub metadata are on by default. You can also pick a jurisdiction
-pack to apply a court's defaults.</p><h2 id="what-to-know">What to know</h2><ul><li><strong>It writes to a new folder, never over your originals.</strong> Choose an empty
-package folder; your source files are left exactly as they are.</li><li><strong>You get a report.</strong> Alongside the cleaned files, Batch Cleanup writes a report
-— a PDF and a data file — listing what happened to each one.</li></ul></div>
-        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/prepare-for-filing.html">Prepare for Filing</a> — ready a single document for the portal</li><li><a href="/help/production-set.html">Production Set</a> — build a Bates-numbered production</li><li><a href="/help/make-searchable.html">Make Searchable (OCR)</a> — the OCR step, on its own</li></ul></div>
+          <div class="help-article__body"><h1>Case Caption</h1><p>Make a caption page for a filing or cover sheet without leaving RaioPDF. Type
+the court, parties, case number, title, and signature lines; pick the layout that
+matches the matter; then save the caption as a PDF or put it at the front of the
+open document.</p><h2 id="why-youd-use-it">Why you'd use it</h2><p>You may need the same caption across a motion, notice, proposed order, and
+packet cover. Saving the matter as a case profile keeps those details on your
+computer so you can reuse them without retyping.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Choose <strong>Case Caption</strong> from the <strong>Legal</strong> tools, or click <strong>Caption</strong> in the
+top bar.</li><li>Fill in the court name, parties, document title, and any case details you
+need.</li><li>Pick a caption style. Each style tile shows a live preview using your current
+caption.</li><li>Use <strong>Save profile</strong> if you want to reuse this matter later.</li><li>Click <strong>Save as PDF</strong> to make a standalone caption, or <strong>Prepend to current
+PDF</strong> to place it as page 1 of the open document.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>It stays on your computer.</strong> The caption is rendered locally. Nothing is
+uploaded.</li><li><strong>The preview is the output.</strong> The main preview and the saved PDF use the same
+renderer.</li><li><strong>Profiles are local.</strong> Case profiles are stored in your browser or desktop
+app storage on this machine.</li><li><strong>Prepend needs a standard open PDF.</strong> Very large streamed documents can still
+use <strong>Save as PDF</strong>, then add that saved caption through the normal binder or
+filing packet flow.</li></ul></div>
+        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/combine-exhibits.html">Combine with Exhibits</a> - assemble the caption with a binder</li><li><a href="/help/prepare-for-filing.html">Prepare for Filing</a> - prepare the finished document for upload</li></ul></div>
         <nav class="help-pager" aria-label="More in this category">
-          <a class="help-pager__link help-pager__link--prev" href="/help/prepare-for-filing.html">
+          <a class="help-pager__link help-pager__link--prev" href="/help/batch-cleanup.html">
             <span class="help-pager__eyebrow">← Previous</span>
-            <span class="help-pager__title">Prepare for Filing</span>
+            <span class="help-pager__title">Batch Cleanup</span>
           </a>
-          <a class="help-pager__link help-pager__link--next" href="/help/case-caption.html">
+          <a class="help-pager__link help-pager__link--next" href="/help/combine-exhibits.html">
             <span class="help-pager__eyebrow">Next →</span>
-            <span class="help-pager__title">Case Caption</span>
+            <span class="help-pager__title">Combine with Exhibits</span>
           </a>
         </nav>
         </article>
@@ -94,7 +97,6 @@ package folder; your source files are left exactly as they are.</li><li><strong>
           <ul>
           <li><a href="#why-youd-use-it">Why you'd use it</a></li>
           <li><a href="#how-to-do-it">How to do it</a></li>
-          <li><a href="#the-steps-you-can-turn-on">The steps you can turn on</a></li>
           <li><a href="#what-to-know">What to know</a></li>
           <li><a href="#related">Related</a></li>
           </ul>

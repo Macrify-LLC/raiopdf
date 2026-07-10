@@ -4,7 +4,9 @@ import { z } from "zod";
 import type {
   PdfApplyEditsOptions,
   PdfBinderOptions,
+  PdfCaptionParty,
   PdfCoverStyle,
+  PdfCoverPageOptions,
   PdfDocumentHandle,
   PdfEdit,
   PdfEditImageFormat,
@@ -12,6 +14,7 @@ import type {
   PdfSplitPart,
   PdfStampPlacement,
 } from "@raiopdf/engine-api";
+import { CAPTION_STYLES } from "@raiopdf/engine-local";
 import { buildProductionSet } from "@raiopdf/production-set";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import {
@@ -30,6 +33,12 @@ const absoluteOutput = z
 const absoluteOutputDir = z
   .string()
   .describe("Absolute path to an existing directory for the output files.");
+const boundedText = (field: string, max = 500) => z
+  .string()
+  .trim()
+  .min(1)
+  .max(max)
+  .describe(field);
 
 const placementSchema = z.object({
   edge: z.enum(["header", "footer"]),
@@ -43,6 +52,11 @@ const pageSelectionSchema = z.union([
 const coverStyleSchema: z.ZodType<PdfCoverStyle> = z
   .enum(["minimal", "labeled", "bordered"])
   .describe("Slip sheet cover style. Defaults to minimal.");
+const captionStyleIds = CAPTION_STYLES.map((style) => style.id) as [string, ...string[]];
+const captionStyleSchema = z
+  .enum(captionStyleIds)
+  .default(CAPTION_STYLES[0]!.id)
+  .describe("Case-caption cover style. Defaults to classic-boxed.");
 const binderIndexSchema = z.object({
   enabled: z.boolean().optional().describe("Generate an Exhibit Index. Defaults to true."),
   includeSourceFileName: z
@@ -165,6 +179,88 @@ export function handleBinder(
       summary: `Assembled an exhibit binder (${exhibits.length} exhibit(s)) into ${input.output}.`,
     };
   });
+}
+
+// ---- build_cover_page ----
+export const coverPageInputSchema = {
+  courtName: boundedText("Court name."),
+  county: boundedText("County name.", 200).optional(),
+  parties: z
+    .array(z.object({
+      role: boundedText("Party role.", 100),
+      names: z.array(boundedText("Party name.", 200)).min(1).max(20),
+      etAl: z.boolean().optional(),
+    }))
+    .min(1)
+    .max(12)
+    .describe("Caption parties, e.g. plaintiff and defendant blocks."),
+  caseNumber: boundedText("Case number.", 100).optional(),
+  division: boundedText("Division.", 150).optional(),
+  judge: boundedText("Judge.", 150).optional(),
+  documentTitle: boundedText("Document title.", 250),
+  signatureBlockLines: z.array(boundedText("Signature block line.", 250)).max(12).optional(),
+  styleId: captionStyleSchema,
+  output: absoluteOutput,
+};
+export const coverPageOutputSchema = outputResultSchema;
+export interface CoverPageInput {
+  courtName: string;
+  county?: string | undefined;
+  parties: { role: string; names: string[]; etAl?: boolean | undefined }[];
+  caseNumber?: string | undefined;
+  division?: string | undefined;
+  judge?: string | undefined;
+  documentTitle: string;
+  signatureBlockLines?: string[] | undefined;
+  styleId?: string | undefined;
+  output: string;
+}
+export async function handleBuildCoverPage(
+  input: CoverPageInput,
+  _engine: EngineHandle,
+): Promise<StructuredToolResult> {
+  const engine = getLocalEngine();
+  const output = await prepareOutput(input.output);
+  let produced: PdfDocumentHandle | undefined;
+
+  try {
+    const parties: PdfCaptionParty[] = input.parties.map((party) => ({
+      role: party.role,
+      names: party.names,
+      ...(party.etAl === undefined ? {} : { etAl: party.etAl }),
+    }));
+    const options: PdfCoverPageOptions = {
+      styleId: input.styleId ?? CAPTION_STYLES[0]!.id,
+      caption: {
+        courtName: input.courtName,
+        parties,
+        documentTitle: input.documentTitle,
+        ...(input.county === undefined ? {} : { county: input.county }),
+        ...(input.caseNumber === undefined ? {} : { caseNumber: input.caseNumber }),
+        ...(input.division === undefined ? {} : { division: input.division }),
+        ...(input.judge === undefined ? {} : { judge: input.judge }),
+        ...(input.signatureBlockLines === undefined
+          ? {}
+          : { signatureBlockLines: input.signatureBlockLines }),
+      },
+    };
+
+    produced = await engine.buildCoverPage(options);
+    await output.write(await engine.saveToBytes(produced));
+    await output.commit();
+
+    return successResult(
+      `Built a court caption cover page into ${input.output}. Review before filing.`,
+      { output: output.outputPath },
+    );
+  } catch (error) {
+    await output.abort();
+    throw error;
+  } finally {
+    if (produced !== undefined) {
+      await engine.close(produced).catch(() => undefined);
+    }
+  }
 }
 
 // ---- one-shot build_binder ----

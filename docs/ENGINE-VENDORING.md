@@ -5,6 +5,26 @@
 > local build of the core-flavor JAR and a live endpoint smoke test. This document drives
 > the engine-bundling phase; re-verify on every version bump.
 
+## Table of Authorities - reporter data
+
+Verified 2026-07-10 over the network against the current upstream `main` branches:
+
+| Source | Commit read | License finding | GPL-3.0 compatibility | URLs read |
+|---|---:|---|---|---|
+| Free Law Project `reporters-db` | `bcae37078404302fe452d6c0d111845777af95b1` | BSD 2-Clause License, SPDX `BSD-2-Clause`. The `LICENSE` file contains the two-clause BSD grant, and the README's license section says the repository is available under a permissive BSD license. | Compatible. BSD-2-Clause is permissive and can be included in a GPL-3.0 work when the BSD notice and conditions are preserved. | `https://raw.githubusercontent.com/freelawproject/reporters-db/bcae37078404302fe452d6c0d111845777af95b1/LICENSE`; `https://raw.githubusercontent.com/freelawproject/reporters-db/bcae37078404302fe452d6c0d111845777af95b1/README.rst` |
+| Free Law Project `eyecite` | `09165c2d90b4295b4967b1b01b83963c37ab2a98` | BSD 2-Clause License, SPDX `BSD-2-Clause`. The `LICENSE` file contains the two-clause BSD grant. | Compatible. BSD-2-Clause is permissive and can be included in a GPL-3.0 work when the BSD notice and conditions are preserved. | `https://raw.githubusercontent.com/freelawproject/eyecite/09165c2d90b4295b4967b1b01b83963c37ab2a98/LICENSE` |
+
+Path taken: clean permissive-license path. The rules package vendors a minimized
+`reporters-db` slice at `packages/rules/src/authorities/data/reporters.generated.json`.
+No `eyecite` code, Python, data, or citation patterns are vendored in this phase.
+
+Included data: reporter lookup abbreviation keys, edition abbreviation keys, reporter
+variation keys, canonical reporter abbreviations, reporter full names, local `kind: "case"`
+classification, and edition abbreviation lists. Excluded data: examples, regexes, date
+ranges, notes, links, publisher metadata, MLZ jurisdiction metadata, and cite-type nuance
+beyond the local case-reporter classification. Source data URL:
+`https://raw.githubusercontent.com/freelawproject/reporters-db/bcae37078404302fe452d6c0d111845777af95b1/reporters_db/data/reporters.json`.
+
 ## Recommendation
 
 **Pin `v2.14.0` and commit `41f1cb2c22b8b117eb07f4cc0cf88c8a782c4a50`, and build with `STIRLING_FLAVOR=core`. Do NOT pin a v1.x tag.**

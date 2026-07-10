@@ -477,3 +477,10 @@
 .tool-panel__icon-mirror {
   transform: scaleX(-1);
 }
+
+/* "Email a report" action under a failed tool action (e.g. redaction),
+   left-aligned with the inline message above it. */
+.tool-panel__report {
+  align-items: flex-start;
+  margin-top: var(--space-1);
+}

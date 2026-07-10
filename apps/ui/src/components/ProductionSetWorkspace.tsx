@@ -7,6 +7,7 @@ import {
   readProductionLastUsed,
 } from "../lib/productionHints";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, HelpIcon, PlusIcon } from "../icons";
+import { ErrorReportButton } from "./ErrorReportButton";
 import { IconButton } from "./IconButton";
 import "./ProductionSetWorkspace.css";
 
@@ -427,6 +428,14 @@ export function ProductionSetWorkspace({
           {localMessage ?? progress.message ?? `${totalPages} page${totalPages === 1 ? "" : "s"} selected`}
         </p>
       </div>
+
+      {/* A finished run carries a `result`; a build that failed leaves a message
+          with no result and isn't running — that's the only state that offers an
+          email report. Local validation (localMessage) is a user-fixable nudge,
+          not a failure, so it doesn't. */}
+      {!localMessage && !progress.running && !progress.result && progress.message ? (
+        <ErrorReportButton className="production-workspace__report" />
+      ) : null}
 
       {progress.result ? (
         <section className="production-workspace__result" aria-label="Production build result">

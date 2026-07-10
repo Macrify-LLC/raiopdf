@@ -17,11 +17,55 @@ declare global {
   }
 }
 
+/**
+ * A diagnostic event, retained in memory so the user can attach the most recent
+ * one to an email report ("Email a report" button on the error surfaces). This
+ * is the same data already sent to the Tauri log -- kept here only so the report
+ * builder can read the last failure without threading error objects through
+ * every workflow's React state.
+ */
+export interface DiagnosticEntry {
+  kind: string;
+  /** Raw error chain (from `describeErrorChain`) or the raw message the caller logged. */
+  message: string;
+  details: string | null;
+  /** Epoch milliseconds when the event was recorded. */
+  at: number;
+}
+
+// Small ring buffer of the most recent diagnostic events. Errors are the only
+// thing recorded through this funnel today (workflow failures + the window-level
+// error/unhandledrejection handlers), so the last entry is the last error.
+const RECENT_DIAGNOSTICS_LIMIT = 10;
+const recentDiagnostics: DiagnosticEntry[] = [];
+
+/** Newest-last snapshot of the recent diagnostics ring buffer. */
+export function getRecentDiagnostics(): readonly DiagnosticEntry[] {
+  return recentDiagnostics.slice();
+}
+
+/** The most recently recorded diagnostic event, or null if none this session. */
+export function getLastDiagnostic(): DiagnosticEntry | null {
+  return recentDiagnostics.at(-1) ?? null;
+}
+
 export async function recordDiagnosticEvent(
   kind: string,
   message: string,
   details: ReadonlyArray<string | null | undefined> = [],
 ): Promise<void> {
+  const joinedDetails =
+    details.filter((detail): detail is string => Boolean(detail)).join(" | ") || null;
+
+  // Retain in memory first, unconditionally: the report builder must still see
+  // the last error even when the Tauri log write is unavailable (browser/tests)
+  // or fails. Capturing here also covers every caller (logWorkflowFailure and
+  // the window-level handlers) with no per-site change.
+  recentDiagnostics.push({ kind, message, details: joinedDetails, at: Date.now() });
+  if (recentDiagnostics.length > RECENT_DIAGNOSTICS_LIMIT) {
+    recentDiagnostics.shift();
+  }
+
   try {
     const invoke = await getTauriInvoke();
     await invoke("diagnostics_record_event", {
@@ -29,7 +73,7 @@ export async function recordDiagnosticEvent(
         source: "ui",
         kind,
         message,
-        details: details.filter((detail): detail is string => Boolean(detail)).join(" | ") || null,
+        details: joinedDetails,
       },
     });
   } catch {

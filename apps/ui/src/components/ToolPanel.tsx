@@ -54,6 +54,7 @@ import type { EditToolId } from "../lib/edits";
 import type { TextEditState } from "../hooks/useTextEdit";
 import { AccordionGroup } from "./AccordionGroup";
 import { EditTextStatusPanel } from "./EditTextStatusPanel";
+import { ErrorReportButton } from "./ErrorReportButton";
 import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import { Switch } from "./Switch";
@@ -636,10 +637,15 @@ function RedactionStatusPanel({
 
   if (state.message) {
     return (
-      <InlineMessage
-        tone={state.phase === "error" ? "danger" : state.phase === "verified" ? "ok" : "neutral"}
-        message={state.message}
-      />
+      <>
+        <InlineMessage
+          tone={state.phase === "error" ? "danger" : state.phase === "verified" ? "ok" : "neutral"}
+          message={state.message}
+        />
+        {state.phase === "error" ? (
+          <ErrorReportButton className="tool-panel__report" />
+        ) : null}
+      </>
     );
   }
 

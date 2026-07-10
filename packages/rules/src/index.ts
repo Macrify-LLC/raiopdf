@@ -75,11 +75,38 @@ export {
   normalizeReporterAbbreviation,
   reporterTable,
 } from "./authorities/reporters.js";
+export {
+  buildCaseReporterCitationPattern,
+  buildCitationPatterns,
+  federalConstitutionalPattern,
+  federalRulePattern,
+  federalStatutePattern,
+  floridaRulePattern,
+  floridaStatutePattern,
+  georgiaStatutePattern,
+  indianaStatutePattern,
+  stateConstitutionalPattern,
+  stateRulePattern,
+} from "./authorities/citationPatterns.js";
+export { detectAuthorities } from "./authorities/detectAuthorities.js";
+export { authoritiesGarbleGate } from "./authorities/garbleGate.js";
 export type {
   ReporterEntry,
   ReporterKind,
   ReporterTable,
 } from "./authorities/reporters.js";
+export type {
+  CitationPattern,
+  CitationPatternName,
+} from "./authorities/citationPatterns.js";
+export type {
+  AuthoritiesGarbleGateResult,
+} from "./authorities/garbleGate.js";
+export type {
+  AuthorityHit,
+  AuthorityKind,
+  DetectedAuthority,
+} from "./authorities/types.js";
 export type {
   AppDataPackIntegrityResult,
   PackAcknowledgmentStore,

@@ -50,6 +50,15 @@
       "binaries/raiopdf-engine-host",
       "binaries/raiopdf-mcp"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "mimeType": "application/pdf",
+        "name": "RaioPDF.PDF",
+        "description": "PDF Document",
+        "role": "Editor"
+      }
+    ],
     "windows": {
       "allowDowngrades": false,
       "nsis": {

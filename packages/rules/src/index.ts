@@ -70,6 +70,16 @@ export type {
   TrivialTextImagePageInfo,
 } from "./types.js";
 export { deriveTextLayerQuality } from "./types.js";
+export {
+  lookupReporter,
+  normalizeReporterAbbreviation,
+  reporterTable,
+} from "./authorities/reporters.js";
+export type {
+  ReporterEntry,
+  ReporterKind,
+  ReporterTable,
+} from "./authorities/reporters.js";
 export type {
   AppDataPackIntegrityResult,
   PackAcknowledgmentStore,

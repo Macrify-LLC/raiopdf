@@ -107,6 +107,18 @@ export {
 export { drawCaptionPage, type CaptionDrawFonts } from "./captionPage";
 export { CAPTION_STYLES, resolveCaptionStyle } from "./captionStyles";
 export { drawCoverPage, type CoverDrawFonts, type CoverDrawInput } from "./coverStyles";
+export {
+  drawDotLeaderRow,
+  renderStableFrontMatter,
+  type DotLeaderRowDrawInput,
+  type DotLeaderRowDrawResult,
+  type FrontMatterFonts,
+  type FrontMatterLeaderRow,
+  type FrontMatterSection,
+  type FrontMatterSectionResolver,
+  type StableFrontMatterRenderInput,
+  type StableFrontMatterRenderResult,
+} from "./frontMatter";
 export type { PdfCaptionStyle, PdfCoverStyle } from "@raiopdf/engine-api";
 export { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 

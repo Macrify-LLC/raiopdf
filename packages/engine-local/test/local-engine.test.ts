@@ -23,6 +23,9 @@ import {
   createStableExhibitIndex,
   drawDotLeaderRow,
   drawCoverPage,
+  drawToaPages,
+  buildTableOfAuthoritiesSections,
+  formatAuthorityPageList,
   renderStableFrontMatter,
   resolveCaptionStyle,
   sanitizeIndexTextForFont,
@@ -1063,6 +1066,73 @@ describe("LocalPdfEngine", () => {
     await expectPageContentNotToContainLabel(bytes, 0, leftText);
   });
 
+  it("groups Table of Authorities entries and alphabetizes each section", () => {
+    expect(buildTableOfAuthoritiesSections([
+      { kind: "statute", citation: "Zoning Act", pages: [4] },
+      { kind: "case", citation: "Alpha 10 LLC v. Beta", pages: [3] },
+      { kind: "other", citation: "Restatement (Second) of Contracts", pages: [7] },
+      { kind: "case", citation: "alpha 2 LLC v. Beta", pages: [2] },
+      { kind: "constitutional", citation: "U.S. Const. art. III", pages: [5] },
+      { kind: "rule", citation: "Fed. R. Civ. P. 12", pages: [6] },
+    ])).toEqual([
+      {
+        title: "Cases",
+        rows: [
+          { leftText: "alpha 2 LLC v. Beta", rightText: "2" },
+          { leftText: "Alpha 10 LLC v. Beta", rightText: "3" },
+        ],
+      },
+      { title: "Statutes", rows: [{ leftText: "Zoning Act", rightText: "4" }] },
+      { title: "Rules", rows: [{ leftText: "Fed. R. Civ. P. 12", rightText: "6" }] },
+      {
+        title: "Constitutional Provisions",
+        rows: [{ leftText: "U.S. Const. art. III", rightText: "5" }],
+      },
+      { title: "Other", rows: [{ leftText: "Restatement (Second) of Contracts", rightText: "7" }] },
+    ]);
+  });
+
+  it("formats Table of Authorities page lists with ranges and passim", () => {
+    expect(formatAuthorityPageList([4, 7, 12, 13])).toBe("4, 7, 12-13");
+    expect(formatAuthorityPageList([4, 7, 12, 13], 5, 1)).toBe("5, 8, 13-14");
+    expect(formatAuthorityPageList([1, 2, 3, 4, 5, 6], 5)).toBe("passim");
+    expect(formatAuthorityPageList([1, 2, 3, 4, 5, 6], 6)).toBe("1-6");
+  });
+
+  it("builds a Table of Authorities and inserts it at the front", async () => {
+    const engine = createLocalPdfEngine();
+    const source = await engine.open(await createTextPdf(["Original first page", "Original second page"]));
+
+    const output = await engine.buildTableOfAuthorities(source, {
+      entries: [
+        { kind: "case", citation: "Acme v. Smith", pages: [1, 2] },
+        { kind: "statute", citation: "11 U.S.C. 362", pages: [2] },
+      ],
+    });
+    const bytes = await engine.saveToBytes(output);
+
+    await expectPageSizes(bytes, [[612, 792], [612, 792], [612, 792]]);
+    await expectPageContentToContainLabel(bytes, 0, "Table of Authorities");
+    await expectPageContentToContainLabel(bytes, 0, "Cases");
+    await expectPageContentToContainLabel(bytes, 0, "Acme v. Smith");
+    await expectPageContentToContainLabel(bytes, 0, "2-3");
+    await expectPageContentToContainLabel(bytes, 1, "Original first page");
+    await expectPageContentNotToContainLabel(bytes, 0, "Original first page");
+  });
+
+  it("draws standalone Table of Authorities pages", async () => {
+    const rendered = await drawToaPages({
+      entries: [{ kind: "case", citation: "Long v. State", pages: [1, 2, 3, 4, 5, 6] }],
+      passimThreshold: 5,
+    });
+    const bytes = await rendered.doc.save();
+
+    expect(rendered.pageCount).toBe(1);
+    await expectPageContentToContainLabel(bytes, 0, "Table of Authorities");
+    await expectPageContentToContainLabel(bytes, 0, "Long v. State");
+    await expectPageContentToContainLabel(bytes, 0, "passim");
+  });
+
   it("renders stable front matter on one page for a small section list", async () => {
     const rendered = await renderStableFrontMatter({
       title: "Table of Contents",
@@ -1138,6 +1208,24 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
 
   for (const pageSize of pageSizes) {
     pdf.addPage([pageSize[0], pageSize[1]]);
+  }
+
+  return pdf.save();
+}
+
+async function createTextPdf(pageLabels: readonly string[]): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+  for (const label of pageLabels) {
+    const page = pdf.addPage([612, 792]);
+    page.drawText(label, {
+      x: 72,
+      y: 720,
+      size: 12,
+      font,
+      color: rgb(0.08, 0.08, 0.08),
+    });
   }
 
   return pdf.save();

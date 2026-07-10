@@ -809,6 +809,20 @@ describe("SidecarPdfEngine", () => {
     });
   });
 
+  it("reports sidecar Table of Authorities creation as unsupported", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(
+      engine.buildTableOfAuthorities(document, {
+        entries: [{ kind: "case", citation: "Acme v. Smith", pages: [1] }],
+      }),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+
   it("reports sidecar page normalization and byte splitting as unsupported", async () => {
     const { fetchImpl } = createFetch(jsonResponse({ pageCount: 1 }));
     const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });

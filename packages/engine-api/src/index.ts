@@ -288,6 +288,21 @@ export type PdfCoverPageOptions = {
   styleId: string;
 };
 
+export type PdfAuthorityEntry = {
+  kind: "case" | "statute" | "rule" | "constitutional" | "other";
+  /** Canonical citation text, already reviewed and edited by the caller. */
+  citation: string;
+  /** 1-based source document page numbers where the authority appears. */
+  pages: readonly number[];
+};
+
+export type PdfTableOfAuthoritiesOptions = {
+  entries: readonly PdfAuthorityEntry[];
+  title?: string | undefined;
+  /** Defaults to 5. Entries above this page-count threshold render as "passim". */
+  passimThreshold?: number | undefined;
+};
+
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
@@ -1251,6 +1266,23 @@ export interface PdfEngine {
    * the default caption implementation.
    */
   buildCoverPage(options: PdfCoverPageOptions): Promise<PdfDocumentHandle>;
+
+  /**
+   * Builds a Table of Authorities from reviewed citation entries and inserts it
+   * at the front of the provided source document.
+   *
+   * Engines should group authorities by type, alphabetize each group by
+   * citation, render each row with dot leaders and a page list or "passim",
+   * then prepend the generated pages while preserving source document content
+   * and offsetting page-targeted outline/bookmark destinations. Engines without
+   * local front-matter rendering may reject this with
+   * `PdfEngineError("UNSUPPORTED", ...)`; the local engine is the default ToA
+   * implementation.
+   */
+  buildTableOfAuthorities(
+    document: PdfDocumentHandle,
+    options: PdfTableOfAuthoritiesOptions,
+  ): Promise<PdfDocumentHandle>;
 
   /**
    * Creates a new document with the provided add-content edits applied.

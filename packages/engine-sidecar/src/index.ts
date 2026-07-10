@@ -40,6 +40,7 @@ import type {
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
   PdfStampTextOptions,
+  PdfTableOfAuthoritiesOptions,
   PdfTextRegion,
   PdfUpdateAnnotationOptions,
   PdfWatermarkOptions,
@@ -216,6 +217,9 @@ const SLASH_CHAR_CODE = "/".charCodeAt(0);
  *   and destinations. Use the local engine for contract-complete binders.
  * - buildCoverPage is intentionally unsupported for this engine because case
  *   captions are generated locally without a source document or sidecar upload.
+ * - buildTableOfAuthorities is intentionally unsupported for this engine
+ *   because reviewed ToA entries are rendered locally as deterministic front
+ *   matter before being prepended to the brief.
  * - ocr -> POST /local/ocr (engine-local OCRmyPDF) with the raw PDF body
  *   base64-encoded. This avoids the WebView -> auth proxy -> Stirling
  *   multipart upload path, which is fragile for force-OCR on large PDFs.
@@ -991,6 +995,16 @@ export class SidecarPdfEngine implements PdfEngine {
 
   async buildCoverPage(
     _options: PdfCoverPageOptions,
+  ): Promise<PdfDocumentHandle> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "That operation isn't available for this document.",
+    );
+  }
+
+  async buildTableOfAuthorities(
+    _document: PdfDocumentHandle,
+    _options: PdfTableOfAuthoritiesOptions,
   ): Promise<PdfDocumentHandle> {
     throw new PdfEngineError(
       "UNSUPPORTED",

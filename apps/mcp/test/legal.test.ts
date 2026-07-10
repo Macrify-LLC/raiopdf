@@ -12,6 +12,7 @@ import {
   handleBinder,
   handleBuildCoverPage,
   handleBuildBinderOneShot,
+  handleDetectAuthorities,
   handleExtract,
   handlePageNumbers,
   handleProductionSet,
@@ -39,6 +40,18 @@ async function makePdf(name: string, pages: number): Promise<string> {
     // Draw text so each page has real content (blank pdf-lib pages are too small
     // to exercise byte-cap splitting deterministically).
     page.drawText(`Page ${index} ${"content ".repeat(40)}`, { x: 5, y: 100, size: 6, font });
+  }
+  const filePath = path.join(dir, name);
+  await fs.writeFile(filePath, await pdf.save());
+  return filePath;
+}
+
+async function makeTextPdf(name: string, pageTexts: readonly string[]): Promise<string> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  for (const [index, text] of pageTexts.entries()) {
+    const page = pdf.addPage([612, 792]);
+    page.drawText(text, { x: 40, y: 720 - index * 20, size: 10, font });
   }
   const filePath = path.join(dir, name);
   await fs.writeFile(filePath, await pdf.save());
@@ -167,6 +180,68 @@ describe("legal tools (local pdf-lib engine)", () => {
       ),
     ).rejects.toThrow(/already exists/);
     expect(await fs.readFile(output, "utf8")).toBe("existing");
+  });
+
+  it("detect_authorities returns structured authorities with one-based page hits and writes no output", async () => {
+    const input = await makeTextPdf("authorities.pdf", [
+      [
+        "The motion cites Roe v. Wade, 410 U.S. 113, 42 USC section 1983,",
+        "Fla. R. Civ. P. 1.510, and U.S. Const. amend. XIV.",
+      ].join(" "),
+      [
+        "The same case appears again as 410 U. S. 113.",
+        "Additional authorities include Fla. Stat. sec. 90.702 and Fed. R. Evid. 702.",
+      ].join(" "),
+    ]);
+    const wouldBeOutput = path.join(dir, "authorities-output.pdf");
+
+    const result = await handleDetectAuthorities({ input }, engine);
+
+    expect(structured(result)).toMatchObject({
+      ok: true,
+      skipped: false,
+      summary: {
+        total: 6,
+        pageCount: 2,
+        byKind: {
+          case: 1,
+          statute: 2,
+          rule: 2,
+          constitutional: 1,
+          other: 0,
+        },
+      },
+    });
+    expect(structured(result).output).toBeUndefined();
+    expect(structured(result).authorities).toEqual([
+      { kind: "case", canonical: "410 U.S. 113", pages: [1, 2] },
+      { kind: "statute", canonical: "42 U.S.C. § 1983", pages: [1] },
+      { kind: "rule", canonical: "Fed. R. Evid. 702", pages: [2] },
+      { kind: "rule", canonical: "Fla. R. Civ. P. 1.510", pages: [1] },
+      { kind: "statute", canonical: "Fla. Stat. § 90.702", pages: [2] },
+      { kind: "constitutional", canonical: "U.S. Const. amend. XIV", pages: [1] },
+    ]);
+    await expect(fs.access(wouldBeOutput)).rejects.toBeTruthy();
+  });
+
+  it("detect_authorities skips garbled text layers with Make Searchable guidance", async () => {
+    const input = await makeTextPdf("garbled-authorities.pdf", [
+      "xqz!@#$ brt%^&* crw+=? plk[]{} mnn<>/ ".repeat(4),
+    ]);
+
+    const result = await handleDetectAuthorities({ input }, engine);
+
+    expect(structured(result)).toMatchObject({
+      ok: true,
+      skipped: true,
+      guidance: expect.stringContaining("running Make Searchable again is recommended"),
+      garbledPages: [1],
+      summary: {
+        total: 0,
+        pageCount: 1,
+      },
+      authorities: [],
+    });
   });
 
   it("one-shot build_binder rejects a main PDF over its passed-in ceiling", async () => {

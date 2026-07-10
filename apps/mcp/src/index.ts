@@ -65,9 +65,12 @@ import {
   binderOutputSchema,
   coverPageInputSchema,
   coverPageOutputSchema,
+  detectAuthoritiesInputSchema,
+  detectAuthoritiesOutputSchema,
   handleApplyEditsOneShot,
   handleBuildCoverPage,
   handleBuildBinderOneShot,
+  handleDetectAuthorities,
   extractInputSchema,
   extractOutputSchema,
   handleBates,
@@ -89,6 +92,7 @@ import {
   type BuildBinderOneShotInput,
   type BinderInput,
   type CoverPageInput,
+  type DetectAuthoritiesInput,
   type ExtractInput,
   type PageNumbersInput,
   type ProductionSetInput,
@@ -333,6 +337,28 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
       dependencies,
       async (input: CoverPageInput) =>
         await handleBuildCoverPage(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "detect_authorities",
+    {
+      title: "Detect legal authorities",
+      description:
+        "Detect the legal authorities (cases, statutes, rules, constitutional provisions) a PDF cites, with the pages each appears on. Read-only — inspects the document, never changes it. Deterministic pattern matching, not legal advice; review before relying on it.",
+      inputSchema: detectAuthoritiesInputSchema,
+      outputSchema: detectAuthoritiesOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    withGate(
+      dependencies,
+      async (input: DetectAuthoritiesInput) =>
+        await handleDetectAuthorities(input, dependencies.engineHandle),
     ),
   );
 

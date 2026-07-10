@@ -4,11 +4,13 @@ import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EngineHandle } from "../src/engine.js";
+import { extractPageText } from "../src/pdfjs-node.js";
 import {
   handleApplyEditsOneShot,
   handleBates,
   handleBatesFolder,
   handleBinder,
+  handleBuildCoverPage,
   handleBuildBinderOneShot,
   handleExtract,
   handlePageNumbers,
@@ -103,6 +105,68 @@ describe("legal tools (local pdf-lib engine)", () => {
       engine,
     );
     expect(await pageCount(output)).toBe(4);
+  });
+
+  it("build_cover_page writes a caption PDF and returns the output path", async () => {
+    const output = path.join(dir, "caption.pdf");
+    const result = await handleBuildCoverPage(
+      {
+        courtName: "Superior Court of Fulton County",
+        county: "Fulton",
+        parties: [
+          { role: "Plaintiff", names: ["Jane Doe"] },
+          { role: "Defendant", names: ["Acme LLC"], etAl: true },
+        ],
+        caseNumber: "2026-CV-1000",
+        division: "Civil Division",
+        judge: "Hon. Ada Lovelace",
+        documentTitle: "Motion for Summary Judgment",
+        signatureBlockLines: ["Respectfully submitted,", "Jane Doe"],
+        styleId: "classic-boxed",
+        output,
+      },
+      engine,
+    );
+
+    expect(structured(result)).toMatchObject({ ok: true, output });
+    expect(await pageCount(output)).toBe(1);
+    const text = await extractPageText(await fs.readFile(output));
+    expect(text).toContain("Superior Court of Fulton County");
+    expect(text).toContain("v.");
+    expect(text).toContain("Case No. 2026-CV-1000");
+    expect(text).toContain("Motion for Summary Judgment");
+  });
+
+  it("build_cover_page rejects a relative output path", async () => {
+    await expect(
+      handleBuildCoverPage(
+        {
+          courtName: "Superior Court of Fulton County",
+          parties: [{ role: "Plaintiff", names: ["Jane Doe"] }],
+          documentTitle: "Complaint",
+          output: "caption.pdf",
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/Output path must be absolute/);
+  });
+
+  it("build_cover_page refuses to overwrite an existing file", async () => {
+    const output = path.join(dir, "caption.pdf");
+    await fs.writeFile(output, "existing");
+
+    await expect(
+      handleBuildCoverPage(
+        {
+          courtName: "Superior Court of Fulton County",
+          parties: [{ role: "Plaintiff", names: ["Jane Doe"] }],
+          documentTitle: "Complaint",
+          output,
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/already exists/);
+    expect(await fs.readFile(output, "utf8")).toBe("existing");
   });
 
   it("one-shot build_binder rejects a main PDF over its passed-in ceiling", async () => {

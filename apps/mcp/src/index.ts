@@ -63,7 +63,10 @@ import {
   batesOutputSchema,
   binderInputSchema,
   binderOutputSchema,
+  coverPageInputSchema,
+  coverPageOutputSchema,
   handleApplyEditsOneShot,
+  handleBuildCoverPage,
   handleBuildBinderOneShot,
   extractInputSchema,
   extractOutputSchema,
@@ -85,6 +88,7 @@ import {
   type BatesInput,
   type BuildBinderOneShotInput,
   type BinderInput,
+  type CoverPageInput,
   type ExtractInput,
   type PageNumbersInput,
   type ProductionSetInput,
@@ -312,6 +316,23 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(
       dependencies,
       async (input: BinderInput) => await handleBinder(input, dependencies.engineHandle),
+    ),
+  );
+
+  server.registerTool(
+    "build_cover_page",
+    {
+      title: "Build court caption cover page",
+      description:
+        "Generates a court caption/cover page from the case details you provide. This is a document-drafting tool, not legal advice; review before filing. Writes a new file.",
+      inputSchema: coverPageInputSchema,
+      outputSchema: coverPageOutputSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    withGate(
+      dependencies,
+      async (input: CoverPageInput) =>
+        await handleBuildCoverPage(input, dependencies.engineHandle),
     ),
   );
 

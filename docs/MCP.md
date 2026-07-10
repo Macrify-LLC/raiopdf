@@ -82,7 +82,7 @@ Claude app and Claude Code.)
 
 ## Tools
 
-**25 tools as of 2026-07-04** (the Bates row below covers two). This table is
+**26 tools as of 2026-07-10** (the Bates row below covers two). This table is
 the canonical list — the README, the landing page, and the macrify.me product
 card all quote the count from here; update them when it changes.
 
@@ -102,6 +102,7 @@ card all quote the count from here; update them when it changes.
 | `page_numbers` | Stamp page numbers. |
 | `bates_stamp` / `bates_stamp_folder` | Bates numbers on one file, or one continuous sequence across an ordered set. |
 | `build_exhibit_binder` | Assemble a main document + ordered, labeled exhibits into one bookmarked binder. |
+| `build_cover_page` | Generate a court caption/cover page from case details you provide. |
 | `build_production_set` | Build a Bates-numbered discovery production from a document set: confidentiality designations, index files, volume splits. |
 | `batch_cleanup` | Run OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs in one queue. |
 | `redact_terms` | Redact terms with verified removal (see above). |

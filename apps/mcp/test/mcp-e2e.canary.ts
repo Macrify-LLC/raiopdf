@@ -127,6 +127,7 @@ const EXPECTED_TOOLS = [
   "sanitize_pdf",
   "scrub_metadata",
   "build_exhibit_binder",
+  "build_cover_page",
   "bates_stamp",
   "bates_stamp_folder",
   "build_production_set",

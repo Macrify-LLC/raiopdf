@@ -21,7 +21,9 @@ import {
   CAPTION_STYLES,
   createLocalPdfEngine,
   createStableExhibitIndex,
+  drawDotLeaderRow,
   drawCoverPage,
+  renderStableFrontMatter,
   resolveCaptionStyle,
   sanitizeIndexTextForFont,
 } from "../src/index";
@@ -1009,6 +1011,98 @@ describe("LocalPdfEngine", () => {
     expect(layout.iterations).toBeLessThanOrEqual(5);
     expect(layout.entries[0]?.pageRange).toBe("6");
     expect(layout.entries.at(-1)?.pageRange).toBe("50");
+  });
+
+  it("draws a dot-leader front-matter row with left and right text", async () => {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([300, 200]);
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+
+    const result = drawDotLeaderRow({
+      page,
+      font,
+      leftText: "Acme v. Smith",
+      rightText: "12",
+      x: 36,
+      y: 120,
+      width: 220,
+      fontSize: 10,
+    });
+    const bytes = await pdf.save();
+
+    expect(result.leaderText.length).toBeGreaterThan(0);
+    await expectPageContentToContainLabel(bytes, 0, "Acme v. Smith");
+    await expectPageContentToContainLabel(bytes, 0, "12");
+  });
+
+  it("truncates a long dot-leader row label before the right text", async () => {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([260, 200]);
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const leftText = "A very long authority label that cannot fit next to the page number";
+
+    const result = drawDotLeaderRow({
+      page,
+      font,
+      leftText,
+      rightText: "999",
+      x: 36,
+      y: 120,
+      width: 120,
+      fontSize: 10,
+    });
+    const bytes = await pdf.save();
+
+    expect(result.leftText).toMatch(/\.\.\.$/u);
+    expect(result.leftText).not.toBe(leftText);
+    expect(font.widthOfTextAtSize(result.leftText, 10)).toBeLessThanOrEqual(
+      120 - font.widthOfTextAtSize(result.rightText, 10) - 8,
+    );
+    await expectPageContentToContainLabel(bytes, 0, result.leftText);
+    await expectPageContentToContainLabel(bytes, 0, "999");
+    await expectPageContentNotToContainLabel(bytes, 0, leftText);
+  });
+
+  it("renders stable front matter on one page for a small section list", async () => {
+    const rendered = await renderStableFrontMatter({
+      title: "Table of Contents",
+      sections: [{ title: "Filings", rows: [{ leftText: "Complaint", rightText: "4" }] }],
+    });
+    const bytes = await rendered.doc.save();
+
+    expect(rendered.pageCount).toBe(1);
+    expect(rendered.pages).toHaveLength(1);
+    expect(rendered.doc.getPageCount()).toBe(1);
+    await expectPageContentToContainLabel(bytes, 0, "Table of Contents");
+    await expectPageContentToContainLabel(bytes, 0, "Complaint");
+    await expectPageContentToContainLabel(bytes, 0, "4");
+  });
+
+  it("stabilizes front-matter page counts for a multi-page section list", async () => {
+    const rendered = await renderStableFrontMatter({
+      title: "Table of Authorities",
+      sections: ({ frontMatterPageCount }) => [
+        {
+          title: "Cases",
+          rows: Array.from({ length: 45 }, (_, index) => ({
+            leftText: `Authority ${index + 1}`,
+            rightText: String(frontMatterPageCount + index + 1),
+          })),
+        },
+      ],
+    });
+    const bytes = await rendered.doc.save();
+
+    expect(rendered.pageCount).toBe(2);
+    expect(rendered.pages).toHaveLength(rendered.pageCount);
+    expect(rendered.doc.getPageCount()).toBe(rendered.pageCount);
+    expect(rendered.iterations).toBeLessThanOrEqual(5);
+    await expectPageContentToContainLabel(bytes, 0, "1 of 2");
+    await expectPageContentToContainLabel(bytes, 1, "2 of 2");
+    await expectPageContentToContainLabel(bytes, 0, "Authority 1");
+    await expectPageContentToContainLabel(bytes, 0, "3");
+    await expectPageContentToContainLabel(bytes, 1, "Authority 45");
+    await expectPageContentToContainLabel(bytes, 1, "47");
   });
 
   it("closes document handles and ignores unknown handles", async () => {

@@ -54,7 +54,7 @@
       {
         "ext": ["pdf"],
         "mimeType": "application/pdf",
-        "name": "PDF",
+        "name": "RaioPDF.PDF",
         "description": "PDF Document",
         "role": "Editor"
       }

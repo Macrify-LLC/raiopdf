@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Batch Cleanup — RaioPDF Help</title>
-<meta name="description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
-<link rel="canonical" href="https://raio.macrify.me/help/batch-cleanup.html">
+<title>PDF -&gt; Word — RaioPDF Help</title>
+<meta name="description" content="Convert one PDF into an editable Word document.">
+<link rel="canonical" href="https://raio.macrify.me/help/pdf-to-word.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
-<meta property="og:url" content="https://raio.macrify.me/help/batch-cleanup.html">
-<meta property="og:title" content="Batch Cleanup — RaioPDF Help">
-<meta property="og:description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
+<meta property="og:url" content="https://raio.macrify.me/help/pdf-to-word.html">
+<meta property="og:title" content="PDF -&gt; Word — RaioPDF Help">
+<meta property="og:description" content="Convert one PDF into an editable Word document.">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Batch Cleanup — RaioPDF Help">
-<meta name="twitter:description" content="Run many PDFs through the same cleanup steps at once — OCR, compress, sanitize, scrub metadata, and more.">
+<meta name="twitter:title" content="PDF -&gt; Word — RaioPDF Help">
+<meta name="twitter:description" content="Convert one PDF into an editable Word document.">
 
 <link rel="stylesheet" href="/shared/reset.css">
 <link rel="stylesheet" href="/shared/help.css">
@@ -58,43 +58,34 @@
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
         <a href="/help/">Help</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <a href="/help/#group-legal">Legal</a>
+        <a href="/help/#group-organize">Organize</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <span class="help-breadcrumb__current" aria-current="page">Batch Cleanup</span>
+        <span class="help-breadcrumb__current" aria-current="page">PDF -&gt; Word</span>
       </nav>
 
       <div class="help-article-layout">
         <article class="help-article">
-          <div class="help-article__body"><h1>Batch Cleanup</h1><p>When you have a stack of PDFs that all need the same treatment, Batch Cleanup
-runs them through it together — no opening each one by hand. Point it at your
-files, choose the steps, and it produces a clean set in a new folder along with a
-report of what it did to each one.</p><h2 id="why-youd-use-it">Why you'd use it</h2><p>A production, a client's document dump, a folder of scans — dozens of files that
-each need OCR, compression, or their metadata scrubbed. One at a time, that's a
-lost afternoon. Batch Cleanup does the whole stack in a single run.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>In the <strong>Legal</strong> tools, choose <strong>Batch Cleanup</strong>.</li><li>Click <strong>Add PDF</strong> for each file you want included. (Files need to be opened
-from your computer.)</li><li>Choose an empty <strong>Package root folder</strong> — where the cleaned files and report
-will go.</li><li>Turn on the steps you want (below).</li><li>Click <strong>Run Batch</strong>.</li></ol><p>Each file shows its status as it goes — pending, running, done, or skipped.</p><h2 id="the-steps-you-can-turn-on">The steps you can turn on</h2><ul><li><strong>OCR</strong> — make scanned files searchable. You can OCR only image-only files,
-skip files that already have text, force it on everything, or leave it off.</li><li><strong>Compress</strong> — shrink large files.</li><li><strong>Sanitize active content</strong> — strip embedded scripts, attached files, and links.</li><li><strong>Scrub metadata</strong> — remove the hidden document information.</li><li><strong>Repair</strong> — fix files that are built in unusual ways.</li><li><strong>Split by size</strong> — break files over a size you set into parts.</li><li><strong>Normalize pages</strong> — bring pages to a consistent size.</li></ul><p>Sanitize and Scrub metadata are on by default. You can also pick a jurisdiction
-pack to apply a court's defaults.</p><h2 id="what-to-know">What to know</h2><ul><li><strong>It writes to a new folder, never over your originals.</strong> Choose an empty
-package folder; your source files are left exactly as they are.</li><li><strong>You get a report.</strong> Alongside the cleaned files, Batch Cleanup writes a report
-— a PDF and a data file — listing what happened to each one.</li></ul></div>
-        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/prepare-for-filing.html">Prepare for Filing</a> — ready a single document for the portal</li><li><a href="/help/production-set.html">Production Set</a> — build a Bates-numbered production</li><li><a href="/help/make-searchable.html">Make Searchable (OCR)</a> — the OCR step, on its own</li></ul></div>
+          <div class="help-article__body"><h1>PDF -&gt; Word</h1><p>PDF -&gt; Word creates a <code>.docx</code> copy from a PDF. It uses Microsoft Word to do the
+conversion, so Word must be installed.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>In the <strong>Organize</strong> tools, choose <strong>PDF -&gt; Word</strong>.</li><li>Pick one PDF.</li><li>If the PDF looks scanned, choose whether to run OCR first.</li><li>Save the generated Word document.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>Experimental — formatting may be approximate.</strong> Read the Word file before
+relying on it.</li><li><strong>Microsoft Word is required.</strong> If Word is not available, RaioPDF explains
+that at the point of action and does not convert the file.</li><li><strong>OCR is offered only for scans.</strong> PDFs that already have a searchable text
+layer convert directly.</li></ul></div>
+        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/make-searchable.html">Make Searchable (OCR)</a> — add real text to a scan first</li><li><a href="/help/pages.html">Organize Pages</a></li></ul></div>
         <nav class="help-pager" aria-label="More in this category">
-          <a class="help-pager__link help-pager__link--prev" href="/help/prepare-for-filing.html">
+          <a class="help-pager__link help-pager__link--prev" href="/help/rotate.html">
             <span class="help-pager__eyebrow">← Previous</span>
-            <span class="help-pager__title">Prepare for Filing</span>
+            <span class="help-pager__title">Rotate Pages</span>
           </a>
-          <a class="help-pager__link help-pager__link--next" href="/help/case-caption.html">
+          <a class="help-pager__link help-pager__link--next" href="/help/merge.html">
             <span class="help-pager__eyebrow">Next →</span>
-            <span class="help-pager__title">Case Caption</span>
+            <span class="help-pager__title">Merge PDFs</span>
           </a>
         </nav>
         </article>
         <aside class="help-toc" aria-label="On this page">
           <p class="help-toc__label">On this page</p>
           <ul>
-          <li><a href="#why-youd-use-it">Why you'd use it</a></li>
           <li><a href="#how-to-do-it">How to do it</a></li>
-          <li><a href="#the-steps-you-can-turn-on">The steps you can turn on</a></li>
           <li><a href="#what-to-know">What to know</a></li>
           <li><a href="#related">Related</a></li>
           </ul>

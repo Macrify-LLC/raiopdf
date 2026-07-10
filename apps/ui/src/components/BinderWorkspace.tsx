@@ -80,6 +80,7 @@ export interface BinderWorkspaceProps {
   onCancel: () => void;
   onHelpRequested?: (() => void) | undefined;
   defaultCoverStyle?: PdfCoverStyle | undefined;
+  onCaptionRequested?: (() => void) | undefined;
 }
 
 export function BinderWorkspace({
@@ -90,6 +91,7 @@ export function BinderWorkspace({
   onCancel,
   onHelpRequested,
   defaultCoverStyle,
+  onCaptionRequested,
 }: BinderWorkspaceProps) {
   const addInputRef = useRef<HTMLInputElement>(null);
   const [exhibits, setExhibits] = useState<ExhibitFile[]>([]);
@@ -445,6 +447,18 @@ export function BinderWorkspace({
             <PlusIcon size={15} />
             Add exhibits...
           </button>
+          {onCaptionRequested ? (
+            <button
+              type="button"
+              className="binder-workspace__secondary binder-workspace__add"
+              onClick={onCaptionRequested}
+              disabled={building}
+              title="Create a caption or cover page before assembling the binder."
+            >
+              <SlipSheetIcon size={15} />
+              Add caption / cover page
+            </button>
+          ) : null}
           <DocxConversionRows rows={docxRows} />
         </section>
 

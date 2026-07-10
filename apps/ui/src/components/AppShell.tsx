@@ -273,6 +273,7 @@ export function AppShell({
         onSearchClear={documentSearch.clear}
         onHelp={onHelpRequested}
         onPrepareForFiling={() => onLegalToolSelected("prepare-for-filing")}
+        onCaseCaption={() => onLegalToolSelected("case-caption")}
         longProcessLockoutLabel={longProcessLockoutLabel}
       />
       <div className="app-shell__document-banner">{documentBanner}</div>

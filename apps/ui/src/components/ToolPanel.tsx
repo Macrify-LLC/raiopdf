@@ -46,6 +46,7 @@ import {
   ScrubMetadataIcon,
   ShieldCheckIcon,
   SignIcon,
+  SlipSheetIcon,
   StrikethroughIcon,
   TextBoxIcon,
   UnderlineIcon,
@@ -66,6 +67,7 @@ export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 
 const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   "prepare-for-filing": <BoltIcon variant="outline" size={16} />,
+  "case-caption": <SlipSheetIcon size={16} />,
   "batch-cleanup": <OcrSearchIcon size={16} />,
   "production-set": <BatesIcon size={16} />,
   "combine-exhibits": <CombineExhibitsIcon size={16} />,

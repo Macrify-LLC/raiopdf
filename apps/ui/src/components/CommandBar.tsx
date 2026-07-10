@@ -10,6 +10,7 @@ import {
   PrintIcon,
   SaveIcon,
   SearchIcon,
+  SlipSheetIcon,
   UndoIcon,
 } from "../icons";
 import { IconButton } from "./IconButton";
@@ -51,6 +52,7 @@ export interface CommandBarProps {
    * this is just a second door into the identical dialog.
    */
   onPrepareForFiling?: (() => void) | undefined;
+  onCaseCaption?: (() => void) | undefined;
   longProcessLockoutLabel?: string | null | undefined;
 }
 
@@ -80,6 +82,7 @@ export function CommandBar({
   onSearchClear,
   onHelp,
   onPrepareForFiling,
+  onCaseCaption,
   longProcessLockoutLabel = null,
 }: CommandBarProps) {
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
@@ -301,6 +304,16 @@ export function CommandBar({
           measurements that also fire off that same transition and made
           click-to-place tools (comment pins) miss their target. */}
       <div className="command-bar__filing-lockout">
+        <button
+          type="button"
+          className="command-bar__legal-cta"
+          disabled={longProcessLocked}
+          title={longProcessLockoutLabel ?? "Create a case caption page"}
+          onClick={onCaseCaption}
+        >
+          <SlipSheetIcon size={14} />
+          Caption
+        </button>
         <button
           type="button"
           className="command-bar__filing-cta"

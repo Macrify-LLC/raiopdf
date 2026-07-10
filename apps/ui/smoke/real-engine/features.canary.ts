@@ -4,7 +4,7 @@
 // a packaged build — especially the sensitive-data scanner, which is a
 // correctness-and-liability feature (Fla. R. Jud. Admin. 2.425).
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Download } from "@playwright/test";
 import {
   captureLogs,
   createPdf,
@@ -13,6 +13,7 @@ import {
   openPdf,
   savePdf,
 } from "./helpers";
+import { PDFDocument } from "pdf-lib";
 
 const BENIGN_LOG = [/Setting up fake worker/i, /Warning: /i, /fontkit/i];
 
@@ -54,3 +55,38 @@ test("Bates numbering: stamps sequential numbers into every page's content", asy
 
   logs.assertClean(BENIGN_LOG);
 });
+
+test("Case caption: saves valid caption pages in multiple local styles", async ({ page }) => {
+  const logs = captureLogs(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Caption" }).click();
+  await page.getByLabel("Court name").fill("Circuit Court");
+  await page.getByLabel("Document title").fill("Notice of Filing");
+  await page.getByLabel("Name 1").first().fill("Jane Smith");
+
+  const firstDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save as PDF" }).click();
+  const first = await downloadBytes(await firstDownload);
+
+  await page.getByRole("radio", { name: "Centered federal" }).click();
+  const secondDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save as PDF" }).click();
+  const second = await downloadBytes(await secondDownload);
+
+  const firstPdf = await PDFDocument.load(first);
+  const secondPdf = await PDFDocument.load(second);
+  expect(firstPdf.getPageCount()).toBe(1);
+  expect(secondPdf.getPageCount()).toBe(1);
+  expect(Buffer.from(first).equals(Buffer.from(second))).toBe(false);
+
+  logs.assertClean(BENIGN_LOG);
+});
+
+async function downloadBytes(download: Download): Promise<Uint8Array> {
+  const filePath = await download.path();
+  if (!filePath) {
+    throw new Error("Caption download did not produce a local file.");
+  }
+  return new Uint8Array(await (await import("node:fs/promises")).readFile(filePath));
+}

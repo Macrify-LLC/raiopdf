@@ -8,6 +8,7 @@ import type {
   PdfCalloutEdit,
   PdfCommentEdit,
   PdfCompressOptions,
+  PdfCoverPageOptions,
   PdfDocumentHandle,
   PdfEdit,
   PdfEditColor,
@@ -93,6 +94,8 @@ import {
   type DrawColor,
   type DrawTarget,
 } from "./drawTarget";
+import { drawCaptionPage } from "./captionPage";
+import { resolveCaptionStyle } from "./captionStyles";
 import { drawCoverPage } from "./coverStyles";
 import { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 
@@ -101,8 +104,10 @@ export {
   createPageDrawTarget,
   drawAnnotationAppearanceOnPage,
 } from "./drawTarget";
+export { drawCaptionPage, type CaptionDrawFonts } from "./captionPage";
+export { CAPTION_STYLES, resolveCaptionStyle } from "./captionStyles";
 export { drawCoverPage, type CoverDrawFonts, type CoverDrawInput } from "./coverStyles";
-export type { PdfCoverStyle } from "@raiopdf/engine-api";
+export type { PdfCaptionStyle, PdfCoverStyle } from "@raiopdf/engine-api";
 export { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
 
 type StoredDocument = {
@@ -945,6 +950,18 @@ export class LocalPdfEngine implements PdfEngine {
       openMode: "outlines",
       revision: "binder",
     }, { preserveSources });
+
+    return this.store(await output.save());
+  }
+
+  async buildCoverPage(options: PdfCoverPageOptions): Promise<PdfDocumentHandle> {
+    const output = await PDFDocument.create();
+    const page = output.addPage([612, 792]);
+    const regular = await output.embedFont(StandardFonts.TimesRoman);
+    const bold = await output.embedFont(StandardFonts.TimesRomanBold);
+    const style = resolveCaptionStyle(options.styleId);
+
+    drawCaptionPage(page, { regular, bold }, { ...options, styleId: style.id });
 
     return this.store(await output.save());
   }

@@ -13,7 +13,7 @@ import {
   openPdf,
   savePdf,
 } from "./helpers";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 const BENIGN_LOG = [/Setting up fake worker/i, /Warning: /i, /fontkit/i];
 
@@ -83,10 +83,51 @@ test("Case caption: saves valid caption pages in multiple local styles", async (
   logs.assertClean(BENIGN_LOG);
 });
 
+test("Table of Authorities: saves grouped authority output from reviewed citations", async ({ page }) => {
+  const logs = captureLogs(page);
+  await page.goto("/");
+  await openPdf(page, "toa-brief.pdf", await createAuthorityBriefPdf());
+
+  await page.getByRole("button", { name: "ToA" }).click();
+  await expect(page.getByDisplayValue("123 So. 3d 456")).toBeVisible();
+  await expect(page.getByDisplayValue("Fla. Stat. § 95.11")).toBeVisible();
+  await page.getByLabel("Passim threshold").fill("2");
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save as PDF" }).click();
+  const bytes = await downloadBytes(await download);
+
+  await expectPageStamp(bytes, 0, "Cases");
+  await expectPageStamp(bytes, 0, "123 So. 3d 456");
+  await expectPageStamp(bytes, 0, "Statutes");
+  await expectPageStamp(bytes, 0, "Fla. Stat. § 95.11");
+  await expectPageStamp(bytes, 0, "Rules");
+  await expectPageStamp(bytes, 0, "Fed. R. Civ. P. 56");
+
+  logs.assertClean(BENIGN_LOG);
+});
+
 async function downloadBytes(download: Download): Promise<Uint8Array> {
   const filePath = await download.path();
   if (!filePath) {
     throw new Error("Caption download did not produce a local file.");
   }
   return new Uint8Array(await (await import("node:fs/promises")).readFile(filePath));
+}
+
+async function createAuthorityBriefPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pageTexts = [
+    "The motion relies on 123 So. 3d 456 and Fla. Stat. § 95.11.",
+    "Summary judgment is governed by Fed. R. Civ. P. 56.",
+    "The same case, 123 So. 3d 456, appears again here.",
+  ];
+
+  for (const text of pageTexts) {
+    const page = pdf.addPage([612, 792]);
+    page.drawText(text, { x: 72, y: 700, size: 12, font });
+  }
+
+  return pdf.save();
 }

@@ -72,14 +72,14 @@ down. Expect ~20–60s once the payload exists (first run also builds the UI). A
 looks like:
 
 ```
-Running 10 tests using 1 worker
+Running 11 tests using 1 worker
   ✓ OCR: force-OCR turns an unreadable scan into genuinely SEARCHABLE text
   ✓ Redact: really removes searched text via the engine (verified by re-extraction)
   ✓ Sensitive-data scanner: finds and masks a planted SSN, offers one-click redaction
   ✓ Prepare for Filing: normalizes landscape to letter-portrait AND splits by file size
   ✓ Exhibit binder: assembles a combined PDF with each exhibit stamped and bookmarked
   ...
-  10 passed
+  11 passed
 ```
 
 To boot just the engine and poke it by hand (or point your own AI agent / MCP client at it):
@@ -105,6 +105,7 @@ engine" rows exercise the bundled Stirling/OCR stack; "Real build" rows are clie
 | Engine error handling | Fails loud, never silent | Unreachable engine → user-facing error, no blank-app hang | `engine-ops` · real engine |
 | **Sensitive-data scanner** | Catches SSNs/account numbers (Fla. R. Jud. Admin. 2.425) | Planted SSN detected, shown masked, one-click redaction offered | `features` · real build |
 | **Case caption & cover page** | Renders caption pages locally with selectable styles | The UI saves valid caption PDFs in at least two styles, and the bytes differ by style | `features` · real build |
+| **Table of Authorities** | Builds a grouped, reviewed authority table from a brief | A brief with planted case/statute/rule citations produces a saved ToA PDF with grouped headings and citation rows | `features` · real build |
 | **Bates numbering** | Sequential numbers stamped across a set | `SMITH000001/2/3` stamped into each page's content bytes | `features` · real build |
 | **Prepare for Filing — page size** | Normalizes to letter-portrait | Every page of every output part is letter-portrait (612×792) | `filing-binder` · real build |
 | **Prepare for Filing — split by size** | Splits oversized filings into portal-compliant parts | Output is ≥2 files, each named "… Part N of M" | `filing-binder` · real build |

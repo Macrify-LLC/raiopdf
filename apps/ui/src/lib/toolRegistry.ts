@@ -14,6 +14,7 @@ export interface ToolRegistryEntry {
 export const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", group: "legal", helpArticleId: "prepare-for-filing", description: "Check filing limits, normalize pages, split if needed, and verify the output." },
   { id: "case-caption", label: "Case Caption...", group: "legal", helpArticleId: "case-caption", description: "Fill a matter caption once, preview court caption styles, and save or prepend a caption page." },
+  { id: "table-of-authorities", label: "Table of Authorities...", group: "legal", helpArticleId: "table-of-authorities", description: "Detect cited authorities, review them, and build a grouped, alphabetized table." },
   { id: "batch-cleanup", label: "Batch Cleanup", group: "legal", helpArticleId: "batch-cleanup", description: "Run OCR, cleanup, metadata removal, and filing splits across local PDFs." },
   { id: "production-set", label: "Production Set", group: "legal", helpArticleId: "production-set", description: "Build a Bates-numbered production package with index files and optional volumes." },
   { id: "combine-exhibits", label: "Combine with Exhibits", group: "legal", helpArticleId: "combine-exhibits", description: "Append exhibits, stamp exhibit labels, add bookmarks, and optionally add an index." },

@@ -274,6 +274,7 @@ export function AppShell({
         onHelp={onHelpRequested}
         onPrepareForFiling={() => onLegalToolSelected("prepare-for-filing")}
         onCaseCaption={() => onLegalToolSelected("case-caption")}
+        onTableOfAuthorities={() => onLegalToolSelected("table-of-authorities")}
         longProcessLockoutLabel={longProcessLockoutLabel}
       />
       <div className="app-shell__document-banner">{documentBanner}</div>

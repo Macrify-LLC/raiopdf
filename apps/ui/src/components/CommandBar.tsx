@@ -10,6 +10,7 @@ import {
   PrintIcon,
   SaveIcon,
   SearchIcon,
+  ScaleIcon,
   SlipSheetIcon,
   UndoIcon,
 } from "../icons";
@@ -53,6 +54,7 @@ export interface CommandBarProps {
    */
   onPrepareForFiling?: (() => void) | undefined;
   onCaseCaption?: (() => void) | undefined;
+  onTableOfAuthorities?: (() => void) | undefined;
   longProcessLockoutLabel?: string | null | undefined;
 }
 
@@ -83,6 +85,7 @@ export function CommandBar({
   onHelp,
   onPrepareForFiling,
   onCaseCaption,
+  onTableOfAuthorities,
   longProcessLockoutLabel = null,
 }: CommandBarProps) {
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
@@ -313,6 +316,16 @@ export function CommandBar({
         >
           <SlipSheetIcon size={14} />
           Caption
+        </button>
+        <button
+          type="button"
+          className="command-bar__legal-cta"
+          disabled={!hasDocument || longProcessLocked}
+          title={longProcessLockoutLabel ?? "Build a Table of Authorities"}
+          onClick={onTableOfAuthorities}
+        >
+          <ScaleIcon size={14} />
+          ToA
         </button>
         <button
           type="button"

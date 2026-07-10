@@ -11,11 +11,13 @@ import { generateToaPdf } from "../lib/toaPreview";
 import {
   HelpIcon,
   InsertIcon,
+  OcrSearchIcon,
   PlusIcon,
   SaveIcon,
   ScaleIcon,
 } from "../icons";
 import { IconButton } from "./IconButton";
+import { LoadingSun } from "./LoadingSun";
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import "./TableOfAuthoritiesWorkspace.css";
 
@@ -332,7 +334,7 @@ export function TableOfAuthoritiesWorkspace({
             </div>
 
             {phase === "detecting" ? (
-              <EmptyState title="Scanning citations" detail="RaioPDF is reading the page text and grouping detected authorities." />
+              <DetectingState />
             ) : rows.length === 0 ? (
               <EmptyState title="No detected citations" detail="Add missed authorities below, then save or prepend the finished table." />
             ) : (
@@ -356,7 +358,7 @@ export function TableOfAuthoritiesWorkspace({
 
           <section className="toa-card toa-card--controls" aria-label="Table of Authorities controls">
             <p className="toa-card__label">Build table</p>
-            <label className="toa-field">
+            <label className="toa-field toa-field--compact">
               <span>Passim threshold</span>
               <input
                 type="number"
@@ -482,7 +484,10 @@ function AuthorityGroup({
 
   return (
     <section className="toa-group" aria-label={group.label}>
-      <h3>{group.label}</h3>
+      <div className="toa-group__header">
+        <h3>{group.label}</h3>
+        <span className="toa-group__count">{rows.length}</span>
+      </div>
       <div className="toa-group__rows" role="list">
         {rows.map((row) => {
           const mergeOptions = allRows.filter((candidate) => candidate.id !== row.id);
@@ -507,6 +512,7 @@ function AuthorityGroup({
                   />
                 </label>
                 <p className="toa-row__pages">Pages {formatPages(row.pageIndexes)}</p>
+                {row.excluded ? <span className="toa-row__excluded-tag">Excluded</span> : null}
               </div>
               <div className="toa-row__actions">
                 <label className="toa-field">
@@ -516,18 +522,25 @@ function AuthorityGroup({
                     onChange={(event) => onMergeTargetChange(row.id, event.currentTarget.value)}
                   >
                     <option value="">Choose authority</option>
-                    {mergeOptions.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>{candidate.citation}</option>
-                    ))}
+                    {AUTHORITY_GROUPS.map((mergeGroup) => {
+                      const groupOptions = mergeOptions.filter((candidate) => candidate.kind === mergeGroup.kind);
+                      return groupOptions.length > 0 ? (
+                        <optgroup key={mergeGroup.kind} label={mergeGroup.label}>
+                          {groupOptions.map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>{candidate.citation}</option>
+                          ))}
+                        </optgroup>
+                      ) : null;
+                    })}
                   </select>
                 </label>
                 <button
                   type="button"
-                  className="toa-workspace__secondary"
+                  className="toa-workspace__secondary toa-row__merge-button"
                   disabled={!selectedMergeTarget}
                   onClick={() => onMerge(row.id)}
                 >
-                  <ScaleIcon size={14} />
+                  <ScaleIcon size={12} />
                   Merge
                 </button>
               </div>
@@ -548,12 +561,19 @@ function GarbledGate({
 }) {
   return (
     <div className="toa-card toa-card--gate" role="alert">
-      <p className="toa-card__label">Searchable text needs repair</p>
-      <h3>Hidden text looks garbled</h3>
-      <p>
+      <div className="toa-gate__lede">
+        <span className="toa-gate__lede-icon" aria-hidden="true">
+          <OcrSearchIcon size={15} />
+        </span>
+        <div>
+          <p className="toa-gate__eyebrow">Searchable text needs repair</p>
+          <h3 className="toa-gate__heading">Hidden text looks garbled</h3>
+        </div>
+      </div>
+      <p className="toa-gate__intro">
         RaioPDF needs clean page text before it can detect citations. Redo searchable text, then run Table of Authorities again.
       </p>
-      <p className="toa-card__hint">Affected pages: {formatPages(garbledPages.map((page) => page.pageIndex))}</p>
+      <p className="toa-gate__pages">Affected pages: {formatPages(garbledPages.map((page) => page.pageIndex))}</p>
       <button type="button" className="toa-workspace__primary" onClick={onForceOcr}>
         Redo searchable text
       </button>
@@ -566,6 +586,18 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
     <div className="toa-empty">
       <p>{title}</p>
       <span>{detail}</span>
+    </div>
+  );
+}
+
+function DetectingState() {
+  return (
+    <div className="toa-loading">
+      <LoadingSun size={26} label="Scanning citations" />
+      <p className="toa-loading__title">Scanning citations</p>
+      <span className="toa-loading__detail">
+        RaioPDF is reading the page text and grouping detected authorities.
+      </span>
     </div>
   );
 }

@@ -48,8 +48,7 @@
 
 .toa-workspace__eyebrow,
 .toa-card__label,
-.toa-field span,
-.toa-group h3 {
+.toa-field span {
   margin: 0;
   font-size: var(--text-2xs);
   font-weight: 700;
@@ -87,19 +86,6 @@
   align-self: start;
 }
 
-.toa-card--gate h3,
-.toa-empty p {
-  margin: 0;
-  color: var(--ink);
-  font-size: var(--text-sm);
-}
-
-.toa-card--gate p {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: 1.45;
-}
-
 .toa-card__title-row {
   display: flex;
   align-items: center;
@@ -107,10 +93,16 @@
   gap: var(--space-3);
 }
 
-.toa-card__title-row span,
+.toa-card__title-row span {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
 .toa-card__hint,
-.toa-workspace__status,
-.toa-workspace__footer-summary p {
+.toa-workspace__status {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-xs);
@@ -138,12 +130,26 @@
 
 .toa-field--citation {
   flex: 1 1 auto;
+  min-width: 160px;
+}
+
+/* The citation is the row's headline -- it reads a size up and bolder than
+   the surrounding meta controls so the eye lands there first. */
+.toa-field--citation input {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* Passim threshold is a one-or-two-digit number; a full-width text box for
+   it reads as an oversized, empty-looking control. */
+.toa-field--compact {
+  max-width: 96px;
 }
 
 .toa-groups,
 .toa-group,
-.toa-group__rows,
-.toa-add {
+.toa-group__rows {
   display: grid;
   gap: var(--space-2);
 }
@@ -158,49 +164,197 @@
   padding-top: 0;
 }
 
+.toa-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A real section heading, not another micro-label -- "Cases" / "Statutes"
+   need to outrank the row-level field labels, so this is deliberately not
+   part of the shared uppercase micro-label rule above. */
+.toa-group h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.toa-group__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Add-missed-authority is a secondary, occasional form -- a hairline plus
+   its own top padding reads as "a distinct section", not a continuation of
+   the passim threshold field above it. */
+.toa-add {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
 .toa-row {
   display: grid;
   gap: var(--space-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   background: var(--chrome);
+  transition:
+    opacity var(--duration-fast) ease,
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
 }
 
+.toa-row:focus-within {
+  border-color: var(--primary);
+}
+
+/* Dimmed AND labeled -- opacity alone is easy to miss at a glance, so an
+   explicit "Excluded" tag (below) carries the state for anyone scanning
+   quickly or using a screen reader that flattens `data-excluded`. */
 .toa-row[data-excluded="true"] {
-  opacity: 0.62;
+  opacity: 0.6;
+  background: var(--panel);
 }
 
-.toa-row__main,
+.toa-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .toa-row__actions {
   display: flex;
   align-items: end;
+  justify-content: flex-start;
   gap: var(--space-2);
-}
-
-.toa-row__actions {
-  justify-content: flex-end;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
 }
 
 .toa-row__actions .toa-field {
   flex: 1 1 220px;
 }
 
-.toa-row__pages {
-  min-width: 92px;
-  margin: 0 0 7px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.3;
+.toa-row__actions .toa-field select {
+  min-height: 28px;
 }
 
-.toa-toggle {
-  min-height: 30px;
-  display: flex;
+/* Merge is a rare, per-row action -- it should read quieter than the
+   page-level primary/secondary buttons in the footer, not compete with
+   them at the same size. */
+.toa-row__merge-button {
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+}
+
+.toa-row__pages {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  color: var(--body);
-  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.toa-row__excluded-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--hover-ground);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+  white-space: nowrap;
+}
+
+/* A real switch, not a bare checkbox -- "excluded" is an on/off state for
+   the row, and a toggle communicates that more clearly at a glance than a
+   to-do-list checkbox glyph would. Label sits above the control, matching
+   every other field in this card. */
+.toa-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  color: var(--muted);
+}
+
+.toa-toggle span {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.toa-toggle input {
+  appearance: none;
+  margin: 0;
+  width: 30px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--border-soft);
+  position: relative;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.toa-toggle input::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: var(--shadow-control);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.toa-toggle input:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.toa-toggle input:checked::after {
+  transform: translateX(12px);
+  background: var(--on-primary);
+}
+
+.toa-toggle input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .toa-workspace__ghost,
@@ -283,12 +437,19 @@
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   border: 1px dashed var(--border);
   border-radius: var(--radius-control);
   color: var(--muted);
   text-align: center;
   padding: var(--space-4);
+}
+
+.toa-empty p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 600;
 }
 
 .toa-empty span {
@@ -297,9 +458,127 @@
   line-height: 1.4;
 }
 
+/* The "detecting" state gets its own visual language -- solid border,
+   chrome ground, and the app's own identity spinner -- so it reads as
+   "working" at a glance, distinct from the dashed, quieter "nothing here"
+   empty states above. */
+.toa-loading {
+  min-height: 160px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  text-align: center;
+  padding: var(--space-4);
+  animation: toa-loading-in var(--duration-medium) var(--ease-out);
+}
+
+@keyframes toa-loading-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toa-loading {
+    animation: none;
+  }
+}
+
+.toa-loading__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.toa-loading__detail {
+  max-width: 320px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* Mirrors the app's established garbled-text idiom (see
+   TextLayerDetailPanel.css) -- a warn-toned icon lede, a warn callout for
+   the affected pages, and a calm, non-alarming ask -- so this gate reads as
+   the same finding a user may have already seen from the status bar, not a
+   one-off card design. */
+.toa-gate__lede {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.toa-gate__lede-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.toa-gate__eyebrow {
+  margin: 0;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.toa-gate__heading {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.toa-gate__intro {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--body);
+}
+
+.toa-gate__pages {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.toa-workspace__footer {
+  min-height: 42px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
 .toa-workspace__footer-summary {
   display: grid;
   gap: 2px;
+}
+
+.toa-workspace__footer-summary p {
+  margin: 0;
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1120px) {
@@ -327,9 +606,5 @@
   .toa-workspace__footer-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
-  }
-
-  .toa-row__pages {
-    margin-bottom: 0;
   }
 }

@@ -64,6 +64,27 @@ describe("detectAuthorities", () => {
 
     expect(detectAuthorities(pages, reporterTable)).toEqual([]);
   });
+
+  it("preserves canonicalization for ordinary citation variants", () => {
+    const pages: PageTextByPage = [
+      {
+        pageIndex: 0,
+        text: [
+          "The authorities include 42 USC section 1983 and O.C.G.A. sec. 9-11-56.",
+          "Constitutional references include U.S. Const. article III, section 2 and Florida Const. article V, section 3.",
+          "The rules citation is Fla. R. Jud. Admin. 2.420.",
+        ].join(" "),
+      },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "42 U.S.C. § 1983": { kind: "statute", pages: [0] },
+      "Fla. Const. art. V, § 3": { kind: "constitutional", pages: [0] },
+      "Fla. R. Jud. Admin. 2.420": { kind: "rule", pages: [0] },
+      "O.C.G.A. § 9-11-56": { kind: "statute", pages: [0] },
+      "U.S. Const. art. III, § 2": { kind: "constitutional", pages: [0] },
+    });
+  });
 });
 
 describe("authoritiesGarbleGate", () => {

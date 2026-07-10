@@ -24,7 +24,8 @@ const CITATION_SUFFIX = String.raw`(?![A-Za-z0-9])`;
 const SECTION_MARKER = String.raw`(?:§{1,2}|sections?|secs?\.?)`;
 const SECTION_VALUE = String.raw`[A-Za-z0-9][A-Za-z0-9().:-]*`;
 const RULE_NUMBER = String.raw`\d+[A-Za-z]?(?:\.\d+)*(?:\([a-zA-Z0-9]+\))*`;
-const CONSTITUTION_PART = String.raw`(?:art\.?|article|amend\.?|amendment)\s+[A-Za-z0-9IVXLCDMivxlcdm]+(?:\s*,?\s*${SECTION_MARKER}\s*[A-Za-z0-9IVXLCDMivxlcdm]+(?:\([a-zA-Z0-9]+\))*)?`;
+const CONSTITUTION_SECTION_SEPARATOR = String.raw`(?:\s+,\s*|,\s*|\s+)`;
+const CONSTITUTION_PART = String.raw`(?:art\.?|article|amend\.?|amendment)\s+[A-Za-z0-9IVXLCDMivxlcdm]+(?:${CONSTITUTION_SECTION_SEPARATOR}${SECTION_MARKER}\s*[A-Za-z0-9IVXLCDMivxlcdm]+(?:\([a-zA-Z0-9]+\))*)?`;
 
 // Example: 410 U.S. 113; 550 F.3d 1214; 123 So. 3d 456.
 export function buildCaseReporterCitationPattern(reporters: ReporterTable): CitationPattern {

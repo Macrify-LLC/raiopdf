@@ -180,16 +180,15 @@ function canonicalizeIndianaRulePrefix(prefix: string): string {
 }
 
 function canonicalizeConstitutionPart(part: string): string {
-  return collapseWhitespace(part)
+  const normalized = collapseWhitespace(part)
     .replace(/\barticle\b/giu, "art.")
     .replace(/\bart\b\.?/giu, "art.")
     .replace(/\bamendment\b/giu, "amend.")
     .replace(/\bamend\b\.?/giu, "amend.")
     .replace(/\bsections?\b/giu, "§")
-    .replace(/\bsecs?\.?\b/giu, "§")
-    .replace(/\s*§+\s*/gu, " § ")
-    .replace(/\s*,\s*/gu, ", ")
-    .trim();
+    .replace(/\bsecs?\.?\b/giu, "§");
+
+  return normalizeCommaSeparators(normalizeSectionMarkerSpacing(normalized)).trim();
 }
 
 function canonicalizeState(state: string): string {
@@ -206,10 +205,10 @@ function canonicalizeState(state: string): string {
 }
 
 function canonicalizeSection(section: string): string {
-  return collapseWhitespace(section)
-    .replace(/[.,;:]+$/u, "")
-    .replace(/\s*-\s*/gu, "-")
-    .replace(/\s*,\s*/gu, ", ");
+  const normalized = collapseWhitespace(section)
+    .replace(/[.,;:]+$/u, "");
+
+  return normalizeCommaSeparators(normalizeHyphenSeparators(normalized));
 }
 
 function canonicalizeRuleNumber(rule: string): string {
@@ -228,6 +227,67 @@ function requiredGroup(groups: Record<string, string | undefined>, name: string)
 
 function collapseWhitespace(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
+}
+
+function normalizeHyphenSeparators(value: string): string {
+  return normalizeSingleCharacterSeparators(value, "-", "-");
+}
+
+function normalizeCommaSeparators(value: string): string {
+  return normalizeSingleCharacterSeparators(value, ",", ", ");
+}
+
+function normalizeSingleCharacterSeparators(
+  value: string,
+  separator: string,
+  replacement: string,
+): string {
+  if (!value.includes(separator)) {
+    return value;
+  }
+
+  return value
+    .split(separator)
+    .map((part) => part.trim())
+    .join(replacement);
+}
+
+function normalizeSectionMarkerSpacing(value: string): string {
+  let normalized = "";
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] === " " && value[index + 1] === "§") {
+      index = consumeSectionMarker(value, index + 1);
+      normalized += " § ";
+      continue;
+    }
+
+    if (value[index] === "§") {
+      index = consumeSectionMarker(value, index);
+      normalized += " § ";
+      continue;
+    }
+
+    normalized += value[index];
+    index += 1;
+  }
+
+  return normalized;
+}
+
+function consumeSectionMarker(value: string, markerIndex: number): number {
+  let index = markerIndex;
+
+  while (value[index] === "§") {
+    index += 1;
+  }
+
+  if (value[index] === " ") {
+    index += 1;
+  }
+
+  return index;
 }
 
 function resetPattern(pattern: RegExp): RegExp {

@@ -128,6 +128,7 @@ const EXPECTED_TOOLS = [
   "scrub_metadata",
   "build_exhibit_binder",
   "build_cover_page",
+  "detect_authorities",
   "bates_stamp",
   "bates_stamp_folder",
   "build_production_set",
@@ -540,10 +541,10 @@ describe("MCP end-to-end canary (real connector + real engine)", () => {
     }
   });
 
-  it("advertises exactly the 25 documented tools", async () => {
+  it("advertises exactly the 27 documented tools", async () => {
     const listed = (await enabled.listTools()).tools.map((tool) => tool.name).sort();
     expect(listed).toEqual(EXPECTED_TOOLS);
-    expect(listed).toHaveLength(25);
+    expect(listed).toHaveLength(27);
   });
 
   it("raiopdf_health: the connector's own engine host is reachable", async () => {

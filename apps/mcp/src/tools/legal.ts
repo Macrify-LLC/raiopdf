@@ -16,6 +16,13 @@ import type {
 } from "@raiopdf/engine-api";
 import { CAPTION_STYLES } from "@raiopdf/engine-local";
 import { buildProductionSet } from "@raiopdf/production-set";
+import {
+  authoritiesGarbleGate,
+  buildDocumentFacts,
+  detectAuthorities,
+  reporterTable,
+  type AuthorityKind,
+} from "@raiopdf/rules";
 import { getLocalEngine, type EngineHandle } from "../engine.js";
 import {
   baseOutputSchema,
@@ -25,6 +32,7 @@ import {
 } from "../format.js";
 import { prepareOutput, preparePackageOutputDir, resolveInput } from "../paths.js";
 import { runLocalOutputOp, runLocalSingleOutputOp, writeManyOutputs } from "../ops.js";
+import { extractPageTextByPage, extractTextLayerCoverage } from "../pdfjs-node.js";
 
 const absoluteInput = z.string().describe("Absolute path to an existing PDF file.");
 const absoluteOutput = z
@@ -83,6 +91,7 @@ const applyEditsTempBytesSchema = z.object({
 
 const outputResultSchema = { ...baseOutputSchema, output: z.string().optional() };
 const multiOutputResultSchema = { ...baseOutputSchema, outputs: z.array(z.string()).optional() };
+const authorityKindSchema = z.enum(["case", "statute", "rule", "constitutional", "other"]);
 
 const BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
 const PAGE_NUMBER_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "center" };
@@ -261,6 +270,120 @@ export async function handleBuildCoverPage(
       await engine.close(produced).catch(() => undefined);
     }
   }
+}
+
+// ---- detect_authorities ----
+export const detectAuthoritiesInputSchema = {
+  input: absoluteInput,
+};
+export const detectAuthoritiesOutputSchema = {
+  ...baseOutputSchema,
+  skipped: z.boolean().optional(),
+  guidance: z.string().optional(),
+  garbledPages: z.array(z.number().int().positive()).optional(),
+  summary: z
+    .object({
+      total: z.number().int().nonnegative(),
+      pageCount: z.number().int().nonnegative(),
+      byKind: z.object({
+        case: z.number().int().nonnegative(),
+        statute: z.number().int().nonnegative(),
+        rule: z.number().int().nonnegative(),
+        constitutional: z.number().int().nonnegative(),
+        other: z.number().int().nonnegative(),
+      }),
+    })
+    .optional(),
+  authorities: z
+    .array(
+      z.object({
+        kind: authorityKindSchema,
+        canonical: z.string(),
+        pages: z.array(z.number().int().positive()),
+      }),
+    )
+    .optional(),
+};
+export interface DetectAuthoritiesInput {
+  input: string;
+}
+type AuthorityCounts = Record<AuthorityKind, number>;
+
+export async function handleDetectAuthorities(
+  input: DetectAuthoritiesInput,
+  _engine: EngineHandle,
+): Promise<StructuredToolResult> {
+  const source = await resolveInput(input.input);
+  const bytes = await fs.readFile(source.realPath);
+  const facts = await buildDocumentFacts(bytes, {
+    textExtractor: {
+      extractTextLayerCoverage,
+      extractPageTextByPage,
+    },
+  });
+  const gate = authoritiesGarbleGate(facts);
+
+  if (gate.blocked) {
+    const guidance = gate.guidance ??
+      "The document's hidden searchable text looks garbled; running Make Searchable again is recommended.";
+    return successResult(
+      `Authority detection skipped. ${guidance}`,
+      {
+        skipped: true,
+        guidance,
+        garbledPages: gate.garbledPages.map((pageIndex) => pageIndex + 1),
+        summary: emptyAuthoritySummary(facts.pages.length),
+        authorities: [],
+      },
+    );
+  }
+
+  const pages = facts.pageTextByPage ?? await extractPageTextByPage(bytes);
+  const authorities = detectAuthorities(pages, reporterTable).map((authority) => ({
+    kind: authority.kind,
+    canonical: authority.canonical,
+    pages: authority.hits.map((hit) => hit.pageIndex + 1),
+  }));
+  const summary = summarizeAuthorities(authorities, facts.pages.length || pages.length);
+
+  return successResult(
+    `Detected ${summary.total} legal authorit${summary.total === 1 ? "y" : "ies"} in ${source.originalPath}. Deterministic pattern matching only; review before relying on it.`,
+    {
+      skipped: false,
+      summary,
+      authorities,
+    },
+  );
+}
+
+function emptyAuthoritySummary(pageCount: number): {
+  total: number;
+  pageCount: number;
+  byKind: AuthorityCounts;
+} {
+  return {
+    total: 0,
+    pageCount,
+    byKind: {
+      case: 0,
+      statute: 0,
+      rule: 0,
+      constitutional: 0,
+      other: 0,
+    },
+  };
+}
+
+function summarizeAuthorities(
+  authorities: readonly { kind: AuthorityKind }[],
+  pageCount: number,
+): ReturnType<typeof emptyAuthoritySummary> {
+  const summary = emptyAuthoritySummary(pageCount);
+  summary.total = authorities.length;
+  for (const authority of authorities) {
+    summary.byKind[authority.kind] += 1;
+  }
+  return summary;
 }
 
 // ---- one-shot build_binder ----

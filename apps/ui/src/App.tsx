@@ -117,15 +117,17 @@ import {
   useEngineBridge,
 } from "./hooks/useEngineBridge";
 import {
+  NEW_TAB_BUSY_MESSAGE,
   STREAMED_DOCUMENT_GATE_MESSAGE,
   useDocument,
   type BinderExhibitInput,
   type DocumentState,
+  type OpenFileResult,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useTextEdit } from "./hooks/useTextEdit";
-import { useEditing } from "./hooks/useEditing";
+import { useEditing, type EditingDocumentSnapshot } from "./hooks/useEditing";
 import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import {
@@ -456,6 +458,20 @@ interface PasswordPromptState {
 interface PendingRedaction {
   id: string;
   area: PdfRedactionArea;
+}
+
+/**
+ * Pending per-document UI state stashed on tab switch-away and restored on
+ * switch-back: annotation overlays + form values (useEditing), pending
+ * redaction areas, and the overlay-dirty marker so discarding restored edits
+ * still returns the tab to clean. Keyed by `document.generation` — a
+ * globally monotonic identity [R1-8] — so a snapshot can never apply to a
+ * different document than the one it was captured from.
+ */
+interface TabEditingSnapshot {
+  editing: EditingDocumentSnapshot;
+  pendingRedactions: readonly PendingRedaction[];
+  overlayDirty: { generation: number; marked: boolean } | null;
 }
 
 interface FilingFactsCache {
@@ -1503,6 +1519,11 @@ export function App() {
   }, [filingPack.id, filingPack.maxEnvelopeBytes, filingPack.maxFileBytes]);
   const ocrRunRef = useRef(0);
   const ocrActiveRef = useRef(false);
+  /** One-shot preserve marker, mirroring `preserveFilingProgressForGenerationRef`:
+   * the OCR flow stamps the generation it is about to reopen/replace FROM so the
+   * generation-change effect keeps its in-flight ocrState (e.g. the "done"
+   * message) instead of resetting it. */
+  const preserveOcrStateForGenerationRef = useRef<number | null>(null);
   const pendingOcrTypeRef = useRef<OcrType>("skip-text");
   const savingRef = useRef(false);
   const startupFileTakenRef = useRef(false);
@@ -1511,6 +1532,7 @@ export function App() {
   const redactionIdRef = useRef(0);
   const documentGenerationRef = useRef<number>(document.generation);
   const legalStateDocumentGenerationRef = useRef<number>(document.generation);
+  const tabEditingSnapshotsRef = useRef(new Map<number, TabEditingSnapshot>());
   const preserveFilingProgressForGenerationRef = useRef<number | null>(null);
   const scannerRunRef = useRef(0);
   const filingRunRef = useRef(0);
@@ -1578,8 +1600,21 @@ export function App() {
     const preserveFilingProgress =
       preserveFilingProgressForGenerationRef.current === previousGeneration;
     preserveFilingProgressForGenerationRef.current = null;
+    const preserveOcrState =
+      preserveOcrStateForGenerationRef.current === previousGeneration;
+    preserveOcrStateForGenerationRef.current = null;
     scannerRunRef.current += 1;
     filingRunRef.current += 1;
+    if (!preserveOcrState) {
+      // A generation change the OCR flow didn't announce makes any running
+      // OCR stale by construction. Reset the OCR UI (the same way
+      // filingProgress is reset) so a mid-run mutation can never leave
+      // ocrState frozen at processing/verifying, pinning longProcessRunning
+      // and wedging Prepare-for-Filing/ToA/Combine-Exhibits/text-edit.
+      ocrRunRef.current += 1;
+      ocrActiveRef.current = false;
+      setOcrState({ phase: "idle", message: null });
+    }
     setPendingRedactions([]);
     setActiveTextEdit(false);
     setTextEditAnnotationPrompt(false);
@@ -1604,6 +1639,7 @@ export function App() {
   const resetVisibleDocumentAppState = useCallback((next: "document" | "empty") => {
     ocrRunRef.current += 1;
     ocrActiveRef.current = false;
+    preserveOcrStateForGenerationRef.current = null;
     setOcrState({ phase: "idle", message: null });
     pathOpCancelRequestsRef.current.clear();
     setPathOpCancelState(null);
@@ -1616,15 +1652,62 @@ export function App() {
     setRepairCandidate(null);
   }, [resetLegalState]);
 
+  /**
+   * Stash the visible document's pending editing state (annotation overlays,
+   * form values, pending redactions, overlay-dirty marker) before another
+   * tab takes over, keyed by `document.generation`. The source-change effect
+   * below restores it on switch-back instead of resetting, so a tab switch
+   * never silently destroys pending work — and the tab's dirty flag keeps
+   * describing real, restorable edits.
+   */
+  const stashVisibleDocumentEditingState = useCallback(() => {
+    if (!document.source) {
+      return;
+    }
+
+    const snapshots = tabEditingSnapshotsRef.current;
+    // Drop entries whose document no longer lives in any tab (generations
+    // are never reused, so stale entries can only waste memory, not
+    // restore into the wrong document).
+    const liveGenerations = new Set(documentTabs.map((tab) => tab.document.generation));
+    for (const generation of [...snapshots.keys()]) {
+      if (!liveGenerations.has(generation)) {
+        snapshots.delete(generation);
+      }
+    }
+
+    if (!editing.hasUnsavedEdits && pendingRedactions.length === 0) {
+      // Nothing worth restoring; switch-back re-imports annotations from
+      // the document itself.
+      snapshots.delete(document.generation);
+      return;
+    }
+
+    snapshots.set(document.generation, {
+      editing: editing.captureDocumentState(),
+      pendingRedactions,
+      overlayDirty: overlayDirtyRef.current,
+    });
+  }, [document.generation, document.source, documentTabs, editing, pendingRedactions]);
+
   const handleTabSelected = useCallback((tabId: string) => {
     if (tabId === activeTabId) {
       return;
     }
 
+    if (longProcessRunning) {
+      // A delegated long op resolves against the active document's
+      // (openToken, generation); switching tabs mid-run swaps the open
+      // token and would silently discard the finished output.
+      setError("Finish the current document operation before switching tabs.");
+      return;
+    }
+
     if (switchDocumentTab(tabId)) {
+      stashVisibleDocumentEditingState();
       resetVisibleDocumentAppState("document");
     }
-  }, [activeTabId, resetVisibleDocumentAppState, switchDocumentTab]);
+  }, [activeTabId, longProcessRunning, resetVisibleDocumentAppState, setError, stashVisibleDocumentEditingState, switchDocumentTab]);
 
   // Document identity is (openToken, generation) [R1-8] — never a
   // Uint8Array reference, which streamed documents don't have.
@@ -1641,7 +1724,18 @@ export function App() {
     (
       source: Exclude<OpenedFileSource, { kind: "memory" }>,
       options: { openInNewTab?: boolean; markDirty?: boolean } = {},
-    ) => {
+    ): Promise<OpenFileResult> => {
+      const opensNewTab = Boolean(options.openInNewTab && document.source);
+      if (opensNewTab && longProcessRunning) {
+        // Opening into a new tab implicitly switches tabs, which would
+        // silently discard the finished output of the delegated op that is
+        // still resolving against the active document.
+        setError(NEW_TAB_BUSY_MESSAGE);
+        return Promise.resolve({ status: "failed", error: NEW_TAB_BUSY_MESSAGE });
+      }
+      if (opensNewTab) {
+        stashVisibleDocumentEditingState();
+      }
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
@@ -1673,7 +1767,7 @@ export function App() {
         return result;
       });
     },
-    [document.source, openStreamedFile, resetLegalState],
+    [document.source, longProcessRunning, openStreamedFile, resetLegalState, setError, stashVisibleDocumentEditingState],
   );
 
   /**
@@ -1986,6 +2080,7 @@ export function App() {
   // swaps reset and re-import annotations. Engine-handle churn for the same
   // source must not force a full annotation re-parse.
   const resetEditingForDocument = editing.resetForDocument;
+  const restoreEditingDocumentState = editing.restoreDocumentState;
   const loadImportedAnnotations = editing.loadImportedAnnotations;
   const editingDocumentSourceRef = useRef<typeof document.source | undefined>(undefined);
   const importedAnnotationsSourceRef = useRef<typeof document.source | undefined>(undefined);
@@ -1995,6 +2090,19 @@ export function App() {
     editingDocumentSourceRef.current = document.source;
 
     if (sourceChanged) {
+      const snapshot = tabEditingSnapshotsRef.current.get(document.generation);
+      if (snapshot && document.source !== null) {
+        // Switch-back to a document whose pending editing state was stashed
+        // on switch-away: restore instead of resetting. The snapshot already
+        // contains the imported annotations, so skip the re-import below.
+        tabEditingSnapshotsRef.current.delete(document.generation);
+        restoreEditingDocumentState(snapshot.editing);
+        setPendingRedactions([...snapshot.pendingRedactions]);
+        overlayDirtyRef.current = snapshot.overlayDirty;
+        importedAnnotationsSourceRef.current = document.source;
+        return;
+      }
+
       resetEditingForDocument();
       importedAnnotationsSourceRef.current = undefined;
     }
@@ -2032,10 +2140,12 @@ export function App() {
     };
   }, [
     document.engineHandle,
+    document.generation,
     document.source,
     loadImportedAnnotations,
     readRaioPdfAnnotations,
     resetEditingForDocument,
+    restoreEditingDocumentState,
   ]);
 
   const selectEditTool = useCallback(
@@ -2481,6 +2591,15 @@ export function App() {
       const isCurrentStreamedRun = () => (
         ocrRunRef.current === runId && isCurrentDocument(sourceOpenToken, sourceGeneration)
       );
+      // Stale-exit UI reset: the document changed under this still-latest
+      // run, so nothing may stay frozen at processing/verifying (that pins
+      // longProcessRunning and wedges the legal tools until a tab switch).
+      // When a NEWER run owns ocrState (runId superseded), leave it alone.
+      const resetOcrUiForStaleRun = () => {
+        if (ocrRunRef.current === runId) {
+          setOcrState({ phase: "idle", message: null });
+        }
+      };
 
       setOcrState({
         phase: "starting-engine",
@@ -2523,6 +2642,7 @@ export function App() {
           await waitForUiPaint();
           const runPlan = await resolveOcrRunPlan();
           if (!isCurrentStreamedRun()) {
+            resetOcrUiForStaleRun();
             return;
           }
 
@@ -2539,6 +2659,7 @@ export function App() {
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             outputToReleaseOnError = null;
+            resetOcrUiForStaleRun();
             return;
           }
 
@@ -2561,6 +2682,7 @@ export function App() {
           if (!isCurrentStreamedRun()) {
             await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             outputToReleaseOnError = null;
+            resetOcrUiForStaleRun();
             return;
           }
 
@@ -2574,6 +2696,10 @@ export function App() {
             return;
           }
 
+          // The reopen bumps the generation; announce it so the
+          // generation-change effect preserves the in-flight OCR UI instead
+          // of resetting it before the "done" message lands.
+          preserveOcrStateForGenerationRef.current = sourceGeneration;
           const reopened = await openPathOpOutput(
             output,
             {
@@ -2587,6 +2713,17 @@ export function App() {
           );
           outputToReleaseOnError = null;
           if (reopened.status !== "opened") {
+            preserveOcrStateForGenerationRef.current = null;
+            if (isCurrentStreamedRun()) {
+              setOcrState({
+                phase: "error",
+                message: reopened.status === "failed"
+                  ? reopened.error
+                  : "OCR finished, but the result could not be reopened. The document was left unchanged.",
+              });
+            } else {
+              resetOcrUiForStaleRun();
+            }
             return;
           }
 
@@ -2596,11 +2733,16 @@ export function App() {
             tone: verification.status === "warning" ? "caution" : "ok",
           });
         } catch (error: unknown) {
+          // A throw after the preserve marker was stamped must disarm it —
+          // otherwise the next unrelated generation change would be
+          // preserved once by mistake.
+          preserveOcrStateForGenerationRef.current = null;
           if (outputToReleaseOnError) {
             await pathOpReleaseOutput(outputToReleaseOnError.outputGrant).catch(() => undefined);
           }
 
           if (!isCurrentStreamedRun()) {
+            resetOcrUiForStaleRun();
             return;
           }
 
@@ -2750,6 +2892,10 @@ export function App() {
           return;
         }
 
+        // The commit bumps the generation; announce it so the
+        // generation-change effect keeps the in-flight OCR UI alive for the
+        // "done" message instead of resetting it.
+        preserveOcrStateForGenerationRef.current = sourceGeneration;
         const replaced = await replaceBytes(workflowResult.bytes, {
           dirty: true,
           hasTextLayer: true,
@@ -2762,6 +2908,10 @@ export function App() {
           expectedOpenToken: sourceOpenToken,
           expectedGeneration: sourceGeneration,
         });
+
+        if (replaced !== "replaced") {
+          preserveOcrStateForGenerationRef.current = null;
+        }
 
         if (!isCurrentRun()) {
           return;
@@ -2939,6 +3089,17 @@ export function App() {
 
   const openOpenedFile = useCallback(
     (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
+      const opensNewTab = Boolean(options.openInNewTab && document.source);
+      if (opensNewTab && longProcessRunning) {
+        // Opening into a new tab implicitly switches tabs, which would
+        // silently discard the finished output of the delegated op that is
+        // still resolving against the active document.
+        setError(NEW_TAB_BUSY_MESSAGE);
+        return;
+      }
+      if (opensNewTab) {
+        stashVisibleDocumentEditingState();
+      }
       ocrRunRef.current += 1;
       ocrActiveRef.current = false;
       setOcrState({ phase: "idle", message: null });
@@ -2977,7 +3138,7 @@ export function App() {
         }
       });
     },
-    [document.source, openDocumentFile, resetLegalState],
+    [document.source, longProcessRunning, openDocumentFile, resetLegalState, setError, stashVisibleDocumentEditingState],
   );
 
   const cancelPasswordPrompt = useCallback(() => {
@@ -3232,6 +3393,9 @@ export function App() {
     }
 
     void closeDocumentTab(tabId).then((closed) => {
+      if (closed) {
+        tabEditingSnapshotsRef.current.delete(tab.document.generation);
+      }
       if (closed && closesVisibleDocument) {
         resetVisibleDocumentAppState(nextVisibleState);
       }
@@ -3963,6 +4127,14 @@ export function App() {
       return;
     }
 
+    if (longProcessRunning) {
+      // Moving a tab out switches the visible document mid-run, which would
+      // silently discard the finished output of the delegated op that is
+      // still resolving against the active document.
+      setError("Finish the current document operation before moving this document to a new window.");
+      return;
+    }
+
     if (tab.document.dirty) {
       const fileName = tab.document.fileName ?? "this document";
       const confirmed = window.confirm(
@@ -3978,13 +4150,14 @@ export function App() {
       if (!switched) {
         return;
       }
+      stashVisibleDocumentEditingState();
       resetVisibleDocumentAppState("document");
       pendingMoveToNewWindowTabIdRef.current = tabId;
       return;
     }
 
     void moveActiveTabToNewWindow(tabId, tab.document.filePath as FileGrant, tab.document.dirty);
-  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, resetVisibleDocumentAppState, setError, switchDocumentTab]);
+  }, [activeTabId, documentTabs, longProcessRunning, moveActiveTabToNewWindow, resetVisibleDocumentAppState, setError, stashVisibleDocumentEditingState, switchDocumentTab]);
 
   useEffect(() => {
     const pendingTabId = pendingMoveToNewWindowTabIdRef.current;
@@ -4108,6 +4281,9 @@ export function App() {
         const output = await pathOpBuildBinder(pathOpsGrant, exhibits, options, fileName);
 
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          // Stale exits before openPathOpOutput must release the output
+          // grant themselves — nothing downstream ever sees it.
+          await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
           setBinderProgress({ running: false, message: null, detail: null });
           return true;
         }
@@ -4186,9 +4362,12 @@ export function App() {
 
   // The print dialog holds the grant it was opened with — close it when the
   // document changes so it can never print a stale grant (the #127 stale-
-  // guard discipline, applied at the dialog boundary).
+  // guard discipline, applied at the dialog boundary). The page-range prompt
+  // is document-bound the same way: closing it here also unsticks a prompt
+  // left at running=true when the document was replaced mid-extraction.
   useEffect(() => {
     setPrintDialogOpen(false);
+    setPrintRangePrompt(null);
   }, [document.generation]);
 
   const cancelPrintRangePrompt = useCallback(() => {
@@ -4215,6 +4394,9 @@ export function App() {
     void extractPrintableRange(grant, rangeInput, document.pageCount, baseName)
       .then((result) => {
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          // The prompt belongs to a document that no longer exists — close
+          // it rather than leaving it stuck at "running".
+          setPrintRangePrompt(null);
           return;
         }
 
@@ -4701,6 +4883,8 @@ export function App() {
         const result = await pathOpRedactAreas(pathOpsGrant, areas);
 
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          // Same leak class as the other pre-openPathOpOutput stale exits.
+          await pathOpReleaseOutput(result.outputGrant).catch(() => undefined);
           return;
         }
 
@@ -4832,8 +5016,10 @@ export function App() {
           const output = await pathOpBatesStamp(pathOpsGrant, options);
 
           // Stale guard (same pattern as the post-#127 funnels): a slow op
-          // must never reopen its output over a newer document.
+          // must never reopen its output over a newer document. Release the
+          // orphaned output grant — nothing downstream ever sees it.
           if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return true;
           }
 
@@ -4937,6 +5123,7 @@ export function App() {
           const output = await pathOpPageNumbers(pathOpsGrant, options);
 
           if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return false;
           }
 
@@ -5032,6 +5219,7 @@ export function App() {
           const output = await pathOpWatermark(pathOpsGrant, options);
 
           if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return false;
           }
 
@@ -5130,6 +5318,7 @@ export function App() {
           // A slow op must never clobber a document the user opened while it
           // ran (Codex review, PR #127) — same stale guard as the byte branch.
           if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return false;
           }
 
@@ -5262,6 +5451,7 @@ export function App() {
         // Stale guard (Codex review, PR #127): don't reopen an output for a
         // document the user has since replaced.
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+          await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
           return false;
         }
 
@@ -5399,6 +5589,7 @@ export function App() {
           // Stale guard (Codex review, PR #127): don't reopen an output for
           // a document the user has since replaced.
           if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+            await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
             return false;
           }
 
@@ -5530,7 +5721,9 @@ export function App() {
         return false;
       }
 
-      const insertAt = [...selectedPageIndexes].sort((left, right) => left - right)[0] ?? document.currentPage;
+      // Fallback is 0-based like the selection indexes — `currentPage` is
+      // 1-based (OrganizeWorkspace applies the same `- 1`).
+      const insertAt = [...selectedPageIndexes].sort((left, right) => left - right)[0] ?? (document.currentPage - 1);
       setSidecarStatus({
         running: true,
         message: "Inserting image pages...",
@@ -7034,6 +7227,23 @@ export function App() {
     [pdfDocument],
   );
 
+  // Production Set and Batch Cleanup run path-based against the on-disk
+  // file. When the open document is dirty or has unsaved in-memory edits,
+  // its disk bytes are the pre-edit content — seeding its path would
+  // silently Bates-stamp / clean stale bytes. Same discipline as
+  // `engineDelegatedGrant` (refuses a grant while dirty) and exportDocx's
+  // "Save the current PDF" gate: don't seed, and say why.
+  const currentFileHasUnsavedChanges = document.dirty || editing.hasUnsavedEdits;
+  const currentFileForPathWorkspaces = document.source && !currentFileHasUnsavedChanges
+    ? {
+        name: document.fileName ?? "Untitled.pdf",
+        path: document.filePath,
+      }
+    : null;
+  const currentFileUnsavedNotice = document.source && currentFileHasUnsavedChanges
+    ? "The open document has unsaved changes, so it was not added. Save the current PDF first, then reopen this tool to include it."
+    : null;
+
   const workspace = activeLegalTool === "case-caption" ? (
     <CaptionWorkspace
       document={document}
@@ -7173,10 +7383,8 @@ export function App() {
           onHelp={() => openHelp("batch-cleanup")}
         >
           <BatchCleanupWorkspace
-            currentFile={document.source ? {
-              name: document.fileName ?? "Untitled.pdf",
-              path: document.filePath,
-            } : null}
+            currentFile={currentFileForPathWorkspaces}
+            currentFileNotice={currentFileUnsavedNotice}
             packs={AVAILABLE_FILING_PACKS}
             progress={batchCleanupProgress}
             onAddFile={openBatchCleanupFile}
@@ -7197,10 +7405,8 @@ export function App() {
           onHelp={() => openHelp("production-set")}
         >
           <ProductionSetWorkspace
-            currentFile={document.source ? {
-              name: document.fileName ?? "Untitled.pdf",
-              path: document.filePath,
-            } : null}
+            currentFile={currentFileForPathWorkspaces}
+            currentFileNotice={currentFileUnsavedNotice}
             currentPageCount={document.pageCount}
             progress={productionProgress}
             onAddFile={openProductionFile}

@@ -450,8 +450,11 @@ export function isLetterPortrait({ width, height }: PageSize): boolean {
 }
 
 function encodeTextAsHex(text: string): string {
-  return `<${[...new TextEncoder().encode(text)]
-    .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+  // PDF simple fonts draw text one byte per glyph (WinAnsi/Latin-1), so encode
+  // single-byte — NOT UTF-8, which would turn "§" (U+00A7) into two bytes (C2A7)
+  // and never match the single 0xA7 byte the page content stream actually holds.
+  return `<${[...text]
+    .map((char) => (char.charCodeAt(0) & 0xff).toString(16).padStart(2, "0").toUpperCase())
     .join("")}>`;
 }
 

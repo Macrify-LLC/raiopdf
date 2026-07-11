@@ -214,7 +214,12 @@ test("Error path: an unreachable engine surfaces a user-facing error, not a sile
   await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
   await page.getByRole("button", { name: "Make searchable", exact: true }).click();
 
-  await expect(page.getByText(/could not|couldn't|failed|unavailable|try again/i)).toBeVisible({ timeout: 60_000 });
+  // Scope to the alert message itself — the loose text match also hit the
+  // "Try again" button, which is a strict-mode collision, not a second error.
+  await expect(page.getByRole("alert")).toContainText(
+    /could not|couldn't|failed|unavailable/i,
+    { timeout: 60_000 },
+  );
   // The failure must be observable (user message above). The canvas stays put —
   // no crash to a blank app.
   await expect(mainCanvas(page)).toBeVisible();

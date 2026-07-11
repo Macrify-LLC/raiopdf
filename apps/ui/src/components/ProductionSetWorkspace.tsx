@@ -63,6 +63,12 @@ export interface ProductionSetSourceFile {
 
 export interface ProductionSetWorkspaceProps {
   currentFile: ProductionSetSourceFile | null;
+  /**
+   * Why the open document was NOT seeded into the production order (e.g. it
+   * has unsaved changes, so its on-disk bytes are stale). Shown as the
+   * initial status message so the omission is visible, never silent.
+   */
+  currentFileNotice?: string | null | undefined;
   currentPageCount: number;
   progress: ProductionSetProgress;
   onAddFile: () => Promise<FileAddResult | null>;
@@ -79,6 +85,7 @@ const DESIGNATION_OPTIONS = [
 
 export function ProductionSetWorkspace({
   currentFile,
+  currentFileNotice,
   currentPageCount,
   progress,
   onAddFile,
@@ -101,7 +108,7 @@ export function ProductionSetWorkspace({
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
   const [addingFile, setAddingFile] = useState(false);
   const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
-  const [localMessage, setLocalMessage] = useState<string | null>(null);
+  const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
   const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
   const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
   const lastNumber = start + Math.max(0, totalPages - 1);

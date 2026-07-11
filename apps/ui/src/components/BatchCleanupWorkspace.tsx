@@ -73,6 +73,12 @@ export interface BatchCleanupSourceFile {
 
 export interface BatchCleanupWorkspaceProps {
   currentFile: BatchCleanupSourceFile | null;
+  /**
+   * Why the open document was NOT seeded into the queue (e.g. it has
+   * unsaved changes, so its on-disk bytes are stale). Shown as the initial
+   * status message so the omission is visible, never silent.
+   */
+  currentFileNotice?: string | null | undefined;
   packs: readonly JurisdictionPack[];
   progress: BatchCleanupProgress;
   /** Add flow rides the `readFileForAdd` choke point [R7-2]: descriptor adds
@@ -107,6 +113,7 @@ const STATUS_HELP: Record<BatchCleanupStatus, string> = {
 
 export function BatchCleanupWorkspace({
   currentFile,
+  currentFileNotice,
   packs,
   progress,
   onAddFile,
@@ -126,7 +133,7 @@ export function BatchCleanupWorkspace({
   const [splitBySize, setSplitBySize] = useState(false);
   const [splitSizeMb, setSplitSizeMb] = useState(25);
   const [normalizePages, setNormalizePages] = useState(false);
-  const [localMessage, setLocalMessage] = useState<string | null>(null);
+  const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
   const canRun = files.length > 0 && outputDir.trim().length > 0 && !progress.running;
 
   async function addFile() {

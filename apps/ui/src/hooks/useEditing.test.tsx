@@ -86,6 +86,39 @@ describe("useEditing pin state", () => {
     expect(statuses(getEditing())).toEqual({ one: "draft", two: "draft" });
   });
 
+  it("captures and restores document-bound state across a reset (tab switch round-trip)", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().addEdit(textBoxEdit("kept-edit"));
+      getEditing().setFormValue("client-name", "Smith");
+      await Promise.resolve();
+    });
+
+    expect(getEditing().hasUnsavedEdits).toBe(true);
+
+    let snapshot: ReturnType<EditingState["captureDocumentState"]> | undefined;
+    await act(async () => {
+      snapshot = getEditing().captureDocumentState();
+      // Simulate switching away to another tab's document.
+      getEditing().resetForDocument();
+      await Promise.resolve();
+    });
+
+    expect(getEditing().pendingEdits).toHaveLength(0);
+    expect(getEditing().hasUnsavedEdits).toBe(false);
+
+    await act(async () => {
+      // Simulate switching back.
+      getEditing().restoreDocumentState(snapshot!);
+      await Promise.resolve();
+    });
+
+    expect(statuses(getEditing())).toEqual({ "kept-edit": "draft" });
+    expect(getEditing().formValues).toEqual({ "client-name": "Smith" });
+    expect(getEditing().hasUnsavedEdits).toBe(true);
+  });
+
   function renderHookValue(): () => EditingState {
     let latest: EditingState | null = null;
     render(<Harness onValue={(value) => { latest = value; }} />);

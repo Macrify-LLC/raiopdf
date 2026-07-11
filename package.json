@@ -23,7 +23,7 @@
     "engine:vendor": "bash engine/vendor.sh",
     "engine:build": "bash engine/build.sh",
     "engine:verify": "bash engine/verify-live.sh",
-    "canary": "pnpm canary:ui && pnpm canary:mcp",
+    "canary": "node scripts/run-canary.mjs",
     "canary:ui": "pnpm --filter @raiopdf/ui test:canary",
     "canary:mcp": "pnpm build:mcp-runtime && pnpm --filter @raiopdf/mcp test:canary",
     "smoke:ocr-progress-wrapper": "node scripts/smoke-ocr-progress-wrapper.mjs",

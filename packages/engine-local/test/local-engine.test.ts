@@ -16,7 +16,11 @@ import {
   StandardFonts,
 } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
-import { readPdfOutline, writePdfOutlineInPlace } from "@raiopdf/engine-pdf-lib";
+import {
+  readPdfOutline,
+  writePdfAIdentificationInPlace,
+  writePdfOutlineInPlace,
+} from "@raiopdf/engine-pdf-lib";
 import {
   CAPTION_STYLES,
   createLocalPdfEngine,
@@ -191,6 +195,54 @@ describe("LocalPdfEngine", () => {
     expect(bounds.maxY - bounds.minY).toBeCloseTo(792, 5);
   });
 
+  it("keeps filled form field values when normalizing pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createFilledFormPdf("JANE Q. DOE"));
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const outputPdf = await PDFDocument.load(bytes);
+
+    // The interactive field is gone (flattened), but its value is baked into
+    // the drawn page content rather than silently dropped with the /Annots.
+    expect(outputPdf.getForm().getFields()).toHaveLength(0);
+    expect(outputPdf.getPage(0).node.Annots()?.size() ?? 0).toBe(0);
+    expect(await readAllDecodedStreams(bytes)).toContain(encodeTextAsHexFragment("JANE Q. DOE"));
+  });
+
+  it("bakes third-party annotation appearance streams when normalizing pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithThirdPartyHighlight({ hidden: false }));
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const outputPdf = await PDFDocument.load(bytes);
+
+    expect(outputPdf.getPage(0).node.Annots()?.size() ?? 0).toBe(0);
+    expect(await readAllDecodedStreams(bytes)).toContain(THIRD_PARTY_APPEARANCE_MARKER);
+  });
+
+  it("does not bake hidden annotations when normalizing pages", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdfWithThirdPartyHighlight({ hidden: true }));
+
+    const normalized = await engine.normalizePages(document, {
+      targetSize: { w: 8.5, h: 11, in: true },
+      orientation: "portrait",
+    });
+    const bytes = await engine.saveToBytes(normalized);
+    const outputPdf = await PDFDocument.load(bytes);
+
+    expect(outputPdf.getPage(0).node.Annots()?.size() ?? 0).toBe(0);
+    expect(await readAllDecodedStreams(bytes)).not.toContain(THIRD_PARTY_APPEARANCE_MARKER);
+  });
+
   it("splits documents by max bytes with greedy page-boundary packing", async () => {
     const engine = createLocalPdfEngine();
     const sourceBytes = await createPdf([[200, 300], [210, 310], [220, 320]]);
@@ -267,6 +319,42 @@ describe("LocalPdfEngine", () => {
     const bound = result.parts.length * (3 + Math.ceil(Math.log2(pageCount)));
     expect(serializations).toBeLessThanOrEqual(bound);
     expect(serializations).toBeLessThan(pageCount);
+  });
+
+  it("carries catalog XMP metadata and scrubbed Info onto split parts", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createScrubbedPdfAPdf(3));
+
+    // A tiny cap forces one oversized part per page, deterministically.
+    const result = await engine.splitByMaxBytes(document, 1000);
+
+    expect(result.parts).toHaveLength(3);
+    for (const part of result.parts) {
+      const partPdf = await PDFDocument.load(await engine.saveToBytes(part.document), {
+        updateMetadata: false,
+      });
+      const metadata = partPdf.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+
+      expect(metadata).toBeDefined();
+      expect(decodePdfStream(metadata!)).toContain("pdfaid:part");
+      expect(partPdf.context.trailerInfo.Info).toBeUndefined();
+    }
+  });
+
+  it("carries the first source's XMP metadata onto merged output", async () => {
+    const engine = createLocalPdfEngine();
+    const first = await engine.open(await createScrubbedPdfAPdf(1));
+    const second = await engine.open(await createScrubbedPdfAPdf(1));
+
+    const { document: merged } = await engine.merge([first, second]);
+    const mergedPdf = await PDFDocument.load(await engine.saveToBytes(merged), {
+      updateMetadata: false,
+    });
+    const metadata = mergedPdf.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+
+    expect(metadata).toBeDefined();
+    expect(decodePdfStream(metadata!)).toContain("pdfaid:part");
+    expect(mergedPdf.context.trailerInfo.Info).toBeUndefined();
   });
 
   it("merges documents in order", async () => {
@@ -1211,6 +1299,72 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
   }
 
   return pdf.save();
+}
+
+const THIRD_PARTY_APPEARANCE_MARKER = "0.9 0.1 0.2 rg";
+
+async function createFilledFormPdf(value: string): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const field = pdf.getForm().createTextField("client.name");
+
+  field.setText(value);
+  field.addToPage(page, { x: 72, y: 700, width: 240, height: 24 });
+
+  return pdf.save();
+}
+
+async function createPdfWithThirdPartyHighlight(options: { hidden: boolean }): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const appearance = pdf.context.stream(`${THIRD_PARTY_APPEARANCE_MARKER}\n0 0 120 16 re\nf`, {
+    Type: "XObject",
+    Subtype: "Form",
+    BBox: [0, 0, 120, 16],
+  });
+  const annotation = pdf.context.obj({
+    Type: "Annot",
+    Subtype: "Highlight",
+    Rect: [72, 640, 192, 656],
+    QuadPoints: [72, 656, 192, 656, 72, 640, 192, 640],
+    ...(options.hidden ? { F: 2 } : {}),
+    AP: { N: pdf.context.register(appearance) },
+  }) as PDFDict;
+
+  page.node.addAnnot(pdf.context.register(annotation));
+
+  return pdf.save();
+}
+
+async function createScrubbedPdfAPdf(pageCount: number): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+
+  for (let index = 0; index < pageCount; index += 1) {
+    pdf.addPage([200, 300]);
+  }
+
+  writePdfAIdentificationInPlace(pdf, { part: "2", conformance: "B" });
+  // Simulate a scrubbed source: no document Info dictionary at all.
+  delete pdf.context.trailerInfo.Info;
+
+  return pdf.save();
+}
+
+async function readAllDecodedStreams(bytes: Uint8Array): Promise<string> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  const decoded: string[] = [];
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFStream) {
+      try {
+        decoded.push(decodePdfStream(object));
+      } catch {
+        // Skip streams with filters decodePDFRawStream can't handle.
+      }
+    }
+  }
+
+  return decoded.join("\n");
 }
 
 async function createTextPdf(pageLabels: readonly string[]): Promise<Uint8Array> {

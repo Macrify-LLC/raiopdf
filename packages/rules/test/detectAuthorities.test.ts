@@ -85,6 +85,76 @@ describe("detectAuthorities", () => {
       "U.S. Const. art. III, § 2": { kind: "constitutional", pages: [0] },
     });
   });
+
+  it("keeps ALL-CAPS and non-breaking-space case citations instead of dropping them", () => {
+    const pages: PageTextByPage = [
+      { pageIndex: 0, text: "THE COURT ERRED. SEE 123 SO. 2D 456 AND 550 F.3D 1214." },
+      { pageIndex: 1, text: "See 123 So. 2d 456 and 123 So. 2d 456 again." },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "123 So. 2d 456": { kind: "case", pages: [0, 1] },
+      "550 F.3d 1214": { kind: "case", pages: [0] },
+    });
+  });
+
+  it("emits one authority per section for §§ lists and dedupes with standalone cites", () => {
+    const pages: PageTextByPage = [
+      {
+        pageIndex: 0,
+        text: "Jurisdiction rests on 28 U.S.C. §§ 1331, 1332. Immunity is waived by Fla. Stat. §§ 768.28(1), (5).",
+      },
+      { pageIndex: 1, text: "Diversity jurisdiction under 28 U.S.C. § 1332 is contested." },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "28 U.S.C. § 1331": { kind: "statute", pages: [0] },
+      "28 U.S.C. § 1332": { kind: "statute", pages: [0, 1] },
+      "Fla. Stat. § 768.28(1)": { kind: "statute", pages: [0] },
+      "Fla. Stat. § 768.28(5)": { kind: "statute", pages: [0] },
+    });
+  });
+
+  it("does not swallow prose after a section list", () => {
+    const pages: PageTextByPage = [
+      { pageIndex: 0, text: "Under 28 U.S.C. §§ 1331, and the court held otherwise." },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "28 U.S.C. § 1331": { kind: "statute", pages: [0] },
+    });
+  });
+
+  it("collapses every spelling of a constitutional provision to one canonical row", () => {
+    const pages: PageTextByPage = [
+      { pageIndex: 0, text: "U.S. Const. art. III, § 2 controls." },
+      { pageIndex: 1, text: "U.S. Const. art. III § 2 controls." },
+      { pageIndex: 2, text: "U.S. Const. art. III sec. 2 controls." },
+      { pageIndex: 3, text: "U.S. Const. article III section 2 controls." },
+    ];
+
+    const detected = detectAuthorities(pages, reporterTable);
+
+    expect(canonicalMap(detected)).toEqual({
+      "U.S. Const. art. III, § 2": { kind: "constitutional", pages: [0, 1, 2, 3] },
+    });
+    for (const authority of detected) {
+      expect(authority.canonical).not.toContain("§ .");
+    }
+  });
+
+  it("detects the post-2021 Florida general practice and judicial administration rules", () => {
+    const pages: PageTextByPage = [
+      {
+        pageIndex: 0,
+        text: "Confidentiality is governed by Fla. R. Gen. Prac. & Jud. Admin. 2.425 and Florida Rule of General Practice and Judicial Administration 2.425.",
+      },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "Fla. R. Gen. Prac. & Jud. Admin. 2.425": { kind: "rule", pages: [0] },
+    });
+  });
 });
 
 describe("authoritiesGarbleGate", () => {

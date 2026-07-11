@@ -14,6 +14,13 @@ export type ReporterTable = Readonly<Record<string, ReporterEntry>>;
 export const reporterTable = reportersGeneratedJson as ReporterTable;
 
 const compactReporterIndex = new Map<string, ReporterEntry>();
+// Case-folded fallback for matches the citation regex accepted
+// case-insensitively (e.g. an ALL-CAPS heading citing "123 SO. 2D 456").
+// Exact-case lookups always win; this index is only consulted when they miss.
+// Case-folding is safe for this table: it introduces no collisions between
+// different reporter series beyond the ones the exact-case compact index
+// already has (asserted by a test over the whole generated table).
+const caseFoldedReporterIndex = new Map<string, ReporterEntry>();
 
 for (const [lookupKey, entry] of Object.entries(reporterTable)) {
   indexReporterAlias(lookupKey, entry);
@@ -25,7 +32,7 @@ export function normalizeReporterAbbreviation(abbreviation: string): string {
   let pendingSpace = false;
 
   for (const char of abbreviation.trim()) {
-    if (isAsciiWhitespace(char)) {
+    if (isWhitespace(char)) {
       pendingSpace = normalized.length > 0;
       continue;
     }
@@ -43,24 +50,27 @@ export function normalizeReporterAbbreviation(abbreviation: string): string {
 
 export function lookupReporter(abbreviation: string): ReporterEntry | undefined {
   const normalized = normalizeReporterAbbreviation(abbreviation);
+  const compacted = compactReporterAbbreviation(normalized);
 
   return (
-    reporterTable[normalized] ?? compactReporterIndex.get(compactReporterAbbreviation(normalized))
+    reporterTable[normalized]
+      ?? compactReporterIndex.get(compacted)
+      ?? caseFoldedReporterIndex.get(compacted.toLowerCase())
   );
 }
 
 function indexReporterAlias(abbreviation: string, entry: ReporterEntry): void {
-  compactReporterIndex.set(
-    compactReporterAbbreviation(normalizeReporterAbbreviation(abbreviation)),
-    entry,
-  );
+  const compacted = compactReporterAbbreviation(normalizeReporterAbbreviation(abbreviation));
+
+  compactReporterIndex.set(compacted, entry);
+  caseFoldedReporterIndex.set(compacted.toLowerCase(), entry);
 }
 
 function compactReporterAbbreviation(abbreviation: string): string {
   let compacted = "";
 
   for (const char of abbreviation) {
-    if (!isAsciiWhitespace(char)) {
+    if (!isWhitespace(char)) {
       compacted += char;
     }
   }
@@ -68,8 +78,9 @@ function compactReporterAbbreviation(abbreviation: string): string {
   return compacted;
 }
 
-function isAsciiWhitespace(char: string): boolean {
-  return (
-    char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\f"
-  );
+// Unicode-aware: Bluebook-formatted documents routinely carry non-breaking
+// (U+00A0) and narrow non-breaking (U+202F) spaces inside reporter
+// abbreviations, and the citation regex already matches them via `\s`.
+function isWhitespace(char: string): boolean {
+  return /\s/u.test(char);
 }

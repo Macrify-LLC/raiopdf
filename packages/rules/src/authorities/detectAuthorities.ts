@@ -18,24 +18,23 @@ export function detectAuthorities(
 
   for (const page of pages) {
     for (const pattern of patterns) {
-      for (const match of page.text.matchAll(resetPattern(pattern.regex))) {
-        const canonical = canonicalizeMatch(pattern, match);
+      // `matchAll` iterates over an internal copy of the pattern and never
+      // mutates the shared regex's `lastIndex`, so the memoized patterns are
+      // reused as-is instead of being recompiled per page.
+      for (const match of page.text.matchAll(pattern.regex)) {
+        for (const canonical of canonicalizeMatch(pattern, match)) {
+          const existing = authorities.get(canonical);
+          if (existing === undefined) {
+            authorities.set(canonical, {
+              kind: pattern.kind,
+              canonical,
+              pages: new Set([page.pageIndex]),
+            });
+            continue;
+          }
 
-        if (canonical === null) {
-          continue;
+          existing.pages.add(page.pageIndex);
         }
-
-        const existing = authorities.get(canonical);
-        if (existing === undefined) {
-          authorities.set(canonical, {
-            kind: pattern.kind,
-            canonical,
-            pages: new Set([page.pageIndex]),
-          });
-          continue;
-        }
-
-        existing.pages.add(page.pageIndex);
       }
     }
   }
@@ -52,17 +51,23 @@ export function detectAuthorities(
     .sort((a, b) => a.canonical.localeCompare(b.canonical));
 }
 
-function canonicalizeMatch(pattern: CitationPattern, match: RegExpMatchArray): string | null {
+// A single regex match can canonicalize to several authorities (a §§ list
+// like "28 U.S.C. §§ 1331, 1332" yields one entry per section, so each
+// section dedupes against standalone cites of the same section elsewhere in
+// the document). An empty array drops the match.
+function canonicalizeMatch(pattern: CitationPattern, match: RegExpMatchArray): readonly string[] {
   const groups = match.groups;
   if (groups === undefined) {
-    return null;
+    return [];
   }
 
   switch (pattern.name) {
     case "case-reporter":
       return canonicalizeCase(groups);
     case "federal-statute":
-      return canonicalizeFederalStatute(groups);
+      return statuteSections(groups).map(
+        (section) => `${requiredGroup(groups, "title")} U.S.C. § ${canonicalizeSection(section)}`,
+      );
     case "florida-statute":
       return canonicalizeStatute("Fla. Stat.", groups);
     case "georgia-statute":
@@ -70,42 +75,91 @@ function canonicalizeMatch(pattern: CitationPattern, match: RegExpMatchArray): s
     case "indiana-statute":
       return canonicalizeStatute("Ind. Code", groups);
     case "federal-rule":
-      return canonicalizeFederalRule(groups);
+      return [canonicalizeFederalRule(groups)];
     case "florida-rule":
-      return canonicalizeFloridaRule(groups);
+      return [canonicalizeFloridaRule(groups)];
     case "state-rule":
-      return canonicalizeStateRule(groups);
+      return [canonicalizeStateRule(groups)];
     case "federal-constitutional":
-      return `U.S. Const. ${canonicalizeConstitutionPart(requiredGroup(groups, "part"))}`;
+      return [`U.S. Const. ${canonicalizeConstitutionPart(requiredGroup(groups, "part"))}`];
     case "state-constitutional":
-      return `${canonicalizeState(requiredGroup(groups, "state"))} Const. ${canonicalizeConstitutionPart(requiredGroup(groups, "part"))}`;
+      return [`${canonicalizeState(requiredGroup(groups, "state"))} Const. ${canonicalizeConstitutionPart(requiredGroup(groups, "part"))}`];
     default:
-      return collapseWhitespace(match[0]);
+      return [collapseWhitespace(match[0])];
   }
 }
 
-function canonicalizeCase(groups: Record<string, string | undefined>): string | null {
+function canonicalizeCase(groups: Record<string, string | undefined>): readonly string[] {
   const volume = requiredGroup(groups, "volume");
   const reporterText = requiredGroup(groups, "reporter");
   const page = requiredGroup(groups, "page");
   const reporter = lookupReporter(reporterText);
 
   if (reporter === undefined) {
-    return null;
+    return [];
   }
 
-  return `${volume} ${reporter.abbreviation} ${page}`;
-}
-
-function canonicalizeFederalStatute(groups: Record<string, string | undefined>): string {
-  return `${requiredGroup(groups, "title")} U.S.C. § ${canonicalizeSection(requiredGroup(groups, "section"))}`;
+  return [`${volume} ${reporter.abbreviation} ${page}`];
 }
 
 function canonicalizeStatute(
   code: "Fla. Stat." | "O.C.G.A." | "Ind. Code",
   groups: Record<string, string | undefined>,
-): string {
-  return `${code} § ${canonicalizeSection(requiredGroup(groups, "section"))}`;
+): readonly string[] {
+  return statuteSections(groups).map((section) => `${code} § ${canonicalizeSection(section)}`);
+}
+
+// Statute patterns capture either a single `section` (§, section, sec.) or a
+// comma-separated `sectionList` (§§, sections, secs.).
+function statuteSections(groups: Record<string, string | undefined>): readonly string[] {
+  const list = groups["sectionList"];
+
+  if (list === undefined) {
+    return [requiredGroup(groups, "section")];
+  }
+
+  return expandSectionList(list);
+}
+
+// "768.28(1), (5)" → ["768.28(1)", "768.28(5)"]: a bare parenthetical
+// continuation inherits the base of the preceding full section.
+function expandSectionList(list: string): readonly string[] {
+  const sections: string[] = [];
+  let base = "";
+
+  for (const rawSegment of list.split(",")) {
+    const segment = rawSegment.trim();
+
+    if (segment.length === 0) {
+      continue;
+    }
+
+    if (segment.startsWith("(") && base.length > 0) {
+      sections.push(base + segment);
+      continue;
+    }
+
+    base = stripTrailingParentheticals(segment);
+    sections.push(segment);
+  }
+
+  return sections;
+}
+
+function stripTrailingParentheticals(section: string): string {
+  let end = section.length;
+
+  while (end > 0 && section[end - 1] === ")") {
+    const open = section.lastIndexOf("(", end - 1);
+
+    if (open <= 0) {
+      break;
+    }
+
+    end = open;
+  }
+
+  return section.slice(0, end);
 }
 
 function canonicalizeFederalRule(groups: Record<string, string | undefined>): string {
@@ -162,6 +216,12 @@ function canonicalizeFloridaRuleBody(body: string): string {
   if (normalized === "jud admin" || normalized === "judicial administration") {
     return "Jud. Admin.";
   }
+  if (
+    normalized === "gen prac & jud admin"
+    || normalized === "general practice and judicial administration"
+  ) {
+    return "Gen. Prac. & Jud. Admin.";
+  }
 
   return "Fam. L. R. P.";
 }
@@ -180,15 +240,23 @@ function canonicalizeIndianaRulePrefix(prefix: string): string {
 }
 
 function canonicalizeConstitutionPart(part: string): string {
+  // The section-marker replacements put the trailing-period match *after* the
+  // word boundary (`\bsecs?\b\.?`) so "sec. 2" fully collapses to "§ 2"
+  // instead of stranding the period as "§ . 2".
   const normalized = collapseWhitespace(part)
     .replace(/\barticle\b/giu, "art.")
     .replace(/\bart\b\.?/giu, "art.")
     .replace(/\bamendment\b/giu, "amend.")
     .replace(/\bamend\b\.?/giu, "amend.")
-    .replace(/\bsections?\b/giu, "§")
-    .replace(/\bsecs?\.?\b/giu, "§");
+    .replace(/\bsections?\b\.?/giu, "§")
+    .replace(/\bsecs?\b\.?/giu, "§");
 
-  return normalizeCommaSeparators(normalizeSectionMarkerSpacing(normalized)).trim();
+  const spaced = normalizeCommaSeparators(normalizeSectionMarkerSpacing(normalized)).trim();
+
+  // Every spelling of the same provision ("art. III, § 2", "art. III § 2",
+  // "art. III section 2") must land on one canonical shape — exactly ", § "
+  // before the section value — so page hits aggregate onto a single row.
+  return spaced.replace(/\s*,?\s*§\s*/u, ", § ").trim();
 }
 
 function canonicalizeState(state: string): string {
@@ -294,10 +362,6 @@ function consumeSectionMarker(value: string, markerIndex: number): number {
   }
 
   return index;
-}
-
-function resetPattern(pattern: RegExp): RegExp {
-  return new RegExp(pattern.source, pattern.flags);
 }
 
 function authorityId(canonical: string): string {

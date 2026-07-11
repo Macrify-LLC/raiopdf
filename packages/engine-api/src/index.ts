@@ -292,7 +292,15 @@ export type PdfAuthorityEntry = {
   kind: "case" | "statute" | "rule" | "constitutional" | "other";
   /** Canonical citation text, already reviewed and edited by the caller. */
   citation: string;
-  /** 1-based source document page numbers where the authority appears. */
+  /**
+   * 1-based source document page numbers where the authority appears.
+   *
+   * How these render depends on where the generated table ends up. A
+   * standalone Table of Authorities PDF renders them as-is (they reference
+   * the source document). `buildTableOfAuthorities`, which prepends the
+   * table, shifts each rendered reference by the table's own page count so
+   * the printed numbers match physical positions in the combined document.
+   */
   pages: readonly number[];
 };
 
@@ -1274,8 +1282,12 @@ export interface PdfEngine {
    * Engines should group authorities by type, alphabetize each group by
    * citation, render each row with dot leaders and a page list or "passim",
    * then prepend the generated pages while preserving source document content
-   * and offsetting page-targeted outline/bookmark destinations. Engines without
-   * local front-matter rendering may reject this with
+   * and offsetting page-targeted outline/bookmark destinations. Because the
+   * table is prepended, rendered page references are shifted by the table's
+   * own page count so they match physical positions in the combined document
+   * (see `PdfAuthorityEntry.pages`); standalone rendering of the same entries
+   * (outside this method) keeps un-shifted source page numbers. Engines
+   * without local front-matter rendering may reject this with
    * `PdfEngineError("UNSUPPORTED", ...)`; the local engine is the default ToA
    * implementation.
    */

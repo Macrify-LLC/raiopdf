@@ -28,7 +28,7 @@ const rulesMocks = vi.hoisted(() => ({
 }));
 
 const toaMocks = vi.hoisted(() => ({
-  generateToaPdf: vi.fn(async () => new Uint8Array([37, 80, 68, 70])),
+  generateToaPdf: vi.fn(async (..._args: unknown[]) => new Uint8Array([37, 80, 68, 70])),
   saveToaPdf: vi.fn(async () => ({ name: "toa.pdf", path: "toa-grant" })),
 }));
 
@@ -125,6 +125,33 @@ describe("TableOfAuthoritiesWorkspace", () => {
       "motion Table of Authorities.pdf",
     );
     expect(host?.textContent).toContain("Saved toa.pdf.");
+  });
+
+  it("renders prepend output with physical page numbers and preview with source page numbers", async () => {
+    const extractPageTextByPage = vi.fn(async () => [
+      { pageIndex: 0, text: "123 So. 3d 456" },
+    ]);
+    const onPrependTable = vi.fn(async () => true);
+    renderWorkspace({ extractPageTextByPage, onPrependTable });
+    await waitForText("Fla. Stat. § 95.11");
+
+    // The debounced preview render is the standalone flow: source numbering
+    // (the default mode — no "physical" argument).
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+    expect(toaMocks.generateToaPdf).toHaveBeenCalled();
+    expect(toaMocks.generateToaPdf.mock.calls.every((call) => call[1] === undefined)).toBe(true);
+
+    toaMocks.generateToaPdf.mockClear();
+    await click(buttonByText("Prepend to current PDF"));
+
+    // Prepending makes the table page 1, so the rendered references must
+    // shift to physical positions.
+    expect(toaMocks.generateToaPdf).toHaveBeenCalledTimes(1);
+    expect(toaMocks.generateToaPdf.mock.calls[0]?.[1]).toBe("physical");
+    expect(onPrependTable).toHaveBeenCalledTimes(1);
   });
 
   it("routes garbled hidden text to force OCR instead of detecting authorities", async () => {

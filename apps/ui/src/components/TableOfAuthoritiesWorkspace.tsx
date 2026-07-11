@@ -284,7 +284,13 @@ export function TableOfAuthoritiesWorkspace({
     setStatus("Rendering Table of Authorities...");
 
     try {
-      const bytes = await generateToaPdf(buildTableOfAuthoritiesOptions(reviewedEntries, passimValue));
+      // "physical": the table becomes page 1 of the open PDF, so its printed
+      // page references shift by the table's own page count. Standalone save
+      // and the preview keep un-shifted source page numbers.
+      const bytes = await generateToaPdf(
+        buildTableOfAuthoritiesOptions(reviewedEntries, passimValue),
+        "physical",
+      );
       const inserted = await onPrependTable(
         { bytes, name: toaFileName(document.fileName), path: null },
         0,

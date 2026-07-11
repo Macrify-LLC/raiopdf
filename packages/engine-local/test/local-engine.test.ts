@@ -1133,6 +1133,36 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 0, "passim");
   });
 
+  it("renders un-offset source page numbers for a standalone Table of Authorities", async () => {
+    const rendered = await drawToaPages({
+      entries: [
+        { kind: "case", citation: "Acme v. Smith", pages: [1, 2] },
+        { kind: "statute", citation: "11 U.S.C. 362", pages: [2] },
+      ],
+    });
+    const bytes = await rendered.doc.save();
+
+    // Nothing is prepended in the standalone Save-as-PDF flow, so the table
+    // must keep the source document's own page numbers.
+    await expectPageContentToContainLabel(bytes, 0, "1-2");
+    await expectPageContentNotToContainLabel(bytes, 0, "2-3");
+  });
+
+  it("offsets rendered page numbers only in physical page-number mode", async () => {
+    const rendered = await drawToaPages(
+      {
+        entries: [{ kind: "case", citation: "Acme v. Smith", pages: [1, 2] }],
+      },
+      "physical",
+    );
+    const bytes = await rendered.doc.save();
+
+    // A one-page table prepended in front shifts source pages 1-2 to
+    // physical positions 2-3.
+    await expectPageContentToContainLabel(bytes, 0, "2-3");
+    await expectPageContentNotToContainLabel(bytes, 0, "1-2");
+  });
+
   it("renders stable front matter on one page for a small section list", async () => {
     const rendered = await renderStableFrontMatter({
       title: "Table of Contents",

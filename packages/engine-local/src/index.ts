@@ -113,6 +113,7 @@ export {
   buildTableOfAuthoritiesSections,
   drawToaPages,
   formatAuthorityPageList,
+  type ToaPageNumberMode,
 } from "./tableOfAuthorities";
 export {
   drawDotLeaderRow,
@@ -990,7 +991,9 @@ export class LocalPdfEngine implements PdfEngine {
     options: PdfTableOfAuthoritiesOptions,
   ): Promise<PdfDocumentHandle> {
     const source = await this.load(document);
-    const toa = await drawToaPages(options);
+    // "physical": the table is prepended below, so rendered page references
+    // are shifted by the table's own page count to match final positions.
+    const toa = await drawToaPages(options, "physical");
     const output = await PDFDocument.create();
 
     await copyPagesInto(output, toa.doc, toa.doc.getPageIndices());

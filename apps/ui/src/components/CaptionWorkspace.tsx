@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { PdfCaptionData, PdfCaptionParty, PdfCoverPageOptions } from "@raiopdf/engine-api";
+import { PdfEngineError, type PdfCaptionData, type PdfCaptionParty, type PdfCoverPageOptions } from "@raiopdf/engine-api";
 import { CAPTION_STYLES } from "@raiopdf/engine-local";
 import type { DocumentFileInput, DocumentState } from "../hooks/useDocument";
 import {
@@ -104,11 +104,25 @@ export function CaptionWorkspace({
     let disposed = false;
     const timeout = window.setTimeout(() => {
       setMainPreview(null);
-      void generateCaptionPdf(options).then((bytes) => {
-        if (!disposed) {
-          setMainPreview(bytes);
-        }
-      });
+      void generateCaptionPdf(options)
+        .then((bytes) => {
+          if (!disposed) {
+            setMainPreview(bytes);
+          }
+        })
+        .catch((error: unknown) => {
+          if (disposed) {
+            return;
+          }
+
+          setMainPreview(null);
+          // Surface the one-page overflow immediately so the user learns the
+          // caption doesn't fit while editing, not at save time.
+          const overflow = captionOverflowMessage(error);
+          if (overflow) {
+            setStatus(overflow);
+          }
+        });
     }, 160);
 
     return () => {
@@ -124,7 +138,10 @@ export function CaptionWorkspace({
       void Promise.all(
         CAPTION_STYLES.map(async (style) => [
           style.id,
-          await generateCaptionPdf({ caption, styleId: style.id }),
+          // Style margins differ, so overflow is per style; a style whose
+          // page can't fit the content shows an empty tile instead of
+          // rejecting the whole batch.
+          await generateCaptionPdf({ caption, styleId: style.id }).catch(() => null),
         ] as const),
       ).then((entries) => {
         if (!disposed) {
@@ -266,8 +283,8 @@ export function CaptionWorkspace({
     try {
       const saved = await saveCaptionPdf(options, captionFileName(caption));
       setStatus(saved ? `Saved ${saved.name}.` : "Save cancelled.");
-    } catch {
-      setStatus("The caption PDF could not be saved.");
+    } catch (error) {
+      setStatus(captionOverflowMessage(error) ?? "The caption PDF could not be saved.");
     } finally {
       setWorking(false);
     }
@@ -297,8 +314,8 @@ export function CaptionWorkspace({
       if (inserted) {
         onCancel();
       }
-    } catch {
-      setStatus("The caption could not be prepended.");
+    } catch (error) {
+      setStatus(captionOverflowMessage(error) ?? "The caption could not be prepended.");
     } finally {
       setWorking(false);
     }
@@ -630,6 +647,15 @@ function validateCaption(caption: PdfCaptionData): string | null {
   }
 
   return null;
+}
+
+// The shared caption renderer refuses to silently truncate a caption that
+// cannot fit its one page; surface that message verbatim so the user knows
+// what to shorten instead of getting a generic failure.
+function captionOverflowMessage(error: unknown): string | null {
+  return error instanceof PdfEngineError && error.code === "CONTENT_OVERFLOW"
+    ? error.message
+    : null;
 }
 
 function captionFileName(caption: PdfCaptionData): string {

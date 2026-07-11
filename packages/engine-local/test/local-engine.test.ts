@@ -864,6 +864,52 @@ describe("LocalPdfEngine", () => {
     await expectPageContentToContainLabel(bytes, 0, "Jane Doe");
   });
 
+  it("rejects captions whose content cannot fit on one page with a typed error", async () => {
+    const engine = createLocalPdfEngine();
+    const parties = Array.from({ length: 12 }, (_, partyIndex) => ({
+      role: partyIndex % 2 === 0 ? "Plaintiff" : "Defendant",
+      names: Array.from({ length: 20 }, (_, nameIndex) =>
+        `Party ${partyIndex + 1} Name ${nameIndex + 1} With A Long Descriptive Suffix`),
+    }));
+
+    await expect(engine.buildCoverPage({
+      styleId: "classic-boxed",
+      caption: { ...sampleCaption(), parties },
+    })).rejects.toMatchObject({
+      name: "PdfEngineError",
+      code: "CONTENT_OVERFLOW",
+    });
+  });
+
+  it("keeps the last party baseline inside the boxed party block", async () => {
+    const engine = createLocalPdfEngine();
+    const cover = await engine.buildCoverPage({
+      styleId: "classic-boxed",
+      caption: sampleCaption(),
+    });
+    const bytes = await engine.saveToBytes(cover);
+    const content = await readDecodedPageContent(bytes, 0);
+
+    // The party box rectangle: pdf-lib translates to the rect origin with a
+    // `cm`, then draws the path; its height is the first vertical line op.
+    const rectMatch = content.match(
+      /1 0 0 1 (?<x>-?[\d.]+) (?<y>-?[\d.]+) cm\n1 0 0 1 0 0 cm\n1 0 0 1 0 0 cm\n0 0 m\n0 (?<height>-?[\d.]+) l/u,
+    );
+    expect(rectMatch).not.toBeNull();
+    const rectBottom = Number(rectMatch!.groups!["y"]);
+    const rectTop = rectBottom + Number(rectMatch!.groups!["height"]);
+
+    // The last drawn party line is the second party's role, "Defendant".
+    const roleMatch = content.match(
+      new RegExp(String.raw`1 0 0 1 (?<x>-?[\d.]+) (?<y>-?[\d.]+) Tm\n${escapeRegExp(encodeTextAsHex("Defendant"))} Tj`, "u"),
+    );
+    expect(roleMatch).not.toBeNull();
+    const roleBaseline = Number(roleMatch!.groups!["y"]);
+
+    expect(roleBaseline).toBeGreaterThanOrEqual(rectBottom);
+    expect(roleBaseline).toBeLessThanOrEqual(rectTop);
+  });
+
   it("keeps the minimal slip-sheet content identical to the prior centered-label output", async () => {
     const engine = createLocalPdfEngine();
     const mainBytes = await createPdf([[612, 792]]);

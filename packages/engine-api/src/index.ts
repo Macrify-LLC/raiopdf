@@ -923,6 +923,8 @@ export type PdfRaioAnnotationImport = {
 };
 
 export type PdfEngineErrorCode =
+  /** Fixed-size page content (e.g. a one-page caption) does not fit. */
+  | "CONTENT_OVERFLOW"
   | "DOCUMENT_NOT_FOUND"
   | "ENCRYPTED_DOCUMENT"
   /** Operation would create a PDF with no pages. */

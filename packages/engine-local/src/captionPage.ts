@@ -4,7 +4,7 @@ import type {
   PdfCaptionStyle,
   PdfCoverPageOptions,
 } from "@raiopdf/engine-api";
-import { wrapTextBoxLines } from "@raiopdf/engine-api";
+import { PdfEngineError, wrapTextBoxLines } from "@raiopdf/engine-api";
 import { type PDFFont, type PDFPage, rgb } from "pdf-lib";
 import { resolveCaptionStyle } from "./captionStyles";
 import { fitTextToWidth, sanitizeIndexTextForFont } from "./textFit";
@@ -43,19 +43,29 @@ export function drawCaptionPage(
   options: PdfCoverPageOptions,
 ): void {
   const style = resolveCaptionStyle(options.styleId);
+  const contentWidth = page.getWidth() - style.margins.left - style.margins.right;
   const layout: CaptionLayout = {
     contentLeft: style.margins.left,
     contentRight: page.getWidth() - style.margins.right,
-    contentWidth: page.getWidth() - style.margins.left - style.margins.right,
+    contentWidth,
     cursorY: page.getHeight() - style.margins.top,
     bottom: style.margins.bottom,
   };
 
-  for (const section of style.ordering) {
-    if (layout.cursorY <= layout.bottom) {
-      return;
-    }
+  // Captions are a one-page layout by contract, so the full measured height
+  // is validated up front. Failing with a typed error beats silently
+  // dropping the sections (title, signature block) that no longer fit.
+  const availableHeight = page.getHeight() - style.margins.top - style.margins.bottom;
+  const requiredHeight = measureCaptionContentHeight(fonts, options.caption, style, contentWidth);
 
+  if (requiredHeight > availableHeight) {
+    throw new PdfEngineError(
+      "CONTENT_OVERFLOW",
+      `The caption content does not fit on one page (needs about ${Math.ceil(requiredHeight)}pt of the ${Math.floor(availableHeight)}pt available). Remove parties, shorten names, or trim the signature block.`,
+    );
+  }
+
+  for (const section of style.ordering) {
     switch (section) {
       case "court":
         drawCourt(page, fonts, options.caption, style, layout);
@@ -76,6 +86,156 @@ export function drawCaptionPage(
   }
 }
 
+// Mirrors exactly what the draw functions below subtract from the cursor, so
+// measurement can never drift from drawing. The trailing SECTION_GAP_PT after
+// the last section is not required to fit on the page.
+function measureCaptionContentHeight(
+  fonts: CaptionDrawFonts,
+  caption: PdfCaptionData,
+  style: PdfCaptionStyle,
+  contentWidth: number,
+): number {
+  let total = 0;
+
+  for (const section of style.ordering) {
+    switch (section) {
+      case "court":
+        total += wrappedHeight(
+          fonts.bold,
+          courtLines(caption),
+          contentWidth,
+          COURT_FONT_SIZE_PT,
+        ) + SECTION_GAP_PT;
+        break;
+      case "parties": {
+        const specs = buildPartyLineSpecs(fonts, caption.parties, style);
+
+        if (specs.length === 0) {
+          break;
+        }
+
+        const boxPadding = style.partyBlockStyle === "boxed" ? PARTY_BOX_PADDING_PT : 0;
+        const textWidth = contentWidth - boxPadding * 2;
+        total += partyBlockHeight(specs, textWidth) + boxPadding * 2 + SECTION_GAP_PT;
+        break;
+      }
+      case "caseInfo": {
+        const lines = caseInfoLines(caption);
+
+        if (lines.length === 0) {
+          break;
+        }
+
+        total += wrappedHeight(fonts.regular, lines, contentWidth, BODY_FONT_SIZE_PT) + SECTION_GAP_PT;
+        break;
+      }
+      case "title":
+        total += wrappedHeight(fonts.bold, [caption.documentTitle], contentWidth, TITLE_FONT_SIZE_PT) + SECTION_GAP_PT;
+        break;
+      case "signature": {
+        const lines = caption.signatureBlockLines ?? [];
+
+        if (lines.length === 0) {
+          break;
+        }
+
+        total += SIGNATURE_FONT_SIZE_PT + LINE_GAP_PT * 2
+          + wrappedHeight(fonts.regular, lines, contentWidth, SIGNATURE_FONT_SIZE_PT)
+          + SECTION_GAP_PT;
+        break;
+      }
+    }
+  }
+
+  return total - SECTION_GAP_PT;
+}
+
+// One logical line of the party block. Measurement and drawing both walk the
+// same spec list with the same fonts, sizes, and gaps, so the measured block
+// height can never drift from the drawn block height (the pre-fix bug: the
+// block was measured entirely at 11pt regular with single gaps, but roles
+// drew at 10pt bold with a double gap, pushing text through the box border).
+type PartyLineSpec = {
+  text: string;
+  font: PDFFont;
+  fontSize: number;
+  color?: ReturnType<typeof rgb> | undefined;
+  gapAfter: number;
+};
+
+function buildPartyLineSpecs(
+  fonts: CaptionDrawFonts,
+  parties: readonly PdfCaptionParty[],
+  style: PdfCaptionStyle,
+): PartyLineSpec[] {
+  const specs: PartyLineSpec[] = [];
+
+  parties.forEach((party, partyIndex) => {
+    if (partyIndex > 0) {
+      pushPartyLineSpec(specs, style.vsSeparator, fonts.regular, BODY_FONT_SIZE_PT, LINE_GAP_PT);
+    }
+
+    for (const name of party.names) {
+      pushPartyLineSpec(specs, name, fonts.regular, BODY_FONT_SIZE_PT, LINE_GAP_PT);
+    }
+
+    if (party.etAl) {
+      pushPartyLineSpec(specs, "et al.", fonts.regular, BODY_FONT_SIZE_PT, LINE_GAP_PT);
+    }
+
+    pushPartyLineSpec(
+      specs,
+      party.role,
+      fonts.bold,
+      ROLE_FONT_SIZE_PT,
+      LINE_GAP_PT * 2,
+      MUTED_COLOR,
+    );
+  });
+
+  return specs;
+}
+
+function pushPartyLineSpec(
+  specs: PartyLineSpec[],
+  text: string,
+  font: PDFFont,
+  fontSize: number,
+  gapAfter: number,
+  color?: ReturnType<typeof rgb>,
+): void {
+  if (text.trim().length === 0) {
+    return;
+  }
+
+  specs.push({ text, font, fontSize, color, gapAfter });
+}
+
+// Total cursor advance if the specs were drawn: every wrapped line advances
+// by fontSize + LINE_GAP_PT, and each logical line adds its own gapAfter.
+function partyBlockAdvance(specs: readonly PartyLineSpec[], width: number): number {
+  let advance = 0;
+
+  for (const spec of specs) {
+    const wrappedLineCount = wrapTextForFont(spec.font, spec.text, width, spec.fontSize).length;
+    advance += wrappedLineCount * (spec.fontSize + LINE_GAP_PT) + spec.gapAfter;
+  }
+
+  return advance;
+}
+
+// Tight text-block height: the advance minus the trailing gaps below the
+// last baseline (drawWrappedLine's own LINE_GAP_PT plus the last gapAfter).
+function partyBlockHeight(specs: readonly PartyLineSpec[], width: number): number {
+  const last = specs[specs.length - 1];
+
+  if (last === undefined) {
+    return 0;
+  }
+
+  return partyBlockAdvance(specs, width) - LINE_GAP_PT - last.gapAfter;
+}
+
 function drawCourt(
   page: PDFPage,
   fonts: CaptionDrawFonts,
@@ -83,7 +243,7 @@ function drawCourt(
   style: PdfCaptionStyle,
   layout: CaptionLayout,
 ): void {
-  const lines = compactStrings([caption.courtName, caption.county]);
+  const lines = courtLines(caption);
   const align: TextAlign = style.partyBlockStyle === "centered" ? "center" : "center";
 
   drawWrappedLines(page, fonts.bold, lines, {
@@ -103,22 +263,15 @@ function drawParties(
   style: PdfCaptionStyle,
   layout: CaptionLayout,
 ): void {
-  if (parties.length === 0) {
+  const specs = buildPartyLineSpecs(fonts, parties, style);
+
+  if (specs.length === 0) {
     return;
   }
 
-  const blockLines = parties.flatMap((party, partyIndex) => {
-    const partyLines = compactStrings([
-      ...party.names,
-      party.etAl ? "et al." : undefined,
-      party.role,
-    ]);
-
-    return partyIndex === 0 ? partyLines : [style.vsSeparator, ...partyLines];
-  });
   const boxPadding = style.partyBlockStyle === "boxed" ? PARTY_BOX_PADDING_PT : 0;
   const textWidth = layout.contentWidth - boxPadding * 2;
-  const blockHeight = wrappedHeight(fonts.regular, blockLines, textWidth, BODY_FONT_SIZE_PT);
+  const blockHeight = partyBlockHeight(specs, textWidth);
   const boxHeight = blockHeight + boxPadding * 2;
   const textY = style.partyBlockStyle === "boxed"
     ? layout.cursorY - boxPadding
@@ -136,7 +289,7 @@ function drawParties(
     });
   }
 
-  drawPartyLines(page, fonts, parties, style, {
+  drawPartyLines(page, specs, {
     x: layout.contentLeft + boxPadding,
     y: textY,
     width: textWidth,
@@ -157,45 +310,19 @@ function drawParties(
 
 function drawPartyLines(
   page: PDFPage,
-  fonts: CaptionDrawFonts,
-  parties: readonly PdfCaptionParty[],
-  style: PdfCaptionStyle,
+  specs: readonly PartyLineSpec[],
   block: { x: number; y: number; width: number; align: TextAlign },
 ): void {
   let cursorY = block.y;
 
-  parties.forEach((party, partyIndex) => {
-    if (partyIndex > 0) {
-      cursorY = drawWrappedLine(page, fonts.regular, style.vsSeparator, {
-        ...block,
-        y: cursorY,
-        fontSize: BODY_FONT_SIZE_PT,
-      }) - LINE_GAP_PT;
-    }
-
-    for (const name of party.names) {
-      cursorY = drawWrappedLine(page, fonts.regular, name, {
-        ...block,
-        y: cursorY,
-        fontSize: BODY_FONT_SIZE_PT,
-      }) - LINE_GAP_PT;
-    }
-
-    if (party.etAl) {
-      cursorY = drawWrappedLine(page, fonts.regular, "et al.", {
-        ...block,
-        y: cursorY,
-        fontSize: BODY_FONT_SIZE_PT,
-      }) - LINE_GAP_PT;
-    }
-
-    cursorY = drawWrappedLine(page, fonts.bold, party.role, {
+  for (const spec of specs) {
+    cursorY = drawWrappedLine(page, spec.font, spec.text, {
       ...block,
       y: cursorY,
-      fontSize: ROLE_FONT_SIZE_PT,
-      color: MUTED_COLOR,
-    }) - LINE_GAP_PT * 2;
-  });
+      fontSize: spec.fontSize,
+      color: spec.color,
+    }) - spec.gapAfter;
+  }
 }
 
 function drawCaseInfo(
@@ -205,11 +332,7 @@ function drawCaseInfo(
   style: PdfCaptionStyle,
   layout: CaptionLayout,
 ): void {
-  const lines = compactStrings([
-    caption.caseNumber ? `Case No. ${caption.caseNumber}` : undefined,
-    caption.division ? `Division: ${caption.division}` : undefined,
-    caption.judge ? `Judge: ${caption.judge}` : undefined,
-  ]);
+  const lines = caseInfoLines(caption);
 
   if (lines.length === 0) {
     return;
@@ -363,6 +486,18 @@ function alignedX(x: number, width: number, textWidth: number, align: TextAlign)
   }
 
   return x;
+}
+
+function courtLines(caption: PdfCaptionData): string[] {
+  return compactStrings([caption.courtName, caption.county]);
+}
+
+function caseInfoLines(caption: PdfCaptionData): string[] {
+  return compactStrings([
+    caption.caseNumber ? `Case No. ${caption.caseNumber}` : undefined,
+    caption.division ? `Division: ${caption.division}` : undefined,
+    caption.judge ? `Judge: ${caption.judge}` : undefined,
+  ]);
 }
 
 function compactStrings(values: readonly (string | undefined)[]): string[] {

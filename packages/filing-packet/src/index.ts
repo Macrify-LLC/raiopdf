@@ -162,6 +162,7 @@ export async function buildFilingPacket(
   const documents: FilingPacketDocumentResult[] = [];
   const allOutputFiles: FilingPacketOutputFile[] = [];
   const combinedHandles: PdfDocumentHandle[] = [];
+  const reservedOutputNames = new Set<string>();
   let finalized = false;
 
   try {
@@ -178,6 +179,7 @@ export async function buildFilingPacket(
         localEngine,
         sidecarEngine,
         opened,
+        reservedOutputNames,
       });
 
       preparedDocuments.push(prepared);
@@ -336,6 +338,7 @@ async function prepareDocument({
   localEngine,
   sidecarEngine,
   opened,
+  reservedOutputNames,
 }: {
   source: FilingPacketSourceInput;
   order: number;
@@ -343,6 +346,7 @@ async function prepareDocument({
   localEngine: PdfEngine;
   sidecarEngine: FilingPacketSidecarEngine | undefined;
   opened: OpenedHandle[];
+  reservedOutputNames: Set<string>;
 }): Promise<PreparedDocument> {
   const sourcePath = path.resolve(source.path);
   const sourceBytes = await fs.readFile(sourcePath);
@@ -467,7 +471,7 @@ async function prepareDocument({
 
     if (convertOutput) {
       if (!sidecarEngine) {
-        if (convertStep) {
+        if (convertStep && index === 0) {
           record(convertStep, "unsupported", "Couldn't convert to the archival PDF/A format this run — that tool wasn't available. Restart RaioPDF and rebuild the packet.");
         }
       } else {
@@ -490,14 +494,14 @@ async function prepareDocument({
     handlesForCombined.push(combinedHandle);
     outputs.push({
       sourceFilename,
-      outputName: outputNameFor({
+      outputName: reserveOutputName(outputNameFor({
         sourceFilename,
         baseName,
         order,
         partNumber: index + 1,
         totalParts: splitResult.parts.length,
         prefix: options.prefixFilenames,
-      }),
+      }), reservedOutputNames),
       pages: pageCount,
       pageIndexes: part.pageIndexes,
       oversized: part.oversized || (splitStepSelected && bytes.byteLength > splitBytes),
@@ -671,6 +675,29 @@ function outputNameFor(input: {
     : `${input.baseName} - Part ${input.partNumber} of ${input.totalParts}`;
   const name = `${safePdfName(stem)}.pdf`;
   return input.prefix ? `${String(input.order).padStart(2, "0")} - ${name}` : name;
+}
+
+/**
+ * Suffixes duplicate output names with " (2)", " (3)", ... so two sources
+ * sharing a basename (possible with prefixFilenames: false) don't collide in
+ * package-writer's reservePath after all processing is done. Mirrors
+ * batch-cleanup's reserveOutputName.
+ */
+function reserveOutputName(outputName: string, reservedNames: Set<string>): string {
+  if (!reservedNames.has(outputName)) {
+    reservedNames.add(outputName);
+    return outputName;
+  }
+
+  const extension = path.extname(outputName);
+  const stem = extension ? outputName.slice(0, -extension.length) : outputName;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${stem} (${suffix})${extension}`;
+    if (!reservedNames.has(candidate)) {
+      reservedNames.add(candidate);
+      return candidate;
+    }
+  }
 }
 
 function safePdfName(value: string): string {

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PDFDocument, PDFName, PDFStream, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PdfEngineError } from "@raiopdf/engine-api";
 import type {
@@ -407,6 +407,60 @@ describe("runBatchCleanup", () => {
     expect(report).not.toContain(source);
   });
 
+  it("reports output pages from the final bytes when repair changes the page count", async () => {
+    const source = await makePdf("shrink.pdf", 3);
+    const outputDir = path.join(dir, "package");
+    const engine = new PageDroppingRepairEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{ path: source, facts: facts({ pages: 3 }) }],
+      outputDir,
+      operations: {
+        repair: true,
+        sanitize: false,
+        scrubMetadata: false,
+        ocrMode: "off",
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["repair"]);
+    expect(result.files[0]!.outputs[0]!.pages).toBe(2);
+  });
+
+  it("keeps the PDF/A metadata stream on parts split after conversion", async () => {
+    const source = await makePdf("convert.pdf", 2);
+    const outputDir = path.join(dir, "package");
+    const engine = new PdfAStampingEngine();
+
+    const result = await runBatchCleanup({
+      sources: [{ path: source, facts: facts({ pages: 2 }) }],
+      outputDir,
+      packId: "florida",
+      operations: {
+        sanitize: false,
+        scrubMetadata: false,
+        ocrMode: "off",
+        convertToPdfA: true,
+        splitBySize: true,
+        splitSizeMb: 0.0005,
+      },
+    }, { local: engine, sidecar: engine });
+
+    expect(result.files[0]!.status).toBe("done");
+    expect(result.files[0]!.operations).toEqual(["pdfa", "split-by-size"]);
+    expect(result.files[0]!.outputs.length).toBeGreaterThan(1);
+    for (const output of result.files[0]!.outputs) {
+      const bytes = await fs.readFile(path.join(outputDir, output.packageRelativePath));
+      const part = await PDFDocument.load(bytes, { updateMetadata: false });
+      const metadata = part.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+
+      expect(metadata).toBeDefined();
+      expect(bytes.includes("pdfaid")).toBe(true);
+      expect(part.context.trailerInfo.Info).toBeUndefined();
+    }
+  });
+
   it("records split-size overrides and part outputs", async () => {
     const source = await makePdf("big.pdf", 2);
     const outputDir = path.join(dir, "package");
@@ -511,6 +565,36 @@ class RecordingEngine extends LocalPdfEngine implements BatchCleanupSidecarEngin
     } finally {
       this.active -= 1;
     }
+  }
+}
+
+class PageDroppingRepairEngine extends RecordingEngine {
+  override async repair(document: PdfDocumentHandle): Promise<PdfDocumentHandle> {
+    const { document: repaired } = await this.deletePages(document, [0]);
+    return repaired;
+  }
+}
+
+class PdfAStampingEngine extends RecordingEngine {
+  override async convertToPdfA(
+    document: PdfDocumentHandle,
+    _options: PdfAConversionOptions,
+  ): Promise<PdfDocumentHandle> {
+    // Simulate a real converter: stamp a pdfaid identification into the
+    // catalog XMP metadata and drop the (scrubbed-equivalent) Info dict.
+    const pdf = await PDFDocument.load(await this.saveToBytes(document), {
+      updateMetadata: false,
+    });
+    const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+      + '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+      + '<rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">'
+      + "<pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>"
+      + "</rdf:Description></rdf:RDF></x:xmpmeta>";
+    const stream = pdf.context.stream(xmp, { Type: "Metadata", Subtype: "XML" });
+    pdf.catalog.set(PDFName.of("Metadata"), pdf.context.register(stream));
+    delete pdf.context.trailerInfo.Info;
+
+    return this.open(await pdf.save());
   }
 }
 

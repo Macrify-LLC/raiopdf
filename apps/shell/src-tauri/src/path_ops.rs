@@ -39,7 +39,7 @@ use crate::FileGrants;
 const NODE_LANE_MAX_BYTES_ENV: &str = "RAIOPDF_NODE_LANE_MAX_BYTES";
 const DEFAULT_NODE_LANE_MAX_BYTES: u64 = 400 * 1024 * 1024;
 const NODE_LANE_HEAP_MB: u64 = 8192;
-const NODE_LANE_SECURITY_FLAG: &str = "--disallow-code-generation-from-strings";
+const NODE_LANE_SECURITY_FLAG: &str = crate::mcp::NODE_SECURITY_FLAG;
 
 /// The input file changed on disk while the op ran (typed like Phase 1's
 /// range-read snapshot error so the UI can share the "reopen it" message).

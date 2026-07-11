@@ -633,6 +633,9 @@ pub(crate) struct McpOneShotOptions {
 /// shipped in v0.1.0–v0.1.2 and broke every one-shot tool.
 pub(crate) const NODE_SECURITY_FLAG: &str = "--disallow-code-generation-from-strings";
 
+/// This spawn choke point is the single owner of the security flag — callers
+/// never add it themselves. The ambient-`NODE_OPTIONS` dedup below only guards
+/// against a user's own environment already carrying the flag.
 fn one_shot_node_options(explicit: Option<String>) -> String {
     let base = explicit.unwrap_or_else(|| match std::env::var("NODE_OPTIONS") {
         Ok(existing) if !existing.trim().is_empty() => existing,
@@ -650,12 +653,6 @@ fn one_shot_node_options(explicit: Option<String>) -> String {
     }
 }
 
-/// `--one-shot <tool>` must be the ONLY arguments, with the marker first —
-/// see [`NODE_SECURITY_FLAG`] for why nothing may precede it.
-fn one_shot_args(tool_name: &str) -> [&str; 2] {
-    ["--one-shot", tool_name]
-}
-
 pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     tool_name: &str,
     input: &T,
@@ -670,7 +667,9 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
 
     let mut command = Command::new(&binary);
     command
-        .args(one_shot_args(tool_name))
+        // `--one-shot <tool>` must be the ONLY arguments, with the marker
+        // first — see `NODE_SECURITY_FLAG` for why nothing may precede it.
+        .args(["--one-shot", tool_name])
         .env("NODE_OPTIONS", one_shot_node_options(options.node_options))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -774,16 +773,6 @@ fn run_one_shot_child(
         let _ = stderr.read_to_end(&mut buffer);
         buffer
     });
-    let join_io = |stdin_writer: std::thread::JoinHandle<()>,
-                   stdout_reader: std::thread::JoinHandle<Vec<u8>>,
-                   stderr_reader: std::thread::JoinHandle<Vec<u8>>| {
-        let _ = stdin_writer.join();
-        (
-            stdout_reader.join().unwrap_or_default(),
-            stderr_reader.join().unwrap_or_default(),
-        )
-    };
-
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -817,6 +806,18 @@ fn run_one_shot_child(
         stdout,
         stderr,
     })
+}
+
+fn join_io(
+    stdin_writer: std::thread::JoinHandle<()>,
+    stdout_reader: std::thread::JoinHandle<Vec<u8>>,
+    stderr_reader: std::thread::JoinHandle<Vec<u8>>,
+) -> (Vec<u8>, Vec<u8>) {
+    let _ = stdin_writer.join();
+    (
+        stdout_reader.join().unwrap_or_default(),
+        stderr_reader.join().unwrap_or_default(),
+    )
 }
 
 /// The Node one-shot spawns its own helpers (qpdf, Ghostscript, the engine
@@ -858,22 +859,12 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        one_shot_args, one_shot_node_options, package_one_shot_timeout, resolve_output_dir,
+        one_shot_node_options, package_one_shot_timeout, resolve_output_dir,
         sanitize_one_shot_failure, NODE_SECURITY_FLAG,
     };
     use std::time::Duration;
 
     const GENERIC_FAILURE: &str = "RaioPDF couldn't complete that operation. Please try again.";
-
-    /// The launcher execs `node <entrypoint> <our args...>`, so every argument
-    /// is a script argument and the runtime dispatches on the `--one-shot`
-    /// marker. Anything placed before it broke every one-shot tool in
-    /// v0.1.0–v0.1.2 — the marker must stay first.
-    #[test]
-    fn one_shot_marker_is_always_the_first_argument() {
-        let args = one_shot_args("build_production_set");
-        assert_eq!(args, ["--one-shot", "build_production_set"]);
-    }
 
     #[test]
     fn node_security_flag_travels_via_node_options() {
@@ -882,9 +873,9 @@ mod tests {
             one_shot_node_options(Some("--max-old-space-size=8192".to_string())),
             format!("--max-old-space-size=8192 {NODE_SECURITY_FLAG}")
         );
-        // Callers that already include the flag don't get it twice.
-        let prebuilt = format!("--max-old-space-size=8192 {NODE_SECURITY_FLAG}");
-        assert_eq!(one_shot_node_options(Some(prebuilt.clone())), prebuilt);
+        // An ambient NODE_OPTIONS that already carries the flag isn't doubled.
+        let ambient = format!("--max-old-space-size=8192 {NODE_SECURITY_FLAG}");
+        assert_eq!(one_shot_node_options(Some(ambient.clone())), ambient);
     }
 
     #[test]

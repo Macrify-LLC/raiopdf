@@ -491,11 +491,13 @@ fn node_lane_timeout(input_size_bytes: u64) -> Duration {
 }
 
 fn node_options_heap_arg() -> String {
+    // Only the lane-specific heap cap lives here; the security flag is owned
+    // by the one-shot spawn choke point (`mcp::one_shot_node_options`), which
+    // appends it to whatever this produces.
     let heap = format!("--max-old-space-size={NODE_LANE_HEAP_MB}");
-    let lane_options = format!("{heap} {NODE_LANE_SECURITY_FLAG}");
     match std::env::var("NODE_OPTIONS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {lane_options}"),
-        _ => lane_options,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {heap}"),
+        _ => heap,
     }
 }
 

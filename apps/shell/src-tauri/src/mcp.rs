@@ -351,6 +351,11 @@ fn package_one_shot_timeout(file_count: usize, total_bytes: u64, per_file: Durat
     BASE + per_file * u32::try_from(file_count).unwrap_or(u32::MAX) + per_size
 }
 
+/// Per-file allowance for jobs that can run OCR — matches the OCR toolchain's
+/// own 30-minute-per-document ceiling so the deadline never undercuts a
+/// legitimate run.
+const OCR_PER_FILE_TIMEOUT: Duration = Duration::from_secs(1800);
+
 fn file_size_or_zero(path: &str) -> u64 {
     fs::metadata(path)
         .map(|metadata| metadata.len())
@@ -466,7 +471,7 @@ pub async fn batch_cleanup(
     let per_file = if operations.ocr_mode == "off" {
         Duration::from_secs(180)
     } else {
-        Duration::from_secs(1800)
+        OCR_PER_FILE_TIMEOUT
     };
 
     let input = BatchCleanupOneShotInput {
@@ -540,7 +545,18 @@ pub async fn build_filing_packet(
         selected_step_ids,
         split_size_mb,
     };
-    let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(120));
+    // The make-searchable step runs OCR on every source, so it gets the
+    // OCR-sized per-file budget; otherwise PDF/A conversion dominates.
+    let per_file = if input
+        .selected_step_ids
+        .iter()
+        .any(|id| id == "make-searchable")
+    {
+        OCR_PER_FILE_TIMEOUT
+    } else {
+        Duration::from_secs(120)
+    };
+    let timeout = package_one_shot_timeout(file_count, total_bytes, per_file);
     let stdout = run_one_shot_on_blocking_pool("build_filing_packet", input, timeout).await?;
     let output: FilingPacketOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
         "RaioPDF couldn't finish building that package. Please try again.".to_string()

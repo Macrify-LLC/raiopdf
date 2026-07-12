@@ -192,4 +192,10 @@ const mockEditing: EditingState = {
   }),
   hasUnsavedEdits: false,
   resetForDocument: noop,
+  captureDocumentState: () => ({
+    pendingEdits: [],
+    importedAnnotIds: new Set<string>(),
+    formValues: {},
+  }),
+  restoreDocumentState: noop,
 };

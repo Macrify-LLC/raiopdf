@@ -23,7 +23,10 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
     container = null;
   });
 
-  function render(onAddFile: () => Promise<FileAddResult | null>) {
+  function render(
+    onAddFile: () => Promise<FileAddResult | null>,
+    currentFileNotice: string | null = null,
+  ) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
     root = createRoot(container);
@@ -32,6 +35,7 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
       root?.render(
         <BatchCleanupWorkspace
           currentFile={null}
+          currentFileNotice={currentFileNotice}
           packs={[getPack()]}
           progress={progress}
           onAddFile={onAddFile}
@@ -72,6 +76,17 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
     await clickAddPdf();
 
     expect(container?.textContent).toContain("big.pdf");
+  });
+
+  it("shows the unsaved-changes notice instead of seeding a dirty current document", () => {
+    // A dirty document's on-disk bytes are stale (pre-edit), so App passes
+    // currentFile=null plus a notice — the omission must be visible, and
+    // nothing may be queued that would clean the stale disk file.
+    const notice = "The open document has unsaved changes, so it was not added. Save the current PDF first, then reopen this tool to include it.";
+    render(async () => null, notice);
+
+    expect(container?.textContent).toContain(notice);
+    expect(container?.textContent).toContain("Add PDFs to build the cleanup queue.");
   });
 
   it("surfaces the honest gate for a browser tooLarge result and queues nothing", async () => {

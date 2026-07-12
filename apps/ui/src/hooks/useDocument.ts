@@ -333,6 +333,15 @@ export function useDocument(options: UseDocumentOptions = {}) {
   const scrollNonceRef = useRef(0);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const busyCountRef = useRef(0);
+  // Eagerly-maintained mirror of the active document's file identity, updated
+  // at the same sites as `activeBytesRef`/`sourceKindRef`. `save()` reads it
+  // synchronously; reading via a `setDocument` updater instead returns
+  // "Untitled.pdf"/null whenever React has a deferred update pending (e.g.
+  // right after Save applied pending annotations through the mutation queue).
+  const fileIdentityRef = useRef<{ fileName: string | null; filePath: string | null }>({
+    fileName: null,
+    filePath: null,
+  });
 
   const setTabsState = useCallback((update: (current: StoredDocumentTab[]) => StoredDocumentTab[]) => {
     setTabs((current) => {
@@ -370,6 +379,32 @@ export function useDocument(options: UseDocumentOptions = {}) {
       busyCount: busyCountRef.current,
     };
   }, [document]);
+
+  /**
+   * Mutation-queue bookkeeping sync: updates ONLY the busy/queue fields of
+   * the active tab. The queue must never write the `document` field — the
+   * render-time document captured at enqueue time is stale after the
+   * operation commits (generation N), and stomping the tab store with it
+   * would regress the generation the mutation guards
+   * (`getActiveGenerationValue`) read until an unrelated `setDocument`
+   * repaired it.
+   */
+  const syncActiveTabBusy = useCallback(() => {
+    const activeTabId = activeTabIdRef.current;
+    if (!activeTabId) {
+      return;
+    }
+
+    setTabsState((current) => current.map((tab) => (
+      tab.id === activeTabId
+        ? {
+            ...tab,
+            mutationQueue: mutationQueueRef.current,
+            busyCount: busyCountRef.current,
+          }
+        : tab
+    )));
+  }, [setTabsState]);
 
   const syncActiveTab = useCallback((nextDocument: DocumentState, nextScrollIntent = pageScrollIntentRef.current) => {
     const activeTabId = activeTabIdRef.current;
@@ -445,6 +480,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
     activeBytesRef.current = tab.bytes;
     openTokenRef.current = tab.openToken;
     sourceKindRef.current = tab.sourceKind;
+    fileIdentityRef.current = {
+      fileName: tab.document.fileName,
+      filePath: tab.document.filePath,
+    };
     scrollNonceRef.current = tab.scrollNonce;
     mutationQueueRef.current = tab.mutationQueue;
     busyCountRef.current = tab.busyCount;
@@ -514,6 +553,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       activeBytesRef.current = null;
       openTokenRef.current = token;
       sourceKindRef.current = null;
+      fileIdentityRef.current = { fileName: null, filePath: null };
       scrollNonceRef.current = 0;
       mutationQueueRef.current = Promise.resolve();
       busyCountRef.current = 0;
@@ -560,6 +600,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     activeBytesRef.current = null;
     openTokenRef.current = 0;
     sourceKindRef.current = null;
+    fileIdentityRef.current = { fileName: null, filePath: null };
     scrollNonceRef.current = 0;
     mutationQueueRef.current = Promise.resolve();
     busyCountRef.current = 0;
@@ -640,6 +681,14 @@ export function useDocument(options: UseDocumentOptions = {}) {
       // before — memory-mode staleness semantics are unchanged [R1-8].
       const generation = nextGeneration();
       sourceKindRef.current = "memory";
+      // Mirror the fileName/filePath merge below eagerly, so `save()` reads
+      // the post-commit identity even while the state update is deferred.
+      fileIdentityRef.current = {
+        fileName: options.fileName ?? fileIdentityRef.current.fileName,
+        filePath: options.filePath !== undefined
+          ? options.filePath
+          : fileIdentityRef.current.filePath,
+      };
       setDocument((current) => ({
         ...current,
         bytes,
@@ -705,7 +754,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     ) => {
       const queued = mutationQueueRef.current.then(async () => {
         busyCountRef.current += 1;
-        syncActiveTab(document);
+        syncActiveTabBusy();
 
         // Streamed docs are never mutated in memory: every enqueueMutation
         // op is gated with the message naming what still works [R1-2].
@@ -749,7 +798,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           }
         } finally {
           busyCountRef.current = Math.max(0, busyCountRef.current - 1);
-          syncActiveTab(document);
+          syncActiveTabBusy();
         }
       });
 
@@ -760,7 +809,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
       return queued;
     },
-    [closeHandle, commitHandle, currentOperation, document, setError, syncActiveTab],
+    [closeHandle, commitHandle, currentOperation, setError, syncActiveTabBusy],
   );
 
   const openPreparedDocument = useCallback(
@@ -882,6 +931,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
           signatureInvalidationNotice,
           error: null,
         };
+        fileIdentityRef.current = {
+          fileName: nextDocument.fileName,
+          filePath: nextDocument.filePath,
+        };
         setDocument(nextDocument);
         const storedTab = createStoredTab(id, nextDocument, {
           engineHandle,
@@ -923,6 +976,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
             activeHandleRef.current = null;
             activeBytesRef.current = null;
             sourceKindRef.current = null;
+            fileIdentityRef.current = { fileName: null, filePath: null };
             await closeHandle(previousHandle);
             setTabsState((current) => current.filter((tab) => tab.id !== id));
             activeTabIdRef.current = null;
@@ -959,6 +1013,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
           activeHandleRef.current = null;
           activeBytesRef.current = null;
           sourceKindRef.current = null;
+          fileIdentityRef.current = { fileName: null, filePath: null };
           setDocument({
             ...INITIAL_DOCUMENT,
             error: message,
@@ -1022,6 +1077,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         filePath: input.path,
         fileSizeBytes: input.source.sizeBytes,
       };
+      fileIdentityRef.current = { fileName: input.name, filePath: input.path };
       setDocument(nextDocument);
       const storedTab = createStoredTab(id, nextDocument, {
         openToken: token,
@@ -1086,6 +1142,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
       return false;
     }
 
+    fileIdentityRef.current = {
+      fileName: source.name ?? fileIdentityRef.current.fileName,
+      filePath: source.grant,
+    };
     setDocument((current) => {
       if (
         current.generation !== expected.generation ||
@@ -1906,23 +1966,22 @@ export function useDocument(options: UseDocumentOptions = {}) {
       }
 
       activeBytesRef.current = bytes;
-      let fileName = "Untitled.pdf";
-      let filePath: string | null = null;
-      setDocument((current) => {
-        fileName = current.fileName ?? fileName;
-        filePath = current.filePath;
-
-        return {
-          ...current,
-          bytes,
-          fileSizeBytes: bytes.byteLength,
-          error: null,
-        };
-      });
+      // File identity comes from the eagerly-maintained ref, never from
+      // inside the setDocument updater: with an update still pending (e.g.
+      // Save just applied pending annotations through the mutation queue),
+      // React defers the updater and a synchronous read-back would return
+      // "Untitled.pdf"/null, degrading Save-in-place to a wrong-name Save As.
+      const { fileName, filePath } = fileIdentityRef.current;
+      setDocument((current) => ({
+        ...current,
+        bytes,
+        fileSizeBytes: bytes.byteLength,
+        error: null,
+      }));
 
       return {
         bytes,
-        fileName,
+        fileName: fileName ?? "Untitled.pdf",
         filePath,
       };
     } catch (error) {
@@ -1935,6 +1994,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
   }, [engine, setError]);
 
   const markSaved = useCallback((saved: { fileName: string; filePath: string | null }) => {
+    fileIdentityRef.current = { fileName: saved.fileName, filePath: saved.filePath };
     setDocument((current) => ({
       ...current,
       dirty: false,
@@ -2021,6 +2081,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         activeTabIdRef.current = null;
         openTokenRef.current = 0;
         scrollNonceRef.current = 0;
+        fileIdentityRef.current = { fileName: null, filePath: null };
         setDocumentState(INITIAL_DOCUMENT);
       }
     }

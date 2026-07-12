@@ -31,8 +31,10 @@ export interface CommandBarProps {
   zoom?: number;
   hasDocument?: boolean;
   /**
-   * Streamed (large) documents can't dirty — mutations are gated — so Save
-   * has nothing to write and stays disabled while the document is open.
+   * Streamed (large) documents disable Save only while there is nothing to
+   * write — pending annotation overlays (or an otherwise dirty document)
+   * commit through the streamed apply_edits save path, so the button stays
+   * enabled for them.
    */
   saveDisabled?: boolean;
   searchValue?: string;

@@ -47,6 +47,18 @@ export interface SavedSignature {
   createdAt: number;
 }
 
+/**
+ * Document-bound editing state that survives a tab switch: pending edits
+ * (including imported annotations and their ids) plus changed form values.
+ * Captured on switch-away and restored on switch-back so pending work is
+ * never silently destroyed by viewing another tab.
+ */
+export interface EditingDocumentSnapshot {
+  pendingEdits: readonly PendingEdit[];
+  importedAnnotIds: ReadonlySet<string>;
+  formValues: Readonly<Record<string, PdfFormFieldValue>>;
+}
+
 const SIGNATURES_STORAGE_KEY = "raiopdf.saved-signatures";
 const MAX_SAVED_SIGNATURES = 12;
 const MAX_SAVED_SIGNATURE_BYTES = 500 * 1024;
@@ -125,6 +137,10 @@ export interface EditingState {
   hasUnsavedEdits: boolean;
   /** Clears all document-bound edit state (pending items + form values). */
   resetForDocument: () => void;
+  /** Captures the document-bound edit state for a tab switch-away. */
+  captureDocumentState: () => EditingDocumentSnapshot;
+  /** Restores a previously captured snapshot on tab switch-back. */
+  restoreDocumentState: (snapshot: EditingDocumentSnapshot) => void;
 }
 
 let editIdCounter = 0;
@@ -457,6 +473,20 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setSelectedEditId(null);
   }, []);
 
+  const captureDocumentState = useCallback((): EditingDocumentSnapshot => ({
+    pendingEdits,
+    importedAnnotIds,
+    formValues,
+  }), [formValues, importedAnnotIds, pendingEdits]);
+
+  const restoreDocumentState = useCallback((snapshot: EditingDocumentSnapshot) => {
+    setPendingEdits(snapshot.pendingEdits);
+    setImportedAnnotIds(snapshot.importedAnnotIds);
+    setFormValues({ ...snapshot.formValues });
+    setMessage(null);
+    setSelectedEditId(null);
+  }, []);
+
   return useMemo(
     () => ({
       tool,
@@ -510,6 +540,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
       resetForDocument,
+      captureDocumentState,
+      restoreDocumentState,
     }),
     [
       tool,
@@ -559,6 +591,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
       resetForDocument,
+      captureDocumentState,
+      restoreDocumentState,
     ],
   );
 }

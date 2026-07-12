@@ -250,7 +250,11 @@ export function AppShell({
       <CommandBar
         onOpen={requestOpen}
         onSave={onSave}
-        saveDisabled={streamedDocument}
+        // Streamed documents disable Save only while there is nothing to
+        // write: with pending annotation overlays (or an otherwise dirty
+        // document) the streamed save path commits them via apply_edits —
+        // mirror the File → Save menu path instead of hard-disabling.
+        saveDisabled={streamedDocument && !document.dirty && !editing.hasUnsavedEdits}
         onPrint={onPrint}
         onPreviousPage={onPreviousPage}
         onNextPage={onNextPage}

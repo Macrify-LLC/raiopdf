@@ -161,6 +161,37 @@ describe("AppShell", () => {
     expect(html).toContain("beta.pdf");
   });
 
+  it("disables toolbar Save for a clean streamed document", () => {
+    const html = renderToStaticMarkup(
+      <AppShell {...appShellProps({ document: streamedDocumentState })} />,
+    );
+
+    expect(saveButtonMarkup(html)).toContain("disabled");
+  });
+
+  it("keeps toolbar Save enabled for a streamed document with pending annotation overlays", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: streamedDocumentState,
+          editing: { ...mockEditing, hasUnsavedEdits: true },
+        })}
+      />,
+    );
+
+    expect(saveButtonMarkup(html)).not.toContain("disabled");
+  });
+
+  it("keeps toolbar Save enabled for a dirty streamed document", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({ document: { ...streamedDocumentState, dirty: true } })}
+      />,
+    );
+
+    expect(saveButtonMarkup(html)).not.toContain("disabled");
+  });
+
   it("renders the long-process lockout note", () => {
     const html = renderToStaticMarkup(
       <AppShell
@@ -176,6 +207,12 @@ describe("AppShell", () => {
     expect(html).toContain("tool-panel__lockout-note");
   });
 });
+
+function saveButtonMarkup(html: string): string {
+  const match = html.match(/<button[^>]*aria-label="Save"[^>]*>/);
+  expect(match).not.toBeNull();
+  return match![0];
+}
 
 function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
   return {
@@ -290,6 +327,20 @@ const openDocument: DocumentState = {
   fileName: "test.pdf",
 };
 
+const streamedDocumentState: DocumentState = {
+  ...mockDocument,
+  source: {
+    kind: "rangeFile",
+    file: new File([new Uint8Array([37, 80, 68, 70])], "big.pdf"),
+    sizeBytes: 4,
+    generation: 1,
+  },
+  generation: 1,
+  pageCount: 12,
+  fileName: "big.pdf",
+  fileSizeBytes: 4,
+};
+
 const mockPdfDocument = {
   numPages: 1,
   getPage: vi.fn(),
@@ -379,4 +430,10 @@ const mockEditing: EditingState = {
   }),
   hasUnsavedEdits: false,
   resetForDocument: noop,
+  captureDocumentState: () => ({
+    pendingEdits: [],
+    importedAnnotIds: new Set<string>(),
+    formValues: {},
+  }),
+  restoreDocumentState: noop,
 };

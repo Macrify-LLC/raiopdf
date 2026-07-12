@@ -26,6 +26,7 @@ describe("ProductionSetWorkspace add flow", () => {
     onAddFile: () => Promise<FileAddResult | null>,
     currentFile: { name: string; path: string | null } | null = null,
     currentPageCount = 0,
+    currentFileNotice: string | null = null,
   ) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
@@ -35,6 +36,7 @@ describe("ProductionSetWorkspace add flow", () => {
       root?.render(
         <ProductionSetWorkspace
           currentFile={currentFile}
+          currentFileNotice={currentFileNotice}
           currentPageCount={currentPageCount}
           progress={progress}
           onAddFile={onAddFile}
@@ -67,6 +69,17 @@ describe("ProductionSetWorkspace add flow", () => {
     expect(container?.textContent).toContain("streamed.pdf");
     expect(container?.textContent).toContain("340 pages");
     expect(container?.textContent).not.toContain("Add PDFs to build the production order.");
+  });
+
+  it("shows the unsaved-changes notice instead of seeding a dirty current document", () => {
+    // A dirty document's on-disk bytes are stale (pre-edit), so App passes
+    // currentFile=null plus a notice — the omission must be visible, and
+    // nothing may be seeded that would Bates-stamp the stale disk file.
+    const notice = "The open document has unsaved changes, so it was not added. Save the current PDF first, then reopen this tool to include it.";
+    render(async () => null, null, 0, notice);
+
+    expect(container?.textContent).toContain(notice);
+    expect(container?.textContent).toContain("Add PDFs to build the production order.");
   });
 
   it("adds a descriptor without bytes, deferring the page count when uncounted", async () => {

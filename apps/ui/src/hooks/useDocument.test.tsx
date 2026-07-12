@@ -29,6 +29,10 @@ const engineState = vi.hoisted(() => ({
   flattenedMarkupHandles: [] as PdfDocumentHandle[],
   applyEditsDeferred: null as Deferred<PdfDocumentHandle> | null,
   applyEditsStarted: null as Deferred<void> | null,
+  // When true, close() takes a macrotask (like the real engine's async
+  // work), giving React a chance to flush state between a commit and the
+  // mutation queue's finally — the window the tab-store regression needs.
+  slowClose: false,
 }));
 
 vi.mock("@raiopdf/engine-local", () => {
@@ -66,6 +70,9 @@ vi.mock("@raiopdf/engine-local", () => {
 
     async close(handle: PdfDocumentHandle) {
       engineState.closeCalls.push(handle);
+      if (engineState.slowClose) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       return undefined;
     }
 
@@ -111,6 +118,7 @@ describe("useDocument openFile", () => {
     engineState.flattenedMarkupHandles.length = 0;
     engineState.applyEditsDeferred = null;
     engineState.applyEditsStarted = null;
+    engineState.slowClose = false;
     latest = null;
   });
 
@@ -379,6 +387,66 @@ describe("useDocument openFile", () => {
       "one.pdf",
       "two.pdf",
     ]);
+  });
+
+  it("keeps the tab store generation in sync after a queued mutation commits", async () => {
+    // Regression (audit #3): the mutation queue used to write the
+    // render-time document captured at enqueue time back into the tab store
+    // in its `finally`, regressing the stored generation to N after the
+    // commit had already moved it to N+1 — so generation guards read a
+    // stale value ("document changed" rejections, or worse, a real lost
+    // update when a slow byte op passed its guard against the regressed
+    // value).
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({ bytes: new Uint8Array([1]), name: "one.pdf" });
+    });
+
+    // The real engine's close spans a macrotask, so React flushes the
+    // commit before the queue's finally runs — the exact window in which
+    // the old code stomped the tab store with the pre-mutation document.
+    engineState.slowClose = true;
+    engineState.applyEditsDeferred = createDeferred<PdfDocumentHandle>();
+    engineState.applyEditsStarted = createDeferred<void>();
+    let mutation: Promise<boolean> | null = null;
+    act(() => {
+      mutation = getHook().applyEdits([
+        {
+          type: "highlight",
+          pageIndex: 0,
+          rects: [{ x: 10, y: 10, w: 100, h: 12 }],
+        },
+      ], { flatten: false });
+    });
+    await engineState.applyEditsStarted.promise;
+
+    // Resolve OUTSIDE act(): the regression needs React's real scheduler to
+    // flush the commit (macrotask) before the queue's finally runs — inside
+    // act() all updates coalesce into one batch and the stale write is
+    // masked by application order.
+    engineState.applyEditsDeferred!.resolve("edited-handle" as PdfDocumentHandle);
+    await mutation!;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => {});
+
+    const committedGeneration = getHook().document.generation;
+    // The tab store must reflect the committed generation, not the
+    // pre-mutation snapshot captured at enqueue time.
+    expect(getHook().getGeneration()).toBe(committedGeneration);
+
+    // And a follow-up guarded byte replacement against the committed
+    // generation must not be spuriously rejected as stale.
+    let replaced: Awaited<ReturnType<UseDocumentValue["replaceBytes"]>> | undefined;
+    await act(async () => {
+      replaced = await getHook().replaceBytes(new Uint8Array([9]), {
+        dirty: true,
+        expectedGeneration: committedGeneration,
+        fileName: "replaced.pdf",
+      });
+    });
+    expect(replaced).toBe("replaced");
   });
 
   it("blocks opening a new tab while the current document has a mutation in flight", async () => {

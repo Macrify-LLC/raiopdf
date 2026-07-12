@@ -16,9 +16,21 @@ export type VerifyOptions = {
  * Lowercase and reduce any run of non-letter/non-digit characters to a single
  * space. Uses Unicode classes so CJK / Cyrillic / Greek terms are preserved
  * (an ASCII-only strip would erase them, making them unverifiable forever).
+ *
+ * Unicode-normalizes (NFKD) and strips combining marks first so composed and
+ * decomposed spellings compare equal: a text layer that extracts "Muñoz" as
+ * "Mun" + combining tilde + "oz" must still match the composed needle
+ * "muñoz" — otherwise a surviving term would falsely verify as removed.
+ * Exported for direct testing (a decomposed haystack can't be produced with
+ * the WinAnsi test fonts).
  */
-function normalizeSpaced(value: string): string {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+export function normalizeSpaced(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 function escapeRegExp(value: string): string {

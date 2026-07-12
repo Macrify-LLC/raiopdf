@@ -220,31 +220,23 @@ export function handleRotate(
 }
 
 // ---- compress_pdf ----
+// Deliberately no tuning parameters: the backing implementation is a fixed
+// qpdf recipe (object streams + flate recompress + linearize). Earlier
+// versions declared `quality`/`grayscale` and silently ignored both; keeping
+// the schema honest beats advertising knobs that do nothing.
 export const compressInputSchema = {
   input: absoluteInput,
   output: absoluteOutput,
-  quality: z
-    .number()
-    .int()
-    .min(1)
-    .max(9)
-    .optional()
-    .describe("Optimize level 1 (light) to 9 (aggressive). Default 5."),
-  grayscale: z.boolean().optional().describe("Convert to grayscale while compressing."),
 };
 export const compressOutputSchema = outputResultSchema;
 export interface CompressInput {
   input: string;
   output: string;
-  quality?: number | undefined;
-  grayscale?: boolean | undefined;
 }
 export function handleCompress(
   input: CompressInput,
   _engine: EngineHandle,
 ): Promise<StructuredToolResult> {
-  void input.quality;
-  void input.grayscale;
   return handleCompressWithQpdf(input);
 }
 

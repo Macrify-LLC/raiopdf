@@ -10,9 +10,9 @@ scanning, metadata scrubbing. No cloud, no account, no telemetry, no AI in the p
 the only automatic network access is the signed update check against GitHub Releases.
 Windows-first; macOS later.
 
-**Status (2026-07-08):** public alpha, version 0.1.2. Signed Windows installers are
+**Status (2026-07-12):** public alpha, version 0.1.3. Signed Windows installers are
 published and downloadable on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases)
-(0.1.0 shipped 2026-07-06, 0.1.1 on 2026-07-07); the landing page at raio.macrify.me tracks
+(0.1.0 shipped 2026-07-06, 0.1.1 on 2026-07-07, 0.1.2 on 2026-07-08); the landing page at raio.macrify.me tracks
 the latest complete signed release. It's still an alpha — don't call it feature-complete,
 "1.0," or production-stable. Per-release notes live in `CHANGELOG.md`.
 

@@ -2120,8 +2120,19 @@ fn forward_chunked_request_body(
             }
         }
 
-        forward_chunk_bytes(client, upstream, &mut pending, size + 2)?;
+        forward_chunk_bytes(client, upstream, &mut pending, chunk_span(size)?)?;
     }
+}
+
+/// Chunk payload length plus its trailing CRLF, guarding the addition against
+/// overflow on a hostile chunk-size line (e.g. `ffffffffffffffff`).
+fn chunk_span(size: usize) -> io::Result<usize> {
+    size.checked_add(2).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("chunk size too large: {size}"),
+        )
+    })
 }
 
 fn read_chunk_line(client: &mut TcpStream, pending: &mut Vec<u8>) -> io::Result<Vec<u8>> {
@@ -2289,8 +2300,7 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "ghostscript binary not found in payload".to_string())?;
     let (icc_source, def_source) = resolve_pdfa_resources(&ghostscript)?;
 
-    let work_dir = unique_temp_dir("raiopdf-pdfa");
-    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let work_dir = create_unique_temp_dir("raiopdf-pdfa")?;
     let _cleanup = TempDirGuard(work_dir.clone());
 
     let in_path = work_dir.join("in.pdf");
@@ -2302,40 +2312,45 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
     fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
 
     let policy = if strict { "2" } else { "1" };
-    let mut command = Command::new(&ghostscript);
-    command
-        .current_dir(&work_dir)
-        .arg(format!("-dPDFA={level}"))
-        .arg("-dBATCH")
-        .arg("-dNOPAUSE")
-        // SAFER sandbox over the untrusted input. `PDFA_def.ps` and `in.pdf`
-        // are command-line operands (auto-permitted read under SAFER) and
-        // `out.pdf` comes from -sOutputFile (auto-permitted write) — their
-        // explicit permits are belt-and-braces. `srgb.icc`, however, is opened
-        // at run time BY `PDFA_def.ps` under its literal relative name, which
-        // SAFER does not auto-permit: without that permit the output intent
-        // fails to load and PDF/A processing aborts (verified against the
-        // bundled gs 10.07.1). Relative permit names match because the process
-        // cwd is the work dir.
-        .arg("-dSAFER")
-        .arg("--permit-file-read=srgb.icc")
-        .arg("--permit-file-read=PDFA_def.ps")
-        .arg("--permit-file-read=in.pdf")
-        .arg("--permit-file-write=out.pdf")
-        .arg("-sColorConversionStrategy=RGB")
-        .arg("-sDEVICE=pdfwrite")
-        .arg(format!("-dPDFACompatibilityPolicy={policy}"))
-        .arg("-sOutputFile=out.pdf")
-        .arg("PDFA_def.ps")
-        .arg("in.pdf")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    apply_platform_spawn_flags(&mut command);
+    // SAFER sandbox over the untrusted input. `PDFA_def.ps` and `in.pdf`
+    // are command-line operands (auto-permitted read under SAFER) and
+    // `out.pdf` comes from -sOutputFile (auto-permitted write) — their
+    // explicit permits are belt-and-braces. `srgb.icc`, however, is opened
+    // at run time BY `PDFA_def.ps` under its literal relative name, which
+    // SAFER does not auto-permit: without that permit the output intent
+    // fails to load and PDF/A processing aborts (verified against the
+    // bundled gs 10.07.1). Relative permit names match because the process
+    // cwd is the work dir.
+    let arguments: Vec<OsString> = [
+        format!("-dPDFA={level}"),
+        "-dBATCH".to_string(),
+        "-dNOPAUSE".to_string(),
+        "-dSAFER".to_string(),
+        "--permit-file-read=srgb.icc".to_string(),
+        "--permit-file-read=PDFA_def.ps".to_string(),
+        "--permit-file-read=in.pdf".to_string(),
+        "--permit-file-write=out.pdf".to_string(),
+        "-sColorConversionStrategy=RGB".to_string(),
+        "-sDEVICE=pdfwrite".to_string(),
+        format!("-dPDFACompatibilityPolicy={policy}"),
+        "-sOutputFile=out.pdf".to_string(),
+        "PDFA_def.ps".to_string(),
+        "in.pdf".to_string(),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
 
-    let output = command
-        .output()
-        .map_err(|error| format!("ghostscript spawn failed: {error}"))?;
+    // Deadline-bounded: a pathological PDF must not wedge Ghostscript — and
+    // this request thread — forever (idle shutdown counts active requests).
+    let output = path_ops::run_command_with_timeout(
+        &ghostscript,
+        &arguments,
+        Some(&work_dir),
+        &[],
+        local_tool_timeout(pdf.len()),
+    )
+    .map_err(|error| error.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2356,15 +2371,15 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
 }
 
 fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
-    let work_dir = unique_temp_dir("raiopdf-compress");
-    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let work_dir = create_unique_temp_dir("raiopdf-compress")?;
     let _cleanup = TempDirGuard(work_dir.clone());
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
     fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
 
-    let toolchain = path_ops::PathOpsToolchain::discover(None);
+    let toolchain =
+        path_ops::PathOpsToolchain::discover(None).with_tool_timeout(local_tool_timeout(pdf.len()));
     path_ops::compress(&toolchain, &in_path, &out_path).map_err(|error| error.to_string())?;
 
     let compressed =
@@ -2380,8 +2395,7 @@ fn run_path_op_ocr_cancelable(
     options: &path_ops::OcrOptions,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<u8>, String> {
-    let work_dir = unique_temp_dir("raiopdf-ocr");
-    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let work_dir = create_unique_temp_dir("raiopdf-ocr")?;
     let _cleanup = TempDirGuard(work_dir.clone());
 
     let in_path = work_dir.join("in.pdf");
@@ -2413,15 +2427,15 @@ fn run_path_op_ocr_cancelable(
 }
 
 fn run_path_op_redact_areas(pdf: &[u8], areas: &[path_ops::RedactArea]) -> Result<Vec<u8>, String> {
-    let work_dir = unique_temp_dir("raiopdf-redact");
-    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let work_dir = create_unique_temp_dir("raiopdf-redact")?;
     let _cleanup = TempDirGuard(work_dir.clone());
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
     fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
 
-    let toolchain = path_ops::PathOpsToolchain::discover(None);
+    let toolchain =
+        path_ops::PathOpsToolchain::discover(None).with_tool_timeout(local_tool_timeout(pdf.len()));
     path_ops::redact_areas(&toolchain, &in_path, areas, &out_path, &work_dir)
         .map_err(|error| error.to_string())?;
 
@@ -2475,7 +2489,16 @@ fn resolve_pdfa_resources(ghostscript: &Path) -> Result<(PathBuf, PathBuf), Stri
 }
 
 fn ghostscript_share_root(ghostscript: &Path) -> Option<PathBuf> {
-    let output = Command::new(ghostscript).arg("--version").output().ok()?;
+    // The `/usr/share/ghostscript/<version>` layout only exists on Unix
+    // systems; on Windows the probe is useless and its `gs --version` spawn
+    // (without the no-window flags) would flash a console window.
+    if cfg!(windows) {
+        return None;
+    }
+    let mut command = Command::new(ghostscript);
+    command.arg("--version").stdin(Stdio::null());
+    apply_platform_spawn_flags(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -2492,8 +2515,7 @@ fn ghostscript_share_root(ghostscript: &Path) -> Option<PathBuf> {
 fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
     let qpdf = resolve_qpdf().ok_or_else(|| "qpdf binary not found in payload".to_string())?;
 
-    let work_dir = unique_temp_dir("raiopdf-decrypt");
-    fs::create_dir_all(&work_dir).map_err(|error| format!("temp dir: {error}"))?;
+    let work_dir = create_unique_temp_dir("raiopdf-decrypt")?;
     let _cleanup = TempDirGuard(work_dir.clone());
 
     let in_path = work_dir.join("in.pdf");
@@ -2502,21 +2524,24 @@ fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
     // qpdf --password-file reads the first line; an empty file == empty password.
     fs::write(&pw_path, password).map_err(|error| format!("write password: {error}"))?;
 
-    let mut command = Command::new(&qpdf);
-    command
-        .arg("--decrypt")
-        .arg(format!("--password-file={}", pw_path.display()))
-        .arg("--warning-exit-0")
-        .arg(&in_path)
-        .arg("-")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    apply_platform_spawn_flags(&mut command);
+    let arguments: Vec<OsString> = vec![
+        OsString::from("--decrypt"),
+        OsString::from(format!("--password-file={}", pw_path.display())),
+        OsString::from("--warning-exit-0"),
+        in_path.as_os_str().to_os_string(),
+        OsString::from("-"),
+    ];
 
-    let output = command
-        .output()
-        .map_err(|error| format!("qpdf spawn failed: {error}"))?;
+    // Deadline-bounded: a pathological PDF must not wedge qpdf — and this
+    // request thread — forever (idle shutdown counts active requests).
+    let output = path_ops::run_command_with_timeout(
+        &qpdf,
+        &arguments,
+        None,
+        &[],
+        local_tool_timeout(pdf.len()),
+    )
+    .map_err(|error| error.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2547,10 +2572,45 @@ fn resolve_qpdf() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn unique_temp_dir(prefix: &str) -> PathBuf {
+/// Generous, size-scaled wall-clock bound for one external tool invocation on
+/// the `/local/*` endpoints: 2 minutes base + 1 minute per 50 MB of input.
+/// The goal is bounding a wedged qpdf/Ghostscript (which would otherwise pin
+/// `active_requests` and permanently defeat idle shutdown), not policing slow
+/// jobs.
+fn local_tool_timeout(input_bytes: usize) -> Duration {
+    const BASE_SECS: u64 = 120;
+    const SECS_PER_STEP: u64 = 60;
+    const STEP_BYTES: u64 = 50 * 1024 * 1024;
+    Duration::from_secs(BASE_SECS + SECS_PER_STEP * (input_bytes as u64 / STEP_BYTES))
+}
+
+/// Create a fresh private work dir under the OS temp dir. The name embeds
+/// PID + timestamp + a process-local counter, and creation uses
+/// `fs::create_dir` (not `create_dir_all`) so a leftover directory from a
+/// crashed earlier session — possible after PID reuse — is never adopted:
+/// a stale `out.pdf` in an adopted dir could be returned as another
+/// document's conversion output. On a name collision we retry with the next
+/// counter value.
+fn create_unique_temp_dir(prefix: &str) -> Result<PathBuf, String> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
-    env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), sequence))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+
+    for _ in 0..16 {
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = env::temp_dir().join(format!(
+            "{prefix}-{}-{nanos}-{sequence}",
+            std::process::id()
+        ));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("temp dir: {error}")),
+        }
+    }
+    Err("temp dir: could not create a unique work directory".to_string())
 }
 
 struct TempDirGuard(PathBuf);
@@ -2846,10 +2906,12 @@ fn matches_origin_host(origin: &str, scheme: &str, host: &str) -> bool {
 
     host_and_port == host
         || host_and_port.strip_prefix(host).is_some_and(|port| {
-            let digits = &port[1..];
-            port.starts_with(':')
-                && !digits.is_empty()
-                && digits.chars().all(|char| char.is_ascii_digit())
+            // `strip_prefix(':')` rather than slicing: `&port[1..]` panics on
+            // a multi-byte character at index 1 (pre-auth, attacker-supplied
+            // Origin header).
+            port.strip_prefix(':').is_some_and(|digits| {
+                !digits.is_empty() && digits.chars().all(|char| char.is_ascii_digit())
+            })
         })
 }
 
@@ -3935,6 +3997,58 @@ mod tests {
         assert!(
             fs::metadata(&log).expect("active log metadata").len() <= 10,
             "active log should stay within the size cap"
+        );
+    }
+
+    #[test]
+    fn origin_check_handles_multibyte_hosts_without_panicking() {
+        // A multi-byte character right after the host prefix used to panic in
+        // the byte-index slice (`&port[1..]`) — pre-auth, attacker-controlled.
+        assert!(!is_allowed_cors_origin("http://localhosté:3000"));
+        assert!(!is_allowed_cors_origin("http://localhost\u{00E9}"));
+        assert!(!is_allowed_cors_origin("http://localhostX:3000"));
+        assert!(is_allowed_cors_origin("http://localhost:3000"));
+        assert!(is_allowed_cors_origin("http://localhost"));
+        assert!(!is_allowed_cors_origin("http://localhost:"));
+        assert!(!is_allowed_cors_origin("http://localhost:12x"));
+    }
+
+    #[test]
+    fn chunk_span_rejects_overflowing_chunk_sizes() {
+        assert_eq!(chunk_span(4).unwrap(), 6);
+        assert_eq!(chunk_span(usize::MAX - 2).unwrap(), usize::MAX);
+        // `ffffffffffffffff` parses to usize::MAX on 64-bit targets; the +2
+        // for the trailing CRLF must not wrap around.
+        let error = chunk_span(usize::MAX).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(chunk_span(usize::MAX - 1).is_err());
+    }
+
+    #[test]
+    fn create_unique_temp_dir_creates_fresh_directories() {
+        let first = create_unique_temp_dir("raiopdf-test-unique").expect("first dir");
+        let second = create_unique_temp_dir("raiopdf-test-unique").expect("second dir");
+        assert_ne!(first, second, "consecutive calls must not collide");
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+    }
+
+    #[test]
+    fn local_tool_timeout_scales_with_input_size() {
+        assert_eq!(local_tool_timeout(0), Duration::from_secs(120));
+        assert_eq!(
+            local_tool_timeout(49 * 1024 * 1024),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            local_tool_timeout(50 * 1024 * 1024),
+            Duration::from_secs(180)
+        );
+        assert_eq!(
+            local_tool_timeout(500 * 1024 * 1024),
+            Duration::from_secs(120 + 10 * 60)
         );
     }
 

@@ -266,13 +266,109 @@ pub enum WordScriptResult {
 pub struct TimeoutKillPlan {
     pub powershell_pid: u32,
     pub winword_pid: Option<u32>,
+    /// Fallback for when the `@@RAIOPDF_WORD_PID@@` marker never arrived
+    /// (Word hung at COM instance creation, before the script could print
+    /// it): WINWORD pids that appeared during the conversion window and have
+    /// no visible window. Empty whenever the marker pid is known.
+    pub fallback_winword_pids: Vec<u32>,
 }
 
-pub fn plan_timeout_kills(stdout: &str, powershell_pid: u32) -> TimeoutKillPlan {
+/// One row of the WINWORD process table used for the marker-less timeout
+/// fallback. `has_visible_window` distinguishes a user's own Word (which has
+/// a titled top-level window) from a hidden DCOM-spawned automation instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WinwordProcess {
+    pub pid: u32,
+    pub has_visible_window: bool,
+}
+
+/// Decide what to kill after a Word-automation timeout.
+///
+/// The primary path is the pid marker the script prints as soon as it can
+/// attribute the WINWORD it spawned — that pid is killed unconditionally.
+/// When the marker is absent (Word wedged inside `New-Object -ComObject`,
+/// before the marker line), the DCOM-spawned WINWORD is not a child of
+/// PowerShell and would survive the PowerShell kill invisibly, holding the
+/// input document locked. The fallback kills only pids that are BOTH:
+///
+/// 1. new — present in the post-timeout snapshot but not the pre-spawn one
+///    (a pre-existing pid can only be an instance we didn't start), AND
+/// 2. windowless — no visible window title, the signature of a hidden
+///    automation instance (a Word the user launched has a titled window).
+///
+/// Residual risk, accepted: a *different* automation tool's hidden Word
+/// instance started during our conversion window would match both filters
+/// and be killed. The window is seconds long and hidden instances are
+/// transient by nature, so this beats the alternative (an orphaned WINWORD
+/// holding the user's document locked indefinitely).
+pub fn plan_timeout_kills(
+    stdout: &str,
+    powershell_pid: u32,
+    winword_pids_before: &[u32],
+    winword_after: &[WinwordProcess],
+) -> TimeoutKillPlan {
+    let winword_pid = parse_winword_pid(stdout);
+    let fallback_winword_pids = if winword_pid.is_some() {
+        Vec::new()
+    } else {
+        winword_after
+            .iter()
+            .filter(|process| {
+                !winword_pids_before.contains(&process.pid) && !process.has_visible_window
+            })
+            .map(|process| process.pid)
+            .collect()
+    };
+
     TimeoutKillPlan {
         powershell_pid,
-        winword_pid: parse_winword_pid(stdout),
+        winword_pid,
+        fallback_winword_pids,
     }
+}
+
+/// Parse `tasklist /v /fo csv /nh` output into WINWORD rows. The verbose CSV
+/// row is: Image Name, PID, Session Name, Session#, Mem Usage, Status, User
+/// Name, CPU Time, Window Title — quoted fields, and Mem Usage contains a
+/// comma ("50,000 K"), so this walks quotes rather than splitting on commas.
+/// A hidden automation instance reports the literal window title "N/A".
+/// Non-CSV lines (e.g. tasklist's "INFO: No tasks..." message) are skipped.
+pub fn parse_tasklist_verbose_csv(output: &str) -> Vec<WinwordProcess> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let fields = parse_csv_line(line.trim())?;
+            if fields.len() < 9 {
+                return None;
+            }
+            let pid = fields[1].parse::<u32>().ok()?;
+            let title = fields[8].trim();
+            Some(WinwordProcess {
+                pid,
+                has_visible_window: !title.is_empty() && title != "N/A",
+            })
+        })
+        .collect()
+}
+
+/// Minimal CSV field parser for tasklist output: fields are always quoted;
+/// commas inside quotes are literal. Returns `None` for non-CSV lines.
+fn parse_csv_line(line: &str) -> Option<Vec<String>> {
+    if !line.starts_with('"') {
+        return None;
+    }
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in line.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => fields.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    fields.push(current);
+    Some(fields)
 }
 
 pub fn parse_word_script_stdout(stdout: &str) -> OpResult<WordScriptOutcome> {
@@ -675,6 +771,12 @@ fn run_word_powershell(args: &[std::ffi::OsString], timeout: Duration) -> OpResu
         .stderr(Stdio::piped());
     crate::apply_platform_spawn_flags(&mut command);
 
+    // Pre-spawn WINWORD snapshot for the marker-less timeout fallback (see
+    // `plan_timeout_kills`). Taken before the spawn so any pid that shows up
+    // later is attributable to the conversion window.
+    let winword_pids_before: Option<Vec<u32>> = query_winword_processes()
+        .map(|processes| processes.iter().map(|process| process.pid).collect());
+
     let mut child = command.spawn().map_err(|error| {
         word_error(
             path_ops::ERR_OP_FAILED,
@@ -703,9 +805,24 @@ fn run_word_powershell(args: &[std::ffi::OsString], timeout: Duration) -> OpResu
         }
         if started.elapsed() >= timeout {
             let stdout_so_far = locked_output_string(&stdout);
-            let kill_plan = plan_timeout_kills(&stdout_so_far, powershell_pid);
+            // Only re-enumerate when the fallback can actually be used: the
+            // marker is missing AND the pre-spawn snapshot succeeded. With no
+            // before-set, a fallback kill could hit the user's own Word.
+            let winword_after = match (&winword_pids_before, parse_winword_pid(&stdout_so_far)) {
+                (Some(_), None) => query_winword_processes().unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            let kill_plan = plan_timeout_kills(
+                &stdout_so_far,
+                powershell_pid,
+                winword_pids_before.as_deref().unwrap_or(&[]),
+                &winword_after,
+            );
             if let Some(winword_pid) = kill_plan.winword_pid {
                 kill_pid(winword_pid);
+            }
+            for winword_pid in &kill_plan.fallback_winword_pids {
+                kill_pid(*winword_pid);
             }
             let _ = child.kill();
             let _ = child.wait();
@@ -755,6 +872,30 @@ fn locked_output_string(output: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> S
         .lock()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default()
+}
+
+/// Snapshot the running WINWORD.EXE processes via `tasklist /v` (window
+/// titles included). `None` when tasklist itself fails — callers must treat
+/// that as "no snapshot" and skip the fallback kill entirely, never as an
+/// empty before-set (which would make every running Word look new).
+#[cfg(windows)]
+fn query_winword_processes() -> Option<Vec<WinwordProcess>> {
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new("tasklist.exe");
+    command
+        .args(["/v", "/fo", "csv", "/nh", "/fi", "IMAGENAME eq WINWORD.EXE"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::apply_platform_spawn_flags(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_tasklist_verbose_csv(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 #[cfg(windows)]
@@ -1100,23 +1241,101 @@ mod tests {
 
     #[test]
     fn timeout_kill_plan_uses_only_attributable_pid() {
-        let plan = plan_timeout_kills("@@RAIOPDF_WORD_PID@@ 5150\nnoise", 2400);
+        let plan = plan_timeout_kills("@@RAIOPDF_WORD_PID@@ 5150\nnoise", 2400, &[], &[]);
         assert_eq!(
             plan,
             TimeoutKillPlan {
                 powershell_pid: 2400,
                 winword_pid: Some(5150),
+                fallback_winword_pids: Vec::new(),
             }
         );
 
-        let plan = plan_timeout_kills("no pid yet", 2400);
+        let plan = plan_timeout_kills("no pid yet", 2400, &[], &[]);
         assert_eq!(
             plan,
             TimeoutKillPlan {
                 powershell_pid: 2400,
                 winword_pid: None,
+                fallback_winword_pids: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn timeout_kill_plan_marker_present_never_uses_the_fallback() {
+        // Even with new windowless pids in the after-snapshot, a known marker
+        // pid means the fallback stays empty — only the attributed instance
+        // is killed.
+        let after = vec![
+            WinwordProcess {
+                pid: 5150,
+                has_visible_window: false,
+            },
+            WinwordProcess {
+                pid: 7777,
+                has_visible_window: false,
+            },
+        ];
+        let plan = plan_timeout_kills("@@RAIOPDF_WORD_PID@@ 5150", 2400, &[], &after);
+        assert_eq!(plan.winword_pid, Some(5150));
+        assert!(plan.fallback_winword_pids.is_empty());
+    }
+
+    #[test]
+    fn timeout_kill_plan_without_marker_kills_only_new_windowless_winword() {
+        let before = vec![1111, 2222];
+        let after = vec![
+            // Pre-existing hidden instance: spared (we cannot attribute it).
+            WinwordProcess {
+                pid: 1111,
+                has_visible_window: false,
+            },
+            // Pre-existing visible instance (user's Word): spared.
+            WinwordProcess {
+                pid: 2222,
+                has_visible_window: true,
+            },
+            // New but visible: the user launched Word mid-conversion — spared.
+            WinwordProcess {
+                pid: 3333,
+                has_visible_window: true,
+            },
+            // New and windowless: the hidden DCOM instance our conversion
+            // spawned before Word wedged — killed.
+            WinwordProcess {
+                pid: 4444,
+                has_visible_window: false,
+            },
+        ];
+        let plan = plan_timeout_kills("no marker", 2400, &before, &after);
+        assert_eq!(plan.winword_pid, None);
+        assert_eq!(plan.fallback_winword_pids, vec![4444]);
+    }
+
+    #[test]
+    fn parses_tasklist_verbose_csv_rows() {
+        let output = concat!(
+            "\"WINWORD.EXE\",\"4242\",\"Console\",\"1\",\"150,204 K\",\"Running\",",
+            "\"DESKTOP\\jacob\",\"0:00:03\",\"Brief - Word\"\r\n",
+            "\"WINWORD.EXE\",\"5150\",\"Console\",\"1\",\"88,004 K\",\"Unknown\",",
+            "\"DESKTOP\\jacob\",\"0:00:00\",\"N/A\"\r\n",
+            "INFO: No tasks are running which match the specified criteria.\r\n",
+        );
+        assert_eq!(
+            parse_tasklist_verbose_csv(output),
+            vec![
+                WinwordProcess {
+                    pid: 4242,
+                    has_visible_window: true,
+                },
+                WinwordProcess {
+                    pid: 5150,
+                    has_visible_window: false,
+                },
+            ]
+        );
+        assert!(parse_tasklist_verbose_csv("").is_empty());
     }
 
     #[test]

@@ -94,6 +94,67 @@ function extractInstallerVersion(exeFilename) {
   return match[1];
 }
 
+/**
+ * Version embedded in a source installer filename — the raw Tauri NSIS output
+ * (`RaioPDF_1.2.3_x64-setup.exe`) or an already-renamed canonical asset. Same
+ * extraction the wired release path (prepare-signed-release-assets) uses.
+ */
+export function sourceInstallerVersion(exeFilename) {
+  requireNonEmptyString("exeFilename", exeFilename);
+  // Canonical asset names first: the loose fallback's semver prerelease part
+  // would greedily swallow the "-windows-x64" suffix.
+  const canonical = CANONICAL_INSTALLER_RE.exec(exeFilename);
+  if (canonical) {
+    return canonical[1];
+  }
+  const match = /(?:^|[_-])([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)(?:[_-])/.exec(
+    exeFilename,
+  );
+  if (!match) {
+    throw new Error(
+      `generate-latest-json: could not read a version from installer filename ${JSON.stringify(
+        exeFilename,
+      )}.`,
+    );
+  }
+  return match[1];
+}
+
+/**
+ * Refuse to build a manifest around a stale build output. The manifest's
+ * signature is read from the .sig sitting next to whatever .exe is in the
+ * NSIS dir — if that installer isn't the tag's version, uploading the result
+ * publishes the PREVIOUS version's signature under the new tag's canonical
+ * URL, and every client's auto-update fails signature verification until the
+ * manifest is fixed. Same enforcement the wired release path
+ * (prepare-signed-release-assets) applies.
+ */
+export function assertSourceInstallerMatchesTag(
+  exeFilename,
+  tagVersion,
+  { allowVersionMismatch = false } = {},
+) {
+  const installerVersion = sourceInstallerVersion(exeFilename);
+  if (installerVersion === tagVersion) {
+    return;
+  }
+  if (allowVersionMismatch) {
+    console.warn(
+      `generate-latest-json: WARNING: source installer ${exeFilename} is version ${installerVersion}, ` +
+        `not tag version ${tagVersion} — continuing because --allow-version-mismatch was passed. ` +
+        "The manifest signature will belong to that installer's bytes; only use this if you know why.",
+    );
+    return;
+  }
+  throw new Error(
+    `generate-latest-json: source installer ${exeFilename} is version ${installerVersion}, ` +
+      `not tag version ${tagVersion}. The NSIS directory holds a stale build — publishing its ` +
+      `signature under ${JSON.stringify(tagVersion)} would break auto-update signature ` +
+      "verification for every client. Rebuild and sign the installer for this tag " +
+      "(or pass --allow-version-mismatch if you are certain).",
+  );
+}
+
 export function buildLatestJsonManifest({ tag, exeFilename, signature, pubDate }) {
   const resolved = normalizeTag(tag);
   requireNonEmptyString("exeFilename", exeFilename);
@@ -177,7 +238,7 @@ export function validateLatestJsonManifest(manifest, { tag, exeFilename }) {
 }
 
 function parseArgs(argv) {
-  const args = { tag: undefined, upload: false };
+  const args = { tag: undefined, upload: false, allowVersionMismatch: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--tag") {
@@ -190,6 +251,8 @@ function parseArgs(argv) {
       args.tag = arg.slice("--tag=".length);
     } else if (arg === "--upload") {
       args.upload = true;
+    } else if (arg === "--allow-version-mismatch") {
+      args.allowVersionMismatch = true;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -201,9 +264,15 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(`Usage: node scripts/generate-latest-json.mjs [--tag vX.Y.Z] [--upload]
+       [--allow-version-mismatch]
 
 Generates apps/shell/src-tauri/target/release/bundle/nsis/latest.json for the
-signed NSIS installer and its updater .sig file.`);
+signed NSIS installer and its updater .sig file.
+
+The source installer's embedded version must match the tag; a stale build in
+the NSIS directory otherwise publishes the previous version's signature under
+the new tag and breaks auto-update fleet-wide. --allow-version-mismatch skips
+that check (expert escape hatch only).`);
 }
 
 function resolveTag(tagOverride) {
@@ -287,6 +356,9 @@ function main() {
   }
 
   const { exeFilename: sourceExeFilename, sigPath } = findNsisArtifacts(NSIS_DIR);
+  assertSourceInstallerMatchesTag(sourceExeFilename, resolved.version, {
+    allowVersionMismatch: args.allowVersionMismatch,
+  });
   const publicExeFilename = canonicalInstallerFilename(resolved.version);
   const signature = readFileSync(sigPath, "utf8").trim();
   const manifest = buildLatestJsonManifest({

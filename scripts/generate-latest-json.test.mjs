@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  assertSourceInstallerMatchesTag,
   buildLatestJsonManifest,
   canonicalInstallerFilename,
   isPrereleaseTag,
   isSemverPrereleaseVersion,
+  sourceInstallerVersion,
 } from "./generate-latest-json.mjs";
 
 describe("buildLatestJsonManifest", () => {
@@ -91,5 +93,56 @@ describe("buildLatestJsonManifest", () => {
     assert.equal(isPrereleaseTag("v0.2.0-rc.1"), true);
     assert.equal(isPrereleaseTag("v0.2.0"), false);
     assert.equal(isSemverPrereleaseVersion("0.2.0+build.5"), false);
+  });
+});
+
+describe("source installer version enforcement", () => {
+  it("reads the version from raw Tauri NSIS output and canonical asset names", () => {
+    assert.equal(sourceInstallerVersion("RaioPDF_0.1.2_x64-setup.exe"), "0.1.2");
+    assert.equal(sourceInstallerVersion("RaioPDF-0.1.2-windows-x64-setup.exe"), "0.1.2");
+    assert.equal(
+      sourceInstallerVersion("RaioPDF_0.2.0-beta.1_x64-setup.exe"),
+      "0.2.0-beta.1",
+    );
+  });
+
+  it("rejects filenames that carry no readable version", () => {
+    assert.throws(
+      () => sourceInstallerVersion("RaioPDF-setup.exe"),
+      /could not read a version/,
+    );
+  });
+
+  it("accepts a source installer whose version matches the tag", () => {
+    assert.doesNotThrow(() =>
+      assertSourceInstallerMatchesTag("RaioPDF_0.1.2_x64-setup.exe", "0.1.2"),
+    );
+  });
+
+  it("hard-fails on a stale installer from a previous version", () => {
+    // The exact failure mode this guard exists for: a stale build dir under a
+    // new tag would publish the OLD installer's signature at the NEW tag's
+    // canonical URL and break auto-update signature verification fleet-wide.
+    assert.throws(
+      () => assertSourceInstallerMatchesTag("RaioPDF_0.1.1_x64-setup.exe", "0.1.2"),
+      /is version 0\.1\.1, not tag version 0\.1\.2[\s\S]*stale build/,
+    );
+  });
+
+  it("allows a mismatch only behind the explicit escape hatch", () => {
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    try {
+      assert.doesNotThrow(() =>
+        assertSourceInstallerMatchesTag("RaioPDF_0.1.1_x64-setup.exe", "0.1.2", {
+          allowVersionMismatch: true,
+        }),
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /--allow-version-mismatch/);
   });
 });

@@ -19,7 +19,17 @@ const APP_LOG_FILE_NAME: &str = "app.log";
 const APP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const APP_LOG_GENERATIONS: usize = 2;
 const LOG_EXPORT_MAX_BYTES: u64 = 96 * 1024;
-const SESSION_STATE_FILE_NAME: &str = "session.state";
+/// Legacy single-slot session marker (pre-multi-instance versions). Read and
+/// removed once by the startup scan; never written anymore.
+const LEGACY_SESSION_STATE_FILE_NAME: &str = "session.state";
+/// Per-instance session markers live here as `session-<instance-id>.state`.
+/// One marker per running process: with several RaioPDF processes sharing
+/// this app-data dir ("Open in New Window", the .pdf file association), a
+/// single shared marker made every second instance report a phantom crash and
+/// let its clean exit mask a real crash of the first.
+const SESSIONS_DIR_NAME: &str = "sessions";
+const SESSION_MARKER_PREFIX: &str = "session-";
+const SESSION_MARKER_SUFFIX: &str = ".state";
 const CRASH_REPORT_OPTOUT_FILE_NAME: &str = "crash-report.optout";
 const CRASH_REPORT_LOG_TAIL_BYTES: u64 = 3500;
 const CRASH_REPORT_BODY_MAX_CHARS: usize = 4500;
@@ -30,7 +40,12 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub struct AppDiagnostics {
     app_data_dir: PathBuf,
     app_log_path: PathBuf,
-    session_state_path: PathBuf,
+    sessions_dir: PathBuf,
+    /// This process's own session marker. `None` when no instance identity
+    /// could be acquired — session tracking is then disabled for this run
+    /// rather than risking false crash prompts from other instances.
+    session_state_path: Option<PathBuf>,
+    instance_id: Option<String>,
     crash_report_optout_path: PathBuf,
     pending_crash_report: Mutex<Option<CrashReportPayload>>,
     log_lock: Mutex<()>,
@@ -65,10 +80,16 @@ struct PendingCrashCapture {
 }
 
 impl AppDiagnostics {
-    pub fn new(app_data_dir: PathBuf) -> Self {
+    pub fn new(app_data_dir: PathBuf, instance_id: Option<String>) -> Self {
+        let sessions_dir = app_data_dir.join(SESSIONS_DIR_NAME);
+        let session_state_path = instance_id
+            .as_deref()
+            .map(|id| session_marker_path(&sessions_dir, id));
         Self {
             app_log_path: app_data_dir.join(APP_LOG_FILE_NAME),
-            session_state_path: app_data_dir.join(SESSION_STATE_FILE_NAME),
+            sessions_dir,
+            session_state_path,
+            instance_id,
             crash_report_optout_path: app_data_dir.join(CRASH_REPORT_OPTOUT_FILE_NAME),
             app_data_dir,
             pending_crash_report: Mutex::new(None),
@@ -87,7 +108,9 @@ impl AppDiagnostics {
                 &scrub_diagnostic_text(&Backtrace::force_capture().to_string()),
                 CRASH_REPORT_BACKTRACE_MAX_CHARS,
             );
-            let _ = write_crash_pending_marker(&session_state_path, &signature, &backtrace);
+            if let Some(session_state_path) = &session_state_path {
+                let _ = write_crash_pending_marker(session_state_path, &signature, &backtrace);
+            }
             let _ = append_diagnostic_line(
                 &app_log_path,
                 APP_LOG_MAX_BYTES,
@@ -99,7 +122,7 @@ impl AppDiagnostics {
     }
 
     pub fn capture_pending_crash_for_startup(&self) -> Result<bool, String> {
-        let capture = self.read_unclean_session()?;
+        let capture = self.take_dead_session_capture()?;
 
         if capture.is_none() || self.crash_report_opted_out() {
             self.clear_pending_crash_report()?;
@@ -116,11 +139,23 @@ impl AppDiagnostics {
     }
 
     pub fn mark_session_running(&self) -> Result<(), String> {
-        write_session_state(&self.session_state_path, "running")
+        match &self.session_state_path {
+            Some(path) => write_session_state(path, "running"),
+            None => Ok(()),
+        }
     }
 
     pub fn mark_session_clean(&self) -> Result<(), String> {
-        write_session_state(&self.session_state_path, "clean")
+        let Some(path) = &self.session_state_path else {
+            return Ok(());
+        };
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            // Couldn't delete the marker — degrade to the overwrite form so
+            // the next scan still reads this exit as clean.
+            Err(_) => write_session_state(path, "clean"),
+        }
     }
 
     fn take_pending_crash_report(&self) -> Result<Option<CrashReportPayload>, String> {
@@ -170,15 +205,55 @@ impl AppDiagnostics {
         self.crash_report_optout_path.exists()
     }
 
-    fn read_unclean_session(&self) -> Result<Option<PendingCrashCapture>, String> {
-        if !self.session_state_path.exists() {
-            return Ok(None);
+    /// Find the first genuine unclean exit among session markers whose owning
+    /// instance is dead, consuming markers as it goes. Markers of live
+    /// instances (a second window running right now) are ignored — with a
+    /// single shared marker, a second instance used to read the first one's
+    /// `running` state as a phantom crash. One crash is reported per startup;
+    /// further dead markers wait for later startups.
+    fn take_dead_session_capture(&self) -> Result<Option<PendingCrashCapture>, String> {
+        // Legacy single-slot marker from pre-multi-instance versions: its
+        // writer is by definition not this process; consume it once.
+        let legacy_path = self.app_data_dir.join(LEGACY_SESSION_STATE_FILE_NAME);
+        if legacy_path.exists() {
+            let state = fs::read_to_string(&legacy_path)
+                .map_err(|error| format!("failed to read crash marker: {error}"))?;
+            let _ = fs::remove_file(&legacy_path);
+            if let Some(capture) = parse_unclean_session_state(&state) {
+                return Ok(Some(capture));
+            }
         }
 
-        let state = fs::read_to_string(&self.session_state_path)
-            .map_err(|error| format!("failed to read crash marker: {error}"))?;
+        let entries = match fs::read_dir(&self.sessions_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("failed to scan session markers: {error}")),
+        };
+        let mut marker_paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+        marker_paths.sort();
 
-        Ok(parse_unclean_session_state(&state))
+        for path in marker_paths {
+            let Some(owner_id) = session_marker_owner_id(&path) else {
+                continue;
+            };
+            if Some(owner_id.as_str()) == self.instance_id.as_deref() {
+                continue;
+            }
+            match crate::instance::owner_liveness(&self.app_data_dir, &owner_id) {
+                crate::instance::Liveness::Alive | crate::instance::Liveness::Unknown => continue,
+                crate::instance::Liveness::Dead => {}
+            }
+            let capture = fs::read_to_string(&path)
+                .ok()
+                .and_then(|state| parse_unclean_session_state(&state));
+            // Dead marker: consumed either way (a clean one is just cleanup).
+            let _ = fs::remove_file(&path);
+            if capture.is_some() {
+                return Ok(capture);
+            }
+        }
+
+        Ok(None)
     }
 
     fn build_crash_report_payload(
@@ -523,6 +598,20 @@ fn read_tail(path: &Path, max_bytes: u64) -> io::Result<String> {
     Ok(text)
 }
 
+fn session_marker_path(sessions_dir: &Path, instance_id: &str) -> PathBuf {
+    sessions_dir.join(format!(
+        "{SESSION_MARKER_PREFIX}{instance_id}{SESSION_MARKER_SUFFIX}"
+    ))
+}
+
+fn session_marker_owner_id(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let id = name
+        .strip_prefix(SESSION_MARKER_PREFIX)?
+        .strip_suffix(SESSION_MARKER_SUFFIX)?;
+    crate::instance::is_valid_owner_id(id).then(|| id.to_string())
+}
+
 fn write_session_state(path: &Path, state: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -783,6 +872,23 @@ mod tests {
         root
     }
 
+    /// A diagnostics handle standing in for the freshly-started instance that
+    /// runs the startup scan. Dead-instance markers in tests use other ids
+    /// with no lock file, which `owner_liveness` reports as dead.
+    fn diagnostics_for(root: &Path, instance_id: &str) -> AppDiagnostics {
+        AppDiagnostics::new(root.to_path_buf(), Some(instance_id.to_string()))
+    }
+
+    fn marker_path(root: &Path, instance_id: &str) -> PathBuf {
+        session_marker_path(&root.join(SESSIONS_DIR_NAME), instance_id)
+    }
+
+    fn write_marker(root: &Path, instance_id: &str, content: &str) {
+        let path = marker_path(root, instance_id);
+        fs::create_dir_all(path.parent().expect("sessions dir")).expect("create sessions dir");
+        fs::write(path, content).expect("write session marker");
+    }
+
     #[test]
     fn exported_logs_scrub_paths_file_names_email_and_long_values() {
         let raw = r#"OCRmyPDF C:\Users\Jacob Schumer\AppData\Local\Temp\Smith v Jones Motion.pdf /tmp/raio/out.hocr jane@example.com 123456789012 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa""#;
@@ -817,31 +923,43 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_writes_running_and_clean_states() {
+    fn session_marker_writes_running_and_removes_on_clean_exit() {
         let root = temp_root("marker");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        let diagnostics = diagnostics_for(&root, "self-a");
 
         diagnostics.mark_session_running().expect("mark running");
         assert_eq!(
-            fs::read_to_string(root.join(SESSION_STATE_FILE_NAME)).expect("read running"),
+            fs::read_to_string(marker_path(&root, "self-a")).expect("read running"),
             "running\n"
         );
 
         diagnostics.mark_session_clean().expect("mark clean");
-        assert_eq!(
-            fs::read_to_string(root.join(SESSION_STATE_FILE_NAME)).expect("read clean"),
-            "clean\n"
-        );
+        assert!(!marker_path(&root, "self-a").exists());
+        // Marking clean twice stays fine (marker already gone).
+        diagnostics.mark_session_clean().expect("mark clean again");
 
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn leftover_running_marker_becomes_one_time_pending_crash() {
+    fn session_marks_are_noops_without_an_instance_identity() {
+        let root = temp_root("no-identity");
+        let diagnostics = AppDiagnostics::new(root.clone(), None);
+
+        diagnostics.mark_session_running().expect("mark running");
+        diagnostics.mark_session_clean().expect("mark clean");
+        assert!(!root.join(SESSIONS_DIR_NAME).exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dead_instances_running_marker_becomes_one_time_pending_crash() {
         let root = temp_root("running-pending");
-        fs::write(root.join(SESSION_STATE_FILE_NAME), "running\n").expect("state");
+        // "dead-1" has no lock file under instances/ — its owner is dead.
+        write_marker(&root, "dead-1", "running\n");
         fs::write(root.join(APP_LOG_FILE_NAME), "startup before hard kill\n").expect("log");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        let diagnostics = diagnostics_for(&root, "live-self");
 
         assert!(diagnostics
             .capture_pending_crash_for_startup()
@@ -856,6 +974,69 @@ mod tests {
             .take_pending_crash_report()
             .expect("second take")
             .is_none());
+        // The marker was consumed — a restart does not re-report the crash.
+        assert!(!marker_path(&root, "dead-1").exists());
+        let next = diagnostics_for(&root, "live-self-2");
+        assert!(!next.capture_pending_crash_for_startup().expect("recapture"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_instances_running_marker_is_not_a_crash() {
+        let root = temp_root("live-ignored");
+        let other = crate::instance::InstanceIdentity::acquire(&root).expect("acquire other");
+        write_marker(&root, other.id(), "running\n");
+        let diagnostics = diagnostics_for(&root, "live-self");
+
+        // A second window's running session must not prompt a phantom crash…
+        assert!(!diagnostics
+            .capture_pending_crash_for_startup()
+            .expect("capture"));
+        // …and its marker must be left alone.
+        assert!(marker_path(&root, other.id()).exists());
+
+        // Once that instance dies uncleanly (lock released, marker left), the
+        // same marker becomes a genuine crash for the next scan.
+        let other_id = other.id().to_string();
+        drop(other);
+        let next = diagnostics_for(&root, "live-self-2");
+        assert!(next.capture_pending_crash_for_startup().expect("capture"));
+        assert!(!marker_path(&root, &other_id).exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn own_marker_and_clean_dead_markers_are_skipped_and_cleaned() {
+        let root = temp_root("own-and-clean");
+        write_marker(&root, "live-self", "running\n");
+        write_marker(&root, "dead-clean", "clean\n");
+        let diagnostics = diagnostics_for(&root, "live-self");
+
+        assert!(!diagnostics
+            .capture_pending_crash_for_startup()
+            .expect("capture"));
+        // Our own marker survives; the dead instance's clean marker is
+        // housekept away without a prompt.
+        assert!(marker_path(&root, "live-self").exists());
+        assert!(!marker_path(&root, "dead-clean").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_single_slot_marker_is_migrated_once() {
+        let root = temp_root("legacy-migrate");
+        fs::write(root.join(LEGACY_SESSION_STATE_FILE_NAME), "running\n").expect("legacy state");
+        let diagnostics = diagnostics_for(&root, "live-self");
+
+        assert!(diagnostics
+            .capture_pending_crash_for_startup()
+            .expect("capture"));
+        assert!(!root.join(LEGACY_SESSION_STATE_FILE_NAME).exists());
+        let next = diagnostics_for(&root, "live-self-2");
+        assert!(!next.capture_pending_crash_for_startup().expect("recapture"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -864,12 +1045,12 @@ mod tests {
     fn crash_pending_marker_keeps_signature_and_backtrace() {
         let root = temp_root("crash-pending");
         write_crash_pending_marker(
-            &root.join(SESSION_STATE_FILE_NAME),
+            &marker_path(&root, "dead-2"),
             "panic while rendering",
             "frame one\nframe two",
         )
         .expect("state");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        let diagnostics = diagnostics_for(&root, "live-self");
 
         assert!(diagnostics
             .capture_pending_crash_for_startup()
@@ -890,13 +1071,13 @@ mod tests {
     #[test]
     fn crash_report_payload_scrubs_log_tail_and_bounds_body() {
         let root = temp_root("scrub-payload");
-        fs::write(root.join(SESSION_STATE_FILE_NAME), "running\n").expect("state");
+        write_marker(&root, "dead-3", "running\n");
         fs::write(
             root.join(APP_LOG_FILE_NAME),
             r#"failed /home/jacob/cases/Smith v Jones Motion.pdf jane@example.com "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 123456789012"#,
         )
         .expect("log");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        let diagnostics = diagnostics_for(&root, "live-self");
 
         assert!(diagnostics
             .capture_pending_crash_for_startup()
@@ -919,8 +1100,8 @@ mod tests {
     #[test]
     fn never_ask_persists_and_suppresses_future_pending_crashes() {
         let root = temp_root("optout");
-        fs::write(root.join(SESSION_STATE_FILE_NAME), "running\n").expect("state");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        write_marker(&root, "dead-4", "running\n");
+        let diagnostics = diagnostics_for(&root, "live-self");
 
         assert!(diagnostics
             .capture_pending_crash_for_startup()
@@ -934,7 +1115,9 @@ mod tests {
             .expect("take")
             .is_none());
 
-        let next_diagnostics = AppDiagnostics::new(root.clone());
+        // Another unclean exit after opting out never prompts again.
+        write_marker(&root, "dead-5", "running\n");
+        let next_diagnostics = diagnostics_for(&root, "live-self-2");
         assert!(!next_diagnostics
             .capture_pending_crash_for_startup()
             .expect("recapture"));
@@ -949,7 +1132,7 @@ mod tests {
     #[test]
     fn set_crash_report_opted_out_false_removes_optout_file() {
         let root = temp_root("optout-toggle");
-        let diagnostics = AppDiagnostics::new(root.clone());
+        let diagnostics = diagnostics_for(&root, "live-self");
 
         diagnostics
             .set_crash_report_opted_out(true)

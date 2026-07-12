@@ -172,7 +172,10 @@ pub async fn print_pdf(
     let toolchain = discover_toolchain(&app);
     // Fallback parts land in a path-ops style temp dir. Deleted when unused
     // (gs path / failure); KEPT when parts were handed to the OS pipeline —
-    // the spooler may still be reading them — and swept on next startup.
+    // the spooler may still be reading them — and reclaimed by a later
+    // instance's startup sweep once this instance has exited (the dir carries
+    // this instance's owner marker, so a concurrently-running instance's
+    // sweep won't pull parts out from under the spooler).
     let work_dir = OpWorkDir::create(&app)?;
 
     let cancel_flag = jobs.register(&job_token)?;
@@ -203,8 +206,8 @@ pub async fn print_pdf(
     jobs.remove(&job_token);
 
     if should_keep_print_work_dir(&result, fallback_part_queued.load(Ordering::Relaxed)) {
-        // Parts may still be spooling in the OS handler — keep the dir; the
-        // startup sweep reclaims it next launch.
+        // Parts may still be spooling in the OS handler — keep the dir; a
+        // startup sweep reclaims it after this instance exits.
         work_dir.keep();
     }
 

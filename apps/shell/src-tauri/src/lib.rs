@@ -1,4 +1,5 @@
 mod diagnostics;
+mod instance;
 mod mcp;
 mod path_ops;
 mod print;
@@ -24,6 +25,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuBuilder, SubmenuBuilder},
@@ -277,6 +279,9 @@ impl DroppedUploads {
                     return Err(format!("Failed to create dropped PDF temp folder: {error}"));
                 }
             }
+            // Upload staging shares the path-ops root — mark ownership so a
+            // concurrently-starting instance's sweep leaves it alone.
+            path_ops::mark_dir_owned_by_current_instance(&temp_dir);
 
             match create_upload_state(&root, temp_dir, sanitized_name.clone(), expected_total) {
                 Ok(state) => {
@@ -329,15 +334,22 @@ impl DroppedUploads {
         file_grants: &FileGrants,
     ) -> Result<OpenedPdf, String> {
         let root = canonical_path_ops_root(path_ops_root)?;
-        let mut uploads = self
-            .uploads
-            .lock()
-            .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+        // Take the entry out of the map up front: whether this finish succeeds
+        // or fails, the slot must be released. A failed finish used to leave
+        // the entry behind, permanently pinning one of the
+        // MAX_IN_FLIGHT_DROPPED_UPLOADS slots (plus its temp file) until the
+        // app restarted.
+        let mut upload = {
+            let mut uploads = self
+                .uploads
+                .lock()
+                .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+            uploads
+                .remove(token)
+                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?
+        };
 
-        {
-            let upload = uploads
-                .get_mut(token)
-                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
+        let finished = (|| {
             if upload.bytes_written != upload.expected_total {
                 return Err("Dropped PDF upload is incomplete".to_string());
             }
@@ -353,14 +365,11 @@ impl DroppedUploads {
                     "Failed to sync dropped PDF at {}: {error}",
                     upload.file_path.to_string_lossy()
                 )
-            })?;
-        }
+            })
+        })();
 
-        let upload = uploads
-            .remove(token)
-            .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
-        drop(uploads);
         let UploadState {
+            temp_dir,
             file_path,
             file,
             sanitized_name,
@@ -368,7 +377,14 @@ impl DroppedUploads {
         } = upload;
         drop(file);
 
-        opened_pdf_for_temp_upload(&file_path, &root, &sanitized_name, file_grants)
+        let result = finished.and_then(|()| {
+            opened_pdf_for_temp_upload(&file_path, &root, &sanitized_name, file_grants)
+        });
+        if result.is_err() {
+            // A failed finish releases its staging dir exactly like an abort.
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+        result
     }
 
     fn abort_upload(&self, token: &str) -> Result<(), String> {
@@ -1384,7 +1400,12 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
 
     match result {
         Ok(()) => {
-            fs::remove_file(&backup).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+            // The save itself is complete — the new bytes are durably in
+            // place. Backup cleanup must not fail the save: AV scanners and
+            // indexers routinely hold a just-renamed file briefly on Windows,
+            // and reporting SAVE_PDF_ERROR here told the user a successful
+            // save had failed (while stranding the backup).
+            remove_save_backup_best_effort(backup);
             Ok(())
         }
         Err(error) => {
@@ -1395,6 +1416,34 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
             Err(error)
         }
     }
+}
+
+const SAVE_BACKUP_CLEANUP_RETRIES: usize = 5;
+const SAVE_BACKUP_CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(400);
+
+/// Delete the `.…raio-save-backup` staged next to the user's file after a
+/// save has already succeeded. A transient lock (AV, indexer) gets a few
+/// background retries; if the file is still held, it is simply left behind —
+/// each save mints a unique backup name, so a stray one can never corrupt a
+/// later save. (The same applies to a backup orphaned by a crash between
+/// rename and persist: recovering it on the next open would mean scanning the
+/// user's directories, which RaioPDF deliberately does not do.)
+fn remove_save_backup_best_effort(backup: PathBuf) {
+    match fs::remove_file(&backup) {
+        Ok(()) => return,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(_) => {}
+    }
+    std::thread::spawn(move || {
+        for _ in 0..SAVE_BACKUP_CLEANUP_RETRIES {
+            std::thread::sleep(SAVE_BACKUP_CLEANUP_RETRY_DELAY);
+            match fs::remove_file(&backup) {
+                Ok(()) => return,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+                Err(_) => {}
+            }
+        }
+    });
 }
 
 fn atomic_copy_grant_if_unchanged(
@@ -1889,13 +1938,21 @@ pub fn run() {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();
-            let diagnostics = AppDiagnostics::new(app_data_dir.clone());
+            // Identity first: everything stamped with this instance's id
+            // (session marker, path-op owner markers) must be written only
+            // while the identity's lock file is already held, so other
+            // instances' liveness probes can never race a startup.
+            let instance_identity = instance::init_current(&app_data_dir);
+            let diagnostics = AppDiagnostics::new(
+                app_data_dir.clone(),
+                instance_identity.map(|identity| identity.id().to_string()),
+            );
             let _ = diagnostics.capture_pending_crash_for_startup();
             let _ = diagnostics.mark_session_running();
             diagnostics.install_panic_hook();
             let _ = diagnostics.record_shell_event("startup", "RaioPDF shell started");
             let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
-                app_data_dir,
+                app_data_dir.clone(),
                 resource_dir,
             ));
             app.manage(manager);
@@ -1917,6 +1974,10 @@ pub fn run() {
                     .record_shell_event("startup-arg", &message);
             }
             if let Some(path) = startup_pdf_path {
+                // An "Open in New Window" handoff points at the spawning
+                // instance's path-op output dir — adopt it so it survives
+                // sweeps after that instance exits (including our own below).
+                path_ops::adopt_containing_output_dir(&app_data_dir, &path);
                 match opened_pdf_for_path(
                     path,
                     app.state::<PendingPdfBytes>().inner(),
@@ -1934,11 +1995,12 @@ pub fn run() {
                 }
             }
 
-            // Grants are in-memory, so every path-op temp dir left behind by a
-            // previous run is dead on a fresh start — sweep them all, off the
-            // startup path.
-            let stale_path_ops_root = app.path().app_data_dir()?.join(path_ops::PATH_OPS_DIR);
-            std::thread::spawn(move || path_ops::purge_stale_outputs(&stale_path_ops_root));
+            // Grants are in-memory, so a path-op temp dir is dead once the
+            // instance that created it has exited — but other instances may
+            // be running right now ("Open in New Window", the .pdf file
+            // association), so the sweep only reclaims dirs whose owner is
+            // gone. Runs off the startup path.
+            std::thread::spawn(move || path_ops::purge_stale_outputs(&app_data_dir));
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -1949,6 +2011,11 @@ pub fn run() {
                     .state::<AppDiagnostics>()
                     .record_shell_event("shutdown", "menu exit requested");
                 let _ = app.state::<AppDiagnostics>().mark_session_clean();
+                // `app.exit(0)` skips window destruction, so the Destroyed
+                // hook never fires on this path. RunEvent::Exit below also
+                // stops the sidecar; doing it here too is belt and braces
+                // against the engine java process outliving the app.
+                app.state::<sidecar::SidecarManager>().shutdown();
                 app.exit(0);
                 return;
             }
@@ -2027,13 +2094,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::WindowEvent {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::Destroyed,
                 ..
-            } = event
-            {
+            } => {
                 if label == "main" {
                     let _ = app_handle
                         .state::<AppDiagnostics>()
@@ -2042,6 +2108,19 @@ pub fn run() {
                     app_handle.state::<sidecar::SidecarManager>().shutdown();
                 }
             }
+            // The deepest shared exit hook: Tauri dispatches RunEvent::Exit on
+            // every exit path — window close AND `app.exit(0)` (menu exit, the
+            // process plugin), which skips window destruction entirely and
+            // used to orphan the engine java process. The Destroyed hook above
+            // stays as belt and braces; `shutdown()` is idempotent.
+            tauri::RunEvent::Exit => {
+                let _ = app_handle
+                    .state::<AppDiagnostics>()
+                    .record_shell_event("shutdown", "app exiting");
+                let _ = app_handle.state::<AppDiagnostics>().mark_session_clean();
+                app_handle.state::<sidecar::SidecarManager>().shutdown();
+            }
+            _ => {}
         });
 }
 
@@ -2299,13 +2378,16 @@ mod tests {
     }
 
     #[test]
-    fn dropped_upload_finish_rejects_incomplete_upload() {
+    fn dropped_upload_finish_rejects_incomplete_upload_and_releases_the_slot() {
         let root = tempfile::tempdir().expect("temp dir");
         let uploads = DroppedUploads::default();
         let grants = FileGrants::default();
         let token = uploads
             .begin_upload(root.path(), 8, "case.pdf")
             .expect("begin");
+        let temp_dir = uploads
+            .upload_temp_dir(&token)
+            .expect("upload temp dir recorded");
 
         uploads.append_upload(&token, b"%PDF").expect("append");
 
@@ -2314,7 +2396,39 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("incomplete"));
-        uploads.abort_upload(&token).expect("abort");
+        // The failed finish must free its in-flight slot and staging dir —
+        // it used to pin one of the MAX_IN_FLIGHT_DROPPED_UPLOADS slots (and
+        // leak the temp file) until restart.
+        assert!(uploads.upload_temp_dir(&token).is_none());
+        assert!(!temp_dir.exists());
+        // The token is fully consumed, so a late abort has nothing to do.
+        assert!(uploads.abort_upload(&token).is_err());
+    }
+
+    #[test]
+    fn dropped_upload_failed_finish_frees_a_slot_for_a_new_upload() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let mut tokens = Vec::new();
+        for index in 0..MAX_IN_FLIGHT_DROPPED_UPLOADS {
+            tokens.push(
+                uploads
+                    .begin_upload(root.path(), 8, &format!("case-{index}.pdf"))
+                    .expect("begin"),
+            );
+        }
+        assert!(uploads
+            .begin_upload(root.path(), 8, "case-full.pdf")
+            .is_err());
+
+        // Fail one finish (incomplete bytes) — its slot must become available.
+        assert!(uploads
+            .finish_upload(&tokens[0], root.path(), &grants)
+            .is_err());
+        uploads
+            .begin_upload(root.path(), 8, "case-freed.pdf")
+            .expect("slot freed by failed finish");
     }
 
     #[test]
@@ -2465,6 +2579,19 @@ mod tests {
         atomic_write_grant_if_unchanged(&entry, b"saved bytes").expect("save unchanged grant");
 
         assert_eq!(fs::read(&path).expect("read saved"), b"saved bytes");
+    }
+
+    #[test]
+    fn save_backup_cleanup_removes_file_and_tolerates_missing_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let backup = dir.path().join(".case.pdf.123.abc.raio-save-backup");
+        fs::write(&backup, b"backup bytes").expect("write backup");
+
+        remove_save_backup_best_effort(backup.clone());
+        assert!(!backup.exists());
+
+        // A backup that is already gone must not spawn retries or panic.
+        remove_save_backup_best_effort(dir.path().join("never-existed.raio-save-backup"));
     }
 
     #[test]

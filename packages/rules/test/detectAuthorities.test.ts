@@ -115,6 +115,17 @@ describe("detectAuthorities", () => {
     });
   });
 
+  it("continues nested parentheticals from the immediate parent, not the bare statute", () => {
+    const pages: PageTextByPage = [
+      { pageIndex: 0, text: "Sovereign immunity is waived by Fla. Stat. §§ 768.28(1)(a), (b)." },
+    ];
+
+    expect(canonicalMap(detectAuthorities(pages, reporterTable))).toEqual({
+      "Fla. Stat. § 768.28(1)(a)": { kind: "statute", pages: [0] },
+      "Fla. Stat. § 768.28(1)(b)": { kind: "statute", pages: [0] },
+    });
+  });
+
   it("does not swallow prose after a section list", () => {
     const pages: PageTextByPage = [
       { pageIndex: 0, text: "Under 28 U.S.C. §§ 1331, and the court held otherwise." },

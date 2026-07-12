@@ -122,7 +122,9 @@ function statuteSections(groups: Record<string, string | undefined>): readonly s
 }
 
 // "768.28(1), (5)" → ["768.28(1)", "768.28(5)"]: a bare parenthetical
-// continuation inherits the base of the preceding full section.
+// continuation inherits the base of the preceding full section. Only the
+// final leaf parenthetical is replaced, so "768.28(1)(a), (b)" continues as
+// "768.28(1)(b)" — the immediate parent, not the bare statute number.
 function expandSectionList(list: string): readonly string[] {
   const sections: string[] = [];
   let base = "";
@@ -139,27 +141,21 @@ function expandSectionList(list: string): readonly string[] {
       continue;
     }
 
-    base = stripTrailingParentheticals(segment);
+    base = stripTrailingLeafParenthetical(segment);
     sections.push(segment);
   }
 
   return sections;
 }
 
-function stripTrailingParentheticals(section: string): string {
-  let end = section.length;
-
-  while (end > 0 && section[end - 1] === ")") {
-    const open = section.lastIndexOf("(", end - 1);
-
-    if (open <= 0) {
-      break;
-    }
-
-    end = open;
+function stripTrailingLeafParenthetical(section: string): string {
+  if (!section.endsWith(")")) {
+    return section;
   }
 
-  return section.slice(0, end);
+  const open = section.lastIndexOf("(");
+
+  return open > 0 ? section.slice(0, open) : section;
 }
 
 function canonicalizeFederalRule(groups: Record<string, string | undefined>): string {

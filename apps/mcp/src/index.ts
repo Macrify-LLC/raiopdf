@@ -7,6 +7,7 @@ import path from "node:path";
 import { EngineHandle, defaultEngineHandle } from "./engine.js";
 import { ENABLE_ACTION, enableFlagPath, isEnabled } from "./gate.js";
 import { errorResult, type StructuredToolResult } from "./format.js";
+import { parseOneShotInvocation } from "./oneShotInvocation.js";
 import { PathPolicyError } from "./paths.js";
 import {
   batchCleanupInputSchema,
@@ -662,8 +663,7 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-async function runOneShot(): Promise<void> {
-  const toolName = process.argv[3];
+async function runOneShot(toolName: string | undefined): Promise<void> {
   const input = JSON.parse(await readStdin()) as unknown;
 
   if (
@@ -763,7 +763,10 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
-  const entrypoint = process.argv[2] === "--one-shot" ? runOneShot : main;
+  const invocation = parseOneShotInvocation(process.argv);
+  const entrypoint = invocation.oneShot
+    ? () => runOneShot(invocation.toolName)
+    : main;
 
   entrypoint().catch((error: unknown) => {
     console.error(error);

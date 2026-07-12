@@ -340,9 +340,53 @@ pub fn mcp_set_enabled(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Deadline for the package one-shot commands, scaled by input volume so a
+/// legitimately large job never gets cut short while a wedged child can't
+/// hang the app forever. `per_file` carries the per-document cost of the
+/// heaviest operation the tool can run (OCR dominates batch cleanup; PDF/A
+/// conversion dominates filing packets).
+fn package_one_shot_timeout(file_count: usize, total_bytes: u64, per_file: Duration) -> Duration {
+    const BASE: Duration = Duration::from_secs(600);
+    let per_size = Duration::from_secs(15 * total_bytes.div_ceil(50 * 1024 * 1024));
+    BASE + per_file * u32::try_from(file_count).unwrap_or(u32::MAX) + per_size
+}
+
+/// Per-file allowance for jobs that can run OCR — matches the OCR toolchain's
+/// own 30-minute-per-document ceiling so the deadline never undercuts a
+/// legitimate run.
+const OCR_PER_FILE_TIMEOUT: Duration = Duration::from_secs(1800);
+
+fn file_size_or_zero(path: &str) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+/// One-shot children block the calling thread for the whole run, so commands
+/// must never execute them inline — a sync `#[tauri::command]` runs on the
+/// main/UI thread and would freeze the window for the duration of the job.
+async fn run_one_shot_on_blocking_pool<T: Serialize + Send + 'static>(
+    tool_name: &'static str,
+    input: T,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_mcp_one_shot_with_options(
+            tool_name,
+            &input,
+            McpOneShotOptions {
+                timeout: Some(timeout),
+                node_options: None,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("RaioPDF's background task failed: {error}"))?
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn build_production_set(
+pub async fn build_production_set(
     sources: Vec<ProductionSetSourceGrant>,
     output_dir: String,
     prefix: String,
@@ -364,6 +408,11 @@ pub fn build_production_set(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let file_count = sources.len();
+    let total_bytes = sources
+        .iter()
+        .map(|source| file_size_or_zero(&source.path))
+        .sum();
 
     let input = ProductionSetOneShotInput {
         sources,
@@ -376,7 +425,8 @@ pub fn build_production_set(
         combined_pdf,
         volume_size_mb,
     };
-    let stdout = run_mcp_one_shot("build_production_set", &input)?;
+    let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
+    let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
     let output: ProductionSetOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
         "RaioPDF couldn't finish building that package. Please try again.".to_string()
     })?;
@@ -402,7 +452,7 @@ pub fn build_production_set(
 }
 
 #[tauri::command]
-pub fn batch_cleanup(
+pub async fn batch_cleanup(
     input_grants: Vec<String>,
     output_dir: String,
     pack_id: Option<String>,
@@ -414,6 +464,15 @@ pub fn batch_cleanup(
         .iter()
         .map(|grant| resolve_source_path(&file_grants, grant))
         .collect::<Result<Vec<_>, String>>()?;
+    let file_count = inputs.len();
+    let total_bytes = inputs.iter().map(|path| file_size_or_zero(path)).sum();
+    // OCR is the open-ended cost: the toolchain itself allows up to 30 minutes
+    // per document, so the deadline must never undercut a legitimate run.
+    let per_file = if operations.ocr_mode == "off" {
+        Duration::from_secs(180)
+    } else {
+        OCR_PER_FILE_TIMEOUT
+    };
 
     let input = BatchCleanupOneShotInput {
         inputs,
@@ -421,7 +480,8 @@ pub fn batch_cleanup(
         pack_id,
         operations,
     };
-    let stdout = run_mcp_one_shot("batch_cleanup", &input)?;
+    let timeout = package_one_shot_timeout(file_count, total_bytes, per_file);
+    let stdout = run_one_shot_on_blocking_pool("batch_cleanup", input, timeout).await?;
     let output: BatchCleanupOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
         "RaioPDF couldn't finish building that package. Please try again.".to_string()
     })?;
@@ -446,7 +506,7 @@ pub fn batch_cleanup(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn build_filing_packet(
+pub async fn build_filing_packet(
     sources: Vec<FilingPacketSourceGrant>,
     output_dir: String,
     pack: String,
@@ -468,6 +528,11 @@ pub fn build_filing_packet(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let file_count = sources.len();
+    let total_bytes = sources
+        .iter()
+        .map(|source| file_size_or_zero(&source.path))
+        .sum();
 
     let input = FilingPacketOneShotInput {
         sources,
@@ -480,7 +545,19 @@ pub fn build_filing_packet(
         selected_step_ids,
         split_size_mb,
     };
-    let stdout = run_mcp_one_shot("build_filing_packet", &input)?;
+    // The make-searchable step runs OCR on every source, so it gets the
+    // OCR-sized per-file budget; otherwise PDF/A conversion dominates.
+    let per_file = if input
+        .selected_step_ids
+        .iter()
+        .any(|id| id == "make-searchable")
+    {
+        OCR_PER_FILE_TIMEOUT
+    } else {
+        Duration::from_secs(120)
+    };
+    let timeout = package_one_shot_timeout(file_count, total_bytes, per_file);
+    let stdout = run_one_shot_on_blocking_pool("build_filing_packet", input, timeout).await?;
     let output: FilingPacketOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
         "RaioPDF couldn't finish building that package. Please try again.".to_string()
     })?;
@@ -564,17 +641,32 @@ pub(crate) struct McpOneShotOptions {
     pub node_options: Option<String>,
 }
 
-impl McpOneShotOptions {
-    fn default() -> Self {
-        Self {
-            timeout: None,
-            node_options: None,
-        }
-    }
-}
+/// Node hardening flag applied to every one-shot child. It MUST travel via
+/// `NODE_OPTIONS`: the launcher execs `node <entrypoint> <args...>`, so any
+/// flag passed as a command-line argument lands AFTER the entrypoint where
+/// Node treats it as an inert script argument — and it shifts the
+/// `--one-shot` marker the runtime dispatches on. Passing it positionally
+/// shipped in v0.1.0–v0.1.2 and broke every one-shot tool.
+pub(crate) const NODE_SECURITY_FLAG: &str = "--disallow-code-generation-from-strings";
 
-fn run_mcp_one_shot<T: Serialize>(tool_name: &str, input: &T) -> Result<Vec<u8>, String> {
-    run_mcp_one_shot_with_options(tool_name, input, McpOneShotOptions::default())
+/// This spawn choke point is the single owner of the security flag — callers
+/// never add it themselves. The ambient-`NODE_OPTIONS` dedup below only guards
+/// against a user's own environment already carrying the flag.
+fn one_shot_node_options(explicit: Option<String>) -> String {
+    let base = explicit.unwrap_or_else(|| match std::env::var("NODE_OPTIONS") {
+        Ok(existing) if !existing.trim().is_empty() => existing,
+        _ => String::new(),
+    });
+    if base
+        .split_whitespace()
+        .any(|flag| flag == NODE_SECURITY_FLAG)
+    {
+        base
+    } else if base.is_empty() {
+        NODE_SECURITY_FLAG.to_string()
+    } else {
+        format!("{base} {NODE_SECURITY_FLAG}")
+    }
 }
 
 pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
@@ -586,36 +678,25 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
         "RaioPDF's built-in tools are missing. Your installation may be incomplete — reinstall RaioPDF and try again."
             .to_string()
     })?;
+    let payload = serde_json::to_vec(input)
+        .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
+
     let mut command = Command::new(&binary);
     command
-        .arg("--disallow-code-generation-from-strings")
-        .arg("--one-shot")
-        .arg(tool_name)
+        // `--one-shot <tool>` must be the ONLY arguments, with the marker
+        // first — see `NODE_SECURITY_FLAG` for why nothing may precede it.
+        .args(["--one-shot", tool_name])
+        .env("NODE_OPTIONS", one_shot_node_options(options.node_options))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(node_options) = options.node_options {
-        command.env("NODE_OPTIONS", node_options);
-    }
     apply_platform_spawn_flags(&mut command);
 
-    let mut child = command.spawn().map_err(|_| {
+    let child = command.spawn().map_err(|_| {
         "RaioPDF couldn't start its built-in tools. Reinstall RaioPDF and try again.".to_string()
     })?;
 
-    let payload = serde_json::to_vec(input)
-        .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "failed to open RaioPDF MCP stdin".to_string())?;
-        stdin
-            .write_all(&payload)
-            .map_err(|error| format!("failed to send {tool_name} request: {error}"))?;
-    }
-
-    let output = wait_with_optional_timeout(child, tool_name, options.timeout)?;
+    let output = run_one_shot_child(child, payload, tool_name, options.timeout)?;
 
     if !output.status.success() {
         return Err(sanitize_one_shot_failure(&output.stderr));
@@ -660,39 +741,117 @@ fn sanitize_one_shot_failure(stderr: &[u8]) -> String {
     GENERIC.to_string()
 }
 
-fn wait_with_optional_timeout(
+struct OneShotChildOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Drives a spawned one-shot child to completion. The request payload is
+/// written from a dedicated thread and stdout/stderr are drained concurrently
+/// so neither side can deadlock on a full pipe (a large request plus a chatty
+/// child would otherwise block both processes forever), then the optional
+/// deadline is enforced against the whole tree.
+fn run_one_shot_child(
     mut child: std::process::Child,
+    payload: Vec<u8>,
     tool_name: &str,
     timeout: Option<Duration>,
-) -> Result<std::process::Output, String> {
-    let Some(timeout) = timeout else {
-        return child
-            .wait_with_output()
-            .map_err(|error| format!("failed to read {tool_name} response: {error}"));
-    };
+) -> Result<OneShotChildOutput, String> {
+    use std::io::Read;
 
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open RaioPDF MCP stdin".to_string())?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to open RaioPDF MCP stdout".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to open RaioPDF MCP stderr".to_string())?;
+
+    // Write errors are intentionally ignored: a child that exits before
+    // consuming the payload surfaces through its exit status, not the broken
+    // pipe. Dropping stdin at thread end delivers EOF.
+    let stdin_writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+    });
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stdout.read_to_end(&mut buffer);
+        buffer
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stderr.read_to_end(&mut buffer);
+        buffer
+    });
     let started = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("failed to read {tool_name} response: {error}"));
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if let Some(timeout) = timeout {
+                    if started.elapsed() >= timeout {
+                        kill_child_tree(&mut child);
+                        let _ = child.wait();
+                        join_io(stdin_writer, stdout_reader, stderr_reader);
+                        return Err(
+                            "That took too long and was stopped. Try again, or with fewer or smaller files."
+                                .to_string(),
+                        );
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
-            Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait_with_output();
-                return Err(
-                    "That took too long and was stopped. Try again, or with fewer or smaller files."
-                        .to_string(),
-                );
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(error) => {
+                kill_child_tree(&mut child);
+                let _ = child.wait();
+                join_io(stdin_writer, stdout_reader, stderr_reader);
                 return Err(format!("failed to poll {tool_name} response: {error}"));
             }
         }
-    }
+    };
+
+    let (stdout, stderr) = join_io(stdin_writer, stdout_reader, stderr_reader);
+    Ok(OneShotChildOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn join_io(
+    stdin_writer: std::thread::JoinHandle<()>,
+    stdout_reader: std::thread::JoinHandle<Vec<u8>>,
+    stderr_reader: std::thread::JoinHandle<Vec<u8>>,
+) -> (Vec<u8>, Vec<u8>) {
+    let _ = stdin_writer.join();
+    (
+        stdout_reader.join().unwrap_or_default(),
+        stderr_reader.join().unwrap_or_default(),
+    )
+}
+
+/// The Node one-shot spawns its own helpers (qpdf, Ghostscript, the engine
+/// host); killing only the direct child would orphan them with open handles
+/// inside the work dir, so take the whole tree down.
+#[cfg(windows)]
+fn kill_child_tree(child: &mut std::process::Child) {
+    let pid = child.id().to_string();
+    let mut command = Command::new("taskkill.exe");
+    command.args(["/PID", &pid, "/T", "/F"]);
+    apply_platform_spawn_flags(&mut command);
+    let _ = command.output();
+    let _ = child.kill();
+}
+
+#[cfg(not(windows))]
+fn kill_child_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 #[cfg(windows)]
@@ -715,9 +874,34 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_output_dir, sanitize_one_shot_failure};
+    use super::{
+        one_shot_node_options, package_one_shot_timeout, resolve_output_dir,
+        sanitize_one_shot_failure, NODE_SECURITY_FLAG,
+    };
+    use std::time::Duration;
 
     const GENERIC_FAILURE: &str = "RaioPDF couldn't complete that operation. Please try again.";
+
+    #[test]
+    fn node_security_flag_travels_via_node_options() {
+        assert_eq!(one_shot_node_options(None), NODE_SECURITY_FLAG);
+        assert_eq!(
+            one_shot_node_options(Some("--max-old-space-size=8192".to_string())),
+            format!("--max-old-space-size=8192 {NODE_SECURITY_FLAG}")
+        );
+        // An ambient NODE_OPTIONS that already carries the flag isn't doubled.
+        let ambient = format!("--max-old-space-size=8192 {NODE_SECURITY_FLAG}");
+        assert_eq!(one_shot_node_options(Some(ambient.clone())), ambient);
+    }
+
+    #[test]
+    fn package_timeout_scales_with_files_and_bytes() {
+        let base = package_one_shot_timeout(0, 0, Duration::from_secs(30));
+        assert_eq!(base, Duration::from_secs(600));
+        let scaled = package_one_shot_timeout(4, 120 * 1024 * 1024, Duration::from_secs(30));
+        // 600 base + 4×30 per-file + 3 chunks × 15s.
+        assert_eq!(scaled, Duration::from_secs(600 + 120 + 45));
+    }
 
     #[test]
     fn recovers_the_structured_child_error_message() {

@@ -39,7 +39,7 @@ use crate::FileGrants;
 const NODE_LANE_MAX_BYTES_ENV: &str = "RAIOPDF_NODE_LANE_MAX_BYTES";
 const DEFAULT_NODE_LANE_MAX_BYTES: u64 = 400 * 1024 * 1024;
 const NODE_LANE_HEAP_MB: u64 = 8192;
-const NODE_LANE_SECURITY_FLAG: &str = "--disallow-code-generation-from-strings";
+const NODE_LANE_SECURITY_FLAG: &str = crate::mcp::NODE_SECURITY_FLAG;
 
 /// The input file changed on disk while the op ran (typed like Phase 1's
 /// range-read snapshot error so the UI can share the "reopen it" message).
@@ -491,11 +491,13 @@ fn node_lane_timeout(input_size_bytes: u64) -> Duration {
 }
 
 fn node_options_heap_arg() -> String {
+    // Only the lane-specific heap cap lives here; the security flag is owned
+    // by the one-shot spawn choke point (`mcp::one_shot_node_options`), which
+    // appends it to whatever this produces.
     let heap = format!("--max-old-space-size={NODE_LANE_HEAP_MB}");
-    let lane_options = format!("{heap} {NODE_LANE_SECURITY_FLAG}");
     match std::env::var("NODE_OPTIONS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {lane_options}"),
-        _ => lane_options,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {heap}"),
+        _ => heap,
     }
 }
 

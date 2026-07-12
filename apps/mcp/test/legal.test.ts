@@ -182,6 +182,32 @@ describe("legal tools (local pdf-lib engine)", () => {
     expect(await fs.readFile(output, "utf8")).toBe("existing");
   });
 
+  it("build_cover_page rejects an overflowing caption with a typed error and writes no output", async () => {
+    const output = path.join(dir, "caption-overflow.pdf");
+    const parties = Array.from({ length: 12 }, (_, partyIndex) => ({
+      role: partyIndex % 2 === 0 ? "Plaintiff" : "Defendant",
+      names: Array.from({ length: 20 }, (_, nameIndex) =>
+        `Party ${partyIndex + 1} Name ${nameIndex + 1} With A Long Descriptive Suffix`),
+    }));
+
+    await expect(
+      handleBuildCoverPage(
+        {
+          courtName: "Superior Court of Fulton County",
+          parties,
+          documentTitle: "Complaint",
+          output,
+        },
+        engine,
+      ),
+    ).rejects.toMatchObject({
+      name: "PdfEngineError",
+      code: "CONTENT_OVERFLOW",
+      message: expect.stringContaining("does not fit on one page"),
+    });
+    await expect(fs.access(output)).rejects.toBeTruthy();
+  });
+
   it("detect_authorities returns structured authorities with one-based page hits and writes no output", async () => {
     const input = await makeTextPdf("authorities.pdf", [
       [

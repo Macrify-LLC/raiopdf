@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PdfEngineError } from "@raiopdf/engine-api";
 import type { DocumentFileInput, DocumentState } from "../hooks/useDocument";
 
 const captionMocks = vi.hoisted(() => ({
@@ -78,6 +79,22 @@ describe("CaptionWorkspace", () => {
       { bytes: new Uint8Array([37, 80, 68, 70]), name: "Notice of Filing Caption.pdf", path: null },
       0,
     );
+  });
+
+  it("surfaces the typed overflow message when the caption cannot fit on one page", async () => {
+    renderWorkspace();
+    await fillValidCaption();
+
+    const overflow = new PdfEngineError(
+      "CONTENT_OVERFLOW",
+      "The caption content does not fit on one page (needs about 900pt of the 648pt available). Remove parties, shorten names, or trim the signature block.",
+    );
+    captionMocks.saveCaptionPdf.mockRejectedValueOnce(overflow);
+
+    await click(buttonByText("Save as PDF"));
+
+    expect(host?.textContent).toContain("does not fit on one page");
+    expect(host?.textContent).not.toContain("The caption PDF could not be saved.");
   });
 
   function renderWorkspace(overrides: {

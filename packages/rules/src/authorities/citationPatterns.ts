@@ -22,7 +22,21 @@ export type CitationPattern = {
 const CITATION_PREFIX = String.raw`(?<![A-Za-z0-9$])`;
 const CITATION_SUFFIX = String.raw`(?![A-Za-z0-9])`;
 const SECTION_MARKER = String.raw`(?:§{1,2}|sections?|secs?\.?)`;
+const SECTION_MARKER_PLURAL = String.raw`(?:§§|sections|secs\.?)`;
+const SECTION_MARKER_SINGULAR = String.raw`(?:§|section|sec\.?)`;
 const SECTION_VALUE = String.raw`[A-Za-z0-9][A-Za-z0-9().:-]*`;
+// Continuation segments after a comma in a §§ list are deliberately narrow so
+// prose ("1331, and the court held") and adjacent citations are never
+// swallowed: only parenthetical chains ("(5)", "(1)(a)") or short
+// digit-leading section numbers qualify.
+const SECTION_PARENTHETICAL = String.raw`\([A-Za-z0-9]{1,10}\)`;
+const SECTION_LIST_CONTINUATION = String.raw`(?:${SECTION_PARENTHETICAL}(?:${SECTION_PARENTHETICAL})*|\d[A-Za-z0-9().:-]{0,24})`;
+const SECTION_LIST = String.raw`${SECTION_VALUE}(?:,\s*${SECTION_LIST_CONTINUATION})*`;
+// Plural markers (§§ / sections / secs.) accept a bounded comma-separated
+// list captured as `sectionList`; singular markers capture a single
+// `section`. Keeping list capture behind the plural marker prevents a
+// singular cite followed by other citation text from over-capturing.
+const SECTION_CLAUSE = String.raw`(?:${SECTION_MARKER_PLURAL}\s*(?<sectionList>${SECTION_LIST})|${SECTION_MARKER_SINGULAR}\s*(?<section>${SECTION_VALUE}))`;
 const RULE_NUMBER = String.raw`\d+[A-Za-z]?(?:\.\d+)*(?:\([a-zA-Z0-9]+\))*`;
 const CONSTITUTION_SECTION_SEPARATOR = String.raw`(?:\s+,\s*|,\s*|\s+)`;
 const CONSTITUTION_PART = String.raw`(?:art\.?|article|amend\.?|amendment)\s+[A-Za-z0-9IVXLCDMivxlcdm]+(?:${CONSTITUTION_SECTION_SEPARATOR}${SECTION_MARKER}\s*[A-Za-z0-9IVXLCDMivxlcdm]+(?:\([a-zA-Z0-9]+\))*)?`;
@@ -41,22 +55,23 @@ export function buildCaseReporterCitationPattern(reporters: ReporterTable): Cita
   };
 }
 
-// Example: 42 U.S.C. § 1983; 11 USC section 362.
+// Example: 42 U.S.C. § 1983; 11 USC section 362; 28 U.S.C. §§ 1331, 1332.
 export const federalStatutePattern: CitationPattern = {
   name: "federal-statute",
   kind: "statute",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}(?<title>\d+)\s+U\.?\s*S\.?\s*C\.?\s*(?:A\.?\s*)?${SECTION_MARKER}\s*(?<section>${SECTION_VALUE})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}(?<title>\d+)\s+U\.?\s*S\.?\s*C\.?\s*(?:A\.?\s*)?${SECTION_CLAUSE}${CITATION_SUFFIX}`,
     "giu",
   ),
 };
 
-// Example: Fla. Stat. § 768.28(5); Florida Statutes section 90.702.
+// Example: Fla. Stat. § 768.28(5); Florida Statutes section 90.702;
+// Fla. Stat. §§ 768.28(1), (5).
 export const floridaStatutePattern: CitationPattern = {
   name: "florida-statute",
   kind: "statute",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}(?<code>Fla\.?|Florida)\s+Stat(?:\.|utes)?(?:\s+Ann\.?)?\s*${SECTION_MARKER}\s*(?<section>${SECTION_VALUE})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}(?<code>Fla\.?|Florida)\s+Stat(?:\.|utes)?(?:\s+Ann\.?)?\s*${SECTION_CLAUSE}${CITATION_SUFFIX}`,
     "giu",
   ),
 };
@@ -66,7 +81,7 @@ export const georgiaStatutePattern: CitationPattern = {
   name: "georgia-statute",
   kind: "statute",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}O\.?\s*C\.?\s*G\.?\s*A\.?\s*${SECTION_MARKER}\s*(?<section>${SECTION_VALUE})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}O\.?\s*C\.?\s*G\.?\s*A\.?\s*${SECTION_CLAUSE}${CITATION_SUFFIX}`,
     "giu",
   ),
 };
@@ -76,27 +91,29 @@ export const indianaStatutePattern: CitationPattern = {
   name: "indiana-statute",
   kind: "statute",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}(?:Ind\.?|Indiana)\s+Code\s*${SECTION_MARKER}\s*(?<section>${SECTION_VALUE})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}(?:Ind\.?|Indiana)\s+Code\s*${SECTION_CLAUSE}${CITATION_SUFFIX}`,
     "giu",
   ),
 };
 
-// Example: Fed. R. Civ. P. 56; Federal Rule of Evidence 702.
+// Example: Fed. R. Civ. P. 56; Federal Rule of Evidence 702;
+// Federal Rules of Civil Procedure 56.
 export const federalRulePattern: CitationPattern = {
   name: "federal-rule",
   kind: "rule",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}(?:Fed\.?|Federal)\s+(?:R\.?|Rule)\s+(?<body>Civ\.?|Civil|Evid\.?|Evidence|App\.?|Appellate|Crim\.?|Criminal|Bankr\.?|Bankruptcy)(?:\s+(?:P\.?|Proc\.?|Procedure))?\s*(?<rule>${RULE_NUMBER})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}(?:Fed\.?|Federal)\s+(?:R\.?|Rules?)\s+(?:of\s+)?(?<body>Civ\.?|Civil|Evid\.?|Evidence|App\.?|Appellate|Crim\.?|Criminal|Bankr\.?|Bankruptcy)(?:\s+(?:P\.?|Proc\.?|Procedure))?\s*(?<rule>${RULE_NUMBER})${CITATION_SUFFIX}`,
     "giu",
   ),
 };
 
-// Example: Fla. R. Civ. P. 1.510; Florida Rule of Appellate Procedure 9.130.
+// Example: Fla. R. Civ. P. 1.510; Florida Rule of Appellate Procedure 9.130;
+// Fla. R. Gen. Prac. & Jud. Admin. 2.425.
 export const floridaRulePattern: CitationPattern = {
   name: "florida-rule",
   kind: "rule",
   regex: new RegExp(
-    String.raw`${CITATION_PREFIX}(?:Fla\.?|Florida)\s+(?:R\.?|Rule)\s+(?<body>Civ\.?|Civil|App\.?|Appellate|Crim\.?|Criminal|Jud\.?\s*Admin\.?|Judicial\s+Administration|Fam\.?\s*L\.?|Family\s+Law)(?:\s+(?:P\.?|Proc\.?|Procedure))?\s*(?<rule>${RULE_NUMBER})${CITATION_SUFFIX}`,
+    String.raw`${CITATION_PREFIX}(?:Fla\.?|Florida)\s+(?:R\.?|Rules?)\s+(?:of\s+)?(?<body>Civ\.?|Civil|App\.?|Appellate|Crim\.?|Criminal|Gen\.?\s*Prac\.?\s*&\s*Jud\.?\s*Admin\.?|General\s+Practice\s+and\s+Judicial\s+Administration|Jud\.?\s*Admin\.?|Judicial\s+Administration|Fam\.?\s*L\.?|Family\s+Law)(?:\s+(?:P\.?|Proc\.?|Procedure))?\s*(?<rule>${RULE_NUMBER})${CITATION_SUFFIX}`,
     "giu",
   ),
 };
@@ -131,8 +148,21 @@ export const stateConstitutionalPattern: CitationPattern = {
   ),
 };
 
+// Building the case-reporter pattern compiles a large alternation (the whole
+// reporter table), so the pattern set is memoized per reporter table. The
+// compiled regexes are safe to share across calls: detection uses
+// `String.prototype.matchAll`, which iterates over an internal copy and never
+// mutates the shared pattern's `lastIndex`.
+const citationPatternsCache = new WeakMap<ReporterTable, readonly CitationPattern[]>();
+
 export function buildCitationPatterns(reporters: ReporterTable): readonly CitationPattern[] {
-  return [
+  const cached = citationPatternsCache.get(reporters);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const patterns: readonly CitationPattern[] = [
     buildCaseReporterCitationPattern(reporters),
     federalStatutePattern,
     floridaStatutePattern,
@@ -144,6 +174,10 @@ export function buildCitationPatterns(reporters: ReporterTable): readonly Citati
     federalConstitutionalPattern,
     stateConstitutionalPattern,
   ];
+
+  citationPatternsCache.set(reporters, patterns);
+
+  return patterns;
 }
 
 function reporterAlternatives(reporters: ReporterTable): string[] {

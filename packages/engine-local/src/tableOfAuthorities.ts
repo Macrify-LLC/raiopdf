@@ -24,15 +24,33 @@ const AUTHORITY_COLLATOR = new Intl.Collator("en", {
   sensitivity: "base",
 });
 
+/**
+ * Controls how entry page numbers render in the generated table.
+ *
+ * - `"source"` (default): render the 1-based source-document page numbers
+ *   as provided. Use this whenever the table stands alone (Save as PDF,
+ *   preview) so the printed numbers keep referencing the source document.
+ * - `"physical"`: shift each rendered reference by the table's own page
+ *   count. Use this only when the table will be prepended to the document
+ *   it indexes, so the printed numbers match physical positions in the
+ *   combined document.
+ */
+export type ToaPageNumberMode = "source" | "physical";
+
 export async function drawToaPages(
   options: PdfTableOfAuthoritiesOptions,
+  pageNumberMode: ToaPageNumberMode = "source",
 ): Promise<StableFrontMatterRenderResult> {
   const passimThreshold = normalizePassimThreshold(options.passimThreshold);
 
   return renderStableFrontMatter({
     title: options.title ?? DEFAULT_TOA_TITLE,
     sections: ({ frontMatterPageCount }) =>
-      buildTableOfAuthoritiesSections(options.entries, passimThreshold, frontMatterPageCount),
+      buildTableOfAuthoritiesSections(
+        options.entries,
+        passimThreshold,
+        pageNumberMode === "physical" ? frontMatterPageCount : 0,
+      ),
   });
 }
 

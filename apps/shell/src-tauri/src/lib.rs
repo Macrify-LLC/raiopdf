@@ -334,15 +334,22 @@ impl DroppedUploads {
         file_grants: &FileGrants,
     ) -> Result<OpenedPdf, String> {
         let root = canonical_path_ops_root(path_ops_root)?;
-        let mut uploads = self
-            .uploads
-            .lock()
-            .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+        // Take the entry out of the map up front: whether this finish succeeds
+        // or fails, the slot must be released. A failed finish used to leave
+        // the entry behind, permanently pinning one of the
+        // MAX_IN_FLIGHT_DROPPED_UPLOADS slots (plus its temp file) until the
+        // app restarted.
+        let mut upload = {
+            let mut uploads = self
+                .uploads
+                .lock()
+                .map_err(|_| "Dropped PDF upload lock poisoned".to_string())?;
+            uploads
+                .remove(token)
+                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?
+        };
 
-        {
-            let upload = uploads
-                .get_mut(token)
-                .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
+        let finished = (|| {
             if upload.bytes_written != upload.expected_total {
                 return Err("Dropped PDF upload is incomplete".to_string());
             }
@@ -358,14 +365,11 @@ impl DroppedUploads {
                     "Failed to sync dropped PDF at {}: {error}",
                     upload.file_path.to_string_lossy()
                 )
-            })?;
-        }
+            })
+        })();
 
-        let upload = uploads
-            .remove(token)
-            .ok_or_else(|| "Dropped PDF upload token not found".to_string())?;
-        drop(uploads);
         let UploadState {
+            temp_dir,
             file_path,
             file,
             sanitized_name,
@@ -373,7 +377,14 @@ impl DroppedUploads {
         } = upload;
         drop(file);
 
-        opened_pdf_for_temp_upload(&file_path, &root, &sanitized_name, file_grants)
+        let result = finished.and_then(|()| {
+            opened_pdf_for_temp_upload(&file_path, &root, &sanitized_name, file_grants)
+        });
+        if result.is_err() {
+            // A failed finish releases its staging dir exactly like an abort.
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+        result
     }
 
     fn abort_upload(&self, token: &str) -> Result<(), String> {
@@ -2367,13 +2378,16 @@ mod tests {
     }
 
     #[test]
-    fn dropped_upload_finish_rejects_incomplete_upload() {
+    fn dropped_upload_finish_rejects_incomplete_upload_and_releases_the_slot() {
         let root = tempfile::tempdir().expect("temp dir");
         let uploads = DroppedUploads::default();
         let grants = FileGrants::default();
         let token = uploads
             .begin_upload(root.path(), 8, "case.pdf")
             .expect("begin");
+        let temp_dir = uploads
+            .upload_temp_dir(&token)
+            .expect("upload temp dir recorded");
 
         uploads.append_upload(&token, b"%PDF").expect("append");
 
@@ -2382,7 +2396,39 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("incomplete"));
-        uploads.abort_upload(&token).expect("abort");
+        // The failed finish must free its in-flight slot and staging dir —
+        // it used to pin one of the MAX_IN_FLIGHT_DROPPED_UPLOADS slots (and
+        // leak the temp file) until restart.
+        assert!(uploads.upload_temp_dir(&token).is_none());
+        assert!(!temp_dir.exists());
+        // The token is fully consumed, so a late abort has nothing to do.
+        assert!(uploads.abort_upload(&token).is_err());
+    }
+
+    #[test]
+    fn dropped_upload_failed_finish_frees_a_slot_for_a_new_upload() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let mut tokens = Vec::new();
+        for index in 0..MAX_IN_FLIGHT_DROPPED_UPLOADS {
+            tokens.push(
+                uploads
+                    .begin_upload(root.path(), 8, &format!("case-{index}.pdf"))
+                    .expect("begin"),
+            );
+        }
+        assert!(uploads
+            .begin_upload(root.path(), 8, "case-full.pdf")
+            .is_err());
+
+        // Fail one finish (incomplete bytes) — its slot must become available.
+        assert!(uploads
+            .finish_upload(&tokens[0], root.path(), &grants)
+            .is_err());
+        uploads
+            .begin_upload(root.path(), 8, "case-freed.pdf")
+            .expect("slot freed by failed finish");
     }
 
     #[test]

@@ -28,7 +28,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_entries};
@@ -48,6 +48,7 @@ pub const ERR_OP_FAILED: &str = "OP_FAILED";
 pub const ERR_VERIFICATION_FAILED: &str = "VERIFICATION_FAILED";
 pub const ERR_IO: &str = "IO_ERROR";
 pub const ERR_CANCELLED: &str = "PATH_OP_CANCELLED";
+pub const ERR_TIMEOUT: &str = "PATH_OP_TIMEOUT";
 
 /// A typed, serializable path-op error. `code` is stable API for the UI;
 /// `message` is a human-readable detail string.
@@ -85,6 +86,10 @@ impl PathOpError {
         Self::new(ERR_CANCELLED, message)
     }
 
+    fn timed_out(message: impl Into<String>) -> Self {
+        Self::new(ERR_TIMEOUT, message)
+    }
+
     fn io(context: &str, error: io::Error) -> Self {
         Self::new(ERR_IO, format!("{context}: {error}"))
     }
@@ -117,6 +122,14 @@ pub struct PathOpsToolchain {
     /// Payload bin dirs prepended to PATH when spawning OCRmyPDF (it invokes
     /// `tesseract` and `gs` by name).
     pub path_entries: Vec<PathBuf>,
+    /// Optional per-invocation deadline for the qpdf/Ghostscript subprocesses
+    /// this toolchain spawns. `None` (the default) preserves the historical
+    /// unbounded behavior; callers handling untrusted in-memory documents
+    /// (the sidecar's `/local/*` endpoints) set a generous size-scaled bound
+    /// so a pathological PDF cannot wedge a tool — and the request thread —
+    /// forever. The deadline applies to each tool invocation, not the whole
+    /// op, so a multi-step op is bounded by (steps × deadline).
+    pub tool_timeout: Option<Duration>,
 }
 
 impl PathOpsToolchain {
@@ -189,7 +202,16 @@ impl PathOpsToolchain {
                 candidate.is_file().then_some(candidate)
             },
             path_entries: payload_path_entries(payload_dir),
+            tool_timeout: None,
         }
+    }
+
+    /// Bound every qpdf/Ghostscript invocation made through this toolchain to
+    /// `timeout`, killing the process tree and returning [`ERR_TIMEOUT`] when
+    /// it is exceeded.
+    pub fn with_tool_timeout(mut self, timeout: Duration) -> Self {
+        self.tool_timeout = Some(timeout);
+        self
     }
 
     fn require_qpdf(&self) -> OpResult<&Path> {
@@ -493,6 +515,42 @@ fn run_command_cancelable(
     prepend_path: &[PathBuf],
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> OpResult<Output> {
+    run_command_supervised(program, args, current_dir, prepend_path, cancel_flag, None)
+}
+
+/// Run a tool bounded by a wall-clock `timeout`: the process tree is killed
+/// and [`ERR_TIMEOUT`] returned when it is exceeded. This is the bound the
+/// sidecar's `/local/*` endpoints rely on so a wedged qpdf/Ghostscript cannot
+/// pin the request thread — and the idle-shutdown supervisor — forever.
+pub(crate) fn run_command_with_timeout(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    timeout: Duration,
+) -> OpResult<Output> {
+    run_command_supervised(
+        program,
+        args,
+        current_dir,
+        prepend_path,
+        None,
+        Some(timeout),
+    )
+}
+
+/// Shared spawn+drain+poll runner behind the cancelable and deadline-bounded
+/// entry points. Cancellation and the deadline both kill the whole child
+/// process tree (qpdf/Ghostscript may have spawned helpers) before returning
+/// a typed error.
+fn run_command_supervised(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    cancel_flag: Option<Arc<AtomicBool>>,
+    timeout: Option<Duration>,
+) -> OpResult<Output> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -513,6 +571,7 @@ fn run_command_cancelable(
     }
     configure_cancelable_command(&mut command);
 
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let mut child = command.spawn().map_err(|error| {
         PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
     })?;
@@ -531,20 +590,34 @@ fn run_command_cancelable(
         })
     });
 
+    let abort = |child: &mut Child,
+                 stdout_thread: &mut Option<thread::JoinHandle<Vec<u8>>>,
+                 stderr_thread: &mut Option<thread::JoinHandle<Vec<u8>>>| {
+        kill_child_tree(child);
+        let _ = child.wait();
+        if let Some(handle) = stdout_thread.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_thread.take() {
+            let _ = handle.join();
+        }
+    };
+
     let status = loop {
         if cancel_flag
             .as_ref()
             .is_some_and(|flag| flag.load(Ordering::Relaxed))
         {
-            kill_child_tree(&mut child);
-            let _ = child.wait();
-            if let Some(handle) = stdout_thread.take() {
-                let _ = handle.join();
-            }
-            if let Some(handle) = stderr_thread.take() {
-                let _ = handle.join();
-            }
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
             return Err(PathOpError::cancelled("Operation was cancelled."));
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            abort(&mut child, &mut stdout_thread, &mut stderr_thread);
+            return Err(PathOpError::timed_out(format!(
+                "{} did not finish within {} seconds and was terminated",
+                program.display(),
+                timeout.unwrap_or_default().as_secs()
+            )));
         }
 
         match child.try_wait() {
@@ -704,14 +777,16 @@ fn kill_child_tree(child: &mut Child) {
 fn kill_child_tree(child: &mut Child) {
     #[cfg(unix)]
     {
+        // `--` ends option parsing: a standalone `kill` binary would otherwise
+        // parse the leading-dash process-group operand as an option.
         let process_group = format!("-{}", child.id());
         let _ = Command::new("kill")
-            .args(["-TERM", process_group.as_str()])
+            .args(["-TERM", "--", process_group.as_str()])
             .output();
         thread::sleep(Duration::from_millis(250));
         if child.try_wait().ok().flatten().is_none() {
             let _ = Command::new("kill")
-                .args(["-KILL", process_group.as_str()])
+                .args(["-KILL", "--", process_group.as_str()])
                 .output();
         }
     }
@@ -867,7 +942,7 @@ pub(crate) fn args(parts: &[&str]) -> Vec<OsString> {
 
 fn run_qpdf(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<Output> {
     let qpdf = toolchain.require_qpdf()?;
-    let output = run_command(qpdf, &arguments, None, &[])?;
+    let output = run_tool_with_toolchain_timeout(toolchain, qpdf, &arguments)?;
     expect_success("qpdf", &output)?;
     Ok(output)
 }
@@ -877,9 +952,22 @@ pub(crate) fn run_ghostscript(
     arguments: Vec<OsString>,
 ) -> OpResult<Output> {
     let ghostscript = toolchain.require_ghostscript()?;
-    let output = run_command(ghostscript, &arguments, None, &[])?;
+    let output = run_tool_with_toolchain_timeout(toolchain, ghostscript, &arguments)?;
     expect_success("ghostscript", &output)?;
     Ok(output)
+}
+
+/// Honor the toolchain's optional per-invocation deadline (see
+/// [`PathOpsToolchain::tool_timeout`]); without one, run unbounded as before.
+fn run_tool_with_toolchain_timeout(
+    toolchain: &PathOpsToolchain,
+    program: &Path,
+    arguments: &[OsString],
+) -> OpResult<Output> {
+    match toolchain.tool_timeout {
+        Some(timeout) => run_command_with_timeout(program, arguments, None, &[], timeout),
+        None => run_command(program, arguments, None, &[]),
+    }
 }
 
 /// Ghostscript sandbox arguments: `-dSAFER` plus explicit permits scoped to
@@ -2247,6 +2335,7 @@ pub(crate) fn plan_watermark_overlay(
     if options.text.is_empty() {
         return Err(PathOpError::invalid("Stamp text must not be empty."));
     }
+    require_win_ansi_encodable(&options.text)?;
     let font_size_pt = options
         .font_size_pt
         .unwrap_or(DEFAULT_WATERMARK_FONT_SIZE_PT);
@@ -2363,6 +2452,7 @@ pub(crate) fn plan_edge_stamp(
     font_size_pt: f64,
     margin_in: f64,
 ) -> OpResult<MiniPdfText> {
+    require_win_ansi_encodable(text)?;
     let (page_width, page_height) = page_box_size(page);
     let sideways = is_sideways(page.rotate);
     let (visual_width, visual_height) = if sideways {
@@ -3100,9 +3190,21 @@ pub(crate) struct MiniPdfPage {
     pub texts: Vec<MiniPdfText>,
 }
 
+/// Defensive backstop for [`write_minimal_pdf`]: the planners validate user
+/// text up front, so hitting this means a caller skipped
+/// [`require_win_ansi_encodable`].
+fn pdf_string_encode_error(ch: char) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        unsupported_stamp_char_message(ch),
+    )
+}
+
 /// Hand-rolled, dependency-free PDF writer. Object layout: 1 Catalog, 2 Pages,
 /// 3 Helvetica font, then (only when used) a Helvetica-Bold font and one
 /// ExtGState per distinct opacity, then (Page, Contents) pairs per page.
+/// Text is transcoded to WinAnsi (cp1252) to match the fonts' declared
+/// `/Encoding`.
 pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Result<()> {
     let mut buffer: Vec<u8> = Vec::new();
     buffer.extend_from_slice(b"%PDF-1.4\n");
@@ -3227,7 +3329,7 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
                 "BT /F1 12 Tf {:.2} {:.2} Td ({}) Tj ET\n",
                 llx + 100.0,
                 lly + 500.0,
-                escape_pdf_string(text),
+                escape_pdf_string(text).map_err(pdf_string_encode_error)?,
             ));
         }
         for placed in &page.texts {
@@ -3247,7 +3349,7 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
                 cos,
                 placed.x,
                 placed.y,
-                escape_pdf_string(&placed.text),
+                escape_pdf_string(&placed.text).map_err(pdf_string_encode_error)?,
             ));
         }
 
@@ -3294,10 +3396,84 @@ pub(crate) fn write_minimal_pdf(path: &Path, pages: &[MiniPdfPage]) -> io::Resul
     Ok(())
 }
 
-fn escape_pdf_string(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
+/// The Windows-1252 (WinAnsi) byte for `ch`, or `None` when the character has
+/// no WinAnsi encoding. The minimal PDF writer declares its Type1 fonts with
+/// `/Encoding /WinAnsiEncoding`, so every string byte is interpreted as
+/// cp1252 — text must be transcoded, not passed through as UTF-8.
+fn win_ansi_byte(ch: char) -> Option<u8> {
+    let code = u32::from(ch);
+    match code {
+        // ASCII and the Latin-1 upper range map 1:1.
+        0x00..=0x7F | 0xA0..=0xFF => Some(code as u8),
+        // The 0x80–0x9F block is where cp1252 diverges from Latin-1.
+        _ => Some(match ch {
+            '\u{20AC}' => 0x80, // €
+            '\u{201A}' => 0x82, // ‚
+            '\u{0192}' => 0x83, // ƒ
+            '\u{201E}' => 0x84, // „
+            '\u{2026}' => 0x85, // …
+            '\u{2020}' => 0x86, // †
+            '\u{2021}' => 0x87, // ‡
+            '\u{02C6}' => 0x88, // ˆ
+            '\u{2030}' => 0x89, // ‰
+            '\u{0160}' => 0x8A, // Š
+            '\u{2039}' => 0x8B, // ‹
+            '\u{0152}' => 0x8C, // Œ
+            '\u{017D}' => 0x8E, // Ž
+            '\u{2018}' => 0x91, // '
+            '\u{2019}' => 0x92, // '
+            '\u{201C}' => 0x93, // "
+            '\u{201D}' => 0x94, // "
+            '\u{2022}' => 0x95, // •
+            '\u{2013}' => 0x96, // –
+            '\u{2014}' => 0x97, // —
+            '\u{02DC}' => 0x98, // ˜
+            '\u{2122}' => 0x99, // ™
+            '\u{0161}' => 0x9A, // š
+            '\u{203A}' => 0x9B, // ›
+            '\u{0153}' => 0x9C, // œ
+            '\u{017E}' => 0x9E, // ž
+            '\u{0178}' => 0x9F, // Ÿ
+            _ => return None,
+        }),
+    }
+}
+
+fn unsupported_stamp_char_message(ch: char) -> String {
+    format!(
+        "Stamp text contains the character '{ch}' (U+{:04X}), which the stamping font cannot \
+         encode. Only Windows-1252 (Latin) characters are supported.",
+        u32::from(ch)
+    )
+}
+
+/// Fail fast — with the user-facing error the UI surfaces — when stamp text
+/// contains a character the WinAnsi-encoded overlay fonts cannot represent.
+/// Without this gate the text would be burned into the output as mojibake.
+fn require_win_ansi_encodable(text: &str) -> OpResult<()> {
+    match text.chars().find(|&ch| win_ansi_byte(ch).is_none()) {
+        Some(ch) => Err(PathOpError::invalid(unsupported_stamp_char_message(ch))),
+        None => Ok(()),
+    }
+}
+
+/// Transcode `text` to a WinAnsi PDF literal string: cp1252 encoding with
+/// `\` `(` `)` escaped and every non-printable-ASCII byte emitted as an octal
+/// escape (the content stream is assembled as ASCII text). Errors with the
+/// offending character when it has no cp1252 mapping.
+fn escape_pdf_string(text: &str) -> Result<String, char> {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        let byte = win_ansi_byte(ch).ok_or(ch)?;
+        match byte {
+            b'\\' => escaped.push_str("\\\\"),
+            b'(' => escaped.push_str("\\("),
+            b')' => escaped.push_str("\\)"),
+            0x20..=0x7E => escaped.push(byte as char),
+            _ => escaped.push_str(&format!("\\{byte:03o}")),
+        }
+    }
+    Ok(escaped)
 }
 
 // ---------------------------------------------------------------------------
@@ -4424,6 +4600,116 @@ mod tests {
 
         let error = plan_edge_stamp(&unrotated, "X1", placement, 11.0, 5.0).unwrap_err();
         assert!(error.message.contains("no room"));
+    }
+
+    #[test]
+    fn escape_pdf_string_leaves_ascii_unchanged_and_escapes_delimiters() {
+        assert_eq!(
+            escape_pdf_string("Exhibit A (draft) \\ [2026]").unwrap(),
+            "Exhibit A \\(draft\\) \\\\ [2026]"
+        );
+    }
+
+    #[test]
+    fn escape_pdf_string_transcodes_win_ansi_text_to_octal_escapes() {
+        // Em dash (cp1252 0x97), e-acute (0xE9), section sign (0xA7): each
+        // becomes its single cp1252 byte as an octal escape, never raw UTF-8.
+        assert_eq!(
+            escape_pdf_string("CONFIDENTIAL — Exhibit é§").unwrap(),
+            "CONFIDENTIAL \\227 Exhibit \\351\\247"
+        );
+        // Smart quotes and the euro sign live in the 0x80–0x9F divergence.
+        assert_eq!(escape_pdf_string("“€”").unwrap(), "\\223\\200\\224");
+    }
+
+    #[test]
+    fn escape_pdf_string_rejects_characters_outside_win_ansi() {
+        assert_eq!(escape_pdf_string("Exhibit 你").unwrap_err(), '你');
+        assert_eq!(escape_pdf_string("№ 5").unwrap_err(), '№');
+    }
+
+    #[test]
+    fn stamp_planners_reject_text_the_win_ansi_fonts_cannot_encode() {
+        let pages = letter_facts(1);
+        let watermark = WatermarkOptions {
+            text: "机密".to_string(),
+            page_indexes: PageSelection::Keyword(PageSelectionKeyword::All),
+            orientation: WatermarkOrientation::Diagonal,
+            opacity: None,
+            font_size_pt: None,
+        };
+        let error = plan_watermark_overlay(&pages, &watermark).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains('机'), "message names the character");
+
+        let bates = BatesStampOptions {
+            prefix: "你".to_string(),
+            start: 1,
+            digits: 4,
+            placement: StampPlacement {
+                edge: StampEdge::Footer,
+                align: StampAlign::Right,
+            },
+            font_size_pt: None,
+            margin_in: None,
+        };
+        let error = plan_bates_overlay(&pages, &bates).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+
+        // WinAnsi-encodable non-ASCII stays accepted (Nº, em dash, é, §).
+        let accepted = BatesStampOptions {
+            prefix: "Nº—é§".to_string(),
+            ..bates
+        };
+        assert!(plan_bates_overlay(&pages, &accepted).is_ok());
+    }
+
+    #[test]
+    fn run_command_with_timeout_kills_a_wedged_child_with_typed_error() {
+        let (program, arguments) = sleep_command(30);
+        let started = Instant::now();
+        let error =
+            run_command_with_timeout(program, &arguments, None, &[], Duration::from_millis(300))
+                .unwrap_err();
+        assert_eq!(error.code, ERR_TIMEOUT);
+        assert!(error.message.contains("was terminated"));
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "timeout must not wait for the child's natural exit"
+        );
+    }
+
+    #[test]
+    fn run_command_with_timeout_passes_through_a_fast_child() {
+        let (program, arguments) = echo_command();
+        let output =
+            run_command_with_timeout(program, &arguments, None, &[], Duration::from_secs(60))
+                .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("ok"));
+    }
+
+    #[cfg(windows)]
+    fn sleep_command(seconds: u32) -> (&'static Path, Vec<OsString>) {
+        (
+            Path::new("cmd.exe"),
+            args(&["/C", &format!("ping -n {} 127.0.0.1 >NUL", seconds + 1)]),
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn sleep_command(seconds: u32) -> (&'static Path, Vec<OsString>) {
+        (Path::new("sh"), args(&["-c", &format!("sleep {seconds}")]))
+    }
+
+    #[cfg(windows)]
+    fn echo_command() -> (&'static Path, Vec<OsString>) {
+        (Path::new("cmd.exe"), args(&["/C", "echo ok"]))
+    }
+
+    #[cfg(not(windows))]
+    fn echo_command() -> (&'static Path, Vec<OsString>) {
+        (Path::new("sh"), args(&["-c", "echo ok"]))
     }
 
     // ---- Toolchain-backed stamping + insert tests ----

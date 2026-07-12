@@ -2084,10 +2084,22 @@ export function App() {
   const loadImportedAnnotations = editing.loadImportedAnnotations;
   const editingDocumentSourceRef = useRef<typeof document.source | undefined>(undefined);
   const importedAnnotationsSourceRef = useRef<typeof document.source | undefined>(undefined);
+  /**
+   * The document source whose editing state (snapshot restore or reset) has
+   * been APPLIED and re-rendered. The restore/reset scheduled by the effect
+   * below lands one flush after a tab switch, so anything that closes over
+   * `editing` (e.g. the deferred move-to-new-window save) must wait until
+   * this marker matches `document.source` — otherwise it would run with the
+   * previous tab's overlays/form values (Codex review, PR #236).
+   */
+  const [editingSyncedSource, setEditingSyncedSource] = useState<DocumentState["source"]>(null);
   useEffect(() => {
     let disposed = false;
     const sourceChanged = editingDocumentSourceRef.current !== document.source;
     editingDocumentSourceRef.current = document.source;
+    // Batched with the restore/reset below, so the render in which the
+    // marker matches also carries the target document's editing state.
+    setEditingSyncedSource(document.source);
 
     if (sourceChanged) {
       const snapshot = tabEditingSnapshotsRef.current.get(document.generation);
@@ -3915,7 +3927,14 @@ export function App() {
         }
       }
 
-      if (!forceSaveAs) {
+      // Plain Save on a CLEAN streamed document has nothing to write. A
+      // DIRTY streamed document with no pending overlays (e.g. an OCR
+      // output reopened as a temp-backed working copy via markDirty) has no
+      // in-place target either — its only meaningful save is the Save As
+      // copy below, so route Save there instead of silently doing nothing.
+      // Both the toolbar button and the File > Save menu land here (Codex
+      // review, PR #236).
+      if (!forceSaveAs && !document.dirty) {
         return null;
       }
 
@@ -4008,6 +4027,7 @@ export function App() {
     }
   }, [
     applyAnnotationSavePlan,
+    document.dirty,
     document.fileName,
     document.fileSizeBytes,
     document.generation,
@@ -4165,6 +4185,17 @@ export function App() {
       return;
     }
 
+    // Defer until the target tab's editing state (snapshot restore or
+    // reset) has rendered: this effect runs in the same flush as the
+    // switch, when `moveActiveTabToNewWindow`/`saveToFile` still close over
+    // the PREVIOUS tab's editing state — saving then could omit the target
+    // tab's stashed edits or even apply the previous tab's overlays before
+    // closing the tab (Codex review, PR #236). The marker update re-runs
+    // this effect one flush later with the restored closures.
+    if (editingSyncedSource !== document.source) {
+      return;
+    }
+
     const tab = documentTabs.find((candidate) => candidate.id === pendingTabId);
     if (!tab || !tab.document.filePath) {
       pendingMoveToNewWindowTabIdRef.current = null;
@@ -4178,7 +4209,7 @@ export function App() {
       tab.document.filePath as FileGrant,
       tab.document.dirty,
     );
-  }, [activeTabId, documentTabs, moveActiveTabToNewWindow, setError]);
+  }, [activeTabId, document.source, documentTabs, editingSyncedSource, moveActiveTabToNewWindow, setError]);
 
   const printDocument = useCallback(() => {
     if (streamedDocument) {

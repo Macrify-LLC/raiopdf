@@ -138,6 +138,15 @@ impl RangeReadError {
             message: "RaioPDF couldn't read this document. Reopen it and try again.".to_string(),
         }
     }
+
+    /// The blocking-pool worker running the read failed to complete (panic or
+    /// runtime shutdown). Surfaced with the same user message as plain IO.
+    pub fn worker_failed() -> Self {
+        Self {
+            code: RangeReadErrorCode::Io,
+            message: "RaioPDF couldn't read this document. Reopen it and try again.".to_string(),
+        }
+    }
 }
 
 /// Read `[offset, offset + length)` from `path`, validating bounds against —

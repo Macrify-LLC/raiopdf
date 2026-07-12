@@ -13,6 +13,7 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 const APP_LOG_FILE_NAME: &str = "app.log";
@@ -424,41 +425,51 @@ pub fn diagnostics_record_event(
 }
 
 #[tauri::command]
-pub fn diagnostics_export_dialog(
+pub async fn diagnostics_export_dialog(
     app: tauri::AppHandle,
     diagnostics: tauri::State<'_, AppDiagnostics>,
-    manager: tauri::State<'_, SidecarManager>,
 ) -> Result<Option<DiagnosticExport>, String> {
     diagnostics.record_shell_event("diagnostics_export", "export requested")?;
 
     let default_name = format!("raiopdf-diagnostics-{}.txt", timestamp_file_part());
-    let Some(path) = app
-        .dialog()
-        .file()
-        .add_filter("Text", &["txt"])
-        .set_file_name(default_name)
-        .blocking_save_file()
-    else {
-        diagnostics.record_shell_event("diagnostics_export", "export canceled")?;
-        return Ok(None);
-    };
+    // Dialog + report assembly + file write all run on the blocking pool: a
+    // sync command would hold the main/UI thread while the user decides and
+    // while every log generation is read and written out. State is re-resolved
+    // from the app handle inside the worker (`State` can't cross into a
+    // 'static closure).
+    tauri::async_runtime::spawn_blocking(move || {
+        let diagnostics = app.state::<AppDiagnostics>();
+        let Some(path) = app
+            .dialog()
+            .file()
+            .add_filter("Text", &["txt"])
+            .set_file_name(default_name)
+            .blocking_save_file()
+        else {
+            diagnostics.record_shell_event("diagnostics_export", "export canceled")?;
+            return Ok(None);
+        };
 
-    let path = path.into_path().map_err(|error| error.to_string())?;
-    let engine_status = manager
-        .engine_status()
-        .and_then(|status| serde_json::to_value(status).map_err(|error| error.to_string()));
-    let report = diagnostics.build_report(engine_status)?;
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        let engine_status = app
+            .state::<SidecarManager>()
+            .engine_status()
+            .and_then(|status| serde_json::to_value(status).map_err(|error| error.to_string()));
+        let report = diagnostics.build_report(engine_status)?;
 
-    fs::write(&path, report)
-        .map_err(|error| format!("failed to write diagnostics export: {error}"))?;
-    diagnostics.record_shell_event(
-        "diagnostics_export",
-        &format!("export saved to {}", path.to_string_lossy()),
-    )?;
+        fs::write(&path, report)
+            .map_err(|error| format!("failed to write diagnostics export: {error}"))?;
+        diagnostics.record_shell_event(
+            "diagnostics_export",
+            &format!("export saved to {}", path.to_string_lossy()),
+        )?;
 
-    Ok(Some(DiagnosticExport {
-        path: path.to_string_lossy().into_owned(),
-    }))
+        Ok(Some(DiagnosticExport {
+            path: path.to_string_lossy().into_owned(),
+        }))
+    })
+    .await
+    .map_err(|error| format!("RaioPDF's background task failed: {error}"))?
 }
 
 #[tauri::command]

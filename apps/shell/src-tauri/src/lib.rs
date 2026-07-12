@@ -25,6 +25,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Mutex,
     },
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuBuilder, SubmenuBuilder},
@@ -1388,7 +1389,12 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
 
     match result {
         Ok(()) => {
-            fs::remove_file(&backup).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+            // The save itself is complete — the new bytes are durably in
+            // place. Backup cleanup must not fail the save: AV scanners and
+            // indexers routinely hold a just-renamed file briefly on Windows,
+            // and reporting SAVE_PDF_ERROR here told the user a successful
+            // save had failed (while stranding the backup).
+            remove_save_backup_best_effort(backup);
             Ok(())
         }
         Err(error) => {
@@ -1399,6 +1405,34 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
             Err(error)
         }
     }
+}
+
+const SAVE_BACKUP_CLEANUP_RETRIES: usize = 5;
+const SAVE_BACKUP_CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(400);
+
+/// Delete the `.…raio-save-backup` staged next to the user's file after a
+/// save has already succeeded. A transient lock (AV, indexer) gets a few
+/// background retries; if the file is still held, it is simply left behind —
+/// each save mints a unique backup name, so a stray one can never corrupt a
+/// later save. (The same applies to a backup orphaned by a crash between
+/// rename and persist: recovering it on the next open would mean scanning the
+/// user's directories, which RaioPDF deliberately does not do.)
+fn remove_save_backup_best_effort(backup: PathBuf) {
+    match fs::remove_file(&backup) {
+        Ok(()) => return,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(_) => {}
+    }
+    std::thread::spawn(move || {
+        for _ in 0..SAVE_BACKUP_CLEANUP_RETRIES {
+            std::thread::sleep(SAVE_BACKUP_CLEANUP_RETRY_DELAY);
+            match fs::remove_file(&backup) {
+                Ok(()) => return,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+                Err(_) => {}
+            }
+        }
+    });
 }
 
 fn atomic_copy_grant_if_unchanged(
@@ -2499,6 +2533,19 @@ mod tests {
         atomic_write_grant_if_unchanged(&entry, b"saved bytes").expect("save unchanged grant");
 
         assert_eq!(fs::read(&path).expect("read saved"), b"saved bytes");
+    }
+
+    #[test]
+    fn save_backup_cleanup_removes_file_and_tolerates_missing_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let backup = dir.path().join(".case.pdf.123.abc.raio-save-backup");
+        fs::write(&backup, b"backup bytes").expect("write backup");
+
+        remove_save_backup_best_effort(backup.clone());
+        assert!(!backup.exists());
+
+        // A backup that is already gone must not spawn retries or panic.
+        remove_save_backup_best_effort(dir.path().join("never-existed.raio-save-backup"));
     }
 
     #[test]

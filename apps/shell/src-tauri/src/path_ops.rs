@@ -411,12 +411,26 @@ fn temp_dir_available_bytes(app: &tauri::AppHandle) -> Option<u64> {
 /// Name of the per-op-dir marker file recording the owning instance id.
 pub const OWNER_MARKER_FILE_NAME: &str = ".raio-owner";
 
+/// Marker content recording that the creating process had no instance
+/// identity (its advisory lock file could not be created or locked). Such
+/// dirs cannot be liveness-probed, so the sweep must NOT put them on the
+/// short legacy grace path — a still-running identity-less instance would
+/// have its live outputs deleted by any second instance started a minute
+/// later. Real instance ids are UUIDs, so this sentinel can never collide.
+const UNIDENTIFIED_OWNER_MARKER: &str = "unidentified";
+
 /// How long an *unowned* dir (no readable owner marker) is left alone before
 /// the sweep reclaims it. Covers the instant between `create_dir` and the
 /// marker write in a concurrently-starting instance; genuinely stale legacy
 /// dirs (pre-ownership versions, or an instance that died mid-create) age past
 /// it and are swept on a later startup.
 const UNOWNED_DIR_SWEEP_GRACE: Duration = Duration::from_secs(60);
+
+/// How long an `unidentified`-marked dir survives before reclaim. With no
+/// liveness to probe, err far on the side of keeping it: a week comfortably
+/// outlives any realistic session, while dirs from crashed identity-less runs
+/// are still eventually reclaimed instead of accumulating forever.
+const UNIDENTIFIED_DIR_SWEEP_GRACE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Startup sweep (large-pdf-handling housekeeping): file grants live only in
 /// memory, so a leftover `<app-data>/path-ops/<uuid>/` dir is unreachable once
@@ -432,9 +446,12 @@ pub fn purge_stale_outputs(app_data_dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if should_sweep_output_dir(&path, UNOWNED_DIR_SWEEP_GRACE, |owner_id| {
-                    crate::instance::owner_liveness(app_data_dir, owner_id)
-                }) {
+                if should_sweep_output_dir(
+                    &path,
+                    UNOWNED_DIR_SWEEP_GRACE,
+                    UNIDENTIFIED_DIR_SWEEP_GRACE,
+                    |owner_id| crate::instance::owner_liveness(app_data_dir, owner_id),
+                ) {
                     let _ = fs::remove_dir_all(&path);
                 }
             } else {
@@ -446,29 +463,54 @@ pub fn purge_stale_outputs(app_data_dir: &Path) {
     crate::instance::sweep_dead_instance_locks(app_data_dir);
 }
 
+/// How one per-op dir's `.raio-owner` marker classifies for the sweep.
+enum DirOwnership {
+    /// Marker names an instance id — liveness decides the dir's fate.
+    Owned(String),
+    /// Marker carries the identity-less sentinel: the creator had no lock to
+    /// probe, so the dir is preserved on the long horizon instead.
+    Unidentified,
+    /// No readable/valid marker — a legacy or mid-create dir on short grace.
+    Unowned,
+}
+
 /// The sweep decision for one per-op dir, with liveness injectable for tests:
 /// an owned dir lives exactly as long as its owning instance might still hold
-/// grants into it; an unowned dir is reclaimed once it is old enough that no
-/// concurrently-starting instance can still be about to mark it.
+/// grants into it; an identity-less dir is never treated as stale while its
+/// long grace runs (ownership is ambiguous — prefer keeping it); an unowned
+/// dir is reclaimed once it is old enough that no concurrently-starting
+/// instance can still be about to mark it.
 fn should_sweep_output_dir(
     dir: &Path,
     unowned_grace: Duration,
+    unidentified_grace: Duration,
     liveness_of: impl Fn(&str) -> crate::instance::Liveness,
 ) -> bool {
-    match dir_owner_id(dir) {
-        Some(owner_id) => match liveness_of(&owner_id) {
+    match dir_ownership(dir) {
+        DirOwnership::Owned(owner_id) => match liveness_of(&owner_id) {
             crate::instance::Liveness::Dead => true,
             // Unknown must not delete: a live instance may hold grants here.
             crate::instance::Liveness::Alive | crate::instance::Liveness::Unknown => false,
         },
-        None => dir_is_older_than(dir, unowned_grace),
+        DirOwnership::Unidentified => dir_is_older_than(dir, unidentified_grace),
+        DirOwnership::Unowned => dir_is_older_than(dir, unowned_grace),
     }
 }
 
-fn dir_owner_id(dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(dir.join(OWNER_MARKER_FILE_NAME)).ok()?;
-    let id = content.trim().to_string();
-    crate::instance::is_valid_owner_id(&id).then_some(id)
+fn dir_ownership(dir: &Path) -> DirOwnership {
+    let Ok(content) = fs::read_to_string(dir.join(OWNER_MARKER_FILE_NAME)) else {
+        return DirOwnership::Unowned;
+    };
+    let id = content.trim();
+    // Sentinel first: it would also pass the owner-id shape check, and must
+    // never be liveness-probed (no lock file exists for it by definition).
+    if id == UNIDENTIFIED_OWNER_MARKER {
+        return DirOwnership::Unidentified;
+    }
+    if crate::instance::is_valid_owner_id(id) {
+        return DirOwnership::Owned(id.to_string());
+    }
+    DirOwnership::Unowned
 }
 
 fn dir_is_older_than(dir: &Path, grace: Duration) -> bool {
@@ -484,17 +526,17 @@ fn dir_is_older_than(dir: &Path, grace: Duration) -> bool {
     }
 }
 
-/// Best-effort: record the calling instance as the owner of `dir`. Without a
-/// marker (no instance identity, or the write failed) the dir is merely
-/// treated as unowned and reclaimed by a later sweep — never a correctness
-/// problem, only a shorter lifetime.
+/// Best-effort: record the calling instance as the owner of `dir`. A process
+/// with no instance identity (its lock could not be acquired) writes the
+/// `unidentified` sentinel instead, which parks the dir on the long-horizon
+/// grace — a live identity-less run must never land on the 60-second legacy
+/// path where a second instance's sweep would delete its in-use outputs.
+/// Only if this write itself also fails does the dir fall back to unowned.
 pub(crate) fn mark_dir_owned_by_current_instance(dir: &Path) {
-    if let Some(identity) = crate::instance::current() {
-        let _ = fs::write(
-            dir.join(OWNER_MARKER_FILE_NAME),
-            format!("{}\n", identity.id()),
-        );
-    }
+    let owner = crate::instance::current()
+        .map(|identity| identity.id())
+        .unwrap_or(UNIDENTIFIED_OWNER_MARKER);
+    let _ = fs::write(dir.join(OWNER_MARKER_FILE_NAME), format!("{owner}\n"));
 }
 
 /// Adopt ownership of the per-op output dir containing `path`, when `path` is
@@ -1988,32 +2030,47 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let dir = make_output_dir(root.path(), "uuid-a", Some("owner-1"));
 
-        assert!(should_sweep_output_dir(&dir, Duration::ZERO, |_| {
-            Liveness::Dead
-        }));
-        assert!(!should_sweep_output_dir(&dir, Duration::ZERO, |_| {
-            Liveness::Alive
-        }));
+        assert!(should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::ZERO,
+            |_| Liveness::Dead
+        ));
+        assert!(!should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::ZERO,
+            |_| Liveness::Alive
+        ));
         // Undecidable liveness must never delete.
-        assert!(!should_sweep_output_dir(&dir, Duration::ZERO, |_| {
-            Liveness::Unknown
-        }));
+        assert!(!should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::ZERO,
+            |_| Liveness::Unknown
+        ));
     }
 
     #[test]
     fn sweep_decision_removes_legacy_dir_after_grace_but_keeps_fresh_one() {
         let root = tempfile::tempdir().expect("temp dir");
         let dir = make_output_dir(root.path(), "uuid-legacy", None);
-        let never_called = |_: &str| panic!("legacy dirs consult no liveness");
+        let never_called = |_: &str| -> Liveness { panic!("legacy dirs consult no liveness") };
 
         // A fresh markerless dir may belong to an instance that is mid-create.
         assert!(!should_sweep_output_dir(
             &dir,
             Duration::from_secs(3600),
+            Duration::ZERO,
             never_called
         ));
         // Once past the grace window it is reclaimed like before.
-        assert!(should_sweep_output_dir(&dir, Duration::ZERO, never_called));
+        assert!(should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::from_secs(3600),
+            never_called
+        ));
     }
 
     #[test]
@@ -2021,9 +2078,43 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let dir = make_output_dir(root.path(), "uuid-garbage", Some("../not a valid id"));
 
-        assert!(should_sweep_output_dir(&dir, Duration::ZERO, |_| {
-            panic!("invalid ids consult no liveness")
-        }));
+        assert!(should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::from_secs(3600),
+            |_| panic!("invalid ids consult no liveness")
+        ));
+    }
+
+    #[test]
+    fn identity_less_marked_dir_rides_the_long_horizon_not_the_legacy_grace() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let dir = root.path().join("uuid-unidentified");
+        fs::create_dir_all(&dir).expect("create dir");
+        // Tests never call `instance::init_current`, so `current()` is None —
+        // exactly the identity-less mode this covers (Codex review, PR #237).
+        mark_dir_owned_by_current_instance(&dir);
+        assert_eq!(
+            fs::read_to_string(dir.join(OWNER_MARKER_FILE_NAME)).expect("read marker"),
+            format!("{UNIDENTIFIED_OWNER_MARKER}\n"),
+        );
+        let never_called = |_: &str| -> Liveness { panic!("sentinel consults no liveness") };
+
+        // A second instance's sweep (past the 60s legacy grace, modeled here
+        // as ZERO) must NOT reclaim a possibly-live identity-less dir…
+        assert!(!should_sweep_output_dir(
+            &dir,
+            Duration::ZERO,
+            Duration::from_secs(3600),
+            never_called
+        ));
+        // …but a genuinely ancient one (long horizon elapsed) still goes.
+        assert!(should_sweep_output_dir(
+            &dir,
+            Duration::from_secs(3600),
+            Duration::ZERO,
+            never_called
+        ));
     }
 
     #[test]
@@ -2043,6 +2134,9 @@ mod tests {
         let orphan_dir = make_output_dir(&root, "uuid-orphan", Some("00000000-no-such-owner"));
         // Fresh legacy dir: inside the grace window, so preserved this pass.
         let legacy_dir = make_output_dir(&root, "uuid-legacy", None);
+        // Identity-less creator: preserved for the whole long horizon.
+        let unidentified_dir =
+            make_output_dir(&root, "uuid-unidentified", Some(UNIDENTIFIED_OWNER_MARKER));
         fs::write(root.join("loose.tmp"), b"tmp").expect("write loose");
 
         purge_stale_outputs(app_data.path());
@@ -2051,6 +2145,7 @@ mod tests {
         assert!(!dead_dir.exists());
         assert!(!orphan_dir.exists());
         assert!(legacy_dir.exists());
+        assert!(unidentified_dir.exists());
         assert!(!root.join("loose.tmp").exists());
         // The root itself survives for the next op.
         assert!(root.exists());

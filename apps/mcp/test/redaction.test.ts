@@ -1,6 +1,10 @@
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { describe, expect, it } from "vitest";
-import { normalizeSpaced, verifyTermsRemoved } from "../src/redaction/verify.js";
+import {
+  normalizeSpaced,
+  normalizeSpacedMarkless,
+  verifyTermsRemoved,
+} from "../src/redaction/verify.js";
 
 async function pdfWithText(text: string): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
@@ -76,10 +80,10 @@ describe("redaction term verifier (pdf.js in Node)", () => {
 
   it("matches a decomposed needle against a composed haystack (Unicode normalization)", async () => {
     // The PDF text layer carries the composed form; the needle arrives
-    // decomposed, as another tool might supply it. Before NFKD normalization
-    // the combining mark was stripped to a space on the needle side only, so
-    // the surviving term verified as removed - a redaction-verification
-    // false negative.
+    // decomposed, as another tool might supply it. NFKC composes both sides,
+    // so the surviving term is correctly flagged; without normalization the
+    // combining mark was stripped to a space on the needle side only and the
+    // surviving term falsely verified as removed.
     const bytes = await pdfWithText(`Deposition of ${COMPOSED_MUNOZ}, page 3`);
     const result = await verifyTermsRemoved(bytes, [DECOMPOSED_MUNOZ]);
     expect(result.ok).toBe(false);
@@ -91,6 +95,7 @@ describe("redaction term verifier (pdf.js in Node)", () => {
     const result = await verifyTermsRemoved(bytes, [DECOMPOSED_MUNOZ]);
     expect(result.ok).toBe(true);
     expect(result.survivingTerms).toEqual([]);
+    expect(result.accentInsensitiveSurvivors).toEqual([]);
   });
 
   it("normalizes composed and decomposed spellings identically (both directions)", () => {
@@ -99,8 +104,50 @@ describe("redaction term verifier (pdf.js in Node)", () => {
     // here rather than through a PDF.
     expect(normalizeSpaced(COMPOSED_MUNOZ)).toBe(normalizeSpaced(DECOMPOSED_MUNOZ));
     expect(normalizeSpaced("Sécret")).toBe(normalizeSpaced("Sécret"));
-    // The mark-stripped, lowercased form both spellings collapse to.
-    expect(normalizeSpaced(COMPOSED_MUNOZ)).toBe("munoz");
+    // NFKC preserves the diacritic (accent-less text must NOT hard-match)...
+    expect(normalizeSpaced(COMPOSED_MUNOZ)).not.toBe("munoz");
+    // ...while the soft-signal normalizer strips it.
+    expect(normalizeSpacedMarkless(COMPOSED_MUNOZ)).toBe("munoz");
+    expect(normalizeSpacedMarkless(DECOMPOSED_MUNOZ)).toBe("munoz");
+  });
+
+  it("folds compatibility forms in the hard gate (ligature needle matches plain text)", async () => {
+    // NFKC maps the U+FB01 ligature to "fi": a needle containing the
+    // ligature must still hard-match plain "file" left in the text layer --
+    // this is why the gate is NFKC rather than bare NFC.
+    expect(normalizeSpaced("ﬁle")).toBe("file");
+    const bytes = await pdfWithText("the file remains here");
+    const result = await verifyTermsRemoved(bytes, ["ﬁle"]);
+    expect(result.ok).toBe(false);
+    expect(result.survivingTerms).toEqual(["ﬁle"]);
+  });
+
+  it("does not refuse when only an unaccented near-miss of the term remains", async () => {
+    // Term "résumé", remaining text "resume": the exact term is gone, so
+    // verification must pass (blocking here was the false positive of the
+    // earlier mark-stripping gate) -- but the accent-less variant is
+    // surfaced as a soft signal for human review.
+    const bytes = await pdfWithText("please see the attached resume today");
+    const result = await verifyTermsRemoved(bytes, ["résumé"]);
+    expect(result.ok).toBe(true);
+    expect(result.survivingTerms).toEqual([]);
+    expect(result.accentInsensitiveSurvivors).toEqual(["résumé"]);
+  });
+
+  it("flags the reverse accent near-miss too (plain term, accented text remains)", async () => {
+    const bytes = await pdfWithText("please see the attached résumé today");
+    const result = await verifyTermsRemoved(bytes, ["resume"]);
+    expect(result.ok).toBe(true);
+    expect(result.survivingTerms).toEqual([]);
+    expect(result.accentInsensitiveSurvivors).toEqual(["resume"]);
+  });
+
+  it("emits no accent warning when the accented term truly hard-matches", async () => {
+    const bytes = await pdfWithText("please see the attached résumé today");
+    const result = await verifyTermsRemoved(bytes, ["résumé"]);
+    expect(result.ok).toBe(false);
+    expect(result.survivingTerms).toEqual(["résumé"]);
+    expect(result.accentInsensitiveSurvivors).toEqual([]);
   });
 
   it("does not treat a non-ASCII term as unverifiable-empty", async () => {

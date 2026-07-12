@@ -26,6 +26,12 @@ export const redactOutputSchema = {
   ...baseOutputSchema,
   output: z.string().optional(),
   survivingTerms: z.array(z.string()).optional(),
+  warnings: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Non-blocking review notes, e.g. unaccented text similar to a redacted term remains.",
+    ),
 };
 export interface RedactInput {
   input: string;
@@ -81,9 +87,23 @@ export async function handleRedact(
 
     await output.write(redactedBytes);
     await output.commit();
+
+    // Soft signal only: an accent-insensitive near-match (e.g. term "résumé"
+    // with "resume" still in the text layer) does not fail verification —
+    // the exact term is gone — but an OCR'd accent-less variant of a
+    // redacted name deserves a human look before relying on the output.
+    const warnings = verification.accentInsensitiveSurvivors.map(
+      (term) =>
+        `Unaccented text similar to "${term}" remains extractable — review the output before relying on it.`,
+    );
+    const summary = `Redacted ${input.terms.length} term(s) into ${input.output}; verified no term remains extractable.`;
     return successResult(
-      `Redacted ${input.terms.length} term(s) into ${input.output}; verified no term remains extractable.`,
-      { output: output.outputPath, survivingTerms: [] },
+      warnings.length > 0 ? `${summary} ${warnings.join(" ")}` : summary,
+      {
+        output: output.outputPath,
+        survivingTerms: [],
+        ...(warnings.length > 0 ? { warnings } : {}),
+      },
     );
   } catch (error) {
     await output.abort();

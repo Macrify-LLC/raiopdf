@@ -5,6 +5,14 @@ export type RedactionVerification = {
   ok: boolean;
   /** Redacted terms still found in the document's extractable text. */
   survivingTerms: string[];
+  /**
+   * Soft signal, never a refusal: terms whose accent-stripped form still
+   * appears even though the exact (NFKC) form does not — e.g. term "résumé"
+   * with "resume" left in the text layer. An OCR'd accent-less variant of a
+   * redacted name is worth a human look, but blocking an otherwise clean
+   * redaction on it would be a false positive.
+   */
+  accentInsensitiveSurvivors: string[];
 };
 
 export type VerifyOptions = {
@@ -13,18 +21,36 @@ export type VerifyOptions = {
 };
 
 /**
- * Lowercase and reduce any run of non-letter/non-digit characters to a single
- * space. Uses Unicode classes so CJK / Cyrillic / Greek terms are preserved
- * (an ASCII-only strip would erase them, making them unverifiable forever).
+ * The hard-gate normalizer (refuses the write on a match). Lowercase and
+ * reduce any run of non-letter/non-digit characters to a single space, using
+ * Unicode classes so CJK / Cyrillic / Greek terms are preserved (an
+ * ASCII-only strip would erase them, making them unverifiable forever).
  *
- * Unicode-normalizes (NFKD) and strips combining marks first so composed and
- * decomposed spellings compare equal: a text layer that extracts "Muñoz" as
- * "Mun" + combining tilde + "oz" must still match the composed needle
- * "muñoz" — otherwise a surviving term would falsely verify as removed.
+ * NFKC-normalizes first — canonical composition handles composed vs
+ * decomposed spellings (a text layer that extracts "Muñoz" as "Mun" +
+ * combining tilde + "oz" still matches the composed needle), and the
+ * compatibility mapping folds ligatures and fullwidth forms (a text layer's
+ * "ﬁle" still matches the needle "file"). Diacritics are PRESERVED: "résumé"
+ * and "resume" stay distinct, so an accent-less near-miss doesn't falsely
+ * block a clean redaction — that case is the soft signal below.
  * Exported for direct testing (a decomposed haystack can't be produced with
  * the WinAnsi test fonts).
  */
 export function normalizeSpaced(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * The soft-signal normalizer: like {@link normalizeSpaced} but additionally
+ * strips combining marks (NFKD, drop \p{M}) so "résumé" and "resume"
+ * compare equal. A hit here that the hard gate missed is surfaced as a
+ * warning, never a refusal.
+ */
+export function normalizeSpacedMarkless(value: string): string {
   return value
     .normalize("NFKD")
     .replace(/\p{M}+/gu, "")
@@ -49,16 +75,32 @@ function escapeRegExp(value: string): string {
  * surviving, since it cannot be verified. The bias is toward false positives
  * (failing a clean redaction) over false negatives (passing a leaked one).
  */
+function termPresent(
+  haystackSpaced: string,
+  haystackCollapsed: string,
+  termSpaced: string,
+  wholeWord: boolean,
+): boolean {
+  if (wholeWord) {
+    return new RegExp(`(?:^| )${escapeRegExp(termSpaced)}(?: |$)`, "u").test(haystackSpaced);
+  }
+  return haystackCollapsed.includes(termSpaced.replace(/ /g, ""));
+}
+
 export async function verifyTermsRemoved(
   bytes: Uint8Array,
   terms: readonly string[],
   options: VerifyOptions = {},
 ): Promise<RedactionVerification> {
-  const spaced = normalizeSpaced(await extractAllText(bytes));
+  const extracted = await extractAllText(bytes);
+  const spaced = normalizeSpaced(extracted);
   const collapsed = spaced.replace(/ /g, "");
+  const spacedMarkless = normalizeSpacedMarkless(extracted);
+  const collapsedMarkless = spacedMarkless.replace(/ /g, "");
   const wholeWord = options.wholeWord ?? false;
   const seen = new Set<string>();
   const survivingTerms: string[] = [];
+  const accentInsensitiveSurvivors: string[] = [];
 
   for (const term of terms) {
     if (seen.has(term)) {
@@ -72,16 +114,26 @@ export async function verifyTermsRemoved(
       continue;
     }
 
-    let present: boolean;
-    if (wholeWord) {
-      present = new RegExp(`(?:^| )${escapeRegExp(termSpaced)}(?: |$)`, "u").test(spaced);
-    } else {
-      present = collapsed.includes(termSpaced.replace(/ /g, ""));
-    }
-    if (present) {
+    if (termPresent(spaced, collapsed, termSpaced, wholeWord)) {
       survivingTerms.push(term);
+      continue;
+    }
+
+    // Hard gate clean — check the accent-stripped shadow match. Runs in both
+    // directions: accented term vs unaccented remaining text ("résumé" /
+    // "resume") and unaccented term vs accented remaining text.
+    const termMarkless = normalizeSpacedMarkless(term);
+    if (
+      termMarkless.length > 0 &&
+      termPresent(spacedMarkless, collapsedMarkless, termMarkless, wholeWord)
+    ) {
+      accentInsensitiveSurvivors.push(term);
     }
   }
 
-  return { ok: survivingTerms.length === 0, survivingTerms };
+  return {
+    ok: survivingTerms.length === 0,
+    survivingTerms,
+    accentInsensitiveSurvivors,
+  };
 }

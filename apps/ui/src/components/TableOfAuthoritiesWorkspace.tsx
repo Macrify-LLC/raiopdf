@@ -338,6 +338,14 @@ export function TableOfAuthoritiesWorkspace({
               <p className="toa-card__label">Review citations</p>
               <span>{includedRows.length} included / {rows.length} found</span>
             </div>
+            {/* Honest-disclosure line: detection covers full citations only, so
+                per-authority page lists are systematically incomplete wherever
+                the brief uses short forms. Persistent and non-blocking — the
+                review step is where the user fills the gap. */}
+            <p className="toa-card__hint">
+              Page lists count full citations only. Short-form references (id., supra,
+              &ldquo;410 U.S. at 116&rdquo;) are not detected &mdash; add those pages while you review.
+            </p>
 
             {phase === "detecting" ? (
               <DetectingState />

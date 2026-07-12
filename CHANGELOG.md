@@ -13,8 +13,35 @@ fades as download volume accrues.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-12
+
+Fourth public alpha. Headline: **two new front-matter tools for briefs** — build a court
+**case caption / cover page**, and generate a **Table of Authorities** from the citations
+in your brief — plus a round of reliability fixes, including restoring the batch and
+packaging tools.
+
+### Added
+
+- **Table of Authorities.** Point RaioPDF at a brief and it finds the legal citations,
+  groups them (cases, statutes, rules, and the rest), and builds a Table of Authorities
+  with real page numbers and dot leaders. A review workspace lets you check and correct
+  what it caught before you insert it — citation detection is assistive, so you stay in
+  control. Runs entirely on your machine.
+- **Case caption & cover page generator.** Build a court caption or cover page with live
+  previews of several styles, then drop it onto the document.
+- **A floating markup toolbar** that follows your work, so the annotation tools are within
+  reach instead of pinned to the edge of the window.
+- **"Email a report" button on error screens.** When something goes wrong, one click
+  drafts an email in your own mail app with the details, so reporting a problem doesn't
+  mean retyping what happened.
+- **Set RaioPDF as your default PDF app.** The installer now registers a Windows file
+  association, so you can open PDFs straight into RaioPDF by double-clicking them.
+
 ### Changed
 
+- **Big PDFs now get the full toolset.** Large documents that open streamed (rather than
+  fully into memory) can now run the same file-to-file operations — split, extract,
+  compress, OCR, and the rest — instead of being limited to viewing.
 - **Make Searchable keeps the searchable copy when a few pages have thin text over a
   scan.** When normal OCR skips pages that already carry a sliver of text over a scanned
   image, RaioPDF now hands you the searchable copy anyway with a light heads-up naming
@@ -22,6 +49,27 @@ fades as download volume accrues.
   result and keeping the original.
 - **A freshly OCR'd document now counts as unsaved,** so closing it prompts you to save
   first — the OCR work can't be discarded by accident.
+
+### Fixed
+
+- **The batch and packaging tools work again.** Production sets, batch cleanup, filing
+  packets, and streamed binder/save-out — the "run one tool over a set of files" lane —
+  were broken in every release up to now; they're restored.
+- **Prepare for Filing no longer flattens filled forms and annotations** when it
+  normalizes pages to letter size — your form fields and markups survive the resize.
+- **No more silent loss of edits, or building the wrong file.** Document and tab state is
+  tracked so edits and generated outputs can't quietly disappear or get crossed between
+  open documents.
+- **Running two copies of RaioPDF at once is safe.** Temporary-file cleanup only touches
+  its own instance's files, each window keeps its own crash marker, and the background
+  engine shuts down whenever a window closes.
+- **The app stays responsive during file work.** File reads and writes moved off the
+  interface thread, background engine calls time out instead of hanging, and a
+  Bates-numbering resource leak was closed.
+- Redaction and stamping now handle accented and other non-ASCII characters correctly,
+  and a hidden Microsoft Word process left behind by an interrupted conversion is cleaned
+  up.
+- Plus various smaller bug fixes and polish across the app.
 
 ## [0.1.2] - 2026-07-08
 
@@ -123,7 +171,8 @@ own machine. Windows only for now (macOS later).
 - An off-by-default MCP connector so RaioPDF can talk to your own AI agents; no AI runs
   inside the app itself.
 
-[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Macrify-LLC/raiopdf/releases/tag/v0.1.0

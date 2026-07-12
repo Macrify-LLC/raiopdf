@@ -1966,6 +1966,11 @@ pub fn run() {
                     .state::<AppDiagnostics>()
                     .record_shell_event("shutdown", "menu exit requested");
                 let _ = app.state::<AppDiagnostics>().mark_session_clean();
+                // `app.exit(0)` skips window destruction, so the Destroyed
+                // hook never fires on this path. RunEvent::Exit below also
+                // stops the sidecar; doing it here too is belt and braces
+                // against the engine java process outliving the app.
+                app.state::<sidecar::SidecarManager>().shutdown();
                 app.exit(0);
                 return;
             }
@@ -2044,13 +2049,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::WindowEvent {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::Destroyed,
                 ..
-            } = event
-            {
+            } => {
                 if label == "main" {
                     let _ = app_handle
                         .state::<AppDiagnostics>()
@@ -2059,6 +2063,19 @@ pub fn run() {
                     app_handle.state::<sidecar::SidecarManager>().shutdown();
                 }
             }
+            // The deepest shared exit hook: Tauri dispatches RunEvent::Exit on
+            // every exit path — window close AND `app.exit(0)` (menu exit, the
+            // process plugin), which skips window destruction entirely and
+            // used to orphan the engine java process. The Destroyed hook above
+            // stays as belt and braces; `shutdown()` is idempotent.
+            tauri::RunEvent::Exit => {
+                let _ = app_handle
+                    .state::<AppDiagnostics>()
+                    .record_shell_event("shutdown", "app exiting");
+                let _ = app_handle.state::<AppDiagnostics>().mark_session_clean();
+                app_handle.state::<sidecar::SidecarManager>().shutdown();
+            }
+            _ => {}
         });
 }
 

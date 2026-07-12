@@ -45,6 +45,12 @@ export function resolvePrepPlan(
       policy: pack.ocr,
       impact: searchableImpact,
     }, facts),
+    // Ordering note: normalize-pages runs before flatten-forms, but the
+    // engine's normalizePages bakes AcroForm field values and annotation
+    // appearances into page content itself before redrawing (its redraw
+    // would otherwise drop everything rendered from /Annots). Running
+    // flatten-forms afterwards on an already-normalized document is a no-op,
+    // so this order stays — it matches the checklist order users see.
     policyStep({
       id: "flatten-forms",
       label: "Lock fillable form fields",

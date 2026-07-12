@@ -62,6 +62,7 @@ import {
   mapPdfOutlineItems,
   offsetPdfOutlineItems,
   prefixPdfOutlineItemIds,
+  preserveSourcePdfMetadataInPlace,
   readPdfOutline,
   scrubPdfMetadataInPlace,
   writePdfOutlineInPlace,
@@ -214,6 +215,10 @@ const HIGHLIGHT_COLOR_COMPONENTS = [1, 0.9, 0.3] as const;
 const ANNOTATION_FLAG_HIDDEN = 2;
 /** PDF annotation flag bit 3 (value 4): render the annotation when printing. */
 const ANNOTATION_FLAG_PRINT = 4;
+/** PDF annotation flag bit 6 (value 32): do not display on screen (NoView). */
+const ANNOTATION_FLAG_NO_VIEW = 32;
+/** Annotation subtypes that never contribute rendered page content. */
+const NON_RENDERED_ANNOTATION_SUBTYPES = new Set(["Link", "Popup"]);
 const RAIOPDF_ANNOTATION_MARKER = PDFName.of("RaioPDF");
 const RAIOPDF_ANNOTATION_MARKER_VERSION = 2;
 const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
@@ -431,7 +436,13 @@ export class LocalPdfEngine implements PdfEngine {
     }
 
     const source = await this.load(document);
-    flattenMarkupAnnotationsInPlace(source);
+    // Bake everything /Annots-rendered into the page content before the
+    // redraw: embedPage() carries only the page content stream, so anything
+    // left in annotation appearance streams — filled AcroForm field values,
+    // third-party highlights/stamps/FreeText/ink, signature appearances —
+    // would silently disappear from the normalized output.
+    flattenAcroFormInPlace(source);
+    flattenAnnotationAppearancesInPlace(source, isVisiblyRenderedAnnotation);
     const output = await PDFDocument.create();
     const targetWidth = Math.min(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;
     const targetHeight = Math.max(options.targetSize.w, options.targetSize.h) * POINTS_PER_INCH;
@@ -669,6 +680,10 @@ export class LocalPdfEngine implements PdfEngine {
       openMode: "default",
       revision: "merged",
     }, { preserveSources });
+    // Carry the first source's catalog XMP (PDF/A identification) onto the
+    // merged document and skip the fresh Info stamp when every source was
+    // scrubbed — copyPages alone silently drops both.
+    preserveSourcePdfMetadataInPlace(output, preserveSources.map((source) => source.pdf));
 
     return {
       document: this.store(await output.save()),
@@ -1313,6 +1328,13 @@ function parseRaioPdfSourceEdit(sourceEditText: string): PdfRaioAnnotationEdit |
 }
 
 function flattenMarkupAnnotationsInPlace(pdf: PDFDocument): void {
+  flattenAnnotationAppearancesInPlace(pdf, isRaioPdfMarkupAnnotation);
+}
+
+function flattenAnnotationAppearancesInPlace(
+  pdf: PDFDocument,
+  shouldFlatten: (annotation: PDFDict) => boolean,
+): void {
   for (const page of pdf.getPages()) {
     const annotations = page.node.lookupMaybe(PDFName.of("Annots"), PDFArray);
 
@@ -1323,7 +1345,7 @@ function flattenMarkupAnnotationsInPlace(pdf: PDFDocument): void {
     for (let index = annotations.size() - 1; index >= 0; index -= 1) {
       const entry = readAnnotationEntryAt(page, annotations, index);
 
-      if (!entry || !isRaioPdfMarkupAnnotation(entry.dict)) {
+      if (!entry || !shouldFlatten(entry.dict)) {
         continue;
       }
 
@@ -1336,6 +1358,43 @@ function flattenMarkupAnnotationsInPlace(pdf: PDFDocument): void {
       page.node.delete(PDFName.of("Annots"));
     }
   }
+}
+
+/**
+ * Paints current AcroForm field appearances into page content and removes the
+ * interactive fields (pdf-lib `form.flatten()`), so a page redraw that only
+ * carries content streams keeps filled-in values. Unlike the `flattenForm`
+ * engine op — which surfaces a broken form to the user as INVALID_DOCUMENT —
+ * this pre-pass falls back to leaving the fields in place; the caller's
+ * annotation-appearance pass then bakes whatever widget appearance streams
+ * exist so the visible values still survive the redraw.
+ */
+function flattenAcroFormInPlace(pdf: PDFDocument): void {
+  try {
+    const form = pdf.getForm();
+
+    if (form.getFields().length > 0) {
+      form.flatten();
+    }
+  } catch {
+    // Fall through to the annotation-appearance bake.
+  }
+}
+
+/**
+ * Whether an annotation renders visible page content worth baking: skips
+ * hidden/NoView annotations and subtypes that carry no printed appearance.
+ */
+function isVisiblyRenderedAnnotation(annotation: PDFDict): boolean {
+  const flags = annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0;
+
+  if ((flags & (ANNOTATION_FLAG_HIDDEN | ANNOTATION_FLAG_NO_VIEW)) !== 0) {
+    return false;
+  }
+
+  const subtype = readAnnotationSubtype(annotation);
+
+  return subtype !== undefined && !NON_RENDERED_ANNOTATION_SUBTYPES.has(subtype);
 }
 
 function readAnnotationEntries(page: ReturnType<PDFDocument["getPage"]>): RaioPdfMarkupAnnotation[] {
@@ -1717,6 +1776,10 @@ async function createDocumentBytesForPages(
 
   const output = await PDFDocument.create();
   await copyPagesInto(output, source, pageIndexes);
+  // Split parts must keep the source's catalog XMP (PDF/A identification) and
+  // must not re-stamp Producer/CreationDate on a source whose Info was
+  // scrubbed — copyPages alone silently drops both.
+  preserveSourcePdfMetadataInPlace(output, [source]);
 
   return output.save();
 }
@@ -3739,7 +3802,12 @@ function formatBatesNumber(options: PdfBatesStampOptions, offset: number): strin
 
 async function loadPdf(bytes: Uint8Array): Promise<PDFDocument> {
   try {
-    return await PDFDocument.load(bytes);
+    // updateMetadata: false matches engine-pdf-lib's loads everywhere: don't
+    // stamp a pdf-lib Producer/ModDate onto documents the user opened — it
+    // would both leak tool metadata into saved output and make a scrubbed
+    // source indistinguishable from one that legitimately carries an Info
+    // dictionary (preserveSourcePdfMetadataInPlace relies on that signal).
+    return await PDFDocument.load(bytes, { updateMetadata: false });
   } catch (error) {
     if (isEncryptedPdfError(error)) {
       throw new PdfEngineError("ENCRYPTED_DOCUMENT", "Encrypted PDFs are not supported.", {

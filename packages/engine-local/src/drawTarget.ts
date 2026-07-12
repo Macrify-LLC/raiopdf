@@ -23,6 +23,7 @@ import {
   rgb,
   setFillingColor,
   type Color,
+  type PDFContext,
   type PDFDocument,
   type PDFFont,
   type PDFOperator,
@@ -123,7 +124,7 @@ export function drawAnnotationAppearanceOnPage(
   annotation: PDFDict,
 ): boolean {
   const rect = readAnnotationRect(annotation);
-  const appearanceRef = readNormalAppearanceRef(annotation);
+  const appearanceRef = readNormalAppearanceRef(annotation, page.doc.context);
 
   if (!rect || !appearanceRef) {
     return false;
@@ -497,9 +498,33 @@ function readAnnotationRect(annotation: PDFDict): PdfEditRect | undefined {
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
-function readNormalAppearanceRef(annotation: PDFDict): PDFRef | undefined {
+function readNormalAppearanceRef(
+  annotation: PDFDict,
+  context: PDFContext,
+): PDFRef | undefined {
   const appearance = annotation.lookupMaybe(PDFName.of("AP"), PDFDict);
   const normalAppearance = appearance?.get(PDFName.of("N"));
 
-  return normalAppearance instanceof PDFRef ? normalAppearance : undefined;
+  if (normalAppearance instanceof PDFRef && context.lookupMaybe(normalAppearance, PDFStream)) {
+    return normalAppearance;
+  }
+
+  // /N may be a sub-dictionary keyed by appearance state (widget annotations,
+  // e.g. checkbox On/Off) — resolve the annotation's current /AS entry.
+  const stateDictionary = normalAppearance instanceof PDFRef
+    ? context.lookupMaybe(normalAppearance, PDFDict)
+    : normalAppearance instanceof PDFDict
+      ? normalAppearance
+      : undefined;
+  const state = annotation.get(PDFName.of("AS"));
+
+  if (stateDictionary && state instanceof PDFName) {
+    const stateRef = stateDictionary.get(state);
+
+    if (stateRef instanceof PDFRef && context.lookupMaybe(stateRef, PDFStream)) {
+      return stateRef;
+    }
+  }
+
+  return undefined;
 }

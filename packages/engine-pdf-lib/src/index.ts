@@ -381,6 +381,64 @@ export async function scrubPdfMetadataBytes(
 }
 
 /**
+ * Carries document-level metadata from source documents onto a freshly
+ * created document that re-assembles their pages (split parts, merges).
+ *
+ * pdf-lib's `copyPages` copies page trees only — the catalog XMP metadata
+ * stream (which carries the PDF/A identification, see PdfAIdentification) is
+ * dropped and the new document gets a fresh pdf-lib Info stamp
+ * (Producer/CreationDate/...). For re-assembled output that silently
+ * un-PDF/As converted parts and re-introduces metadata a scrub deliberately
+ * removed. This helper:
+ *
+ * - copies the catalog XMP metadata stream from the first source that has one
+ *   (for merges the earliest document wins; the parts of a single split all
+ *   share one source, so the choice is only visible when merging documents
+ *   with differing metadata);
+ * - deletes the target's fresh Info dictionary when no source has one, so a
+ *   scrubbed source does not come back stamped with Producer/CreationDate.
+ *
+ * It does NOT attempt to guarantee full PDF/A validity of the result — only
+ * to stop the re-assembly itself from destroying the identification.
+ */
+export function preserveSourcePdfMetadataInPlace(
+  target: PDFDocument,
+  sources: readonly PDFDocument[],
+): void {
+  let xmp: Uint8Array | null = null;
+  for (const source of sources) {
+    xmp = readCatalogXmpBytes(source);
+    if (xmp) {
+      break;
+    }
+  }
+
+  if (xmp) {
+    // PDF/A requires the metadata stream to be uncompressed; context.stream
+    // creates a raw (unfiltered) stream.
+    const stream = target.context.stream(xmp, {
+      Type: "Metadata",
+      Subtype: "XML",
+    });
+    target.catalog.set(PDFName.of("Metadata"), target.context.register(stream));
+  }
+
+  if (!sources.some(hasInfoDict)) {
+    const infoRef = target.context.trailerInfo.Info;
+    if (isPdfRef(infoRef)) {
+      target.context.delete(infoRef);
+    }
+    delete target.context.trailerInfo.Info;
+  }
+}
+
+function hasInfoDict(pdf: PDFDocument): boolean {
+  const info = pdf.context.trailerInfo.Info;
+
+  return info !== undefined && pdf.context.lookup(info) instanceof PDFDict;
+}
+
+/**
  * What a PDF/A conversion would destroy in a document.
  *
  * PDF/A prohibits interactive form fields, most annotations, and encryption, so the
@@ -1391,6 +1449,12 @@ function bytesContainAscii(bytes: Uint8Array, text: string): boolean {
 }
 
 function readCatalogXmp(pdf: PDFDocument): string | null {
+  const contents = readCatalogXmpBytes(pdf);
+
+  return contents ? new TextDecoder("utf-8", { fatal: false }).decode(contents) : null;
+}
+
+function readCatalogXmpBytes(pdf: PDFDocument): Uint8Array | null {
   try {
     const stream = pdf.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
 
@@ -1398,11 +1462,9 @@ function readCatalogXmp(pdf: PDFDocument): string | null {
       return null;
     }
 
-    const contents = stream.dict.has(PDFName.of("Filter"))
+    return stream.dict.has(PDFName.of("Filter"))
       ? decodePDFRawStream(stream).decode()
       : stream.contents;
-
-    return new TextDecoder("utf-8", { fatal: false }).decode(contents);
   } catch {
     return null;
   }

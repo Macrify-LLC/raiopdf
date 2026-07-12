@@ -167,6 +167,8 @@ const DEFAULT_OCR_MODE: BatchCleanupOcrMode = "auto-image-only";
 const DEFAULT_COMPRESSION_QUALITY = 5;
 const DEFAULT_SPLIT_SIZE_MB = 25;
 const SIDE_CAR_OPERATIONS = new Set(["remove-encryption", "repair", "sanitize", "ocr", "compress", "pdfa"]);
+/** Operations that rewrite the whole file and may change its page count. */
+const PAGE_COUNT_ALTERING_OPERATIONS = new Set(["repair", "sanitize", "ocr", "compress", "pdfa"]);
 
 class BatchPackageWriteError extends Error {
   constructor(readonly originalError: unknown) {
@@ -716,9 +718,17 @@ async function runOperationPipeline(
     );
   }
 
+  // The facts were computed on the pre-pipeline bytes; operations that
+  // rewrite the whole file can change the page count, so recount from the
+  // final bytes whenever one of them ran.
+  const recountPages = operations.some((operation) =>
+    PAGE_COUNT_ALTERING_OPERATIONS.has(operation));
+
   return [{
     bytes,
-    pages: facts.pages.length || await countPages(localEngine, bytes),
+    pages: recountPages || facts.pages.length === 0
+      ? await countPages(localEngine, bytes)
+      : facts.pages.length,
   }];
 }
 

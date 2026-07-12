@@ -154,6 +154,54 @@ describe("buildFilingPacket", () => {
     expect(extractTextLayerCoverageForPart).toHaveBeenCalledTimes(3);
   });
 
+  it("suffixes duplicate output names when filename prefixes are disabled", async () => {
+    const first = await writePdf("alpha/Motion.pdf", ["first motion"]);
+    const second = await writePdf("beta/Motion.pdf", ["second motion"]);
+    const outputDir = path.join(dir, "packet-duplicate-names");
+
+    const result = await buildFilingPacket({
+      sources: [
+        { path: first, facts: sourceFacts(1) },
+        { path: second, facts: sourceFacts(1) },
+      ],
+      outputDir,
+      packId: "florida",
+      prefixFilenames: false,
+      checklist: {
+        selectedStepIds: [],
+      },
+    });
+
+    expect(result.files.map((file) => file.outputName)).toEqual([
+      "Motion.pdf",
+      "Motion (2).pdf",
+    ]);
+    expect(await exists(path.join(outputDir, "upload", "Motion.pdf"))).toBe(true);
+    expect(await exists(path.join(outputDir, "upload", "Motion (2).pdf"))).toBe(true);
+  });
+
+  it("records the PDF/A tool-unavailable step once per document across split parts", async () => {
+    const motion = await writePdf("Motion.pdf", ["one", "two", "three"]);
+    const outputDir = path.join(dir, "packet-pdfa-unavailable");
+
+    const result = await buildFilingPacket({
+      sources: [{ path: motion, facts: sourceFacts(3) }],
+      outputDir,
+      packId: "florida",
+      checklist: {
+        selectedStepIds: ["split-by-size", "convert-pdfa"],
+        splitSizeMb: 0.001,
+      },
+    });
+
+    const convertRecords = result.documents[0]!.stepStatus
+      .filter((step) => step.stepId === "convert-pdfa");
+
+    expect(result.files.length).toBeGreaterThan(1);
+    expect(convertRecords).toHaveLength(1);
+    expect(convertRecords[0]).toMatchObject({ status: "unsupported" });
+  });
+
   it("runs make-searchable with force OCR for garbled text-layer coverage", async () => {
     const motion = await writePdf("Garbled Motion.pdf", ["abc"]);
     const outputDir = path.join(dir, "packet-force-ocr");
@@ -238,6 +286,7 @@ async function writePdf(name: string, lines: readonly string[]): Promise<string>
   }
 
   const filePath = path.join(dir, name);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, await pdf.save());
   return filePath;
 }

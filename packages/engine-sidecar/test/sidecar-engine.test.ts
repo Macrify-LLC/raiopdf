@@ -760,6 +760,33 @@ describe("SidecarPdfEngine", () => {
     expectFormField(calls[2], "stampText", "ABC099");
     expectFormField(calls[3], "pageNumbers", "3");
     expectFormField(calls[3], "stampText", "ABC100");
+    // Intermediate per-page results are closed as the run advances: only the
+    // caller's source document and the final stamped result stay open.
+    expect(openDocumentCount(engine)).toBe(2);
+    await expect(engine.saveToBytes(document)).resolves.toEqual(bytes(1));
+  });
+
+  it("closes intermediate Bates documents when a stamp call fails mid-run", async () => {
+    const { fetchImpl } = createFetch(
+      jsonResponse({ pageCount: 3 }),
+      pdfResponse(80),
+      textResponse("stamp failed", 500),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await expect(
+      engine.batesStamp(document, {
+        prefix: "ABC",
+        start: 1,
+        digits: 3,
+        placement: { edge: "footer", align: "right" },
+      }),
+    ).rejects.toBeInstanceOf(PdfEngineError);
+
+    // The failed run leaks nothing; the caller's source document stays open.
+    expect(openDocumentCount(engine)).toBe(1);
+    await expect(engine.saveToBytes(document)).resolves.toEqual(bytes(1));
   });
 
   it("rejects Bates numbers that overflow the configured digit width before stamping", async () => {
@@ -992,7 +1019,13 @@ describe("SidecarPdfEngine", () => {
     expect(queryValue(calls[0], "ocr_type")).toBe("force-ocr");
     expect(queryValue(calls[0], "page_indexes")).toBe("0,2,3");
     expect(queryValue(calls[0], "job_token")).toBe("ocr-job-1");
-    expect(calls[0]?.init?.signal).toBe(abortController.signal);
+    // The caller's signal is combined with the request-deadline signal, so
+    // the fetch receives a composed AbortSignal that follows the caller's.
+    const requestSignal = calls[0]?.init?.signal;
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(requestSignal?.aborted).toBe(false);
+    abortController.abort();
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it("cancels local sidecar jobs by token", async () => {
@@ -1015,6 +1048,70 @@ describe("SidecarPdfEngine", () => {
     })).rejects.toMatchObject({
       code: "PATH_OP_CANCELLED",
     });
+  });
+
+  it("sends a deadline signal on every sidecar request", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({ pageCount: 3 }), pdfResponse(9));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(bytes(1));
+
+    await engine.reorderPages(document, [0, 1, 2]);
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.init?.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("fails a stalled sidecar request with TIMEOUT once the deadline passes", async () => {
+    const { calls, fetchImpl } = createStalledFetch();
+    const engine = new SidecarPdfEngine({
+      baseUrl: "http://127.0.0.1:8080",
+      fetch: fetchImpl,
+      requestTimeoutMs: 20,
+    });
+
+    // repairBytes hits the wedged endpoint directly (no prior page-count call).
+    await expect(engine.repairBytes(bytes(1))).rejects.toMatchObject({
+      code: "TIMEOUT",
+      message: "RaioPDF's PDF engine didn't respond in time. Try the operation again.",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails a stalled local request with TIMEOUT once the deadline passes", async () => {
+    const { calls, fetchImpl } = createStalledFetch();
+    const engine = new SidecarPdfEngine({
+      baseUrl: "http://127.0.0.1:8080",
+      fetch: fetchImpl,
+      requestTimeoutMs: 20,
+    });
+
+    // The timeout passes through removeEncryption's wrapper untouched — a
+    // stalled engine must not be misreported as a rejected password.
+    await expect(engine.removeEncryption(bytes(1), "secret")).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
+  });
+
+  it("maps a caller abort during a stalled OCR request to a cancellation error", async () => {
+    const { fetchImpl } = createStalledFetch();
+    const abortController = new AbortController();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    const pending = engine.ocrBytes(bytes(1), {
+      knownPageCount: 1,
+      signal: abortController.signal,
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      code: "PATH_OP_CANCELLED",
+    });
+    abortController.abort();
+
+    // The caller's abort wins over the (much longer) OCR deadline — the
+    // operation stays a silent cancellation, not a surfaced timeout.
+    await rejection;
   });
 
   it("normalizes legacy Normal OCR mode to skip-text for the local interceptor", async () => {
@@ -1170,6 +1267,47 @@ function createFetch(...responses: Response[]): {
     }
 
     return response;
+  };
+
+  return { calls, fetchImpl };
+}
+
+/**
+ * Peek at the engine's private document map. `private` is compile-time only;
+ * the leak assertions need the count of open handles without widening the
+ * public engine surface for tests.
+ */
+function openDocumentCount(engine: SidecarPdfEngine): number {
+  return (engine as unknown as { documents: Map<unknown, unknown> }).documents.size;
+}
+
+/**
+ * A fetch against a wedged endpoint: never resolves on its own, rejects with
+ * the signal's abort reason once the request signal fires — the behavior of a
+ * real fetch when its AbortSignal (deadline or caller cancellation) aborts.
+ */
+function createStalledFetch(): {
+  calls: FetchCall[];
+  fetchImpl: typeof fetch;
+} {
+  const calls: FetchCall[] = [];
+  const fetchImpl: typeof fetch = (input, init) => {
+    calls.push({
+      url: input instanceof Request ? input.url : String(input),
+      ...(init ? { init } : {}),
+    });
+
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) {
+        return;
+      }
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      signal.addEventListener("abort", () => reject(signal.reason));
+    });
   };
 
   return { calls, fetchImpl };

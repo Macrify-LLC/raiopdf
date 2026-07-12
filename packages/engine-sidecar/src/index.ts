@@ -103,14 +103,23 @@ type TextRewritePreflight = {
   warnings: PdfReplaceTextWarning[];
 };
 
-type LocalRequestOptions = {
+type SidecarRequestOptions = {
+  /** Caller-provided cancellation (e.g. the OCR job's abort signal). */
   signal?: AbortSignal;
+  /** Per-request deadline override; defaults to the engine's request timeout. */
+  timeoutMs?: number;
 };
 
 export type SidecarPdfEngineOptions = {
   authToken?: string;
   baseUrl: string;
   fetch?: Fetch;
+  /**
+   * Default per-request deadline in milliseconds. Every sidecar HTTP request
+   * is bounded so a stalled engine endpoint fails the operation instead of
+   * hanging it (and the UI's serialized mutation queue) forever.
+   */
+  requestTimeoutMs?: number;
 };
 
 export type SidecarPdfEngineInfo = {
@@ -152,6 +161,20 @@ type StirlingErrorBody = {
 const DEFAULT_FONT_SIZE_PT = 11;
 const DEFAULT_MARGIN_IN = 0.5;
 const SLASH_CHAR_CODE = "/".charCodeAt(0);
+
+/**
+ * Default deadline for a single sidecar HTTP round trip. Generous — normal
+ * Stirling operations finish in seconds — but bounded, so a wedged engine
+ * endpoint surfaces a TIMEOUT error instead of hanging forever.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
+/**
+ * OCR deadline: the engine-side OCR interceptor enforces its own
+ * 30-minute-per-document ceiling, so the HTTP deadline sits just above it —
+ * a legitimate long OCR is never cut short, and when the engine's own limit
+ * trips, its real error message wins over a bare client-side timeout.
+ */
+const OCR_REQUEST_TIMEOUT_MS = 31 * 60_000;
 
 /**
  * PdfEngine implementation backed by Stirling PDF's current v2 API surface.
@@ -228,12 +251,14 @@ export class SidecarPdfEngine implements PdfEngine {
   private readonly authToken: string | undefined;
   private readonly baseUrl: string;
   private readonly fetchImpl: Fetch;
+  private readonly requestTimeoutMs: number;
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
   private nextDocumentId = 1;
 
   constructor(options: SidecarPdfEngineOptions) {
     this.authToken = options.authToken;
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     // Native fetch must not be stored bare: `this.fetchImpl(...)` invokes it
     // with the engine instance as receiver, and Chromium throws
     // "Failed to execute 'fetch' on 'Window': Illegal invocation" -- an
@@ -256,6 +281,9 @@ export class SidecarPdfEngine implements PdfEngine {
         headers: sidecarHeaders(authToken, {
           accept: "application/json",
         }),
+        // A stalled status endpoint must not hang the probe; failures
+        // (including the timeout) already resolve to null below.
+        signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -289,9 +317,15 @@ export class SidecarPdfEngine implements PdfEngine {
         }),
       );
     } catch (error) {
-      if (error instanceof PdfEngineError) {
+      if (
+        error instanceof PdfEngineError &&
+        error.code !== "TIMEOUT" &&
+        error.code !== "PATH_OP_CANCELLED"
+      ) {
         // qpdf refused: an empty password means the file genuinely needs one;
-        // a supplied password that failed means it was wrong.
+        // a supplied password that failed means it was wrong. Timeouts and
+        // cancellations pass through untouched — "password not accepted"
+        // would misdiagnose a stalled engine.
         throw new PdfEngineError(
           password.length === 0 ? "PASSWORD_REQUIRED" : "ENCRYPTED_DOCUMENT",
           password.length === 0
@@ -959,24 +993,42 @@ export class SidecarPdfEngine implements PdfEngine {
     const pageCount = await this.pageCount(document);
     const normalizedOptions = normalizeBatesOptions(options);
     assertBatesFitsPageCount(normalizedOptions, pageCount);
+    // One add-stamp round trip per page: Stirling's stamp endpoint takes a
+    // single stamp text per call, and Bates text differs on every page, so
+    // there is no batched single-call shape for this. Each round trip stores
+    // a fresh full document copy — intermediates are closed as soon as the
+    // next stamp lands so an N-page run never retains N copies in memory.
     let stampedDocument = document;
 
-    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-      const stampOptions: PdfStampTextOptions = {
-        text: formatBatesNumber(normalizedOptions, pageIndex),
-        pageIndexes: [pageIndex],
-        placement: normalizedOptions.placement,
-      };
+    try {
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const stampOptions: PdfStampTextOptions = {
+          text: formatBatesNumber(normalizedOptions, pageIndex),
+          pageIndexes: [pageIndex],
+          placement: normalizedOptions.placement,
+        };
 
-      if (normalizedOptions.fontSizePt !== undefined) {
-        stampOptions.fontSizePt = normalizedOptions.fontSizePt;
+        if (normalizedOptions.fontSizePt !== undefined) {
+          stampOptions.fontSizePt = normalizedOptions.fontSizePt;
+        }
+
+        if (normalizedOptions.marginIn !== undefined) {
+          stampOptions.marginIn = normalizedOptions.marginIn;
+        }
+
+        const nextDocument = await this.stampText(stampedDocument, stampOptions);
+        if (stampedDocument !== document) {
+          await this.close(stampedDocument);
+        }
+        stampedDocument = nextDocument;
       }
-
-      if (normalizedOptions.marginIn !== undefined) {
-        stampOptions.marginIn = normalizedOptions.marginIn;
+    } catch (error) {
+      // A failed stamp must not leak the last intermediate; the caller's
+      // input document stays open (they own that handle).
+      if (stampedDocument !== document) {
+        await this.close(stampedDocument);
       }
-
-      stampedDocument = await this.stampText(stampedDocument, stampOptions);
+      throw error;
     }
 
     return stampedDocument;
@@ -1105,7 +1157,7 @@ export class SidecarPdfEngine implements PdfEngine {
     if (response.status === 204) {
       return true;
     }
-    const text = await response.text();
+    const text = await readBody(() => response.text());
 
     return text.trim() === "true";
   }
@@ -1126,7 +1178,10 @@ export class SidecarPdfEngine implements PdfEngine {
         ...(pageIndexes ? { page_indexes: pageIndexes } : {}),
         ...(options.jobToken ? { job_token: options.jobToken } : {}),
       },
-      options.signal ? { signal: options.signal } : {},
+      {
+        timeoutMs: OCR_REQUEST_TIMEOUT_MS,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
     );
   }
 
@@ -1286,7 +1341,11 @@ export class SidecarPdfEngine implements PdfEngine {
     return readBytes(response);
   }
 
-  private async request(path: string, body: FormData): Promise<Response> {
+  private async request(
+    path: string,
+    body: FormData,
+    options: SidecarRequestOptions = {},
+  ): Promise<Response> {
     let response: Response;
 
     try {
@@ -1294,11 +1353,13 @@ export class SidecarPdfEngine implements PdfEngine {
         method: "POST",
         headers: sidecarHeaders(this.authToken),
         body,
+        signal: this.requestSignal(options),
       });
     } catch (error) {
-      throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF's PDF engine couldn't complete that. Try reopening the file.", {
-        cause: error,
-      });
+      throw mapRequestFailure(
+        error,
+        "RaioPDF's PDF engine couldn't complete that. Try reopening the file.",
+      );
     }
 
     if (!response.ok) {
@@ -1319,7 +1380,7 @@ export class SidecarPdfEngine implements PdfEngine {
     path: string,
     body: Uint8Array | string,
     query: Record<string, string> = {},
-    options: LocalRequestOptions = {},
+    options: SidecarRequestOptions = {},
   ): Promise<Response> {
     let response: Response;
     const url = new URL(`${this.baseUrl}${path}`);
@@ -1336,18 +1397,14 @@ export class SidecarPdfEngine implements PdfEngine {
         method: "POST",
         headers: sidecarHeaders(this.authToken),
         body: requestBody,
-        ...(options.signal ? { signal: options.signal } : {}),
+        signal: this.requestSignal(options),
       };
       response = await this.fetchImpl(url.href, init);
     } catch (error) {
-      if (isAbortError(error)) {
-        throw new PdfEngineError("PATH_OP_CANCELLED", "Operation cancelled.", {
-          cause: error,
-        });
-      }
-      throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF couldn't complete that operation. Try reopening the file.", {
-        cause: error,
-      });
+      throw mapRequestFailure(
+        error,
+        "RaioPDF couldn't complete that operation. Try reopening the file.",
+      );
     }
 
     if (!response.ok) {
@@ -1355,6 +1412,17 @@ export class SidecarPdfEngine implements PdfEngine {
     }
 
     return response;
+  }
+
+  /**
+   * Deadline + cancellation signal for one sidecar HTTP request. Every request
+   * carries at least the timeout signal; a caller-provided signal (OCR
+   * cancellation) is combined with it so either can abort the fetch.
+   */
+  private requestSignal(options: SidecarRequestOptions): AbortSignal {
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? this.requestTimeoutMs);
+
+    return options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   }
 }
 
@@ -1385,6 +1453,37 @@ function isAbortError(error: unknown): boolean {
     error !== null &&
     "name" in error &&
     error.name === "AbortError";
+}
+
+/** `AbortSignal.timeout` aborts with a DOMException named "TimeoutError". */
+function isTimeoutError(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "TimeoutError";
+}
+
+/**
+ * Map a rejected sidecar fetch to a typed engine error: caller aborts stay
+ * cancellations (silent in the UI), deadline expiries surface as TIMEOUT, and
+ * anything else keeps the operation's generic failure message.
+ */
+function mapRequestFailure(error: unknown, fallbackMessage: string): PdfEngineError {
+  if (isAbortError(error)) {
+    return new PdfEngineError("PATH_OP_CANCELLED", "Operation cancelled.", {
+      cause: error,
+    });
+  }
+
+  if (isTimeoutError(error)) {
+    return new PdfEngineError(
+      "TIMEOUT",
+      "RaioPDF's PDF engine didn't respond in time. Try the operation again.",
+      { cause: error },
+    );
+  }
+
+  return new PdfEngineError("INVALID_DOCUMENT", fallbackMessage, { cause: error });
 }
 
 function normalizeSidecarOcrType(ocrType: SidecarOcrType | undefined): "skip-text" | "force-ocr" {
@@ -2223,14 +2322,41 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
+/**
+ * Body reads happen after request()/requestLocal() have returned — the
+ * sidecar can send response headers and then stall while streaming the body,
+ * in which case the request deadline (or a caller abort) fires mid-read. Route
+ * those rejections through the same abort→PATH_OP_CANCELLED / deadline→TIMEOUT
+ * mapping as the request path, so they never escape as a raw TimeoutError or
+ * get misreported as an unreadable document. Every body read on a sidecar
+ * response must go through this wrapper.
+ */
+async function readBody<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (isAbortError(error) || isTimeoutError(error)) {
+      throw mapRequestFailure(
+        error,
+        "RaioPDF's PDF engine couldn't complete that. Try reopening the file.",
+      );
+    }
+    throw error;
+  }
+}
+
 async function readBytes(response: Response): Promise<Uint8Array> {
-  return new Uint8Array(await response.arrayBuffer());
+  return new Uint8Array(await readBody(() => response.arrayBuffer()));
 }
 
 async function readJson(response: Response): Promise<unknown> {
   try {
-    return await response.json();
+    return await readBody(() => response.json());
   } catch (error) {
+    if (error instanceof PdfEngineError) {
+      // Already mapped (timeout/cancel) — don't relabel it as unreadable JSON.
+      throw error;
+    }
     throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF got an unreadable response while working on this file. Try reopening it.", {
       cause: error,
     });
@@ -2321,6 +2447,10 @@ async function throwResponseError(response: Response): Promise<never> {
 }
 
 async function readResponseText(response: Response): Promise<string | null> {
+  // Error-path body read (the response is already !ok). Deliberately NOT
+  // routed through readBody: an abort/timeout while reading the error body
+  // just drops the detail text, and throwResponseError still surfaces the
+  // HTTP failure — nothing raw can escape through this catch-all.
   try {
     return await response.text();
   } catch {

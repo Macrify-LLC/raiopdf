@@ -906,7 +906,7 @@ async fn convert_docx_for_add(
 /// end-exclusive and validated against the grant-time snapshot (see
 /// `range_read.rs` for the contract).
 #[tauri::command]
-fn read_pdf_range(
+async fn read_pdf_range(
     grant: String,
     offset: u64,
     length: u64,
@@ -920,13 +920,31 @@ fn read_pdf_range(
         .ok_or_else(RangeReadError::grant_without_snapshot)?;
     let cap = range_call_cap_bytes(large_doc_threshold_bytes());
 
-    Ok(tauri::ipc::Response::new(read_file_range(
-        &entry.path,
-        &snapshot,
-        offset,
-        length,
-        cap,
-    )?))
+    // The read runs on the blocking pool: a cold multi-MB chunk from a slow
+    // (network/USB) volume takes long enough to stutter the UI thread.
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        read_file_range(&entry.path, &snapshot, offset, length, cap)
+    })
+    .await
+    .map_err(|_| RangeReadError::worker_failed())??;
+
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Sync `#[tauri::command]`s execute on the main/UI thread, so commands that
+/// copy, write, or read whole documents must be `async` and push the blocking
+/// work here — the same pattern as `path_ops::on_blocking_pool` and mcp.rs's
+/// `run_one_shot_on_blocking_pool`. Opening a dialog from this pool is safe:
+/// the dialog plugin internally dispatches dialog creation to the main thread
+/// and only parks the calling thread while the user decides.
+async fn on_command_blocking_pool<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("RaioPDF's background task failed: {error}"))?
 }
 
 /// Save As for streamed documents: a shell-side file copy by grant — the
@@ -934,48 +952,51 @@ fn read_pdf_range(
 /// drifted from its open-time snapshot (a changed file must be reopened,
 /// not silently propagated).
 #[tauri::command]
-fn save_pdf_copy_dialog(
+async fn save_pdf_copy_dialog(
     app: tauri::AppHandle,
     source_grant: String,
     suggested_name: String,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
     let entry = file_grants.resolve_entry(&source_grant)?;
-    let snapshot = entry
-        .snapshot
-        .ok_or("This file could not be verified against its open-time snapshot — reopen it.")?;
-    let current = snapshot_file(&entry.path)
-        .map_err(|_| "This file changed on disk — reopen it.".to_string())?;
-
-    if current != snapshot {
-        return Err("This file changed on disk — reopen it.".to_string());
-    }
+    // Fail fast on drift before the user is asked to pick a destination.
+    ensure_grant_file_unchanged(&entry)?;
 
     let suggested_name = ensure_pdf_extension(&suggested_name);
-    let Some(destination) = app
-        .dialog()
-        .file()
-        .add_filter("PDF", &["pdf"])
-        .set_file_name(suggested_name)
-        .blocking_save_file()
-    else {
+    // Dialog + whole-file copy both block: the dialog for as long as the user
+    // keeps it open, the copy (io::copy + sync_all) for as long as a streamed
+    // multi-GB document takes — neither may run on the UI thread.
+    let destination = on_command_blocking_pool(move || {
+        let Some(destination) = app
+            .dialog()
+            .file()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(suggested_name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+
+        // Copying a file onto itself truncates the source to zero bytes before
+        // the copy begins (fs::copy opens the destination with truncation), which
+        // would destroy the user's original. A streamed document is clean by
+        // construction, so "save over the original" is already satisfied — treat
+        // it as a successful no-op (Codex review, PR #124).
+        if is_same_file(&entry.path, &destination) {
+            ensure_grant_file_unchanged(&entry)?;
+            return Ok(Some(destination));
+        }
+
+        atomic_copy_grant_if_unchanged(&entry, &destination)?;
+        Ok(Some(destination))
+    })
+    .await?;
+
+    let Some(destination) = destination else {
         return Ok(None);
     };
-
-    let destination = destination.into_path().map_err(|error| error.to_string())?;
-
-    // Copying a file onto itself truncates the source to zero bytes before
-    // the copy begins (fs::copy opens the destination with truncation), which
-    // would destroy the user's original. A streamed document is clean by
-    // construction, so "save over the original" is already satisfied — treat
-    // it as a successful no-op (Codex review, PR #124).
-    if is_same_file(&entry.path, &destination) {
-        ensure_grant_file_unchanged(&entry)?;
-        return Ok(Some(saved_pdf(&destination, file_grants.inner())?));
-    }
-
-    atomic_copy_grant_if_unchanged(&entry, &destination)?;
-
     Ok(Some(saved_pdf(&destination, file_grants.inner())?))
 }
 
@@ -1004,21 +1025,26 @@ fn pick_output_directory(
 }
 
 #[tauri::command]
-fn save_pdf_into_dir(
+async fn save_pdf_into_dir(
     request: tauri::ipc::Request<'_>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
     let directory_grant = required_header(&request, HEADER_DIRECTORY_GRANT)?;
     let file_name = required_header(&request, HEADER_FILE_NAME)?;
-    let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
-    let path = write_pdf_bytes_into_directory(&directory, &file_name, &raw_pdf_bytes(&request)?)?;
+    let directory = directory_grants.resolve(&directory_grant)?;
+    let bytes = raw_pdf_bytes(&request)?.into_owned();
+    let path = on_command_blocking_pool(move || {
+        let directory = validate_output_directory(&directory)?;
+        write_pdf_bytes_into_directory(&directory, &file_name, &bytes)
+    })
+    .await?;
 
     saved_pdf(&path, file_grants.inner())
 }
 
 #[tauri::command]
-fn save_pdf_copy_into_dir(
+async fn save_pdf_copy_into_dir(
     source_grant: String,
     directory_grant: String,
     file_name: String,
@@ -1026,8 +1052,12 @@ fn save_pdf_copy_into_dir(
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
     let entry = file_grants.resolve_entry(&source_grant)?;
-    let directory = validate_output_directory(&directory_grants.resolve(&directory_grant)?)?;
-    let path = copy_pdf_grant_into_directory(&entry, &directory, &file_name)?;
+    let directory = directory_grants.resolve(&directory_grant)?;
+    let path = on_command_blocking_pool(move || {
+        let directory = validate_output_directory(&directory)?;
+        copy_pdf_grant_into_directory(&entry, &directory, &file_name)
+    })
+    .await?;
 
     saved_pdf(&path, file_grants.inner())
 }
@@ -1043,10 +1073,13 @@ fn is_same_file(source: &Path, destination: &Path) -> bool {
 }
 
 #[tauri::command]
-fn read_opened_pdf_bytes(
+async fn read_opened_pdf_bytes(
     token: String,
     pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
 ) -> Result<tauri::ipc::Response, String> {
+    // No file IO here (the bytes were staged at open time), but handing tens
+    // of MB across the IPC boundary is heavy enough that the command runs as
+    // an async task instead of on the main/UI thread.
     Ok(tauri::ipc::Response::new(pending_pdf_bytes.remove(&token)?))
 }
 
@@ -1075,16 +1108,23 @@ fn dropped_pdf_append(
 }
 
 #[tauri::command]
-fn dropped_pdf_finish(
+async fn dropped_pdf_finish(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
-    dropped_uploads: tauri::State<'_, DroppedUploads>,
-    file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<OpenedPdf, String> {
     let token = required_header(&request, HEADER_DROPPED_PDF_TOKEN)?;
     let root = path_ops_root_for_app(&app)?;
 
-    dropped_uploads.finish_upload(&token, &root, file_grants.inner())
+    // finish_upload flushes + fsyncs the staged file — up to 2 GB of dropped
+    // PDF — so it must not run on the UI thread. State is re-resolved from
+    // the app handle inside the worker (`State` can't cross into a 'static
+    // closure).
+    on_command_blocking_pool(move || {
+        let dropped_uploads = app.state::<DroppedUploads>();
+        let file_grants = app.state::<FileGrants>();
+        dropped_uploads.finish_upload(&token, &root, file_grants.inner())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1098,31 +1138,39 @@ fn dropped_pdf_abort(
 }
 
 #[tauri::command]
-fn save_pdf_dialog(
+async fn save_pdf_dialog(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
     let suggested_name = required_header(&request, HEADER_SUGGESTED_NAME)?;
     let suggested_name = ensure_pdf_extension(&suggested_name);
-    let Some(path) = app
-        .dialog()
-        .file()
-        .add_filter("PDF", &["pdf"])
-        .set_file_name(suggested_name)
-        .blocking_save_file()
-    else {
+    let bytes = raw_pdf_bytes(&request)?.into_owned();
+    let path = on_command_blocking_pool(move || {
+        let Some(path) = app
+            .dialog()
+            .file()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name(suggested_name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        write_pdf_bytes_atomic(&path, &bytes)?;
+        Ok(Some(path))
+    })
+    .await?;
+
+    let Some(path) = path else {
         return Ok(None);
     };
-
-    let path = path.into_path().map_err(|error| error.to_string())?;
-    write_pdf_bytes_atomic(&path, &raw_pdf_bytes(&request)?)?;
-
     Ok(Some(saved_pdf(&path, file_grants.inner())?))
 }
 
 #[tauri::command]
-fn save_docx_dialog(
+async fn save_docx_dialog(
     app: tauri::AppHandle,
     source_grant: String,
     suggested_name: String,
@@ -1131,34 +1179,45 @@ fn save_docx_dialog(
     let entry = file_grants.resolve_entry(&source_grant)?;
     ensure_docx_source(&entry.path)?;
     let suggested_name = ensure_docx_extension(&suggested_name);
-    let Some(destination) = app
-        .dialog()
-        .file()
-        .add_filter("Word Document", &["docx"])
-        .set_file_name(suggested_name)
-        .blocking_save_file()
-    else {
+    let destination = on_command_blocking_pool(move || {
+        let Some(destination) = app
+            .dialog()
+            .file()
+            .add_filter("Word Document", &["docx"])
+            .set_file_name(suggested_name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+
+        let destination = destination.into_path().map_err(|error| error.to_string())?;
+        if is_same_file(&entry.path, &destination) {
+            ensure_grant_file_unchanged(&entry)?;
+            return Ok(Some(destination));
+        }
+
+        atomic_copy_docx_grant_if_unchanged(&entry, &destination)?;
+        Ok(Some(destination))
+    })
+    .await?;
+
+    let Some(destination) = destination else {
         return Ok(None);
     };
-
-    let destination = destination.into_path().map_err(|error| error.to_string())?;
-    if is_same_file(&entry.path, &destination) {
-        ensure_grant_file_unchanged(&entry)?;
-        return Ok(Some(saved_docx(&destination, file_grants.inner())?));
-    }
-
-    atomic_copy_docx_grant_if_unchanged(&entry, &destination)?;
     Ok(Some(saved_docx(&destination, file_grants.inner())?))
 }
 
 #[tauri::command]
-fn save_pdf_to_path(
+async fn save_pdf_to_path(
     request: tauri::ipc::Request<'_>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<SavedPdf, String> {
     let file_grant = required_header(&request, HEADER_FILE_GRANT)?;
     let entry = file_grants.resolve_entry(&file_grant)?;
-    write_pdf_bytes_atomic_if_unchanged(&entry, &raw_pdf_bytes(&request)?)?;
+    let bytes = raw_pdf_bytes(&request)?.into_owned();
+    let write_entry = entry.clone();
+    on_command_blocking_pool(move || write_pdf_bytes_atomic_if_unchanged(&write_entry, &bytes))
+        .await?;
 
     saved_pdf(&entry.path, file_grants.inner())
 }

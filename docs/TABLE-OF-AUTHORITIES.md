@@ -13,6 +13,23 @@ The workspace groups authorities as:
 - **Constitutional Provisions**
 - **Other**
 
+## What's detected — and what's not
+
+Detection matches **full citations** in the document's text layer: complete
+case reporter citations, statute/rule/constitutional citations in their full
+form. Short-form references are **not** detected or counted:
+
+- `id.` / `Id.`
+- `supra` references (e.g. "Smith, supra, at 14")
+- short cites like "410 U.S. at 116" or "Roe, 410 U.S. at 116"
+
+This means each authority's page list is systematically incomplete wherever
+the brief switches to short forms after the first full citation — which most
+briefs do. Short-form resolution is future work; today the review step is
+where the gap gets closed: edit each row's pages (or add authorities) so the
+final table reflects every page the authority is actually cited on. The
+workspace shows a persistent hint to the same effect.
+
 Each detected row shows the canonical citation and the source document pages
 where it appears. Before anything is rendered, the reviewer can:
 

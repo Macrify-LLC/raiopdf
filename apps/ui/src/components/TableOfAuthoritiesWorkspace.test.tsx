@@ -154,6 +154,20 @@ describe("TableOfAuthoritiesWorkspace", () => {
     expect(onPrependTable).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the persistent full-citations-only hint in the review card", async () => {
+    const extractPageTextByPage = vi.fn(async () => [
+      { pageIndex: 0, text: "123 So. 3d 456" },
+    ]);
+    renderWorkspace({ extractPageTextByPage });
+    await waitForText("Fla. Stat. § 95.11");
+
+    // Honest disclosure: detection covers full citations only, so the page
+    // lists are incomplete wherever the brief uses short forms.
+    expect(host?.textContent).toContain("Page lists count full citations only");
+    expect(host?.textContent).toContain("id., supra");
+    expect(host?.textContent).toContain("410 U.S. at 116");
+  });
+
   it("routes garbled hidden text to force OCR instead of detecting authorities", async () => {
     const extractPageTextByPage = vi.fn(async () => []);
     const onForceOcr = vi.fn();

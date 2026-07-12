@@ -34,6 +34,11 @@ from the document text, then keeps you in control of the final list.
 
 ## What to know
 
+- **Page lists cover full citations only.** Short-form references — *id.*,
+  *supra*, or a short cite like "410 U.S. at 116" — aren't counted, so an
+  authority's page list misses the pages where your brief uses those forms.
+  Review each authority and add the missing pages in the review step before
+  you rely on the table.
 - **You make the final call.** Detection is assistive. Review the table before
   you file or serve it.
 - **Clean searchable text matters.** If the hidden text looks garbled, RaioPDF

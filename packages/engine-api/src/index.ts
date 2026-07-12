@@ -935,6 +935,8 @@ export type PdfEngineErrorCode =
   | "PASSWORD_REQUIRED"
   | "PATH_OP_CANCELLED"
   | "SIGNED_DOCUMENT"
+  /** An engine request exceeded its deadline (e.g. a stalled sidecar HTTP call). */
+  | "TIMEOUT"
   | "UNSUPPORTED_ENCRYPTION"
   | "UNSUPPORTED"
   | "UNSUPPORTED_ROTATION";

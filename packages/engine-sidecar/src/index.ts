@@ -1157,7 +1157,7 @@ export class SidecarPdfEngine implements PdfEngine {
     if (response.status === 204) {
       return true;
     }
-    const text = await response.text();
+    const text = await readBody(() => response.text());
 
     return text.trim() === "true";
   }
@@ -2322,14 +2322,41 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
+/**
+ * Body reads happen after request()/requestLocal() have returned — the
+ * sidecar can send response headers and then stall while streaming the body,
+ * in which case the request deadline (or a caller abort) fires mid-read. Route
+ * those rejections through the same abort→PATH_OP_CANCELLED / deadline→TIMEOUT
+ * mapping as the request path, so they never escape as a raw TimeoutError or
+ * get misreported as an unreadable document. Every body read on a sidecar
+ * response must go through this wrapper.
+ */
+async function readBody<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (isAbortError(error) || isTimeoutError(error)) {
+      throw mapRequestFailure(
+        error,
+        "RaioPDF's PDF engine couldn't complete that. Try reopening the file.",
+      );
+    }
+    throw error;
+  }
+}
+
 async function readBytes(response: Response): Promise<Uint8Array> {
-  return new Uint8Array(await response.arrayBuffer());
+  return new Uint8Array(await readBody(() => response.arrayBuffer()));
 }
 
 async function readJson(response: Response): Promise<unknown> {
   try {
-    return await response.json();
+    return await readBody(() => response.json());
   } catch (error) {
+    if (error instanceof PdfEngineError) {
+      // Already mapped (timeout/cancel) — don't relabel it as unreadable JSON.
+      throw error;
+    }
     throw new PdfEngineError("INVALID_DOCUMENT", "RaioPDF got an unreadable response while working on this file. Try reopening it.", {
       cause: error,
     });
@@ -2420,6 +2447,10 @@ async function throwResponseError(response: Response): Promise<never> {
 }
 
 async function readResponseText(response: Response): Promise<string | null> {
+  // Error-path body read (the response is already !ok). Deliberately NOT
+  // routed through readBody: an abort/timeout while reading the error body
+  // just drops the detail text, and throwResponseError still surfaces the
+  // HTTP failure — nothing raw can escape through this catch-all.
   try {
     return await response.text();
   } catch {

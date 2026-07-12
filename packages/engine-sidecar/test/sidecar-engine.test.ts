@@ -1095,6 +1095,61 @@ describe("SidecarPdfEngine", () => {
     expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
   });
 
+  it("maps a body stall after response headers to TIMEOUT on the bytes path", async () => {
+    // Headers arrive fine; the PDF body never finishes streaming. The
+    // deadline aborts the arrayBuffer() read, which happens after request()
+    // has returned — it must still surface as the mapped TIMEOUT error, not
+    // a raw TimeoutError.
+    const { calls, fetchImpl } = createStalledBodyFetch();
+    const engine = new SidecarPdfEngine({
+      baseUrl: "http://127.0.0.1:8080",
+      fetch: fetchImpl,
+      requestTimeoutMs: 20,
+    });
+
+    await expect(engine.repairBytes(bytes(1))).rejects.toMatchObject({
+      code: "TIMEOUT",
+      message: "RaioPDF's PDF engine didn't respond in time. Try the operation again.",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps a body stall after response headers to TIMEOUT on the JSON path", async () => {
+    // basic-info replies with headers, then stalls the JSON body: readJson
+    // must pass the mapped TIMEOUT through instead of relabeling it as an
+    // unreadable document.
+    const { calls, fetchImpl } = createStalledBodyFetch();
+    const engine = new SidecarPdfEngine({
+      baseUrl: "http://127.0.0.1:8080",
+      fetch: fetchImpl,
+      requestTimeoutMs: 20,
+    });
+
+    // bytes(1) is not parseable locally, so open() falls back to the sidecar
+    // basic-info JSON round trip.
+    await expect(engine.open(bytes(1))).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/api/v1/analysis/basic-info");
+  });
+
+  it("maps a caller abort during a stalled body read to a cancellation error", async () => {
+    const { fetchImpl } = createStalledBodyFetch();
+    const abortController = new AbortController();
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    const pending = engine.ocrBytes(bytes(1), {
+      knownPageCount: 1,
+      signal: abortController.signal,
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      code: "PATH_OP_CANCELLED",
+    });
+    abortController.abort();
+
+    await rejection;
+  });
+
   it("maps a caller abort during a stalled OCR request to a cancellation error", async () => {
     const { fetchImpl } = createStalledFetch();
     const abortController = new AbortController();
@@ -1308,6 +1363,49 @@ function createStalledFetch(): {
       }
       signal.addEventListener("abort", () => reject(signal.reason));
     });
+  };
+
+  return { calls, fetchImpl };
+}
+
+/**
+ * A fetch whose response headers arrive immediately but whose body never
+ * finishes streaming: arrayBuffer()/json()/text() only reject once the
+ * request signal aborts — the behavior of a real fetch when the sidecar
+ * stalls mid-body.
+ */
+function createStalledBodyFetch(): {
+  calls: FetchCall[];
+  fetchImpl: typeof fetch;
+} {
+  const calls: FetchCall[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    calls.push({
+      url: input instanceof Request ? input.url : String(input),
+      ...(init ? { init } : {}),
+    });
+
+    const stall = <T,>() =>
+      new Promise<T>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          return;
+        }
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason));
+      });
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      arrayBuffer: () => stall<ArrayBuffer>(),
+      json: () => stall<unknown>(),
+      text: () => stall<string>(),
+    } as unknown as Response;
   };
 
   return { calls, fetchImpl };

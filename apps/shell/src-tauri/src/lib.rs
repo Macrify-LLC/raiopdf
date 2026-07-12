@@ -1,4 +1,5 @@
 mod diagnostics;
+mod instance;
 mod mcp;
 mod path_ops;
 mod print;
@@ -277,6 +278,9 @@ impl DroppedUploads {
                     return Err(format!("Failed to create dropped PDF temp folder: {error}"));
                 }
             }
+            // Upload staging shares the path-ops root — mark ownership so a
+            // concurrently-starting instance's sweep leaves it alone.
+            path_ops::mark_dir_owned_by_current_instance(&temp_dir);
 
             match create_upload_state(&root, temp_dir, sanitized_name.clone(), expected_total) {
                 Ok(state) => {
@@ -1917,6 +1921,10 @@ pub fn run() {
                     .record_shell_event("startup-arg", &message);
             }
             if let Some(path) = startup_pdf_path {
+                // An "Open in New Window" handoff points at the spawning
+                // instance's path-op output dir — adopt it so it survives
+                // sweeps after that instance exits (including our own below).
+                path_ops::adopt_containing_output_dir(&app_data_dir, &path);
                 match opened_pdf_for_path(
                     path,
                     app.state::<PendingPdfBytes>().inner(),
@@ -1934,11 +1942,12 @@ pub fn run() {
                 }
             }
 
-            // Grants are in-memory, so every path-op temp dir left behind by a
-            // previous run is dead on a fresh start — sweep them all, off the
-            // startup path.
-            let stale_path_ops_root = app.path().app_data_dir()?.join(path_ops::PATH_OPS_DIR);
-            std::thread::spawn(move || path_ops::purge_stale_outputs(&stale_path_ops_root));
+            // Grants are in-memory, so a path-op temp dir is dead once the
+            // instance that created it has exited — but other instances may
+            // be running right now ("Open in New Window", the .pdf file
+            // association), so the sweep only reclaims dirs whose owner is
+            // gone. Runs off the startup path.
+            std::thread::spawn(move || path_ops::purge_stale_outputs(&app_data_dir));
             Ok(())
         })
         .on_menu_event(|app, event| {

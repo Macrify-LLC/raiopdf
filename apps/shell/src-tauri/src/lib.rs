@@ -1893,13 +1893,21 @@ pub fn run() {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();
-            let diagnostics = AppDiagnostics::new(app_data_dir.clone());
+            // Identity first: everything stamped with this instance's id
+            // (session marker, path-op owner markers) must be written only
+            // while the identity's lock file is already held, so other
+            // instances' liveness probes can never race a startup.
+            let instance_identity = instance::init_current(&app_data_dir);
+            let diagnostics = AppDiagnostics::new(
+                app_data_dir.clone(),
+                instance_identity.map(|identity| identity.id().to_string()),
+            );
             let _ = diagnostics.capture_pending_crash_for_startup();
             let _ = diagnostics.mark_session_running();
             diagnostics.install_panic_hook();
             let _ = diagnostics.record_shell_event("startup", "RaioPDF shell started");
             let manager = sidecar::SidecarManager::new(sidecar::SidecarConfig::from_env(
-                app_data_dir,
+                app_data_dir.clone(),
                 resource_dir,
             ));
             app.manage(manager);

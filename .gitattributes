@@ -3,5 +3,10 @@
 *.ps1 text eol=lf
 installer/** text eol=lf
 engine/** text eol=lf
+# Pin Cargo manifests/lockfile to LF: `* text=auto` alone lets them check out CRLF
+# on Windows, which broke the release version-stamper's Cargo.lock regex
+# (Node reads the raw CRLF bytes). Keep these LF on every platform.
+Cargo.lock text eol=lf
+Cargo.toml text eol=lf
 *.ico -text
 *.png -text

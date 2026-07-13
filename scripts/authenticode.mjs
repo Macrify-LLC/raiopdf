@@ -5,7 +5,11 @@ function psLiteral(value) {
 }
 
 function authenticodeTool() {
-  return process.platform === "win32" ? "powershell.exe" : "pwsh";
+  // Prefer PowerShell 7+ (pwsh) everywhere. On Windows, powershell.exe (Windows
+  // PowerShell 5.1) can fail to autoload Get-AuthenticodeSignature from
+  // Microsoft.PowerShell.Security in some sessions, which breaks release-asset
+  // signature validation; pwsh loads it reliably.
+  return "pwsh";
 }
 
 function normalizeThumbprint(value) {

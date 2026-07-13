@@ -817,9 +817,11 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
 
-  // Comment: click drops a pin, popover takes the note text.
+  // Comment: click drops a pin, popover takes the note text. Kept in the upper
+  // portion of the tall first page so it stays within the viewport now that the
+  // top markup strip + mode bar reserve more vertical space above page one.
   await selectMarkupTool(page, "Comment");
-  await clickCanvasAt(page, canvas, 0.6, 0.5);
+  await clickCanvasAt(page, canvas, 0.6, 0.4);
   await page.getByLabel("Comment text").fill("Check exhibit reference");
   await page.getByRole("button", { name: "Save Note" }).click();
   await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(1);

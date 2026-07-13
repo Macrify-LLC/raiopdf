@@ -41,19 +41,12 @@
   pointer-events: auto;
 }
 
+/* Rides inside the top-center mode-bar stack (above the mode/annotation bars),
+   so it needs no absolute position of its own -- just a width cap so a very
+   wide strip scrolls rather than overflowing the viewer. */
 .canvas-well__markup-rail-slot {
-  position: absolute;
-  top: var(--space-4);
-  left: 50%;
-  z-index: 3;
-  max-width: calc(100% - (2 * var(--space-4)));
+  max-width: 100%;
   overflow-x: auto;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
-.canvas-well__markup-rail-slot > * {
-  pointer-events: auto;
 }
 
 .canvas-well__annotation-actions {

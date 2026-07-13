@@ -43,12 +43,12 @@
 
 .canvas-well__markup-rail-slot {
   position: absolute;
-  top: 50%;
-  left: var(--space-4);
+  top: var(--space-4);
+  left: 50%;
   z-index: 3;
-  max-height: calc(100% - (2 * var(--space-4)));
-  overflow-y: auto;
-  transform: translateY(-50%);
+  max-width: calc(100% - (2 * var(--space-4)));
+  overflow-x: auto;
+  transform: translateX(-50%);
   pointer-events: none;
 }
 

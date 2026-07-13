@@ -10,6 +10,7 @@ import type { EditToolId } from "../lib/edits";
 import { COMMAND_BAR_EDIT_TOOLS } from "../lib/toolRegistry";
 import {
   ArrowLineIcon,
+  CalloutIcon,
   CommentIcon,
   DrawIcon,
   EllipseIcon,
@@ -31,7 +32,7 @@ const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   underline: (size) => <UnderlineIcon size={size} />,
   strikethrough: (size) => <StrikethroughIcon size={size} />,
   textBox: (size) => <TextBoxIcon size={size} />,
-  callout: (size) => <ArrowLineIcon size={size} />,
+  callout: (size) => <CalloutIcon size={size} />,
   image: (size) => <ImageIcon size={size} />,
   comment: (size) => <CommentIcon size={size} />,
   draw: (size) => <DrawIcon size={size} />,
@@ -111,7 +112,7 @@ export function FloatingMarkupToolbar({ editing }: FloatingMarkupToolbarProps) {
       className="floating-markup-toolbar"
       role="toolbar"
       aria-label="Markup tools"
-      aria-orientation="vertical"
+      aria-orientation="horizontal"
       onKeyDown={handleKeyDown}
     >
       {COMMAND_BAR_EDIT_TOOLS.map((tool, index) => {
@@ -133,7 +134,13 @@ export function FloatingMarkupToolbar({ editing }: FloatingMarkupToolbarProps) {
               onFocus={() => setTabStopIndex(index)}
               onClick={() => toggleTool(tool.id)}
             >
-              {EDIT_TOOL_ICONS[tool.id](17)}
+              <span className="floating-markup-toolbar__icon" aria-hidden="true">
+                {EDIT_TOOL_ICONS[tool.id](17)}
+              </span>
+              {/* The name rides in the DOM for every button but is collapsed to
+                  zero width by CSS; it expands on hover and for the active tool
+                  so the top strip stays compact but still shows tool names. */}
+              <span className="floating-markup-toolbar__label">{tool.label}</span>
             </button>
             {GROUP_ENDS.has(tool.id) && index < COMMAND_BAR_EDIT_TOOLS.length - 1 ? (
               <span className="floating-markup-toolbar__divider" aria-hidden="true" />

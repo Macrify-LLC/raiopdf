@@ -1,8 +1,9 @@
 .floating-markup-toolbar {
   display: inline-flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   gap: 2px;
+  max-width: 100%;
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-popover);
@@ -15,11 +16,10 @@
 }
 
 .floating-markup-toolbar__button {
-  display: grid;
-  place-items: center;
-  width: 30px;
+  display: inline-flex;
+  align-items: center;
   height: 30px;
-  padding: 0;
+  padding: 0 5px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--panel);
@@ -32,6 +32,40 @@
     box-shadow var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.floating-markup-toolbar__icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* The tool name lives in the DOM for every button but stays collapsed to zero
+   width, so the strip reads as compact icons. It expands (slides open) on
+   hover, keyboard focus, and for the active tool -- "along the top so we keep
+   the tool-name expansion." */
+.floating-markup-toolbar__label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: var(--text-xs, 12px);
+  font-weight: 500;
+  line-height: 1;
+  transition:
+    max-width var(--duration-fast) ease,
+    opacity var(--duration-fast) ease,
+    margin-left var(--duration-fast) ease;
+}
+
+.floating-markup-toolbar__button:hover .floating-markup-toolbar__label,
+.floating-markup-toolbar__button:focus-visible .floating-markup-toolbar__label,
+.floating-markup-toolbar__button[data-active="true"] .floating-markup-toolbar__label {
+  max-width: 120px;
+  margin-left: 5px;
+  opacity: 1;
 }
 
 .floating-markup-toolbar__button:hover {
@@ -55,12 +89,12 @@
   background: var(--identity-amber-soft);
   border-color: var(--border);
   color: var(--primary);
-  box-shadow: inset 2px 0 0 var(--identity-amber), var(--shadow-control-active);
+  box-shadow: inset 0 2px 0 var(--identity-amber), var(--shadow-control-active);
 }
 
 .floating-markup-toolbar__divider {
-  width: 22px;
-  height: 1px;
-  margin: 3px 0;
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
   background: var(--border);
 }

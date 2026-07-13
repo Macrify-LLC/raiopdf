@@ -23,18 +23,22 @@ describe("FloatingMarkupToolbar", () => {
     host = null;
   });
 
-  it("renders the command-bar edit tools as icon-only toolbar buttons", () => {
+  it("renders the command-bar edit tools as a horizontal toolbar with expandable labels", () => {
     renderToolbar();
 
     const toolbar = getToolbar();
     const buttons = getButtons();
 
-    expect(toolbar.getAttribute("aria-orientation")).toBe("vertical");
+    expect(toolbar.getAttribute("aria-orientation")).toBe("horizontal");
     expect(buttons).toHaveLength(14);
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(
       COMMAND_BAR_EDIT_TOOLS.map((tool) => tool.label),
     );
-    expect(host?.textContent).toBe("");
+    // Each button now carries its tool name as text (collapsed by CSS until
+    // hover/active); the icon is aria-hidden, so the button's text is the label.
+    expect(buttons.map((button) => button.textContent)).toEqual(
+      COMMAND_BAR_EDIT_TOOLS.map((tool) => tool.label),
+    );
   });
 
   it("reflects the active editing tool", () => {

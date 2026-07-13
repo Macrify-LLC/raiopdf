@@ -214,41 +214,6 @@
   flex: 0 0 auto;
 }
 
-.command-bar__legal-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: 0 0 auto;
-  height: 30px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--panel);
-  color: var(--body);
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  white-space: nowrap;
-  box-shadow: var(--shadow-control);
-  cursor: default;
-}
-
-.command-bar__legal-cta:hover:not(:disabled) {
-  background: var(--hover-ground);
-  box-shadow: var(--shadow-control-hover);
-}
-
-.command-bar__legal-cta:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.command-bar__legal-cta:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
 .command-bar__filing-cta:hover:not(:disabled) {
   background: var(--primary-deep);
   box-shadow: var(--shadow-primary-hover);
@@ -319,10 +284,6 @@
   }
 
   .command-bar__filing-cta {
-    padding-inline: var(--space-2);
-  }
-
-  .command-bar__legal-cta {
     padding-inline: var(--space-2);
   }
 }

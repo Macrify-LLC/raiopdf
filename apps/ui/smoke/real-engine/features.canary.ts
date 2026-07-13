@@ -60,7 +60,7 @@ test("Case caption: saves valid caption pages in multiple local styles", async (
   const logs = captureLogs(page);
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Caption", exact: true }).click();
+  await page.getByRole("button", { name: "Case Caption (experimental)...", exact: true }).click();
   await page.getByLabel("Court name").fill("Circuit Court");
   await page.getByLabel("Document title").fill("Notice of Filing");
   await page.getByLabel("Name 1").first().fill("Jane Smith");
@@ -88,7 +88,7 @@ test("Table of Authorities: saves grouped authority output from reviewed citatio
   await page.goto("/");
   await openPdf(page, "toa-brief.pdf", await createAuthorityBriefPdf());
 
-  await page.getByRole("button", { name: "ToA", exact: true }).click();
+  await page.getByRole("button", { name: "Table of Authorities (experimental)...", exact: true }).click();
   // Detected citations render as editable "Citation" textboxes. Assert the two
   // seeded authorities were detected by reading the inputs' live values.
   // (getByDisplayValue is a Testing-Library API, not Playwright — this check

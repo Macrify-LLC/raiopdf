@@ -10,8 +10,6 @@ import {
   PrintIcon,
   SaveIcon,
   SearchIcon,
-  ScaleIcon,
-  SlipSheetIcon,
   UndoIcon,
 } from "../icons";
 import { IconButton } from "./IconButton";
@@ -49,14 +47,13 @@ export interface CommandBarProps {
   onSearchClear?: (() => void) | undefined;
   onHelp?: (() => void) | undefined;
   /**
-   * Item 6/7: Prepare for Filing gets a persistent, primary-styled entry
-   * point in the main command bar (in addition to the Legal sidebar tool,
-   * which stays) whenever a document is open. Both call the same handler --
-   * this is just a second door into the identical dialog.
+   * Prepare for Filing gets a persistent, primary-styled entry point in the
+   * main command bar (in addition to the Legal sidebar tool, which stays)
+   * whenever a document is open. Both call the same handler -- this is just a
+   * second door into the identical dialog. Case Caption and Table of
+   * Authorities are Legal-panel-only tools (they are not promoted to this bar).
    */
   onPrepareForFiling?: (() => void) | undefined;
-  onCaseCaption?: (() => void) | undefined;
-  onTableOfAuthorities?: (() => void) | undefined;
   longProcessLockoutLabel?: string | null | undefined;
 }
 
@@ -86,8 +83,6 @@ export function CommandBar({
   onSearchClear,
   onHelp,
   onPrepareForFiling,
-  onCaseCaption,
-  onTableOfAuthorities,
   longProcessLockoutLabel = null,
 }: CommandBarProps) {
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
@@ -309,26 +304,6 @@ export function CommandBar({
           measurements that also fire off that same transition and made
           click-to-place tools (comment pins) miss their target. */}
       <div className="command-bar__filing-lockout">
-        <button
-          type="button"
-          className="command-bar__legal-cta"
-          disabled={longProcessLocked}
-          title={longProcessLockoutLabel ?? "Create a case caption page"}
-          onClick={onCaseCaption}
-        >
-          <SlipSheetIcon size={14} />
-          Caption
-        </button>
-        <button
-          type="button"
-          className="command-bar__legal-cta"
-          disabled={!hasDocument || longProcessLocked}
-          title={longProcessLockoutLabel ?? "Build a Table of Authorities"}
-          onClick={onTableOfAuthorities}
-        >
-          <ScaleIcon size={14} />
-          ToA
-        </button>
         <button
           type="button"
           className="command-bar__filing-cta"

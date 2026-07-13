@@ -92,3 +92,36 @@ export function ArrowLineIcon({ size = 20, ...props }: IconProps) {
     </svg>
   );
 }
+
+// A callout: a small text box with a leader line running to the page point it
+// annotates. Distinct from ArrowLineIcon (a bare arrow) so the callout and
+// arrow tools no longer share a glyph.
+export function CalloutIcon({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      {...props}
+      width={size}
+      height={size}
+      viewBox={ICON_VIEWBOX}
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="3"
+        y="3.5"
+        width="9.5"
+        height="7"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth={ICON_STROKE_WIDTH}
+      />
+      <path
+        d="M11 10.5L16 16"
+        stroke="currentColor"
+        strokeWidth={ICON_STROKE_WIDTH}
+        strokeLinecap="round"
+      />
+      <circle cx="16" cy="16" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}

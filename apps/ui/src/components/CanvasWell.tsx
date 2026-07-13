@@ -20,8 +20,10 @@ export type { PendingRedactionOverlay } from "./PageView";
 const MODE_BAR_INSET = 44;
 const STACKED_MODE_BAR_INSET = 88;
 const PROCESS_LOADER_INSET = 88;
-// 16px rail offset + ~42px rail footprint + 8px gap before page hit-testing starts.
-const MARKUP_RAIL_PAGE_INSET = 66;
+// Height reserved above the first page for the top markup strip (~40px tall + gap).
+// The strip shares the top-center stack with the mode bar, so this adds to the
+// mode-bar inset rather than reserving a left gutter.
+const MARKUP_STRIP_INSET = 48;
 
 export interface CanvasWellProps {
   onOpenRequested?: (() => void) | undefined;
@@ -129,8 +131,16 @@ export function CanvasWell({
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
-      {showFloatingControls ? (
+      {showMarkupRail || showFloatingControls ? (
+        // One top-center stack: the markup strip sits above the (contextual)
+        // mode bar and annotation-action bar so they never overlap or steal
+        // each other's clicks.
         <div className="canvas-well__mode-bar-slot">
+          {showMarkupRail && editing ? (
+            <div className="canvas-well__markup-rail-slot">
+              <FloatingMarkupToolbar editing={editing} />
+            </div>
+          ) : null}
           {modeBar}
           {showAnnotationActions && editing ? (
             <AnnotationActionBar
@@ -138,11 +148,6 @@ export function CanvasWell({
               onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
             />
           ) : null}
-        </div>
-      ) : null}
-      {showMarkupRail && editing ? (
-        <div className="canvas-well__markup-rail-slot">
-          <FloatingMarkupToolbar editing={editing} />
         </div>
       ) : null}
       {viewerActive && engineStarting ? (
@@ -189,14 +194,14 @@ export function CanvasWell({
             fitWidth={fitWidth}
             scrollIntent={scrollIntent}
             topInset={
-              showModeBar && showAnnotationActions
+              (showMarkupRail ? MARKUP_STRIP_INSET : 0) +
+              (showModeBar && showAnnotationActions
                 ? STACKED_MODE_BAR_INSET
                 : showFloatingControls
                   ? MODE_BAR_INSET
-                  : 0
+                  : 0)
             }
             bottomInset={processLoader ? PROCESS_LOADER_INSET : 0}
-            leftInset={showMarkupRail ? MARKUP_RAIL_PAGE_INSET : 0}
             onVisiblePageChange={onVisiblePageChange}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}

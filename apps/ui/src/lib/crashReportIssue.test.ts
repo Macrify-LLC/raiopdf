@@ -16,6 +16,10 @@ describe("crash report GitHub issue URL", () => {
         (_, index) =>
           `frame ${index}: C:\\Users\\[user]\\cases\\Motion: ${"details: ".repeat(4)}`,
       ).join("\n"),
+      signature: "encoding-heavy panic",
+      panicLocation: "src/main.rs:42",
+      backtrace: "full backtrace",
+      logTail: "recent activity",
     };
 
     const fitted = fitCrashReportPayloadToIssueUrl(payload);
@@ -26,5 +30,7 @@ describe("crash report GitHub issue URL", () => {
     expect(fitted.body).toContain(CRASH_REPORT_ISSUE_TRUNCATION_NOTE.trim());
     expect(sentBody).toBe(fitted.body);
     expect(formatCrashReportPreview(fitted).split("GitHub issue body\n").at(1)).toBe(sentBody);
+    expect(fitted.backtrace).toBe("full backtrace");
+    expect(fitted.logTail).toBe("recent activity");
   });
 });

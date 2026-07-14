@@ -35,6 +35,7 @@ const CRASH_REPORT_OPTOUT_FILE_NAME: &str = "crash-report.optout";
 const CRASH_REPORT_LOG_TAIL_BYTES: u64 = 3500;
 const CRASH_REPORT_BODY_MAX_CHARS: usize = 4500;
 const CRASH_REPORT_BACKTRACE_MAX_CHARS: usize = 1800;
+const CRASH_REPORT_ENVELOPE_MAGIC: &str = "RAIOPDF-CRASH-REPORT/1";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -67,16 +68,21 @@ pub struct DiagnosticExport {
     path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrashReportPayload {
     title: String,
     body: String,
+    signature: String,
+    panic_location: Option<String>,
+    backtrace: String,
+    log_tail: String,
 }
 
 #[derive(Debug, Clone)]
 struct PendingCrashCapture {
     signature: Option<String>,
+    panic_location: Option<String>,
     backtrace: Option<String>,
 }
 
@@ -104,13 +110,20 @@ impl AppDiagnostics {
         let default_hook = std::panic::take_hook();
 
         std::panic::set_hook(Box::new(move |info| {
-            let signature = scrub_diagnostic_text(&panic_summary(info));
+            let signature = scrub_diagnostic_text(&panic_signature(info));
+            let panic_location =
+                panic_location(info).map(|location| scrub_diagnostic_text(&location));
             let backtrace = truncate_chars(
                 &scrub_diagnostic_text(&Backtrace::force_capture().to_string()),
                 CRASH_REPORT_BACKTRACE_MAX_CHARS,
             );
             if let Some(session_state_path) = &session_state_path {
-                let _ = write_crash_pending_marker(session_state_path, &signature, &backtrace);
+                let _ = write_crash_pending_marker(
+                    session_state_path,
+                    &signature,
+                    panic_location.as_deref(),
+                    &backtrace,
+                );
             }
             let _ = append_diagnostic_line(
                 &app_log_path,
@@ -276,6 +289,11 @@ impl AppDiagnostics {
         };
         let app_log_tail = scrub_diagnostic_text(&app_log_tail);
         let signature = scrub_diagnostic_text(signature);
+        let panic_location = capture
+            .panic_location
+            .as_deref()
+            .map(scrub_diagnostic_text)
+            .filter(|location| !location.trim().is_empty());
         let backtrace = scrub_diagnostic_text(backtrace);
 
         let mut body = String::new();
@@ -287,7 +305,11 @@ impl AppDiagnostics {
         body.push_str(&format!("Arch: {}\n\n", std::env::consts::ARCH));
         body.push_str("Crash\n");
         body.push_str("-----\n");
-        body.push_str(&format!("Signature: {signature}\n\n"));
+        body.push_str(&format!("Signature: {signature}\n"));
+        if let Some(panic_location) = &panic_location {
+            body.push_str(&format!("Panic location: {panic_location}\n"));
+        }
+        body.push('\n');
         body.push_str("Backtrace:\n");
         body.push_str(&backtrace);
         if !backtrace.ends_with('\n') {
@@ -312,6 +334,10 @@ impl AppDiagnostics {
         Ok(CrashReportPayload {
             title: scrub_diagnostic_text(&title),
             body,
+            signature,
+            panic_location,
+            backtrace,
+            log_tail: app_log_tail,
         })
     }
 
@@ -378,7 +404,7 @@ impl AppDiagnostics {
         ));
         report.push_str("Release debug symbols: line-tables-only (profile.release.debug = 1)\n");
         report.push_str("Telemetry: none. This file was saved locally and not sent anywhere.\n");
-        report.push_str("Crash reporting: reports are never sent automatically. After an unclean exit RaioPDF may ask once whether to report it; you review and submit each report yourself via GitHub, and can turn the prompt off.\n");
+        report.push_str("Crash reporting: reports are never sent automatically. After an unclean exit RaioPDF may ask once whether to report it; you review and either save it to email or submit it yourself via GitHub, and can turn the prompt off.\n");
         report.push_str("Log policy: local logs are scrubbed and truncated in this export.\n\n");
 
         report.push_str("Engine status\n");
@@ -463,6 +489,40 @@ pub async fn diagnostics_export_dialog(
             "diagnostics_export",
             &format!("export saved to {}", path.to_string_lossy()),
         )?;
+
+        Ok(Some(DiagnosticExport {
+            path: path.to_string_lossy().into_owned(),
+        }))
+    })
+    .await
+    .map_err(|error| format!("RaioPDF's background task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn crash_report_save_dialog(
+    app: tauri::AppHandle,
+    diagnostics: tauri::State<'_, AppDiagnostics>,
+    payload: CrashReportPayload,
+) -> Result<Option<DiagnosticExport>, String> {
+    diagnostics.record_shell_event("crash_report_save", "save requested")?;
+
+    let default_name = format!("raiopdf-crash-report-{}.txt", timestamp_file_part());
+    tauri::async_runtime::spawn_blocking(move || {
+        let diagnostics = app.state::<AppDiagnostics>();
+        let Some(path) = app
+            .dialog()
+            .file()
+            .add_filter("Text", &["txt"])
+            .set_file_name(default_name)
+            .blocking_save_file()
+        else {
+            diagnostics.record_shell_event("crash_report_save", "save canceled")?;
+            return Ok(None);
+        };
+
+        let path = path.into_path().map_err(|error| error.to_string())?;
+        save_crash_report(&path, &payload)?;
+        diagnostics.record_shell_event("crash_report_save", "report saved")?;
 
         Ok(Some(DiagnosticExport {
             path: path.to_string_lossy().into_owned(),
@@ -633,7 +693,12 @@ fn write_session_state(path: &Path, state: &str) -> Result<(), String> {
         .map_err(|error| format!("failed to write crash marker: {error}"))
 }
 
-fn write_crash_pending_marker(path: &Path, signature: &str, backtrace: &str) -> Result<(), String> {
+fn write_crash_pending_marker(
+    path: &Path,
+    signature: &str,
+    panic_location: Option<&str>,
+    backtrace: &str,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create app data directory: {error}"))?;
@@ -644,6 +709,11 @@ fn write_crash_pending_marker(path: &Path, signature: &str, backtrace: &str) -> 
     marker.push_str("signature: ");
     marker.push_str(&single_line(signature));
     marker.push('\n');
+    if let Some(panic_location) = panic_location {
+        marker.push_str("panic-location: ");
+        marker.push_str(&single_line(panic_location));
+        marker.push('\n');
+    }
     marker.push_str("backtrace:\n");
     marker.push_str(backtrace);
     if !backtrace.ends_with('\n') {
@@ -663,6 +733,7 @@ fn parse_unclean_session_state(state: &str) -> Option<PendingCrashCapture> {
     if !trimmed.starts_with("crash-pending") {
         return Some(PendingCrashCapture {
             signature: None,
+            panic_location: None,
             backtrace: None,
         });
     }
@@ -673,6 +744,12 @@ fn parse_unclean_session_state(state: &str) -> Option<PendingCrashCapture> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned);
+    let panic_location = state
+        .lines()
+        .find_map(|line| line.strip_prefix("panic-location: "))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned);
     let backtrace = state
         .split_once("backtrace:\n")
         .map(|(_, backtrace)| backtrace.trim().to_string())
@@ -680,8 +757,60 @@ fn parse_unclean_session_state(state: &str) -> Option<PendingCrashCapture> {
 
     Some(PendingCrashCapture {
         signature,
+        panic_location,
         backtrace,
     })
+}
+
+fn save_crash_report(path: &Path, payload: &CrashReportPayload) -> Result<(), String> {
+    fs::write(path, build_crash_report_envelope(payload))
+        .map_err(|error| format!("failed to write crash report: {error}"))
+}
+
+fn build_crash_report_envelope(payload: &CrashReportPayload) -> String {
+    let signature = single_line(&scrub_diagnostic_text(&payload.signature));
+    let signature = if signature.is_empty() {
+        "Previous session ended without a panic signature."
+    } else {
+        &signature
+    };
+    let panic_location = payload
+        .panic_location
+        .as_deref()
+        .map(scrub_diagnostic_text)
+        .map(|location| single_line(&location))
+        .filter(|location| !location.is_empty());
+    let backtrace = scrub_diagnostic_text(&payload.backtrace);
+    let backtrace = if backtrace.trim().is_empty() {
+        "No panic backtrace was captured for this exit."
+    } else {
+        backtrace.trim_end()
+    };
+    let log_tail = scrub_diagnostic_text(&payload.log_tail);
+    let log_tail = if log_tail.trim().is_empty() {
+        "No application log was available."
+    } else {
+        log_tail.trim_end()
+    };
+
+    // Stable, versioned contract: keep the magic line, Key: Value header block,
+    // blank-line separator, and named sections in this exact order.
+    let mut report = String::new();
+    report.push_str(CRASH_REPORT_ENVELOPE_MAGIC);
+    report.push('\n');
+    report.push_str(&format!("App-Version: {}\n", env!("CARGO_PKG_VERSION")));
+    report.push_str(&format!("OS: {}\n", os_description()));
+    report.push_str(&format!("Arch: {}\n", std::env::consts::ARCH));
+    report.push_str(&format!("Signature: {signature}\n"));
+    if let Some(panic_location) = panic_location {
+        report.push_str(&format!("Panic-Location: {panic_location}\n"));
+    }
+    report.push_str("\nBacktrace:\n");
+    report.push_str(backtrace);
+    report.push_str("\n\nLog-Tail:\n");
+    report.push_str(log_tail);
+    report.push('\n');
+    report
 }
 
 fn scrub_diagnostic_text(text: &str) -> String {
@@ -851,19 +980,26 @@ fn os_version() -> String {
     "version unavailable".to_string()
 }
 
-fn panic_summary(info: &PanicHookInfo<'_>) -> String {
-    let payload = info
-        .payload()
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("panic");
-    let location = info
-        .location()
-        .map(|location| format!("{}:{}", location.file(), location.line()))
-        .unwrap_or_else(|| "unknown location".to_string());
+fn panic_signature(info: &PanicHookInfo<'_>) -> String {
+    compact_log_field(
+        info.payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("panic"),
+    )
+}
 
-    format!("{} at {}", compact_log_field(payload), location)
+fn panic_location(info: &PanicHookInfo<'_>) -> Option<String> {
+    info.location()
+        .map(|location| format!("{}:{}", location.file(), location.line()))
+}
+
+fn panic_summary(info: &PanicHookInfo<'_>) -> String {
+    match panic_location(info) {
+        Some(location) => format!("{} at {location}", panic_signature(info)),
+        None => panic_signature(info),
+    }
 }
 
 #[cfg(test)]
@@ -1058,6 +1194,7 @@ mod tests {
         write_crash_pending_marker(
             &marker_path(&root, "dead-2"),
             "panic while rendering",
+            Some("src/render.rs:42"),
             "frame one\nframe two",
         )
         .expect("state");
@@ -1073,10 +1210,66 @@ mod tests {
 
         assert!(payload.title.contains("panic while rendering"));
         assert!(payload.body.contains("Signature: panic while rendering"));
+        assert!(payload.body.contains("Panic location: src/render.rs:42"));
         assert!(payload.body.contains("frame one"));
         assert!(payload.body.contains("frame two"));
+        assert_eq!(payload.signature, "panic while rendering");
+        assert_eq!(payload.panic_location.as_deref(), Some("src/render.rs:42"));
+        assert_eq!(payload.backtrace, "frame one\nframe two");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn crash_report_save_writes_versioned_scrubbed_envelope() {
+        let root = temp_root("crash-envelope");
+        let path = root.join("crash-report.txt");
+        let payload = CrashReportPayload {
+            title: "Crash report: render panic".to_string(),
+            body: "GitHub display body".to_string(),
+            signature: "render panic for jane@example.com\non next line".to_string(),
+            panic_location: Some("src/render.rs:42".to_string()),
+            backtrace: "frame one /home/jane/cases/Secret Motion.pdf\nframe two".to_string(),
+            log_tail: "opened Client Filing.pdf for jane@example.com".to_string(),
+        };
+
+        save_crash_report(&path, &payload).expect("save crash report");
+        let report = fs::read_to_string(path).expect("read crash report");
+
+        let expected_headers = format!(
+            "{CRASH_REPORT_ENVELOPE_MAGIC}\nApp-Version: {}\nOS: {}\nArch: {}\nSignature: render panic for [email] on next line\nPanic-Location: src/render.rs:42\n\nBacktrace:\n",
+            env!("CARGO_PKG_VERSION"),
+            os_description(),
+            std::env::consts::ARCH,
+        );
+        assert!(report.starts_with(&expected_headers));
+        assert!(report.contains("Backtrace:\n[file]\nframe two"));
+        assert!(report.contains("Log-Tail:\n[file] for [email]\n"));
+        assert!(!report.contains("jane@example.com"));
+        assert!(!report.contains("Secret Motion.pdf"));
+        assert!(!report.contains("Client Filing.pdf"));
+        assert!(!report.contains("GitHub display body"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn crash_report_envelope_omits_unknown_location_and_uses_backtrace_fallback() {
+        let payload = CrashReportPayload {
+            title: "Crash report".to_string(),
+            body: String::new(),
+            signature: "unclean exit".to_string(),
+            panic_location: None,
+            backtrace: String::new(),
+            log_tail: String::new(),
+        };
+
+        let report = build_crash_report_envelope(&payload);
+
+        assert!(!report.contains("Panic-Location:"));
+        assert!(report.contains(
+            "\nBacktrace:\nNo panic backtrace was captured for this exit.\n\nLog-Tail:\nNo application log was available.\n"
+        ));
     }
 
     #[test]

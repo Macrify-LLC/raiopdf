@@ -1283,14 +1283,16 @@ export function App() {
     void handleCheckForUpdates("auto");
   }, [handleCheckForUpdates]);
   const handleSaveCrashReport = useCallback(async (): Promise<string | null> => {
-    if (!isTauriRuntime()) {
+    if (!isTauriRuntime() || !crashReportPayload) {
       return null;
     }
 
     const { invoke } = await import("@tauri-apps/api/core");
-    const result = await invoke<{ path: string } | null>("diagnostics_export_dialog");
+    const result = await invoke<{ path: string } | null>("crash_report_save_dialog", {
+      payload: crashReportPayload,
+    });
     return result?.path ?? null;
-  }, []);
+  }, [crashReportPayload]);
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;

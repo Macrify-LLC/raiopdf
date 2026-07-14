@@ -10,6 +10,10 @@ const COPY_FAILED_LABEL_MS = 2400;
 export interface CrashReportPayload {
   title: string;
   body: string;
+  signature: string;
+  panicLocation: string | null;
+  backtrace: string;
+  logTail: string;
 }
 
 export interface CrashReportDialogProps {

@@ -1,6 +1,6 @@
 # 0002 — Opt-in crash reporting via a user-submitted GitHub issue
 
-- Status: accepted
+- Status: superseded by 0003 — Saveable crash reports for voluntary email submission
 - Date: 2026-07-03
 - Blueprint: `2026-07-03-raiopdf-error-logging-and-diagnostics` (Phase 3, Open Question Q1)
 - Related: 0001 — Logging & privacy policy (planned; the Phase 1 logging/scrubber

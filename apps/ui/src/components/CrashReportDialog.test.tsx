@@ -12,6 +12,10 @@ import {
 const payload: CrashReportPayload = {
   title: "Crash report: panic",
   body: "RaioPDF crash report\n\nSignature: panic\n\nApplication log tail (scrubbed)\nline one",
+  signature: "panic",
+  panicLocation: "src/main.rs:42",
+  backtrace: "frame one\nframe two",
+  logTail: "line one",
 };
 
 describe("CrashReportDialog", () => {

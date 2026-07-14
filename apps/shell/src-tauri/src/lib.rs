@@ -2109,6 +2109,7 @@ pub fn run() {
             diagnostics::diagnostics_record_event,
             diagnostics::diagnostics_export_dialog,
             diagnostics::crash_report_take_pending,
+            diagnostics::crash_report_save_dialog,
             diagnostics::crash_report_never_ask,
             diagnostics::crash_report_is_opted_out,
             diagnostics::crash_report_set_opted_out,

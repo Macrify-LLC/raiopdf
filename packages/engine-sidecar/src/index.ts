@@ -352,7 +352,8 @@ export class SidecarPdfEngine implements PdfEngine {
     // Decrypt with the engine's bundled qpdf (lossless — it strips /Encrypt but
     // keeps the text layer). Stirling's /remove-password is measurably lossy
     // (drops the text layer) and must NOT be used here. The password travels
-    // hex-encoded in a header so qpdf never sees it on a command line.
+    // only inside the bounded binary request envelope, and qpdf reads it from
+    // stdin rather than a command-line argument.
     try {
       return await readBytes(await this.requestSecretPdf(
         "/local/decrypt",

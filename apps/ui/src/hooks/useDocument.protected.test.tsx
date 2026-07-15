@@ -185,6 +185,17 @@ describe("useDocument protected PDFs", () => {
     await expect(act(async () => harness.current.save())).resolves.toMatchObject({
       filePath: null,
     });
+
+    act(() => {
+      harness.current.markSaved({
+        fileName: "restricted-unlocked.pdf",
+        filePath: "C:\\cases\\restricted-unlocked.pdf",
+      }, { clearProtection: true });
+    });
+
+    expect(harness.current.document.protectionSource).toBeNull();
+    expect(harness.current.document.protectionFacts).toBeNull();
+    expect(harness.current.document.protectedSourceGrant).toBeNull();
   });
 
   it("keeps the previous document usable after a failed replacement open (Codex P1)", async () => {

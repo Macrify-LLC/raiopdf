@@ -2185,13 +2185,23 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }
   }, [engine, setError]);
 
-  const markSaved = useCallback((saved: { fileName: string; filePath: string | null }) => {
+  const markSaved = useCallback((
+    saved: { fileName: string; filePath: string | null },
+    options: { clearProtection?: boolean } = {},
+  ) => {
     fileIdentityRef.current = { fileName: saved.fileName, filePath: saved.filePath };
     setDocument((current) => ({
       ...current,
       dirty: false,
       fileName: saved.fileName,
       filePath: saved.filePath,
+      ...(options.clearProtection
+        ? {
+            protectionSource: null,
+            protectionFacts: null,
+            protectedSourceGrant: null,
+          }
+        : {}),
       error: null,
     }));
   }, []);

@@ -1,9 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import { PdfEngineError, type PdfProtectionFacts } from "@raiopdf/engine-api";
 import {
+  isUnlockedProtectedWorkingCopy,
   isRetryablePdfPasswordError,
   resolveProtectedPdfBytes,
 } from "./protectedPdfResolver";
+
+describe("isUnlockedProtectedWorkingCopy", () => {
+  it("identifies decrypted memory and streamed working copies", () => {
+    expect(isUnlockedProtectedWorkingCopy({
+      protectionSource: "user-password",
+      protectedSourceGrant: "protected-original",
+      source: { kind: "memory" },
+    })).toBe(true);
+    expect(isUnlockedProtectedWorkingCopy({
+      protectionSource: "owner-restricted",
+      protectedSourceGrant: "protected-original",
+      source: { kind: "rangeGrant", grant: "decrypted-temp" },
+    })).toBe(true);
+  });
+
+  it("keeps protection state when Save copies the protected source itself", () => {
+    expect(isUnlockedProtectedWorkingCopy({
+      protectionSource: "owner-restricted",
+      protectedSourceGrant: "protected-original",
+      source: { kind: "rangeGrant", grant: "protected-original" },
+    })).toBe(false);
+  });
+});
 
 describe("isRetryablePdfPasswordError", () => {
   it.each(["PASSWORD_REQUIRED", "PASSWORD_INVALID", "ENCRYPTED_DOCUMENT"] as const)(

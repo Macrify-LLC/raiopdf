@@ -12,6 +12,29 @@ export type UnlockWarning =
 
 export type ProtectedPdfSource = "owner-restricted" | "user-password";
 
+interface ProtectedWorkingCopyState {
+  protectionSource: ProtectedPdfSource | null;
+  protectedSourceGrant: string | null;
+  source:
+    | { kind: "memory" }
+    | { kind: "rangeGrant"; grant: string }
+    | { kind: "rangeFile" }
+    | null;
+}
+
+/** True when Save writes decrypted content rather than copying its protected source. */
+export function isUnlockedProtectedWorkingCopy(state: ProtectedWorkingCopyState): boolean {
+  if (!state.protectionSource || !state.source) {
+    return false;
+  }
+  if (state.source.kind === "memory") {
+    return true;
+  }
+  return state.source.kind === "rangeGrant" &&
+    state.protectedSourceGrant !== null &&
+    state.protectedSourceGrant !== state.source.grant;
+}
+
 export type UnlockResult =
   | {
       status: "unlocked";

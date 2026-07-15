@@ -241,6 +241,7 @@ import {
 import { extractPrintableRange } from "./lib/printRange";
 import { writeProductionLastUsed } from "./lib/productionHints";
 import {
+  isUnlockedProtectedWorkingCopy,
   isRetryablePdfPasswordError,
   resolveProtectedPdfBytes,
   type ProtectedPdfSource,
@@ -4006,6 +4007,21 @@ export function App() {
       return null;
     }
 
+    const clearProtectionAfterSave = isUnlockedProtectedWorkingCopy({
+      protectionSource: document.protectionSource,
+      protectedSourceGrant: document.protectedSourceGrant,
+      source: document.source,
+    });
+    const finishSavedFile = (written: SavedFile) => {
+      markSaved({
+        fileName: written.name,
+        filePath: written.path,
+      }, { clearProtection: clearProtectionAfterSave });
+      if (clearProtectionAfterSave && document.protectedSourceGrant) {
+        void pathOpReleaseOutput(document.protectedSourceGrant).catch(() => undefined);
+      }
+    };
+
     // Streamed documents can't dirty, so Save has nothing to write (the
     // button is disabled unless pending overlays made the document dirty).
     // With pending edits, both Save and Save As commit through apply_edits and
@@ -4136,7 +4152,7 @@ export function App() {
         );
 
         if (written) {
-          markSaved({ fileName: written.name, filePath: written.path });
+          finishSavedFile(written);
         }
         return written;
       } catch (error: unknown) {
@@ -4198,10 +4214,7 @@ export function App() {
       );
 
       if (written) {
-        markSaved({
-          fileName: written.name,
-          filePath: written.path,
-        });
+        finishSavedFile(written);
       }
       return written;
     } catch (error: unknown) {
@@ -4221,6 +4234,7 @@ export function App() {
     document.fileSizeBytes,
     document.generation,
     document.protectedSourceGrant,
+    document.protectionSource,
     document.source,
     editing,
     getOpenToken,

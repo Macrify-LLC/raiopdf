@@ -10,6 +10,7 @@
 //   fixtures.local/restricted-not-secured.pdf — owner-restricted, opens without a password
 
 import { expect, test } from "@playwright/test";
+import { createSidecarPdfEngine } from "@raiopdf/engine-sidecar";
 import { readEngineEndpoint } from "./endpoint";
 import {
   installRealEngineBridge,
@@ -148,18 +149,13 @@ for (const restrictedName of restrictedFixtures) {
   test(`Engine decrypt preserves the text layer (lossless qpdf): ${restrictedName}`, async ({ page }) => {
     const source = localFixture(restrictedName)!;
 
-    // Decrypt through the real engine, owner-restricted → empty password.
-    const response = await fetch(`${endpoint.baseUrl}/local/decrypt`, {
-      method: "POST",
-      headers: {
-        "X-RaioPDF-Auth": endpoint.token,
-        "X-RaioPDF-Password-Hex": "",
-        "Content-Type": "application/pdf",
-      },
-      body: new Uint8Array(source),
+    // Decrypt through the production sidecar client so this canary exercises
+    // the same bounded binary secret envelope as the app.
+    const engine = createSidecarPdfEngine({
+      baseUrl: endpoint.baseUrl,
+      authToken: endpoint.token,
     });
-    expect(response.status, "engine decrypt should succeed for an owner-restricted PDF").toBe(200);
-    const decrypted = new Uint8Array(await response.arrayBuffer());
+    const decrypted = await engine.removeEncryption(new Uint8Array(source), "");
     const latin1 = Buffer.from(decrypted).toString("latin1");
 
     // Lossless, structurally: encryption removed, fonts kept, size ~preserved —

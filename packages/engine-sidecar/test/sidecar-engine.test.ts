@@ -152,7 +152,10 @@ describe("SidecarPdfEngine", () => {
   ] as const)(
     "maps rejected protection inspection password %j to %s",
     async (password, expectedCode) => {
-      const { fetchImpl } = createFetch(textResponse("qpdf could not process PDF protection", 422));
+      const rejection = password.length === 0
+        ? "PASSWORD_REQUIRED: A PDF password is required."
+        : "PASSWORD_INVALID: The PDF password was not accepted.";
+      const { fetchImpl } = createFetch(textResponse(rejection, 422));
       const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
 
       await expect(engine.inspectProtection(bytes(4, 5), password)).rejects.toMatchObject({
@@ -160,6 +163,28 @@ describe("SidecarPdfEngine", () => {
       });
     },
   );
+
+  it("preserves non-password protection inspection failures", async () => {
+    const { fetchImpl } = createFetch(
+      textResponse("TOOLCHAIN_MISSING: qpdf binary not found in payload", 422),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.inspectProtection(bytes(4, 5), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: expect.stringContaining("TOOLCHAIN_MISSING"),
+    });
+  });
+
+  it("preserves malformed protection-facts responses", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ kind: "open-password" }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.inspectProtection(bytes(4, 5), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: "PDF protection facts were incomplete.",
+    });
+  });
 
   it("tries an empty local decrypt password for owner-restricted PDFs", async () => {
     const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
@@ -199,6 +224,18 @@ describe("SidecarPdfEngine", () => {
     await expect(engine.removeEncryption(bytes(1), "wrong")).rejects.toMatchObject({
       code: "ENCRYPTED_DOCUMENT",
       message: "The PDF password was not accepted.",
+    });
+  });
+
+  it("preserves non-password local decrypt failures", async () => {
+    const { fetchImpl } = createFetch(
+      textResponse("TOOLCHAIN_MISSING: qpdf binary not found in payload", 422),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: expect.stringContaining("TOOLCHAIN_MISSING"),
     });
   });
 

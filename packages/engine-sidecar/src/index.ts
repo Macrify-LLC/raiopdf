@@ -331,11 +331,7 @@ export class SidecarPdfEngine implements PdfEngine {
       );
       return parseProtectionFacts(await readJson(response));
     } catch (error) {
-      if (
-        error instanceof PdfEngineError
-        && error.code !== "TIMEOUT"
-        && error.code !== "PATH_OP_CANCELLED"
-      ) {
+      if (isPasswordRejection(error)) {
         throw new PdfEngineError(
           password.length === 0 ? "PASSWORD_REQUIRED" : "PASSWORD_INVALID",
           password.length === 0
@@ -364,15 +360,10 @@ export class SidecarPdfEngine implements PdfEngine {
         }, normalizeBytes(bytes)),
       ));
     } catch (error) {
-      if (
-        error instanceof PdfEngineError &&
-        error.code !== "TIMEOUT" &&
-        error.code !== "PATH_OP_CANCELLED"
-      ) {
+      if (isPasswordRejection(error)) {
         // qpdf refused: an empty password means the file genuinely needs one;
         // a supplied password that failed means it was wrong. Timeouts and
-        // cancellations pass through untouched — "password not accepted"
-        // would misdiagnose a stalled engine.
+        // non-password engine failures pass through untouched.
         throw new PdfEngineError(
           password.length === 0 ? "PASSWORD_REQUIRED" : "ENCRYPTED_DOCUMENT",
           password.length === 0
@@ -1573,6 +1564,21 @@ function isTimeoutError(error: unknown): boolean {
     error !== null &&
     "name" in error &&
     error.name === "TimeoutError";
+}
+
+function isPasswordRejection(error: unknown): error is PdfEngineError {
+  if (!(error instanceof PdfEngineError)) {
+    return false;
+  }
+  if (error.code === "PASSWORD_REQUIRED" || error.code === "PASSWORD_INVALID") {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("password_required") ||
+    message.includes("password_invalid") ||
+    message.includes("invalid password") ||
+    message.includes("password was not accepted") ||
+    message.includes("password is required");
 }
 
 /**

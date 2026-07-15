@@ -90,6 +90,15 @@ describe("useDocument protected PDFs", () => {
       provenance: {
         source: "owner-restricted",
         signature,
+        protection: {
+          kind: "owner-restricted",
+          encryption: "AES-256",
+          permissions: {
+            printing: "full",
+            copying: "blocked",
+            accessibilityExtraction: "allowed",
+          },
+        },
       },
     }));
     const harness = renderUseDocument({
@@ -113,6 +122,12 @@ describe("useDocument protected PDFs", () => {
     expect(harness.current.document.fileName).toBe("signed.pdf");
     expect(harness.current.document.filePath).toBeNull();
     expect(harness.current.document.dirty).toBe(true);
+    expect(harness.current.document.protectionSource).toBe("owner-restricted");
+    expect(harness.current.document.protectionFacts).toMatchObject({
+      kind: "owner-restricted",
+      encryption: "AES-256",
+    });
+    expect(harness.current.document.protectedSourceGrant).toBe("C:\\cases\\signed.pdf");
     expect(harness.current.document.signatureInvalidationNotice).toMatchObject({
       sourceFileNames: ["signed.pdf"],
       sourceFilePath: "C:\\cases\\signed.pdf",
@@ -122,6 +137,54 @@ describe("useDocument protected PDFs", () => {
     const saved = await act(async () => harness.current.save());
 
     expect(saved?.filePath).toBeNull();
+  });
+
+  it("never lets an unlocked protected source save over its protected original", async () => {
+    const resolve = vi.fn(async (): Promise<UnlockResult> => ({
+      status: "unlocked",
+      bytes: new Uint8Array([2]),
+      changed: true,
+      warnings: [],
+      provenance: {
+        source: "owner-restricted",
+        signature: {
+          standardAcroFormSignatureCount: 0,
+          hasByteRangeOrContentsMarkers: false,
+          hasCertificationDictionary: false,
+        },
+        protection: {
+          kind: "owner-restricted",
+          encryption: "unknown",
+          permissions: {
+            printing: "unknown",
+            copying: "unknown",
+            accessibilityExtraction: "unknown",
+          },
+        },
+      },
+    }));
+    const harness = renderUseDocument({
+      protectedPdf: {
+        confirmSignatureInvalidation: vi.fn(async () => true),
+        resolve,
+      },
+    });
+
+    await act(async () => {
+      await harness.current.openFile({
+        bytes: new Uint8Array([1]),
+        name: "restricted.pdf",
+        path: "C:\\cases\\restricted.pdf",
+      });
+    });
+
+    expect(harness.current.document.protectionSource).toBe("owner-restricted");
+    expect(harness.current.document.protectedSourceGrant).toBe("C:\\cases\\restricted.pdf");
+    expect(harness.current.document.filePath).toBeNull();
+    expect(harness.current.document.dirty).toBe(true);
+    await expect(act(async () => harness.current.save())).resolves.toMatchObject({
+      filePath: null,
+    });
   });
 
   it("keeps the previous document usable after a failed replacement open (Codex P1)", async () => {

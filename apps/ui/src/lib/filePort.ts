@@ -77,6 +77,7 @@ export interface FilePort {
     bytes: Uint8Array,
     suggestedName: string,
     currentPath: string | null,
+    excludedSourceGrants?: readonly FileGrant[],
   ) => Promise<SavedFile | null>;
   saveFileIntoDirectory: (
     bytes: Uint8Array,
@@ -89,6 +90,7 @@ const HEADER_FILE_GRANT = "x-raio-file-grant";
 const HEADER_DIRECTORY_GRANT = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME = "x-raio-suggested-name";
 const HEADER_FILE_NAME = "x-raio-file-name";
+const HEADER_EXCLUDED_FILE_GRANTS = "x-raio-excluded-file-grants";
 
 /**
  * The UI-side threshold lives in `largeDocThreshold.ts` (single source of
@@ -298,12 +300,16 @@ export async function saveStreamedCopy(
     | { kind: "rangeGrant"; grant: FileGrant }
     | { kind: "rangeFile"; file: File },
   suggestedName: string,
+  excludedSourceGrants: readonly FileGrant[] = [],
 ): Promise<SavedFile | null> {
   if (source.kind === "rangeGrant") {
     const { invoke } = await import("@tauri-apps/api/core");
     const saved = await invoke<TauriSavedPdf | null>("save_pdf_copy_dialog", {
       sourceGrant: source.grant,
       suggestedName,
+      ...(excludedSourceGrants.length
+        ? { excludedSourceGrants: [...excludedSourceGrants] }
+        : {}),
     });
     return saved ? savedFromTauri(saved) : null;
   }
@@ -397,7 +403,7 @@ function createTauriFilePort(): FilePort {
         }
         : null;
     },
-    async saveFile(bytes, suggestedName, currentPath) {
+    async saveFile(bytes, suggestedName, currentPath, excludedSourceGrants = []) {
       const { invoke } = await import("@tauri-apps/api/core");
 
       if (currentPath) {
@@ -412,6 +418,13 @@ function createTauriFilePort(): FilePort {
       const saved = await invoke<TauriSavedPdf | null>("save_pdf_dialog", bytes, {
         headers: {
           [HEADER_SUGGESTED_NAME]: encodeURIComponent(suggestedName),
+          ...(excludedSourceGrants.length
+            ? {
+              [HEADER_EXCLUDED_FILE_GRANTS]: encodeURIComponent(
+                JSON.stringify(excludedSourceGrants),
+              ),
+            }
+            : {}),
         },
       });
       return saved ? savedFromTauri(saved) : null;

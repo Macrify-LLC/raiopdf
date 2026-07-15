@@ -21,6 +21,8 @@ import type {
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
+  PdfProtectionOptions,
+  PdfProtectionFacts,
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
   PdfReplaceTextOptions,
@@ -305,17 +307,61 @@ export class SidecarPdfEngine implements PdfEngine {
     }
   }
 
+  async createProtectedCopy(
+    bytes: PdfBytes,
+    options: PdfProtectionOptions,
+  ): Promise<Uint8Array> {
+    return readBytes(
+      await this.requestSecretPdf(
+        "/local/protect",
+        encodeSecretPdfEnvelope(1, options, normalizeBytes(bytes)),
+      ),
+    );
+  }
+
+  async inspectProtection(bytes: PdfBytes, password: string): Promise<PdfProtectionFacts> {
+    try {
+      const response = await this.requestSecretPdf(
+        "/local/protection-facts",
+        encodeSecretPdfEnvelope(2, {
+          openPassword: password,
+          allowPrinting: false,
+          allowCopying: false,
+        }, normalizeBytes(bytes)),
+      );
+      return parseProtectionFacts(await readJson(response));
+    } catch (error) {
+      if (
+        error instanceof PdfEngineError
+        && error.code !== "TIMEOUT"
+        && error.code !== "PATH_OP_CANCELLED"
+      ) {
+        throw new PdfEngineError(
+          password.length === 0 ? "PASSWORD_REQUIRED" : "PASSWORD_INVALID",
+          password.length === 0
+            ? "A PDF password is required to inspect protection."
+            : "The PDF password was not accepted.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
   async removeEncryption(bytes: PdfBytes, password: string): Promise<Uint8Array> {
     // Decrypt with the engine's bundled qpdf (lossless — it strips /Encrypt but
     // keeps the text layer). Stirling's /remove-password is measurably lossy
     // (drops the text layer) and must NOT be used here. The password travels
     // hex-encoded in a header so qpdf never sees it on a command line.
     try {
-      return await readBytes(
-        await this.requestLocal("/local/decrypt", normalizeBytes(bytes), {
-          password_hex: encodePasswordHex(password),
-        }),
-      );
+      return await readBytes(await this.requestSecretPdf(
+        "/local/decrypt",
+        encodeSecretPdfEnvelope(3, {
+          openPassword: password,
+          allowPrinting: false,
+          allowCopying: false,
+        }, normalizeBytes(bytes)),
+      ));
     } catch (error) {
       if (
         error instanceof PdfEngineError &&
@@ -1415,6 +1461,34 @@ export class SidecarPdfEngine implements PdfEngine {
   }
 
   /**
+   * POST a bounded binary envelope whose secret fields must not appear in a
+   * URL, header, loggable command argument, or result. Used only by local Rust
+   * handlers; never proxied to Stirling.
+   */
+  private async requestSecretPdf(path: string, envelope: Uint8Array): Promise<Response> {
+    let response: Response;
+    const body = new ArrayBuffer(envelope.byteLength);
+    new Uint8Array(body).set(envelope);
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: sidecarHeaders(this.authToken),
+        body: new Blob([body], { type: "application/octet-stream" }),
+        signal: this.requestSignal({}),
+      });
+    } catch (error) {
+      throw mapRequestFailure(
+        error,
+        "RaioPDF couldn't complete that operation. Try reopening the file.",
+      );
+    }
+    if (!response.ok) {
+      await throwResponseError(response);
+    }
+    return response;
+  }
+
+  /**
    * Deadline + cancellation signal for one sidecar HTTP request. Every request
    * carries at least the timeout signal; a caller-provided signal (OCR
    * cancellation) is combined with it so either can abort the fetch.
@@ -1430,11 +1504,48 @@ export function createSidecarPdfEngine(options: SidecarPdfEngineOptions): PdfEng
   return new SidecarPdfEngine(options);
 }
 
-/** Hex-encode a password for the `X-RaioPDF-Password-Hex` header. Empty → "". */
-function encodePasswordHex(password: string): string {
-  return Array.from(new TextEncoder().encode(password))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+const SECRET_PDF_ENVELOPE_MAGIC = new TextEncoder().encode("RAIOSEC1");
+const SECRET_PDF_ENVELOPE_HEADER_BYTES = 22;
+
+function encodeSecretPdfEnvelope(
+  operation: number,
+  options: PdfProtectionOptions,
+  pdf: Uint8Array,
+): Uint8Array {
+  const password = new TextEncoder().encode(options.openPassword);
+  const envelope = new Uint8Array(
+    SECRET_PDF_ENVELOPE_HEADER_BYTES + password.byteLength + pdf.byteLength,
+  );
+  envelope.set(SECRET_PDF_ENVELOPE_MAGIC, 0);
+  envelope[8] = operation;
+  envelope[9] = (options.allowPrinting ? 1 : 0) | (options.allowCopying ? 2 : 0);
+  const view = new DataView(envelope.buffer);
+  view.setUint32(10, password.byteLength, false);
+  view.setBigUint64(14, BigInt(pdf.byteLength), false);
+  envelope.set(password, SECRET_PDF_ENVELOPE_HEADER_BYTES);
+  envelope.set(pdf, SECRET_PDF_ENVELOPE_HEADER_BYTES + password.byteLength);
+  return envelope;
+}
+
+function parseProtectionFacts(value: unknown): PdfProtectionFacts {
+  if (!isRecord(value) || !isRecord(value.permissions)) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "PDF protection facts were incomplete.");
+  }
+  const kind = value.kind;
+  const encryption = value.encryption;
+  const printing = value.permissions.printing;
+  const copying = value.permissions.copying;
+  const accessibilityExtraction = value.permissions.accessibilityExtraction;
+  if (
+    !["not-protected", "open-password", "owner-restricted"].includes(String(kind))
+    || !["AES-256", "AES-128", "unknown"].includes(String(encryption))
+    || !["full", "low-resolution", "blocked", "unknown"].includes(String(printing))
+    || !["allowed", "blocked", "unknown"].includes(String(copying))
+    || !["allowed", "blocked", "unknown"].includes(String(accessibilityExtraction))
+  ) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "PDF protection facts were invalid.");
+  }
+  return value as PdfProtectionFacts;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

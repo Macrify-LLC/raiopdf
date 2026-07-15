@@ -502,6 +502,7 @@ export const applyEditsOneShotInputSchema = {
   mainPath: absoluteInput,
   edits: z.array(z.unknown()),
   applyOptions: applyEditsOptionsSchema.optional(),
+  flatten: z.boolean().default(false),
   outputPath: absoluteOutput,
   maxInputBytes: z.number().int().positive(),
 };
@@ -510,6 +511,7 @@ export interface ApplyEditsOneShotInput {
   mainPath: string;
   edits: unknown[];
   applyOptions?: PdfApplyEditsOptions | undefined;
+  flatten?: boolean | undefined;
   outputPath: string;
   maxInputBytes: number;
 }
@@ -553,6 +555,13 @@ export async function handleApplyEditsOneShot(
     };
 
     produced = await engine.applyEdits(main, edits, applyOptions);
+    if (input.flatten) {
+      const filled = produced;
+      produced = await engine.flattenForm(filled);
+      if (produced !== filled) {
+        opened.push(filled);
+      }
+    }
     await output.write(await engine.saveToBytes(produced));
     await output.commit();
 

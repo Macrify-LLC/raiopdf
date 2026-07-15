@@ -30,6 +30,8 @@ import type {
   PdfPageSizePoints,
   PdfPageNumbersOptions,
   PdfPageSelection,
+  PdfProtectionFacts,
+  PdfProtectionOptions,
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
   PdfReplaceTextOptions,
@@ -260,6 +262,23 @@ const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
 export class LocalPdfEngine implements PdfEngine {
   private readonly documents = new Map<PdfDocumentHandle, StoredDocument>();
   private nextDocumentId = 1;
+
+  async createProtectedCopy(
+    _bytes: PdfBytes,
+    _options: PdfProtectionOptions,
+  ): Promise<Uint8Array> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Creating a protected copy requires the installed RaioPDF app.",
+    );
+  }
+
+  async inspectProtection(_bytes: PdfBytes, _password: string): Promise<PdfProtectionFacts> {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Inspecting PDF protection requires the installed RaioPDF app.",
+    );
+  }
 
   async removeEncryption(_bytes: PdfBytes, _password: string): Promise<Uint8Array> {
     throw new PdfEngineError(

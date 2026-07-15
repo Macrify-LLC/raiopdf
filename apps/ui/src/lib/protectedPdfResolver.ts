@@ -1,4 +1,4 @@
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, type PdfProtectionFacts } from "@raiopdf/engine-api";
 import {
   detectSignatureFacts,
   hasEmbeddedSignatureMarkers,
@@ -21,6 +21,7 @@ export type UnlockResult =
       provenance: {
         source: ProtectedPdfSource;
         signature: SignatureDetectionFacts;
+        protection: PdfProtectionFacts;
       };
     }
   | { status: "password_required" }
@@ -30,6 +31,7 @@ export type UnlockResult =
 export interface ResolveProtectedPdfBytesOptions {
   isUnavailableError?: ((error: unknown) => boolean) | undefined;
   password?: string | undefined;
+  inspectProtection: (bytes: Uint8Array, password: string) => Promise<PdfProtectionFacts>;
   removeEncryption: (bytes: Uint8Array, password: string) => Promise<Uint8Array>;
 }
 
@@ -46,6 +48,7 @@ export async function resolveProtectedPdfBytes(
   const password = options.password ?? "";
 
   try {
+    const protection = await options.inspectProtection(bytes, password);
     const unlockedBytes = await options.removeEncryption(bytes, password);
     const warnings: UnlockWarning[] = [];
     let signature = EMPTY_SIGNATURE_FACTS;
@@ -67,6 +70,7 @@ export async function resolveProtectedPdfBytes(
       provenance: {
         source: password ? "user-password" : "owner-restricted",
         signature,
+        protection,
       },
     };
   } catch (error) {
@@ -98,6 +102,7 @@ function isPasswordRequired(error: unknown, password: string): boolean {
   return error instanceof PdfEngineError &&
     (
       error.code === "PASSWORD_REQUIRED" ||
+      error.code === "PASSWORD_INVALID" ||
       (password.length === 0 && error.code === "ENCRYPTED_DOCUMENT")
     );
 }

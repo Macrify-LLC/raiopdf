@@ -35,8 +35,111 @@ use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_ent
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::{fs::DirBuilderExt, fs::OpenOptionsExt};
 
 static TEXT_LAYER_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Create a work directory before any plaintext is written. Unix creation is
+/// atomic at mode 0700. Windows creates the random empty directory first, then
+/// replaces inherited ACLs with a single current-user ACE before callers can
+/// place document bytes inside it.
+pub fn create_private_dir(path: &Path) -> OpResult<()> {
+    #[cfg(unix)]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+            .create(path)
+            .map_err(|error| PathOpError::io("create private directory", error))
+    }
+    #[cfg(windows)]
+    {
+        fs::create_dir(path).map_err(|error| PathOpError::io("create private directory", error))?;
+        if let Err(error) = restrict_private_dir(path) {
+            let _ = fs::remove_dir(path);
+            return Err(error);
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        fs::create_dir(path).map_err(|error| PathOpError::io("create private directory", error))
+    }
+}
+
+pub fn restrict_private_dir(path: &Path) -> OpResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| PathOpError::io("restrict private directory", error))?;
+    }
+    #[cfg(windows)]
+    restrict_directory_to_current_user(path)?;
+    Ok(())
+}
+
+pub fn write_private_file(path: &Path, bytes: &[u8]) -> OpResult<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|error| PathOpError::io("create private file", error))?;
+    file.write_all(bytes)
+        .map_err(|error| PathOpError::io("write private file", error))?;
+    file.flush()
+        .map_err(|error| PathOpError::io("flush private file", error))
+}
+
+pub fn restrict_private_file(path: &Path) -> OpResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| PathOpError::io("restrict private file", error))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_directory_to_current_user(path: &Path) -> OpResult<()> {
+    let whoami = Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .map_err(|error| PathOpError::io("read current Windows identity", error))?;
+    if !whoami.status.success() {
+        return Err(PathOpError::failed(
+            "could not read current Windows identity",
+        ));
+    }
+    let output = String::from_utf8_lossy(&whoami.stdout);
+    let sid_start = output
+        .find("S-1-")
+        .ok_or_else(|| PathOpError::failed("current Windows identity had no SID"))?;
+    let sid: String = output[sid_start..]
+        .chars()
+        .take_while(|character| {
+            character.is_ascii_digit() || *character == '-' || *character == 'S'
+        })
+        .collect();
+    let grant = format!("*{sid}:(OI)(CI)F");
+    let status = Command::new("icacls.exe")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| PathOpError::io("restrict private directory", error))?;
+    if !status.success() {
+        return Err(PathOpError::failed("could not restrict private directory"));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -49,6 +152,9 @@ pub const ERR_VERIFICATION_FAILED: &str = "VERIFICATION_FAILED";
 pub const ERR_IO: &str = "IO_ERROR";
 pub const ERR_CANCELLED: &str = "PATH_OP_CANCELLED";
 pub const ERR_TIMEOUT: &str = "PATH_OP_TIMEOUT";
+pub const ERR_SIGNED_DOCUMENT: &str = "SIGNED_DOCUMENT";
+pub const ERR_PASSWORD_REQUIRED: &str = "PASSWORD_REQUIRED";
+pub const ERR_PASSWORD_INVALID: &str = "PASSWORD_INVALID";
 
 /// A typed, serializable path-op error. `code` is stable API for the UI;
 /// `message` is a human-readable detail string.
@@ -302,6 +408,18 @@ pub const OP_DESCRIPTORS: &[OpDescriptor] = &[
         max_input_bytes: None,
     },
     OpDescriptor {
+        name: "create_protected_copy",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
+        max_input_bytes: None,
+    },
+    OpDescriptor {
+        name: "inspect_protection",
+        requires: &[Tool::Qpdf],
+        filing_step: None,
+        max_input_bytes: None,
+    },
+    OpDescriptor {
         name: "extract_pages",
         requires: &[Tool::Qpdf],
         filing_step: None,
@@ -515,7 +633,15 @@ fn run_command_cancelable(
     prepend_path: &[PathBuf],
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> OpResult<Output> {
-    run_command_supervised(program, args, current_dir, prepend_path, cancel_flag, None)
+    run_command_supervised(
+        program,
+        args,
+        current_dir,
+        prepend_path,
+        cancel_flag,
+        None,
+        None,
+    )
 }
 
 /// Run a tool bounded by a wall-clock `timeout`: the process tree is killed
@@ -536,6 +662,28 @@ pub(crate) fn run_command_with_timeout(
         prepend_path,
         None,
         Some(timeout),
+        None,
+    )
+}
+
+/// Run a command with an invocation-scoped stdin payload. This is the only
+/// runner used for qpdf operations whose response-file arguments contain a
+/// password: the process command line contains only `@-`.
+fn run_command_with_stdin(
+    program: &Path,
+    args: &[OsString],
+    stdin_bytes: &[u8],
+    cancel_flag: Option<Arc<AtomicBool>>,
+    timeout: Option<Duration>,
+) -> OpResult<Output> {
+    run_command_supervised(
+        program,
+        args,
+        None,
+        &[],
+        cancel_flag,
+        timeout,
+        Some(stdin_bytes),
     )
 }
 
@@ -550,11 +698,16 @@ fn run_command_supervised(
     prepend_path: &[PathBuf],
     cancel_flag: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
+    stdin_bytes: Option<&[u8]>,
 ) -> OpResult<Output> {
     let mut command = Command::new(program);
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin_bytes.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = current_dir {
@@ -575,6 +728,22 @@ fn run_command_supervised(
     let mut child = command.spawn().map_err(|error| {
         PathOpError::failed(format!("{} spawn failed: {error}", program.display()))
     })?;
+    if let Some(stdin_bytes) = stdin_bytes {
+        let result = child
+            .stdin
+            .take()
+            .ok_or_else(|| PathOpError::failed("failed to open tool stdin"))
+            .and_then(|mut stdin| {
+                stdin
+                    .write_all(stdin_bytes)
+                    .map_err(|_| PathOpError::failed("failed to send tool options"))
+            });
+        if let Err(error) = result {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            return Err(error);
+        }
+    }
     let mut stdout_thread = child.stdout.take().map(|mut stdout| {
         thread::spawn(move || {
             let mut buffer = Vec::new();
@@ -1403,36 +1572,512 @@ fn parse_rectangle(objects: &JsonObjectMap, value: &serde_json::Value) -> Option
 // 2. decrypt
 // ---------------------------------------------------------------------------
 
-/// File-to-file qpdf `--decrypt`. The password travels via a temp file inside
-/// `work_dir` (never a process argument), matching the sidecar's discipline.
+/// File-to-file qpdf `--decrypt`. The password and every other qpdf argument
+/// travel through the `@-` response-file stdin stream, never argv or disk.
 pub fn decrypt(
     toolchain: &PathOpsToolchain,
     input: &Path,
     password: &str,
     output_path: &Path,
-    work_dir: &Path,
+    _work_dir: &Path,
 ) -> OpResult<()> {
     require_input_file(input)?;
-    let password_path = work_dir.join("pw.txt");
-    fs::write(&password_path, password.as_bytes())
-        .map_err(|error| PathOpError::io("write password file", error))?;
-
-    let mut arguments = args(&["--warning-exit-0", "--decrypt"]);
-    arguments.push(OsString::from(format!(
-        "--password-file={}",
-        password_path.display()
-    )));
-    arguments.push(path_arg(input));
-    arguments.push(path_arg(output_path));
-    let result = run_qpdf(toolchain, arguments);
-    let _ = fs::remove_file(&password_path);
-    result?;
+    validate_secret(password, false)?;
+    let response = response_file(&[
+        "--warning-exit-0".to_string(),
+        "--password-mode=unicode".to_string(),
+        "--decrypt".to_string(),
+        format!("--password={password}"),
+        response_path(input, "input")?,
+        response_path(output_path, "output")?,
+    ])?;
+    run_qpdf_response_file(toolchain, &response, None)?;
     require_output("qpdf --decrypt", output_path)?;
+    restrict_private_file(output_path)?;
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// 3. extract_pages / merge
+// 3. AES-256 protected copies and protection inspection
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionOptions {
+    pub allow_printing: bool,
+    pub allow_copying: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionPermissions {
+    pub printing: &'static str,
+    pub copying: &'static str,
+    pub accessibility_extraction: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionFacts {
+    pub kind: &'static str,
+    pub encryption: &'static str,
+    pub permissions: ProtectionPermissions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionVerification {
+    pub encryption: &'static str,
+    pub allow_printing: bool,
+    pub allow_copying: bool,
+    pub accessibility_extraction: bool,
+    pub metadata_encrypted: bool,
+    pub modification_allowed: bool,
+    pub page_geometry_preserved: bool,
+    pub page_count: u32,
+}
+
+struct ProtectionInspection {
+    facts: ProtectionFacts,
+    document: DocumentFacts,
+    metadata_encrypted: bool,
+    modification_allowed: bool,
+}
+
+/// Create a separately written AES-256 protected PDF and verify it by reopening
+/// with the caller's open password. The generated owner password is 256 bits of
+/// OS randomness and is discarded after qpdf consumes the stdin response file.
+pub fn protect(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    open_password: &str,
+    options: &ProtectionOptions,
+    output: &Path,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<ProtectionVerification> {
+    protect_with_verification_callback(
+        toolchain,
+        input,
+        open_password,
+        options,
+        output,
+        cancel_flag,
+        || {},
+    )
+}
+
+pub fn protect_with_verification_callback<F>(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    open_password: &str,
+    options: &ProtectionOptions,
+    output: &Path,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    on_verifying: F,
+) -> OpResult<ProtectionVerification>
+where
+    F: FnOnce(),
+{
+    require_input_file(input)?;
+    validate_secret(open_password, true)?;
+    ensure_distinct_paths(input, output)?;
+    if output.exists() {
+        return Err(PathOpError::invalid(
+            "Protected-copy encryption requires a fresh candidate path.",
+        ));
+    }
+
+    let source_facts = document_facts(toolchain, input)?;
+    if source_facts
+        .signature_detection
+        .standard_acro_form_signature_count
+        > 0
+        || source_facts
+            .signature_detection
+            .has_byte_range_or_contents_markers
+        || source_facts
+            .signature_detection
+            .has_certification_dictionary
+    {
+        return Err(PathOpError::new(
+            ERR_SIGNED_DOCUMENT,
+            "Password protection must be applied before digitally signing the PDF.",
+        ));
+    }
+
+    let owner_password = random_owner_password()?;
+    let response = response_file(&[
+        "--warning-exit-0".to_string(),
+        "--password-mode=unicode".to_string(),
+        // The source lane is either unencrypted or owner-restricted with an
+        // empty user password. This is deliberately distinct from the new
+        // output's caller-supplied open password below.
+        "--password=".to_string(),
+        "--encrypt".to_string(),
+        format!("--user-password={open_password}"),
+        format!("--owner-password={owner_password}"),
+        "--bits=256".to_string(),
+        format!(
+            "--print={}",
+            if options.allow_printing {
+                "full"
+            } else {
+                "none"
+            }
+        ),
+        format!(
+            "--extract={}",
+            if options.allow_copying { "y" } else { "n" }
+        ),
+        "--accessibility=y".to_string(),
+        "--modify=all".to_string(),
+        "--".to_string(),
+        response_path(input, "input")?,
+        response_path(output, "output")?,
+    ])?;
+
+    if let Err(error) = run_qpdf_response_file(toolchain, &response, cancel_flag.clone()) {
+        let _ = fs::remove_file(output);
+        return Err(error);
+    }
+    if let Err(error) = require_output("qpdf protection", output) {
+        let _ = fs::remove_file(output);
+        return Err(error);
+    }
+    if let Err(error) = restrict_private_file(output) {
+        let _ = fs::remove_file(output);
+        return Err(error);
+    }
+
+    on_verifying();
+
+    let inspection = match inspect_protection_details(toolchain, output, open_password, cancel_flag)
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = fs::remove_file(output);
+            return Err(PathOpError::new(
+                ERR_VERIFICATION_FAILED,
+                format!(
+                    "Protected copy could not be reopened and verified: {}",
+                    error.code
+                ),
+            ));
+        }
+    };
+    let expected_printing = if options.allow_printing {
+        "full"
+    } else {
+        "blocked"
+    };
+    let expected_copying = if options.allow_copying {
+        "allowed"
+    } else {
+        "blocked"
+    };
+    let page_geometry_preserved = same_page_geometry(&source_facts, &inspection.document);
+    let verified = inspection.facts.kind == "open-password"
+        && inspection.facts.encryption == "AES-256"
+        && inspection.facts.permissions.printing == expected_printing
+        && inspection.facts.permissions.copying == expected_copying
+        && inspection.facts.permissions.accessibility_extraction == "allowed"
+        && inspection.metadata_encrypted
+        && inspection.modification_allowed
+        && page_geometry_preserved;
+    if !verified {
+        let _ = fs::remove_file(output);
+        return Err(PathOpError::new(
+            ERR_VERIFICATION_FAILED,
+            "Protected copy did not match the requested AES-256 security settings.",
+        ));
+    }
+
+    Ok(ProtectionVerification {
+        encryption: "AES-256",
+        allow_printing: options.allow_printing,
+        allow_copying: options.allow_copying,
+        accessibility_extraction: true,
+        metadata_encrypted: true,
+        modification_allowed: true,
+        page_geometry_preserved: true,
+        page_count: inspection.document.page_count,
+    })
+}
+
+pub fn inspect_protection(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    password: &str,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<ProtectionFacts> {
+    inspect_protection_details(toolchain, input, password, cancel_flag)
+        .map(|inspection| inspection.facts)
+}
+
+fn inspect_protection_details(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    password: &str,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<ProtectionInspection> {
+    require_input_file(input)?;
+    validate_secret(password, false)?;
+    let response = response_file(&[
+        "--warning-exit-0".to_string(),
+        "--password-mode=unicode".to_string(),
+        format!("--password={password}"),
+        "--json=latest".to_string(),
+        "--json-key=encrypt".to_string(),
+        "--json-key=pages".to_string(),
+        "--json-key=qpdf".to_string(),
+        response_path(input, "input")?,
+    ])?;
+    let output = run_qpdf_response_file(toolchain, &response, cancel_flag).map_err(|error| {
+        if error.code != ERR_OP_FAILED {
+            return error;
+        }
+        if password.is_empty() {
+            PathOpError::new(ERR_PASSWORD_REQUIRED, "A PDF password is required.")
+        } else {
+            PathOpError::new(ERR_PASSWORD_INVALID, "The PDF password was not accepted.")
+        }
+    })?;
+    let size = fs::metadata(input)
+        .map_err(|error| PathOpError::io("stat protection input", error))?
+        .len();
+    parse_protection_facts(&output.stdout, size, !password.is_empty())
+}
+
+fn parse_protection_facts(
+    json: &[u8],
+    size_bytes: u64,
+    password_supplied: bool,
+) -> OpResult<ProtectionInspection> {
+    let root: serde_json::Value = serde_json::from_slice(json)
+        .map_err(|_| PathOpError::failed("qpdf protection inspection returned invalid JSON"))?;
+    let encrypt = root.get("encrypt").ok_or_else(|| {
+        PathOpError::failed("qpdf protection inspection omitted encryption facts")
+    })?;
+    let encrypted = encrypt
+        .get("encrypted")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let document = parse_document_facts(json, size_bytes)?;
+    if !encrypted {
+        return Ok(ProtectionInspection {
+            facts: ProtectionFacts {
+                kind: "not-protected",
+                encryption: "unknown",
+                permissions: ProtectionPermissions {
+                    printing: "unknown",
+                    copying: "unknown",
+                    accessibility_extraction: "unknown",
+                },
+            },
+            document,
+            metadata_encrypted: false,
+            modification_allowed: true,
+        });
+    }
+
+    let parameters = encrypt.get("parameters");
+    let bits = parameters
+        .and_then(|value| value.get("bits"))
+        .and_then(serde_json::Value::as_u64);
+    let method = parameters
+        .and_then(|value| value.get("method"))
+        .and_then(serde_json::Value::as_str);
+    let encryption = match (bits, method) {
+        (Some(256), Some("AESv3")) => "AES-256",
+        (Some(128), Some("AESv2")) => "AES-128",
+        _ => "unknown",
+    };
+    let capabilities = encrypt.get("capabilities");
+    let capability = |name: &str| {
+        capabilities
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_bool)
+    };
+    let printing = match (capability("printhigh"), capability("printlow")) {
+        (Some(true), _) => "full",
+        (_, Some(true)) => "low-resolution",
+        (Some(false), Some(false)) => "blocked",
+        _ => "unknown",
+    };
+    let copying = match capability("extract") {
+        Some(true) => "allowed",
+        Some(false) => "blocked",
+        None => "unknown",
+    };
+    let accessibility_extraction = match capability("accessibility") {
+        Some(true) => "allowed",
+        Some(false) => "blocked",
+        None => "unknown",
+    };
+    let modification_allowed = [
+        "modify",
+        "modifyannotations",
+        "modifyassembly",
+        "modifyforms",
+        "modifyother",
+    ]
+    .into_iter()
+    .all(|name| capability(name) == Some(true));
+    let metadata_encrypted = encryption_dictionary_encrypts_metadata(&root);
+    Ok(ProtectionInspection {
+        facts: ProtectionFacts {
+            kind: if password_supplied {
+                "open-password"
+            } else {
+                "owner-restricted"
+            },
+            encryption,
+            permissions: ProtectionPermissions {
+                printing,
+                copying,
+                accessibility_extraction,
+            },
+        },
+        document,
+        metadata_encrypted,
+        modification_allowed,
+    })
+}
+
+fn encryption_dictionary_encrypts_metadata(root: &serde_json::Value) -> bool {
+    root.get("qpdf")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.get(1))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|objects| {
+            objects.values().find_map(|entry| {
+                let value = entry.get("value")?.as_object()?;
+                (value.get("/Filter")?.as_str()? == "/Standard").then_some(value)
+            })
+        })
+        .is_some_and(|encryption| {
+            encryption
+                .get("/EncryptMetadata")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true)
+        })
+}
+
+fn same_page_geometry(source: &DocumentFacts, output: &DocumentFacts) -> bool {
+    source.page_count == output.page_count
+        && source.pages.len() == output.pages.len()
+        && source
+            .pages
+            .iter()
+            .zip(&output.pages)
+            .all(|(source, output)| {
+                source.index == output.index
+                    && source.media_box == output.media_box
+                    && source.rotate == output.rotate
+                    && source.orientation == output.orientation
+            })
+}
+
+fn run_qpdf_response_file(
+    toolchain: &PathOpsToolchain,
+    response: &[u8],
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> OpResult<Output> {
+    let qpdf = toolchain.require_qpdf()?;
+    let output = run_command_with_stdin(
+        qpdf,
+        &[OsString::from("@-")],
+        response,
+        cancel_flag,
+        toolchain.tool_timeout,
+    )?;
+    if !output.status.success() {
+        return Err(PathOpError::failed("qpdf could not process PDF protection"));
+    }
+    Ok(output)
+}
+
+fn response_file(lines: &[String]) -> OpResult<Vec<u8>> {
+    let mut response = Vec::new();
+    for line in lines {
+        validate_response_value(line, "qpdf option")?;
+        response.extend_from_slice(line.as_bytes());
+        response.push(b'\n');
+    }
+    Ok(response)
+}
+
+fn response_path(path: &Path, label: &str) -> OpResult<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| PathOpError::invalid(format!("{label} path is not valid UTF-8")))?;
+    validate_response_value(value, label)?;
+    Ok(value.to_string())
+}
+
+fn validate_response_value(value: &str, label: &str) -> OpResult<()> {
+    if value
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
+    {
+        return Err(PathOpError::invalid(format!(
+            "{label} contains a character that cannot be passed safely to qpdf"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_secret(password: &str, require_minimum: bool) -> OpResult<()> {
+    validate_response_value(password, "password")?;
+    if require_minimum && password.chars().count() < 8 {
+        return Err(PathOpError::invalid(
+            "The open password must contain at least 8 characters.",
+        ));
+    }
+    if password.len() > 127 {
+        return Err(PathOpError::invalid(
+            "The PDF password must be no more than 127 UTF-8 bytes.",
+        ));
+    }
+    Ok(())
+}
+
+fn random_owner_password() -> OpResult<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|_| PathOpError::failed("could not generate PDF owner credentials"))?;
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(encoded)
+}
+
+fn ensure_distinct_paths(input: &Path, output: &Path) -> OpResult<()> {
+    if input == output {
+        return Err(PathOpError::invalid(
+            "The protected copy must not replace the open source file.",
+        ));
+    }
+    if output.exists() {
+        let input =
+            fs::canonicalize(input).map_err(|error| PathOpError::io("resolve input", error))?;
+        let output =
+            fs::canonicalize(output).map_err(|error| PathOpError::io("resolve output", error))?;
+        if input == output {
+            return Err(PathOpError::invalid(
+                "The protected copy must not replace the open source file.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 4. extract_pages / merge
 // ---------------------------------------------------------------------------
 
 /// qpdf `--pages` extraction of zero-based page indexes into a new file.
@@ -3795,6 +4440,33 @@ mod tests {
         }
     }
 
+    fn test_qpdf_toolchain() -> Option<PathOpsToolchain> {
+        let mut toolchain = PathOpsToolchain::discover(None);
+        if toolchain.qpdf.is_none() {
+            let repo_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../apps/shell/src-tauri/payload/ocr/qpdf/bin");
+            toolchain.qpdf = [repo_bin.join("qpdf.exe"), repo_bin.join("qpdf")]
+                .into_iter()
+                .find(|candidate| candidate.is_file());
+        }
+        if toolchain.qpdf.is_none()
+            && Command::new("qpdf")
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        {
+            toolchain.qpdf = Some(PathBuf::from("qpdf"));
+        }
+        if toolchain.qpdf.is_some() {
+            Some(toolchain)
+        } else {
+            eprintln!("skipping qpdf-backed path-op test: bundled/repo/PATH qpdf not found");
+            None
+        }
+    }
+
     #[test]
     fn pdf_text_layer_probe_distinguishes_text_and_image_only_fixtures() {
         let Some(toolchain) = test_toolchain() else {
@@ -3830,6 +4502,35 @@ mod tests {
             }
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_plaintext_storage_uses_owner_only_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = TestDir::new("private-modes");
+        let private = root.path().join("work");
+        create_private_dir(&private).expect("private directory");
+        let plaintext = private.join("input.pdf");
+        write_private_file(&plaintext, b"sensitive PDF bytes").expect("private file");
+
+        assert_eq!(
+            fs::metadata(&private)
+                .expect("dir metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&plaintext)
+                .expect("file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     fn letter_page(text: Option<&str>) -> MiniPdfPage {
@@ -3976,6 +4677,123 @@ mod tests {
         assert_eq!(facts.page_count, 1);
         // The password temp file must not linger.
         assert!(!dir.path().join("pw.txt").exists());
+    }
+
+    #[test]
+    fn protect_by_path_creates_verified_aes_256_copy_with_requested_permissions() {
+        let Some(toolchain) = test_qpdf_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("protect");
+        let fixture = write_fixture(dir.path(), "plain.pdf", &[letter_page(Some("secret"))]);
+        let original = fs::read(&fixture).unwrap();
+        let protected = dir.path().join("protected.pdf");
+        let open_password = " leading café passphrase ";
+
+        let verification = protect(
+            &toolchain,
+            &fixture,
+            open_password,
+            &ProtectionOptions {
+                allow_printing: true,
+                allow_copying: false,
+            },
+            &protected,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(verification.encryption, "AES-256");
+        assert!(verification.allow_printing);
+        assert!(!verification.allow_copying);
+        assert!(verification.accessibility_extraction);
+        assert!(verification.metadata_encrypted);
+        assert!(verification.modification_allowed);
+        assert!(verification.page_geometry_preserved);
+        assert_eq!(verification.page_count, 1);
+        assert_eq!(
+            fs::read(&fixture).unwrap(),
+            original,
+            "source must remain untouched"
+        );
+
+        let decrypted = dir.path().join("roundtrip.pdf");
+        decrypt(
+            &toolchain,
+            &protected,
+            open_password,
+            &decrypted,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(page_count(&toolchain, &decrypted).unwrap(), 1);
+        assert_eq!(
+            inspect_protection(&toolchain, &protected, "", None)
+                .unwrap_err()
+                .code,
+            ERR_PASSWORD_REQUIRED
+        );
+        assert_eq!(
+            inspect_protection(&toolchain, &protected, "wrong password", None)
+                .unwrap_err()
+                .code,
+            ERR_PASSWORD_INVALID
+        );
+        assert!(decrypt(
+            &toolchain,
+            &protected,
+            "wrong password",
+            &dir.path().join("wrong.pdf"),
+            dir.path(),
+        )
+        .is_err());
+        assert!(!dir.path().join("pw.txt").exists());
+    }
+
+    #[test]
+    fn protect_by_path_reprotects_an_owner_restricted_source() {
+        let Some(toolchain) = test_qpdf_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("protect-owner-restricted");
+        let plain = write_fixture(dir.path(), "plain.pdf", &[letter_page(Some("restricted"))]);
+        let restricted = dir.path().join("restricted.pdf");
+        let response = response_file(&[
+            "--password-mode=unicode".to_string(),
+            "--encrypt".to_string(),
+            "--user-password=".to_string(),
+            "--owner-password=owner-only-test-value".to_string(),
+            "--bits=256".to_string(),
+            "--print=none".to_string(),
+            "--extract=n".to_string(),
+            "--".to_string(),
+            response_path(&plain, "input").unwrap(),
+            response_path(&restricted, "output").unwrap(),
+        ])
+        .unwrap();
+        run_qpdf_response_file(&toolchain, &response, None).unwrap();
+
+        let source = inspect_protection(&toolchain, &restricted, "", None).unwrap();
+        assert_eq!(source.kind, "owner-restricted");
+        let protected = dir.path().join("new-protected.pdf");
+        protect(
+            &toolchain,
+            &restricted,
+            "new open passphrase",
+            &ProtectionOptions {
+                allow_printing: true,
+                allow_copying: true,
+            },
+            &protected,
+            None,
+        )
+        .unwrap();
+        let result =
+            inspect_protection(&toolchain, &protected, "new open passphrase", None).unwrap();
+        assert_eq!(result.kind, "open-password");
+        assert_eq!(result.encryption, "AES-256");
+        assert_eq!(result.permissions.printing, "full");
+        assert_eq!(result.permissions.copying, "allowed");
     }
 
     #[test]

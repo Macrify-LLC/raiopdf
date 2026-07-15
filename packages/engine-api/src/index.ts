@@ -933,6 +933,7 @@ export type PdfEngineErrorCode =
   | "INVALID_DOCUMENT"
   | "INVALID_PAGE_INDEX"
   | "PASSWORD_REQUIRED"
+  | "PASSWORD_INVALID"
   | "PATH_OP_CANCELLED"
   | "SIGNED_DOCUMENT"
   /** An engine request exceeded its deadline (e.g. a stalled sidecar HTTP call). */
@@ -955,7 +956,40 @@ export class PdfEngineError extends Error {
   }
 }
 
+/**
+ * Options for creating a separately saved password-protected PDF copy.
+ *
+ * Engines must use AES-256, encrypt document metadata, preserve accessibility
+ * extraction, generate and discard a cryptographically-random owner password,
+ * and verify the result before returning it. The caller-supplied open password
+ * is invocation-scoped secret material: never persist, log, or return it.
+ */
+export type PdfProtectionOptions = {
+  openPassword: string;
+  allowPrinting: boolean;
+  allowCopying: boolean;
+};
+
+export type PdfProtectionFacts = {
+  kind: "not-protected" | "open-password" | "owner-restricted";
+  encryption: "AES-256" | "AES-128" | "unknown";
+  permissions: {
+    printing: "full" | "low-resolution" | "blocked" | "unknown";
+    copying: "allowed" | "blocked" | "unknown";
+    accessibilityExtraction: "allowed" | "blocked" | "unknown";
+  };
+};
+
 export interface PdfEngine {
+  /** Creates and verifies an AES-256 protected copy without changing the input. */
+  createProtectedCopy(
+    bytes: PdfBytes,
+    options: PdfProtectionOptions,
+  ): Promise<Uint8Array>;
+
+  /** Inspects the still-protected source so callers can retain provenance after unlock. */
+  inspectProtection(bytes: PdfBytes, password: string): Promise<PdfProtectionFacts>;
+
   /**
    * Removes PDF encryption/password protection from raw bytes.
    *

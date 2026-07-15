@@ -6,6 +6,8 @@ import type {
   PdfDocumentHandle,
   PdfInspectTextMapOptions,
   PdfInspectTextMapResult,
+  PdfProtectionFacts,
+  PdfProtectionOptions,
   PdfReplaceSelectedTextOptions,
   PdfReplaceTextOptions,
   PdfReplaceTextWarning,
@@ -75,6 +77,14 @@ export interface EngineBridge {
     password: string,
     options?: RemoveEncryptionOptions,
   ) => Promise<Uint8Array>;
+  createProtectedCopy: (
+    bytes: Uint8Array,
+    options: PdfProtectionOptions,
+  ) => Promise<Uint8Array>;
+  inspectProtection: (
+    bytes: Uint8Array,
+    password: string,
+  ) => Promise<PdfProtectionFacts>;
   sanitize: (bytes: Uint8Array, options?: PdfSanitizeOptions) => Promise<{
     bytes: Uint8Array;
     removed: PdfSanitizeResult["removed"];
@@ -378,6 +388,26 @@ export function useEngineBridge(): EngineBridge {
     [ensureEngine, invalidateEngine],
   );
 
+  const createProtectedCopy = useCallback(
+    (bytes: Uint8Array, options: PdfProtectionOptions) =>
+      withEngineRetry(
+        ensureEngine,
+        (engine) => engine.createProtectedCopy(bytes, options),
+        invalidateEngine,
+      ),
+    [ensureEngine, invalidateEngine],
+  );
+
+  const inspectProtection = useCallback(
+    (bytes: Uint8Array, password: string) =>
+      withEngineRetry(
+        ensureEngine,
+        (engine) => engine.inspectProtection(bytes, password),
+        invalidateEngine,
+      ),
+    [ensureEngine, invalidateEngine],
+  );
+
   const sanitize = useCallback(
     (bytes: Uint8Array, options: PdfSanitizeOptions = {}) =>
       withEngineRetry(ensureEngine, async (engine) => {
@@ -476,6 +506,8 @@ export function useEngineBridge(): EngineBridge {
     redactAreas,
     convertToPdfA,
     compress,
+    createProtectedCopy,
+    inspectProtection,
     removeEncryption,
     sanitize,
     replaceText,

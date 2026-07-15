@@ -41,6 +41,7 @@ const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
 const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
 const HEADER_FILE_NAME: &str = "x-raio-file-name";
+const HEADER_EXCLUDED_FILE_GRANTS: &str = "x-raio-excluded-file-grants";
 const HEADER_DROPPED_PDF_SIZE: &str = "x-raio-dropped-pdf-size";
 const HEADER_DROPPED_PDF_TOKEN: &str = "x-raio-dropped-pdf-token";
 const MAX_DROPPED_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -272,9 +273,9 @@ impl DroppedUploads {
             }
 
             let temp_dir = root.join(&token);
-            match fs::create_dir(&temp_dir) {
+            match engine_sidecar_core::path_ops::create_private_dir(&temp_dir) {
                 Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(_error) if temp_dir.exists() => continue,
                 Err(error) => {
                     return Err(format!("Failed to create dropped PDF temp folder: {error}"));
                 }
@@ -562,8 +563,17 @@ fn path_ops_root_for_app(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn canonical_path_ops_root(path_ops_root: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(path_ops_root)
-        .map_err(|error| format!("Failed to create path-ops temp root: {error}"))?;
+    if !path_ops_root.exists() {
+        let parent = path_ops_root
+            .parent()
+            .ok_or_else(|| "Path-ops temp root has no parent".to_string())?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create app-data folder: {error}"))?;
+        engine_sidecar_core::path_ops::create_private_dir(path_ops_root)
+            .map_err(|error| format!("Failed to create path-ops temp root: {error}"))?;
+    }
+    engine_sidecar_core::path_ops::restrict_private_dir(path_ops_root)
+        .map_err(|error| format!("Failed to restrict path-ops temp root: {error}"))?;
     fs::canonicalize(path_ops_root)
         .map_err(|error| format!("Failed to resolve path-ops temp root: {error}"))
 }
@@ -592,6 +602,8 @@ fn create_upload_state(
                 file_path.to_string_lossy()
             )
         })?;
+    engine_sidecar_core::path_ops::restrict_private_file(&file_path)
+        .map_err(|error| format!("Failed to restrict dropped PDF temp file: {error}"))?;
     let file_path = fs::canonicalize(&file_path)
         .map_err(|error| format!("Failed to resolve dropped PDF temp file: {error}"))?;
     if file_path.parent() != Some(temp_dir.as_path()) {
@@ -956,9 +968,15 @@ async fn save_pdf_copy_dialog(
     app: tauri::AppHandle,
     source_grant: String,
     suggested_name: String,
+    excluded_source_grants: Option<Vec<String>>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
     let entry = file_grants.resolve_entry(&source_grant)?;
+    let excluded_sources = excluded_source_grants
+        .unwrap_or_default()
+        .iter()
+        .map(|grant| file_grants.resolve_entry(grant).map(|entry| entry.path))
+        .collect::<Result<Vec<_>, _>>()?;
     // Fail fast on drift before the user is asked to pick a destination.
     ensure_grant_file_unchanged(&entry)?;
 
@@ -978,6 +996,8 @@ async fn save_pdf_copy_dialog(
         };
 
         let destination = destination.into_path().map_err(|error| error.to_string())?;
+
+        refuse_excluded_save_destination(&excluded_sources, &destination)?;
 
         // Copying a file onto itself truncates the source to zero bytes before
         // the copy begins (fs::copy opens the destination with truncation), which
@@ -1072,6 +1092,21 @@ fn is_same_file(source: &Path, destination: &Path) -> bool {
     }
 }
 
+fn refuse_excluded_save_destination(
+    excluded_sources: &[PathBuf],
+    destination: &Path,
+) -> Result<(), String> {
+    if excluded_sources
+        .iter()
+        .any(|source| is_same_file(source, destination))
+    {
+        return Err(
+            "Choose a new file name. The protected source PDF cannot be replaced.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn read_opened_pdf_bytes(
     token: String,
@@ -1144,6 +1179,17 @@ async fn save_pdf_dialog(
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<SavedPdf>, String> {
     let suggested_name = required_header(&request, HEADER_SUGGESTED_NAME)?;
+    let excluded_source_grants = optional_header(&request, HEADER_EXCLUDED_FILE_GRANTS)?
+        .map(|value| {
+            serde_json::from_str::<Vec<String>>(&value)
+                .map_err(|_| format!("Invalid {HEADER_EXCLUDED_FILE_GRANTS} header"))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let excluded_sources = excluded_source_grants
+        .iter()
+        .map(|grant| file_grants.resolve_entry(grant).map(|entry| entry.path))
+        .collect::<Result<Vec<_>, _>>()?;
     let suggested_name = ensure_pdf_extension(&suggested_name);
     let bytes = raw_pdf_bytes(&request)?.into_owned();
     let path = on_command_blocking_pool(move || {
@@ -1158,6 +1204,7 @@ async fn save_pdf_dialog(
         };
 
         let path = path.into_path().map_err(|error| error.to_string())?;
+        refuse_excluded_save_destination(&excluded_sources, &path)?;
         write_pdf_bytes_atomic(&path, &bytes)?;
         Ok(Some(path))
     })
@@ -1286,6 +1333,22 @@ fn required_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<Stri
         .map_err(|_| format!("Invalid {name} header"))?;
 
     percent_decode(value)
+}
+
+fn optional_header(
+    request: &tauri::ipc::Request<'_>,
+    name: &str,
+) -> Result<Option<String>, String> {
+    request
+        .headers()
+        .get(name)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| format!("Invalid {name} header"))
+                .and_then(percent_decode)
+        })
+        .transpose()
 }
 
 fn required_u64_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<u64, String> {
@@ -2020,6 +2083,7 @@ pub fn run() {
             app.manage(FileGrants::default());
             app.manage(DirectoryGrants::default());
             app.manage(DroppedUploads::default());
+            app.manage(path_ops::ProtectedOutputTargets::default());
             app.manage(StartupPdf::default());
             app.manage(path_ops::PathOpJobs::default());
             app.manage(print::PrintJobs::default());
@@ -2122,6 +2186,11 @@ pub fn run() {
             path_ops::path_op_cancel,
             path_ops::path_op_page_count,
             path_ops::path_op_document_facts,
+            path_ops::path_op_inspect_protection,
+            path_ops::reveal_file_grant,
+            path_ops::pick_protected_output_target,
+            path_ops::release_protected_output_target,
+            path_ops::protect_to_target,
             path_ops::path_op_decrypt,
             path_ops::path_op_extract_pages,
             path_ops::path_op_merge,
@@ -2194,7 +2263,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:export-pdfa", "Export PDF/A...")
         .text("file:export-docx", "Export Editable Word (.docx)...")
         .text("file:print", "Print...")
-        .text("file:protect", "Protect (passwords)...")
+        .text("file:protect", "Create Protected Copy...")
         .text("file:properties", "Document Properties")
         .separator()
         .text("file:export-diagnostics", "Export Diagnostics...")
@@ -2229,6 +2298,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn file_grants_resolve_only_shell_owned_paths() {
@@ -2244,8 +2314,6 @@ mod tests {
 
     #[test]
     fn grants_snapshot_existing_files_and_serve_ranged_reads() {
-        use std::io::Write;
-
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("case.pdf");
         std::fs::File::create(&path)
@@ -2260,6 +2328,21 @@ mod tests {
 
         let bytes = read_file_range(&entry.path, &snapshot, 4, 3, 1024).expect("range");
         assert_eq!(bytes, b"456");
+    }
+
+    #[test]
+    fn save_as_refuses_any_excluded_source_identity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let protected_source = dir.path().join("protected-source.pdf");
+        let current_source = dir.path().join("current-source.pdf");
+        let allowed = dir.path().join("unlocked-copy.pdf");
+        fs::write(&protected_source, b"protected").expect("protected source");
+        fs::write(&current_source, b"current").expect("current source");
+        let excluded = vec![protected_source.clone(), current_source.clone()];
+
+        assert!(refuse_excluded_save_destination(&excluded, &protected_source).is_err());
+        assert!(refuse_excluded_save_destination(&excluded, &current_source).is_err());
+        assert!(refuse_excluded_save_destination(&excluded, &allowed).is_ok());
     }
 
     #[test]

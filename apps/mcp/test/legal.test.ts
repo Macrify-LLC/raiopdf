@@ -373,6 +373,29 @@ describe("legal tools (local pdf-lib engine)", () => {
     expect(await pageCount(output)).toBe(1);
   });
 
+  it("one-shot apply_edits fills and optionally flattens AcroForm values", async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage([300, 200]);
+    const field = source.getForm().createTextField("client.name");
+    field.addToPage(page, { x: 30, y: 100, width: 180, height: 24 });
+    const main = path.join(dir, "fillable.pdf");
+    const output = path.join(dir, "filled-flat.pdf");
+    await fs.writeFile(main, await source.save());
+
+    const result = await handleApplyEditsOneShot({
+      mainPath: main,
+      edits: [{ type: "formValues", values: { "client.name": "Ada Lovelace" } }],
+      flatten: true,
+      outputPath: output,
+      maxInputBytes: 10_000_000,
+    });
+
+    expect(structured(result)).toMatchObject({ ok: true, output });
+    const written = await PDFDocument.load(await fs.readFile(output));
+    expect(written.getForm().getFields()).toHaveLength(0);
+    expect(await extractPageText(await fs.readFile(output))).toContain("Ada Lovelace");
+  });
+
   it("split_pdf writes multiple parts that cover every page", async () => {
     const input = await makePdf("in.pdf", 10);
     const result = await handleSplit({ input, outputDir: dir, maxBytes: 1500 }, engine);

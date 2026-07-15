@@ -25,7 +25,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { STREAMED_RANGE_CHUNK_SIZE } from "./streamedChunks";
-import { materializeDroppedFileGrant } from "./dropMaterialize";
+import { materializeDroppedFileGrant, materializePdfBytesGrant } from "./dropMaterialize";
 
 beforeEach(() => {
   invokeState.calls.length = 0;
@@ -126,5 +126,46 @@ describe("materializeDroppedFileGrant", () => {
     await expect(materializeDroppedFileGrant(file)).resolves.toBeNull();
 
     expect(invokeState.calls).toHaveLength(0);
+  });
+});
+
+describe("materializePdfBytesGrant", () => {
+  it("stages generated PDF bytes through the same chunked shell upload", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const bytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]);
+    invokeState.handler = (command) => {
+      if (command === "dropped_pdf_begin") {
+        return "generated-token";
+      }
+      if (command === "dropped_pdf_append") {
+        return undefined;
+      }
+      if (command === "dropped_pdf_finish") {
+        return {
+          bytesToken: null,
+          fileGrant: "generated-grant",
+          name: "draft.pdf",
+          sizeBytes: bytes.byteLength,
+          thresholdBytes: 52_428_800,
+        };
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    await expect(materializePdfBytesGrant(bytes, "draft.pdf")).resolves.toEqual({
+      kind: "rangeGrant",
+      grant: "generated-grant",
+      name: "draft.pdf",
+      sizeBytes: bytes.byteLength,
+    });
+    expect(invokeState.calls.map((call) => call.command)).toEqual([
+      "dropped_pdf_begin",
+      "dropped_pdf_append",
+      "dropped_pdf_finish",
+    ]);
+    expect(invokeState.calls[1]?.args).toEqual(bytes);
   });
 });

@@ -10,6 +10,7 @@ import type {
   PdfOutlineState,
   PdfOutlineWriteResult,
   PdfPageNumbersOptions,
+  PdfProtectionFacts,
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
   PdfWatermarkOptions,
@@ -82,6 +83,11 @@ export interface DocumentState {
   outline: PdfOutlineState | null;
   outlineStatus: string | null;
   signatureInvalidationNotice: SignatureInvalidationNotice | null;
+  /** How the source PDF was protected before Raio opened its unlocked copy. */
+  protectionSource: ProtectedPdfSource | null;
+  protectionFacts: PdfProtectionFacts | null;
+  /** Original protected file identity, retained only for same-file refusal. */
+  protectedSourceGrant: FileGrant | null;
   error: string | null;
 }
 
@@ -121,15 +127,31 @@ const INITIAL_DOCUMENT: DocumentState = {
   outline: null,
   outlineStatus: null,
   signatureInvalidationNotice: null,
+  protectionSource: null,
+  protectionFacts: null,
+  protectedSourceGrant: null,
   error: null,
 };
 
-function releaseRangeGrantSource(source: DocumentSource | null | undefined): Promise<void> {
-  if (source?.kind !== "rangeGrant") {
-    return Promise.resolve();
+function releaseDocumentGrants(
+  source: DocumentSource | null | undefined,
+  protectedSourceGrant: FileGrant | null | undefined,
+  preservedGrants: readonly FileGrant[] = [],
+): Promise<void> {
+  const preserved = new Set(preservedGrants);
+  const grants = new Set<FileGrant>();
+  if (source?.kind === "rangeGrant") {
+    grants.add(source.grant);
+  }
+  if (protectedSourceGrant) {
+    grants.add(protectedSourceGrant);
   }
 
-  return pathOpReleaseOutput(source.grant).catch(() => undefined);
+  return Promise.all(
+    [...grants]
+      .filter((grant) => !preserved.has(grant))
+      .map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)),
+  ).then(() => undefined);
 }
 
 interface CommitOptions {
@@ -193,10 +215,16 @@ export interface OpenFileOptions {
    * Internal reopen flows keep the historical replace-active behavior.
    */
   openMode?: "replace-active" | "new-tab";
+  protectionSource?: ProtectedPdfSource;
+  protectionFacts?: PdfProtectionFacts | null;
+  protectedSourceGrant?: FileGrant | null;
 }
 
 export interface OpenStreamedFileOptions {
   openMode?: "replace-active" | "new-tab";
+  protectionSource?: ProtectedPdfSource;
+  protectionFacts?: PdfProtectionFacts | null;
+  protectedSourceGrant?: FileGrant | null;
   /**
    * Marks the newly opened streamed document dirty immediately instead of
    * clean. Streamed path ops normally reopen a generated copy as a clean
@@ -310,6 +338,9 @@ interface PreparedDocument {
   bytes: Uint8Array;
   engineHandle: PdfDocumentHandle;
   signatureInvalidationNotice: SignatureInvalidationNotice | null;
+  protectionSource: ProtectedPdfSource | null;
+  protectionFacts: PdfProtectionFacts | null;
+  protectedSourceGrant: FileGrant | null;
 }
 
 export function useDocument(options: UseDocumentOptions = {}) {
@@ -612,6 +643,40 @@ export function useDocument(options: UseDocumentOptions = {}) {
     setDocument((current) => ({ ...current, error }));
   }, [setDocument]);
 
+  const setProtectionFacts = useCallback((
+    facts: PdfProtectionFacts,
+    expectedGeneration = getActiveGenerationValue(),
+  ): boolean => {
+    if (getActiveGenerationValue() !== expectedGeneration) {
+      return false;
+    }
+
+    setDocument((current) => {
+      if (current.generation !== expectedGeneration) {
+        return current;
+      }
+
+      const protectionSource: ProtectedPdfSource | null = facts.kind === "open-password"
+        ? "user-password"
+        : facts.kind === "owner-restricted"
+          ? "owner-restricted"
+          : null;
+      const protectedSourceGrant = protectionSource
+        ? current.protectedSourceGrant ?? (
+          current.source?.kind === "rangeGrant" ? current.source.grant : null
+        )
+        : null;
+
+      return {
+        ...current,
+        protectionSource,
+        protectionFacts: facts,
+        protectedSourceGrant,
+      };
+    });
+    return true;
+  }, [getActiveGenerationValue, setDocument]);
+
   const closeHandle = useCallback(
     async (engineHandle: PdfDocumentHandle | null) => {
       if (!engineHandle) {
@@ -646,6 +711,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
       for (const tab of tabsRef.current) {
         if (tab.document.source?.kind === "rangeGrant") {
           grants.add(tab.document.source.grant);
+        }
+        if (tab.document.protectedSourceGrant) {
+          grants.add(tab.document.protectedSourceGrant);
         }
       }
       void Promise.all([...grants].map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)));
@@ -819,6 +887,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
           bytes: file.bytes,
           engineHandle: await engine.open(file.bytes),
           signatureInvalidationNotice: null,
+          protectionSource: null,
+          protectionFacts: null,
+          protectedSourceGrant: null,
         };
       } catch (error) {
         if (!isProtectedOpenError(error) || !options.protectedPdf) {
@@ -862,6 +933,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
             bytes: unlockedBytes,
             engineHandle: unlockedHandle,
             signatureInvalidationNotice,
+            protectionSource: unlockResult.provenance.source,
+            protectionFacts: unlockResult.provenance.protection,
+            protectedSourceGrant: file.path ? file.path as FileGrant : null,
           };
         } catch (openUnlockedError) {
           await closeHandle(unlockedHandle);
@@ -883,6 +957,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       }
       const { id, token, previousHandle } = target;
       const previousSource = target.newTab ? null : document.source;
+      const previousProtectedSourceGrant = target.newTab ? null : document.protectedSourceGrant;
       let prepared: PreparedDocument | null = null;
 
       try {
@@ -894,6 +969,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
         const { bytes, engineHandle, signatureInvalidationNotice } = prepared;
         const signatureInvalidated = Boolean(signatureInvalidationNotice);
+        const unlockedProtectedSource = options.protectionSource ?? prepared.protectionSource;
+        const protectionFacts = options.protectionFacts ?? prepared.protectionFacts;
+        const protectedSourceGrant = options.protectedSourceGrant ?? prepared.protectedSourceGrant;
         const [pageCount, outline] = await Promise.all([
           engine.pageCount(engineHandle),
           engine.getOutline(engineHandle),
@@ -919,9 +997,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
           currentPage: 1,
           zoom: 1,
           fitWidth: true,
-          dirty: (options.markDirty ?? false) || signatureInvalidated,
+          dirty: (options.markDirty ?? false) || signatureInvalidated || unlockedProtectedSource !== null,
           fileName: file.name,
-          filePath: signatureInvalidated ? null : file.path ?? null,
+          filePath: signatureInvalidated || unlockedProtectedSource !== null ? null : file.path ?? null,
           fileSizeBytes: bytes.byteLength,
           hasTextLayer: null,
           textLayerCoverage: null,
@@ -929,6 +1007,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
           outline,
           outlineStatus: null,
           signatureInvalidationNotice,
+          protectionSource: unlockedProtectedSource,
+          protectionFacts,
+          protectedSourceGrant,
           error: null,
         };
         fileIdentityRef.current = {
@@ -948,7 +1029,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
             : [...current, storedTab]
         ));
         prepared = null;
-        void releaseRangeGrantSource(previousSource);
+        void releaseDocumentGrants(
+          previousSource,
+          previousProtectedSourceGrant,
+          protectedSourceGrant ? [protectedSourceGrant] : [],
+        );
         requestPageScroll(1);
         return { status: "opened" };
       } catch (error) {
@@ -986,7 +1071,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
             busyCountRef.current = 0;
             setPageScrollIntent(null);
             setDocument(INITIAL_DOCUMENT);
-            void releaseRangeGrantSource(previousSource);
+            void releaseDocumentGrants(previousSource, previousProtectedSourceGrant);
           } else {
             restoreAfterFailedNewTabOpen(target);
           }
@@ -1018,12 +1103,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
             ...INITIAL_DOCUMENT,
             error: message,
           });
-          void releaseRangeGrantSource(previousSource);
+          void releaseDocumentGrants(previousSource, previousProtectedSourceGrant);
         }
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, createStoredTab, document.source, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
+    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
   );
 
   /**
@@ -1043,6 +1128,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       }
       const { id, token, previousHandle } = target;
       const previousSource = target.newTab ? null : document.source;
+      const previousProtectedSourceGrant = target.newTab ? null : document.protectedSourceGrant;
 
       activeHandleRef.current = null;
       activeBytesRef.current = null;
@@ -1072,10 +1158,13 @@ export function useDocument(options: UseDocumentOptions = {}) {
         // them through apply_edits. A caller can also open the copy dirty
         // (markDirty) when it's an unsaved working copy — e.g. an OCR result —
         // so Close prompts to save.
-        dirty: options.markDirty ?? false,
+        dirty: (options.markDirty ?? false) || options.protectionSource !== undefined,
         fileName: input.name,
-        filePath: input.path,
+        filePath: options.protectionSource !== undefined ? null : input.path,
         fileSizeBytes: input.source.sizeBytes,
+        protectionSource: options.protectionSource ?? null,
+        protectionFacts: options.protectionFacts ?? null,
+        protectedSourceGrant: options.protectedSourceGrant ?? null,
       };
       fileIdentityRef.current = { fileName: input.name, filePath: input.path };
       setDocument(nextDocument);
@@ -1088,17 +1177,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
           ? current.map((tab) => (tab.id === id ? { ...tab, ...storedTab } : tab))
           : [...current, storedTab]
       ));
-      if (
-        previousSource?.kind !== "rangeGrant" ||
-        input.source.kind !== "rangeGrant" ||
-        previousSource.grant !== input.source.grant
-      ) {
-        void releaseRangeGrantSource(previousSource);
-      }
+      void releaseDocumentGrants(
+        previousSource,
+        previousProtectedSourceGrant,
+        [
+          ...(input.source.kind === "rangeGrant" ? [input.source.grant] : []),
+          ...(nextDocument.protectedSourceGrant ? [nextDocument.protectedSourceGrant] : []),
+        ],
+      );
       requestPageScroll(1);
       return { status: "opened" };
     },
-    [closeHandle, createStoredTab, document.source, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
+    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
   );
 
   /**
@@ -1815,6 +1905,108 @@ export function useDocument(options: UseDocumentOptions = {}) {
     [closeHandle, engine, enqueueMutation],
   );
 
+  const serializeAnnotationSavePlan = useCallback(
+    (
+      plan: {
+        appendEdits: readonly PdfEdit[];
+        updateEdits: readonly { annotId: string; edit: PdfRaioAnnotationEdit }[];
+        deleteAnnotIds: readonly string[];
+      },
+      options: {
+        flatten: boolean;
+        printMarkupAnnotations?: boolean;
+        expectedGeneration?: number;
+      },
+      requestedToken = openTokenRef.current,
+    ): Promise<Uint8Array | null> => {
+      const queued = mutationQueueRef.current.then(async () => {
+        busyCountRef.current += 1;
+        syncActiveTabBusy();
+
+        try {
+          if (sourceKindRef.current !== "memory") {
+            return null;
+          }
+
+          const context = currentOperation();
+          if (
+            !context ||
+            context.token !== requestedToken ||
+            (
+              options.expectedGeneration !== undefined &&
+              getActiveGenerationValue() !== options.expectedGeneration
+            )
+          ) {
+            return null;
+          }
+
+          const hasChanges = plan.appendEdits.length > 0 ||
+            plan.updateEdits.length > 0 ||
+            plan.deleteAnnotIds.length > 0;
+          if (!hasChanges) {
+            return new Uint8Array(await engine.saveToBytes(context.handle));
+          }
+
+          const applyOptions: PdfApplyEditsOptions = {
+            markupMode: "annotation",
+            printMarkupAnnotations: options.printMarkupAnnotations ?? true,
+          };
+          const handlesToClose = new Set<PdfDocumentHandle>();
+
+          try {
+            const sourceBytes = await engine.saveToBytes(context.handle);
+            let snapshotHandle = await engine.open(sourceBytes);
+            handlesToClose.add(snapshotHandle);
+
+            if (plan.appendEdits.length > 0) {
+              snapshotHandle = await engine.applyEdits(
+                snapshotHandle,
+                plan.appendEdits,
+                applyOptions,
+              );
+              handlesToClose.add(snapshotHandle);
+            }
+
+            for (const update of plan.updateEdits) {
+              snapshotHandle = await engine.updateAnnotationById(
+                snapshotHandle,
+                update.annotId,
+                update.edit,
+                applyOptions,
+              );
+              handlesToClose.add(snapshotHandle);
+            }
+
+            for (const annotId of plan.deleteAnnotIds) {
+              snapshotHandle = await engine.deleteAnnotationById(snapshotHandle, annotId);
+              handlesToClose.add(snapshotHandle);
+            }
+
+            if (options.flatten) {
+              snapshotHandle = await engine.flattenForm(snapshotHandle);
+              handlesToClose.add(snapshotHandle);
+            }
+
+            return new Uint8Array(await engine.saveToBytes(snapshotHandle));
+          } finally {
+            await Promise.all([...handlesToClose].map((handle) => closeHandle(handle)));
+          }
+        } finally {
+          busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+          syncActiveTabBusy();
+        }
+      });
+
+      mutationQueueRef.current = queued.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      return queued;
+    },
+    [closeHandle, currentOperation, engine, getActiveGenerationValue, syncActiveTabBusy],
+  );
+
   const flattenMarkupAnnotations = useCallback(async () => {
     return enqueueMutation("flatten markup", async ({ handle }) => ({
       engineHandle: await engine.flattenMarkupAnnotations(handle),
@@ -2071,7 +2263,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
     }
 
     await closeHandle(tab.engineHandle);
-    await releaseRangeGrantSource(tab.document.source);
+    await releaseDocumentGrants(
+      tab.document.source,
+      tab.document.protectedSourceGrant,
+    );
 
     if (isActive) {
       const nextActive = nextTabs[Math.min(closingIndex, nextTabs.length - 1)] ?? null;
@@ -2114,6 +2309,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     setTextLayerCoverage,
     setPageSizeInches,
     setError,
+    setProtectionFacts,
     rotatePages,
     deletePages,
     reorderPages,
@@ -2127,6 +2323,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     applyEdits,
     readRaioPdfAnnotations,
     applyAnnotationSavePlan,
+    serializeAnnotationSavePlan,
     flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,

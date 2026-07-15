@@ -1259,7 +1259,7 @@ pub fn release_protected_output_target(
 
 /// Encrypt into a fresh private sibling candidate, verify, recheck both the
 /// source hash and target snapshot, then atomically publish by no-clobber hard
-/// link (with rollback when replacing a previously confirmed target).
+/// publication (with rollback when replacing a previously confirmed target).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri exposes command parameters as the IPC contract.
 pub async fn protect_to_target(
@@ -1514,7 +1514,7 @@ where
     let replaced_existing = matches!(baseline, OutputTargetBaseline::Existing { .. });
     if replaced_existing {
         atomic_replace_existing(candidate, destination, &backup, baseline)?;
-    } else if let Err(error) = fs::hard_link(candidate, destination) {
+    } else if let Err(error) = atomic_publish_absent(candidate, destination) {
         return Err(PathOpError {
             code: core_ops::ERR_IO,
             message: format!("could not commit the protected copy without clobbering: {error}"),
@@ -1569,14 +1569,49 @@ where
             ),
         })?;
     } else {
-        // The no-clobber publication is a hard link. The candidate directory's
-        // RAII guard is a second cleanup attempt if this unlink is interrupted.
-        fs::remove_file(candidate).map_err(|error| PathOpError {
-            code: core_ops::ERR_IO,
-            message: format!("The protected copy was saved, but its private candidate could not be removed: {error}"),
-        })?;
+        // Unix publication retains the private hard-link candidate; Windows
+        // MoveFileExW consumes it. The RAII directory guard is a second cleanup
+        // attempt if the Unix unlink is interrupted.
+        if candidate.exists() {
+            fs::remove_file(candidate).map_err(|error| PathOpError {
+                code: core_ops::ERR_IO,
+                message: format!("The protected copy was saved, but its private candidate could not be removed: {error}"),
+            })?;
+        }
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn atomic_publish_absent(candidate: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::hard_link(candidate, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn atomic_publish_absent(candidate: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let candidate = wide(candidate);
+    let destination = wide(destination);
+    let moved = unsafe {
+        MoveFileExW(
+            candidate.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -3052,6 +3087,26 @@ mod tests {
             b"verified protected bytes"
         );
         assert!(!candidate_root.exists());
+    }
+
+    #[test]
+    fn protected_output_absent_publish_never_clobbers_a_racing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let candidate = dir.path().join("candidate.pdf");
+        let destination = dir.path().join("protected.pdf");
+        fs::write(&candidate, b"new verified bytes").expect("candidate");
+        fs::write(&destination, b"racing destination").expect("destination");
+
+        atomic_publish_absent(&candidate, &destination).unwrap_err();
+
+        assert_eq!(
+            fs::read(&destination).expect("destination"),
+            b"racing destination"
+        );
+        assert_eq!(
+            fs::read(&candidate).expect("candidate"),
+            b"new verified bytes"
+        );
     }
 
     #[test]

@@ -391,6 +391,13 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
   await expect(
     redactionToolbar.getByRole("button", { name: "Select text" }),
   ).toHaveAttribute("aria-pressed", "true");
+  // `aria-pressed` commits with the render, while PageView's window-level
+  // pointer listener is installed by a passive effect just after paint.
+  // Wait through a full paint/effect turn before synthesizing pointerup so
+  // fast CI browsers cannot dispatch between those two lifecycle moments.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
 
   const rawRectCount = await textLayer.evaluate((layer) => {
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);

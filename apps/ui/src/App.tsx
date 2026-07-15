@@ -7570,6 +7570,10 @@ export function App() {
     pdfSecurityRunRef.current = runId;
     const sourceOpenToken = getOpenToken();
     const sourceGeneration = document.generation;
+    const isCurrentRun = () => (
+      pdfSecurityRunRef.current === runId &&
+      isCurrentDocument(sourceOpenToken, sourceGeneration)
+    );
     const suggestedName = `${stripPdfExtension(document.fileName ?? "Document")}-unlocked.pdf`;
     const excludedSourceGrants = [...new Set(
       [
@@ -7596,7 +7600,7 @@ export function App() {
           },
           sourceOpenToken,
         );
-        if (!bytes || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
+        if (!bytes || !isCurrentRun()) {
           return;
         }
         await filePort.saveFile(bytes, suggestedName, null, excludedSourceGrants);
@@ -7638,6 +7642,9 @@ export function App() {
           pendingApply.flatten,
         );
         temporaryGrants.push(staged.outputGrant);
+        if (!isCurrentRun()) {
+          return;
+        }
         await saveStreamedCopy(
           { kind: "rangeGrant", grant: staged.outputGrant },
           suggestedName,
@@ -7646,6 +7653,9 @@ export function App() {
         return;
       }
 
+      if (!isCurrentRun()) {
+        return;
+      }
       await saveStreamedCopy(
         source.kind === "rangeFile" && !streamedInputGrant
           ? { kind: "rangeFile", file: source.file }
@@ -7657,7 +7667,7 @@ export function App() {
         excludedSourceGrants,
       );
     } catch (error: unknown) {
-      if (!isPathOpCancelledError(error)) {
+      if (isCurrentRun() && !isPathOpCancelledError(error)) {
         setError("RaioPDF could not save the unlocked copy. The open PDF was left unchanged.");
       }
     } finally {

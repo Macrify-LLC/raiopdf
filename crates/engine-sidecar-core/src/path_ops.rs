@@ -101,6 +101,8 @@ pub fn restrict_private_file(path: &Path) -> OpResult<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .map_err(|error| PathOpError::io("restrict private file", error))?;
     }
+    #[cfg(not(unix))]
+    let _ = path; // The containing directory supplies the Windows ACL.
     Ok(())
 }
 

@@ -2844,7 +2844,7 @@ fn purge_private_temp_dirs_in(root: &Path) {
 
 struct TempDirGuard {
     path: PathBuf,
-    _owner_lock: File,
+    owner_lock: Option<File>,
 }
 
 impl TempDirGuard {
@@ -2862,7 +2862,7 @@ impl TempDirGuard {
                 .map_err(|error| format!("lock private-temp owner: {error}"))?;
             Ok(Self {
                 path: path.clone(),
-                _owner_lock: owner_lock,
+                owner_lock: Some(owner_lock),
             })
         })();
         if result.is_err() {
@@ -2874,6 +2874,7 @@ impl TempDirGuard {
 
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
+        drop(self.owner_lock.take());
         let _ = fs::remove_dir_all(&self.path);
     }
 }
@@ -4313,6 +4314,24 @@ mod tests {
         assert!(
             !live.exists(),
             "released owner lock must be reclaimed immediately"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn private_temp_guard_closes_owner_lock_before_cleanup() {
+        let root = test_temp_dir("private-temp-guard");
+        let guarded = root.join("raiopdf-protect-guarded");
+        path_ops::create_private_dir(&guarded).expect("guarded dir");
+        let guard = TempDirGuard::hold(guarded.clone()).expect("hold guard");
+        path_ops::write_private_file(&guarded.join("protected.pdf"), b"sensitive")
+            .expect("private output");
+
+        drop(guard);
+
+        assert!(
+            !guarded.exists(),
+            "dropping a guard must immediately remove its private files"
         );
         let _ = fs::remove_dir_all(root);
     }

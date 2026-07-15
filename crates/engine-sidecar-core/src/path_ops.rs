@@ -68,6 +68,21 @@ pub fn create_private_dir(path: &Path) -> OpResult<()> {
     }
 }
 
+/// Create a shared private directory, or re-apply its private permissions when
+/// another process won the creation race. Unlike `create_private_dir`, this is
+/// idempotent and must only be used for shared roots, never random per-op dirs.
+pub fn ensure_private_dir(path: &Path) -> OpResult<()> {
+    match create_private_dir(path) {
+        Ok(()) => Ok(()),
+        Err(create_error) => match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                restrict_private_dir(path)
+            }
+            _ => Err(create_error),
+        },
+    }
+}
+
 pub fn restrict_private_dir(path: &Path) -> OpResult<()> {
     #[cfg(unix)]
     {
@@ -4642,6 +4657,26 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn shared_private_directory_creation_is_idempotent() {
+        let root = TestDir::new("shared-private-root");
+        let shared = root.path().join("path-ops");
+
+        ensure_private_dir(&shared).expect("first creator");
+        ensure_private_dir(&shared).expect("concurrent creator that observes the directory");
+
+        assert!(shared.is_dir());
+    }
+
+    #[test]
+    fn shared_private_directory_rejects_an_existing_file() {
+        let root = TestDir::new("shared-private-file");
+        let shared = root.path().join("path-ops");
+        fs::write(&shared, b"not a directory").expect("existing file");
+
+        assert!(ensure_private_dir(&shared).is_err());
     }
 
     fn letter_page(text: Option<&str>) -> MiniPdfPage {

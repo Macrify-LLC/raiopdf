@@ -563,17 +563,13 @@ fn path_ops_root_for_app(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn canonical_path_ops_root(path_ops_root: &Path) -> Result<PathBuf, String> {
-    if !path_ops_root.exists() {
-        let parent = path_ops_root
-            .parent()
-            .ok_or_else(|| "Path-ops temp root has no parent".to_string())?;
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Failed to create app-data folder: {error}"))?;
-        engine_sidecar_core::path_ops::create_private_dir(path_ops_root)
-            .map_err(|error| format!("Failed to create path-ops temp root: {error}"))?;
-    }
-    engine_sidecar_core::path_ops::restrict_private_dir(path_ops_root)
-        .map_err(|error| format!("Failed to restrict path-ops temp root: {error}"))?;
+    let parent = path_ops_root
+        .parent()
+        .ok_or_else(|| "Path-ops temp root has no parent".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create app-data folder: {error}"))?;
+    engine_sidecar_core::path_ops::ensure_private_dir(path_ops_root)
+        .map_err(|error| format!("Failed to prepare path-ops temp root: {error}"))?;
     fs::canonicalize(path_ops_root)
         .map_err(|error| format!("Failed to resolve path-ops temp root: {error}"))
 }

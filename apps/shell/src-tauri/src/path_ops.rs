@@ -700,16 +700,13 @@ pub(crate) struct OpWorkDir {
 impl OpWorkDir {
     pub(crate) fn create(app: &tauri::AppHandle) -> OpResult<Self> {
         let root = path_ops_root(app)?;
-        if !root.exists() {
-            if let Some(parent) = root.parent() {
-                fs::create_dir_all(parent).map_err(|error| PathOpError {
-                    code: "IO_ERROR",
-                    message: format!("failed to create path-ops parent: {error}"),
-                })?;
-            }
-            core_ops::create_private_dir(&root)?;
+        if let Some(parent) = root.parent() {
+            fs::create_dir_all(parent).map_err(|error| PathOpError {
+                code: "IO_ERROR",
+                message: format!("failed to create path-ops parent: {error}"),
+            })?;
         }
-        core_ops::restrict_private_dir(&root)?;
+        core_ops::ensure_private_dir(&root)?;
         let dir = root.join(Uuid::new_v4().to_string());
         core_ops::create_private_dir(&dir)?;
         // Owner marker keeps a concurrent instance's startup sweep from

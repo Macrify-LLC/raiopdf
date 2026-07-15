@@ -227,10 +227,10 @@ const OCR_REQUEST_TIMEOUT_MS = 31 * 60_000;
  *   large PDF bytes never travel in headers.
  * - sanitize -> POST /api/v1/security/sanitize-pdf with removeJavaScript,
  *   removeEmbeddedFiles, removeLinks, and metadata/font removal disabled.
- * - removeEncryption -> POST /local/decrypt (engine-local qpdf) with the raw PDF
- *   body as base64 text and the password hex-encoded in a loopback query param. Stirling's
- *   /remove-password is lossy (drops the text layer) so it is never used; the
- *   password never touches a command line or document handle.
+ * - removeEncryption -> POST /local/decrypt (engine-local qpdf) with the PDF and
+ *   password inside a bounded binary envelope. Stirling's /remove-password is
+ *   lossy (drops the text layer) so it is never used; the password never touches
+ *   a URL, header, command line, or document handle.
  * - convertToPdfA -> POST /local/pdfa (engine-local Ghostscript) with the raw PDF
  *   body as base64 text and PDF/A options in loopback query params. Stirling
  *   2.14.0 gates /api/v1/convert/pdf/pdfa behind LibreOffice, which is not

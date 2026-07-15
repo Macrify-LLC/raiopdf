@@ -1568,6 +1568,16 @@ export function App() {
     documentGenerationRef.current = document.generation;
   }, [document.generation]);
 
+  // Leaving Redact through any route (another legal tool, Organize/Edit,
+  // closing the workspace, or the mode bar) restores the established draw-
+  // box default. Keeping this transition here prevents indirect exits from
+  // preserving Select text for the next redaction session.
+  useEffect(() => {
+    if (activeLegalTool !== "redact") {
+      setRedactionSelectMode("draw");
+    }
+  }, [activeLegalTool]);
+
   const resetLegalState = useCallback(() => {
     preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
@@ -7192,10 +7202,7 @@ export function App() {
       onSearchTextChange={setRedactionSearchText}
       onSearchSubmit={searchTextForRedaction}
       onApply={requestApplyRedactions}
-      onExit={() => {
-        setActiveLegalTool(null);
-        setRedactionSelectMode("draw");
-      }}
+      onExit={() => setActiveLegalTool(null)}
     />
   ) : editing.tool !== "select" ? (
     <EditModeBar editing={editingForShell} />

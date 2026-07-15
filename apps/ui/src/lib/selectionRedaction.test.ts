@@ -71,15 +71,16 @@ describe("redactionAreasFromClientRects", () => {
   it("stamps the given pageIndex on every produced area", async () => {
     const viewport = await buildViewport([200, 100]);
     const frame = frameFor(viewport);
-    const rect = pdfRectToViewportRect({ x: 10, y: 10, w: 20, h: 8 }, viewport);
+    const first = pdfRectToViewportRect({ x: 10, y: 10, w: 20, h: 8 }, viewport);
+    const second = pdfRectToViewportRect({ x: 10, y: 40, w: 20, h: 8 }, viewport);
 
-    const areas = redactionAreasFromClientRects([rect, rect], frame, viewport, 3);
+    const areas = redactionAreasFromClientRects([first, second], frame, viewport, 3);
 
     expect(areas).toHaveLength(2);
     expect(areas.every((area) => area.pageIndex === 3)).toBe(true);
   });
 
-  it("produces one area per input rect — one per visual line of a multi-line selection", async () => {
+  it("produces one area per visual line of a multi-line selection", async () => {
     const viewport = await buildViewport([200, 200]);
     const frame = frameFor(viewport);
     const line1 = pdfRectToViewportRect({ x: 10, y: 150, w: 60, h: 10 }, viewport);
@@ -89,6 +90,47 @@ describe("redactionAreasFromClientRects", () => {
     const areas = redactionAreasFromClientRects([line1, line2, line3], frame, viewport, 0);
 
     expect(areas).toHaveLength(3);
+  });
+
+  it("merges duplicate and adjacent browser fragments on the same visual line", async () => {
+    const viewport = await buildViewport([240, 120]);
+    const frame = frameFor(viewport);
+    const firstFragment: RectLike = { left: 20, top: 20, width: 35, height: 12 };
+    const secondFragment: RectLike = { left: 59, top: 20, width: 42, height: 13 };
+    const duplicateSecond: RectLike = { left: 59, top: 20, width: 42, height: 12 };
+    const nextLine: RectLike = { left: 20, top: 48, width: 50, height: 12 };
+
+    const areas = redactionAreasFromClientRects(
+      [firstFragment, secondFragment, duplicateSecond, nextLine],
+      frame,
+      viewport,
+      0,
+      { padPt: 0 },
+    );
+
+    expect(areas).toHaveLength(2);
+    const firstLine = pdfRectToViewportRect(areas[0]!, viewport);
+    expect(firstLine.left).toBeCloseTo(20, 5);
+    expect(firstLine.top).toBeCloseTo(20, 5);
+    expect(firstLine.width).toBeCloseTo(81, 5);
+    expect(firstLine.height).toBeCloseTo(13, 5);
+  });
+
+  it("keeps separated same-height fragments as distinct areas", async () => {
+    const viewport = await buildViewport([300, 120]);
+    const frame = frameFor(viewport);
+    const leftColumn: RectLike = { left: 20, top: 20, width: 40, height: 12 };
+    const rightColumn: RectLike = { left: 180, top: 20, width: 40, height: 12 };
+
+    const areas = redactionAreasFromClientRects(
+      [leftColumn, rightColumn],
+      frame,
+      viewport,
+      0,
+      { padPt: 0 },
+    );
+
+    expect(areas).toHaveLength(2);
   });
 
   it("clamps a rect that overshoots the frame to the page bounds", async () => {
@@ -146,5 +188,21 @@ describe("redactionAreasFromClientRects", () => {
     const verticalPad = padded.h - unpadded.h;
     expect(verticalPad).toBeGreaterThan(0);
     expect(verticalPad).toBeLessThan(padded.w - unpadded.w);
+  });
+
+  it("keeps horizontal and vertical padding visually correct on a rotated page", async () => {
+    const viewport = await buildViewport([200, 100], { scale: 1.5, rotation: 90 });
+    const frame = frameFor(viewport);
+    const rect = pdfRectToViewportRect({ x: 30, y: 20, w: 40, h: 15 }, viewport);
+
+    const unpadded = redactionAreasFromClientRects([rect], frame, viewport, 0, { padPt: 0 })[0]!;
+    const padded = redactionAreasFromClientRects([rect], frame, viewport, 0, { padPt: 3 })[0]!;
+    const unpaddedViewport = pdfRectToViewportRect(unpadded, viewport);
+    const paddedViewport = pdfRectToViewportRect(padded, viewport);
+
+    expect(paddedViewport.left).toBeCloseTo(unpaddedViewport.left - 4.5, 5);
+    expect(paddedViewport.width).toBeCloseTo(unpaddedViewport.width + 9, 5);
+    expect(paddedViewport.top).toBeCloseTo(unpaddedViewport.top - 1.5, 5);
+    expect(paddedViewport.height).toBeCloseTo(unpaddedViewport.height + 3, 5);
   });
 });

@@ -391,14 +391,6 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
   await expect(
     redactionToolbar.getByRole("button", { name: "Select text" }),
   ).toHaveAttribute("aria-pressed", "true");
-  // `aria-pressed` commits with the render, while PageView's window-level
-  // pointer listener is installed by a passive effect just after paint.
-  // Wait through a full paint/effect turn before synthesizing pointerup so
-  // fast CI browsers cannot dispatch between those two lifecycle moments.
-  await page.evaluate(() => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  }));
-
   const rawRectCount = await textLayer.evaluate((layer) => {
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
     const textNodes: Node[] = [];
@@ -423,15 +415,31 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
-    const rectCount = range.getClientRects().length;
-
-    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-    return rectCount;
+    return range.getClientRects().length;
   });
 
+  // A real multi-span selection reports several client rects; the merge logic
+  // must collapse them into a single redaction area.
   expect(rawRectCount).toBeGreaterThan(1);
+
+  // PageView installs its window-level pointer listener in a passive effect,
+  // which React flushes after paint — no fixed rAF count deterministically
+  // brackets that flush, so on a fast runner a single synthesized pointerup
+  // can land before the listener attaches. Re-dispatch pointerup until the
+  // capture marks the (single, merged) area. The selection set above persists
+  // until a capture succeeds and clears it, so re-dispatching never
+  // double-marks.
+  const overlay = page.locator(".page-view__redaction-overlay");
+  await expect(async () => {
+    if ((await overlay.count()) === 0) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      });
+    }
+    expect(await overlay.count()).toBe(1);
+  }).toPass({ timeout: 15_000 });
+
   await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();
-  await expect(page.locator(".page-view__redaction-overlay")).toHaveCount(1);
 
   // Leaving through another legal tool (not the mode bar's Exit button)
   // must still restore Draw box for the next redaction session.

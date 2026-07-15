@@ -392,7 +392,7 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
     redactionToolbar.getByRole("button", { name: "Select text" }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  const rawRectCount = await textLayer.evaluate((layer) => {
+  const rawRects = await textLayer.evaluate((layer) => {
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
     const textNodes: Node[] = [];
     let node = walker.nextNode();
@@ -416,12 +416,17 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
-    return range.getClientRects().length;
+    return Array.from(range.getClientRects(), ({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+    }));
   });
 
   // A real multi-span selection reports several client rects; the merge logic
   // must collapse them into a single redaction area.
-  expect(rawRectCount).toBeGreaterThan(1);
+  expect(rawRects.length).toBeGreaterThan(1);
 
   // Re-dispatch until the synthetic browser selection is captured. The live
   // selection persists until a successful capture clears it, so retries are
@@ -433,7 +438,7 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
         window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
       });
     }
-    expect(await overlay.count()).toBe(1);
+    expect(await overlay.count(), `selection rects: ${JSON.stringify(rawRects)}`).toBe(1);
   }).toPass({ timeout: 15_000 });
 
   await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();

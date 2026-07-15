@@ -116,30 +116,51 @@ describe("redactionAreasFromClientRects", () => {
     expect(firstLine.height).toBeCloseTo(13, 5);
   });
 
-  it("merges same-baseline fragments with cross-font line-box offsets", async () => {
+  it("coalesces a visual line transitively when tiny top offsets reorder fragments", async () => {
     const viewport = await buildViewport([240, 140]);
     const frame = frameFor(viewport);
-    // Chromium can expose substantially different tops and heights for
-    // adjacent PDF.js spans that use different fonts on the same baseline.
-    // These overlap by less than half the smaller box but are still one line.
-    const tallFont: RectLike = { left: 20, top: 20, width: 38, height: 16 };
-    const shortFont: RectLike = { left: 60, top: 29, width: 32, height: 9 };
-    const nextLine: RectLike = { left: 20, top: 52, width: 45, height: 12 };
+    // The trailing fragment sorts first because its top is fractionally
+    // smaller. The middle fragment later bridges it to the leading fragment.
+    const leading: RectLike = { left: 20, top: 20, width: 35, height: 12 };
+    const middle: RectLike = { left: 59, top: 20, width: 38, height: 12 };
+    const trailing: RectLike = { left: 101, top: 19.5, width: 40, height: 13 };
 
     const areas = redactionAreasFromClientRects(
-      [tallFont, shortFont, nextLine],
+      [leading, middle, trailing],
       frame,
       viewport,
       0,
       { padPt: 0 },
     );
 
-    expect(areas).toHaveLength(2);
-    const firstLine = pdfRectToViewportRect(areas[0]!, viewport);
-    expect(firstLine.left).toBeCloseTo(20, 5);
-    expect(firstLine.top).toBeCloseTo(20, 5);
-    expect(firstLine.width).toBeCloseTo(72, 5);
-    expect(firstLine.height).toBeCloseTo(18, 5);
+    expect(areas).toHaveLength(1);
+    const line = pdfRectToViewportRect(areas[0]!, viewport);
+    expect(line.left).toBeCloseTo(20, 5);
+    expect(line.top).toBeCloseTo(19.5, 5);
+    expect(line.width).toBeCloseTo(121, 5);
+    expect(line.height).toBeCloseTo(13, 5);
+  });
+
+  it("merges the duplicate fragment geometry emitted by Linux Chromium", async () => {
+    const viewport = await buildViewport([800, 600]);
+    const frame = frameFor(viewport);
+    // Captured from the real PDF.js smoke fixture on GitHub's Ubuntu runner.
+    // The final fragment sorts before all the others by 0.4px, while several
+    // fully-selected spans expose both a 33.2px and a 37px client rect.
+    const rects: RectLike[] = [
+      { left: 314.453125, top: 339.84375, width: 175.45944213867188, height: 37 },
+      { left: 489.90625, top: 341.84375, width: 9.234375, height: 33.234375 },
+      { left: 489.90625, top: 339.84375, width: 9.234375, height: 37 },
+      { left: 498.1875, top: 341.84375, width: 73.8504638671875, height: 33.234375 },
+      { left: 498.1875, top: 339.84375, width: 73.8504638671875, height: 37 },
+      { left: 572.0625, top: 341.84375, width: 8.3125, height: 33.234375 },
+      { left: 572.0625, top: 339.84375, width: 8.3125, height: 37 },
+      { left: 592.015625, top: 339.4375, width: 119.634521484375, height: 39 },
+    ];
+
+    expect(
+      redactionAreasFromClientRects(rects, frame, viewport, 0, { padPt: 0 }),
+    ).toHaveLength(1);
   });
 
   it("keeps separated same-height fragments as distinct areas", async () => {

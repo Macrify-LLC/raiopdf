@@ -1593,7 +1593,13 @@ pub fn decrypt(
         response_path(input, "input")?,
         response_path(output_path, "output")?,
     ])?;
-    run_qpdf_response_file(toolchain, &response, None)?;
+    run_qpdf_response_file(toolchain, &response, None).map_err(|error| {
+        if error.code == ERR_PASSWORD_INVALID && password.is_empty() {
+            PathOpError::new(ERR_PASSWORD_REQUIRED, "A PDF password is required.")
+        } else {
+            error
+        }
+    })?;
     require_output("qpdf --decrypt", output_path)?;
     restrict_private_file(output_path)?;
     Ok(())
@@ -1835,13 +1841,10 @@ fn inspect_protection_details(
         response_path(input, "input")?,
     ])?;
     let output = run_qpdf_response_file(toolchain, &response, cancel_flag).map_err(|error| {
-        if error.code != ERR_OP_FAILED {
-            return error;
-        }
-        if password.is_empty() {
+        if error.code == ERR_PASSWORD_INVALID && password.is_empty() {
             PathOpError::new(ERR_PASSWORD_REQUIRED, "A PDF password is required.")
         } else {
-            PathOpError::new(ERR_PASSWORD_INVALID, "The PDF password was not accepted.")
+            error
         }
     })?;
     let size = fs::metadata(input)
@@ -1994,9 +1997,22 @@ fn run_qpdf_response_file(
         toolchain.tool_timeout,
     )?;
     if !output.status.success() {
+        if qpdf_diagnostic_reports_password_failure(&output.stderr)
+            || qpdf_diagnostic_reports_password_failure(&output.stdout)
+        {
+            return Err(PathOpError::new(
+                ERR_PASSWORD_INVALID,
+                "The PDF password was not accepted.",
+            ));
+        }
         return Err(PathOpError::failed("qpdf could not process PDF protection"));
     }
     Ok(output)
+}
+
+fn qpdf_diagnostic_reports_password_failure(diagnostic: &[u8]) -> bool {
+    let diagnostic = String::from_utf8_lossy(diagnostic).to_lowercase();
+    diagnostic.contains("invalid password") || diagnostic.contains("incorrect password")
 }
 
 fn response_file(lines: &[String]) -> OpResult<Vec<u8>> {
@@ -4134,6 +4150,19 @@ mod tests {
     // ---- pure-logic tests (no toolchain required) ----
 
     #[test]
+    fn recognizes_only_password_specific_qpdf_failures() {
+        assert!(qpdf_diagnostic_reports_password_failure(
+            b"qpdf: invalid password"
+        ));
+        assert!(qpdf_diagnostic_reports_password_failure(
+            b"qpdf: incorrect password supplied"
+        ));
+        assert!(!qpdf_diagnostic_reports_password_failure(
+            b"qpdf: damaged xref table"
+        ));
+    }
+
+    #[test]
     fn gs_arg_builders_run_safer_with_scoped_permits() {
         let input = Path::new(r"C:\work\input docs\brief.pdf");
         let output = Path::new(r"C:\work\out\normalized.pdf");
@@ -4743,14 +4772,30 @@ mod tests {
                 .code,
             ERR_PASSWORD_INVALID
         );
-        assert!(decrypt(
-            &toolchain,
-            &protected,
-            &invalid_password,
-            &dir.path().join("wrong.pdf"),
-            dir.path(),
-        )
-        .is_err());
+        assert_eq!(
+            decrypt(
+                &toolchain,
+                &protected,
+                &invalid_password,
+                &dir.path().join("wrong.pdf"),
+                dir.path(),
+            )
+            .unwrap_err()
+            .code,
+            ERR_PASSWORD_INVALID
+        );
+        assert_eq!(
+            decrypt(
+                &toolchain,
+                &protected,
+                &no_password,
+                &dir.path().join("missing.pdf"),
+                dir.path(),
+            )
+            .unwrap_err()
+            .code,
+            ERR_PASSWORD_REQUIRED
+        );
         assert!(!dir.path().join("pw.txt").exists());
     }
 

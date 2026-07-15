@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
 import { verifyMinisignSignature } from "./minisign.mjs";
+import { validatePlatformReleaseStage } from "./validate-package-boundary.mjs";
 import { prepareSignedReleaseAssets } from "./prepare-signed-release-assets.mjs";
 import {
   validateGitHubLatestRelease,
   validateGitHubReleaseState,
+  validatePublicAssetNames,
   validateReleaseAssets,
 } from "./validate-release-assets.mjs";
 
@@ -73,6 +75,45 @@ describe("signed release asset preparation", () => {
     assert.throws(
       () => verifyMinisignSignature(Buffer.from("Test"), TEST_PREHASHED_SIGNATURE_TEXT, TEST_PUBLIC_KEY_TEXT),
       /does not match installer bytes/,
+    );
+  });
+
+  it("accepts only the legacy Windows set or the complete combined public set", () => {
+    const version = "0.2.0";
+    const pins = { GHOSTSCRIPT_VERSION: "10.07.1" };
+    const windows = [
+      `RaioPDF-${version}-windows-x64-setup.exe`,
+      `RaioPDF-${version}-windows-x64-setup.exe.sig`,
+      `RaioPDF-${version}-third-party-notices.txt`,
+      `RaioPDF-${version}-component-manifest.json`,
+      `RaioPDF-${version}-source-correspondence.md`,
+      `RaioPDF-${version}-license-notices.txt`,
+      `RaioPDF-${version}-ghostscript-source-offer.txt`,
+      "ghostscript-10.07.1-source.tar.xz",
+      "latest.json",
+      "SHA256SUMS.txt",
+    ];
+    const mac = [
+      `RaioPDF-${version}-macos-arm64.dmg`,
+      `RaioPDF-${version}-macos-arm64.app.tar.gz`,
+      `RaioPDF-${version}-macos-arm64.app.tar.gz.sig`,
+      `RaioPDF-${version}-macos-arm64-third-party-notices.txt`,
+      `RaioPDF-${version}-macos-arm64-component-manifest.json`,
+      `RaioPDF-${version}-macos-arm64-source-correspondence.md`,
+      `RaioPDF-${version}-macos-arm64-license-notices.txt`,
+      `RaioPDF-${version}-macos-arm64-ghostscript-source-offer.txt`,
+      "ghostscript-10.08.0-macos-arm64-source.tar.xz",
+      "SHA256SUMS-macos-arm64.txt",
+    ];
+
+    assert.deepEqual(validatePublicAssetNames(windows, version, pins), { includesMac: false });
+    assert.deepEqual(
+      validatePublicAssetNames([...windows, ...mac], version, pins, { allowMac: true }),
+      { includesMac: true, macGhostscriptVersion: "10.08.0" },
+    );
+    assert.throws(
+      () => validatePublicAssetNames([...windows, ...mac.slice(1)], version, pins, { allowMac: true }),
+      /missing required assets/,
     );
   });
 
@@ -166,6 +207,7 @@ describe("signed release asset preparation", () => {
         pinsPath,
         skipAuthenticode: true,
         updaterPubkey: TEST_UPDATER_PUBKEY,
+        skipPayloadSize: true,
       });
       assert.deepEqual(validated.localNames, [
         "RaioPDF-0.1.2-windows-x64-setup.exe",
@@ -179,6 +221,51 @@ describe("signed release asset preparation", () => {
         "latest.json",
         "SHA256SUMS.txt",
       ].sort((a, b) => a.localeCompare(b)));
+
+      const platformOnly = prepareSignedReleaseAssets({
+        tag: "v0.1.2",
+        nsisDir,
+        outDir,
+        payloadDir,
+        pinsPath,
+        ghostscriptSource,
+        skipAuthenticode: true,
+        skipLegalCheck: true,
+        updaterPubkey: TEST_UPDATER_PUBKEY,
+        platformStageOnly: true,
+      });
+      assert.equal(platformOnly.assetNames.includes("latest.json"), false);
+      assert.equal(existsSync(path.join(outDir, "latest.json")), false);
+      assert.doesNotMatch(readFileSync(path.join(outDir, "SHA256SUMS.txt"), "utf8"), /latest\.json/);
+      assert.doesNotThrow(() =>
+        validatePlatformReleaseStage({
+          rootDir: outDir,
+          platformId: "windows-x64",
+          version: "0.1.2",
+          ghostscriptVersion: "10.07.1",
+          updaterPubkey: TEST_UPDATER_PUBKEY,
+          payloadRoot: payloadDir,
+          baselines: {
+            schemaVersion: 1,
+            platforms: {
+              "windows-x64": {
+                installer: {
+                  baselineVersion: "test",
+                  baselineBytes: 1024,
+                  maxGrowthBytes: 100,
+                  maxGrowthPercent: 10,
+                },
+                payload: {
+                  baselineVersion: "test",
+                  baselineBytes: 1024 * 1024,
+                  maxGrowthBytes: 1024,
+                  maxGrowthPercent: 10,
+                },
+              },
+            },
+          },
+        }),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -199,6 +286,7 @@ describe("signed release asset preparation", () => {
         pinsPath,
         skipAuthenticode: true,
         skipUpdaterSignature: true,
+        skipPayloadSize: true,
       });
 
       assert.equal(validated.version, "0.2.0-beta.1");

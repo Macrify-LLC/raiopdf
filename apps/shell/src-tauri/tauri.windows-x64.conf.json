@@ -17,7 +17,6 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "resources": {
       "payload/windows-x64": "payload"
@@ -32,10 +31,6 @@
         "installMode": "currentUser",
         "languages": ["English"],
         "compression": "lzma"
-      },
-      "signCommand": {
-        "cmd": "pwsh",
-        "args": ["-NoProfile", "-File", "scripts/sign-windows.ps1", "%1"]
       }
     }
   },

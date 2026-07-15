@@ -71,10 +71,10 @@ jobs:
       - name: Cache payload downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: installer/.payload-cache
-          key: payload-${{ runner.os }}-${{ hashFiles('installer/PINS.env', 'installer/ocrmypdf-windows-requirements.txt', 'engine/PINNED_TAG') }}
+          path: installer/.payload-cache/windows-x64
+          key: payload-windows-x64-${{ runner.os }}-${{ hashFiles('installer/PINS.windows-x64.env', 'installer/ocrmypdf-windows-requirements.txt', 'engine/PINNED_TAG') }}
           restore-keys: |
-            payload-${{ runner.os }}-
+            payload-windows-x64-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -84,11 +84,14 @@ jobs:
 
       - name: Assemble Windows payload
         shell: bash
-        run: bash installer/assemble-payload.sh
+        run: node installer/run-payload-assembler.mjs --platform windows-x64
 
       - name: Verify Windows payload
         shell: bash
-        run: bash installer/assemble-payload.sh --verify
+        run: node installer/run-payload-assembler.mjs --platform windows-x64 --verify
+
+      - name: Reject foreign payload binaries and unexplained growth
+        run: pnpm validate:package-boundary -- --platform windows-x64 --root apps/shell/src-tauri/payload/windows-x64 --payload-size
 
       - name: Smoke OCR progress wrapper
         run: pnpm smoke:ocr-progress-wrapper
@@ -106,7 +109,7 @@ jobs:
           node scripts/stamp-shell-version.mjs "$VERSION"
 
       - name: Build Tauri shell
-        run: pnpm build:shell
+        run: pnpm build:shell:windows-x64
 
       - name: Assert installer filenames include stamped version
         if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
@@ -147,6 +150,13 @@ jobs:
           printf 'Versioned installer artifacts:\n'
           printf '  %s\n' "${NSIS_INSTALLERS[@]}"
 
+          for installer in "${NSIS_INSTALLERS[@]}"; do
+            pnpm validate:package-boundary -- \
+              --platform windows-x64 \
+              --root "$(dirname "$installer")" \
+              --installer "$installer"
+          done
+
       - name: Verify bundled payload manifest
         shell: bash
         run: |
@@ -165,7 +175,7 @@ jobs:
           for manifest in "${manifests[@]}"; do
             payload_dir=$(dirname "$manifest")
             echo "  $payload_dir"
-            RAIOPDF_PAYLOAD_DIR="$payload_dir" bash installer/assemble-payload.sh --verify
+            RAIOPDF_PAYLOAD_DIR="$payload_dir" node installer/run-payload-assembler.mjs --platform windows-x64 --verify
           done
 
       - name: Smoke offline OCR engine
@@ -173,7 +183,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          PAYLOAD_DIR="$PWD/apps/shell/src-tauri/payload"
+          PAYLOAD_DIR="$PWD/apps/shell/src-tauri/payload/windows-x64"
           JAVA_BIN="$PAYLOAD_DIR/jre/bin/java.exe"
           JAR_PATH="$PAYLOAD_DIR/engine/stirling.jar"
 
@@ -377,7 +387,7 @@ jobs:
           set -Eeuo pipefail
           # Drives the real UI against the real payload engine through every
           # advertised feature. See docs/RELEASE-CANARY.md. The payload
-          # (apps/shell/src-tauri/payload) and engine-host binary were produced
+          # (apps/shell/src-tauri/payload/windows-x64) and engine-host binary were produced
           # by the "Build Tauri shell" step above.
           pnpm --filter @raiopdf/ui exec playwright install chromium
           pnpm canary
@@ -418,8 +428,8 @@ jobs:
           cp -- "$PAYLOAD_LEGAL_DIR/RELEASE-SOURCE-CORRESPONDENCE.md" "$ASSET_DIR/RaioPDF-$VERSION-source-correspondence.md"
           cp -- "$PAYLOAD_LEGAL_DIR/source-offers/GHOSTSCRIPT-SOURCE-OFFER.txt" "$ASSET_DIR/RaioPDF-$VERSION-ghostscript-source-offer.txt"
 
-          # shellcheck source=installer/PINS.env
-          source installer/PINS.env
+          # shellcheck source=installer/PINS.windows-x64.env
+          source installer/PINS.windows-x64.env
           curl -fL --retry 3 --retry-delay 2 \
             -o "$ASSET_DIR/ghostscript-$GHOSTSCRIPT_VERSION-source.tar.xz" \
             "$GHOSTSCRIPT_SOURCE_URL"
@@ -475,4 +485,4 @@ jobs:
             echo "Validate them with: pnpm validate:release-assets -- --tag $TAG"
             echo "After publishing, validate GitHub assets with: pnpm validate:release-assets -- --tag $TAG --github"
           fi
-          echo "Upload the validated release-assets/signed/* files with gh release upload."
+          echo "Upload the validated release-assets/signed/windows-x64/* files with gh release upload."

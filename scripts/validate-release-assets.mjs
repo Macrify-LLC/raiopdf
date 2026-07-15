@@ -9,9 +9,23 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalInstallerFilename, isPrereleaseTag } from "./generate-latest-json.mjs";
 import { verifyAuthenticodeSignature } from "./authenticode.mjs";
 import { verifyTauriUpdaterSignature } from "./minisign.mjs";
+import {
+  canonicalArtifactNames,
+  getPlatform,
+  platformPath,
+} from "../installer/platforms.mjs";
+import {
+  expectedPlatformReleaseAssets,
+  validateInstallerSize,
+  validatePackageBoundary,
+  validatePayloadSize,
+} from "./validate-package-boundary.mjs";
 
-const DEFAULT_ASSET_DIR = fileURLToPath(new URL("../release-assets/signed/", import.meta.url));
-const DEFAULT_PINS_PATH = fileURLToPath(new URL("../installer/PINS.env", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const WINDOWS_PLATFORM = getPlatform("windows-x64");
+const DEFAULT_ASSET_DIR = platformPath(REPO_ROOT, "windows-x64", "releaseStageDir");
+const DEFAULT_PINS_PATH = path.resolve(REPO_ROOT, WINDOWS_PLATFORM.pinsFile);
+const DEFAULT_PAYLOAD_DIR = platformPath(REPO_ROOT, "windows-x64", "payloadOutputDir");
 const REPO = "Macrify-LLC/raiopdf";
 const PLATFORM = "windows-x86_64";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
@@ -23,10 +37,13 @@ function parseArgs(argv) {
     pinsPath: DEFAULT_PINS_PATH,
     github: false,
     prerelease: false,
+    payloadDir: DEFAULT_PAYLOAD_DIR,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--tag") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--tag") {
       args.tag = argv[++index];
     } else if (arg.startsWith("--tag=")) {
       args.tag = arg.slice("--tag=".length);
@@ -42,6 +59,10 @@ function parseArgs(argv) {
       args.github = true;
     } else if (arg === "--prerelease") {
       args.prerelease = true;
+    } else if (arg === "--payload-dir") {
+      args.payloadDir = argv[++index];
+    } else if (arg.startsWith("--payload-dir=")) {
+      args.payloadDir = arg.slice("--payload-dir=".length);
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -52,7 +73,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/validate-release-assets.mjs --tag vX.Y.Z [--dir release-assets/signed] [--pins PATH] [--github] [--prerelease]
+  console.log(`Usage: node scripts/validate-release-assets.mjs --tag vX.Y.Z [--dir release-assets/signed/windows-x64] [--payload-dir PATH] [--pins PATH] [--github] [--prerelease]
 
 Validates the canonical public release asset set locally. With --github, also
 rejects draft GitHub Releases, checks the release asset names via gh, downloads
@@ -99,7 +120,7 @@ function parsePins(pinsPath) {
   }
   if (!pins.GHOSTSCRIPT_VERSION || !pins.GHOSTSCRIPT_SOURCE_URL || !pins.GHOSTSCRIPT_SOURCE_SHA256) {
     throw new Error(
-      "validate-release-assets: installer/PINS.env must pin Ghostscript source version, URL, and SHA256.",
+      "validate-release-assets: the selected platform pins file must pin Ghostscript source version, URL, and SHA256.",
     );
   }
   return pins;
@@ -131,10 +152,24 @@ function expectedAssets(version, pins) {
   ].sort((a, b) => a.localeCompare(b));
 }
 
-function validateNames(names, version, pins) {
+export function validatePublicAssetNames(names, version, pins, { allowMac = false } = {}) {
   const installer = canonicalInstallerFilename(version);
-  const expected = expectedAssets(version, pins);
-  const actual = [...names].sort();
+  const expectedWindows = expectedAssets(version, pins);
+  const actual = [...names].sort((a, b) => a.localeCompare(b));
+  const macSourcePattern = /^ghostscript-([0-9]+\.[0-9]+\.[0-9]+)-macos-arm64-source\.tar\.xz$/u;
+  const macSourceVersions = actual
+    .map((name) => macSourcePattern.exec(name)?.[1])
+    .filter(Boolean);
+  const macGhostscriptVersion = macSourceVersions.length === 1
+    ? macSourceVersions[0]
+    : pins.GHOSTSCRIPT_VERSION;
+  const expectedMac = expectedPlatformReleaseAssets({
+    platformId: "macos-arm64",
+    version,
+    ghostscriptVersion: macGhostscriptVersion,
+  });
+  const expectedCombined = [...new Set([...expectedWindows, ...expectedMac])]
+    .sort((a, b) => a.localeCompare(b));
 
   const unsigned = actual.filter((name) => /unsigned/i.test(name));
   if (unsigned.length > 0) {
@@ -148,17 +183,30 @@ function validateNames(names, version, pins) {
     );
   }
 
-  const missing = expected.filter((name) => !actual.includes(name));
+  const matches = (expected) =>
+    expected.length === actual.length && expected.every((name, index) => name === actual[index]);
+  const windowsOnly = matches(expectedWindows);
+  if (windowsOnly || (allowMac && macSourceVersions.length === 1 && matches(expectedCombined))) {
+    return windowsOnly
+      ? { includesMac: false }
+      : { includesMac: true, macGhostscriptVersion };
+  }
+
+  const target = allowMac && actual.some((name) => name.includes("macos-arm64"))
+    ? expectedCombined
+    : expectedWindows;
+  const missing = target.filter((name) => !actual.includes(name));
   if (missing.length > 0) {
     throw new Error(`validate-release-assets: missing required assets: ${missing.join(", ")}`);
   }
-  const unexpected = actual.filter((name) => !expected.includes(name));
+  const unexpected = actual.filter((name) => !target.includes(name));
   if (unexpected.length > 0) {
     throw new Error(`validate-release-assets: unexpected public assets: ${unexpected.join(", ")}`);
   }
+  throw new Error("validate-release-assets: public asset set is incomplete.");
 }
 
-function validateLatestJson(dir, tag, version) {
+function validateLatestJson(dir, tag, version, { expectMac = false } = {}) {
   const installer = canonicalInstallerFilename(version);
   const manifest = JSON.parse(readFileSync(path.join(dir, "latest.json"), "utf8"));
   if (manifest.version !== version) {
@@ -176,6 +224,18 @@ function validateLatestJson(dir, tag, version) {
   const signature = readFileSync(path.join(dir, `${installer}.sig`), "utf8").trim();
   if (platform.signature !== signature) {
     throw new Error("validate-release-assets: latest.json signature does not match installer .sig file.");
+  }
+  const expectedPlatforms = expectMac
+    ? ["darwin-aarch64", "windows-x86_64"]
+    : ["windows-x86_64"];
+  const actualPlatforms = Object.keys(manifest.platforms ?? {}).sort((a, b) => a.localeCompare(b));
+  if (
+    actualPlatforms.length !== expectedPlatforms.length ||
+    expectedPlatforms.some((name, index) => name !== actualPlatforms[index])
+  ) {
+    throw new Error(
+      `validate-release-assets: latest.json platform set is ${actualPlatforms.join(", ") || "empty"}.`,
+    );
   }
 }
 
@@ -219,11 +279,75 @@ function validateChecksums(dir, version, pins) {
   }
   const ghostscriptSource = `ghostscript-${pins.GHOSTSCRIPT_VERSION}-source.tar.xz`;
   if (byName.get(ghostscriptSource) !== pins.GHOSTSCRIPT_SOURCE_SHA256) {
-    throw new Error("validate-release-assets: Ghostscript source checksum does not match installer/PINS.env.");
+    throw new Error("validate-release-assets: Ghostscript source checksum does not match the selected platform pins file.");
   }
   if (!byName.has(installer)) {
     throw new Error(`validate-release-assets: SHA256SUMS.txt is missing ${installer}`);
   }
+}
+
+function validateMacChecksums(dir, version, pins, ghostscriptVersion) {
+  const expected = expectedPlatformReleaseAssets({
+    platformId: "macos-arm64",
+    version,
+    ghostscriptVersion,
+  });
+  const checksumName = "SHA256SUMS-macos-arm64.txt";
+  const entries = new Map();
+  for (const line of readFileSync(path.join(dir, checksumName), "utf8").trim().split(/\r?\n/u)) {
+    const match = /^([a-f0-9]{64})\s{2}(.+)$/u.exec(line);
+    if (!match || entries.has(match[2])) {
+      throw new Error(`validate-release-assets: malformed Mac checksum line: ${line}`);
+    }
+    entries.set(match[2], match[1]);
+  }
+  for (const filename of expected.filter((name) => name !== checksumName)) {
+    if (entries.get(filename) !== sha256(path.join(dir, filename))) {
+      throw new Error(`validate-release-assets: Mac checksum is missing or stale for ${filename}.`);
+    }
+  }
+  const extras = [...entries.keys()].filter((name) => !expected.includes(name));
+  if (extras.length > 0) {
+    throw new Error(`validate-release-assets: Mac checksum contains unexpected files: ${extras.join(", ")}`);
+  }
+  const source = `ghostscript-${ghostscriptVersion}-macos-arm64-source.tar.xz`;
+  const manifest = JSON.parse(
+    readFileSync(
+      path.join(dir, `RaioPDF-${version}-macos-arm64-component-manifest.json`),
+      "utf8",
+    ),
+  );
+  const ghostscript = manifest.components?.find((entry) => entry.name === "Ghostscript");
+  if (
+    ghostscript?.version !== ghostscriptVersion ||
+    ghostscript?.source?.sha256 !== entries.get(source) ||
+    typeof ghostscript?.source?.url !== "string" ||
+    ghostscript.source.url.trim() === ""
+  ) {
+    throw new Error("validate-release-assets: Mac Ghostscript source does not match its component manifest.");
+  }
+  if (
+    ghostscriptVersion === pins.GHOSTSCRIPT_VERSION &&
+    entries.get(source) !== pins.GHOSTSCRIPT_SOURCE_SHA256
+  ) {
+    throw new Error("validate-release-assets: shared-version Mac Ghostscript source does not match the Windows pins.");
+  }
+}
+
+function validateMacUpdater(dir, tag, version, updaterPubkey) {
+  const names = canonicalArtifactNames("macos-arm64", version);
+  const manifest = JSON.parse(readFileSync(path.join(dir, "latest.json"), "utf8"));
+  const platform = manifest.platforms?.["darwin-aarch64"];
+  const signature = readFileSync(path.join(dir, `${names.updater}.sig`), "utf8").trim();
+  const expectedUrl = `https://github.com/Macrify-LLC/raiopdf/releases/download/${tag}/${names.updater}`;
+  if (platform?.signature !== signature || platform?.url !== expectedUrl) {
+    throw new Error("validate-release-assets: latest.json Mac updater entry is missing or noncanonical.");
+  }
+  verifyTauriUpdaterSignature(
+    path.join(dir, names.updater),
+    path.join(dir, `${names.updater}.sig`),
+    { pubkey: updaterPubkey, label: `updater signature for ${names.updater}` },
+  );
 }
 
 function validateComponentManifest(dir, version, pins) {
@@ -354,15 +478,25 @@ export function validateReleaseAssets({
   skipUpdaterSignature = false,
   updaterPubkey,
   prerelease = false,
+  payloadDir = DEFAULT_PAYLOAD_DIR,
+  skipPayloadSize = false,
 }) {
   const version = versionFromTag(tag);
   const expectedPrerelease = prerelease || isPrereleaseTag(tag);
   const pins = parsePins(pinsPath);
   const localNames = listLocalAssets(dir);
-  validateNames(localNames, version, pins);
+  validatePackageBoundary({ rootDir: dir, platformId: "windows-x64" });
+  validatePublicAssetNames(localNames, version, pins);
   validateLatestJson(dir, tag, version);
   validateChecksums(dir, version, pins);
   validateComponentManifest(dir, version, pins);
+  validateInstallerSize({
+    installerPath: path.join(dir, canonicalInstallerFilename(version)),
+    platformId: "windows-x64",
+  });
+  if (!skipPayloadSize) {
+    validatePayloadSize({ payloadRoot: payloadDir, platformId: "windows-x64" });
+  }
   if (!skipUpdaterSignature) {
     validateUpdaterSignature(dir, version, updaterPubkey);
   }
@@ -383,13 +517,33 @@ export function validateReleaseAssets({
     } else {
       validateGitHubLatestRelease(tag, githubLatestReleaseMetadata());
     }
-    validateNames(githubAssetNames(release), version, pins);
+    const publicSet = validatePublicAssetNames(githubAssetNames(release), version, pins, {
+      allowMac: true,
+    });
     const downloadDir = downloadGitHubAssets(tag);
     try {
-      validateNames(listLocalAssets(downloadDir), version, pins);
-      validateLatestJson(downloadDir, tag, version);
+      if (!publicSet.includesMac) {
+        validatePackageBoundary({ rootDir: downloadDir, platformId: "windows-x64" });
+      }
+      validatePublicAssetNames(listLocalAssets(downloadDir), version, pins, { allowMac: true });
+      validateLatestJson(downloadDir, tag, version, { expectMac: publicSet.includesMac });
       validateChecksums(downloadDir, version, pins);
       validateComponentManifest(downloadDir, version, pins);
+      if (publicSet.includesMac) {
+        validateMacChecksums(
+          downloadDir,
+          version,
+          pins,
+          publicSet.macGhostscriptVersion,
+        );
+        if (!skipUpdaterSignature) {
+          validateMacUpdater(downloadDir, tag, version, updaterPubkey);
+        }
+      }
+      validateInstallerSize({
+        installerPath: path.join(downloadDir, canonicalInstallerFilename(version)),
+        platformId: "windows-x64",
+      });
       if (!skipUpdaterSignature) {
         validateUpdaterSignature(downloadDir, version, updaterPubkey);
       }

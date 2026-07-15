@@ -52,7 +52,14 @@ const engineHostBin =
   path.join(repoRoot, "target", "release", engineHostName);
 const payloadDir =
   process.env.RAIOPDF_ENGINE_PAYLOAD_DIR ??
-  path.join(repoRoot, "apps", "shell", "src-tauri", "payload");
+  path.join(
+    repoRoot,
+    "apps",
+    "shell",
+    "src-tauri",
+    "payload",
+    isWindows ? "windows-x64" : "macos-arm64",
+  );
 
 // The connector we drive is the exact artifact that ships: the esbuild-bundled
 // runtime under the assembled payload (produced by `installer/build-mcp-runtime.mjs`
@@ -60,8 +67,13 @@ const payloadDir =
 // what the `raiopdf-mcp` launcher runs — NOT the raw tsc `apps/mcp/dist/index.js`,
 // which relies on extensionless workspace imports esbuild resolves at bundle time.
 const bundledConnector = path.join(payloadDir, "mcp", "app", "index.mjs");
-const bundledNode = path.join(payloadDir, "mcp", "node", isWindows ? "node.exe" : "node");
-const nodeBin = existsSync(bundledNode) ? bundledNode : process.execPath;
+const bundledNodeCandidates = isWindows
+  ? [path.join(payloadDir, "mcp", "node", "node.exe")]
+  : [
+      path.join(payloadDir, "mcp", "node", "bin", "node"),
+      path.join(payloadDir, "mcp", "node", "node"),
+    ];
+const nodeBin = bundledNodeCandidates.find((candidate) => existsSync(candidate)) ?? process.execPath;
 
 // process.env is Record<string, string | undefined>; the SDK transport's env wants
 // Record<string, string>. Drop undefined values once, at module scope.

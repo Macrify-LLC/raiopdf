@@ -33,7 +33,8 @@ fn run() -> Result<i32, String> {
     let payload_dir = resource_dir.join("payload");
     let mcp_dir = payload_dir.join("mcp");
     let node_modules_dir = mcp_dir.join("node_modules");
-    let node = mcp_dir.join("node").join(executable("node"));
+    let node = resolve_node(&mcp_dir)
+        .ok_or_else(|| format!("missing bundled Node runtime below {}", mcp_dir.display()))?;
     let entrypoint = mcp_dir.join("app").join("index.mjs");
     let pdfjs_asset_dir = mcp_dir.join("pdfjs");
 
@@ -103,6 +104,16 @@ fn resource_candidates(exe_dir: &Path) -> Vec<PathBuf> {
             .map(|parent| parent.join("Resources"))
             .unwrap_or_else(|| exe_dir.join("..").join("Resources")),
     ]
+}
+
+fn resolve_node(mcp_dir: &Path) -> Option<PathBuf> {
+    let node_root = mcp_dir.join("node");
+    let candidates = if cfg!(windows) {
+        vec![node_root.join("node.exe")]
+    } else {
+        vec![node_root.join("bin").join("node"), node_root.join("node")]
+    };
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 fn resolve_engine_host(exe_dir: &Path) -> Option<PathBuf> {

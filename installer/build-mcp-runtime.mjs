@@ -4,12 +4,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
+import { getHostPlatformId, getPlatform, platformPath } from "./platforms.mjs";
+
 const require = createRequire(import.meta.url);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const platformId = parsePlatform(process.argv.slice(2));
+const platform = getPlatform(platformId);
+const hostPlatformId = getHostPlatformId();
+if (platformId !== hostPlatformId) {
+  throw new Error(
+    `MCP runtime ${platformId} must be built on its native host (current host: ${hostPlatformId}).`,
+  );
+}
 const payloadDir = process.env.RAIOPDF_PAYLOAD_DIR
   ? path.resolve(process.env.RAIOPDF_PAYLOAD_DIR)
-  : path.join(repoRoot, "apps", "shell", "src-tauri", "payload");
+  : platformPath(repoRoot, platformId, "payloadOutputDir");
 const mcpPayloadDir = path.join(payloadDir, "mcp");
 const appDir = path.join(mcpPayloadDir, "app");
 const nodeModulesDir = path.join(mcpPayloadDir, "node_modules");
@@ -48,13 +58,33 @@ await copyPdfjsAssetDir(pdfjsRoot, "cmaps");
 await copyPdfjsAssetDir(pdfjsRoot, "standard_fonts");
 await copyPdfjsAssetDir(pdfjsRoot, "wasm");
 await copyNodePackage(pdfjsRequire, "@napi-rs/canvas");
-if (process.platform === "win32") {
-  await copyNodePackage(pdfjsRequire, "@napi-rs/canvas-win32-x64-msvc");
-} else {
-  await copyOptionalNodePackage(pdfjsRequire, "@napi-rs/canvas-win32-x64-msvc");
-}
+await copyNodePackage(pdfjsRequire, nativeCanvasPackage(platform.nodePlatform));
 
 console.log(`Bundled MCP runtime at ${mcpPayloadDir}`);
+
+function parsePlatform(argv) {
+  let selected = process.env.RAIOPDF_PLATFORM || process.env.PAYLOAD_PLATFORM;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--platform") {
+      selected = argv[++index];
+      if (!selected || selected.startsWith("--")) {
+        throw new Error("--platform requires a platform id.");
+      }
+    } else if (arg.startsWith("--platform=")) {
+      selected = arg.slice("--platform=".length);
+    } else {
+      throw new Error(`Unknown build-mcp-runtime argument: ${arg}`);
+    }
+  }
+  return selected || getHostPlatformId();
+}
+
+function nativeCanvasPackage(nodePlatform) {
+  if (nodePlatform === "win32-x64") return "@napi-rs/canvas-win32-x64-msvc";
+  if (nodePlatform === "darwin-arm64") return "@napi-rs/canvas-darwin-arm64";
+  throw new Error(`Unsupported canvas platform ${nodePlatform}.`);
+}
 
 async function copyPdfjsAssetDir(pdfjsRoot, name) {
   const source = path.join(pdfjsRoot, name);
@@ -70,17 +100,6 @@ async function copyNodePackage(resolver, name) {
   const destination = path.join(nodeModulesDir, ...name.split("/"));
 
   await cp(source, destination, { recursive: true });
-}
-
-async function copyOptionalNodePackage(resolver, name) {
-  try {
-    await copyNodePackage(resolver, name);
-  } catch (error) {
-    if (error?.code !== "MODULE_NOT_FOUND") {
-      throw error;
-    }
-    console.warn(`Skipping optional MCP package not installed on ${process.platform}: ${name}`);
-  }
 }
 
 async function requireFile(file, label) {

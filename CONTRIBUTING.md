@@ -69,7 +69,7 @@ splitting, the exhibit binder stamping and bookmarking, and so on. See
 it and paste the result into your PR:
 
 ```bash
-pnpm prepare:shell-bundle   # once, if you don't already have apps/shell/src-tauri/payload/
+pnpm prepare:shell-bundle   # once, if payload/windows-x64 is not already assembled
 pnpm canary
 ```
 

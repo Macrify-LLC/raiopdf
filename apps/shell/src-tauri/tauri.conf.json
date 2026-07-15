@@ -18,7 +18,7 @@
         "height": 800,
         "minWidth": 1024,
         "minHeight": 680,
-        "decorations": false,
+        "decorations": true,
         "dragDropEnabled": false
       }
     ],
@@ -27,10 +27,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": [
-      "nsis"
-    ],
+    "active": false,
     "publisher": "Macrify LLC",
     "homepage": "https://raio.macrify.me",
     "copyright": "Copyright (c) 2026 Macrify LLC",
@@ -39,13 +36,7 @@
     "category": "Productivity",
     "shortDescription": "Free, local desktop PDF suite for law firms.",
     "longDescription": "RaioPDF is a free, fully local PDF suite for law firms. It runs on your computer and ships as open-source software under GPL-3.0 with bundled third-party components under their own licenses.",
-    "icon": [
-      "icons/icon.png",
-      "icons/icon.ico"
-    ],
-    "resources": [
-      "payload/**/*"
-    ],
+    "icon": ["icons/icon.png"],
     "externalBin": [
       "binaries/raiopdf-engine-host",
       "binaries/raiopdf-mcp"
@@ -58,21 +49,7 @@
         "description": "PDF Document",
         "role": "Editor"
       }
-    ],
-    "windows": {
-      "allowDowngrades": false,
-      "nsis": {
-        "headerImage": "../../../installer/artwork/nsis-header.bmp",
-        "sidebarImage": "../../../installer/artwork/nsis-sidebar.bmp",
-        "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico",
-        "installMode": "currentUser",
-        "languages": [
-          "English"
-        ],
-        "compression": "lzma"
-      }
-    }
+    ]
   },
   "plugins": {
     "shell": {
@@ -82,10 +59,7 @@
       "endpoints": [
         "https://github.com/Macrify-LLC/raiopdf/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFFRTFBNkE1RTRDQkIyQUEKUldTcXNzdmtwYWJoSGtpclh5QnAvSTlxalZCZ25FL3hqS0IrNEZRNmFFcWRzRFgwVitsZmprRkgK",
-      "windows": {
-        "installMode": "passive"
-      }
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFFRTFBNkE1RTRDQkIyQUEKUldTcXNzdmtwYWJoSGtpclh5QnAvSTlxalZCZ25FL3hqS0IrNEZRNmFFcWRzRFgwVitsZmprRkgK"
     }
   }
 }

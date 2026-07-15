@@ -5,16 +5,27 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getPlatform, platformPath } from "../installer/platforms.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
-const DEFAULT_PAYLOAD_DIR = join(REPO_ROOT, "apps", "shell", "src-tauri", "payload");
-
 const args = parseArgs(process.argv.slice(2));
-const payloadDir = resolve(args.payloadDir ?? process.env.RAIOPDF_PAYLOAD_DIR ?? DEFAULT_PAYLOAD_DIR);
+const platform = getPlatform(
+  args.platform ?? process.env.RAIOPDF_PLATFORM ?? process.env.PAYLOAD_PLATFORM ?? "windows-x64",
+);
+const pinsPath = resolve(
+  args.pinsPath ?? process.env.RAIOPDF_PINS_FILE ?? join(REPO_ROOT, platform.pinsFile),
+);
+const payloadDir = resolve(
+  args.payloadDir ??
+    process.env.RAIOPDF_PAYLOAD_DIR ??
+    platformPath(REPO_ROOT, platform.payloadId, "payloadOutputDir"),
+);
 const legalDir = join(payloadDir, "legal");
 const checkOnly = args.check;
 
-const pins = parsePins(join(REPO_ROOT, "installer", "PINS.env"));
+const pins = parsePins(pinsPath);
+assertSupportedProvenance();
 const version = releaseVersion();
 
 if (checkOnly) {
@@ -25,11 +36,15 @@ if (checkOnly) {
 }
 
 function parseArgs(argv) {
-  const parsed = { check: false, payloadDir: undefined };
+  const parsed = { check: false, payloadDir: undefined, platform: undefined, pinsPath: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--check") {
       parsed.check = true;
+      continue;
+    }
+    if (arg.startsWith("--payload-dir=")) {
+      parsed.payloadDir = arg.slice("--payload-dir=".length);
       continue;
     }
     if (arg === "--payload-dir") {
@@ -41,6 +56,28 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--platform=")) {
+      parsed.platform = arg.slice("--platform=".length);
+      continue;
+    }
+    if (arg === "--platform") {
+      const value = argv[index + 1];
+      if (!value) usage("Missing value for --platform");
+      parsed.platform = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--pins=")) {
+      parsed.pinsPath = arg.slice("--pins=".length);
+      continue;
+    }
+    if (arg === "--pins") {
+      const value = argv[index + 1];
+      if (!value) usage("Missing value for --pins");
+      parsed.pinsPath = value;
+      index += 1;
+      continue;
+    }
     usage(`Unknown argument: ${arg}`);
   }
   return parsed;
@@ -48,11 +85,16 @@ function parseArgs(argv) {
 
 function usage(message) {
   console.error(message);
-  console.error("Usage: node scripts/generate-legal-notices.mjs [--payload-dir PATH] [--check]");
+  console.error(
+    "Usage: node scripts/generate-legal-notices.mjs [--platform ID] [--pins PATH] [--payload-dir PATH] [--check]",
+  );
   process.exit(2);
 }
 
 function parsePins(path) {
+  if (!existsSync(path)) {
+    throw new Error(`Legal provenance pins do not exist for ${platform.payloadId}: ${path}`);
+  }
   const result = {};
   for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -65,6 +107,50 @@ function parsePins(path) {
     }
   }
   return result;
+}
+
+function assertSupportedProvenance() {
+  const commonRequired = [
+    "TEMURIN_JRE_VERSION",
+    "TEMURIN_JRE_URL",
+    "TEMURIN_JRE_SHA256",
+    "NODE_RUNTIME_VERSION",
+    "NODE_RUNTIME_URL",
+    "NODE_RUNTIME_SHA256",
+    "PYTHON_EMBED_VERSION",
+    "PYTHON_EMBED_URL",
+    "PYTHON_EMBED_SHA256",
+    "OCRMYPDF_VERSION",
+    "OCRMYPDF_REQUIREMENTS",
+    "OCRMYPDF_REQUIREMENTS_SHA256",
+    "TESSERACT_VERSION",
+    "TESSERACT_URL",
+    "TESSERACT_SHA256",
+    "TESSDATA_FAST_VERSION",
+    "TESSDATA_ENG_URL",
+    "TESSDATA_ENG_SHA256",
+    "GHOSTSCRIPT_VERSION",
+    "GHOSTSCRIPT_URL",
+    "GHOSTSCRIPT_SHA256",
+    "GHOSTSCRIPT_SOURCE_URL",
+    "GHOSTSCRIPT_SOURCE_SHA256",
+    "QPDF_VERSION",
+    "QPDF_URL",
+    "QPDF_SHA256",
+  ];
+  const missing = commonRequired.filter((name) => !pins[name]);
+  if (missing.length > 0) {
+    throw new Error(
+      `${platform.payloadId} legal provenance is incomplete in ${relative(REPO_ROOT, pinsPath)}; ` +
+        `missing: ${missing.join(", ")}.`,
+    );
+  }
+  if (platform.payloadId !== "windows-x64") {
+    throw new Error(
+      `${platform.payloadId} legal generation is not enabled until its native component paths, ` +
+        "license inventory, and source-correspondence templates are verified. Refusing to emit Windows claims.",
+    );
+  }
 }
 
 function releaseVersion() {
@@ -223,22 +309,15 @@ function buildComponentManifest() {
     product: "RaioPDF",
     releaseVersion: version,
     generatedBy: "scripts/generate-legal-notices.mjs",
+    provenancePins: relative(REPO_ROOT, pinsPath).replaceAll("\\", "/"),
     sourceRepository: "https://github.com/Macrify-LLC/raiopdf",
     platforms: [
       {
-        id: "windows-x64",
+        id: platform.payloadId,
+        enginePlatform: platform.enginePlatform,
+        artifactPlatform: platform.artifactPlatform,
         status: "shipping",
-        note: "Current release payload assembled by installer/assemble-payload.sh.",
-      },
-      {
-        id: "macos",
-        status: "planned",
-        note: "Not currently shipped. Re-run this generator when a macOS payload is added.",
-      },
-      {
-        id: "linux",
-        status: "planned",
-        note: "Not currently shipped. Re-run this generator when a Linux payload is added.",
+        note: `Release payload assembled by installer/${platform.assembler}.`,
       },
     ],
     components,
@@ -315,9 +394,8 @@ legal/RELEASE-SOURCE-CORRESPONDENCE.md for source-correspondence details.
 Platform Scope
 --------------
 
-The current shipping payload is windows-x64. macOS and Linux are listed in the
-component manifest as planned platforms so future payloads have a notice gate
-before release.
+These notices apply only to the ${platform.payloadId} payload. Every other
+platform has a separate pins file, component inventory, and release gate.
 
 License Texts
 -------------
@@ -359,16 +437,16 @@ those files are byte-identical when both are present.
 ## Other Bundled Runtime Components
 
 Pinned URLs and checksums for JRE, Node.js, Python, Tesseract, tessdata_fast,
-Ghostscript, qpdf, and 7-Zip helper downloads live in \`installer/PINS.env\`.
+Ghostscript, qpdf, and 7-Zip helper downloads live in
+\`${relative(REPO_ROOT, pinsPath).replaceAll("\\", "/")}\`.
 The release payload manifest hashes every file copied under the bundled
 \`payload/\` resource directory.
 
-## Planned macOS and Linux Payloads
+## Other Platform Payloads
 
-macOS and Linux are not shipping payloads in this release line. Before either
-platform ships, the payload generator must be run on that platform's payload and
-the component manifest must be updated to include its platform-specific bundled
-components and source correspondence.
+These notices do not describe another platform's binaries. Before another
+platform ships, its native pins, payload inventory, and source correspondence
+must pass that platform's legal generator and release gate.
 `;
 }
 
@@ -417,7 +495,9 @@ function checkLegalPayload() {
   }
 
   if (!pins.GHOSTSCRIPT_SOURCE_URL || !pins.GHOSTSCRIPT_SOURCE_SHA256) {
-    errors.push("GHOSTSCRIPT_SOURCE_URL and GHOSTSCRIPT_SOURCE_SHA256 must be pinned in installer/PINS.env");
+    errors.push(
+      `GHOSTSCRIPT_SOURCE_URL and GHOSTSCRIPT_SOURCE_SHA256 must be pinned in ${relative(REPO_ROOT, pinsPath)}`,
+    );
   }
 
   const manifestPath = join(legalDir, "COMPONENT-MANIFEST.json");
@@ -429,6 +509,17 @@ function checkLegalPayload() {
     if (manifest.releaseVersion !== version) {
       errors.push(
         `COMPONENT-MANIFEST.json releaseVersion must be ${version}, got ${manifest.releaseVersion}`,
+      );
+    }
+    if (manifest.provenancePins !== relative(REPO_ROOT, pinsPath).replaceAll("\\", "/")) {
+      errors.push("COMPONENT-MANIFEST.json provenancePins does not match the selected pins file");
+    }
+    const selectedPlatform = manifest.platforms?.find(
+      (entry) => entry.id === platform.payloadId && entry.status === "shipping",
+    );
+    if (!selectedPlatform || manifest.platforms?.length !== 1) {
+      errors.push(
+        `COMPONENT-MANIFEST.json must describe only the selected ${platform.payloadId} shipping payload`,
       );
     }
     const raio = manifest.components?.find((entry) => entry.name === "RaioPDF");
@@ -448,10 +539,10 @@ function checkLegalPayload() {
         errors.push(`Ghostscript license must be AGPL-3.0-only, got ${ghostscript.license}`);
       }
       if (ghostscript.source?.url !== pins.GHOSTSCRIPT_SOURCE_URL) {
-        errors.push("Ghostscript source URL in manifest does not match installer/PINS.env");
+        errors.push("Ghostscript source URL in manifest does not match the selected pins file");
       }
       if (ghostscript.source?.sha256 !== pins.GHOSTSCRIPT_SOURCE_SHA256) {
-        errors.push("Ghostscript source SHA256 in manifest does not match installer/PINS.env");
+        errors.push("Ghostscript source SHA256 in manifest does not match the selected pins file");
       }
     }
     const npmDependencyNames = new Set(

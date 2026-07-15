@@ -16,7 +16,9 @@ describe("package writer", () => {
     await expect(readdir(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
     await session.finalize();
     await expect(readdir(join(rootDir, "upload"))).resolves.toEqual([]);
-    await expect(readdir(join(rootDir, "raio-manifest"))).resolves.toEqual([
+    await expect(
+      readdir(join(rootDir, "raio-manifest")).then((entries) => entries.sort()),
+    ).resolves.toEqual([
       "README.txt",
       "checksums.txt",
       "manifest.json",

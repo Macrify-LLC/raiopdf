@@ -27,10 +27,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { getHostPlatformId, platformPath } from "../installer/platforms.mjs";
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const IS_WINDOWS = process.platform === "win32";
 
-const DEFAULT_PAYLOAD_DIR = path.join(REPO_ROOT, "apps", "shell", "src-tauri", "payload");
+const DEFAULT_PAYLOAD_DIR = platformPath(REPO_ROOT, getHostPlatformId(), "payloadOutputDir");
 const ENGINE_HOST_BIN = path.join(
   REPO_ROOT,
   "target",

@@ -391,6 +391,7 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
   await expect(
     redactionToolbar.getByRole("button", { name: "Select text" }),
   ).toHaveAttribute("aria-pressed", "true");
+
   const rawRectCount = await textLayer.evaluate((layer) => {
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
     const textNodes: Node[] = [];

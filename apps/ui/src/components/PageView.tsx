@@ -269,7 +269,9 @@ export function PageView({
   // to ME?" via `closestTextLayer` + a page-index match. Exactly one
   // PageView's text layer can own a given selection, so exactly one
   // converts -- no drop, no double-emit, regardless of release position.
-  useEffect(() => {
+  // Install in the layout phase so the listener is already active when
+  // the Select text button's pressed state becomes observable.
+  useLayoutEffect(() => {
     if (!redactionTextSelect || !viewport) {
       return;
     }

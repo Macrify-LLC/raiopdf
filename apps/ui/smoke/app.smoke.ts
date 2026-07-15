@@ -423,13 +423,9 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
   // must collapse them into a single redaction area.
   expect(rawRectCount).toBeGreaterThan(1);
 
-  // PageView installs its window-level pointer listener in a passive effect,
-  // which React flushes after paint — no fixed rAF count deterministically
-  // brackets that flush, so on a fast runner a single synthesized pointerup
-  // can land before the listener attaches. Re-dispatch pointerup until the
-  // capture marks the (single, merged) area. The selection set above persists
-  // until a capture succeeds and clears it, so re-dispatching never
-  // double-marks.
+  // Re-dispatch until the synthetic browser selection is captured. The live
+  // selection persists until a successful capture clears it, so retries are
+  // idempotent and cannot double-mark the page.
   const overlay = page.locator(".page-view__redaction-overlay");
   await expect(async () => {
     if ((await overlay.count()) === 0) {

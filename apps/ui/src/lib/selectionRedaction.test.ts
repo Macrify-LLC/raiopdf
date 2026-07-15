@@ -116,6 +116,32 @@ describe("redactionAreasFromClientRects", () => {
     expect(firstLine.height).toBeCloseTo(13, 5);
   });
 
+  it("merges same-baseline fragments with cross-font line-box offsets", async () => {
+    const viewport = await buildViewport([240, 140]);
+    const frame = frameFor(viewport);
+    // Chromium can expose substantially different tops and heights for
+    // adjacent PDF.js spans that use different fonts on the same baseline.
+    // These overlap by less than half the smaller box but are still one line.
+    const tallFont: RectLike = { left: 20, top: 20, width: 38, height: 16 };
+    const shortFont: RectLike = { left: 60, top: 29, width: 32, height: 9 };
+    const nextLine: RectLike = { left: 20, top: 52, width: 45, height: 12 };
+
+    const areas = redactionAreasFromClientRects(
+      [tallFont, shortFont, nextLine],
+      frame,
+      viewport,
+      0,
+      { padPt: 0 },
+    );
+
+    expect(areas).toHaveLength(2);
+    const firstLine = pdfRectToViewportRect(areas[0]!, viewport);
+    expect(firstLine.left).toBeCloseTo(20, 5);
+    expect(firstLine.top).toBeCloseTo(20, 5);
+    expect(firstLine.width).toBeCloseTo(72, 5);
+    expect(firstLine.height).toBeCloseTo(18, 5);
+  });
+
   it("keeps separated same-height fragments as distinct areas", async () => {
     const viewport = await buildViewport([300, 120]);
     const frame = frameFor(viewport);

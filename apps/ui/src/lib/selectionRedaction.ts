@@ -24,7 +24,7 @@ const DEFAULT_PAD_PT = 1.5;
 const DEFAULT_MIN_SIDE_PX = 2;
 const MIN_INLINE_MERGE_GAP_PX = 4;
 const INLINE_MERGE_GAP_HEIGHT_FRACTION = 0.75;
-const SAME_LINE_OVERLAP_FRACTION = 0.5;
+const SAME_LINE_CENTER_TOLERANCE_HEIGHT_FRACTION = 0.75;
 // Vertical padding is kept a fraction of the horizontal pad. Unlike
 // `textItemToRedactionArea` (pageTextCache.ts), which pads generously
 // because it derives a box from a text-item BASELINE and has to guess at
@@ -127,13 +127,18 @@ function mergeVisualLineRects(rects: readonly ViewportRect[]): ViewportRect[] {
 }
 
 function sameVisualLine(left: ViewportRect, right: ViewportRect): boolean {
-  const verticalOverlap = Math.min(
-    left.top + left.height,
-    right.top + right.height,
-  ) - Math.max(left.top, right.top);
-  const minHeight = Math.min(left.height, right.height);
+  const leftCenter = left.top + left.height / 2;
+  const rightCenter = right.top + right.height / 2;
+  const maxHeight = Math.max(left.height, right.height);
 
-  if (verticalOverlap < minHeight * SAME_LINE_OVERLAP_FRACTION) {
+  // Inline boxes from different fonts can share a baseline while exposing
+  // noticeably different tops and heights in Chromium. Comparing their
+  // vertical centers against the larger line box is stable across those font
+  // metrics, while adjacent text lines remain farther than this tolerance.
+  if (
+    Math.abs(leftCenter - rightCenter)
+    > maxHeight * SAME_LINE_CENTER_TOLERANCE_HEIGHT_FRACTION
+  ) {
     return false;
   }
 
@@ -144,7 +149,7 @@ function sameVisualLine(left: ViewportRect, right: ViewportRect): boolean {
   );
   const mergeGap = Math.max(
     MIN_INLINE_MERGE_GAP_PX,
-    minHeight * INLINE_MERGE_GAP_HEIGHT_FRACTION,
+    Math.min(left.height, right.height) * INLINE_MERGE_GAP_HEIGHT_FRACTION,
   );
 
   return horizontalGap <= mergeGap;

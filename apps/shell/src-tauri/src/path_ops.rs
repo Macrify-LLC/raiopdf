@@ -1459,9 +1459,33 @@ fn commit_verified_candidate(
     destination: &Path,
     baseline: &OutputTargetBaseline,
 ) -> OpResult<()> {
-    commit_verified_candidate_with_sync(candidate, destination, baseline, |path| {
-        fs::File::open(path).and_then(|file| file.sync_all())
-    })
+    commit_verified_candidate_with_sync(candidate, destination, baseline, sync_committed_file)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_committed_file(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path).and_then(|file| file.sync_all())
+}
+
+#[cfg(target_os = "windows")]
+fn sync_committed_file(_path: &Path) -> std::io::Result<()> {
+    // The candidate is flushed before publication and ReplaceFileW uses
+    // REPLACEFILE_WRITE_THROUGH. Opening the committed file read-only and
+    // calling FlushFileBuffers fails with ERROR_ACCESS_DENIED on Windows.
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_candidate_file(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path).and_then(|file| file.sync_all())
+}
+
+#[cfg(target_os = "windows")]
+fn sync_candidate_file(path: &Path) -> std::io::Result<()> {
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
 }
 
 fn commit_verified_candidate_with_sync<F>(
@@ -1474,18 +1498,16 @@ where
     F: FnOnce(&Path) -> std::io::Result<()>,
 {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    sync_candidate_file(candidate).map_err(|error| PathOpError {
+        code: core_ops::ERR_IO,
+        message: format!("could not sync protected-copy candidate: {error}"),
+    })?;
     if let OutputTargetBaseline::Existing { permissions, .. } = baseline {
         fs::set_permissions(candidate, permissions.clone()).map_err(|error| PathOpError {
             code: core_ops::ERR_IO,
             message: format!("could not preserve output permissions: {error}"),
         })?;
     }
-    fs::File::open(candidate)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| PathOpError {
-            code: core_ops::ERR_IO,
-            message: format!("could not sync protected-copy candidate: {error}"),
-        })?;
 
     ensure_output_target_unchanged(destination, baseline)?;
     let backup = parent.join(format!(".raiopdf-protect-backup-{}", Uuid::new_v4()));

@@ -4833,6 +4833,11 @@ export function App() {
   // convert (currently: spans more than one page) -- surface it the same way
   // search-to-redact surfaces "no matching text was found."
   const handleRedactionSelectionRejected = useCallback((message: string) => {
+    // Reset the phase like the search/add paths do: a rejection is a
+    // non-terminal notice, so it must not inherit a prior apply's "error"
+    // or "verified" phase, which RedactionStatusPanel reads for the message
+    // tone and the error-report button.
+    setRedactionPhase("idle");
     setRedactionMessage(message);
   }, []);
 

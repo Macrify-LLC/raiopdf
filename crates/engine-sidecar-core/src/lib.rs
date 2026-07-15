@@ -3856,7 +3856,7 @@ mod tests {
         assert!(!config.disabled());
         assert_eq!(
             config.java_path,
-            payload.join("jre").join("bin").join("java.exe")
+            payload_tool_path(&payload, PayloadTool::Java)
         );
         assert_eq!(config.engine_log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
@@ -3865,24 +3865,23 @@ mod tests {
         );
         assert_eq!(
             config.ocrmypdf_path,
-            Some(payload.join("ocr").join("ocrmypdf.cmd"))
+            Some(payload_tool_path(&payload, PayloadTool::Ocrmypdf))
         );
         assert_eq!(
             config.python_path,
-            Some(payload.join("ocr").join("python").join("python.exe"))
+            Some(payload_tool_path(&payload, PayloadTool::Python))
         );
         assert_eq!(
             config.tessdata_dir,
-            Some(payload.join("ocr").join("tesseract").join("tessdata"))
+            payload_tool_path(&payload, PayloadTool::TessdataEnglish)
+                .parent()
+                .map(Path::to_path_buf)
         );
         assert_eq!(config.ocr_toolchain().missing, Vec::<String>::new());
         assert!(config.ocr_toolchain().available);
 
         let spec = engine_spawn_spec(&config, 49152).expect("spawn spec should build");
-        assert_eq!(
-            spec.program,
-            payload.join("jre").join("bin").join("java.exe")
-        );
+        assert_eq!(spec.program, payload_tool_path(&payload, PayloadTool::Java));
         assert_eq!(spec.log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
             spec.args,
@@ -3923,17 +3922,22 @@ mod tests {
         let settings = fs::read_to_string(app_data.join("configs").join("custom_settings.yml"))
             .expect("settings should be written");
         assert!(settings.contains("ocrmypdf: '"));
-        assert!(settings.contains("ocrmypdf.cmd"));
+        assert!(settings.contains(
+            payload_tool_path(&payload, PayloadTool::Ocrmypdf)
+                .file_name()
+                .expect("OCRmyPDF filename")
+                .to_string_lossy()
+                .as_ref()
+        ));
         assert!(settings.contains("tessdataDir: '"));
         assert!(settings.contains("ocrMyPdfSessionLimit: 2"));
         assert!(settings.contains("enabled: false"));
         assert!(spec.envs.iter().any(|(key, value)| {
             key.to_string_lossy() == "TESSDATA_PREFIX"
                 && value
-                    == payload
-                        .join("ocr")
-                        .join("tesseract")
-                        .join("tessdata")
+                    == payload_tool_path(&payload, PayloadTool::TessdataEnglish)
+                        .parent()
+                        .expect("tessdata parent")
                         .as_os_str()
         }));
     }
@@ -4006,10 +4010,8 @@ mod tests {
         let root = test_temp_dir("payload-missing-ocr");
         let exe_dir = root.join("bin");
         let payload = exe_dir.join(PAYLOAD_DIR_NAME);
-        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload_tool_path(&payload, PayloadTool::Java));
         touch(&payload.join("engine").join("stirling.jar"));
-        fs::create_dir_all(payload.join("ocr").join("tesseract").join("tessdata"))
-            .expect("tessdata directory should be created");
 
         let config = SidecarConfig::from_env_vars_with_roots(
             Vec::<(OsString, OsString)>::new(),
@@ -4025,11 +4027,23 @@ mod tests {
             OcrToolchainStatus {
                 available: false,
                 missing: vec![
-                    "ocr/ocrmypdf.cmd".to_string(),
-                    "ocr/python/python.exe".to_string(),
-                    "ocr/tesseract/tesseract.exe".to_string(),
-                    "ocr/tesseract/tessdata/eng.traineddata".to_string(),
-                    "ocr/gs/bin/gs.exe".to_string(),
+                    runtime::expected_payload_path(
+                        PayloadTool::Ocrmypdf,
+                        RuntimePlatform::current()
+                    ),
+                    runtime::expected_payload_path(PayloadTool::Python, RuntimePlatform::current()),
+                    runtime::expected_payload_path(
+                        PayloadTool::Tesseract,
+                        RuntimePlatform::current()
+                    ),
+                    runtime::expected_payload_path(
+                        PayloadTool::TessdataEnglish,
+                        RuntimePlatform::current(),
+                    ),
+                    runtime::expected_payload_path(
+                        PayloadTool::Ghostscript,
+                        RuntimePlatform::current()
+                    ),
                 ],
             }
         );
@@ -4213,26 +4227,24 @@ mod tests {
     }
 
     fn create_payload_tree(payload: &Path) {
-        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload_tool_path(payload, PayloadTool::Java));
         touch(&payload.join("engine").join("stirling.jar"));
-        touch(&payload.join("ocr").join("ocrmypdf.cmd"));
-        touch(&payload.join("ocr").join("python").join("python.exe"));
-        touch(
-            &payload
-                .join("ocr")
-                .join("tesseract")
-                .join("tessdata")
-                .join("eng.traineddata"),
-        );
-        touch(&payload.join("ocr").join("tesseract").join("tesseract.exe"));
-        touch(&payload.join("ocr").join("gs").join("bin").join("gs.exe"));
-        touch(
-            &payload
-                .join("ocr")
-                .join("qpdf")
-                .join("bin")
-                .join("qpdf.exe"),
-        );
+        for tool in [
+            PayloadTool::Ocrmypdf,
+            PayloadTool::Python,
+            PayloadTool::Tesseract,
+            PayloadTool::TessdataEnglish,
+            PayloadTool::Ghostscript,
+            PayloadTool::Qpdf,
+        ] {
+            touch(&payload_tool_path(payload, tool));
+        }
+    }
+
+    fn payload_tool_path(payload: &Path, tool: PayloadTool) -> PathBuf {
+        runtime::tool_candidates(tool, RuntimePlatform::current())[0]
+            .iter()
+            .fold(payload.to_path_buf(), |path, part| path.join(part))
     }
 
     fn touch(path: &Path) {

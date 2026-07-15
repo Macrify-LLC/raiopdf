@@ -1288,12 +1288,14 @@ pub struct DocumentFacts {
     pub page_count: u32,
     pub size_bytes: u64,
     pub encrypted: bool,
+    /// Whether catalog XMP contains a PDF/A identification (`pdfaid:part`).
+    pub pdfa_claimed: bool,
     pub signature_detection: SignatureDetectionFacts,
     pub pages: Vec<PageFacts>,
 }
 
-/// qpdf `--json` powered document facts: page count, per-page boxes and
-/// orientations, encryption, and file size — the streamed-mode preflight input
+/// qpdf-powered document facts: page geometry, encryption, signatures, PDF/A
+/// identification metadata, and file size — the streamed-mode preflight input
 /// (plan [R5-2]).
 pub fn document_facts(toolchain: &PathOpsToolchain, input: &Path) -> OpResult<DocumentFacts> {
     let size_bytes = require_input_file(input)?;
@@ -1306,7 +1308,17 @@ pub fn document_facts(toolchain: &PathOpsToolchain, input: &Path) -> OpResult<Do
     ]);
     arguments.push(path_arg(input));
     let output = run_qpdf(toolchain, arguments)?;
-    parse_document_facts(&output.stdout, size_bytes)
+    let mut facts = parse_document_facts(&output.stdout, size_bytes)?;
+    if let Some(selector) = catalog_metadata_object_selector(&output.stdout) {
+        let show_object = format!("--show-object={selector}");
+        let mut metadata_arguments =
+            args(&["--warning-exit-0", &show_object, "--filtered-stream-data"]);
+        metadata_arguments.push(path_arg(input));
+        if let Ok(metadata) = run_qpdf(toolchain, metadata_arguments) {
+            facts.pdfa_claimed = xmp_claims_pdfa(&metadata.stdout);
+        }
+    }
+    Ok(facts)
 }
 
 /// Probe whether a standalone PDF path has an extractable text layer.
@@ -1428,8 +1440,56 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         page_count: page_facts.len() as u32,
         size_bytes,
         encrypted,
+        pdfa_claimed: false,
         signature_detection,
         pages: page_facts,
+    })
+}
+
+fn catalog_metadata_object_selector(json: &[u8]) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let objects = root.get("qpdf")?.as_array()?.get(1)?.as_object()?;
+    let reference = objects.values().find_map(|entry| {
+        let value = entry.get("value")?.as_object()?;
+        if json_name(value.get("/Type")) != Some("Catalog") {
+            return None;
+        }
+        value.get("/Metadata")?.as_str()
+    })?;
+    let mut parts = reference.split(' ');
+    let object = parts.next()?;
+    let generation = parts.next()?;
+    if parts.next()? != "R" || parts.next().is_some() {
+        return None;
+    }
+    object.parse::<u64>().ok()?;
+    generation.parse::<u64>().ok()?;
+    Some(format!("{object},{generation}"))
+}
+
+fn xmp_claims_pdfa(xmp: &[u8]) -> bool {
+    let xmp = String::from_utf8_lossy(xmp).to_lowercase();
+    if let Some(start) = xmp.find("<pdfaid:part") {
+        if let Some(end) = xmp[start..].find('>') {
+            let value = xmp[start + end + 1..].trim_start();
+            if value.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    xmp.match_indices("pdfaid:part").any(|(start, marker)| {
+        let value = xmp[start + marker.len()..].trim_start();
+        let Some(value) = value.strip_prefix('=') else {
+            return false;
+        };
+        let value = value.trim_start();
+        let Some(quote) = value.chars().next().filter(|ch| *ch == '"' || *ch == '\'') else {
+            return false;
+        };
+        value[quote.len_utf8()..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
     })
 }
 
@@ -4163,6 +4223,26 @@ mod tests {
     }
 
     #[test]
+    fn finds_catalog_metadata_and_pdfa_identification() {
+        let json = br#"{
+          "qpdf": [{}, {
+            "obj:1 0 R": { "value": { "/Type": "/Catalog", "/Metadata": "9 0 R" } },
+            "obj:9 0 R": { "value": { "/Type": "/Metadata", "/Subtype": "/XML" } }
+          }]
+        }"#;
+        assert_eq!(
+            catalog_metadata_object_selector(json).as_deref(),
+            Some("9,0")
+        );
+        assert!(xmp_claims_pdfa(br#"<pdfaid:part>2</pdfaid:part>"#));
+        assert!(xmp_claims_pdfa(br#"pdfaid:part = '1'"#));
+        assert!(!xmp_claims_pdfa(br#"<dc:title>PDF archive</dc:title>"#));
+        assert!(!xmp_claims_pdfa(
+            br#"<pdfaid:part></pdfaid:part> other="2""#
+        ));
+    }
+
+    #[test]
     fn gs_arg_builders_run_safer_with_scoped_permits() {
         let input = Path::new(r"C:\work\input docs\brief.pdf");
         let output = Path::new(r"C:\work\out\normalized.pdf");
@@ -4577,6 +4657,60 @@ mod tests {
         let path = dir.join(name);
         write_minimal_pdf(&path, pages).unwrap();
         path
+    }
+
+    fn write_pdfa_fixture(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let objects = [
+            b"<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >>".to_vec(),
+            b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+            b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+            [
+                format!(
+                    "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n",
+                    xmp.len()
+                )
+                .into_bytes(),
+                xmp.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        fs::write(&path, pdf).unwrap();
+        path
+    }
+
+    #[test]
+    fn document_facts_detects_streamed_pdfa_claims() {
+        let Some(toolchain) = test_qpdf_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("pdfa-facts");
+        let fixture = write_pdfa_fixture(dir.path(), "claimed.pdf");
+        assert!(document_facts(&toolchain, &fixture).unwrap().pdfa_claimed);
     }
 
     #[test]

@@ -171,6 +171,7 @@ export interface PathOpsDocumentFacts {
   pageCount: number;
   sizeBytes: number;
   encrypted: boolean;
+  pdfaClaimed: boolean;
   signatureDetection: SignatureDetectionFacts;
   pages: PathOpsPageFacts[];
 }

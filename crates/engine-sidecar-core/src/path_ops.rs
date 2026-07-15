@@ -4688,12 +4688,14 @@ mod tests {
         let fixture = write_fixture(dir.path(), "plain.pdf", &[letter_page(Some("secret"))]);
         let original = fs::read(&fixture).unwrap();
         let protected = dir.path().join("protected.pdf");
-        let open_password = " leading café passphrase ";
+        let open_password = format!(" leading café {} ", random_owner_password().unwrap());
+        let invalid_password = random_owner_password().unwrap();
+        let no_password = String::new();
 
         let verification = protect(
             &toolchain,
             &fixture,
-            open_password,
+            &open_password,
             &ProtectionOptions {
                 allow_printing: true,
                 allow_copying: false,
@@ -4721,20 +4723,20 @@ mod tests {
         decrypt(
             &toolchain,
             &protected,
-            open_password,
+            &open_password,
             &decrypted,
             dir.path(),
         )
         .unwrap();
         assert_eq!(page_count(&toolchain, &decrypted).unwrap(), 1);
         assert_eq!(
-            inspect_protection(&toolchain, &protected, "", None)
+            inspect_protection(&toolchain, &protected, &no_password, None)
                 .unwrap_err()
                 .code,
             ERR_PASSWORD_REQUIRED
         );
         assert_eq!(
-            inspect_protection(&toolchain, &protected, "wrong password", None)
+            inspect_protection(&toolchain, &protected, &invalid_password, None)
                 .unwrap_err()
                 .code,
             ERR_PASSWORD_INVALID
@@ -4742,7 +4744,7 @@ mod tests {
         assert!(decrypt(
             &toolchain,
             &protected,
-            "wrong password",
+            &invalid_password,
             &dir.path().join("wrong.pdf"),
             dir.path(),
         )
@@ -4758,11 +4760,14 @@ mod tests {
         let dir = TestDir::new("protect-owner-restricted");
         let plain = write_fixture(dir.path(), "plain.pdf", &[letter_page(Some("restricted"))]);
         let restricted = dir.path().join("restricted.pdf");
+        let owner_password = random_owner_password().unwrap();
+        let open_password = random_owner_password().unwrap();
+        let no_password = String::new();
         let response = response_file(&[
             "--password-mode=unicode".to_string(),
             "--encrypt".to_string(),
             "--user-password=".to_string(),
-            "--owner-password=owner-only-test-value".to_string(),
+            format!("--owner-password={owner_password}"),
             "--bits=256".to_string(),
             "--print=none".to_string(),
             "--extract=n".to_string(),
@@ -4773,13 +4778,13 @@ mod tests {
         .unwrap();
         run_qpdf_response_file(&toolchain, &response, None).unwrap();
 
-        let source = inspect_protection(&toolchain, &restricted, "", None).unwrap();
+        let source = inspect_protection(&toolchain, &restricted, &no_password, None).unwrap();
         assert_eq!(source.kind, "owner-restricted");
         let protected = dir.path().join("new-protected.pdf");
         protect(
             &toolchain,
             &restricted,
-            "new open passphrase",
+            &open_password,
             &ProtectionOptions {
                 allow_printing: true,
                 allow_copying: true,
@@ -4788,8 +4793,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let result =
-            inspect_protection(&toolchain, &protected, "new open passphrase", None).unwrap();
+        let result = inspect_protection(&toolchain, &protected, &open_password, None).unwrap();
         assert_eq!(result.kind, "open-password");
         assert_eq!(result.encryption, "AES-256");
         assert_eq!(result.permissions.printing, "full");

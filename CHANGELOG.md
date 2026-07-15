@@ -13,6 +13,13 @@ fades as download volume accrues.
 
 ## [Unreleased]
 
+### Added
+
+- **Highlight-to-redact.** Redaction mode now has a "Select text" sub-mode: highlight
+  text with the pointer and each line becomes a marked area, alongside the existing
+  draw-a-box and search-text methods. It needs no full-document text extraction, so it
+  also works on very large files where search-to-redact isn't available.
+
 ## [0.1.3] - 2026-07-12
 
 Fourth public alpha. Headline: **two new front-matter tools for briefs** — build a court

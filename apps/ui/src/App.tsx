@@ -812,6 +812,10 @@ export function App() {
   const [redactionMessage, setRedactionMessage] = useState<string | null>(null);
   const [redactionSearchOpen, setRedactionSearchOpen] = useState(false);
   const [redactionSearchText, setRedactionSearchText] = useState("");
+  // Redaction mode bar's Draw box / Select text sub-mode toggle. "draw" is
+  // the default so existing box-drawing behavior is unchanged unless the
+  // user opts into highlighting text.
+  const [redactionSelectMode, setRedactionSelectMode] = useState<"draw" | "text">("draw");
   const [batesState, setBatesState] = useState<BatesPanelState>({
     applying: false,
     message: null,
@@ -1573,6 +1577,7 @@ export function App() {
     setRedactionMessage(null);
     setRedactionSearchOpen(false);
     setRedactionSearchText("");
+    setRedactionSelectMode("draw");
     setScannerState({ scanning: false, message: null, hits: [] });
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
@@ -4802,6 +4807,35 @@ export function App() {
     setRedactionMessage(null);
   }, []);
 
+  // Batch counterpart of addPendingRedaction: highlight-to-redact queues one
+  // area per visual line of a selection in a single call, rather than one
+  // state update per line.
+  const addPendingRedactions = useCallback((areas: PdfRedactionArea[]) => {
+    if (areas.length === 0) {
+      return;
+    }
+
+    setPendingRedactions((current) => [
+      ...current,
+      ...areas.map((area) => {
+        redactionIdRef.current += 1;
+        return {
+          id: `redaction-${redactionIdRef.current}`,
+          area,
+        };
+      }),
+    ]);
+    setRedactionPhase("idle");
+    setRedactionMessage(null);
+  }, []);
+
+  // Highlight-to-redact's window-level capture rejects a selection it can't
+  // convert (currently: spans more than one page) -- surface it the same way
+  // search-to-redact surfaces "no matching text was found."
+  const handleRedactionSelectionRejected = useCallback((message: string) => {
+    setRedactionMessage(message);
+  }, []);
+
   const removePendingRedaction = useCallback((id: string) => {
     setPendingRedactions((current) => current.filter((area) => area.id !== id));
   }, []);
@@ -7144,6 +7178,8 @@ export function App() {
   ) : activeLegalTool === "redact" ? (
     <RedactionModeBar
       pendingCount={pendingRedactions.length}
+      selectMode={redactionSelectMode}
+      onSelectModeChange={setRedactionSelectMode}
       searchOpen={redactionSearchOpen}
       searchText={redactionSearchText}
       applying={redactionPhase === "applying"}
@@ -7151,7 +7187,10 @@ export function App() {
       onSearchTextChange={setRedactionSearchText}
       onSearchSubmit={searchTextForRedaction}
       onApply={requestApplyRedactions}
-      onExit={() => setActiveLegalTool(null)}
+      onExit={() => {
+        setActiveLegalTool(null);
+        setRedactionSelectMode("draw");
+      }}
     />
   ) : editing.tool !== "select" ? (
     <EditModeBar editing={editingForShell} />
@@ -7643,6 +7682,7 @@ export function App() {
           />
         }
         activeLegalTool={activeLegalTool}
+        redactionSelectMode={redactionSelectMode}
         activeTextEdit={activeTextEdit}
         activeEditDialogTool={activeEditDialogTool}
         activeOrganizeTool={activeOrganizeTool}
@@ -7665,6 +7705,8 @@ export function App() {
         modeBar={modeBar}
         editing={editingForShell}
         onRedactionAreaCreated={addPendingRedaction}
+        onRedactionAreasCreated={addPendingRedactions}
+        onRedactionSelectionRejected={handleRedactionSelectionRejected}
         onRedactionAreaRemoved={removePendingRedaction}
         onConfirmRedactions={confirmRedactions}
         onCancelRedactions={cancelRedactions}
@@ -7832,6 +7874,8 @@ export function App() {
 
 function RedactionModeBar({
   pendingCount,
+  selectMode,
+  onSelectModeChange,
   searchOpen,
   searchText,
   applying,
@@ -7842,6 +7886,8 @@ function RedactionModeBar({
   onExit,
 }: {
   pendingCount: number;
+  selectMode: "draw" | "text";
+  onSelectModeChange: (mode: "draw" | "text") => void;
   searchOpen: boolean;
   searchText: string;
   applying: boolean;
@@ -7855,6 +7901,29 @@ function RedactionModeBar({
     <div className="legal-mode-bar" role="toolbar" aria-label="Redaction mode">
       <span className="legal-mode-bar__status">
         Redaction mode — {pendingCount} {pendingCount === 1 ? "area" : "areas"} marked
+      </span>
+      <div className="legal-mode-bar__tool-options" role="group" aria-label="Redaction method">
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          aria-pressed={selectMode === "draw"}
+          onClick={() => onSelectModeChange("draw")}
+        >
+          Draw box
+        </button>
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          aria-pressed={selectMode === "text"}
+          onClick={() => onSelectModeChange("text")}
+        >
+          Select text
+        </button>
+      </div>
+      <span className="legal-mode-bar__hint">
+        {selectMode === "text"
+          ? "Highlight text to mark it for redaction. Image-only pages have no text layer — use Draw box there, or run OCR first."
+          : "Draw a box over anything to redact — text, images, or scans."}
       </span>
       {searchOpen ? (
         <form className="legal-mode-bar__search" onSubmit={onSearchSubmit}>

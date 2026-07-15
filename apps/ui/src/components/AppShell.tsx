@@ -88,6 +88,8 @@ export interface AppShellProps {
   /** Update indicator (UpdatePill) rendered in the title bar's meta area. */
   updateSlot?: ReactNode;
   activeLegalTool: string | null;
+  /** Redaction mode bar's draw/select-text toggle (default "draw"). */
+  redactionSelectMode: "draw" | "text";
   activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
   activeOrganizeTool: string | null;
@@ -110,6 +112,8 @@ export interface AppShellProps {
   modeBar: ReactNode;
   editing: EditingState;
   onRedactionAreaCreated: (area: PdfRedactionArea) => void;
+  onRedactionAreasCreated: (areas: PdfRedactionArea[]) => void;
+  onRedactionSelectionRejected: (message: string) => void;
   onRedactionAreaRemoved: (id: string) => void;
   onConfirmRedactions: () => void;
   onCancelRedactions: () => void;
@@ -168,6 +172,7 @@ export function AppShell({
   longProcessLockoutLabel = null,
   updateSlot,
   activeLegalTool,
+  redactionSelectMode,
   activeTextEdit = false,
   activeEditDialogTool,
   activeOrganizeTool,
@@ -190,6 +195,8 @@ export function AppShell({
   modeBar,
   editing,
   onRedactionAreaCreated,
+  onRedactionAreasCreated,
+  onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   onConfirmRedactions,
   onCancelRedactions,
@@ -317,11 +324,14 @@ export function AppShell({
           onPageSizeChange={onPageSizeChange}
           onRenderError={onRenderError}
           redactionMode={activeLegalTool === "redact"}
+          redactionTextSelect={activeLegalTool === "redact" && redactionSelectMode === "text"}
           modeBar={modeBar}
           onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
           editing={editing}
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}
+          onRedactionAreasCreated={onRedactionAreasCreated}
+          onRedactionSelectionRejected={onRedactionSelectionRejected}
           onRedactionAreaRemoved={onRedactionAreaRemoved}
           searchResults={activeTextEdit && textEdit ? textEdit.matches : documentSearch.results}
           activeSearchResultId={activeTextEdit && textEdit ? textEdit.activeMatch?.id ?? null : documentSearch.activeMatch?.id ?? null}

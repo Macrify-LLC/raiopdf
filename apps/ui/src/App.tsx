@@ -24,7 +24,6 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
-import { PdfEngineError } from "@raiopdf/engine-api";
 import {
   LocalPdfEngine,
   hideRaioPdfImportedAnnotationsForDisplay,
@@ -241,7 +240,11 @@ import {
 } from "./lib/streamedFiling";
 import { extractPrintableRange } from "./lib/printRange";
 import { writeProductionLastUsed } from "./lib/productionHints";
-import { resolveProtectedPdfBytes, type ProtectedPdfSource } from "./lib/protectedPdfResolver";
+import {
+  isRetryablePdfPasswordError,
+  resolveProtectedPdfBytes,
+  type ProtectedPdfSource,
+} from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
 import { logWorkflowFailure, recordDiagnosticEvent } from "./lib/diagnostics";
 import {
@@ -3531,7 +3534,7 @@ export function App() {
             return;
           }
 
-          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+          if (isRetryablePdfPasswordError(error)) {
             setPasswordPrompt((current) => (
               current
                 ? { ...current, phase: "prompt", error: "That password wasn't accepted. Try again." }

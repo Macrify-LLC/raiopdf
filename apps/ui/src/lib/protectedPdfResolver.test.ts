@@ -1,6 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { PdfEngineError, type PdfProtectionFacts } from "@raiopdf/engine-api";
-import { resolveProtectedPdfBytes } from "./protectedPdfResolver";
+import {
+  isRetryablePdfPasswordError,
+  resolveProtectedPdfBytes,
+} from "./protectedPdfResolver";
+
+describe("isRetryablePdfPasswordError", () => {
+  it.each(["PASSWORD_REQUIRED", "PASSWORD_INVALID", "ENCRYPTED_DOCUMENT"] as const)(
+    "keeps the unlock prompt open for %s",
+    (code) => {
+      expect(isRetryablePdfPasswordError(new PdfEngineError(code, "retry"))).toBe(true);
+    },
+  );
+
+  it("does not retry unrelated engine or generic failures", () => {
+    expect(isRetryablePdfPasswordError(new PdfEngineError("INVALID_DOCUMENT", "bad PDF"))).toBe(false);
+    expect(isRetryablePdfPasswordError(new Error("offline"))).toBe(false);
+  });
+});
 
 describe("resolveProtectedPdfBytes protection provenance", () => {
   it("keeps the password prompt open after a typed invalid-password inspection", async () => {

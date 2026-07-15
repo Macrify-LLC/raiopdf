@@ -98,6 +98,15 @@ export function unlockResultHasSignatureWarning(result: UnlockResult): boolean {
   return result.status === "unlocked" && hasEmbeddedSignatureMarkers(result.provenance.signature);
 }
 
+export function isRetryablePdfPasswordError(error: unknown): boolean {
+  return error instanceof PdfEngineError &&
+    (
+      error.code === "PASSWORD_REQUIRED" ||
+      error.code === "PASSWORD_INVALID" ||
+      error.code === "ENCRYPTED_DOCUMENT"
+    );
+}
+
 function isPasswordRequired(error: unknown, password: string): boolean {
   return error instanceof PdfEngineError &&
     (

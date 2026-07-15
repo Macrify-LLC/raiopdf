@@ -26,7 +26,15 @@ RaioPDF's **Redact** tool removes it, then double-checks its own work.
 
 1. Open the PDF.
 2. In the **Legal** tools, choose **Redact**.
-3. Drag a box over each thing you want removed. Add as many boxes as you need.
+3. Mark what to remove, mixing methods as needed:
+   - **Draw box** (the default) — drag a box over anything you want removed:
+     text, an image, a signature, a whole stamp.
+   - **Select text** — switch to it in the mode bar, then highlight text with
+     your pointer the way you'd select it anywhere else. Each line you
+     highlight becomes a marked area. It works even on very large files where
+     search-to-redact isn't available. Image-only pages have no text to
+     select, so use Draw box there (or run OCR first).
+   Add as many areas as you need.
 4. Click **Apply Redactions**. RaioPDF tells you how many areas will be
    permanently removed — confirm, and it removes them and checks its work.
 5. **Save.** RaioPDF leaves your original file untouched and asks for a new file

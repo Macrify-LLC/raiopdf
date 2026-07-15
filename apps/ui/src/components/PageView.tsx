@@ -11,6 +11,8 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
+import { closestTextLayer } from "../lib/selectedTextEdit";
+import { redactionAreasFromClientRects } from "../lib/selectionRedaction";
 import {
   clamp,
   pdfRectToViewportRect,
@@ -37,8 +39,19 @@ export interface PageViewProps {
   /** True when the Select tool owns the pointer (text selection wins). */
   textSelectable: boolean;
   redactionMode?: boolean;
+  /**
+   * True when redaction mode's "Select text" sub-mode is active: highlighting
+   * text queues one pending redaction area per visual line instead of
+   * drawing a box. See the window-level pointerup listener below for why
+   * this can't just reuse `handlePointerUp`.
+   */
+  redactionTextSelect?: boolean;
   pendingRedactions?: readonly PendingRedactionOverlay[];
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
+  /** Batch counterpart of `onRedactionAreaCreated` for a multi-line selection capture. */
+  onRedactionAreasCreated?: ((areas: PdfRedactionArea[]) => void) | undefined;
+  /** A capture attempt was rejected (e.g. the selection spanned more than one page). */
+  onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
@@ -69,8 +82,11 @@ export function PageView({
   zoom,
   textSelectable,
   redactionMode = false,
+  redactionTextSelect = false,
   pendingRedactions = [],
   onRedactionAreaCreated,
+  onRedactionAreasCreated,
+  onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
   searchResults = [],
@@ -246,6 +262,90 @@ export function PageView({
     dragStartRef.current = null;
   }, [redactionMode, zoom]);
 
+  // Highlight-to-redact capture: WINDOW-level, not this frame's pointerup.
+  // Releasing the pointer over a neighbor page or the gap between pages
+  // must not drop the selection, so every mounted PageView (in select
+  // sub-mode) listens on `window` and asks "does the live selection belong
+  // to ME?" via `closestTextLayer` + a page-index match. Exactly one
+  // PageView's text layer can own a given selection, so exactly one
+  // converts -- no drop, no double-emit, regardless of release position.
+  // Install in the layout phase so the listener is already active when
+  // the Select text button's pressed state becomes observable.
+  useLayoutEffect(() => {
+    if (!redactionTextSelect || !viewport) {
+      return;
+    }
+
+    // Rebind to a non-null local: TS can't carry the guard's narrowing into
+    // the nested function declaration below (it could, in principle, run
+    // after a later render with a different `viewport` closed over it).
+    const activeViewport = viewport;
+
+    function handleSelectionCapture() {
+      const selection = window.getSelection();
+
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const startLayer = closestTextLayer(range.startContainer);
+      const endLayer = closestTextLayer(range.endContainer);
+
+      if (!startLayer || !endLayer) {
+        return;
+      }
+
+      // Ownership is decided by the selection's ANCHOR (start) page, for
+      // both the accept and the reject path below -- so exactly one mounted
+      // PageView acts on any given selection, cross-page or not. Every
+      // other mounted PageView's listener no-ops here.
+      if (Number(startLayer.dataset.pageIndex) !== pageIndex) {
+        return;
+      }
+
+      if (startLayer !== endLayer) {
+        // Multi-page selection redaction is out of scope for v1 (mirrors
+        // the same single-page guard Edit Text uses in selectedTextEdit.ts).
+        // Draw box and Search text still cover cross-page redaction.
+        onRedactionSelectionRejected?.(
+          "Text redaction covers one page at a time — that selection was skipped.",
+        );
+        selection.removeAllRanges();
+        return;
+      }
+
+      const frame = frameRef.current;
+
+      if (!frame) {
+        return;
+      }
+
+      const areas = redactionAreasFromClientRects(
+        Array.from(range.getClientRects()),
+        frame.getBoundingClientRect(),
+        activeViewport,
+        pageIndex,
+      );
+
+      // Clear the DOM selection so the browser highlight doesn't linger
+      // over the new pending-redaction overlay.
+      selection.removeAllRanges();
+
+      if (areas.length > 0) {
+        onRedactionAreasCreated?.(areas);
+      }
+    }
+
+    window.addEventListener("pointerup", handleSelectionCapture);
+    window.addEventListener("pointercancel", handleSelectionCapture);
+
+    return () => {
+      window.removeEventListener("pointerup", handleSelectionCapture);
+      window.removeEventListener("pointercancel", handleSelectionCapture);
+    };
+  }, [onRedactionAreasCreated, onRedactionSelectionRejected, pageIndex, redactionTextSelect, viewport]);
+
   function getViewportPoint(event: PointerEvent<HTMLDivElement>): ViewportPoint | null {
     const frame = frameRef.current;
 
@@ -262,6 +362,13 @@ export function PageView({
   }
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (redactionTextSelect) {
+      // The text layer owns this drag natively (native browser selection) —
+      // never start box-drawing (or its setPointerCapture) in select
+      // sub-mode. Must run before the dragStartRef guard below.
+      return;
+    }
+
     if (!redactionMode || !viewport) {
       return;
     }
@@ -332,6 +439,7 @@ export function PageView({
       className="page-view"
       style={frameStyle}
       data-redaction-mode={redactionMode ? "true" : undefined}
+      data-redaction-select={redactionTextSelect ? "true" : undefined}
       data-text-select={textSelectable ? "true" : undefined}
       data-edit-tool={editing?.tool}
       onPointerDown={handlePointerDown}

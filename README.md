@@ -94,7 +94,7 @@ Four ways it fits into an actual day at the firm:
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
 | **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |
-| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
+| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. Mark what to remove by drawing a box, searching for text, or highlighting text with the pointer. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
 | **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 

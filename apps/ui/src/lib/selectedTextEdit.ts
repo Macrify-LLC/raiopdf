@@ -22,7 +22,7 @@ export type TextSelectionResolveResult =
   | { ok: true; area: PdfRedactionArea; target: PdfSelectedTextTarget }
   | { ok: false; message: string };
 
-const TEXT_LAYER_SELECTOR = ".page-view__text-layer[data-page-index]";
+export const TEXT_LAYER_SELECTOR = ".page-view__text-layer[data-page-index]";
 
 export function captureCurrentTextSelection(
   selection: Selection | null = window.getSelection(),
@@ -264,7 +264,13 @@ function rangeTouchesContiguousElements(
   return true;
 }
 
-function closestTextLayer(node: Node): HTMLElement | null {
+/**
+ * Walks up from a `Range` boundary node to the `.page-view__text-layer` that
+ * owns it, if any. Shared by both selected-text editing (above) and
+ * highlight-to-redact (`PageView.tsx`) — the two features that need to know
+ * which page's text layer a live browser selection belongs to.
+ */
+export function closestTextLayer(node: Node): HTMLElement | null {
   const element = node instanceof HTMLElement ? node : node.parentElement;
   return element?.closest<HTMLElement>(TEXT_LAYER_SELECTOR) ?? null;
 }

@@ -231,6 +231,7 @@ import {
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
 import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
+import { stageStreamedProtectedCopyEdits } from "./lib/protectedCopyStaging";
 import {
   annotateStreamedPreflight,
   buildPrepareFilingPlan,
@@ -7333,7 +7334,7 @@ export function App() {
       return {
         status: "error",
         message: error instanceof PathOpsError && error.code === "INVALID_INPUT"
-          ? "Choose a different output file. The protected copy cannot replace its source."
+          ? error.message
           : pathOpErrorMessage(error, "RaioPDF could not prepare that output location."),
       };
     } finally {
@@ -7404,7 +7405,7 @@ export function App() {
     const suggestedName = `${stripPdfExtension(document.fileName ?? "Document")}-protected.pdf`;
     let targetToken: string | null = preparedTarget.targetToken;
     pdfSecurityPreparedTargetRef.current = null;
-    let temporaryInputGrant: FileGrant | null = null;
+    const temporaryInputGrants: FileGrant[] = [];
     let stopProgressListener: (() => void) | null = null;
 
     try {
@@ -7448,7 +7449,7 @@ export function App() {
             message: "RaioPDF could not prepare the current PDF for protection.",
           };
         }
-        temporaryInputGrant = stagedGrant;
+        temporaryInputGrants.push(stagedGrant);
         inputGrant = stagedGrant;
       } else {
         if (!pathOpsGrant) {
@@ -7468,15 +7469,16 @@ export function App() {
               message: "Save the current edits in this very large PDF before creating a protected copy.",
             };
           }
-          const staged = await pathOpApplyEdits(
-            pathOpsGrant,
-            pendingApply.plan.appendEdits,
-            { markupMode: "annotation", printMarkupAnnotations },
-            suggestedName,
-            pendingApply.flatten,
-          );
-          temporaryInputGrant = staged.outputGrant;
-          inputGrant = staged.outputGrant;
+          const staged = await stageStreamedProtectedCopyEdits({
+            sourceGrant: pathOpsGrant,
+            ownerRestricted: pdfSecurityDocumentState.kind === "owner-restricted",
+            edits: pendingApply.plan.appendEdits,
+            applyOptions: { markupMode: "annotation", printMarkupAnnotations },
+            outputName: suggestedName,
+            flatten: pendingApply.flatten,
+          });
+          temporaryInputGrants.push(...staged.temporaryGrants);
+          inputGrant = staged.inputGrant;
         } else {
           inputGrant = pathOpsGrant;
         }
@@ -7528,7 +7530,7 @@ export function App() {
       if (error instanceof PathOpsError && error.code === "INVALID_INPUT") {
         return {
           status: "error",
-          message: "Choose a different output file. The protected copy cannot replace its source.",
+          message: error.message,
         };
       }
 
@@ -7542,8 +7544,8 @@ export function App() {
     } finally {
       stopProgressListener?.();
       pdfSecurityStagingAbortRef.current = null;
-      if (temporaryInputGrant) {
-        await pathOpReleaseOutput(temporaryInputGrant).catch(() => undefined);
+      for (const grant of temporaryInputGrants.reverse()) {
+        await pathOpReleaseOutput(grant).catch(() => undefined);
       }
       if (targetToken) {
         await releaseProtectedOutputTarget(targetToken).catch(() => undefined);

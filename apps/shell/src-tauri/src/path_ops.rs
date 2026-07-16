@@ -677,6 +677,28 @@ fn containing_output_dir(app_data_dir: &Path, path: &Path) -> Option<PathBuf> {
     releasable_output_dir(&path, &root)
 }
 
+/// True when an existing path, or the existing parent of a new path, resolves
+/// inside the private path-ops root. The lexical check also fails closed while
+/// the root is absent; canonicalization catches aliases through symlinks.
+fn path_resolves_within_root(path: &Path, root: &Path) -> bool {
+    if path.starts_with(root) {
+        return true;
+    }
+    let Ok(root) = fs::canonicalize(root) else {
+        return false;
+    };
+    let resolved = fs::canonicalize(path).or_else(|_| {
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("path has no parent"))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("path has no file name"))?;
+        Ok::<PathBuf, std::io::Error>(fs::canonicalize(parent)?.join(name))
+    });
+    resolved.is_ok_and(|path| path.starts_with(root))
+}
+
 /// The per-op temp dir a released output grant should delete: the grant's
 /// parent `<uuid>` dir, but ONLY when that dir sits directly under the
 /// path-ops root. A grant pointing anywhere else (a user's own file) must
@@ -1164,6 +1186,7 @@ pub async fn pick_protected_output_target(
     source_grants: Option<Vec<String>>,
 ) -> Result<Option<PickedProtectedOutputTarget>, PathOpError> {
     require_protected_copy_platform()?;
+    let private_root = path_ops_root(&app)?;
     let sources = source_grants
         .unwrap_or_default()
         .iter()
@@ -1172,6 +1195,7 @@ pub async fn pick_protected_output_target(
     let default_directory = sources
         .first()
         .and_then(|source| source.parent())
+        .filter(|directory| !path_resolves_within_root(directory, &private_root))
         .map(Path::to_path_buf);
     let suggested_name = if suggested_name.to_ascii_lowercase().ends_with(".pdf") {
         suggested_name
@@ -1203,6 +1227,13 @@ pub async fn pick_protected_output_target(
     let Some(destination) = destination else {
         return Ok(None);
     };
+    if path_resolves_within_root(&destination, &private_root) {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: "Choose a permanent location outside RaioPDF's temporary working folders."
+                .to_string(),
+        });
+    }
     if destination
         .extension()
         .and_then(|extension| extension.to_str())
@@ -3046,6 +3077,30 @@ mod tests {
             containing_output_dir(app_data.path(), &nested.join("deep.pdf")),
             None
         );
+    }
+
+    #[test]
+    fn protected_outputs_cannot_resolve_inside_the_path_ops_root() {
+        let app_data = tempfile::tempdir().expect("temp dir");
+        let root = app_data.path().join(PATH_OPS_DIR);
+        let output_dir = make_output_dir(&root, "uuid-source", Some("owner"));
+        let outside = app_data.path().join("saved-protected.pdf");
+
+        assert!(path_resolves_within_root(
+            &output_dir.join("new-protected.pdf"),
+            &root
+        ));
+        assert!(!path_resolves_within_root(&outside, &root));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&output_dir, app_data.path().join("output-alias"))
+                .expect("symlink output dir");
+            assert!(path_resolves_within_root(
+                &app_data.path().join("output-alias/aliased-protected.pdf"),
+                &root
+            ));
+        }
     }
 
     #[test]

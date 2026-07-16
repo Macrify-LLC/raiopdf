@@ -1656,7 +1656,7 @@ fn atomic_replace_existing(
     candidate: &Path,
     destination: &Path,
     backup: &Path,
-    _baseline: &OutputTargetBaseline,
+    baseline: &OutputTargetBaseline,
 ) -> OpResult<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
@@ -1708,7 +1708,7 @@ fn atomic_replace_existing(
             ),
         });
     }
-    Ok(())
+    verify_displaced_destination(destination, backup, baseline)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1743,6 +1743,36 @@ fn atomic_restore_backup(destination: &Path, backup: &Path) -> std::io::Result<(
         Err(std::io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+/// `ReplaceFileW` atomically moves the destination it actually replaced into
+/// `backup`. Verify that displaced file against the picker-time baseline so a
+/// change in the final precheck→replace gap is restored instead of clobbered.
+#[cfg(any(target_os = "windows", test))]
+fn verify_displaced_destination(
+    destination: &Path,
+    backup: &Path,
+    baseline: &OutputTargetBaseline,
+) -> OpResult<()> {
+    let Err(drift) = ensure_output_target_unchanged(backup, baseline) else {
+        return Ok(());
+    };
+    match atomic_restore_backup(destination, backup) {
+        Ok(()) => Err(PathOpError {
+            code: ERR_FILE_CHANGED,
+            message: format!(
+                "{} The changed destination was restored.",
+                drift.message
+            ),
+        }),
+        Err(rollback_error) => Err(PathOpError {
+            code: ERR_FILE_CHANGED,
+            message: format!(
+                "{} Restoring the changed destination also failed: {rollback_error}. A private rollback backup was retained beside the selected output.",
+                drift.message
+            ),
+        }),
     }
 }
 
@@ -3160,6 +3190,30 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with(".raiopdf-protect-backup-")));
+    }
+
+    #[test]
+    fn protected_output_restores_a_destination_that_changed_during_replace() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let destination = dir.path().join("protected.pdf");
+        let backup = dir.path().join("private-backup");
+        fs::write(&destination, b"original bytes").expect("original destination");
+        let baseline = capture_output_target_baseline(&destination).expect("baseline");
+
+        // Model the atomic post-ReplaceFileW state: our verified candidate is
+        // published, while the destination it actually displaced is in backup.
+        fs::write(&destination, b"verified protected bytes").expect("published candidate");
+        fs::write(&backup, b"racing destination").expect("displaced destination");
+
+        let error = verify_displaced_destination(&destination, &backup, &baseline).unwrap_err();
+
+        assert_eq!(error.code, ERR_FILE_CHANGED);
+        assert!(error.message.contains("changed destination was restored"));
+        assert_eq!(
+            fs::read(&destination).expect("restored destination"),
+            b"racing destination"
+        );
+        assert!(!backup.exists());
     }
 
     #[test]

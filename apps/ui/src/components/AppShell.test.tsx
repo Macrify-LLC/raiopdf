@@ -319,6 +319,9 @@ const mockDocument: DocumentState = {
   outline: null,
   outlineStatus: null,
   signatureInvalidationNotice: null,
+  protectionSource: null,
+  protectionFacts: null,
+  protectedSourceGrant: null,
   error: null,
 };
 

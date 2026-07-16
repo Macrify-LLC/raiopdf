@@ -1,4 +1,4 @@
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, type PdfProtectionFacts } from "@raiopdf/engine-api";
 import {
   detectSignatureFacts,
   hasEmbeddedSignatureMarkers,
@@ -12,6 +12,29 @@ export type UnlockWarning =
 
 export type ProtectedPdfSource = "owner-restricted" | "user-password";
 
+interface ProtectedWorkingCopyState {
+  protectionSource: ProtectedPdfSource | null;
+  protectedSourceGrant: string | null;
+  source:
+    | { kind: "memory" }
+    | { kind: "rangeGrant"; grant: string }
+    | { kind: "rangeFile" }
+    | null;
+}
+
+/** True when Save writes decrypted content rather than copying its protected source. */
+export function isUnlockedProtectedWorkingCopy(state: ProtectedWorkingCopyState): boolean {
+  if (!state.protectionSource || !state.source) {
+    return false;
+  }
+  if (state.source.kind === "memory") {
+    return true;
+  }
+  return state.source.kind === "rangeGrant" &&
+    state.protectedSourceGrant !== null &&
+    state.protectedSourceGrant !== state.source.grant;
+}
+
 export type UnlockResult =
   | {
       status: "unlocked";
@@ -21,6 +44,7 @@ export type UnlockResult =
       provenance: {
         source: ProtectedPdfSource;
         signature: SignatureDetectionFacts;
+        protection: PdfProtectionFacts;
       };
     }
   | { status: "password_required" }
@@ -30,6 +54,7 @@ export type UnlockResult =
 export interface ResolveProtectedPdfBytesOptions {
   isUnavailableError?: ((error: unknown) => boolean) | undefined;
   password?: string | undefined;
+  inspectProtection: (bytes: Uint8Array, password: string) => Promise<PdfProtectionFacts>;
   removeEncryption: (bytes: Uint8Array, password: string) => Promise<Uint8Array>;
 }
 
@@ -46,6 +71,7 @@ export async function resolveProtectedPdfBytes(
   const password = options.password ?? "";
 
   try {
+    const protection = await options.inspectProtection(bytes, password);
     const unlockedBytes = await options.removeEncryption(bytes, password);
     const warnings: UnlockWarning[] = [];
     let signature = EMPTY_SIGNATURE_FACTS;
@@ -67,6 +93,7 @@ export async function resolveProtectedPdfBytes(
       provenance: {
         source: password ? "user-password" : "owner-restricted",
         signature,
+        protection,
       },
     };
   } catch (error) {
@@ -94,10 +121,20 @@ export function unlockResultHasSignatureWarning(result: UnlockResult): boolean {
   return result.status === "unlocked" && hasEmbeddedSignatureMarkers(result.provenance.signature);
 }
 
+export function isRetryablePdfPasswordError(error: unknown): boolean {
+  return error instanceof PdfEngineError &&
+    (
+      error.code === "PASSWORD_REQUIRED" ||
+      error.code === "PASSWORD_INVALID" ||
+      error.code === "ENCRYPTED_DOCUMENT"
+    );
+}
+
 function isPasswordRequired(error: unknown, password: string): boolean {
   return error instanceof PdfEngineError &&
     (
       error.code === "PASSWORD_REQUIRED" ||
+      error.code === "PASSWORD_INVALID" ||
       (password.length === 0 && error.code === "ENCRYPTED_DOCUMENT")
     );
 }

@@ -176,10 +176,10 @@ don't isolate it into its own callout box if you're using the full text.
 - **Bates numbering** across an entire document set in one pass.
 - **Batch cleanup** — queue OCR, compression, sanitizing, metadata scrubbing,
   and filing splits across many PDFs at once, against a jurisdiction pack.
-- **Unlock PDFs** — save a decrypted copy of a password- or owner-restricted
-  PDF (you supply the password when one is required); the original stays
-  untouched. Do NOT claim password *protection* — adding encryption is not in
-  this build yet.
+- **PDF Security** — create a separate AES-256 protected copy with an open
+  password and optional advisory print/copy restrictions, or save an unlocked
+  copy of a protected PDF. Unsaved edits can go into the new copy; the original
+  stays untouched. Available in the installed Windows app.
 - **Sensitive-info scanner** — assistive detection of SSNs and account
   numbers before a filing goes out (no rule-number citation in marketing
   copy per the 2026-07-04 note above). Always pair with the honest caveat: this is assistive only — never trust AI with

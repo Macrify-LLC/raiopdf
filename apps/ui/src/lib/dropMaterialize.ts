@@ -56,6 +56,24 @@ export async function materializeDroppedFileGrant(
   }
 }
 
+/**
+ * Stages generated PDF bytes into the shell's private, grant-backed upload
+ * area without sending the whole document through a Tauri command argument.
+ * The returned grant has the same lifecycle and startup scavenging behavior
+ * as a genuinely dropped PDF.
+ */
+export function materializePdfBytesGrant(
+  bytes: Uint8Array,
+  name: string,
+  signal?: AbortSignal,
+): Promise<OpenedFileSource | null> {
+  const stableBytes = new Uint8Array(bytes);
+  return materializeDroppedFileGrant(
+    new File([stableBytes], name, { type: "application/pdf" }),
+    signal,
+  );
+}
+
 function appendDroppedPdfChunk(
   invoke: Invoke,
   token: string,

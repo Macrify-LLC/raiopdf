@@ -475,7 +475,7 @@ export function ToolPanel({
                 <InlineMessage tone="neutral" message="Inspect and scrub metadata in the document dialog." />
               ) : null}
               {tool.id === "passwords" && selected ? (
-                <InlineMessage tone="neutral" message="Password controls open over the document." />
+                <InlineMessage tone="neutral" message="PDF Security opens over the document." />
               ) : null}
             </div>
           );
@@ -570,7 +570,7 @@ interface OcrResultNoticeProps {
 // the OcrDialog now -- this only ever renders for the terminal done/error
 // phases, as a brief result line under the Make Searchable/Force re-OCR
 // buttons, reusing the same InlineMessage pattern every other tool in this
-// panel (Redact, Sanitize, Repair, Compress, Scrub Metadata, Passwords)
+// panel (Redact, Sanitize, Repair, Compress, Scrub Metadata)
 // already uses for its own result/availability messaging.
 function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
   const message = ocrState.message ?? "OCR finished.";
@@ -964,35 +964,6 @@ function CommentsCard({
   );
 }
 
-export function PasswordsPanel() {
-  return (
-    <div className="tool-panel__inline-card">
-      <div className="tool-panel__field">
-        <label htmlFor="open-password">Open password</label>
-        <input id="open-password" type="password" disabled />
-      </div>
-      <label className="tool-panel__check-row">
-        <input type="checkbox" disabled />
-        Allow printing
-      </label>
-      <label className="tool-panel__check-row">
-        <input type="checkbox" disabled />
-        Allow copying
-      </label>
-      <p className="tool-panel__note">
-        Never stored. Prepare for Filing can remove encryption with the open password. Setting or changing PDF passwords remains unavailable in this build.
-      </p>
-      <div className="tool-panel__button-row">
-        <button type="button" className="tool-panel__primary-button" disabled>
-          Set Password
-        </button>
-        <button type="button" className="tool-panel__secondary-button" disabled>
-          Remove Password
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function InlineMessage({
   tone,

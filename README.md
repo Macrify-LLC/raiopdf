@@ -76,9 +76,9 @@ Four ways it fits into an actual day at the firm:
 | Fill & sign | Fill forms, add text and images, signature stamp + flatten |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
 | **Word ↔ PDF** *(experimental)* | Import a Word document (with a tracked-changes check first), or export a PDF back to editable Word. Runs through your own installed copy of Microsoft Word — the menu items say so and gray out if Word isn't installed. Formatting is approximate; check the result. |
-| Unlock PDFs | Save a decrypted copy of a password- or owner-restricted PDF (you supply the password if one is required) — the original on disk stays untouched. *Adding* password protection isn't in this build yet. |
+| PDF Security | Create a separate AES-256 protected copy, with optional advisory print/copy restrictions, or save an unlocked copy of a protected PDF. Unsaved edits can go into the new copy; the original stays untouched. Available in the installed Windows app. |
 | In-app help | Built-in, offline help for every tool — the same articles published at [raio.macrify.me/help](https://raio.macrify.me/help/) |
-| Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can drive the whole toolbox |
+| Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can run supported local tools |
 | No catches | No watermarks, no nag screens, ever |
 
 ### Legal — the stuff nobody bothered building for lawyers

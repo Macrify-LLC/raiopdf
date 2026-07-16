@@ -63,6 +63,7 @@ export function mapPathOpsFactsToDocumentFacts(
       };
     }),
     fileBytes: facts.sizeBytes,
+    pdfaClaimed: facts.pdfaClaimed,
     ...(options.filename ? { filename: options.filename } : {}),
     signatureDetection: facts.signatureDetection,
     signatureFieldCount: facts.signatureDetection.standardAcroFormSignatureCount,

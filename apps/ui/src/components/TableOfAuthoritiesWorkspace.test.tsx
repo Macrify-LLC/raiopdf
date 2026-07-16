@@ -330,6 +330,9 @@ function memoryDocument(overrides: Partial<DocumentState> = {}): DocumentState {
     outline: null,
     outlineStatus: null,
     signatureInvalidationNotice: null,
+    protectionSource: null,
+    protectionFacts: null,
+    protectedSourceGrant: null,
     error: null,
     ...overrides,
   };

@@ -1,0 +1,598 @@
+.pdf-security-panel {
+  display: grid;
+  gap: var(--space-4);
+  color: var(--body);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.pdf-security-panel p,
+.pdf-security-panel h3,
+.pdf-security-panel ul,
+.pdf-security-panel fieldset {
+  margin: 0;
+}
+
+.pdf-security-panel__empty-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  min-height: 132px;
+  align-content: center;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.pdf-security-panel__status-card {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 82px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--chrome);
+}
+
+.pdf-security-panel__status-card[data-state="protected"] {
+  border-color: var(--accent);
+  background: var(--accent-pale);
+}
+
+.pdf-security-panel__status-copy,
+.pdf-security-panel__success-copy {
+  min-width: 0;
+}
+
+.pdf-security-panel__status-kicker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.pdf-security-panel__eyebrow,
+.pdf-security-panel__password-heading p,
+.pdf-security-panel__permissions legend {
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+}
+
+.pdf-security-panel__file-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-security-panel__status-card h3,
+.pdf-security-panel__success h3,
+.pdf-security-panel__section-heading h3 {
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pdf-security-panel__status-card h3 {
+  margin-top: 1px;
+}
+
+.pdf-security-panel__success h3:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pdf-security-panel__status-detail,
+.pdf-security-panel__output-location,
+.pdf-security-panel__section-heading p,
+.pdf-security-panel__success-note,
+.pdf-security-panel__accessibility-note,
+.pdf-security-panel__retention-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.pdf-security-panel__fact-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 0;
+  margin-top: var(--space-2) !important;
+  list-style: none;
+}
+
+.pdf-security-panel__fact-list li {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--panel);
+  color: var(--body);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+
+.pdf-security-panel__seal {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.pdf-security-panel__seal[data-state="protected"],
+.pdf-security-panel__seal[data-state="verified"] {
+  border-color: var(--accent);
+  color: var(--primary-deep);
+}
+
+.pdf-security-panel__seal[data-state="verified"] {
+  background: var(--accent-pale);
+}
+
+.pdf-security-panel__seal svg {
+  width: 34px;
+  height: 34px;
+  overflow: visible;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pdf-security-panel__seal-ring {
+  opacity: 0.62;
+}
+
+.pdf-security-panel__seal-check {
+  stroke-width: 1.8;
+}
+
+.pdf-security-panel__seal-rays {
+  stroke: var(--identity-amber);
+  stroke-width: 1.2;
+}
+
+.pdf-security-panel__message,
+.pdf-security-panel__operation-error {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  color: var(--body);
+  font-size: var(--text-xs);
+}
+
+.pdf-security-panel__message[data-tone="danger"],
+.pdf-security-panel__operation-error {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.pdf-security-panel__message[data-tone="caution"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.pdf-security-panel__progress {
+  display: grid;
+  min-height: 132px;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.pdf-security-panel__progress p {
+  color: var(--body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.pdf-security-panel__form-shell,
+.pdf-security-panel__form,
+.pdf-security-panel__section-heading {
+  display: grid;
+}
+
+.pdf-security-panel__form-shell {
+  gap: var(--space-3);
+}
+
+.pdf-security-panel__section-heading {
+  gap: 2px;
+}
+
+.pdf-security-panel__form {
+  gap: var(--space-3);
+}
+
+.pdf-security-panel__prepare {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background:
+    radial-gradient(circle at 12% 18%, var(--accent-pale), transparent 56%),
+    var(--chrome);
+}
+
+.pdf-security-panel__prepare-visual {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  color: var(--primary-deep);
+}
+
+.pdf-security-panel__prepare-visual svg {
+  width: 23px;
+  height: 23px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pdf-security-panel__prepare-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pdf-security-panel__prepare-copy > p:last-child {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.pdf-security-panel__prepare > .pdf-security-panel__operation-error,
+.pdf-security-panel__prepare > .pdf-security-panel__actions {
+  grid-column: 1 / -1;
+}
+
+.pdf-security-panel__prepared-output {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--accent-pale);
+}
+
+.pdf-security-panel__prepared-output > div {
+  min-width: 0;
+}
+
+.pdf-security-panel__prepared-name {
+  overflow: hidden;
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-security-panel__password-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: calc(-1 * var(--space-2));
+}
+
+.pdf-security-panel__reveal-button {
+  padding: 2px var(--space-1);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  cursor: default;
+}
+
+.pdf-security-panel__reveal-button:hover {
+  background: var(--hover-ground);
+}
+
+.pdf-security-panel__reveal-button:focus-visible,
+.pdf-security-panel__field input:focus-visible,
+.pdf-security-panel__permissions input:focus-visible,
+.pdf-security-panel__primary-button:focus-visible,
+.pdf-security-panel__secondary-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pdf-security-panel__field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
+.pdf-security-panel__field input {
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.pdf-security-panel__field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.pdf-security-panel__guidance {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: calc(-1 * var(--space-2));
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.pdf-security-panel__guidance p[data-tone="danger"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.pdf-security-panel__guidance p[data-tone="caution"] {
+  color: var(--warn);
+}
+
+.pdf-security-panel__permissions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+}
+
+.pdf-security-panel__permissions legend {
+  margin-bottom: var(--space-1);
+}
+
+.pdf-security-panel__permissions label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--chrome);
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.pdf-security-panel__permissions input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.pdf-security-panel__accessibility-note {
+  margin-top: calc(-1 * var(--space-2)) !important;
+}
+
+.pdf-security-panel__retention-note {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.pdf-security-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.pdf-security-panel__primary-button,
+.pdf-security-panel__secondary-button {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  box-shadow: var(--shadow-control);
+  cursor: default;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.pdf-security-panel__primary-button {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-primary);
+}
+
+.pdf-security-panel__primary-button:hover:not(:disabled) {
+  background: var(--primary-deep);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.pdf-security-panel__primary-button:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.pdf-security-panel__secondary-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--body);
+}
+
+.pdf-security-panel__secondary-button:hover {
+  border-color: var(--muted);
+  background: var(--hover-ground);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.pdf-security-panel__unlocked-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.pdf-security-panel__unlocked-copy p {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.pdf-security-panel__success {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-popover);
+  background: var(--accent-pale);
+  animation: pdf-security-success-in var(--dur-tool-expand) var(--ease-emil);
+}
+
+.pdf-security-panel__success .pdf-security-panel__seal {
+  animation: pdf-security-seal-settle var(--dur-tool-expand) var(--ease-emil);
+}
+
+.pdf-security-panel__success .pdf-security-panel__seal-check {
+  stroke-dasharray: 8;
+  stroke-dashoffset: 8;
+  animation: pdf-security-check-in var(--duration-medium) var(--ease-out) var(--duration-fast) forwards;
+}
+
+.pdf-security-panel__success .pdf-security-panel__seal-rays {
+  opacity: 0;
+  animation: pdf-security-rays-in calc(var(--dur-tool-expand) * 2) var(--ease-out) var(--duration-fast);
+}
+
+.pdf-security-panel__success-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.pdf-security-panel__output-name {
+  overflow: hidden;
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-security-panel__success-note {
+  margin-top: var(--space-2) !important;
+}
+
+.pdf-security-panel__actions--success {
+  grid-column: 1 / -1;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.pdf-security-panel__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px !important;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes pdf-security-success-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pdf-security-seal-settle {
+  from {
+    transform: scale(0.96);
+  }
+
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes pdf-security-check-in {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pdf-security-rays-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+
+  36% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-security-panel__success,
+  .pdf-security-panel__success .pdf-security-panel__seal,
+  .pdf-security-panel__success .pdf-security-panel__seal-check,
+  .pdf-security-panel__success .pdf-security-panel__seal-rays {
+    animation: none;
+  }
+
+  .pdf-security-panel__success .pdf-security-panel__seal-check {
+    stroke-dashoffset: 0;
+  }
+}

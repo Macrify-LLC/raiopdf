@@ -4,6 +4,7 @@ pub mod print_ops;
 pub mod word_ops;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -16,10 +17,10 @@ use std::{
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, Once,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(windows)]
@@ -41,7 +42,7 @@ pub const ENGINE_LOG_FILE_NAME: &str = "engine.log";
 pub const ENGINE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 pub const ENGINE_LOG_GENERATIONS: usize = 2;
 pub const AUTH_HEADER_NAME: &str = "x-raiopdf-auth";
-pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas";
+pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas";
 pub const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 pub const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 pub const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
@@ -1347,6 +1348,7 @@ fn start_auth_proxy_inner(
     token: String,
     idle: Option<Arc<(Mutex<IdleShutdownState>, Condvar)>>,
 ) -> io::Result<ProxyHandle> {
+    purge_stale_private_temp_dirs();
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -1512,6 +1514,22 @@ fn proxy_client_with_activity(
         return result;
     }
 
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/protect")
+    {
+        let result = handle_local_protect(&mut client, &request_head, &buffered_body);
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
+    if request_method(&request_head) == Some("POST")
+        && request_path(&request_head) == Some("/local/protection-facts")
+    {
+        let result = handle_local_protection_facts(&mut client, &request_head, &buffered_body);
+        let _ = client.shutdown(Shutdown::Write);
+        return result;
+    }
+
     // PDF/A runs the bundled Ghostscript locally. Stirling 2.14.0 gates its
     // /api/v1/convert/pdf/pdfa endpoint behind the LibreOffice dependency group
     // (soffice), which RaioPDF does not bundle — so that endpoint is always
@@ -1620,17 +1638,16 @@ fn request_path(request_head: &[u8]) -> Option<&str> {
         .map(|target| target.split_once('?').map_or(target, |(path, _)| path))
 }
 
-/// Handle `POST /local/decrypt`: PDF bytes in the body, optionally base64
-/// encoded when `body_encoding=base64`, and the password hex-encoded in the
-/// loopback query string or legacy header. Responds with the decrypted PDF
-/// (200) or a plain-text error (422).
+/// Handle `POST /local/decrypt`: password and PDF bytes are accepted only in
+/// the bounded binary secret envelope. Responds with the decrypted PDF (200)
+/// or a plain-text error (422), never echoing the secret.
 fn handle_local_decrypt(
     client: &mut TcpStream,
     request_head: &[u8],
     buffered_body: &[u8],
 ) -> io::Result<()> {
-    let body = match read_local_pdf_body(client, request_head, buffered_body) {
-        Ok(body) => body,
+    let envelope = match read_secret_pdf_envelope(client, request_head, buffered_body, 3) {
+        Ok(envelope) => envelope,
         Err(message) => {
             return write_local_bytes_response(
                 client,
@@ -1643,12 +1660,7 @@ fn handle_local_decrypt(
         }
     };
 
-    let password = request_query_param(request_head, "password_hex")
-        .or_else(|| request_header(request_head, "x-raiopdf-password-hex"))
-        .map(decode_hex)
-        .unwrap_or_default();
-
-    match run_qpdf_decrypt(&body, &password) {
+    match run_qpdf_decrypt(&envelope.pdf, envelope.password.as_bytes()) {
         Ok(decrypted) => write_local_bytes_response(
             client,
             request_head,
@@ -1657,6 +1669,181 @@ fn handle_local_decrypt(
             "application/pdf",
             &decrypted,
         ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+const SECRET_PDF_MAGIC: &[u8; 8] = b"RAIOSEC1";
+const SECRET_PDF_HEADER_BYTES: usize = 22;
+const SECRET_PDF_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+struct SecretPdfEnvelope {
+    allow_printing: bool,
+    allow_copying: bool,
+    password: String,
+    pdf: Vec<u8>,
+}
+
+fn read_secret_pdf_envelope(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+    expected_operation: u8,
+) -> Result<SecretPdfEnvelope, String> {
+    let advertised = request_content_length(request_head);
+    if advertised > SECRET_PDF_MAX_BYTES {
+        return Err("secret PDF request exceeds the local processing limit".to_string());
+    }
+    let body = read_request_body(client, request_head, buffered_body)
+        .map_err(|_| "could not read secret PDF request".to_string())?;
+    if body.len() > SECRET_PDF_MAX_BYTES || body.len() < SECRET_PDF_HEADER_BYTES {
+        return Err("secret PDF request had an invalid length".to_string());
+    }
+    if body.get(..8) != Some(SECRET_PDF_MAGIC) {
+        return Err("secret PDF request had an invalid signature".to_string());
+    }
+    let operation = body[8];
+    if operation != expected_operation {
+        return Err("secret PDF request used the wrong operation".to_string());
+    }
+    let flags = body[9];
+    if flags & !0b11 != 0 {
+        return Err("secret PDF request used invalid option flags".to_string());
+    }
+    let password_length = u32::from_be_bytes(body[10..14].try_into().unwrap()) as usize;
+    let pdf_length_u64 = u64::from_be_bytes(body[14..22].try_into().unwrap());
+    let pdf_length = usize::try_from(pdf_length_u64)
+        .map_err(|_| "secret PDF request declared an invalid PDF length".to_string())?;
+    if password_length > 127 || pdf_length == 0 {
+        return Err("secret PDF request declared invalid field lengths".to_string());
+    }
+    let expected_length = SECRET_PDF_HEADER_BYTES
+        .checked_add(password_length)
+        .and_then(|length| length.checked_add(pdf_length))
+        .ok_or_else(|| "secret PDF request length overflowed".to_string())?;
+    if expected_length != body.len() {
+        return Err("secret PDF request length did not match its framing".to_string());
+    }
+    let password_end = SECRET_PDF_HEADER_BYTES + password_length;
+    let password = std::str::from_utf8(&body[SECRET_PDF_HEADER_BYTES..password_end])
+        .map_err(|_| "PDF password was not valid UTF-8".to_string())?
+        .to_string();
+    if password
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
+    {
+        return Err("PDF password contained an unsupported control character".to_string());
+    }
+    Ok(SecretPdfEnvelope {
+        allow_printing: flags & 0b01 != 0,
+        allow_copying: flags & 0b10 != 0,
+        password,
+        pdf: body[password_end..].to_vec(),
+    })
+}
+
+fn handle_local_protect(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let envelope = match read_secret_pdf_envelope(client, request_head, buffered_body, 1) {
+        Ok(envelope) => envelope,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+    match run_local_protect(&envelope) {
+        Ok(protected) => write_local_bytes_response(
+            client,
+            request_head,
+            200,
+            "OK",
+            "application/pdf",
+            &protected,
+        ),
+        Err(message) => write_local_bytes_response(
+            client,
+            request_head,
+            422,
+            "Unprocessable Entity",
+            "text/plain",
+            message.as_bytes(),
+        ),
+    }
+}
+
+fn run_local_protect(envelope: &SecretPdfEnvelope) -> Result<Vec<u8>, String> {
+    let work_dir = create_unique_temp_dir("raiopdf-protect")?;
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
+    let input = work_dir.join("in.pdf");
+    let output = work_dir.join("protected.pdf");
+    path_ops::write_private_file(&input, &envelope.pdf).map_err(|error| error.to_string())?;
+    let toolchain = path_ops::PathOpsToolchain::discover(None)
+        .with_tool_timeout(local_tool_timeout(envelope.pdf.len()));
+    path_ops::protect(
+        &toolchain,
+        &input,
+        &envelope.password,
+        &path_ops::ProtectionOptions {
+            allow_printing: envelope.allow_printing,
+            allow_copying: envelope.allow_copying,
+        },
+        &output,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::read(&output).map_err(|error| format!("read protected output: {error}"))
+}
+
+fn handle_local_protection_facts(
+    client: &mut TcpStream,
+    request_head: &[u8],
+    buffered_body: &[u8],
+) -> io::Result<()> {
+    let envelope = match read_secret_pdf_envelope(client, request_head, buffered_body, 2) {
+        Ok(envelope) => envelope,
+        Err(message) => {
+            return write_local_bytes_response(
+                client,
+                request_head,
+                422,
+                "Unprocessable Entity",
+                "text/plain",
+                message.as_bytes(),
+            );
+        }
+    };
+    let result = (|| -> Result<Vec<u8>, String> {
+        let work_dir = create_unique_temp_dir("raiopdf-protection-facts")?;
+        let _cleanup = TempDirGuard::hold(work_dir.clone())?;
+        let input = work_dir.join("input.pdf");
+        path_ops::write_private_file(&input, &envelope.pdf).map_err(|error| error.to_string())?;
+        let toolchain = path_ops::PathOpsToolchain::discover(None)
+            .with_tool_timeout(local_tool_timeout(envelope.pdf.len()));
+        let facts = path_ops::inspect_protection(&toolchain, &input, &envelope.password, None)
+            .map_err(|error| error.to_string())?;
+        serde_json::to_vec(&facts).map_err(|error| format!("encode protection facts: {error}"))
+    })();
+    match result {
+        Ok(json) => {
+            write_local_bytes_response(client, request_head, 200, "OK", "application/json", &json)
+        }
         Err(message) => write_local_bytes_response(
             client,
             request_head,
@@ -2301,7 +2488,7 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
     let (icc_source, def_source) = resolve_pdfa_resources(&ghostscript)?;
 
     let work_dir = create_unique_temp_dir("raiopdf-pdfa")?;
-    let _cleanup = TempDirGuard(work_dir.clone());
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
@@ -2372,7 +2559,7 @@ fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
 
 fn run_path_op_compress(pdf: &[u8]) -> Result<Vec<u8>, String> {
     let work_dir = create_unique_temp_dir("raiopdf-compress")?;
-    let _cleanup = TempDirGuard(work_dir.clone());
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
@@ -2396,7 +2583,7 @@ fn run_path_op_ocr_cancelable(
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<u8>, String> {
     let work_dir = create_unique_temp_dir("raiopdf-ocr")?;
-    let _cleanup = TempDirGuard(work_dir.clone());
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
@@ -2428,7 +2615,7 @@ fn run_path_op_ocr_cancelable(
 
 fn run_path_op_redact_areas(pdf: &[u8], areas: &[path_ops::RedactArea]) -> Result<Vec<u8>, String> {
     let work_dir = create_unique_temp_dir("raiopdf-redact")?;
-    let _cleanup = TempDirGuard(work_dir.clone());
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
 
     let in_path = work_dir.join("in.pdf");
     let out_path = work_dir.join("out.pdf");
@@ -2509,52 +2696,31 @@ fn ghostscript_share_root(ghostscript: &Path) -> Option<PathBuf> {
     Some(PathBuf::from("/usr/share/ghostscript").join(version))
 }
 
-/// Losslessly strip encryption with the bundled qpdf. Input goes via a temp file
-/// (qpdf can't read stdin); the password via a temp file (never a process arg);
-/// output comes back on stdout, so no plaintext output temp file is left behind.
+/// Losslessly strip encryption with the bundled qpdf. Input/output live only in
+/// a private work directory; the password travels through qpdf `@-` stdin.
 fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
     let qpdf = resolve_qpdf().ok_or_else(|| "qpdf binary not found in payload".to_string())?;
 
     let work_dir = create_unique_temp_dir("raiopdf-decrypt")?;
-    let _cleanup = TempDirGuard(work_dir.clone());
+    let _cleanup = TempDirGuard::hold(work_dir.clone())?;
 
     let in_path = work_dir.join("in.pdf");
-    let pw_path = work_dir.join("pw.txt");
-    fs::write(&in_path, pdf).map_err(|error| format!("write input: {error}"))?;
-    // qpdf --password-file reads the first line; an empty file == empty password.
-    fs::write(&pw_path, password).map_err(|error| format!("write password: {error}"))?;
-
-    let arguments: Vec<OsString> = vec![
-        OsString::from("--decrypt"),
-        OsString::from(format!("--password-file={}", pw_path.display())),
-        OsString::from("--warning-exit-0"),
-        in_path.as_os_str().to_os_string(),
-        OsString::from("-"),
-    ];
-
-    // Deadline-bounded: a pathological PDF must not wedge qpdf — and this
-    // request thread — forever (idle shutdown counts active requests).
-    let output = path_ops::run_command_with_timeout(
-        &qpdf,
-        &arguments,
-        None,
-        &[],
-        local_tool_timeout(pdf.len()),
-    )
-    .map_err(|error| error.to_string())?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "qpdf --decrypt failed ({}): {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-    if output.stdout.is_empty() {
+    let out_path = work_dir.join("out.pdf");
+    path_ops::write_private_file(&in_path, pdf).map_err(|error| error.to_string())?;
+    let password = std::str::from_utf8(password)
+        .map_err(|_| "PDF password was not valid UTF-8".to_string())?;
+    let toolchain = path_ops::PathOpsToolchain {
+        qpdf: Some(qpdf),
+        tool_timeout: Some(local_tool_timeout(pdf.len())),
+        ..Default::default()
+    };
+    path_ops::decrypt(&toolchain, &in_path, password, &out_path, &work_dir)
+        .map_err(|error| error.to_string())?;
+    let output = fs::read(&out_path).map_err(|error| format!("read decrypted output: {error}"))?;
+    if output.is_empty() {
         return Err("qpdf produced no output".to_string());
     }
-    Ok(output.stdout)
+    Ok(output)
 }
 
 fn resolve_qpdf() -> Option<PathBuf> {
@@ -2604,20 +2770,112 @@ fn create_unique_temp_dir(prefix: &str) -> Result<PathBuf, String> {
             "{prefix}-{}-{nanos}-{sequence}",
             std::process::id()
         ));
-        match fs::create_dir(&candidate) {
+        match path_ops::create_private_dir(&candidate) {
             Ok(()) => return Ok(candidate),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_error) if candidate.exists() => continue,
             Err(error) => return Err(format!("temp dir: {error}")),
         }
     }
     Err("temp dir: could not create a unique work directory".to_string())
 }
 
-struct TempDirGuard(PathBuf);
+fn purge_stale_private_temp_dirs() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        purge_private_temp_dirs_in(&env::temp_dir());
+    });
+}
+
+const PRIVATE_TEMP_OWNER_LOCK: &str = ".raiopdf-owner.lock";
+const LEGACY_PRIVATE_TEMP_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn purge_private_temp_dirs_in(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if ![
+            "raiopdf-protect-",
+            "raiopdf-protection-facts-",
+            "raiopdf-decrypt-",
+            "raiopdf-pdfa-",
+            "raiopdf-compress-",
+            "raiopdf-ocr-",
+            "raiopdf-redact-",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        {
+            continue;
+        }
+
+        let path = entry.path();
+        let owner_lock = path.join(PRIVATE_TEMP_OWNER_LOCK);
+        let reclaim = match OpenOptions::new().read(true).write(true).open(owner_lock) {
+            Ok(lock) => match lock.try_lock_exclusive() {
+                Ok(()) => {
+                    drop(lock);
+                    true
+                }
+                Err(_) => false,
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age >= LEGACY_PRIVATE_TEMP_TTL),
+            Err(_) => false,
+        };
+        if reclaim {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+struct TempDirGuard {
+    path: PathBuf,
+    owner_lock: Option<File>,
+}
+
+impl TempDirGuard {
+    fn hold(path: PathBuf) -> Result<Self, String> {
+        let result = (|| {
+            let marker = path.join(PRIVATE_TEMP_OWNER_LOCK);
+            path_ops::write_private_file(&marker, b"").map_err(|error| error.to_string())?;
+            let owner_lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&marker)
+                .map_err(|error| format!("open private-temp owner lock: {error}"))?;
+            owner_lock
+                .try_lock_exclusive()
+                .map_err(|error| format!("lock private-temp owner: {error}"))?;
+            Ok(Self {
+                path: path.clone(),
+                owner_lock: Some(owner_lock),
+            })
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&path);
+        }
+        result
+    }
+}
 
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        drop(self.owner_lock.take());
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -2644,20 +2902,6 @@ fn write_local_bytes_response(
     client.write_all(head.as_bytes())?;
     client.write_all(body)?;
     Ok(())
-}
-
-fn decode_hex(value: &str) -> Vec<u8> {
-    let bytes = value.trim().as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    let mut index = 0;
-    while index + 1 < bytes.len() {
-        match (hex_value(bytes[index]), hex_value(bytes[index + 1])) {
-            (Some(high), Some(low)) => out.push((high << 4) | low),
-            _ => break,
-        }
-        index += 2;
-    }
-    out
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -3397,7 +3641,7 @@ mod tests {
         stop_proxy(&Arc::new(Mutex::new(Some(proxy))));
         assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(response.contains(
-            "Access-Control-Allow-Headers: Content-Type, X-RaioPDF-Auth, X-RaioPDF-Password-Hex, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas"
+            "Access-Control-Allow-Headers: Content-Type, X-RaioPDF-Auth, X-RaioPDF-PdfA-Level, X-RaioPDF-PdfA-Strict, X-RaioPDF-Redaction-Areas"
         ));
         assert_eq!(response.matches("Access-Control-Allow-Headers:").count(), 1);
         assert!(response.ends_with("bad"));
@@ -4033,6 +4277,63 @@ mod tests {
         assert!(second.is_dir());
         let _ = fs::remove_dir_all(&first);
         let _ = fs::remove_dir_all(&second);
+    }
+
+    #[test]
+    fn private_temp_sweep_removes_dead_owner_and_preserves_live_owner() {
+        use fs2::FileExt;
+
+        let root = test_temp_dir("private-temp-sweep");
+        let dead = root.join("raiopdf-protect-111-1-1");
+        let live = root.join("raiopdf-decrypt-222-2-2");
+        path_ops::create_private_dir(&dead).expect("dead dir");
+        path_ops::create_private_dir(&live).expect("live dir");
+        path_ops::write_private_file(&dead.join(PRIVATE_TEMP_OWNER_LOCK), b"")
+            .expect("dead marker");
+        path_ops::write_private_file(&live.join(PRIVATE_TEMP_OWNER_LOCK), b"")
+            .expect("live marker");
+        let live_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(live.join(PRIVATE_TEMP_OWNER_LOCK))
+            .expect("open live marker");
+        live_lock.try_lock_exclusive().expect("hold live lock");
+
+        purge_private_temp_dirs_in(&root);
+
+        assert!(
+            !dead.exists(),
+            "dead-owner plaintext temp must be reclaimed"
+        );
+        assert!(
+            live.exists(),
+            "a concurrent live instance must be preserved"
+        );
+        drop(live_lock);
+        purge_private_temp_dirs_in(&root);
+        assert!(
+            !live.exists(),
+            "released owner lock must be reclaimed immediately"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn private_temp_guard_closes_owner_lock_before_cleanup() {
+        let root = test_temp_dir("private-temp-guard");
+        let guarded = root.join("raiopdf-protect-guarded");
+        path_ops::create_private_dir(&guarded).expect("guarded dir");
+        let guard = TempDirGuard::hold(guarded.clone()).expect("hold guard");
+        path_ops::write_private_file(&guarded.join("protected.pdf"), b"sensitive")
+            .expect("private output");
+
+        drop(guard);
+
+        assert!(
+            !guarded.exists(),
+            "dropping a guard must immediately remove its private files"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

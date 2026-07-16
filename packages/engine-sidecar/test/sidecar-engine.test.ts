@@ -74,13 +74,116 @@ describe("SidecarPdfEngine", () => {
     await expect(engine.removeEncryption(bytes(1, 2, 3), "secret")).resolves.toEqual(bytes(9, 8, 7));
 
     // Decrypt goes to the engine's local qpdf interceptor, not Stirling's lossy
-    // /remove-password: PDF bytes are base64 text in the body, the password is
-    // hex-encoded in a loopback query param so qpdf never sees it on a command
-    // line.
+    // /remove-password. Its password stays inside the bounded binary envelope.
     expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
-    expectBase64Body(calls[0], [1, 2, 3]);
-    expect(queryValue(calls[0], "body_encoding")).toBe("base64");
-    expect(queryValue(calls[0], "password_hex")).toBe("736563726574");
+    await expectProtectionEnvelope(calls[0], {
+      operation: 3,
+      password: "secret",
+      allowPrinting: false,
+      allowCopying: false,
+      pdfBytes: [1, 2, 3],
+    });
+    expect(queryValue(calls[0], "password_hex")).toBeNull();
+    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBeNull();
+  });
+
+  it("creates an AES-256 protected copy locally without putting the open password in the URL", async () => {
+    const { calls, fetchImpl } = createFetch(pdfResponse(9, 8, 7));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.createProtectedCopy(bytes(1, 2, 3), {
+      openPassword: "correct horse battery staple",
+      allowPrinting: true,
+      allowCopying: false,
+    })).resolves.toEqual(bytes(9, 8, 7));
+
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/protect");
+    await expectProtectionEnvelope(calls[0], {
+      operation: 1,
+      password: "correct horse battery staple",
+      allowPrinting: true,
+      allowCopying: false,
+      pdfBytes: [1, 2, 3],
+    });
+    expect(queryValue(calls[0], "body_encoding")).toBeNull();
+    expect(queryValue(calls[0], "allow_printing")).toBeNull();
+    expect(queryValue(calls[0], "allow_copying")).toBeNull();
+    expect(calls[0]?.url).not.toContain("correct");
+    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBeNull();
+  });
+
+  it("inspects source protection facts without returning or exposing the password", async () => {
+    const { calls, fetchImpl } = createFetch(jsonResponse({
+      kind: "open-password",
+      encryption: "AES-256",
+      permissions: {
+        printing: "full",
+        copying: "blocked",
+        accessibilityExtraction: "allowed",
+      },
+    }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.inspectProtection(bytes(4, 5), " café secret ")).resolves.toEqual({
+      kind: "open-password",
+      encryption: "AES-256",
+      permissions: {
+        printing: "full",
+        copying: "blocked",
+        accessibilityExtraction: "allowed",
+      },
+    });
+
+    expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/protection-facts");
+    await expectProtectionEnvelope(calls[0], {
+      operation: 2,
+      password: " café secret ",
+      allowPrinting: false,
+      allowCopying: false,
+      pdfBytes: [4, 5],
+    });
+    expect(calls[0]?.url).not.toContain("secret");
+    expect(headerValue(calls[0], "X-RaioPDF-Password-Hex")).toBeNull();
+  });
+
+  it.each([
+    ["", "PASSWORD_REQUIRED"],
+    ["wrong password", "PASSWORD_INVALID"],
+  ] as const)(
+    "maps rejected protection inspection password %j to %s",
+    async (password, expectedCode) => {
+      const rejection = password.length === 0
+        ? "PASSWORD_REQUIRED: A PDF password is required."
+        : "PASSWORD_INVALID: The PDF password was not accepted.";
+      const { fetchImpl } = createFetch(textResponse(rejection, 422));
+      const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+      await expect(engine.inspectProtection(bytes(4, 5), password)).rejects.toMatchObject({
+        code: expectedCode,
+      });
+    },
+  );
+
+  it("preserves non-password protection inspection failures", async () => {
+    const { fetchImpl } = createFetch(
+      textResponse("TOOLCHAIN_MISSING: qpdf binary not found in payload", 422),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.inspectProtection(bytes(4, 5), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: expect.stringContaining("TOOLCHAIN_MISSING"),
+    });
+  });
+
+  it("preserves malformed protection-facts responses", async () => {
+    const { fetchImpl } = createFetch(jsonResponse({ kind: "open-password" }));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.inspectProtection(bytes(4, 5), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: "PDF protection facts were incomplete.",
+    });
   });
 
   it("tries an empty local decrypt password for owner-restricted PDFs", async () => {
@@ -90,9 +193,14 @@ describe("SidecarPdfEngine", () => {
     await expect(engine.removeEncryption(bytes(1, 2, 3), "")).resolves.toEqual(bytes(9, 8, 7));
 
     expect(pathFromUrl(calls[0]?.url ?? "")).toBe("/local/decrypt");
-    expectBase64Body(calls[0], [1, 2, 3]);
-    expect(queryValue(calls[0], "body_encoding")).toBe("base64");
-    expect(queryValue(calls[0], "password_hex")).toBe("");
+    await expectProtectionEnvelope(calls[0], {
+      operation: 3,
+      password: "",
+      allowPrinting: false,
+      allowCopying: false,
+      pdfBytes: [1, 2, 3],
+    });
+    expect(queryValue(calls[0], "password_hex")).toBeNull();
   });
 
   it("maps an empty-password local decrypt failure to PASSWORD_REQUIRED", async () => {
@@ -116,6 +224,18 @@ describe("SidecarPdfEngine", () => {
     await expect(engine.removeEncryption(bytes(1), "wrong")).rejects.toMatchObject({
       code: "ENCRYPTED_DOCUMENT",
       message: "The PDF password was not accepted.",
+    });
+  });
+
+  it("preserves non-password local decrypt failures", async () => {
+    const { fetchImpl } = createFetch(
+      textResponse("TOOLCHAIN_MISSING: qpdf binary not found in payload", 422),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+
+    await expect(engine.removeEncryption(bytes(1), "typed password")).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: expect.stringContaining("TOOLCHAIN_MISSING"),
     });
   });
 
@@ -1791,6 +1911,33 @@ function expectBase64Body(call: FetchCall | undefined, expectedBytes: readonly n
   const body = call?.init?.body;
   expect(typeof body).toBe("string");
   expect(body).toBe(btoa(String.fromCharCode(...expectedBytes)));
+}
+
+async function expectProtectionEnvelope(
+  call: FetchCall | undefined,
+  expected: {
+    operation: number;
+    password: string;
+    allowPrinting: boolean;
+    allowCopying: boolean;
+    pdfBytes: readonly number[];
+  },
+): Promise<void> {
+  const body = call?.init?.body;
+  expect(body).toBeInstanceOf(Blob);
+  const bytes = new Uint8Array(await (body as Blob).arrayBuffer());
+  expect(new TextDecoder().decode(bytes.subarray(0, 8))).toBe("RAIOSEC1");
+  expect(bytes[8]).toBe(expected.operation);
+  expect(bytes[9]).toBe((expected.allowPrinting ? 1 : 0) | (expected.allowCopying ? 2 : 0));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const passwordLength = view.getUint32(10, false);
+  const pdfLength = Number(view.getBigUint64(14, false));
+  const passwordStart = 22;
+  const pdfStart = passwordStart + passwordLength;
+  expect(new TextDecoder().decode(bytes.subarray(passwordStart, pdfStart))).toBe(expected.password);
+  expect([...bytes.subarray(pdfStart)]).toEqual(expected.pdfBytes);
+  expect(pdfLength).toBe(expected.pdfBytes.length);
+  expect(bytes.byteLength).toBe(pdfStart + pdfLength);
 }
 
 function pathFromUrl(url: string): string {

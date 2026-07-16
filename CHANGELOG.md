@@ -15,6 +15,11 @@ fades as download volume accrues.
 
 ### Added
 
+- **PDF Security.** Create a separate AES-256 protected copy with an open
+  password and optional advisory print/copy restrictions, or save an unlocked
+  copy of a protected PDF. RaioPDF includes current unsaved edits without changing the
+  original, verifies the protected output before reporting success, and never
+  stores the password.
 - **Highlight-to-redact.** Redaction mode now has a "Select text" sub-mode: highlight
   text with the pointer and each line becomes a marked area, alongside the existing
   draw-a-box and search-text methods. It needs no full-document text extraction, so it

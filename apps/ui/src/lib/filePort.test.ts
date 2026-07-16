@@ -35,6 +35,7 @@ import {
   readBrowserFileSource,
   readPdfRange,
   readPickedFileSource,
+  saveStreamedCopy,
   saveStreamedCopyIntoDirectory,
   type FileGrant,
   type PickedDirectory,
@@ -160,6 +161,43 @@ describe("readPickedFileSource", () => {
 });
 
 describe("directory saves", () => {
+  it("passes excluded protected-source grants through both Save As lanes", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    invokeState.handler = (command) => command === "save_pdf_dialog"
+      ? { fileGrant: "memory-saved", name: "unlocked.pdf" }
+      : { fileGrant: "stream-saved", name: "unlocked.pdf" };
+    const { filePort } = await import("./filePort");
+    const excluded = ["protected-source" as FileGrant];
+
+    await filePort.saveFile(new Uint8Array([1]), "unlocked.pdf", null, excluded);
+    await saveStreamedCopy(
+      { kind: "rangeGrant", grant: "current-source" as FileGrant },
+      "unlocked.pdf",
+      excluded,
+    );
+
+    expect(invokeState.calls[0]).toMatchObject({
+      command: "save_pdf_dialog",
+      options: {
+        headers: {
+          "x-raio-excluded-file-grants": "%5B%22protected-source%22%5D",
+        },
+      },
+    });
+    expect(invokeState.calls[1]).toEqual({
+      command: "save_pdf_copy_dialog",
+      args: {
+        sourceGrant: "current-source",
+        suggestedName: "unlocked.pdf",
+        excludedSourceGrants: ["protected-source"],
+      },
+    });
+  });
+
   it("Tauri filePort writes Save As bytes as the raw invoke body", async () => {
     vi.resetModules();
     Object.defineProperty(window, "__TAURI_INTERNALS__", {

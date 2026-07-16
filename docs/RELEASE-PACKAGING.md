@@ -6,10 +6,15 @@ macOS installer may contain only the macOS arm64 runtime and native tools. We do
 not build a universal macOS package or put both operating-system payloads in one
 download.
 
-The macOS overlay already records the future DMG, updater, and resource contract,
-but `bundle.active` remains false until the native payload is assembled and
-verified on Apple Silicon. This prevents CI's compile-only placeholder from ever
-becoming a plausible distributable.
+The macOS overlay records the DMG, updater, and resource contract. `bundle.active`
+is now true: the relocatable macOS arm64 payload is assembled and verified on Apple
+Silicon (`installer/assemble-macos-arm64.sh` plus the manifest, Mach-O boundary, and
+size gates), so `pnpm build:shell:macos-arm64` produces an unsigned `.app`/`.dmg`.
+CI's compile-only `shell-macos-arm64` job stays non-distributable regardless: it runs
+the payload assembler with `--prepare-empty` (an empty-payload marker) and builds Tauri
+with `--no-bundle`, so it compiles the shell without ever emitting a bundle. Signing and
+notarization remain a separate maintainer-local step (`docs/SIGNING.md`); the `.app`/`.dmg`
+produced by the bundle are unsigned.
 
 The platform contract is defined in `installer/platforms.mjs`. It owns the
 payload, cache, release-stage, Tauri updater, Rust target, and public artifact

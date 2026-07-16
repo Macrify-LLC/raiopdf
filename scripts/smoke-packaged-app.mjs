@@ -45,15 +45,35 @@ function ok(message) {
   console.log(`ok    ${message}`);
 }
 
-/** The bundle's own engine-host, with every RAIOPDF_ENGINE_* hint removed. */
+/** The PATH a Finder-launched app inherits from launchd — not a developer shell's. */
+const LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/**
+ * The bundle's own engine-host, run in the environment a double-clicked app gets.
+ *
+ * Stripping RAIOPDF_ENGINE_* is not enough on its own. The OCR runner prepends the
+ * payload's bin dirs and then *appends the inherited PATH* as a fallback
+ * (`crates/engine-sidecar-core/src/path_ops.rs`), so a developer shell with Homebrew's
+ * gs/tesseract on PATH would let a bundle that is missing its own copies still pass —
+ * the precise false pass this harness exists to prevent, and the same Homebrew fallback
+ * that made the canary's OCR result meaningless. Replace PATH with launchd's, and drop
+ * the toolchain hints a shell might be carrying, so the only way to pass is with the
+ * tools actually inside the bundle.
+ */
 function spawnEngineHost() {
   const bin = path.join(appPath, "Contents/MacOS/raiopdf-engine-host");
   if (!existsSync(bin)) {
     throw new Error(`no engine-host in the bundle: ${bin}`);
   }
+  const stripped = new Set(["TESSDATA_PREFIX", "PYTHONHOME", "PYTHONPATH", "GS_LIB"]);
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("RAIOPDF_ENGINE_")),
+    Object.entries(process.env).filter(
+      ([key]) => !key.startsWith("RAIOPDF_ENGINE_") && !stripped.has(key),
+    ),
   );
+  env.PATH = LAUNCHD_PATH;
+  // TMPDIR is deliberately left alone: launchd gives a real app one, so removing it
+  // would test a situation the product never sees.
   // stdin stays piped: the host treats EOF as a shutdown signal.
   return spawn(bin, [], { env, stdio: ["pipe", "pipe", "pipe"] });
 }

@@ -527,6 +527,12 @@ prune_payload() {
   # pip is only needed at assembly time to install OCRmyPDF; drop it (and its
   # vendored Windows .exe launchers) from the shipped runtime.
   rm -rf -- "$py_lib"/site-packages/pip "$py_lib"/site-packages/pip-*.dist-info 2>/dev/null || true
+  # Tcl/Tk GUI runtime — unused by OCRmyPDF, and its packages reference sibling
+  # dylibs by flat-namespace leaf name (not @rpath), so drop them entirely.
+  local py_root="$PAYLOAD_DIR/ocr/python/lib"
+  rm -rf -- "$py_root"/tcl9* "$py_root"/tk9* "$py_root"/thread[0-9]* "$py_root"/itcl[0-9]* "$py_root"/tdbc[0-9]* 2>/dev/null || true
+  rm -f -- "$py_root"/libtcl*.dylib "$py_root"/libtk*.dylib 2>/dev/null || true
+  rm -f -- "$py_lib"/lib-dynload/_tkinter*.so 2>/dev/null || true
   # Any remaining foreign-extension files anywhere in the payload.
   find "$PAYLOAD_DIR" -type f \( \
     -name "*.bat" -o -name "*.cmd" -o -name "*.exe" -o -name "*.dll" \

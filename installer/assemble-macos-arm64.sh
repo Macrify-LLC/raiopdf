@@ -407,6 +407,15 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONHOME="$DIR/python"
 export PYTHONDONTWRITEBYTECODE=1
 export TESSDATA_PREFIX="$DIR/tesseract/share/tessdata"
+# Leptonica (inside tesseract) rewrites paths under /tmp to its own managed temp
+# directory, so a page image rasterized there is unreadable by the time tesseract
+# opens it and OCR fails with "cannot be read". Python's tempfile falls back to
+# /tmp whenever TMPDIR is unset — which it is when the app spawns us with a
+# curated environment — so pin the real per-user temp dir instead.
+if [ -z "${TMPDIR:-}" ] || [ "${TMPDIR%/}" = "/tmp" ]; then
+  _raio_tmp="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
+  [ -n "$_raio_tmp" ] && export TMPDIR="$_raio_tmp"
+fi
 exec "$DIR/python/bin/python3" -m ocrmypdf "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/ocrmypdf"
@@ -419,6 +428,12 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONHOME="$DIR/python"
 export PYTHONDONTWRITEBYTECODE=1
 export TESSDATA_PREFIX="$DIR/tesseract/share/tessdata"
+# See the ocrmypdf launcher: leptonica rewrites /tmp paths, so never let Python's
+# tempfile fall back there.
+if [ -z "${TMPDIR:-}" ] || [ "${TMPDIR%/}" = "/tmp" ]; then
+  _raio_tmp="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
+  [ -n "$_raio_tmp" ] && export TMPDIR="$_raio_tmp"
+fi
 exec "$DIR/python/bin/python3" "$DIR/raiopdf_ocr_progress.py" "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/raiopdf-ocr-progress"

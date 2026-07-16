@@ -119,6 +119,26 @@ describe("useEditing pin state", () => {
     expect(getEditing().hasUnsavedEdits).toBe(true);
   });
 
+  it.each(["formText", "formCheckbox"] as const)(
+    "clears inherited %s mode when the document resets",
+    async (tool) => {
+      const getEditing = renderHookValue();
+
+      await act(async () => {
+        getEditing().setTool(tool);
+        await Promise.resolve();
+      });
+      expect(getEditing().tool).toBe(tool);
+
+      await act(async () => {
+        getEditing().resetForDocument();
+        await Promise.resolve();
+      });
+
+      expect(getEditing().tool).toBe("select");
+    },
+  );
+
   it("keeps authored fields reusable when saving existing form values", async () => {
     const getEditing = renderHookValue();
 

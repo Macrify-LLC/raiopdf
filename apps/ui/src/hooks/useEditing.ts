@@ -471,6 +471,9 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const collectMarkupAnnotationSavePlan = useCallback(() => annotationSavePlan, [annotationSavePlan]);
 
   const resetForDocument = useCallback(() => {
+    setToolState((current) =>
+      current === "formText" || current === "formCheckbox" ? "select" : current,
+    );
     setPendingEdits([]);
     setImportedAnnotIds(new Set());
     setFormValues({});

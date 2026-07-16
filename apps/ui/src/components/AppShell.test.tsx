@@ -251,6 +251,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     workspace: null,
     overlay: null,
     activeLegalTool: null,
+    redactionSelectMode: "draw",
     activeEditDialogTool: null,
     activeOrganizeTool: null,
     onEditDialogToolSelected: () => undefined,
@@ -264,6 +265,8 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     modeBar: null,
     editing: mockEditing,
     onRedactionAreaCreated: () => undefined,
+    onRedactionAreasCreated: () => undefined,
+    onRedactionSelectionRejected: () => undefined,
     onRedactionAreaRemoved: () => undefined,
     onConfirmRedactions: () => undefined,
     onCancelRedactions: () => undefined,
@@ -316,6 +319,9 @@ const mockDocument: DocumentState = {
   outline: null,
   outlineStatus: null,
   signatureInvalidationNotice: null,
+  protectionSource: null,
+  protectionFacts: null,
+  protectedSourceGrant: null,
   error: null,
 };
 

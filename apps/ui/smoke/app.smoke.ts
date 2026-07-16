@@ -378,6 +378,83 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
   await expect.poll(() => getRedactionCallCount(page)).toBe(1);
 });
 
+test("highlight-to-redact merges a real multi-span browser selection into one area", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "select-redaction.pdf", await createFragmentedTextPdf());
+
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect.poll(() => textLayer.locator("span").count()).toBeGreaterThanOrEqual(3);
+
+  await page.getByRole("button", { name: "Redact", exact: true }).click();
+  const redactionToolbar = page.getByRole("toolbar", { name: "Redaction mode" });
+  await redactionToolbar.getByRole("button", { name: "Select text" }).click();
+  await expect(
+    redactionToolbar.getByRole("button", { name: "Select text" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  const rawRects = await textLayer.evaluate((layer) => {
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    const textNodes: Node[] = [];
+    let node = walker.nextNode();
+
+    while (node) {
+      if (node.textContent?.trim()) {
+        textNodes.push(node);
+      }
+      node = walker.nextNode();
+    }
+    const first = textNodes[0];
+    const last = textNodes.at(-1);
+
+    if (!first || !last) {
+      throw new Error("The PDF text layer did not expose selectable text nodes.");
+    }
+
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.textContent?.length ?? 0);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return Array.from(range.getClientRects(), ({ left, top, width, height }) => ({
+      left,
+      top,
+      width,
+      height,
+    }));
+  });
+
+  // A real multi-span selection reports several client rects; the merge logic
+  // must collapse them into a single redaction area.
+  expect(rawRects.length).toBeGreaterThan(1);
+
+  // Re-dispatch until the synthetic browser selection is captured. The live
+  // selection persists until a successful capture clears it, so retries are
+  // idempotent and cannot double-mark the page.
+  const overlay = page.locator(".page-view__redaction-overlay");
+  await expect(async () => {
+    if ((await overlay.count()) === 0) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      });
+    }
+    expect(await overlay.count(), `selection rects: ${JSON.stringify(rawRects)}`).toBe(1);
+  }).toPass({ timeout: 15_000 });
+
+  await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();
+
+  // Leaving through another legal tool (not the mode bar's Exit button)
+  // must still restore Draw box for the next redaction session.
+  await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
+  await page.getByRole("button", { name: "Close Bates Numbering" }).click();
+  await page.getByRole("button", { name: "Redact", exact: true }).click();
+  await expect(
+    page.getByRole("toolbar", { name: "Redaction mode" })
+      .getByRole("button", { name: "Draw box" }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
@@ -1136,6 +1213,26 @@ async function createTextPdf(text: string): Promise<Uint8Array> {
     size: 12,
     font,
   });
+
+  return pdf.save();
+}
+
+async function createFragmentedTextPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([260, 300]);
+  const fonts = await Promise.all([
+    pdf.embedFont(StandardFonts.Helvetica),
+    pdf.embedFont(StandardFonts.TimesRoman),
+    pdf.embedFont(StandardFonts.Courier),
+  ]);
+  const fragments = ["Confidential", " client", " number"];
+  let x = 24;
+
+  for (const [index, fragment] of fragments.entries()) {
+    const font = fonts[index]!;
+    page.drawText(fragment, { x, y: 240, size: 12, font });
+    x += font.widthOfTextAtSize(fragment, 12);
+  }
 
   return pdf.save();
 }

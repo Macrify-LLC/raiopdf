@@ -76,9 +76,9 @@ Four ways it fits into an actual day at the firm:
 | Fill & sign | Fill forms, add text and images, signature stamp + flatten |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
 | **Word ↔ PDF** *(experimental)* | Import a Word document (with a tracked-changes check first), or export a PDF back to editable Word. Runs through your own installed copy of Microsoft Word — the menu items say so and gray out if Word isn't installed. Formatting is approximate; check the result. |
-| Unlock PDFs | Save a decrypted copy of a password- or owner-restricted PDF (you supply the password if one is required) — the original on disk stays untouched. *Adding* password protection isn't in this build yet. |
+| PDF Security | Create a separate AES-256 protected copy, with optional advisory print/copy restrictions, or save an unlocked copy of a protected PDF. Unsaved edits can go into the new copy; the original stays untouched. Available in the installed Windows app. |
 | In-app help | Built-in, offline help for every tool — the same articles published at [raio.macrify.me/help](https://raio.macrify.me/help/) |
-| Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can drive the whole toolbox |
+| Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can run supported local tools |
 | No catches | No watermarks, no nag screens, ever |
 
 ### Legal — the stuff nobody bothered building for lawyers
@@ -94,7 +94,7 @@ Four ways it fits into an actual day at the firm:
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
 | **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |
-| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
+| **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. Mark what to remove by drawing a box, searching for text, or highlighting text with the pointer. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
 | **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 

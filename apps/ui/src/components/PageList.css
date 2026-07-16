@@ -38,7 +38,10 @@
   --scale-round-y: 1px;
 }
 
-.page-view[data-redaction-mode="true"] {
+/* Crosshair only in draw sub-mode -- Select-text sub-mode leaves the text
+   cursor (from .page-view__text-layer :is(span, br) below) so the pointer
+   reads as "select" rather than "draw a box". */
+.page-view[data-redaction-mode="true"]:not([data-redaction-select="true"]) {
   cursor: crosshair;
 }
 

@@ -18,12 +18,12 @@ import type {
   PdfCompressOptions,
   PdfImagePageInput,
   PdfPageNumbersOptions,
+  PdfProtectionFacts,
   PdfRedactionArea,
   PdfSanitizeRemovedItem,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { PdfDocumentHandle } from "@raiopdf/engine-api";
-import { PdfEngineError } from "@raiopdf/engine-api";
 import {
   LocalPdfEngine,
   hideRaioPdfImportedAnnotationsForDisplay,
@@ -108,6 +108,15 @@ import {
   type OcrDialogPhase,
 } from "./components/OcrDialog";
 import { PasswordDialog, type PasswordDialogPhase } from "./components/PasswordDialog";
+import {
+  PdfSecurityPanel,
+  type CreateProtectedCopyRequest,
+  type CreateProtectedCopyResult,
+  type PdfSecurityDocumentState,
+  type PdfSecurityOutputReference,
+  type PdfSecurityProgress,
+  type PrepareProtectedCopyResult,
+} from "./components/PdfSecurityPanel";
 import { PrintDialog } from "./components/PrintDialog";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import { DockedProcessLoader } from "./components/DockedProcessLoader";
@@ -167,7 +176,10 @@ import {
   type PickedDirectory,
   type SavedFile,
 } from "./lib/filePort";
-import { materializeDroppedFileGrant } from "./lib/dropMaterialize";
+import {
+  materializeDroppedFileGrant,
+  materializePdfBytesGrant,
+} from "./lib/dropMaterialize";
 import {
   pickFileForAdd,
   tooLargeToAddMessage,
@@ -196,6 +208,7 @@ import {
   pathOpOcr,
   pathOpPageNumbers,
   pathOpPrepareFiling,
+  pathOpInspectProtection,
   pathOpRedactAreas,
   pathOpReleaseOutput,
   pathOpRepair,
@@ -205,6 +218,11 @@ import {
   isPathOpCancelledError,
   pathOpStatusEntry,
   pathOpWatermark,
+  pickProtectedOutputTarget,
+  listenProtectProgress,
+  protectToTarget,
+  releaseProtectedOutputTarget,
+  revealGrantInFolder,
   pathOpErrorMessage,
   PathOpsError,
   type PathOpsRedactionVerification,
@@ -213,6 +231,7 @@ import {
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
 import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
+import { stageStreamedProtectedCopyEdits } from "./lib/protectedCopyStaging";
 import {
   annotateStreamedPreflight,
   buildPrepareFilingPlan,
@@ -222,7 +241,12 @@ import {
 } from "./lib/streamedFiling";
 import { extractPrintableRange } from "./lib/printRange";
 import { writeProductionLastUsed } from "./lib/productionHints";
-import { resolveProtectedPdfBytes, type ProtectedPdfSource } from "./lib/protectedPdfResolver";
+import {
+  isUnlockedProtectedWorkingCopy,
+  isRetryablePdfPasswordError,
+  resolveProtectedPdfBytes,
+  type ProtectedPdfSource,
+} from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
 import { logWorkflowFailure, recordDiagnosticEvent } from "./lib/diagnostics";
 import {
@@ -294,7 +318,6 @@ import {
   BatesPanel,
   DesktopCapabilityMessage,
   formatBytes,
-  PasswordsPanel,
   ScrubMetadataPanel,
   SidecarStatusLine,
   type EditDialogToolId,
@@ -513,10 +536,15 @@ export function App() {
       resolve: (bytes: Uint8Array) =>
         resolveProtectedPdfBytes(bytes, {
           isUnavailableError: isEngineBridgeUnavailableError,
+          inspectProtection: engineBridge.inspectProtection,
           removeEncryption: engineBridge.removeEncryption,
         }),
     }),
-    [confirmSignatureInvalidation, engineBridge.removeEncryption],
+    [
+      confirmSignatureInvalidation,
+      engineBridge.inspectProtection,
+      engineBridge.removeEncryption,
+    ],
   );
   // Decryption strips a document's signature. Callers that decrypt outside the
   // useDocument open path (the manual password dialog, Prepare for Filing) must
@@ -591,6 +619,7 @@ export function App() {
     setTextLayerCoverage,
     setPageSizeInches,
     setError,
+    setProtectionFacts,
     rotatePages,
     deletePages,
     reorderPages,
@@ -603,6 +632,7 @@ export function App() {
     batesStamp,
     readRaioPdfAnnotations,
     applyAnnotationSavePlan,
+    serializeAnnotationSavePlan,
     flattenMarkupAnnotations,
     scrubMetadata,
     pageNumbers,
@@ -812,6 +842,10 @@ export function App() {
   const [redactionMessage, setRedactionMessage] = useState<string | null>(null);
   const [redactionSearchOpen, setRedactionSearchOpen] = useState(false);
   const [redactionSearchText, setRedactionSearchText] = useState("");
+  // Redaction mode bar's Draw box / Select text sub-mode toggle. "draw" is
+  // the default so existing box-drawing behavior is unchanged unless the
+  // user opts into highlighting text.
+  const [redactionSelectMode, setRedactionSelectMode] = useState<"draw" | "text">("draw");
   const [batesState, setBatesState] = useState<BatesPanelState>({
     applying: false,
     message: null,
@@ -897,6 +931,18 @@ export function App() {
     }
   }, [filingProgress.phase]);
 
+  const [pdfSecurityProgress, setPdfSecurityProgress] = useState<PdfSecurityProgress>("idle");
+  const pdfSecurityRunRef = useRef(0);
+  const pdfSecurityJobTokenRef = useRef<string | null>(null);
+  const pdfSecurityTargetTokenRef = useRef<string | null>(null);
+  const pdfSecurityPreparedTargetRef = useRef<{
+    targetToken: string;
+    runId: number;
+    sourceOpenToken: number;
+    sourceGeneration: number;
+  } | null>(null);
+  const pdfSecurityStagingAbortRef = useRef<AbortController | null>(null);
+
   const longProcessRunning = isFilingProgressActive(filingProgress.phase) ||
     filingPacketProgress.running ||
     binderProgress.running ||
@@ -904,7 +950,8 @@ export function App() {
     ocrState.phase === "processing" ||
     ocrState.phase === "verifying" ||
     textEdit.phase === "staging" ||
-    textEdit.phase === "applying";
+    textEdit.phase === "applying" ||
+    pdfSecurityProgress !== "idle";
   // Streamed checklist enablement is the closed-form rule [R7-1]: a step is
   // enabled ⟺ a registered path op implements it AND its toolchain is
   // available — computed from `path_ops_status`, never a hand list.
@@ -1563,6 +1610,16 @@ export function App() {
     documentGenerationRef.current = document.generation;
   }, [document.generation]);
 
+  // Leaving Redact through any route (another legal tool, Organize/Edit,
+  // closing the workspace, or the mode bar) restores the established draw-
+  // box default. Keeping this transition here prevents indirect exits from
+  // preserving Select text for the next redaction session.
+  useEffect(() => {
+    if (activeLegalTool !== "redact") {
+      setRedactionSelectMode("draw");
+    }
+  }, [activeLegalTool]);
+
   const resetLegalState = useCallback(() => {
     preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
@@ -1572,6 +1629,7 @@ export function App() {
     setRedactionMessage(null);
     setRedactionSearchOpen(false);
     setRedactionSearchText("");
+    setRedactionSelectMode("draw");
     setScannerState({ scanning: false, message: null, hits: [] });
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
@@ -1724,7 +1782,13 @@ export function App() {
   const openStreamedSource = useCallback(
     (
       source: Exclude<OpenedFileSource, { kind: "memory" }>,
-      options: { openInNewTab?: boolean; markDirty?: boolean } = {},
+      options: {
+        openInNewTab?: boolean;
+        markDirty?: boolean;
+        protectionSource?: ProtectedPdfSource;
+        protectionFacts?: PdfProtectionFacts | null;
+        protectedSourceGrant?: FileGrant | null;
+      } = {},
     ): Promise<OpenFileResult> => {
       const opensNewTab = Boolean(options.openInNewTab && document.source);
       if (opensNewTab && longProcessRunning) {
@@ -1759,6 +1823,9 @@ export function App() {
         {
           openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
           ...(options.markDirty ? { markDirty: true } : {}),
+          ...(options.protectionSource ? { protectionSource: options.protectionSource } : {}),
+          ...(options.protectionFacts ? { protectionFacts: options.protectionFacts } : {}),
+          ...(options.protectedSourceGrant ? { protectedSourceGrant: options.protectedSourceGrant } : {}),
         },
       ).then((result) => {
         if (result.status === "opened") {
@@ -1796,8 +1863,25 @@ export function App() {
       // so in-place reopens (OCR, decrypt, ...) keep replacing the active tab.
       // `markDirty` opens the reopened copy dirty so Close prompts to save — for
       // outputs that are an unsaved working copy (OCR), not a saved artifact.
-      options: { openInNewTab?: boolean; markDirty?: boolean } = {},
+      options: {
+        openInNewTab?: boolean;
+        markDirty?: boolean;
+        protectionSource?: ProtectedPdfSource;
+        protectionFacts?: PdfProtectionFacts | null;
+        protectedSourceGrant?: FileGrant | null;
+        inheritProtection?: boolean;
+      } = {},
     ) => {
+      const inheritProtection = options.inheritProtection ?? !options.openInNewTab;
+      const protectionSource = options.protectionSource ?? (
+        inheritProtection ? document.protectionSource ?? undefined : undefined
+      );
+      const protectedSourceGrant = options.protectedSourceGrant ?? (
+        inheritProtection ? document.protectedSourceGrant ?? undefined : undefined
+      );
+      const protectionFacts = options.protectionFacts ?? (
+        inheritProtection ? document.protectionFacts ?? undefined : undefined
+      );
       const staleResult = {
         status: "failed" as const,
         error: "The document changed before the operation output could reopen.",
@@ -1835,7 +1919,12 @@ export function App() {
             name: output.name,
             path: null,
           },
-          options.markDirty ? { markDirty: true } : {},
+          {
+            ...(options.markDirty ? { markDirty: true } : {}),
+            ...(protectionSource ? { protectionSource } : {}),
+            ...(protectionFacts ? { protectionFacts } : {}),
+            ...(protectedSourceGrant ? { protectedSourceGrant } : {}),
+          },
         );
 
         if (result.status === "opened") {
@@ -1866,10 +1955,21 @@ export function App() {
         {
           openInNewTab: options.openInNewTab ?? false,
           ...(options.markDirty ? { markDirty: true } : {}),
+          ...(protectionSource ? { protectionSource } : {}),
+          ...(protectionFacts ? { protectionFacts } : {}),
+          ...(protectedSourceGrant ? { protectedSourceGrant } : {}),
         },
       );
     },
-    [isCurrentDocument, openDocumentFile, openStreamedSource, resetLegalState],
+    [
+      document.protectedSourceGrant,
+      document.protectionFacts,
+      document.protectionSource,
+      isCurrentDocument,
+      openDocumentFile,
+      openStreamedSource,
+      resetLegalState,
+    ],
   );
 
   useEffect(() => {
@@ -2339,7 +2439,10 @@ export function App() {
   }, [document.bytes, pdfDocument, streamedDocument]);
 
   useEffect(() => {
-    if (activeLegalTool !== "prepare-for-filing") {
+    const needsDocumentFacts = activeLegalTool === "prepare-for-filing" ||
+      activeLegalTool === "passwords" ||
+      activeOrganizeTool === "properties";
+    if (!needsDocumentFacts) {
       return;
     }
 
@@ -2434,6 +2537,7 @@ export function App() {
     };
   }, [
     activeLegalTool,
+    activeOrganizeTool,
     document.generation,
     document.source,
     getOpenToken,
@@ -2445,8 +2549,11 @@ export function App() {
     let disposed = false;
     const sourceBytes = document.bytes;
     const sourceGeneration = document.generation;
+    const needsDocumentFacts = activeLegalTool === "prepare-for-filing" ||
+      activeLegalTool === "passwords" ||
+      activeOrganizeTool === "properties";
 
-    if (activeLegalTool !== "prepare-for-filing") {
+    if (!needsDocumentFacts) {
       setFilingReportLoading(false);
       setFilingReportError(null);
       return;
@@ -2547,7 +2654,70 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [activeLegalTool, document.bytes, document.generation, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pathOpsGrant, pdfDocument, pdfDocumentBytes]);
+  }, [activeLegalTool, activeOrganizeTool, document.bytes, document.generation, document.fileName, document.fileSizeBytes, document.textLayerCoverage, filingPack, pathOpsGrant, pdfDocument, pdfDocumentBytes]);
+
+  useEffect(() => {
+    const needsProtectionFacts = activeLegalTool === "passwords" ||
+      activeOrganizeTool === "properties";
+    if (
+      !needsProtectionFacts ||
+      !pathOpsGrant ||
+      document.protectionFacts !== null
+    ) {
+      return;
+    }
+
+    const sourceGeneration = document.generation;
+    let disposed = false;
+    void pathOpInspectProtection(pathOpsGrant, "")
+      .then((facts) => {
+        if (!disposed && documentGenerationRef.current === sourceGeneration) {
+          setProtectionFacts(facts, sourceGeneration);
+        }
+      })
+      .catch(() => {
+        // A genuine open-password PDF is handled by the existing unlock
+        // prompt. Keep protection facts unknown here rather than guessing.
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    activeLegalTool,
+    activeOrganizeTool,
+    document.generation,
+    document.protectionFacts,
+    pathOpsGrant,
+    setProtectionFacts,
+  ]);
+
+  useEffect(() => {
+    if (
+      activeLegalTool !== "passwords" ||
+      pathOpsGrant ||
+      !isPathOpsRuntime()
+    ) {
+      return;
+    }
+
+    let disposed = false;
+    void pathOpsStatus()
+      .then((status) => {
+        if (!disposed) {
+          setPathOpsGeneralStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setPathOpsGeneralStatus(null);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeLegalTool, pathOpsGrant]);
 
   const runOcrWorkflow = useCallback((ocrType: OcrType) => {
     if (ocrActiveRef.current) {
@@ -3201,8 +3371,12 @@ export function App() {
         const { grant } = prompt.source;
         setPasswordPrompt({ ...prompt, phase: "unlocking", error: null });
 
-        void pathOpDecrypt(grant, password)
-          .then(async (output) => {
+        void pathOpInspectProtection(grant, password)
+          .then(async (protectionFacts) => ({
+            output: await pathOpDecrypt(grant, password),
+            protectionFacts,
+          }))
+          .then(async ({ output, protectionFacts }) => {
             if (!isCurrentUnlock() || !isCurrentDocument(sourceOpenToken, sourceGeneration)) {
               await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
               return;
@@ -3238,6 +3412,10 @@ export function App() {
             const reopened = await openPathOpOutput(output, {
               openToken: sourceOpenToken,
               generation: sourceGeneration,
+            }, {
+              protectionSource: password ? "user-password" : "owner-restricted",
+              protectionFacts,
+              protectedSourceGrant: grant,
             });
             if (reopened.status !== "opened" && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
               setError("This PDF could not be unlocked. Try again in a moment.");
@@ -3250,8 +3428,11 @@ export function App() {
 
             if (
               error instanceof PathOpsError &&
-              error.code === "OP_FAILED" &&
-              /invalid password/i.test(error.message)
+              (
+                error.code === "PASSWORD_REQUIRED" ||
+                error.code === "PASSWORD_INVALID" ||
+                (error.code === "OP_FAILED" && /invalid password/i.test(error.message))
+              )
             ) {
               setPasswordPrompt((current) => (
                 current
@@ -3276,14 +3457,15 @@ export function App() {
       setPasswordPrompt({ ...prompt, phase: "starting-engine", error: null });
 
       void engineBridge
-        .removeEncryption(promptBytes, password, {
-          onEngineReady: () => {
-            if (isCurrentUnlock()) {
-              setPasswordPrompt((current) => (current ? { ...current, phase: "unlocking" } : current));
-            }
-          },
-        })
-        .then(async (decryptedBytes) => {
+        .inspectProtection(promptBytes, password)
+        .then(async (protectionFacts) => {
+          const decryptedBytes = await engineBridge.removeEncryption(promptBytes, password, {
+            onEngineReady: () => {
+              if (isCurrentUnlock()) {
+                setPasswordPrompt((current) => (current ? { ...current, phase: "unlocking" } : current));
+              }
+            },
+          });
           if (!isCurrentUnlock()) {
             return;
           }
@@ -3314,6 +3496,11 @@ export function App() {
             {
               markDirty: true,
               openMode: document.source ? "new-tab" : "replace-active",
+              protectionSource: password ? "user-password" : "owner-restricted",
+              protectionFacts,
+              ...(prompt.filePath
+                ? { protectedSourceGrant: prompt.filePath as FileGrant }
+                : {}),
             },
           );
 
@@ -3348,7 +3535,7 @@ export function App() {
             return;
           }
 
-          if (error instanceof PdfEngineError && error.code === "ENCRYPTED_DOCUMENT") {
+          if (isRetryablePdfPasswordError(error)) {
             setPasswordPrompt((current) => (
               current
                 ? { ...current, phase: "prompt", error: "That password wasn't accepted. Try again." }
@@ -3848,6 +4035,21 @@ export function App() {
       return null;
     }
 
+    const clearProtectionAfterSave = isUnlockedProtectedWorkingCopy({
+      protectionSource: document.protectionSource,
+      protectedSourceGrant: document.protectedSourceGrant,
+      source: document.source,
+    });
+    const finishSavedFile = (written: SavedFile) => {
+      markSaved({
+        fileName: written.name,
+        filePath: written.path,
+      }, { clearProtection: clearProtectionAfterSave });
+      if (clearProtectionAfterSave && document.protectedSourceGrant) {
+        void pathOpReleaseOutput(document.protectedSourceGrant).catch(() => undefined);
+      }
+    };
+
     // Streamed documents can't dirty, so Save has nothing to write (the
     // button is disabled unless pending overlays made the document dirty).
     // With pending edits, both Save and Save As commit through apply_edits and
@@ -3974,10 +4176,11 @@ export function App() {
             ? { kind: "rangeGrant", grant: source.grant }
             : { kind: "rangeFile", file: source.file },
           document.fileName ?? "Document.pdf",
+          document.protectedSourceGrant ? [document.protectedSourceGrant] : [],
         );
 
         if (written) {
-          markSaved({ fileName: written.name, filePath: written.path });
+          finishSavedFile(written);
         }
         return written;
       } catch (error: unknown) {
@@ -4035,13 +4238,11 @@ export function App() {
         saved.bytes,
         saved.fileName,
         forceSaveAs ? null : saved.filePath,
+        document.protectedSourceGrant ? [document.protectedSourceGrant] : [],
       );
 
       if (written) {
-        markSaved({
-          fileName: written.name,
-          filePath: written.path,
-        });
+        finishSavedFile(written);
       }
       return written;
     } catch (error: unknown) {
@@ -4060,6 +4261,8 @@ export function App() {
     document.fileName,
     document.fileSizeBytes,
     document.generation,
+    document.protectedSourceGrant,
+    document.protectionSource,
     document.source,
     editing,
     getOpenToken,
@@ -4476,8 +4679,28 @@ export function App() {
       });
   }, [document.fileName, document.generation, document.pageCount, getOpenToken, isCurrentDocument, openOpenedFile, pathOpsGrant]);
 
+  const showPasswordProtection = useCallback(() => {
+    if (textEdit.pendingOps.length > 0) {
+      setError("Apply or clear queued text replacements before creating a protected copy.");
+      return;
+    }
+
+    if (pendingRedactions.length > 0) {
+      setError("Apply or clear pending redaction marks before creating a protected copy.");
+      return;
+    }
+
+    setActiveOrganizeTool(null);
+    setActiveLegalTool("passwords");
+  }, [pendingRedactions.length, setError, textEdit.pendingOps.length]);
+
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
+      if (toolId === "passwords") {
+        showPasswordProtection();
+        return;
+      }
+
       if (
         longProcessRunning &&
         (toolId === "prepare-for-filing" || toolId === "combine-exhibits")
@@ -4512,7 +4735,7 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [document.fileSizeBytes, editing, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, streamedDocument],
+    [document.fileSizeBytes, editing, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, showPasswordProtection, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
@@ -4827,6 +5050,40 @@ export function App() {
     ]);
     setRedactionPhase("idle");
     setRedactionMessage(null);
+  }, []);
+
+  // Batch counterpart of addPendingRedaction: highlight-to-redact queues one
+  // area per visual line of a selection in a single call, rather than one
+  // state update per line.
+  const addPendingRedactions = useCallback((areas: PdfRedactionArea[]) => {
+    if (areas.length === 0) {
+      return;
+    }
+
+    setPendingRedactions((current) => [
+      ...current,
+      ...areas.map((area) => {
+        redactionIdRef.current += 1;
+        return {
+          id: `redaction-${redactionIdRef.current}`,
+          area,
+        };
+      }),
+    ]);
+    setRedactionPhase("idle");
+    setRedactionMessage(null);
+  }, []);
+
+  // Highlight-to-redact's window-level capture rejects a selection it can't
+  // convert (currently: spans more than one page) -- surface it the same way
+  // search-to-redact surfaces "no matching text was found."
+  const handleRedactionSelectionRejected = useCallback((message: string) => {
+    // Reset the phase like the search/add paths do: a rejection is a
+    // non-terminal notice, so it must not inherit a prior apply's "error"
+    // or "verified" phase, which RedactionStatusPanel reads for the message
+    // tone and the error-report button.
+    setRedactionPhase("idle");
+    setRedactionMessage(message);
   }, []);
 
   const removePendingRedaction = useCallback((id: string) => {
@@ -6941,10 +7198,553 @@ export function App() {
     streamedDocument,
   ]);
 
-  const showPasswordProtection = useCallback(() => {
-    setActiveOrganizeTool(null);
-    setActiveLegalTool("passwords");
+  const pdfSecurityDocumentState = useMemo<PdfSecurityDocumentState | null>(() => {
+    if (document.source === null) {
+      return null;
+    }
+
+    const signature: PdfSecurityDocumentState["signature"] = filingFacts?.signatureDetection
+      ? hasEmbeddedSignatureMarkers(filingFacts.signatureDetection)
+        ? "present"
+        : "none"
+      : "unknown";
+    const pdfA = filingFacts?.pdfaClaimed === true;
+    const protection = document.protectionFacts;
+    const sourceKind = protection?.kind === "owner-restricted" ||
+      document.protectionSource === "owner-restricted"
+      ? "owner-restricted"
+      : protection?.kind === "open-password" || document.protectionSource === "user-password"
+        ? "protected-unlocked"
+        : null;
+
+    if (!sourceKind) {
+      return { kind: "unprotected", signature, pdfA };
+    }
+
+    return {
+      kind: sourceKind,
+      encryptionLabel: protection && protection.encryption !== "unknown"
+        ? protection.encryption
+        : null,
+      printing: protection?.permissions.printing === "blocked"
+        ? "blocked"
+        : protection?.permissions.printing === "full" ||
+            protection?.permissions.printing === "low-resolution"
+          ? "allowed"
+          : "unknown",
+      copying: protection?.permissions.copying ?? "unknown",
+      signature,
+      pdfA,
+    };
+  }, [document.protectionFacts, document.protectionSource, document.source, filingFacts]);
+
+  const pdfSecurityAvailable = isPathOpsRuntime() &&
+    pathOpStatusEntry(pathOpsGeneralStatus, "create_protected_copy")?.available === true;
+
+  const cancelPdfSecurityOperation = useCallback(() => {
+    pdfSecurityRunRef.current += 1;
+    pdfSecurityStagingAbortRef.current?.abort();
+    pdfSecurityStagingAbortRef.current = null;
+
+    const jobToken = pdfSecurityJobTokenRef.current;
+    pdfSecurityJobTokenRef.current = null;
+    if (jobToken) {
+      void pathOpCancel(jobToken).catch(() => undefined);
+    }
+
+    const targetToken = pdfSecurityTargetTokenRef.current;
+    pdfSecurityTargetTokenRef.current = null;
+    pdfSecurityPreparedTargetRef.current = null;
+    if (targetToken) {
+      void releaseProtectedOutputTarget(targetToken).catch(() => undefined);
+    }
+
+    setPdfSecurityProgress("idle");
   }, []);
+
+  useEffect(() => {
+    cancelPdfSecurityOperation();
+  }, [cancelPdfSecurityOperation, document.generation]);
+
+  useEffect(() => {
+    const cancelWhenHidden = () => {
+      if (window.document.visibilityState === "hidden") {
+        cancelPdfSecurityOperation();
+      }
+    };
+
+    window.document.addEventListener("visibilitychange", cancelWhenHidden);
+    return () => window.document.removeEventListener("visibilitychange", cancelWhenHidden);
+  }, [cancelPdfSecurityOperation]);
+
+  const prepareProtectedCopy = useCallback(async (): Promise<PrepareProtectedCopyResult> => {
+    cancelPdfSecurityOperation();
+
+    if (!pdfSecurityAvailable || !pdfSecurityDocumentState) {
+      return {
+        status: "error",
+        message: "Creating protected copies is unavailable in this RaioPDF session.",
+      };
+    }
+
+    if (pdfSecurityDocumentState.signature !== "none") {
+      return {
+        status: "error",
+        message: pdfSecurityDocumentState.signature === "present"
+          ? "This PDF contains a digital signature. Protect it before signing."
+          : "RaioPDF could not verify this PDF's signature status.",
+      };
+    }
+
+    if (textEdit.pendingOps.length > 0 || pendingRedactions.length > 0) {
+      return {
+        status: "error",
+        message: "Apply or clear pending text replacements and redaction marks first.",
+      };
+    }
+
+    if (
+      pdfSecurityDocumentState.pdfA &&
+      !window.confirm(
+        "The protected copy will no longer conform to PDF/A because PDF/A does not allow encryption. Create it anyway?",
+      )
+    ) {
+      return { status: "cancelled" };
+    }
+
+    const runId = pdfSecurityRunRef.current + 1;
+    pdfSecurityRunRef.current = runId;
+    const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
+    const isCurrentRun = () => (
+      pdfSecurityRunRef.current === runId &&
+      isCurrentDocument(sourceOpenToken, sourceGeneration)
+    );
+    const suggestedName = `${stripPdfExtension(document.fileName ?? "Document")}-protected.pdf`;
+    const sourceGrants = [...new Set(
+      [
+        document.filePath ? document.filePath as FileGrant : null,
+        document.protectedSourceGrant,
+        pathOpsGrant,
+      ].filter((grant): grant is FileGrant => grant !== null),
+    )];
+    let targetToken: string | null = null;
+
+    try {
+      setPdfSecurityProgress("choosing-output");
+      const target = await pickProtectedOutputTarget(suggestedName, sourceGrants);
+      if (!target) {
+        return { status: "cancelled" };
+      }
+
+      targetToken = target.targetToken;
+      if (!isCurrentRun()) {
+        await releaseProtectedOutputTarget(targetToken).catch(() => undefined);
+        targetToken = null;
+        return { status: "cancelled" };
+      }
+
+      pdfSecurityTargetTokenRef.current = targetToken;
+      pdfSecurityPreparedTargetRef.current = {
+        targetToken,
+        runId,
+        sourceOpenToken,
+        sourceGeneration,
+      };
+      targetToken = null;
+      return { status: "ready", displayName: target.name };
+    } catch (error: unknown) {
+      if (!isCurrentRun() || isPathOpCancelledError(error)) {
+        return { status: "cancelled" };
+      }
+
+      return {
+        status: "error",
+        message: error instanceof PathOpsError && error.code === "INVALID_INPUT"
+          ? error.message
+          : pathOpErrorMessage(error, "RaioPDF could not prepare that output location."),
+      };
+    } finally {
+      if (targetToken) {
+        await releaseProtectedOutputTarget(targetToken).catch(() => undefined);
+      }
+      if (pdfSecurityRunRef.current === runId) {
+        setPdfSecurityProgress("idle");
+      }
+    }
+  }, [
+    cancelPdfSecurityOperation,
+    document.fileName,
+    document.filePath,
+    document.generation,
+    document.protectedSourceGrant,
+    getOpenToken,
+    isCurrentDocument,
+    pathOpsGrant,
+    pdfSecurityAvailable,
+    pdfSecurityDocumentState,
+    pendingRedactions.length,
+    textEdit.pendingOps.length,
+  ]);
+
+  const createProtectedCopy = useCallback(async (
+    request: CreateProtectedCopyRequest,
+  ): Promise<CreateProtectedCopyResult> => {
+    const preparedTarget = pdfSecurityPreparedTargetRef.current;
+    if (!preparedTarget) {
+      return {
+        status: "error",
+        message: "Choose where to save the protected copy first.",
+      };
+    }
+
+    if (!pdfSecurityAvailable || !pdfSecurityDocumentState) {
+      cancelPdfSecurityOperation();
+      return {
+        status: "error",
+        message: "Creating protected copies is unavailable in this RaioPDF session.",
+      };
+    }
+
+    if (pdfSecurityDocumentState.signature !== "none") {
+      cancelPdfSecurityOperation();
+      return {
+        status: "error",
+        message: pdfSecurityDocumentState.signature === "present"
+          ? "This PDF contains a digital signature. Protect it before signing."
+          : "RaioPDF could not verify this PDF's signature status.",
+      };
+    }
+
+    if (textEdit.pendingOps.length > 0 || pendingRedactions.length > 0) {
+      cancelPdfSecurityOperation();
+      return {
+        status: "error",
+        message: "Apply or clear pending text replacements and redaction marks first.",
+      };
+    }
+
+    const { runId, sourceOpenToken, sourceGeneration } = preparedTarget;
+    const isCurrentRun = () => (
+      pdfSecurityRunRef.current === runId &&
+      isCurrentDocument(sourceOpenToken, sourceGeneration)
+    );
+    const suggestedName = `${stripPdfExtension(document.fileName ?? "Document")}-protected.pdf`;
+    let targetToken: string | null = preparedTarget.targetToken;
+    pdfSecurityPreparedTargetRef.current = null;
+    const temporaryInputGrants: FileGrant[] = [];
+    let stopProgressListener: (() => void) | null = null;
+
+    try {
+      if (!isCurrentRun()) {
+        return { status: "cancelled" };
+      }
+      setPdfSecurityProgress("preparing");
+
+      let inputGrant: FileGrant;
+      const pendingApply = editing.collectAnnotationSavePlan();
+      if (document.source?.kind === "memory") {
+        const snapshotBytes = await serializeAnnotationSavePlan(
+          pendingApply?.plan ?? {
+            appendEdits: [],
+            updateEdits: [],
+            deleteAnnotIds: [],
+          },
+          {
+            flatten: pendingApply?.flatten ?? false,
+            printMarkupAnnotations,
+            expectedGeneration: sourceGeneration,
+          },
+          sourceOpenToken,
+        );
+        if (!snapshotBytes || !isCurrentRun()) {
+          return { status: "cancelled" };
+        }
+
+        const stagingAbort = new AbortController();
+        pdfSecurityStagingAbortRef.current = stagingAbort;
+        const staged = await materializePdfBytesGrant(snapshotBytes, suggestedName, stagingAbort.signal);
+        pdfSecurityStagingAbortRef.current = null;
+        const stagedGrant = staged?.kind === "rangeGrant"
+          ? staged.grant
+          : staged?.kind === "memory" && staged.path
+            ? staged.path as FileGrant
+            : null;
+        if (!stagedGrant) {
+          return {
+            status: "error",
+            message: "RaioPDF could not prepare the current PDF for protection.",
+          };
+        }
+        temporaryInputGrants.push(stagedGrant);
+        inputGrant = stagedGrant;
+      } else {
+        if (!pathOpsGrant) {
+          return {
+            status: "error",
+            message: "RaioPDF could not access this PDF for protection.",
+          };
+        }
+
+        if (pendingApply) {
+          if (
+            pendingApply.plan.updateEdits.length > 0 ||
+            pendingApply.plan.deleteAnnotIds.length > 0
+          ) {
+            return {
+              status: "error",
+              message: "Save the current edits in this very large PDF before creating a protected copy.",
+            };
+          }
+          const staged = await stageStreamedProtectedCopyEdits({
+            sourceGrant: pathOpsGrant,
+            ownerRestricted: pdfSecurityDocumentState.kind === "owner-restricted",
+            edits: pendingApply.plan.appendEdits,
+            applyOptions: { markupMode: "annotation", printMarkupAnnotations },
+            outputName: suggestedName,
+            flatten: pendingApply.flatten,
+          });
+          temporaryInputGrants.push(...staged.temporaryGrants);
+          inputGrant = staged.inputGrant;
+        } else {
+          inputGrant = pathOpsGrant;
+        }
+      }
+
+      if (!isCurrentRun()) {
+        return { status: "cancelled" };
+      }
+
+      const jobToken = newOcrJobToken();
+      pdfSecurityJobTokenRef.current = jobToken;
+      stopProgressListener = await listenProtectProgress(jobToken, (event) => {
+        if (isCurrentRun()) {
+          setPdfSecurityProgress(event.phase);
+        }
+      });
+      setPdfSecurityProgress("encrypting");
+      const saved = await protectToTarget(inputGrant, targetToken, {
+        openPassword: request.password,
+        allowPrinting: request.allowPrinting,
+        allowCopying: request.allowCopying,
+      }, jobToken);
+      pdfSecurityJobTokenRef.current = null;
+      pdfSecurityTargetTokenRef.current = null;
+      targetToken = null;
+
+      if (!isCurrentRun()) {
+        return { status: "cancelled" };
+      }
+
+      return {
+        status: "success",
+        output: {
+          grant: saved.fileGrant,
+          displayName: saved.name,
+        },
+        allowPrinting: saved.verification.allowPrinting,
+        allowCopying: saved.verification.allowCopying,
+      };
+    } catch (error: unknown) {
+      if (
+        !isCurrentRun() ||
+        isPathOpCancelledError(error) ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        return { status: "cancelled" };
+      }
+
+      if (error instanceof PathOpsError && error.code === "INVALID_INPUT") {
+        return {
+          status: "error",
+          message: error.message,
+        };
+      }
+
+      return {
+        status: "error",
+        message: pathOpErrorMessage(
+          error,
+          "RaioPDF could not create and verify the protected copy. No unverified output was kept.",
+        ),
+      };
+    } finally {
+      stopProgressListener?.();
+      pdfSecurityStagingAbortRef.current = null;
+      for (const grant of temporaryInputGrants.reverse()) {
+        await pathOpReleaseOutput(grant).catch(() => undefined);
+      }
+      if (targetToken) {
+        await releaseProtectedOutputTarget(targetToken).catch(() => undefined);
+      }
+      if (pdfSecurityTargetTokenRef.current === targetToken) {
+        pdfSecurityTargetTokenRef.current = null;
+      }
+      if (pdfSecurityRunRef.current === runId) {
+        pdfSecurityJobTokenRef.current = null;
+        setPdfSecurityProgress("idle");
+      }
+    }
+  }, [
+    cancelPdfSecurityOperation,
+    document.fileName,
+    document.source,
+    editing,
+    isCurrentDocument,
+    pathOpsGrant,
+    pdfSecurityAvailable,
+    pdfSecurityDocumentState,
+    pendingRedactions.length,
+    printMarkupAnnotations,
+    serializeAnnotationSavePlan,
+    textEdit.pendingOps.length,
+  ]);
+
+  const openProtectedCopy = useCallback(async (output: PdfSecurityOutputReference) => {
+    try {
+      await openGrantInNewWindow(output.grant);
+    } catch {
+      setError("The protected copy was created, but could not be opened in a new window.");
+    }
+  }, [setError]);
+
+  const saveUnlockedCopy = useCallback(async () => {
+    const runId = pdfSecurityRunRef.current + 1;
+    pdfSecurityRunRef.current = runId;
+    const sourceOpenToken = getOpenToken();
+    const sourceGeneration = document.generation;
+    const isCurrentRun = () => (
+      pdfSecurityRunRef.current === runId &&
+      isCurrentDocument(sourceOpenToken, sourceGeneration)
+    );
+    const suggestedName = `${stripPdfExtension(document.fileName ?? "Document")}-unlocked.pdf`;
+    const excludedSourceGrants = [...new Set(
+      [
+        document.filePath ? document.filePath as FileGrant : null,
+        document.protectedSourceGrant,
+      ].filter((grant): grant is FileGrant => grant !== null),
+    )];
+    const temporaryGrants: FileGrant[] = [];
+
+    setPdfSecurityProgress("preparing");
+    try {
+      const pendingApply = editing.collectAnnotationSavePlan();
+      if (document.source?.kind === "memory") {
+        const bytes = await serializeAnnotationSavePlan(
+          pendingApply?.plan ?? {
+            appendEdits: [],
+            updateEdits: [],
+            deleteAnnotIds: [],
+          },
+          {
+            flatten: pendingApply?.flatten ?? false,
+            printMarkupAnnotations,
+            expectedGeneration: sourceGeneration,
+          },
+          sourceOpenToken,
+        );
+        if (!bytes || !isCurrentRun()) {
+          return;
+        }
+        await filePort.saveFile(bytes, suggestedName, null, excludedSourceGrants);
+        return;
+      }
+
+      const source = document.source;
+      if (!source) {
+        return;
+      }
+
+      let streamedInputGrant = pathOpsGrant;
+      if (
+        streamedInputGrant &&
+        (
+          document.protectionFacts?.kind === "owner-restricted" ||
+          document.protectionSource === "owner-restricted"
+        )
+      ) {
+        const decrypted = await pathOpDecrypt(streamedInputGrant, "");
+        streamedInputGrant = decrypted.outputGrant;
+        temporaryGrants.push(decrypted.outputGrant);
+      }
+
+      if (pendingApply) {
+        if (
+          !streamedInputGrant ||
+          pendingApply.plan.updateEdits.length > 0 ||
+          pendingApply.plan.deleteAnnotIds.length > 0
+        ) {
+          setError("Save the current edits in this very large PDF before saving an unlocked copy.");
+          return;
+        }
+        const staged = await pathOpApplyEdits(
+          streamedInputGrant,
+          pendingApply.plan.appendEdits,
+          { markupMode: "annotation", printMarkupAnnotations },
+          suggestedName,
+          pendingApply.flatten,
+        );
+        temporaryGrants.push(staged.outputGrant);
+        if (!isCurrentRun()) {
+          return;
+        }
+        await saveStreamedCopy(
+          { kind: "rangeGrant", grant: staged.outputGrant },
+          suggestedName,
+          excludedSourceGrants,
+        );
+        return;
+      }
+
+      if (!isCurrentRun()) {
+        return;
+      }
+      await saveStreamedCopy(
+        source.kind === "rangeFile" && !streamedInputGrant
+          ? { kind: "rangeFile", file: source.file }
+          : {
+              kind: "rangeGrant",
+              grant: streamedInputGrant ?? (source.kind === "rangeGrant" ? source.grant : pathOpsGrant!),
+            },
+        suggestedName,
+        excludedSourceGrants,
+      );
+    } catch (error: unknown) {
+      if (isCurrentRun() && !isPathOpCancelledError(error)) {
+        setError("RaioPDF could not save the unlocked copy. The open PDF was left unchanged.");
+      }
+    } finally {
+      await Promise.all(
+        temporaryGrants.map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)),
+      );
+      if (pdfSecurityRunRef.current === runId) {
+        setPdfSecurityProgress("idle");
+      }
+    }
+  }, [
+    document.fileName,
+    document.filePath,
+    document.generation,
+    document.protectedSourceGrant,
+    document.protectionFacts,
+    document.protectionSource,
+    document.source,
+    editing,
+    getOpenToken,
+    isCurrentDocument,
+    pathOpsGrant,
+    printMarkupAnnotations,
+    serializeAnnotationSavePlan,
+    setError,
+  ]);
+
+  const showProtectedCopyInFolder = useCallback(async (output: PdfSecurityOutputReference) => {
+    try {
+      await revealGrantInFolder(output.grant);
+    } catch {
+      setError("The protected copy was created, but its folder could not be opened.");
+    }
+  }, [setError]);
 
   const fitToPageWidth = useCallback(() => {
     if (document.source === null) {
@@ -7171,6 +7971,8 @@ export function App() {
   ) : activeLegalTool === "redact" ? (
     <RedactionModeBar
       pendingCount={pendingRedactions.length}
+      selectMode={redactionSelectMode}
+      onSelectModeChange={setRedactionSelectMode}
       searchOpen={redactionSearchOpen}
       searchText={redactionSearchText}
       applying={redactionPhase === "applying"}
@@ -7517,8 +8319,28 @@ export function App() {
 
     if (activeLegalTool === "passwords") {
       return (
-        <FloatingDialog title="Passwords" eyebrow="Legal" onClose={closeWorkspace} onHelp={() => openHelp("passwords")}>
-          <PasswordsPanel />
+        <FloatingDialog
+          title="PDF Security"
+          eyebrow="Legal"
+          onClose={() => {
+            cancelPdfSecurityOperation();
+            closeWorkspace();
+          }}
+          onHelp={() => openHelp("passwords")}
+        >
+          <PdfSecurityPanel
+            documentKey={document.source ? `${activeTabId ?? "document"}:${document.generation}` : null}
+            fileName={document.fileName}
+            documentState={pdfSecurityDocumentState}
+            desktopAvailable={pdfSecurityAvailable}
+            progress={pdfSecurityProgress}
+            onPrepareProtectedCopy={prepareProtectedCopy}
+            onDiscardPreparedCopy={cancelPdfSecurityOperation}
+            onCreateProtectedCopy={createProtectedCopy}
+            onSaveUnlockedCopy={saveUnlockedCopy}
+            onOpenProtectedCopy={openProtectedCopy}
+            onShowProtectedCopyInFolder={showProtectedCopyInFolder}
+          />
         </FloatingDialog>
       );
     }
@@ -7670,6 +8492,7 @@ export function App() {
           />
         }
         activeLegalTool={activeLegalTool}
+        redactionSelectMode={redactionSelectMode}
         activeTextEdit={activeTextEdit}
         activeEditDialogTool={activeEditDialogTool}
         activeOrganizeTool={activeOrganizeTool}
@@ -7692,6 +8515,8 @@ export function App() {
         modeBar={modeBar}
         editing={editingForShell}
         onRedactionAreaCreated={addPendingRedaction}
+        onRedactionAreasCreated={addPendingRedactions}
+        onRedactionSelectionRejected={handleRedactionSelectionRejected}
         onRedactionAreaRemoved={removePendingRedaction}
         onConfirmRedactions={confirmRedactions}
         onCancelRedactions={cancelRedactions}
@@ -7859,6 +8684,8 @@ export function App() {
 
 function RedactionModeBar({
   pendingCount,
+  selectMode,
+  onSelectModeChange,
   searchOpen,
   searchText,
   applying,
@@ -7869,6 +8696,8 @@ function RedactionModeBar({
   onExit,
 }: {
   pendingCount: number;
+  selectMode: "draw" | "text";
+  onSelectModeChange: (mode: "draw" | "text") => void;
   searchOpen: boolean;
   searchText: string;
   applying: boolean;
@@ -7882,6 +8711,29 @@ function RedactionModeBar({
     <div className="legal-mode-bar" role="toolbar" aria-label="Redaction mode">
       <span className="legal-mode-bar__status">
         Redaction mode — {pendingCount} {pendingCount === 1 ? "area" : "areas"} marked
+      </span>
+      <div className="legal-mode-bar__tool-options" role="group" aria-label="Redaction method">
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          aria-pressed={selectMode === "draw"}
+          onClick={() => onSelectModeChange("draw")}
+        >
+          Draw box
+        </button>
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          aria-pressed={selectMode === "text"}
+          onClick={() => onSelectModeChange("text")}
+        >
+          Select text
+        </button>
+      </div>
+      <span className="legal-mode-bar__hint">
+        {selectMode === "text"
+          ? "Highlight text to mark it for redaction. Image-only pages have no text layer — use Draw box there, or run OCR first."
+          : "Draw a box over anything to redact — text, images, or scans."}
       </span>
       {searchOpen ? (
         <form className="legal-mode-bar__search" onSubmit={onSearchSubmit}>
@@ -7928,7 +8780,7 @@ function batchCleanupCompletionMessage(files: readonly {
 
 /**
  * Streamed-mode gate list for the legal tool group [R1-2]: the 2.425 scanner
- * (proxy-based, user-initiated) and the static Passwords panel are always
+ * (proxy-based, user-initiated) and PDF Security are always
  * open; the delegated set opens when the document has a shell grant for the
  * PathOpsEngine (Prepare for Filing runs the reduced path pipeline; Batch
  * Cleanup and Production Set are path-based package flows; Redact, Sanitize,
@@ -8221,14 +9073,36 @@ function DocumentPropertiesPanel({
   document: DocumentState;
   metadata: PdfMetadataSummary | null;
 }) {
+  const protection = document.protectionFacts;
+  const protectionStatus = protection?.kind === "owner-restricted" ||
+    document.protectionSource === "owner-restricted"
+    ? "Owner-restricted"
+    : protection?.kind === "open-password" || document.protectionSource === "user-password"
+      ? "Protected and unlocked"
+      : protection?.kind === "not-protected" || document.bytes
+        ? "Not protected"
+        : document.source
+          ? "—"
+          : "Not set";
   const rows = [
     ...(metadata?.rows ?? []),
     { label: "Pages", value: String(document.pageCount || "Not set") },
     { label: "Page size", value: document.pageSizeInches ? `${document.pageSizeInches.width} x ${document.pageSizeInches.height} in` : "Not set" },
     { label: "File size", value: document.fileSizeBytes ? formatBytes(document.fileSizeBytes) : "Not set" },
-    // Streamed docs opened successfully through pdf.js without a password,
-    // but the deep pdf-lib inspection never ran -- show the honest gap.
-    { label: "Encryption", value: document.bytes ? "Not encrypted" : document.source ? "—" : "Not set" },
+    { label: "Protection", value: protectionStatus },
+    {
+      label: "Encryption",
+      value: protection && protection.kind !== "not-protected"
+        ? protection.encryption === "unknown" ? "Protected — details unavailable" : protection.encryption
+        : protectionStatus === "Not protected" ? "Not encrypted" : protectionStatus === "Not set" ? "Not set" : "—",
+    },
+    ...(protection && protection.kind !== "not-protected"
+      ? [
+          { label: "Printing", value: describePdfPrintingPermission(protection.permissions.printing) },
+          { label: "Copying", value: describePdfBinaryPermission(protection.permissions.copying) },
+          { label: "Accessibility extraction", value: describePdfBinaryPermission(protection.permissions.accessibilityExtraction) },
+        ]
+      : []),
     { label: "Searchable", value: describeTextLayerStatus(deriveTextLayerStatus(document.textLayerCoverage)) },
   ];
 
@@ -8246,6 +9120,21 @@ function DocumentPropertiesPanel({
       </table>
     </div>
   );
+}
+
+function describePdfPrintingPermission(
+  permission: "full" | "low-resolution" | "blocked" | "unknown",
+): string {
+  if (permission === "full") return "Allowed";
+  if (permission === "low-resolution") return "Low resolution only";
+  if (permission === "blocked") return "Blocked";
+  return "—";
+}
+
+function describePdfBinaryPermission(permission: "allowed" | "blocked" | "unknown"): string {
+  if (permission === "allowed") return "Allowed";
+  if (permission === "blocked") return "Blocked";
+  return "—";
 }
 
 async function reopenFilingHandle(

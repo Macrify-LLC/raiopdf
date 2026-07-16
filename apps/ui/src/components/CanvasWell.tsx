@@ -45,10 +45,13 @@ export interface CanvasWellProps {
   overlay?: ReactNode;
   processLoader?: ReactNode;
   redactionMode?: boolean;
+  redactionTextSelect?: boolean;
   modeBar?: ReactNode;
   onFlattenMarkupAnnotations?: (() => void) | undefined;
   pendingRedactions?: readonly PendingRedactionOverlay[];
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
+  onRedactionAreasCreated?: ((areas: PdfRedactionArea[]) => void) | undefined;
+  onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
@@ -87,10 +90,13 @@ export function CanvasWell({
   overlay = null,
   processLoader = null,
   redactionMode = false,
+  redactionTextSelect = false,
   modeBar = null,
   onFlattenMarkupAnnotations,
   pendingRedactions = [],
   onRedactionAreaCreated,
+  onRedactionAreasCreated,
+  onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
   searchResults = [],
@@ -209,8 +215,11 @@ export function CanvasWell({
             onPageSizeChange={onPageSizeChange}
             onRenderError={onRenderError}
             redactionMode={redactionMode}
+            redactionTextSelect={redactionTextSelect}
             pendingRedactions={pendingRedactions}
             onRedactionAreaCreated={onRedactionAreaCreated}
+            onRedactionAreasCreated={onRedactionAreasCreated}
+            onRedactionSelectionRejected={onRedactionSelectionRejected}
             onRedactionAreaRemoved={onRedactionAreaRemoved}
             editing={editing}
             searchResults={searchResults}

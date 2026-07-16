@@ -57,6 +57,7 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
     pageCount: 2,
     sizeBytes: 283_000_000,
     encrypted: false,
+    pdfaClaimed: false,
     signatureDetection: {
       standardAcroFormSignatureCount: 1,
       hasByteRangeOrContentsMarkers: true,
@@ -100,13 +101,19 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
     expect(mapped.signatureDetection).toEqual(facts.signatureDetection);
     // Facts qpdf cannot provide stay undefined — unknown, never passed.
     expect(mapped.searchableText).toBeUndefined();
-    expect(mapped.pdfaClaimed).toBeUndefined();
+    expect(mapped.pdfaClaimed).toBe(false);
     expect(mapped.pdfaCompliant).toBeUndefined();
   });
 
   it("maps an encrypted-but-rendered doc to usage_restricted (no open password possible)", () => {
     const mapped = mapPathOpsFactsToDocumentFacts({ ...facts, encrypted: true });
     expect(mapped.encryptionState).toBe("usage_restricted");
+  });
+
+  it("carries a streamed PDF/A identification claim into filing facts", () => {
+    const mapped = mapPathOpsFactsToDocumentFacts({ ...facts, pdfaClaimed: true });
+    expect(mapped.pdfaClaimed).toBe(true);
+    expect(mapped.pdfaCompliant).toBeUndefined();
   });
 });
 

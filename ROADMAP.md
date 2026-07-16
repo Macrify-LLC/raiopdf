@@ -21,9 +21,6 @@ buried in "later," that's exactly the kind of thing worth telling us about — s
 
 ## Next — lined up after that
 
-- **Adding password protection.** Today RaioPDF can *unlock* a PDF (save a
-  decrypted copy); *adding* encryption to a document isn't here yet, and it's a
-  natural next step.
 - **More e-filing jurisdiction packs.** The alpha covers Florida, Federal
   CM/ECF, Georgia, and Indiana. Which jurisdictions come next will be driven by
   what people ask for.

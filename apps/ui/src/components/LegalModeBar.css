@@ -126,6 +126,16 @@
   color: var(--primary-deep);
 }
 
+/* Redaction mode's Draw box / Select text segmented toggle -- same
+   aria-pressed treatment as the width-button group above, scoped to the
+   tool-options group so it never affects the bar's other (non-toggle)
+   `.legal-mode-bar__button`s (Search text..., Exit). */
+.legal-mode-bar__tool-options .legal-mode-bar__button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--accent-pale);
+  color: var(--primary-deep);
+}
+
 .legal-mode-bar__button,
 .legal-mode-bar__danger-button {
   min-height: 30px;

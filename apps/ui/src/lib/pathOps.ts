@@ -19,6 +19,8 @@ import type {
   PdfCoverStyle,
   PdfEdit,
   PdfPageNumbersOptions,
+  PdfProtectionFacts,
+  PdfProtectionOptions,
   PdfRedactionArea,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
@@ -39,6 +41,9 @@ export type PathOpErrorCode =
   | "VERIFICATION_FAILED"
   | "IO_ERROR"
   | "FILE_CHANGED"
+  | "SIGNED_DOCUMENT"
+  | "PASSWORD_REQUIRED"
+  | "PASSWORD_INVALID"
   | "PATH_OP_CANCELLED"
   // Native print pipeline (print.rs shares the PathOpError wire shape).
   | "PRINT_NOT_SUPPORTED"
@@ -92,6 +97,14 @@ export function pathOpErrorMessage(error: unknown, fallback: string): string {
 
     if (error.code === "PATH_OP_CANCELLED") {
       return "Operation cancelled. The document was left unchanged.";
+    }
+
+    if (error.code === "SIGNED_DOCUMENT") {
+      return "This PDF contains a digital signature and was left unchanged.";
+    }
+
+    if (error.code === "PASSWORD_REQUIRED" || error.code === "PASSWORD_INVALID") {
+      return error.message;
     }
   }
 
@@ -158,6 +171,7 @@ export interface PathOpsDocumentFacts {
   pageCount: number;
   sizeBytes: number;
   encrypted: boolean;
+  pdfaClaimed: boolean;
   signatureDetection: SignatureDetectionFacts;
   pages: PathOpsPageFacts[];
 }
@@ -177,6 +191,28 @@ export interface PathOpOutput {
   sizeBytes: number;
   pageCount: number;
   opReport: PathOpReport;
+}
+
+export interface PickedProtectedOutputTarget {
+  targetToken: string;
+  name: string;
+}
+
+export interface ProtectedCopyVerification {
+  encryption: "AES-256";
+  allowPrinting: boolean;
+  allowCopying: boolean;
+  accessibilityExtraction: true;
+  metadataEncrypted: true;
+  modificationAllowed: true;
+  pageGeometryPreserved: true;
+  pageCount: number;
+}
+
+export interface ProtectedCopySaved {
+  fileGrant: PathOpsFileGrant;
+  name: string;
+  verification: ProtectedCopyVerification;
 }
 
 export interface PathOpsSplitPart {
@@ -359,6 +395,66 @@ export function pathOpDocumentFacts(
   return invokePathOp("path_op_document_facts", { grant });
 }
 
+export function pathOpInspectProtection(
+  grant: PathOpsFileGrant,
+  password: string,
+): Promise<PdfProtectionFacts> {
+  return invokePathOp("path_op_inspect_protection", { grant, password });
+}
+
+export function revealGrantInFolder(grant: PathOpsFileGrant): Promise<void> {
+  return invokePathOp("reveal_file_grant", { grant });
+}
+
+export function pickProtectedOutputTarget(
+  suggestedName: string,
+  sourceGrants?: readonly PathOpsFileGrant[],
+): Promise<PickedProtectedOutputTarget | null> {
+  return invokePathOp("pick_protected_output_target", {
+    suggestedName,
+    ...(sourceGrants?.length ? { sourceGrants: [...sourceGrants] } : {}),
+  });
+}
+
+export function releaseProtectedOutputTarget(targetToken: string): Promise<boolean> {
+  return invokePathOp("release_protected_output_target", { targetToken });
+}
+
+export type ProtectProgressPhase = "encrypting" | "verifying";
+
+export interface ProtectProgressEvent {
+  jobToken: string;
+  phase: ProtectProgressPhase;
+}
+
+export async function listenProtectProgress(
+  jobToken: string,
+  onProgress: (event: ProtectProgressEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ProtectProgressEvent>("raiopdf-protect-progress", (event) => {
+    if (event.payload.jobToken === jobToken) {
+      onProgress(event.payload);
+    }
+  });
+}
+
+export function protectToTarget(
+  inputGrant: PathOpsFileGrant,
+  targetToken: string,
+  options: PdfProtectionOptions,
+  jobToken?: string,
+): Promise<ProtectedCopySaved> {
+  return invokePathOp("protect_to_target", {
+    inputGrant,
+    targetToken,
+    openPassword: options.openPassword,
+    allowPrinting: options.allowPrinting,
+    allowCopying: options.allowCopying,
+    ...(jobToken ? { jobToken } : {}),
+  });
+}
+
 export function pathOpDecrypt(
   grant: PathOpsFileGrant,
   password: string,
@@ -456,12 +552,14 @@ export function pathOpApplyEdits(
   edits: readonly PdfEdit[],
   applyOptions: PdfApplyEditsOptions,
   outputName: string,
+  flatten = false,
 ): Promise<PathOpOutput> {
   return invokePathOp("path_op_apply_edits", {
     grant,
     payload: {
       edits: edits.map(serializePathOpEdit),
       applyOptions,
+      ...(flatten ? { flatten: true } : {}),
       outputName,
     },
   });

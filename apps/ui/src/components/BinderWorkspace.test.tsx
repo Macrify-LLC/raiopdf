@@ -33,6 +33,9 @@ const documentState = {
   outline: null,
   outlineStatus: null,
   signatureInvalidationNotice: null,
+  protectionSource: null,
+  protectionFacts: null,
+  protectedSourceGrant: null,
   error: null,
 } satisfies DocumentState;
 

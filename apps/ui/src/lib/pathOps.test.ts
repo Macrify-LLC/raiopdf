@@ -337,6 +337,7 @@ describe("path op invoke plumbing", () => {
       ],
       { markupMode: "annotation", printMarkupAnnotations: true },
       "edited.pdf",
+      true,
     )).resolves.toEqual(output);
     expect(invokeMock).toHaveBeenCalledWith("path_op_apply_edits", {
       grant: "grant-1",
@@ -349,6 +350,7 @@ describe("path op invoke plumbing", () => {
           format: "png",
         }],
         applyOptions: { markupMode: "annotation", printMarkupAnnotations: true },
+        flatten: true,
         outputName: "edited.pdf",
       },
     });

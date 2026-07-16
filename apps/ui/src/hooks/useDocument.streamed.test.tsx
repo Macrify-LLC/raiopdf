@@ -118,6 +118,61 @@ describe("useDocument streamed mode", () => {
     expect(getHook().document.dirty).toBe(true);
   });
 
+  it("opens a decrypted streamed source as an unsaved copy while retaining its protected original", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile(
+        {
+          source: { kind: "rangeGrant", grant: "decrypted-temp" as FileGrant, sizeBytes: 50_000_000 },
+          name: "Protected.pdf",
+          path: "decrypted-temp",
+        },
+        {
+          protectionSource: "user-password",
+          protectedSourceGrant: "protected-original" as FileGrant,
+        },
+      );
+    });
+
+    expect(getHook().document.dirty).toBe(true);
+    expect(getHook().document.filePath).toBeNull();
+    expect(getHook().document.protectionSource).toBe("user-password");
+    expect(getHook().document.protectedSourceGrant).toBe("protected-original");
+  });
+
+  it("retains inspected owner-restriction facts with the streamed source grant", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openStreamedFile({
+        source: { kind: "rangeGrant", grant: "owner-source" as FileGrant, sizeBytes: 50_000_000 },
+        name: "Restricted.pdf",
+        path: "owner-source",
+      });
+    });
+    const generation = getHook().document.generation;
+
+    act(() => {
+      getHook().setProtectionFacts({
+        kind: "owner-restricted",
+        encryption: "AES-256",
+        permissions: {
+          printing: "full",
+          copying: "blocked",
+          accessibilityExtraction: "allowed",
+        },
+      }, generation);
+    });
+
+    expect(getHook().document.protectionSource).toBe("owner-restricted");
+    expect(getHook().document.protectedSourceGrant).toBe("owner-source");
+    expect(getHook().document.protectionFacts).toMatchObject({
+      kind: "owner-restricted",
+      encryption: "AES-256",
+    });
+  });
+
   it("commits the pdf.js page count only for the matching generation", async () => {
     mount();
 

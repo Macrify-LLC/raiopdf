@@ -25,6 +25,7 @@ const engineState = vi.hoisted(() => ({
   openBehaviors: [] as OpenBehavior[],
   openCalls: [] as Uint8Array[],
   closeCalls: [] as PdfDocumentHandle[],
+  saveCalls: [] as PdfDocumentHandle[],
   applyOptions: [] as PdfApplyEditsOptions[],
   flattenedMarkupHandles: [] as PdfDocumentHandle[],
   applyEditsDeferred: null as Deferred<PdfDocumentHandle> | null,
@@ -61,6 +62,7 @@ vi.mock("@raiopdf/engine-local", () => {
     }
 
     async saveToBytes(handle: PdfDocumentHandle) {
+      engineState.saveCalls.push(handle);
       return new Uint8Array([String(handle).length]);
     }
 
@@ -114,6 +116,7 @@ describe("useDocument openFile", () => {
     engineState.openBehaviors.length = 0;
     engineState.openCalls.length = 0;
     engineState.closeCalls.length = 0;
+    engineState.saveCalls.length = 0;
     engineState.applyOptions.length = 0;
     engineState.flattenedMarkupHandles.length = 0;
     engineState.applyEditsDeferred = null;
@@ -231,6 +234,56 @@ describe("useDocument openFile", () => {
         printMarkupAnnotations: false,
       },
     ]);
+  });
+
+  it("serializes pending edits into a copy without mutating the open document", async () => {
+    mount();
+
+    await act(async () => {
+      await getHook().openFile({
+        bytes: new Uint8Array([4]),
+        name: "draft.pdf",
+      });
+    });
+
+    const generation = getHook().document.generation;
+    const sourceHandle = getHook().document.engineHandle;
+    let snapshot: Uint8Array | null = null;
+
+    await act(async () => {
+      snapshot = await getHook().serializeAnnotationSavePlan({
+        appendEdits: [
+          {
+            type: "highlight",
+            pageIndex: 0,
+            rects: [{ x: 10, y: 10, w: 100, h: 12 }],
+          },
+        ],
+        updateEdits: [],
+        deleteAnnotIds: [],
+      }, {
+        flatten: false,
+        printMarkupAnnotations: false,
+        expectedGeneration: generation,
+      });
+    });
+
+    expect(snapshot).toEqual(new Uint8Array(["edited-handle".length]));
+    expect(engineState.applyOptions).toEqual([{
+      markupMode: "annotation",
+      printMarkupAnnotations: false,
+    }]);
+    expect(engineState.saveCalls).toEqual([
+      sourceHandle,
+      "edited-handle",
+    ]);
+    expect(engineState.closeCalls).toEqual(expect.arrayContaining([
+      "handle-2",
+      "edited-handle",
+    ]));
+    expect(getHook().document.engineHandle).toBe(sourceHandle);
+    expect(getHook().document.generation).toBe(generation);
+    expect(getHook().document.dirty).toBe(false);
   });
 
   it("flattens RaioPDF markup annotations on the current document", async () => {

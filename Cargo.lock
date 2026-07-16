@@ -894,6 +894,7 @@ name = "engine-sidecar-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fs2",
  "getrandom 0.3.4",
  "libc",
  "quick-xml",
@@ -2770,6 +2771,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2779,6 +2781,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

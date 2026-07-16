@@ -156,10 +156,20 @@ at all.
 
 ### Can it add password protection / encrypt a PDF?
 
-Not in this build. RaioPDF can **unlock** PDFs — save a decrypted copy of a
-password- or owner-restricted file (you supply the password when one's required),
-leaving the original untouched — but *adding* encryption isn't here yet. It's on
-the [roadmap](ROADMAP.md).
+Yes, in the installed Windows app. **PDF Security** creates a separate AES-256
+protected copy with an open password. It can include your current unsaved edits,
+while the original file stays open and unchanged.
+
+You can allow or restrict printing and copying, but those PDF permissions are
+advisory and some readers may ignore them. The open password is the part that
+encrypts the file.
+
+RaioPDF does not store or recover the password. Keep it somewhere safe and,
+when practical, send the PDF and password through different channels.
+
+RaioPDF blocks protection when it finds a digital signature. For a PDF/A file,
+it asks you to confirm that the protected copy will no longer be PDF/A. You can
+also use **Save Unlocked Copy**, leaving the protected original unchanged.
 
 ### Which courts / jurisdictions does the e-filing prep support?
 
@@ -187,7 +197,7 @@ already provide, if you so choose.
 ### Then what's this "MCP" thing I've seen mentioned?
 
 RaioPDF ships an **off-by-default** connector that lets *your own* AI agent
-(Claude Desktop, Claude Code, etc.) drive RaioPDF's local tools over the
+(Claude Desktop, Claude Code, etc.) run RaioPDF's supported local tools over the
 [Model Context Protocol](https://modelcontextprotocol.io). So there's no AI
 *inside* RaioPDF, but if you already use an AI assistant, you can point it at
 RaioPDF's toolbox — OCR, verified redaction, Bates, binders, production sets,

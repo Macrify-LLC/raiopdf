@@ -68,8 +68,12 @@ export interface PageListProps {
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
   onRenderError?: ((message: string) => void) | undefined;
   redactionMode?: boolean;
+  /** Redaction mode's "Select text" sub-mode -- see PageView's window-level capture. */
+  redactionTextSelect?: boolean;
   pendingRedactions?: readonly PendingRedactionOverlay[];
   onRedactionAreaCreated?: ((area: PdfRedactionArea) => void) | undefined;
+  onRedactionAreasCreated?: ((areas: PdfRedactionArea[]) => void) | undefined;
+  onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
   searchResults?: readonly DocumentSearchMatch[];
@@ -110,8 +114,11 @@ export function PageList({
   onPageSizeChange,
   onRenderError,
   redactionMode = false,
+  redactionTextSelect = false,
   pendingRedactions = [],
   onRedactionAreaCreated,
+  onRedactionAreasCreated,
+  onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
   searchResults = [],
@@ -129,12 +136,13 @@ export function PageList({
   // ever extended) so the selection anchor's DOM never unmounts mid-drag.
   const [selectionDragActive, setSelectionDragActive] = useState(false);
   const textSelectable = Boolean(
-    editing &&
+    (editing &&
       !redactionMode &&
       (editing.tool === "select" ||
         editing.tool === "highlight" ||
         editing.tool === "underline" ||
-        editing.tool === "strikethrough"),
+        editing.tool === "strikethrough")) ||
+      (redactionMode && redactionTextSelect),
   );
 
   const sizes = pageSizes?.doc === pdfDocument ? pageSizes : null;
@@ -543,8 +551,11 @@ export function PageList({
                   zoom={zoom}
                   textSelectable={textSelectable}
                   redactionMode={redactionMode}
+                  redactionTextSelect={redactionMode && redactionTextSelect}
                   pendingRedactions={pendingRedactions}
                   onRedactionAreaCreated={onRedactionAreaCreated}
+                  onRedactionAreasCreated={onRedactionAreasCreated}
+                  onRedactionSelectionRejected={onRedactionSelectionRejected}
                   onRedactionAreaRemoved={onRedactionAreaRemoved}
                   editing={editing}
                   searchResults={searchResults}

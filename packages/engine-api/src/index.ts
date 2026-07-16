@@ -855,6 +855,40 @@ export type PdfCommentEdit = {
 export type PdfFormFieldValue = string | boolean | readonly string[];
 
 /**
+ * Creates a reusable text or checkbox field in the document's AcroForm.
+ *
+ * The field remains interactive after save and interoperates with ordinary
+ * PDF viewers. Geometry uses the same PDF user-space coordinate contract as
+ * every other page-scoped edit.
+ */
+type PdfFormFieldEditBase = {
+  type: "formField";
+  /** Fully-qualified AcroForm field name. Must be unique in the document. */
+  name: string;
+  /** Zero-based page index receiving the field widget. */
+  pageIndex: number;
+  /** Widget bounds in PDF user-space points. */
+  rect: PdfEditRect;
+  /** Marks the field as required for form submission. */
+  required?: boolean;
+  /** Prevents PDF viewers from changing the saved value. */
+  readOnly?: boolean;
+};
+
+export type PdfFormFieldEdit =
+  | (PdfFormFieldEditBase & {
+      fieldType: "text";
+      initialValue?: string;
+      multiline?: boolean;
+      /** Text appearance size in PDF points. */
+      fontSizePt?: number;
+    })
+  | (PdfFormFieldEditBase & {
+      fieldType: "checkbox";
+      initialValue?: boolean;
+    });
+
+/**
  * Writes values into the document's AcroForm fields.
  *
  * Form fields are document-scoped in PDF, so this is the one edit variant
@@ -907,6 +941,7 @@ export type PdfEdit =
   | PdfInkEdit
   | PdfShapeEdit
   | PdfCommentEdit
+  | PdfFormFieldEdit
   | PdfFormValuesEdit
   | PdfSignatureEdit;
 

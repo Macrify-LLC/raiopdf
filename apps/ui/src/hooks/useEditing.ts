@@ -64,6 +64,10 @@ const MAX_SAVED_SIGNATURES = 12;
 const MAX_SAVED_SIGNATURE_BYTES = 500 * 1024;
 const MAX_SAVED_SIGNATURES_BYTES = 2 * 1024 * 1024;
 
+function resetFormAuthoringTool(tool: EditToolId): EditToolId {
+  return tool === "formText" || tool === "formCheckbox" ? "select" : tool;
+}
+
 export interface EditingState {
   tool: EditToolId;
   setTool: (tool: EditToolId) => void;
@@ -424,10 +428,11 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
 
     const hasSignatureEdit = pendingEdits.some((edit) => edit.kind === "signature");
     const hasFormWrite = Object.keys(formValues).length > 0;
+    const hasFormFieldEdit = edits.some((edit) => edit.type === "formField");
 
     return {
       edits,
-      flatten: flattenOnSave && (hasSignatureEdit || hasFormWrite),
+      flatten: flattenOnSave && !hasFormFieldEdit && (hasSignatureEdit || hasFormWrite),
     };
   }, [flattenOnSave, formValues, pendingEdits]);
 
@@ -456,16 +461,21 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
           ],
         }
       : annotationSavePlan;
+    const hasFormFieldEdit = plan.appendEdits.some((edit) => edit.type === "formField");
 
     return {
       plan,
-      flatten: flattenOnSave && (annotationSavePlan.hasSignatureEdit || hasFormWrite),
+      flatten:
+        flattenOnSave &&
+        !hasFormFieldEdit &&
+        (annotationSavePlan.hasSignatureEdit || hasFormWrite),
     };
   }, [annotationSavePlan, flattenOnSave, formValues]);
 
   const collectMarkupAnnotationSavePlan = useCallback(() => annotationSavePlan, [annotationSavePlan]);
 
   const resetForDocument = useCallback(() => {
+    setToolState(resetFormAuthoringTool);
     setPendingEdits([]);
     setImportedAnnotIds(new Set());
     setFormValues({});
@@ -480,6 +490,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }), [formValues, importedAnnotIds, pendingEdits]);
 
   const restoreDocumentState = useCallback((snapshot: EditingDocumentSnapshot) => {
+    setToolState(resetFormAuthoringTool);
     setPendingEdits(snapshot.pendingEdits);
     setImportedAnnotIds(snapshot.importedAnnotIds);
     setFormValues({ ...snapshot.formValues });

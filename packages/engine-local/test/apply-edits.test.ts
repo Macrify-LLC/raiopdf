@@ -1,4 +1,4 @@
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, type PdfEdit } from "@raiopdf/engine-api";
 import { wrapTextBoxLines } from "@raiopdf/engine-api";
 import {
   decodePDFRawStream,
@@ -13,6 +13,7 @@ import {
   PDFStream,
   PDFString,
   StandardFonts,
+  degrees,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createLocalPdfEngine } from "../src/index";
@@ -907,6 +908,271 @@ describe("LocalPdfEngine.applyEdits", () => {
 
     expect(form.getTextField("name").getText()).toBe("Jane Doe");
     expect(form.getCheckBox("agree").isChecked()).toBe(true);
+  });
+
+  it("creates a reusable text form field in a fieldless PDF", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.name",
+        pageIndex: 0,
+        rect: { x: 40, y: 300, w: 200, h: 24 },
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+    const field = reopened.getForm().getTextField("client.name");
+    const [widget] = field.acroField.getWidgets();
+
+    expect(field.getText()).toBeUndefined();
+    expect(widget?.getRectangle()).toEqual({ x: 40, y: 300, width: 200, height: 24 });
+  });
+
+  it("creates a reusable checkbox form field in a fieldless PDF", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "formField",
+        fieldType: "checkbox",
+        name: "terms.accepted",
+        pageIndex: 0,
+        rect: { x: 40, y: 300, w: 18, h: 18 },
+        initialValue: true,
+        required: true,
+        readOnly: true,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+    const field = reopened.getForm().getCheckBox("terms.accepted");
+    const [widget] = field.acroField.getWidgets();
+
+    expect(field.isChecked()).toBe(true);
+    expect(field.isRequired()).toBe(true);
+    expect(field.isReadOnly()).toBe(true);
+    expect(widget?.getRectangle()).toEqual({ x: 40, y: 300, width: 18, height: 18 });
+  });
+
+  it("creates a text field with its initial value and authoring properties", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.notes",
+        pageIndex: 0,
+        rect: { x: 40, y: 250, w: 200, h: 48 },
+        initialValue: "Ready for review",
+        required: true,
+        readOnly: true,
+        multiline: true,
+        fontSizePt: 13,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+    const field = reopened.getForm().getTextField("client.notes");
+
+    expect(field.getText()).toBe("Ready for review");
+    expect(field.isRequired()).toBe(true);
+    expect(field.isReadOnly()).toBe(true);
+    expect(field.isMultiline()).toBe(true);
+    expect(field.acroField.getDefaultAppearance()).toMatch(/13 Tf/);
+  });
+
+  it("creates upright form fields at the placed rectangles on rotated pages", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([300, 400]).setRotation(degrees(90));
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await source.save());
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.name",
+        pageIndex: 0,
+        rect: { x: 40, y: 100, w: 24, h: 180 },
+        initialValue: "Jane Doe",
+      },
+      {
+        type: "formField",
+        fieldType: "checkbox",
+        name: "terms.accepted",
+        pageIndex: 0,
+        rect: { x: 80, y: 100, w: 18, h: 18 },
+        initialValue: true,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+    const textField = reopened.getForm().getTextField("client.name");
+    const checkBox = reopened.getForm().getCheckBox("terms.accepted");
+    const [textWidget] = textField.acroField.getWidgets();
+    const [checkboxWidget] = checkBox.acroField.getWidgets();
+
+    expect(textWidget?.getRectangle()).toEqual({ x: 40, y: 100, width: 24, height: 180 });
+    expect(textWidget?.getAppearanceCharacteristics()?.getRotation()).toBe(90);
+    expect(textField.getText()).toBe("Jane Doe");
+    expect(checkboxWidget?.getRectangle()).toEqual({ x: 80, y: 100, width: 18, height: 18 });
+    expect(checkboxWidget?.getAppearanceCharacteristics()?.getRotation()).toBe(90);
+    expect(checkBox.isChecked()).toBe(true);
+  });
+
+  it("creates fields before writing values in the same atomic edit transaction", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+
+    const edited = await applyBakedEdits(engine, document, [
+      { type: "formValues", values: { "client.name": "Jane Doe" } },
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.name",
+        pageIndex: 0,
+        rect: { x: 40, y: 300, w: 200, h: 24 },
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+
+    expect(reopened.getForm().getTextField("client.name").getText()).toBe("Jane Doe");
+  });
+
+  it("rejects duplicate authored field names without changing the source document", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+
+    await expect(
+      applyBakedEdits(engine, document, [
+        {
+          type: "formField",
+          fieldType: "text",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 40, y: 300, w: 200, h: 24 },
+        },
+        {
+          type: "formField",
+          fieldType: "checkbox",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 40, y: 260, w: 18, h: 18 },
+        },
+      ]),
+    ).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: 'Form field "client.name" already exists.',
+    });
+
+    const sourceBytes = await engine.saveToBytes(document);
+    const reopenedSource = await PDFDocument.load(sourceBytes);
+    expect(reopenedSource.getForm().getFields()).toHaveLength(0);
+  });
+
+  it("refuses to author fields in a signed document", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([300, 400]);
+    const signatureValue = pdf.context.register(
+      pdf.context.obj({ Type: "Sig", Filter: "Adobe.PPKLite" }),
+    );
+    const signatureField = pdf.context.register(
+      pdf.context.obj({
+        FT: "Sig",
+        T: PDFString.of("attorney-signature"),
+        V: signatureValue,
+        Rect: [10, 10, 200, 60],
+      }),
+    );
+    const acroForm = pdf.context.obj({ Fields: [signatureField] }) as PDFDict;
+    pdf.catalog.set(PDFName.of("AcroForm"), pdf.context.register(acroForm));
+
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await pdf.save());
+
+    await expect(
+      applyBakedEdits(engine, document, [
+        {
+          type: "formField",
+          fieldType: "text",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 40, y: 300, w: 200, h: 24 },
+        },
+      ]),
+    ).rejects.toMatchObject({
+      code: "SIGNED_DOCUMENT",
+      message: "Form fields cannot be authored in a signed PDF.",
+    });
+  });
+
+  it("refuses to author fields in an XFA document", async () => {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([300, 400]);
+    pdf
+      .getForm()
+      .acroForm.dict.set(PDFName.of("XFA"), PDFString.of("<template xmlns=\"xfa\" />"));
+
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await pdf.save());
+
+    await expect(
+      applyBakedEdits(engine, document, [
+        {
+          type: "formField",
+          fieldType: "text",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 40, y: 300, w: 200, h: 24 },
+        },
+      ]),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      message: "Form fields cannot be authored in an XFA PDF.",
+    });
+  });
+
+  it("rejects unsupported authored field kinds at the runtime boundary", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+    const unsupported = {
+      type: "formField",
+      fieldType: "radio",
+      name: "choice",
+      pageIndex: 0,
+      rect: { x: 40, y: 300, w: 18, h: 18 },
+    } as unknown as PdfEdit;
+
+    await expect(applyBakedEdits(engine, document, [unsupported])).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: "Form field type must be text or checkbox.",
+    });
+  });
+
+  it("rejects non-boolean checkbox defaults at the runtime boundary", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+    const invalidDefault = {
+      type: "formField",
+      fieldType: "checkbox",
+      name: "terms.accepted",
+      pageIndex: 0,
+      rect: { x: 40, y: 300, w: 18, h: 18 },
+      initialValue: "true",
+    } as unknown as PdfEdit;
+
+    await expect(applyBakedEdits(engine, document, [invalidDefault])).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: "Checkbox initial value must be a boolean.",
+    });
   });
 
   it("rejects form values for unknown fields", async () => {

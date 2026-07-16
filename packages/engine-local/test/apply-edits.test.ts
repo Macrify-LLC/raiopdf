@@ -13,6 +13,7 @@ import {
   PDFStream,
   PDFString,
   StandardFonts,
+  degrees,
 } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createLocalPdfEngine } from "../src/index";
@@ -985,6 +986,45 @@ describe("LocalPdfEngine.applyEdits", () => {
     expect(field.isReadOnly()).toBe(true);
     expect(field.isMultiline()).toBe(true);
     expect(field.acroField.getDefaultAppearance()).toMatch(/13 Tf/);
+  });
+
+  it("creates upright form fields at the placed rectangles on rotated pages", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([300, 400]).setRotation(degrees(90));
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await source.save());
+
+    const edited = await applyBakedEdits(engine, document, [
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.name",
+        pageIndex: 0,
+        rect: { x: 40, y: 100, w: 24, h: 180 },
+        initialValue: "Jane Doe",
+      },
+      {
+        type: "formField",
+        fieldType: "checkbox",
+        name: "terms.accepted",
+        pageIndex: 0,
+        rect: { x: 80, y: 100, w: 18, h: 18 },
+        initialValue: true,
+      },
+    ]);
+    const bytes = await engine.saveToBytes(edited);
+    const reopened = await PDFDocument.load(bytes);
+    const textField = reopened.getForm().getTextField("client.name");
+    const checkBox = reopened.getForm().getCheckBox("terms.accepted");
+    const [textWidget] = textField.acroField.getWidgets();
+    const [checkboxWidget] = checkBox.acroField.getWidgets();
+
+    expect(textWidget?.getRectangle()).toEqual({ x: 40, y: 100, width: 24, height: 180 });
+    expect(textWidget?.getAppearanceCharacteristics()?.getRotation()).toBe(90);
+    expect(textField.getText()).toBe("Jane Doe");
+    expect(checkboxWidget?.getRectangle()).toEqual({ x: 80, y: 100, width: 18, height: 18 });
+    expect(checkboxWidget?.getAppearanceCharacteristics()?.getRotation()).toBe(90);
+    expect(checkBox.isChecked()).toBe(true);
   });
 
   it("creates fields before writing values in the same atomic edit transaction", async () => {

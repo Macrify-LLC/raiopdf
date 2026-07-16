@@ -3073,12 +3073,27 @@ function applyFormFieldEdit(pdf: PDFDocument, edit: PdfFormFieldEdit): void {
 
   try {
     let field: PDFField;
+    const pageRotation = normalizePageRotation(page.getRotation().angle);
+    const visualRect = mapPageRectToVisualRect(
+      edit.rect,
+      page.getWidth(),
+      page.getHeight(),
+      pageRotation,
+    );
+    const anchor = mapVisualPointToPagePoint({
+      visualX: visualRect.x,
+      visualY: visualRect.y,
+      pageWidth: page.getWidth(),
+      pageHeight: page.getHeight(),
+      pageRotation,
+    });
     const widgetOptions = {
-      x: edit.rect.x,
-      y: edit.rect.y,
-      width: edit.rect.w,
-      height: edit.rect.h,
+      x: anchor.x,
+      y: anchor.y,
+      width: visualRect.w,
+      height: visualRect.h,
       borderWidth: 0,
+      rotate: pdfDegrees(pageRotation),
     };
 
     if (edit.fieldType === "text") {

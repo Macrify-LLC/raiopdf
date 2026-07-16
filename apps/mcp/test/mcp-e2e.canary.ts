@@ -89,8 +89,17 @@ function commandPath(command: string): string | undefined {
   }
 }
 
-function existingEnvFile(key: string, fallbackCommand: string): Record<string, string> {
+function existingEnvFile(
+  key: string,
+  payloadRelative: readonly string[],
+  fallbackCommand: string,
+): Record<string, string> {
   if (process.env[key]?.trim()) return {};
+  // Prefer the bundled payload tool so the canary exercises exactly what ships:
+  // leaving the override unset lets the engine-host discover the bundled binary
+  // (for OCRmyPDF, the wrapper that sets TESSDATA_PREFIX for the source-built
+  // tesseract). Fall back to a system tool only when the payload lacks it.
+  if (existsSync(path.join(payloadDir, ...payloadRelative))) return {};
   const found = commandPath(fallbackCommand);
   return found ? { [key]: found } : {};
 }
@@ -120,9 +129,9 @@ const DEV_ENGINE_TOOLCHAIN_ENV: Record<string, string> = isWindows
   ? {}
   : {
       RAIOPDF_ENGINE_JAVA: process.env.RAIOPDF_ENGINE_JAVA?.trim() || "java",
-      ...existingEnvFile("RAIOPDF_ENGINE_QPDF", "qpdf"),
-      ...existingEnvFile("RAIOPDF_ENGINE_GHOSTSCRIPT", "gs"),
-      ...existingEnvFile("RAIOPDF_ENGINE_OCRMYPDF", "ocrmypdf"),
+      ...existingEnvFile("RAIOPDF_ENGINE_QPDF", ["ocr", "qpdf", "bin", "qpdf"], "qpdf"),
+      ...existingEnvFile("RAIOPDF_ENGINE_GHOSTSCRIPT", ["ocr", "gs", "bin", "gs"], "gs"),
+      ...existingEnvFile("RAIOPDF_ENGINE_OCRMYPDF", ["ocr", "ocrmypdf"], "ocrmypdf"),
     };
 
 // The tools the connector advertises. Canonical count lives in docs/MCP.md; this set

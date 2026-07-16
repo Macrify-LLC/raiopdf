@@ -268,6 +268,16 @@ async function assertNoSymlinkComponents(filePath: string): Promise<void> {
     }
 
     if (stats.isSymbolicLink()) {
+      // macOS exposes /var, /tmp, and /etc as OS-managed symlinks into /private
+      // (system firmlinks). They are safe and unavoidable — the default temp
+      // directory lives under /var/folders — so resolve them and continue the
+      // walk from the real target. Every other symlink component is rejected.
+      const resolved = await fs.realpath(current);
+      if (process.platform === "darwin" && MACOS_SYSTEM_FIRMLINKS.get(current) === resolved) {
+        current = resolved;
+        continue;
+      }
+
       throw new PathPolicyError(
         `Path contains a symlink component: ${current}.`,
         "Choose the real absolute path to a regular file; symlink paths are not accepted.",
@@ -275,6 +285,14 @@ async function assertNoSymlinkComponents(filePath: string): Promise<void> {
     }
   }
 }
+
+// Standard macOS firmlinks: a top-level symlink whose real target is the
+// matching /private/* directory. Anything else remains a rejected symlink.
+const MACOS_SYSTEM_FIRMLINKS = new Map<string, string>([
+  ["/var", "/private/var"],
+  ["/tmp", "/private/tmp"],
+  ["/etc", "/private/etc"],
+]);
 
 async function removeIfExists(filePath: string): Promise<void> {
   try {

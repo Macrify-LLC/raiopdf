@@ -23,6 +23,8 @@ const payloadDir = resolve(
 );
 const legalDir = join(payloadDir, "legal");
 const checkOnly = args.check;
+const isMacPlatform = platform.payloadId === "macos-arm64";
+const SUPPORTED_LEGAL_PLATFORMS = new Set(["windows-x64", "macos-arm64"]);
 
 const pins = parsePins(pinsPath);
 assertSupportedProvenance();
@@ -110,6 +112,14 @@ function parsePins(path) {
 }
 
 function assertSupportedProvenance() {
+  if (!SUPPORTED_LEGAL_PLATFORMS.has(platform.payloadId)) {
+    throw new Error(
+      `${platform.payloadId} legal generation is not enabled until its native component paths, ` +
+        "license inventory, and source-correspondence templates are verified. Refusing to emit " +
+        "unverified platform claims.",
+    );
+  }
+
   const commonRequired = [
     "TEMURIN_JRE_VERSION",
     "TEMURIN_JRE_URL",
@@ -117,38 +127,58 @@ function assertSupportedProvenance() {
     "NODE_RUNTIME_VERSION",
     "NODE_RUNTIME_URL",
     "NODE_RUNTIME_SHA256",
-    "PYTHON_EMBED_VERSION",
-    "PYTHON_EMBED_URL",
-    "PYTHON_EMBED_SHA256",
     "OCRMYPDF_VERSION",
     "OCRMYPDF_REQUIREMENTS",
     "OCRMYPDF_REQUIREMENTS_SHA256",
     "TESSERACT_VERSION",
-    "TESSERACT_URL",
-    "TESSERACT_SHA256",
     "TESSDATA_FAST_VERSION",
     "TESSDATA_ENG_URL",
     "TESSDATA_ENG_SHA256",
     "GHOSTSCRIPT_VERSION",
-    "GHOSTSCRIPT_URL",
-    "GHOSTSCRIPT_SHA256",
     "GHOSTSCRIPT_SOURCE_URL",
     "GHOSTSCRIPT_SOURCE_SHA256",
     "QPDF_VERSION",
-    "QPDF_URL",
-    "QPDF_SHA256",
   ];
-  const missing = commonRequired.filter((name) => !pins[name]);
+  // Windows ships prebuilt binaries for Python/Tesseract/qpdf; macOS builds
+  // them (and their static image-IO dependencies) from pinned source instead.
+  const platformRequired = isMacPlatform
+    ? [
+        "PYTHON_STANDALONE_VERSION",
+        "PYTHON_STANDALONE_URL",
+        "PYTHON_STANDALONE_SHA256",
+        "TESSERACT_SOURCE_URL",
+        "TESSERACT_SOURCE_SHA256",
+        "QPDF_SOURCE_URL",
+        "QPDF_SOURCE_SHA256",
+        "LEPTONICA_VERSION",
+        "LEPTONICA_SOURCE_URL",
+        "LEPTONICA_SOURCE_SHA256",
+        "LIBPNG_VERSION",
+        "LIBPNG_SOURCE_URL",
+        "LIBPNG_SOURCE_SHA256",
+        "LIBTIFF_VERSION",
+        "LIBTIFF_SOURCE_URL",
+        "LIBTIFF_SOURCE_SHA256",
+        "LIBJPEG_TURBO_VERSION",
+        "LIBJPEG_TURBO_SOURCE_URL",
+        "LIBJPEG_TURBO_SOURCE_SHA256",
+      ]
+    : [
+        "PYTHON_EMBED_VERSION",
+        "PYTHON_EMBED_URL",
+        "PYTHON_EMBED_SHA256",
+        "TESSERACT_URL",
+        "TESSERACT_SHA256",
+        "GHOSTSCRIPT_URL",
+        "GHOSTSCRIPT_SHA256",
+        "QPDF_URL",
+        "QPDF_SHA256",
+      ];
+  const missing = [...commonRequired, ...platformRequired].filter((name) => !pins[name]);
   if (missing.length > 0) {
     throw new Error(
       `${platform.payloadId} legal provenance is incomplete in ${relative(REPO_ROOT, pinsPath)}; ` +
         `missing: ${missing.join(", ")}.`,
-    );
-  }
-  if (platform.payloadId !== "windows-x64") {
-    throw new Error(
-      `${platform.payloadId} legal generation is not enabled until its native component paths, ` +
-        "license inventory, and source-correspondence templates are verified. Refusing to emit Windows claims.",
     );
   }
 }
@@ -231,20 +261,7 @@ function buildComponentManifest() {
       source: "https://github.com/Macrify-LLC/raiopdf",
       correspondingSource: "The public GitHub repository contains the preferred source form and build scripts.",
     }),
-    component("Ghostscript", pins.GHOSTSCRIPT_VERSION, "AGPL-3.0-only", "https://www.ghostscript.com/", {
-      role: "OCR/PDF interpreter",
-      binary: {
-        url: pins.GHOSTSCRIPT_URL,
-        sha256: pins.GHOSTSCRIPT_SHA256,
-        payloadPaths: ["ocr/gs/bin/gswin64c.exe", "ocr/gs/bin/gs.exe"],
-      },
-      source: {
-        url: pins.GHOSTSCRIPT_SOURCE_URL,
-        sha256: pins.GHOSTSCRIPT_SOURCE_SHA256,
-      },
-      modificationStatus:
-        "Unmodified upstream Windows x64 installer payload. RaioPDF copies gswin64c.exe to gs.exe as a byte-identical convenience alias.",
-    }),
+    ghostscriptComponent(),
     component("Stirling-PDF core flavor", readPinnedTag("engine/PINNED_TAG"), "MIT", "https://github.com/Stirling-Tools/Stirling-PDF", {
       role: "PDF engine",
       payloadPaths: ["engine/stirling.jar"],
@@ -254,35 +271,12 @@ function buildComponentManifest() {
       role: "bundled Java runtime",
       binary: { url: pins.TEMURIN_JRE_URL, sha256: pins.TEMURIN_JRE_SHA256 },
     }),
-    component("Node.js runtime", pins.NODE_RUNTIME_VERSION, "MIT", "https://nodejs.org/", {
-      role: "bundled MCP runtime",
-      binary: { url: pins.NODE_RUNTIME_URL, sha256: pins.NODE_RUNTIME_SHA256 },
-      payloadPaths: ["mcp/node/node.exe", "mcp/node/LICENSE"],
-    }),
-    component("Python embeddable package", pins.PYTHON_EMBED_VERSION, "Python-2.0", "https://www.python.org/", {
-      role: "bundled OCR runtime",
-      binary: { url: pins.PYTHON_EMBED_URL, sha256: pins.PYTHON_EMBED_SHA256 },
-      payloadPaths: ["ocr/python/python.exe"],
-    }),
-    component("OCRmyPDF", pins.OCRMYPDF_VERSION, "MPL-2.0", "https://ocrmypdf.readthedocs.io/", {
-      role: "OCR pipeline",
-      payloadPaths: ["ocr/ocrmypdf.cmd", "ocr/THIRD-PARTY-PYTHON.md"],
-    }),
-    component("Tesseract OCR", pins.TESSERACT_VERSION, "Apache-2.0", "https://github.com/tesseract-ocr/tesseract", {
-      role: "OCR engine",
-      binary: { url: pins.TESSERACT_URL, sha256: pins.TESSERACT_SHA256 },
-      payloadPaths: ["ocr/tesseract/tesseract.exe"],
-    }),
-    component("tessdata_fast English traineddata", pins.TESSDATA_FAST_VERSION, "Apache-2.0", "https://github.com/tesseract-ocr/tessdata_fast", {
-      role: "OCR language data",
-      binary: { url: pins.TESSDATA_ENG_URL, sha256: pins.TESSDATA_ENG_SHA256 },
-      payloadPaths: ["ocr/tesseract/tessdata/eng.traineddata"],
-    }),
-    component("qpdf", pins.QPDF_VERSION, "Apache-2.0", "https://github.com/qpdf/qpdf", {
-      role: "PDF repair/linearization helper",
-      binary: { url: pins.QPDF_URL, sha256: pins.QPDF_SHA256 },
-      payloadPaths: ["ocr/qpdf/bin/qpdf.exe", "ocr/qpdf/LICENSE.txt"],
-    }),
+    nodeComponent(),
+    pythonComponent(),
+    ocrmypdfComponent(),
+    tesseractComponent(),
+    tessdataComponent(),
+    qpdfComponent(),
     component("pdfjs-dist", npmVersion("pdfjs-dist"), "Apache-2.0", "https://github.com/mozilla/pdf.js", {
       role: "PDF rendering assets and worker",
       payloadPaths: ["mcp/pdfjs/cmaps", "mcp/pdfjs/standard_fonts", "mcp/pdfjs/wasm"],
@@ -290,18 +284,16 @@ function buildComponentManifest() {
     component("pdf-lib", npmVersion("pdf-lib"), "MIT", "https://github.com/Hopding/pdf-lib", {
       role: "PDF manipulation library",
     }),
-    component("@napi-rs/canvas", npmVersion("@napi-rs/canvas"), "MIT", "https://github.com/Brooooooklyn/canvas", {
-      role: "MCP image/canvas rendering dependency",
-      payloadPaths: [
-        "mcp/node_modules/@napi-rs/canvas/package.json",
-        "mcp/node_modules/@napi-rs/canvas-win32-x64-msvc/package.json",
-      ],
-    }),
+    canvasComponent(),
     component("React", npmVersion("react"), "MIT", "https://react.dev/", { role: "desktop UI" }),
     component("React DOM", npmVersion("react-dom"), "MIT", "https://react.dev/", { role: "desktop UI" }),
     component("Tauri", cargoVersion("tauri"), "Apache-2.0 OR MIT", "https://tauri.app/", {
       role: "desktop application shell",
     }),
+    // macOS builds its native OCR toolchain (Ghostscript/Tesseract/qpdf) from
+    // source instead of shipping prebuilt binaries, which pulls in these
+    // statically-linked source dependencies. Windows has no equivalent.
+    ...(isMacPlatform ? macSourceBuiltImageDependencies() : []),
   ];
 
   return {
@@ -340,6 +332,175 @@ function component(name, version, license, homepage, extra = {}) {
   };
 }
 
+// Platform-conditional component builders. Windows branches are the
+// pre-existing, byte-for-byte-unchanged behavior; macOS branches describe the
+// source-built toolchain per installer/PINS.macos-arm64.env.
+
+function ghostscriptComponent() {
+  if (isMacPlatform) {
+    return component("Ghostscript", pins.GHOSTSCRIPT_VERSION, "AGPL-3.0-only", "https://www.ghostscript.com/", {
+      role: "OCR/PDF interpreter",
+      payloadPaths: ["ocr/gs/bin/gs"],
+      source: {
+        url: pins.GHOSTSCRIPT_SOURCE_URL,
+        sha256: pins.GHOSTSCRIPT_SOURCE_SHA256,
+      },
+      modificationStatus:
+        "Built from the pinned upstream AGPL-3.0 source archive on the build host. RaioPDF's build " +
+        "configuration (configure flags) produces a self-contained arm64 binary; RaioPDF makes no " +
+        "functional modifications to the Ghostscript source.",
+    });
+  }
+  return component("Ghostscript", pins.GHOSTSCRIPT_VERSION, "AGPL-3.0-only", "https://www.ghostscript.com/", {
+    role: "OCR/PDF interpreter",
+    binary: {
+      url: pins.GHOSTSCRIPT_URL,
+      sha256: pins.GHOSTSCRIPT_SHA256,
+      payloadPaths: ["ocr/gs/bin/gswin64c.exe", "ocr/gs/bin/gs.exe"],
+    },
+    source: {
+      url: pins.GHOSTSCRIPT_SOURCE_URL,
+      sha256: pins.GHOSTSCRIPT_SOURCE_SHA256,
+    },
+    modificationStatus:
+      "Unmodified upstream Windows x64 installer payload. RaioPDF copies gswin64c.exe to gs.exe as a byte-identical convenience alias.",
+  });
+}
+
+function nodeComponent() {
+  const payloadPaths = isMacPlatform
+    ? ["mcp/node/bin/node", "mcp/node/LICENSE"]
+    : ["mcp/node/node.exe", "mcp/node/LICENSE"];
+  return component("Node.js runtime", pins.NODE_RUNTIME_VERSION, "MIT", "https://nodejs.org/", {
+    role: "bundled MCP runtime",
+    binary: { url: pins.NODE_RUNTIME_URL, sha256: pins.NODE_RUNTIME_SHA256 },
+    payloadPaths,
+  });
+}
+
+function pythonComponent() {
+  if (isMacPlatform) {
+    return component(
+      "Python (python-build-standalone)",
+      pins.PYTHON_STANDALONE_VERSION,
+      "Python-2.0",
+      "https://github.com/astral-sh/python-build-standalone",
+      {
+        role: "bundled OCR runtime",
+        binary: { url: pins.PYTHON_STANDALONE_URL, sha256: pins.PYTHON_STANDALONE_SHA256 },
+        payloadPaths: ["ocr/python/bin/python3"],
+      },
+    );
+  }
+  return component("Python embeddable package", pins.PYTHON_EMBED_VERSION, "Python-2.0", "https://www.python.org/", {
+    role: "bundled OCR runtime",
+    binary: { url: pins.PYTHON_EMBED_URL, sha256: pins.PYTHON_EMBED_SHA256 },
+    payloadPaths: ["ocr/python/python.exe"],
+  });
+}
+
+function ocrmypdfComponent() {
+  const payloadPaths = isMacPlatform
+    ? ["ocr/ocrmypdf", "ocr/THIRD-PARTY-PYTHON.md"]
+    : ["ocr/ocrmypdf.cmd", "ocr/THIRD-PARTY-PYTHON.md"];
+  return component("OCRmyPDF", pins.OCRMYPDF_VERSION, "MPL-2.0", "https://ocrmypdf.readthedocs.io/", {
+    role: "OCR pipeline",
+    payloadPaths,
+  });
+}
+
+function tesseractComponent() {
+  if (isMacPlatform) {
+    return component("Tesseract OCR", pins.TESSERACT_VERSION, "Apache-2.0", "https://github.com/tesseract-ocr/tesseract", {
+      role: "OCR engine",
+      payloadPaths: ["ocr/tesseract/bin/tesseract"],
+      source: { url: pins.TESSERACT_SOURCE_URL, sha256: pins.TESSERACT_SOURCE_SHA256 },
+      modificationStatus:
+        "Built from the pinned upstream source archive on the build host, statically linked against " +
+        "Leptonica, libpng, libtiff, and libjpeg-turbo; no functional source modifications.",
+    });
+  }
+  return component("Tesseract OCR", pins.TESSERACT_VERSION, "Apache-2.0", "https://github.com/tesseract-ocr/tesseract", {
+    role: "OCR engine",
+    binary: { url: pins.TESSERACT_URL, sha256: pins.TESSERACT_SHA256 },
+    payloadPaths: ["ocr/tesseract/tesseract.exe"],
+  });
+}
+
+function tessdataComponent() {
+  const payloadPaths = isMacPlatform
+    ? ["ocr/tesseract/share/tessdata/eng.traineddata"]
+    : ["ocr/tesseract/tessdata/eng.traineddata"];
+  return component("tessdata_fast English traineddata", pins.TESSDATA_FAST_VERSION, "Apache-2.0", "https://github.com/tesseract-ocr/tessdata_fast", {
+    role: "OCR language data",
+    binary: { url: pins.TESSDATA_ENG_URL, sha256: pins.TESSDATA_ENG_SHA256 },
+    payloadPaths,
+  });
+}
+
+function qpdfComponent() {
+  if (isMacPlatform) {
+    return component("qpdf", pins.QPDF_VERSION, "Apache-2.0", "https://github.com/qpdf/qpdf", {
+      role: "PDF repair/linearization helper",
+      payloadPaths: ["ocr/qpdf/bin/qpdf"],
+      source: { url: pins.QPDF_SOURCE_URL, sha256: pins.QPDF_SOURCE_SHA256 },
+      modificationStatus:
+        "Built from the pinned upstream source archive on the build host (fully static, native crypto, " +
+        "no OpenSSL); no functional source modifications.",
+    });
+  }
+  return component("qpdf", pins.QPDF_VERSION, "Apache-2.0", "https://github.com/qpdf/qpdf", {
+    role: "PDF repair/linearization helper",
+    binary: { url: pins.QPDF_URL, sha256: pins.QPDF_SHA256 },
+    payloadPaths: ["ocr/qpdf/bin/qpdf.exe", "ocr/qpdf/LICENSE.txt"],
+  });
+}
+
+function canvasComponent() {
+  const payloadPaths = isMacPlatform
+    ? [
+        "mcp/node_modules/@napi-rs/canvas/package.json",
+        "mcp/node_modules/@napi-rs/canvas-darwin-arm64/package.json",
+      ]
+    : [
+        "mcp/node_modules/@napi-rs/canvas/package.json",
+        "mcp/node_modules/@napi-rs/canvas-win32-x64-msvc/package.json",
+      ];
+  return component("@napi-rs/canvas", npmVersion("@napi-rs/canvas"), "MIT", "https://github.com/Brooooooklyn/canvas", {
+    role: "MCP image/canvas rendering dependency",
+    payloadPaths,
+  });
+}
+
+// Static image-IO dependencies pulled in only because macOS builds
+// Ghostscript/Tesseract/qpdf from source instead of shipping prebuilt
+// binaries. All are statically linked into those binaries; none ship as
+// standalone payload files.
+function macSourceBuiltImageDependencies() {
+  return [
+    component("Leptonica", pins.LEPTONICA_VERSION, "leptonica license", "http://leptonica.org/", {
+      role: "Tesseract image I/O dependency (statically linked)",
+      source: { url: pins.LEPTONICA_SOURCE_URL, sha256: pins.LEPTONICA_SOURCE_SHA256 },
+      modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
+    }),
+    component("libpng", pins.LIBPNG_VERSION, "libpng-2.0", "http://www.libpng.org/pub/png/libpng.html", {
+      role: "PNG image support for Leptonica (statically linked)",
+      source: { url: pins.LIBPNG_SOURCE_URL, sha256: pins.LIBPNG_SOURCE_SHA256 },
+      modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
+    }),
+    component("libtiff", pins.LIBTIFF_VERSION, "libtiff license", "https://libtiff.gitlab.io/libtiff/", {
+      role: "TIFF image support for Leptonica (statically linked)",
+      source: { url: pins.LIBTIFF_SOURCE_URL, sha256: pins.LIBTIFF_SOURCE_SHA256 },
+      modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
+    }),
+    component("libjpeg-turbo", pins.LIBJPEG_TURBO_VERSION, "IJG AND BSD-3-Clause AND Zlib", "https://libjpeg-turbo.org/", {
+      role: "JPEG support for Leptonica, Tesseract, and qpdf (statically linked)",
+      source: { url: pins.LIBJPEG_TURBO_SOURCE_URL, sha256: pins.LIBJPEG_TURBO_SOURCE_SHA256 },
+      modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
+    }),
+  ];
+}
+
 function thirdPartyNotices(manifest) {
   const rows = manifest.components
     .map((entry) => `- ${entry.name} ${entry.version}: ${entry.license}. ${entry.role ?? ""}`.trim())
@@ -376,17 +537,7 @@ ${npmRows || "- npm dependency inventory unavailable; see COMPONENT-MANIFEST.jso
 Ghostscript Source
 ------------------
 
-RaioPDF treats the bundled Ghostscript Windows x64 component as AGPL-3.0-only.
-The Ghostscript binary is not modified. The payload copies the upstream
-gswin64c.exe to gs.exe as a byte-identical convenience alias.
-
-Pinned Ghostscript binary:
-${pins.GHOSTSCRIPT_URL}
-SHA256: ${pins.GHOSTSCRIPT_SHA256}
-
-Pinned Ghostscript source:
-${pins.GHOSTSCRIPT_SOURCE_URL}
-SHA256: ${pins.GHOSTSCRIPT_SOURCE_SHA256}
+${ghostscriptProvenanceNote()}
 
 See legal/source-offers/GHOSTSCRIPT-SOURCE-OFFER.txt and
 legal/RELEASE-SOURCE-CORRESPONDENCE.md for source-correspondence details.
@@ -420,25 +571,13 @@ application, build scripts, installer scripts, and payload assembly scripts.
 
 ## Ghostscript
 
-The bundled Ghostscript Windows x64 binary is taken from:
-
-- ${pins.GHOSTSCRIPT_URL}
-- SHA256: \`${pins.GHOSTSCRIPT_SHA256}\`
-
-The corresponding pinned Ghostscript source archive is:
-
-- ${pins.GHOSTSCRIPT_SOURCE_URL}
-- SHA256: \`${pins.GHOSTSCRIPT_SOURCE_SHA256}\`
-
-RaioPDF does not patch or rebuild Ghostscript. The installer payload copies
-\`ocr/gs/bin/gswin64c.exe\` to \`ocr/gs/bin/gs.exe\`; the release gate verifies
-those files are byte-identical when both are present.
+${ghostscriptSourceCorrespondenceNote()}
 
 ## Other Bundled Runtime Components
 
 Pinned URLs and checksums for JRE, Node.js, Python, Tesseract, tessdata_fast,
-Ghostscript, qpdf, and 7-Zip helper downloads live in
-\`${relative(REPO_ROOT, pinsPath).replaceAll("\\", "/")}\`.
+Ghostscript, and qpdf${isMacPlatform ? " (plus the source-built Leptonica/libpng/libtiff/libjpeg-turbo dependencies)" : ", and 7-Zip helper"}
+downloads live in \`${relative(REPO_ROOT, pinsPath).replaceAll("\\", "/")}\`.
 The release payload manifest hashes every file copied under the bundled
 \`payload/\` resource directory.
 
@@ -454,7 +593,87 @@ function ghostscriptSourceOffer() {
   return `Ghostscript Source Offer for RaioPDF
 ========================================
 
-RaioPDF bundles Ghostscript ${pins.GHOSTSCRIPT_VERSION} for Windows x64 under
+${ghostscriptSourceOfferNote()}
+`;
+}
+
+// The three narrative helpers below describe the same underlying facts
+// (Ghostscript license, pinned binary/source, modification status) at three
+// call sites (THIRD-PARTY-NOTICES, RELEASE-SOURCE-CORRESPONDENCE, and the
+// GHOSTSCRIPT-SOURCE-OFFER). Each stays platform-conditional here rather than
+// duplicating the branch at every call site.
+
+function ghostscriptProvenanceNote() {
+  if (isMacPlatform) {
+    return `RaioPDF treats the bundled Ghostscript component as AGPL-3.0-only.
+Ghostscript is built from the pinned upstream AGPL-3.0 source archive on the
+build host; RaioPDF ships no prebuilt Ghostscript binary for macOS. RaioPDF's
+build configuration (configure flags) produces a self-contained arm64 binary
+with no functional source modifications.
+
+Pinned Ghostscript source:
+${pins.GHOSTSCRIPT_SOURCE_URL}
+SHA256: ${pins.GHOSTSCRIPT_SOURCE_SHA256}`;
+  }
+  return `RaioPDF treats the bundled Ghostscript Windows x64 component as AGPL-3.0-only.
+The Ghostscript binary is not modified. The payload copies the upstream
+gswin64c.exe to gs.exe as a byte-identical convenience alias.
+
+Pinned Ghostscript binary:
+${pins.GHOSTSCRIPT_URL}
+SHA256: ${pins.GHOSTSCRIPT_SHA256}
+
+Pinned Ghostscript source:
+${pins.GHOSTSCRIPT_SOURCE_URL}
+SHA256: ${pins.GHOSTSCRIPT_SOURCE_SHA256}`;
+}
+
+function ghostscriptSourceCorrespondenceNote() {
+  if (isMacPlatform) {
+    return `RaioPDF builds Ghostscript from the pinned upstream AGPL-3.0 source archive
+on the build host; no prebuilt Ghostscript binary ships for macOS:
+
+- ${pins.GHOSTSCRIPT_SOURCE_URL}
+- SHA256: \`${pins.GHOSTSCRIPT_SOURCE_SHA256}\`
+
+RaioPDF's build configuration (configure flags) produces a self-contained
+arm64 \`gs\` binary that links only system libraries. RaioPDF makes no
+functional modifications to the Ghostscript source.`;
+  }
+  return `The bundled Ghostscript Windows x64 binary is taken from:
+
+- ${pins.GHOSTSCRIPT_URL}
+- SHA256: \`${pins.GHOSTSCRIPT_SHA256}\`
+
+The corresponding pinned Ghostscript source archive is:
+
+- ${pins.GHOSTSCRIPT_SOURCE_URL}
+- SHA256: \`${pins.GHOSTSCRIPT_SOURCE_SHA256}\`
+
+RaioPDF does not patch or rebuild Ghostscript. The installer payload copies
+\`ocr/gs/bin/gswin64c.exe\` to \`ocr/gs/bin/gs.exe\`; the release gate verifies
+those files are byte-identical when both are present.`;
+}
+
+function ghostscriptSourceOfferNote() {
+  if (isMacPlatform) {
+    return `RaioPDF bundles Ghostscript ${pins.GHOSTSCRIPT_VERSION}, built for macOS arm64
+from the pinned upstream AGPL-3.0 source archive on the build host.
+
+Source archive:
+${pins.GHOSTSCRIPT_SOURCE_URL}
+SHA256: ${pins.GHOSTSCRIPT_SOURCE_SHA256}
+
+The RaioPDF release process attaches this source archive to release artifacts
+as ghostscript-${pins.GHOSTSCRIPT_VERSION}-source.tar.xz and records it in
+SHA256SUMS.txt. The archive can also be downloaded from the pinned upstream URL
+above.
+
+RaioPDF's build configuration (configure flags) produces a self-contained
+arm64 binary; RaioPDF makes no functional modifications to the Ghostscript
+source.`;
+  }
+  return `RaioPDF bundles Ghostscript ${pins.GHOSTSCRIPT_VERSION} for Windows x64 under
 AGPL-3.0-only.
 
 Bundled binary:
@@ -471,8 +690,7 @@ SHA256SUMS.txt. The archive can also be downloaded from the pinned upstream URL
 above.
 
 RaioPDF does not modify Ghostscript. It copies the upstream gswin64c.exe binary
-to gs.exe as a byte-identical convenience alias for command-line invocation.
-`;
+to gs.exe as a byte-identical convenience alias for command-line invocation.`;
 }
 
 function checkLegalPayload() {
@@ -555,6 +773,9 @@ function checkLegalPayload() {
     }
   }
 
+  // Windows-only byte-identity check. macOS ships ocr/gs/bin/gs (no .exe
+  // extension, no gswin64c.exe alias), so both existsSync calls are false
+  // there and this block is a no-op rather than an error.
   const gsExe = join(payloadDir, "ocr", "gs", "bin", "gs.exe");
   const gsWin = join(payloadDir, "ocr", "gs", "bin", "gswin64c.exe");
   if (existsSync(gsExe) || existsSync(gsWin)) {
@@ -735,7 +956,11 @@ function cargoVersion(crateName) {
 }
 
 function pythonDistributions() {
-  const sitePackages = join(payloadDir, "ocr", "python", "Lib", "site-packages");
+  // Windows' embeddable package uses a flat Lib/site-packages; macOS's
+  // python-build-standalone layout is versioned (lib/python<X.Y>/site-packages).
+  const sitePackages = isMacPlatform
+    ? join(payloadDir, "ocr", "python", "lib", `python${pins.PYTHON_VERSION}`, "site-packages")
+    : join(payloadDir, "ocr", "python", "Lib", "site-packages");
   if (!existsSync(sitePackages)) {
     return [];
   }

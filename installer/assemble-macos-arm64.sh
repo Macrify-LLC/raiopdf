@@ -324,6 +324,10 @@ stage_native_ocr_tools() {
   chmod +x "$PAYLOAD_DIR/ocr/gs/bin/gs" "$PAYLOAD_DIR/ocr/qpdf/bin/qpdf" \
     "$PAYLOAD_DIR/ocr/tesseract/bin/tesseract"
 
+  # Tesseract needs its installed tessdata tree (configs/hocr, tessconfigs, pdf.ttf)
+  # alongside the language data — OCRmyPDF invokes tesseract with the `hocr`/`pdf`
+  # configs, which live under share/tessdata/configs.
+  cp -R "$PREFIX_TESS/share/tessdata/". "$PAYLOAD_DIR/ocr/tesseract/share/tessdata/"
   local tessdata
   tessdata=$(download_verified "tessdata-fast-$TESSDATA_FAST_VERSION-eng.traineddata" "$TESSDATA_ENG_URL" "$TESSDATA_ENG_SHA256")
   cp -- "$tessdata" "$PAYLOAD_DIR/ocr/tesseract/share/tessdata/eng.traineddata"
@@ -381,12 +385,15 @@ install_python_ocrmypdf() {
     -r "$REQ_FILE"
 
   # POSIX launcher: run the bundled interpreter's ocrmypdf module. The engine
-  # adds the bundled tesseract/gs dirs to PATH before invoking this.
+  # adds the bundled tesseract/gs dirs to PATH before invoking this. TESSDATA_PREFIX
+  # is set here because the source-built tesseract bakes in an absolute build-time
+  # tessdata path; the PathOps OCR lane (unlike the Stirling lane) does not export it.
   cat >"$PAYLOAD_DIR/ocr/ocrmypdf" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONHOME="$DIR/python"
 export PYTHONDONTWRITEBYTECODE=1
+export TESSDATA_PREFIX="$DIR/tesseract/share/tessdata"
 exec "$DIR/python/bin/python3" -m ocrmypdf "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/ocrmypdf"
@@ -398,6 +405,7 @@ EOF
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export PYTHONHOME="$DIR/python"
 export PYTHONDONTWRITEBYTECODE=1
+export TESSDATA_PREFIX="$DIR/tesseract/share/tessdata"
 exec "$DIR/python/bin/python3" "$DIR/raiopdf_ocr_progress.py" "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/raiopdf-ocr-progress"

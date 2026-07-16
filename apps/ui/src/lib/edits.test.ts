@@ -420,6 +420,61 @@ describe("toPdfEdits", () => {
     ]);
   });
 
+  it("maps pending authored fields before their document-scoped value writes", () => {
+    const edits = toPdfEdits(
+      [
+        {
+          kind: "formField",
+          id: "field-1",
+          pageIndex: 0,
+          fieldType: "text",
+          name: "client.notes",
+          rect: { x: 40, y: 250, w: 200, h: 48 },
+          initialValue: "Draft",
+          required: true,
+          multiline: true,
+          fontSizePt: 12,
+        },
+        {
+          kind: "formField",
+          id: "field-2",
+          pageIndex: 0,
+          fieldType: "checkbox",
+          name: "terms.accepted",
+          rect: { x: 40, y: 220, w: 18, h: 18 },
+          initialValue: true,
+        },
+      ],
+      { "client.notes": "Ready", "terms.accepted": false },
+    );
+
+    expect(edits).toEqual([
+      {
+        type: "formField",
+        fieldType: "text",
+        name: "client.notes",
+        pageIndex: 0,
+        rect: { x: 40, y: 250, w: 200, h: 48 },
+        initialValue: "Draft",
+        required: true,
+        multiline: true,
+        fontSizePt: 12,
+      },
+      {
+        type: "formField",
+        fieldType: "checkbox",
+        name: "terms.accepted",
+        pageIndex: 0,
+        rect: { x: 40, y: 220, w: 18, h: 18 },
+        initialValue: true,
+      },
+      {
+        type: "formValues",
+        values: { "client.notes": "Ready", "terms.accepted": false },
+      },
+    ]);
+  });
+
   it("returns an empty list when there is nothing to apply", () => {
     expect(toPdfEdits([], {})).toEqual([]);
   });

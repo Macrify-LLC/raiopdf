@@ -4066,8 +4066,8 @@ export function App() {
           return null;
         }
 
-        if (pendingApply.flatten || planHasFormValues(pendingApply.plan.appendEdits)) {
-          setError("Form filling is not available for very large documents yet.");
+        if (pendingApply.flatten || planHasFormEdits(pendingApply.plan.appendEdits)) {
+          setError("Form filling and field authoring are not available for very large documents yet.");
           return null;
         }
 
@@ -8861,8 +8861,8 @@ function streamedEditingGateMessage(
   return STREAMED_DOCUMENT_GATE_MESSAGE;
 }
 
-function planHasFormValues(edits: readonly PdfEdit[]): boolean {
-  return edits.some((edit) => edit.type === "formValues");
+function planHasFormEdits(edits: readonly PdfEdit[]): boolean {
+  return edits.some((edit) => edit.type === "formValues" || edit.type === "formField");
 }
 
 /** Per-area pass/fail rendering for the delegated redaction's verification.

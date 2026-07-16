@@ -8,6 +8,8 @@ Both implementations are live. The desktop shell launches the bundled Stirling e
 
 The UI must never call the Stirling sidecar directly. All document operations go through `PdfEngine` so handles, byte serialization, errors, and future sidecar behavior stay behind one boundary. This also keeps the Tauri shell free to decide how local services are launched, discovered, supervised, and shut down without leaking those mechanics into React components.
 
+Add-content editing, including AcroForm authoring, stays in the local `pdf-lib` engine. The UI holds new text fields and checkboxes as pending page-space edits, renders them as live inputs, and sends field creation plus initial values through one `applyEdits` transaction on Save. The engine creates all fields before applying document-scoped value writes, preflights duplicate and incompatible names, and rejects signed or XFA documents before mutation. Large streamed documents remain outside this authoring lane until the path editor supports the same guarantees.
+
 Desktop packaging has an equally strict platform boundary. The neutral Tauri
 configuration cannot bundle by itself; Windows x64 and macOS arm64 builds apply
 separate overlays that select exactly one namespaced payload and remap it to the

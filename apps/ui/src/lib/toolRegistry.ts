@@ -42,6 +42,8 @@ export const ORGANIZE_TOOLS = [
 export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "edit-text", label: "Find & Replace", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
   { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
+  { id: "formText", label: "Create Fillable Text Field", group: "edit", helpArticleId: "form-authoring", description: "Add a reusable text field that remains fillable in ordinary PDF viewers." },
+  { id: "formCheckbox", label: "Create Fillable Checkbox", group: "edit", helpArticleId: "form-authoring", description: "Add a reusable checkbox that remains fillable in ordinary PDF viewers." },
   { id: "callout", label: "Callout", group: "edit", helpArticleId: "callout", description: "Place a text box with a leader arrow pointing to a page spot." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", description: "Place an image on the current page before saving." },
   { id: "highlight", label: "Highlight", group: "edit", helpArticleId: "highlight", description: "Drag over text to create a saved highlight mark." },
@@ -66,6 +68,8 @@ export const COMMAND_BAR_EDIT_TOOLS = [
   { id: "underline", label: "Underline", group: "edit", helpArticleId: "underline", tooltip: "Drag over text to create a saved underline mark." },
   { id: "strikethrough", label: "Strikethrough", group: "edit", helpArticleId: "strikethrough", tooltip: "Drag over text to create a saved strikethrough mark." },
   { id: "textBox", label: "Text box", group: "edit", helpArticleId: "textBox", tooltip: "Place editable text on the current page before saving." },
+  { id: "formText", label: "Fillable text", group: "edit", helpArticleId: "form-authoring", tooltip: "Create a reusable AcroForm text field." },
+  { id: "formCheckbox", label: "Fillable checkbox", group: "edit", helpArticleId: "form-authoring", tooltip: "Create a reusable AcroForm checkbox." },
   { id: "callout", label: "Callout", group: "edit", helpArticleId: "callout", tooltip: "Place a text box with a leader arrow pointing to a page spot." },
   { id: "image", label: "Image", group: "edit", helpArticleId: "image", tooltip: "Place an image on the current page before saving." },
   { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment", tooltip: "Add a PDF note annotation on the current page." },

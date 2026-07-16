@@ -558,6 +558,103 @@ describe("EditLayer shape removal", () => {
     expect(textBox?.style.top).toBe("30px");
   });
 
+  it("places a live reusable text field in form-authoring mode", async () => {
+    await renderEditLayer([], "formText");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 20, 30);
+      await Promise.resolve();
+    });
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const valueInput = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-input");
+    const nameInput = field?.querySelector<HTMLInputElement>('input[aria-label="Field name"]');
+
+    expect(field?.dataset.fieldType).toBe("text");
+    expect(field?.style.left).toBe("20px");
+    expect(field?.style.top).toBe("30px");
+    expect(field?.style.width).toBe("180px");
+    expect(field?.style.height).toBe("24px");
+    expect(valueInput?.value).toBe("");
+    expect(nameInput?.value).toMatch(
+      /^raio\.text\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("places and fills a reusable checkbox in form-authoring mode", async () => {
+    await renderEditLayer([], "formCheckbox");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 40, 50);
+      await Promise.resolve();
+    });
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const checkbox = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-checkbox");
+
+    expect(field?.dataset.fieldType).toBe("checkbox");
+    expect(field?.style.width).toBe("18px");
+    expect(field?.style.height).toBe("18px");
+    expect(checkbox?.checked).toBe(false);
+
+    await act(async () => {
+      checkbox?.click();
+      await Promise.resolve();
+    });
+
+    expect(checkbox?.checked).toBe(true);
+  });
+
+  it("selects and drags a reusable text field through its value input", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "formField",
+          fieldType: "text",
+          id: "client-name",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 120, h: 24 },
+          initialValue: "Jane Doe",
+        },
+      ],
+      "select",
+    );
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const valueInput = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-input");
+    expect(field).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(valueInput!, "pointerdown", 25, 25);
+      dispatchPointerEvent(valueInput!, "pointerup", 25, 25);
+      await Promise.resolve();
+    });
+
+    expect(field?.dataset.selected).toBe("true");
+    const initialLeft = Number.parseFloat(field?.style.left ?? "0");
+    const initialTop = Number.parseFloat(field?.style.top ?? "0");
+
+    await act(async () => {
+      dispatchPointerEvent(valueInput!, "pointerdown", 25, 25);
+      dispatchPointerEvent(valueInput!, "pointermove", 45, 35);
+      dispatchPointerEvent(valueInput!, "pointerup", 45, 35);
+      await Promise.resolve();
+    });
+
+    expect(field?.style.left).toBe(`${initialLeft + 20}px`);
+    expect(field?.style.top).toBe(`${initialTop + 10}px`);
+  });
+
   it("shows an armed image ghost at the pointer before placement", async () => {
     await renderEditLayer([], "image", {
       armedImage: {

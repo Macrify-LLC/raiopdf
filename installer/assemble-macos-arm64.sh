@@ -584,6 +584,13 @@ make_relocatable() {
   find "$PAYLOAD_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
   find "$PAYLOAD_DIR" -type f -name "*.pyc" -delete 2>/dev/null || true
 
+  # Make every payload file owner-writable and strip macOS extended attributes.
+  # The bundled JRE ships read-only (0444) legal files; Tauri's resource walker
+  # opens resources read-write and fails with EACCES on them. Stripping quarantine/
+  # provenance xattrs keeps the staged tree clean before bundling.
+  chmod -R u+w "$PAYLOAD_DIR" 2>/dev/null || true
+  xattr -cr "$PAYLOAD_DIR" 2>/dev/null || true
+
   echo "Thinning fat Mach-O binaries to arm64..." >&2
   local file info
   while IFS= read -r file; do

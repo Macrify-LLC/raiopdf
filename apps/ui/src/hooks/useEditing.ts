@@ -424,10 +424,11 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
 
     const hasSignatureEdit = pendingEdits.some((edit) => edit.kind === "signature");
     const hasFormWrite = Object.keys(formValues).length > 0;
+    const hasFormFieldEdit = edits.some((edit) => edit.type === "formField");
 
     return {
       edits,
-      flatten: flattenOnSave && (hasSignatureEdit || hasFormWrite),
+      flatten: flattenOnSave && !hasFormFieldEdit && (hasSignatureEdit || hasFormWrite),
     };
   }, [flattenOnSave, formValues, pendingEdits]);
 
@@ -456,10 +457,14 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
           ],
         }
       : annotationSavePlan;
+    const hasFormFieldEdit = plan.appendEdits.some((edit) => edit.type === "formField");
 
     return {
       plan,
-      flatten: flattenOnSave && (annotationSavePlan.hasSignatureEdit || hasFormWrite),
+      flatten:
+        flattenOnSave &&
+        !hasFormFieldEdit &&
+        (annotationSavePlan.hasSignatureEdit || hasFormWrite),
     };
   }, [annotationSavePlan, flattenOnSave, formValues]);
 

@@ -119,6 +119,48 @@ describe("useEditing pin state", () => {
     expect(getEditing().hasUnsavedEdits).toBe(true);
   });
 
+  it("keeps authored fields reusable when saving existing form values", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().addEdit(formFieldEdit());
+      getEditing().setFormValue("existing.name", "Jane Doe");
+      await Promise.resolve();
+    });
+
+    const annotationSave = getEditing().collectAnnotationSavePlan();
+    const directSave = getEditing().collectEdits();
+
+    expect(annotationSave?.plan.appendEdits.map((edit) => edit.type)).toEqual([
+      "formField",
+      "formValues",
+    ]);
+    expect(annotationSave?.flatten).toBe(false);
+    expect(directSave?.flatten).toBe(false);
+  });
+
+  it("keeps authored fields reusable when a signature is saved with them", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().addEdit(formFieldEdit());
+      getEditing().addEdit({
+        kind: "signature",
+        id: "signature",
+        pageIndex: 0,
+        rect: { x: 10, y: 10, w: 100, h: 40 },
+        bytes: new Uint8Array([1]),
+        format: "png",
+        dataUrl: "data:image/png;base64,AQ==",
+        aspectRatio: 2.5,
+      });
+      await Promise.resolve();
+    });
+
+    expect(getEditing().collectAnnotationSavePlan()?.flatten).toBe(false);
+    expect(getEditing().collectEdits()?.flatten).toBe(false);
+  });
+
   function renderHookValue(): () => EditingState {
     let latest: EditingState | null = null;
     render(<Harness onValue={(value) => { latest = value; }} />);
@@ -158,6 +200,17 @@ function textBoxEdit(id: string, status?: PendingEdit["status"]): PendingEdit {
     text: id,
     fontSizePt: 12,
     ...(status ? { status } : {}),
+  };
+}
+
+function formFieldEdit(): PendingEdit {
+  return {
+    kind: "formField",
+    fieldType: "text",
+    id: "client-name",
+    name: "client.name",
+    pageIndex: 0,
+    rect: { x: 20, y: 20, w: 180, h: 24 },
   };
 }
 

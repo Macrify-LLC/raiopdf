@@ -318,6 +318,47 @@ tools below do.
 
 ## Known gaps & findings
 
+- **The canary cannot see the packaged app's own environment — `pnpm smoke:packaged-macos`
+  closes part of it.** The canary boots the engine through `scripts/boot-payload-engine.mjs`,
+  which *exports* `RAIOPDF_ENGINE_PAYLOAD_DIR` and the per-tool overrides, and drives a
+  `vite preview` from a shell that already has a normal environment. The packaged app has
+  none of that: it resolves its own payload from inside the bundle and spawns its tools with
+  a curated environment. Anything that only works because the harness supplied it therefore
+  passes here and fails for the user. The first macOS build shipped three failures in exactly
+  that gap, with the canary fully green:
+  - **Payload discovery.** A `.app` keeps executables in `Contents/MacOS` and resources in
+    `Contents/Resources`, so the payload is not a sibling of the executable the way an
+    installed Windows tree makes it. Every caller resolving without a Tauri `resource_dir` —
+    all the loopback `/local/*` handlers use `discover(None)` — found nothing, came up with an
+    empty toolchain, and OCR failed for every document.
+  - **Ghostscript resolution.** `resolve_ghostscript()` read only `RAIOPDF_ENGINE_*`, which
+    nothing but the canary's own boot script sets, so `/local/pdfa` answered 422 in the bundle.
+  - **A stale bundle.** `tauri build` copies the external bins; only `build:external-bins`
+    rebuilds them. A bundle can ship an hours-old `raiopdf-engine-host` while the shell is
+    current — and then "I rebuilt and retested" proves nothing.
+
+  `pnpm smoke:packaged-macos` boots the bundle's own engine-host with every `RAIOPDF_ENGINE_*`
+  variable stripped and drives the loopback handlers: it fails if the packaged binaries cannot
+  find their own payload, if OCR does not return a PDF, or if PDF/A comes back without its
+  markers. Run it after `pnpm build:shell:macos-arm64`, before shipping a macOS build.
+
+- **Automation cannot launch the app the way a user does — some checks stay manual.** The
+  canary drives a headless browser against a dev server; it never launches the packaged app
+  through an Apple Event and never opens a native panel. Two macOS defects hid there and were
+  found in minutes of clicking: opening a PDF from Finder *aborted* the app (a Rust panic
+  crossing tao's non-unwinding `application_open_urls` callback), and every open/pick dialog
+  froze it (a synchronous Tauri command calling `blocking_pick_*` on the main thread, which
+  deadlocks against the panel it just scheduled there). Before shipping a macOS build, do this
+  by hand on a real desktop session — no harness substitutes for it:
+
+  | Check | Why it cannot be automated |
+  |---|---|
+  | Double-click a PDF in Finder with the app closed | launch-time open-documents Apple Event |
+  | File → Open, pick a PDF | native NSOpenPanel, main-thread contract |
+  | Make Searchable on a born-digital PDF | packaged spawn environment end-to-end |
+  | Save As | native NSSavePanel |
+  | Email a report from an error surface | opener ACL + the OS mail handler |
+
 - **The bundled MCP connector was missing pdf.js's worker — FIXED at packaging.** The MCP
   canary caught that `installer/build-mcp-runtime.mjs` bundled `index.mjs` but never shipped
   `pdf.worker.mjs`. `pdfjs-node.ts` uses `pdfjs-dist/legacy/build/pdf.mjs`, which fake-worker-

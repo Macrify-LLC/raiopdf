@@ -36,6 +36,7 @@
     "canary:ui": "pnpm --filter @raiopdf/ui test:canary",
     "canary:mcp": "pnpm build:mcp-runtime && pnpm --filter @raiopdf/mcp test:canary",
     "smoke:ocr-progress-wrapper": "node scripts/smoke-ocr-progress-wrapper.mjs",
+    "smoke:packaged-macos": "node scripts/smoke-packaged-app.mjs",
     "canary:large": "cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture",
     "prepare": "husky",
     "typecheck": "pnpm -r typecheck",

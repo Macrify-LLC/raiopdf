@@ -15,10 +15,10 @@
     ]
   },
   "bundle": {
-    "active": false,
-    "targets": ["dmg"],
+    "active": true,
+    "targets": ["app", "dmg"],
     "createUpdaterArtifacts": true,
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
     "resources": {
       "payload/macos-arm64": "payload"
     },

@@ -2707,12 +2707,14 @@ fn resolve_ghostscript() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let payload = env::var_os("RAIOPDF_ENGINE_PAYLOAD_DIR")?;
-    let bin_dir = PathBuf::from(payload).join("ocr").join("gs").join("bin");
-    ["gs.exe", "gs"]
-        .into_iter()
-        .map(|name| bin_dir.join(name))
-        .find(|candidate| candidate.is_file())
+    // Fall back to the same payload discovery every other local handler uses.
+    // Reading only the environment meant a packaged app — which sets neither
+    // variable; only dev and the canary's boot script export them — never found
+    // its own bundled Ghostscript, so `/local/pdfa` failed with "ghostscript
+    // binary not found in payload" while dev and the canary both passed.
+    // `discover` still honours RAIOPDF_ENGINE_PAYLOAD_DIR internally, so the
+    // previous env-driven behaviour is preserved.
+    path_ops::PathOpsToolchain::discover(None).ghostscript
 }
 
 fn resolve_pdfa_resources(ghostscript: &Path) -> Result<(PathBuf, PathBuf), String> {

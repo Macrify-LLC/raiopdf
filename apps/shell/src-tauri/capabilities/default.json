@@ -14,6 +14,9 @@
       "allow": [
         {
           "url": "https://github.com/Macrify-LLC/raiopdf/*"
+        },
+        {
+          "url": "mailto:crash-reports@macrify.me*"
         }
       ]
     },

@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
   assertSourceInstallerMatchesTag,
   buildLatestJsonManifest,
   canonicalInstallerFilename,
+  canonicalUpdaterFilename,
+  findStagedUpdaterArtifacts,
   isPrereleaseTag,
   isSemverPrereleaseVersion,
   sourceInstallerVersion,
+  validateLatestJsonManifest,
 } from "./generate-latest-json.mjs";
 
 describe("buildLatestJsonManifest", () => {
@@ -64,7 +70,7 @@ describe("buildLatestJsonManifest", () => {
           signature: "trusted-signature",
           pubDate: new Date("2026-07-03T12:34:56.000Z"),
         }),
-      /installer version "0\.1\.0" does not match release tag version "0\.2\.0"/,
+      /windows-x64 updater asset must be RaioPDF-0\.2\.0-windows-x64-setup\.exe/,
     );
   });
 
@@ -77,7 +83,7 @@ describe("buildLatestJsonManifest", () => {
           signature: "trusted-signature",
           pubDate: new Date("2026-07-03T12:34:56.000Z"),
         }),
-      /canonical public filename/,
+      /windows-x64 updater asset must be RaioPDF-0\.1\.2-windows-x64-setup\.exe/,
     );
   });
 
@@ -86,6 +92,112 @@ describe("buildLatestJsonManifest", () => {
       canonicalInstallerFilename("0.1.2"),
       "RaioPDF-0.1.2-windows-x64-setup.exe",
     );
+  });
+
+  it("builds one lockstep manifest with independent Windows and Apple Silicon assets", () => {
+    const platformArtifacts = [
+      {
+        platformId: "windows-x64",
+        filename: canonicalUpdaterFilename("0.2.0", "windows-x64"),
+        signature: "windows-signature",
+      },
+      {
+        platformId: "macos-arm64",
+        filename: canonicalUpdaterFilename("0.2.0", "macos-arm64"),
+        signature: "mac-signature",
+      },
+    ];
+    const manifest = buildLatestJsonManifest({
+      tag: "v0.2.0",
+      platformArtifacts,
+      pubDate: "2026-07-15T12:00:00.000Z",
+    });
+
+    assert.equal(manifest.version, "0.2.0");
+    assert.deepEqual(Object.keys(manifest.platforms).sort(), [
+      "darwin-aarch64",
+      "windows-x86_64",
+    ]);
+    assert.equal(
+      manifest.platforms["darwin-aarch64"].url,
+      "https://github.com/Macrify-LLC/raiopdf/releases/download/v0.2.0/RaioPDF-0.2.0-macos-arm64.app.tar.gz",
+    );
+    assert.doesNotThrow(() =>
+      validateLatestJsonManifest(manifest, { tag: "v0.2.0", platformArtifacts }),
+    );
+    manifest.platforms["darwin-aarch64"].signature = "tampered";
+    assert.throws(
+      () => validateLatestJsonManifest(manifest, { tag: "v0.2.0", platformArtifacts }),
+      /signature does not match the staged updater \.sig/,
+    );
+  });
+
+  it("rejects mixed versions and unexpected updater platform entries", () => {
+    assert.throws(
+      () =>
+        buildLatestJsonManifest({
+          tag: "v0.2.0",
+          platformArtifacts: [
+            {
+              platformId: "macos-arm64",
+              filename: "RaioPDF-0.1.9-macos-arm64.app.tar.gz",
+              signature: "mac-signature",
+            },
+          ],
+          pubDate: "2026-07-15T12:00:00.000Z",
+        }),
+      /must be RaioPDF-0\.2\.0-macos-arm64\.app\.tar\.gz/,
+    );
+
+    const manifest = buildLatestJsonManifest({
+      tag: "v0.2.0",
+      platformArtifacts: [
+        {
+          platformId: "windows-x64",
+          filename: "RaioPDF-0.2.0-windows-x64-setup.exe",
+          signature: "windows-signature",
+        },
+      ],
+      pubDate: "2026-07-15T12:00:00.000Z",
+    });
+    manifest.platforms["darwin-aarch64"] = {
+      signature: "unexpected",
+      url: "https://example.invalid/unexpected",
+    };
+    assert.throws(
+      () =>
+        validateLatestJsonManifest(manifest, {
+          tag: "v0.2.0",
+          exeFilename: "RaioPDF-0.2.0-windows-x64-setup.exe",
+        }),
+      /platform keys darwin-aarch64, windows-x86_64 do not match expected windows-x86_64/,
+    );
+  });
+
+  it("discovers updater artifacts only inside their platform-specific stage", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-updater-stages-"));
+    try {
+      const windowsDir = path.join(root, "windows-x64");
+      const macDir = path.join(root, "macos-arm64");
+      mkdirSync(windowsDir);
+      mkdirSync(macDir);
+      const windows = "RaioPDF-0.2.0-windows-x64-setup.exe";
+      const mac = "RaioPDF-0.2.0-macos-arm64.app.tar.gz";
+      writeFileSync(path.join(windowsDir, windows), "windows");
+      writeFileSync(path.join(windowsDir, `${windows}.sig`), "windows-signature\n");
+      writeFileSync(path.join(macDir, mac), "mac");
+      writeFileSync(path.join(macDir, `${mac}.sig`), "mac-signature\n");
+
+      assert.deepEqual(findStagedUpdaterArtifacts(root), [
+        { platformId: "windows-x64", filename: windows, signature: "windows-signature" },
+        { platformId: "macos-arm64", filename: mac, signature: "mac-signature" },
+      ]);
+      assert.deepEqual(findStagedUpdaterArtifacts(root, ["macos-arm64"]), [
+        { platformId: "macos-arm64", filename: mac, signature: "mac-signature" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("distinguishes semver prerelease tags from stable versions", () => {

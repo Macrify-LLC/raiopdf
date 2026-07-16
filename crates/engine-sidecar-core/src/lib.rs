@@ -1,10 +1,12 @@
 pub mod docx_scan;
 pub mod path_ops;
 pub mod print_ops;
+pub mod runtime;
 pub mod word_ops;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use fs2::FileExt;
+use runtime::{find_payload_tool, PayloadTool, RuntimePlatform};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -23,6 +25,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -46,12 +50,6 @@ pub const CORS_ALLOW_HEADERS: &str = "Content-Type, X-RaioPDF-Auth, X-RaioPDF-Pd
 pub const CORS_ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 pub const MAX_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 pub const ENGINE_JAR_RELATIVE: &[&str] = &["engine", "stirling.jar"];
-pub const OCRMYPDF_RELATIVE: &[&str] = &["ocr", "ocrmypdf.cmd"];
-pub const PYTHON_RELATIVE: &[&str] = &["ocr", "python", "python.exe"];
-pub const TESSDATA_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata"];
-pub const TESSERACT_RELATIVE: &[&str] = &["ocr", "tesseract", "tesseract.exe"];
-pub const TESSDATA_ENG_RELATIVE: &[&str] = &["ocr", "tesseract", "tessdata", "eng.traineddata"];
-pub const GHOSTSCRIPT_RELATIVE: &[&str] = &["ocr", "gs", "bin", "gs.exe"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidecarConfig {
@@ -126,6 +124,7 @@ impl SidecarConfig {
         let mut idle_shutdown = idle_shutdown_from_minutes(DEFAULT_IDLE_SHUTDOWN_MINUTES);
         let mut path_env_key = OsString::from("PATH");
         let mut inherited_path = None;
+        let platform = RuntimePlatform::current();
 
         for (key, value) in vars {
             let key = key.into();
@@ -208,21 +207,28 @@ impl SidecarConfig {
         if let Some(payload_dir) = payload_dir.as_deref() {
             jar_path = jar_path.or_else(|| existing_join(payload_dir, ENGINE_JAR_RELATIVE));
             java_path = java_path.or_else(|| payload_java_path(payload_dir));
-            ocrmypdf_path = ocrmypdf_path.or_else(|| existing_join(payload_dir, OCRMYPDF_RELATIVE));
-            python_path = python_path.or_else(|| existing_join(payload_dir, PYTHON_RELATIVE));
+            ocrmypdf_path = ocrmypdf_path
+                .or_else(|| find_payload_tool(payload_dir, PayloadTool::Ocrmypdf, platform));
+            python_path = python_path
+                .or_else(|| find_payload_tool(payload_dir, PayloadTool::Python, platform));
             ocr_python_required = !ocrmypdf_path_from_env;
-            tessdata_dir = tessdata_dir.or_else(|| existing_join(payload_dir, TESSDATA_RELATIVE));
-            tesseract_path =
-                tesseract_path.or_else(|| existing_join(payload_dir, TESSERACT_RELATIVE));
-            tessdata_eng_path =
-                tessdata_eng_path.or_else(|| existing_join(payload_dir, TESSDATA_ENG_RELATIVE));
-            ghostscript_path =
-                ghostscript_path.or_else(|| existing_join(payload_dir, GHOSTSCRIPT_RELATIVE));
+            tesseract_path = tesseract_path
+                .or_else(|| find_payload_tool(payload_dir, PayloadTool::Tesseract, platform));
+            tessdata_eng_path = tessdata_eng_path
+                .or_else(|| find_payload_tool(payload_dir, PayloadTool::TessdataEnglish, platform));
+            tessdata_dir = tessdata_dir.or_else(|| {
+                tessdata_eng_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+            });
+            ghostscript_path = ghostscript_path
+                .or_else(|| find_payload_tool(payload_dir, PayloadTool::Ghostscript, platform));
         }
 
         let path_entries = payload_dir
             .as_deref()
-            .map(payload_path_entries)
+            .map(|payload| runtime::payload_path_entries(payload, platform))
             .unwrap_or_default();
         let java_path = java_path.unwrap_or_else(|| PathBuf::from("java"));
         let engine_log_path = default_app_data_dir.join(ENGINE_LOG_FILE_NAME);
@@ -286,19 +292,34 @@ impl SidecarConfig {
         let mut missing = Vec::new();
 
         if self.ocrmypdf_path.is_none() {
-            missing.push("ocr/ocrmypdf.cmd".to_string());
+            missing.push(runtime::expected_payload_path(
+                PayloadTool::Ocrmypdf,
+                RuntimePlatform::current(),
+            ));
         }
         if self.ocr_python_required && self.python_path.is_none() {
-            missing.push("ocr/python/python.exe".to_string());
+            missing.push(runtime::expected_payload_path(
+                PayloadTool::Python,
+                RuntimePlatform::current(),
+            ));
         }
         if self.tesseract_path.is_none() {
-            missing.push("ocr/tesseract/tesseract.exe".to_string());
+            missing.push(runtime::expected_payload_path(
+                PayloadTool::Tesseract,
+                RuntimePlatform::current(),
+            ));
         }
         if self.tessdata_eng_path.is_none() {
-            missing.push("ocr/tesseract/tessdata/eng.traineddata".to_string());
+            missing.push(runtime::expected_payload_path(
+                PayloadTool::TessdataEnglish,
+                RuntimePlatform::current(),
+            ));
         }
         if self.ghostscript_path.is_none() {
-            missing.push("ocr/gs/bin/gs.exe".to_string());
+            missing.push(runtime::expected_payload_path(
+                PayloadTool::Ghostscript,
+                RuntimePlatform::current(),
+            ));
         }
 
         OcrToolchainStatus {
@@ -919,7 +940,7 @@ pub fn spawn_engine(config: &SidecarConfig, port: u16) -> std::io::Result<Child>
     }
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    apply_platform_spawn_flags(&mut command);
+    configure_child_process(&mut command);
     let mut child = command.spawn()?;
 
     if let Some(stdout) = child.stdout.take() {
@@ -1118,8 +1139,19 @@ fn apply_platform_spawn_flags(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn apply_platform_spawn_flags(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(not(any(windows, unix)))]
 fn apply_platform_spawn_flags(_command: &mut Command) {}
+
+/// Put a helper in an independently terminable process tree. On Windows this
+/// also preserves the existing no-console-window behavior.
+pub fn configure_child_process(command: &mut Command) {
+    apply_platform_spawn_flags(command);
+}
 
 pub fn wait_until_ready(
     config: &SidecarConfig,
@@ -1320,9 +1352,44 @@ fn kill_child(child: &Arc<Mutex<Option<Child>>>) -> bool {
         return false;
     };
 
-    let _ = child.kill();
+    kill_process_tree(&mut child);
     let _ = child.wait();
     true
+}
+
+/// Terminate a RaioPDF-owned child and every helper it spawned.
+#[cfg(windows)]
+pub fn kill_process_tree(child: &mut Child) {
+    let pid = child.id().to_string();
+    let mut command = Command::new("taskkill.exe");
+    command.args(["/PID", &pid, "/T", "/F"]);
+    apply_platform_spawn_flags(&mut command);
+    let _ = command.output();
+    let _ = child.kill();
+}
+
+/// Terminate the process group created by [`configure_child_process`].
+#[cfg(unix)]
+pub fn kill_process_tree(child: &mut Child) {
+    let Ok(process_group) = libc::pid_t::try_from(child.id()) else {
+        let _ = child.kill();
+        return;
+    };
+    let process_group = -process_group;
+    // SAFETY: the child was placed in a process group whose id is its pid by
+    // `configure_child_process`; a negative pid targets that complete group.
+    let _ = unsafe { libc::kill(process_group, libc::SIGTERM) };
+    thread::sleep(Duration::from_millis(250));
+    if child.try_wait().ok().flatten().is_none() {
+        // SAFETY: same process-group invariant as the SIGTERM call above.
+        let _ = unsafe { libc::kill(process_group, libc::SIGKILL) };
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(any(windows, unix)))]
+pub fn kill_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 pub fn start_auth_proxy(
@@ -2640,12 +2707,14 @@ fn resolve_ghostscript() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let payload = env::var_os("RAIOPDF_ENGINE_PAYLOAD_DIR")?;
-    let bin_dir = PathBuf::from(payload).join("ocr").join("gs").join("bin");
-    ["gs.exe", "gs"]
-        .into_iter()
-        .map(|name| bin_dir.join(name))
-        .find(|candidate| candidate.is_file())
+    // Fall back to the same payload discovery every other local handler uses.
+    // Reading only the environment meant a packaged app — which sets neither
+    // variable; only dev and the canary's boot script export them — never found
+    // its own bundled Ghostscript, so `/local/pdfa` failed with "ghostscript
+    // binary not found in payload" while dev and the canary both passed.
+    // `discover` still honours RAIOPDF_ENGINE_PAYLOAD_DIR internally, so the
+    // previous env-driven behaviour is preserved.
+    path_ops::PathOpsToolchain::discover(None).ghostscript
 }
 
 fn resolve_pdfa_resources(ghostscript: &Path) -> Result<(PathBuf, PathBuf), String> {
@@ -3264,14 +3333,49 @@ pub fn find_payload_dir(
     resource_dir: Option<&Path>,
     dev_payload_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    [
+    if let Some(path) = [
         exe_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
+        // A macOS .app keeps its executables in Contents/MacOS and its bundled
+        // resources in Contents/Resources, so the payload is not a sibling of the
+        // executable the way an installed Windows tree makes it. Without this
+        // candidate every caller that cannot supply a resource_dir — the loopback
+        // `/local/*` handlers all use `discover(None)` — finds no payload inside a
+        // packaged app and silently degrades to an empty toolchain.
+        exe_dir
+            .and_then(Path::parent)
+            .map(|contents| contents.join("Resources").join(PAYLOAD_DIR_NAME)),
         resource_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
-        dev_payload_dir.map(Path::to_path_buf),
     ]
     .into_iter()
     .flatten()
     .find(|path| path.is_dir())
+    {
+        return Some(path);
+    }
+
+    let dev_root = dev_payload_dir?.to_path_buf();
+    if !dev_root.is_dir() {
+        return None;
+    }
+    if dev_root.join("engine").is_dir() {
+        return Some(dev_root);
+    }
+
+    // Source payloads may be namespaced by platform while installed Tauri
+    // resources are remapped to canonical `payload/`. Auto-select only when
+    // one source payload has been assembled; with multiple architectures in
+    // the tree the build must provide RAIOPDF_ENGINE_PAYLOAD_DIR explicitly.
+    let mut namespaced = fs::read_dir(&dev_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.join("engine").join("stirling.jar").is_file());
+    let selected = namespaced.next();
+    if namespaced.next().is_some() {
+        None
+    } else {
+        selected.or(Some(dev_root))
+    }
 }
 
 fn existing_join(root: &Path, parts: &[&str]) -> Option<PathBuf> {
@@ -3286,25 +3390,7 @@ fn join_parts(root: &Path, parts: &[&str]) -> PathBuf {
 }
 
 fn payload_java_path(payload_dir: &Path) -> Option<PathBuf> {
-    [
-        payload_dir.join("jre").join("bin").join("java.exe"),
-        payload_dir.join("jre").join("bin").join("java"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
-
-fn payload_path_entries(payload_dir: &Path) -> Vec<PathBuf> {
-    [
-        payload_dir.join("ocr"),
-        payload_dir.join("ocr").join("python"),
-        payload_dir.join("ocr").join("tesseract"),
-        payload_dir.join("ocr").join("gs").join("bin"),
-        payload_dir.join("ocr").join("qpdf").join("bin"),
-    ]
-    .into_iter()
-    .filter(|path| path.is_dir())
-    .collect()
+    find_payload_tool(payload_dir, PayloadTool::Java, RuntimePlatform::current())
 }
 
 fn child_path(config: &SidecarConfig) -> Option<OsString> {
@@ -4025,7 +4111,7 @@ mod tests {
         assert!(!config.disabled());
         assert_eq!(
             config.java_path,
-            payload.join("jre").join("bin").join("java.exe")
+            payload_tool_path(&payload, PayloadTool::Java)
         );
         assert_eq!(config.engine_log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
@@ -4034,24 +4120,23 @@ mod tests {
         );
         assert_eq!(
             config.ocrmypdf_path,
-            Some(payload.join("ocr").join("ocrmypdf.cmd"))
+            Some(payload_tool_path(&payload, PayloadTool::Ocrmypdf))
         );
         assert_eq!(
             config.python_path,
-            Some(payload.join("ocr").join("python").join("python.exe"))
+            Some(payload_tool_path(&payload, PayloadTool::Python))
         );
         assert_eq!(
             config.tessdata_dir,
-            Some(payload.join("ocr").join("tesseract").join("tessdata"))
+            payload_tool_path(&payload, PayloadTool::TessdataEnglish)
+                .parent()
+                .map(Path::to_path_buf)
         );
         assert_eq!(config.ocr_toolchain().missing, Vec::<String>::new());
         assert!(config.ocr_toolchain().available);
 
         let spec = engine_spawn_spec(&config, 49152).expect("spawn spec should build");
-        assert_eq!(
-            spec.program,
-            payload.join("jre").join("bin").join("java.exe")
-        );
+        assert_eq!(spec.program, payload_tool_path(&payload, PayloadTool::Java));
         assert_eq!(spec.log_path, app_data.join(ENGINE_LOG_FILE_NAME));
         assert_eq!(
             spec.args,
@@ -4092,19 +4177,83 @@ mod tests {
         let settings = fs::read_to_string(app_data.join("configs").join("custom_settings.yml"))
             .expect("settings should be written");
         assert!(settings.contains("ocrmypdf: '"));
-        assert!(settings.contains("ocrmypdf.cmd"));
+        assert!(settings.contains(
+            payload_tool_path(&payload, PayloadTool::Ocrmypdf)
+                .file_name()
+                .expect("OCRmyPDF filename")
+                .to_string_lossy()
+                .as_ref()
+        ));
         assert!(settings.contains("tessdataDir: '"));
         assert!(settings.contains("ocrMyPdfSessionLimit: 2"));
         assert!(settings.contains("enabled: false"));
         assert!(spec.envs.iter().any(|(key, value)| {
             key.to_string_lossy() == "TESSDATA_PREFIX"
                 && value
-                    == payload
-                        .join("ocr")
-                        .join("tesseract")
-                        .join("tessdata")
+                    == payload_tool_path(&payload, PayloadTool::TessdataEnglish)
+                        .parent()
+                        .expect("tessdata parent")
                         .as_os_str()
         }));
+    }
+
+    #[test]
+    fn payload_resolution_finds_the_payload_inside_a_macos_app_bundle() {
+        // A packaged .app puts the executable in Contents/MacOS and the payload in
+        // Contents/Resources — not side by side as an installed Windows tree does.
+        // The loopback `/local/*` handlers resolve with `discover(None)`, so the
+        // exe dir is the only hint available and this is the sole candidate that
+        // can find the payload. Without it the packaged app silently ran with an
+        // empty toolchain and every OCR attempt failed.
+        let root = test_temp_dir("macos-app-bundle-payload");
+        let contents = root.join("RaioPDF.app").join("Contents");
+        let exe_dir = contents.join("MacOS");
+        let payload = contents.join("Resources").join(PAYLOAD_DIR_NAME);
+        touch(&exe_dir.join("raiopdf-shell"));
+        touch(&payload.join("engine").join("stirling.jar"));
+
+        assert_eq!(find_payload_dir(Some(&exe_dir), None, None), Some(payload));
+    }
+
+    #[test]
+    fn payload_resolution_still_prefers_an_executable_sibling_payload() {
+        // The installed Windows layout keeps the payload next to the executable;
+        // that must keep winning over the macOS bundle candidate.
+        let root = test_temp_dir("sibling-payload-wins");
+        let exe_dir = root.join("app");
+        let sibling = exe_dir.join(PAYLOAD_DIR_NAME);
+        touch(&sibling.join("engine").join("stirling.jar"));
+        touch(
+            &root
+                .join("Resources")
+                .join(PAYLOAD_DIR_NAME)
+                .join("engine/stirling.jar"),
+        );
+
+        assert_eq!(find_payload_dir(Some(&exe_dir), None, None), Some(sibling));
+    }
+
+    #[test]
+    fn dev_payload_resolution_accepts_one_namespaced_source_payload() {
+        let root = test_temp_dir("namespaced-dev-payload");
+        let dev_root = root.join(PAYLOAD_DIR_NAME);
+        let selected = dev_root.join("selected-platform");
+        touch(&selected.join("engine").join("stirling.jar"));
+
+        assert_eq!(
+            find_payload_dir(None, None, Some(&dev_root)),
+            Some(selected)
+        );
+    }
+
+    #[test]
+    fn dev_payload_resolution_refuses_to_guess_between_architectures() {
+        let root = test_temp_dir("ambiguous-dev-payload");
+        let dev_root = root.join(PAYLOAD_DIR_NAME);
+        touch(&dev_root.join("platform-a/engine/stirling.jar"));
+        touch(&dev_root.join("platform-b/engine/stirling.jar"));
+
+        assert_eq!(find_payload_dir(None, None, Some(&dev_root)), None);
     }
 
     #[test]
@@ -4152,10 +4301,8 @@ mod tests {
         let root = test_temp_dir("payload-missing-ocr");
         let exe_dir = root.join("bin");
         let payload = exe_dir.join(PAYLOAD_DIR_NAME);
-        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload_tool_path(&payload, PayloadTool::Java));
         touch(&payload.join("engine").join("stirling.jar"));
-        fs::create_dir_all(payload.join("ocr").join("tesseract").join("tessdata"))
-            .expect("tessdata directory should be created");
 
         let config = SidecarConfig::from_env_vars_with_roots(
             Vec::<(OsString, OsString)>::new(),
@@ -4171,11 +4318,23 @@ mod tests {
             OcrToolchainStatus {
                 available: false,
                 missing: vec![
-                    "ocr/ocrmypdf.cmd".to_string(),
-                    "ocr/python/python.exe".to_string(),
-                    "ocr/tesseract/tesseract.exe".to_string(),
-                    "ocr/tesseract/tessdata/eng.traineddata".to_string(),
-                    "ocr/gs/bin/gs.exe".to_string(),
+                    runtime::expected_payload_path(
+                        PayloadTool::Ocrmypdf,
+                        RuntimePlatform::current()
+                    ),
+                    runtime::expected_payload_path(PayloadTool::Python, RuntimePlatform::current()),
+                    runtime::expected_payload_path(
+                        PayloadTool::Tesseract,
+                        RuntimePlatform::current()
+                    ),
+                    runtime::expected_payload_path(
+                        PayloadTool::TessdataEnglish,
+                        RuntimePlatform::current(),
+                    ),
+                    runtime::expected_payload_path(
+                        PayloadTool::Ghostscript,
+                        RuntimePlatform::current()
+                    ),
                 ],
             }
         );
@@ -4416,26 +4575,24 @@ mod tests {
     }
 
     fn create_payload_tree(payload: &Path) {
-        touch(&payload.join("jre").join("bin").join("java.exe"));
+        touch(&payload_tool_path(payload, PayloadTool::Java));
         touch(&payload.join("engine").join("stirling.jar"));
-        touch(&payload.join("ocr").join("ocrmypdf.cmd"));
-        touch(&payload.join("ocr").join("python").join("python.exe"));
-        touch(
-            &payload
-                .join("ocr")
-                .join("tesseract")
-                .join("tessdata")
-                .join("eng.traineddata"),
-        );
-        touch(&payload.join("ocr").join("tesseract").join("tesseract.exe"));
-        touch(&payload.join("ocr").join("gs").join("bin").join("gs.exe"));
-        touch(
-            &payload
-                .join("ocr")
-                .join("qpdf")
-                .join("bin")
-                .join("qpdf.exe"),
-        );
+        for tool in [
+            PayloadTool::Ocrmypdf,
+            PayloadTool::Python,
+            PayloadTool::Tesseract,
+            PayloadTool::TessdataEnglish,
+            PayloadTool::Ghostscript,
+            PayloadTool::Qpdf,
+        ] {
+            touch(&payload_tool_path(payload, tool));
+        }
+    }
+
+    fn payload_tool_path(payload: &Path, tool: PayloadTool) -> PathBuf {
+        runtime::tool_candidates(tool, RuntimePlatform::current())[0]
+            .iter()
+            .fold(payload.to_path_buf(), |path, part| path.join(part))
     }
 
     fn touch(path: &Path) {

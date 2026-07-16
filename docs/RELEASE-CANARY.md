@@ -32,7 +32,7 @@ Playwright (real Chromium)  ──► vite preview @ http://localhost:4180   (th
         │  real browser fetch (X-RaioPDF-Auth + CORS preflight)
         ▼
   raiopdf-engine-host  ──►  Rust auth-proxy  ──►  bundled Stirling-PDF  +  OCRmyPDF/Tesseract/Ghostscript
-   (scripts/boot-payload-engine.mjs boots it from apps/shell/src-tauri/payload/)
+   (scripts/boot-payload-engine.mjs boots the host platform's namespaced payload)
 ```
 
 Two load-bearing details:
@@ -50,7 +50,7 @@ artifacts a release produces. On a clean checkout:
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm prepare:shell-bundle      # assembles apps/shell/src-tauri/payload/ + builds engine-host
+pnpm prepare:shell-bundle      # assembles payload/windows-x64 + builds Windows external bins
 ```
 
 `prepare:shell-bundle` downloads the JRE, Stirling JAR, and the OCR toolchain (~hundreds of
@@ -156,7 +156,7 @@ pnpm exec playwright test smoke/streamed-memory.smoke.ts
 # 3. Path-op acceptance (selected-page extract, page-range split,
 #    split-by-max-bytes parts passing qpdf --check, and prepare_filing
 #    normalize+split with per-part facts preflight):
-RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload \
+RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload/windows-x64 \
 RAIOPDF_LARGE_FIXTURE=<repo>/apps/ui/smoke/fixtures.local/synthetic-large.pdf \
   cargo test -p engine-sidecar-core -- --ignored large_fixture --nocapture
 
@@ -254,7 +254,7 @@ git tag vX.Y.Z-beta.N
 pnpm build:shell:signed
 pnpm prepare:release-assets -- --tag vX.Y.Z-beta.N
 pnpm validate:release-assets -- --tag vX.Y.Z-beta.N --prerelease
-gh release upload vX.Y.Z-beta.N release-assets/signed/* --clobber
+gh release upload vX.Y.Z-beta.N release-assets/signed/windows-x64/* --clobber
 pnpm validate:release-assets -- --tag vX.Y.Z-beta.N --github --prerelease
 ```
 

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "platforms": {
+    "windows-x64": {
+      "installer": {
+        "baselineVersion": "0.1.3",
+        "baselineBytes": 409660072,
+        "maxGrowthBytes": 20971520,
+        "maxGrowthPercent": 5
+      },
+      "payload": {
+        "baselineVersion": "0.1.3",
+        "baselineBytes": 986198913,
+        "maxGrowthBytes": 52428800,
+        "maxGrowthPercent": 5
+      }
+    },
+    "macos-arm64": {
+      "installer": null,
+      "payload": {
+        "baselineVersion": "0.1.0",
+        "baselineBytes": 762971330,
+        "maxGrowthBytes": 52428800,
+        "maxGrowthPercent": 5
+      }
+    }
+  }
+}

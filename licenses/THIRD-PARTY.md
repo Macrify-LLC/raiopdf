@@ -40,7 +40,7 @@ including `THIRD-PARTY-NOTICES.txt`, `COMPONENT-MANIFEST.json`,
 - Binary source: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10071/gs10071w64.exe
 - Corresponding source: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10071/ghostscript-10.07.1.tar.xz
 - Use: Ghostscript command-line tools required by OCRmyPDF and Stirling PDF/A flows.
-- Packaging note: Ghostscript is bundled unmodified. `installer/assemble-payload.sh`
+- Packaging note: Ghostscript is bundled unmodified in the Windows payload. `installer/assemble-windows-x64.sh`
   copies upstream `gswin64c.exe` to `gs.exe` as a byte-identical convenience alias,
   and `scripts/generate-legal-notices.mjs --check` verifies that alias.
 - Aggregation note: Ghostscript is bundled as a separate executable toolchain
@@ -52,7 +52,7 @@ including `THIRD-PARTY-NOTICES.txt`, `COMPONENT-MANIFEST.json`,
 - License: Apache-2.0
 - Source: https://github.com/qpdf/qpdf
 - Use: qpdf command-line tool required by Stirling-PDF repair and other structure-preserving PDF workflows.
-- License text: bundled at `payload/ocr/qpdf/LICENSE.txt` by `installer/assemble-payload.sh` from the upstream qpdf distribution.
+- License text: bundled at `payload/ocr/qpdf/LICENSE.txt` by `installer/assemble-windows-x64.sh` from the upstream qpdf distribution.
 
 ## Python
 
@@ -67,4 +67,4 @@ including `THIRD-PARTY-NOTICES.txt`, `COMPONENT-MANIFEST.json`,
 - License: MPL-2.0 for OCRmyPDF; transitive dependencies carry their own upstream licenses
 - Source: https://github.com/ocrmypdf/OCRmyPDF
 - Use: Searchable PDF OCR pipeline invoked by Stirling-PDF.
-- Python dependency notices: generated at `payload/ocr/THIRD-PARTY-PYTHON.md` by `installer/assemble-payload.sh` from each installed wheel's `*.dist-info/METADATA`.
+- Python dependency notices: generated at `payload/ocr/THIRD-PARTY-PYTHON.md` by `installer/assemble-windows-x64.sh` from each installed wheel's `*.dist-info/METADATA`.

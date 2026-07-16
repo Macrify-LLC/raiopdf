@@ -35,6 +35,10 @@ const LOCK_EXTENSION: &str = "lock";
 
 pub struct InstanceIdentity {
     id: String,
+    /// This instance's lock file path, unlinked on a clean drop (see the `Drop`
+    /// impl) so liveness for a cleanly-exited id resolves deterministically to
+    /// `Dead` (missing file) rather than through a same-process flock re-probe.
+    lock_path: PathBuf,
     /// Held open and exclusively locked for the lifetime of the process. The
     /// OS releases the lock on process exit however that exit happens, which
     /// is the whole liveness mechanism — never drop this early.
@@ -46,23 +50,40 @@ impl InstanceIdentity {
         let dir = instances_dir(app_data_dir);
         fs::create_dir_all(&dir)?;
         let id = Uuid::new_v4().to_string();
+        let path = lock_path(&dir, &id);
         let file = fs::OpenOptions::new()
             .create_new(true)
             .read(true)
             .write(true)
-            .open(lock_path(&dir, &id))?;
+            .open(&path)?;
         // `create_new` plus a fresh UUID means no other process can already
         // hold this lock; a failure here is a filesystem oddity, surfaced so
         // callers degrade to "no identity" instead of lying about liveness.
         file.try_lock_exclusive()?;
         Ok(Self {
             id,
+            lock_path: path,
             _lock_file: file,
         })
     }
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+}
+
+impl Drop for InstanceIdentity {
+    /// Best-effort removal of our own lock file on a clean exit. On Unix the
+    /// file is unlinked while `_lock_file` is still open (that handle, dropped
+    /// immediately after, releases the advisory lock), so a subsequent
+    /// `owner_liveness` scan sees no file and reports `Dead` without a flock
+    /// re-probe — that probe can transiently still read the just-released lock
+    /// as held on macOS. On a crash or kill this never runs, so the file is
+    /// left for the OS-released-lock probe and the startup sweep, exactly as
+    /// before; on Windows the open handle blocks the unlink and liveness
+    /// harmlessly falls back to that same (already reliable) probe.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lock_path);
     }
 }
 

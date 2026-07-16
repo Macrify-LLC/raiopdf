@@ -38,6 +38,42 @@ describe("site release data", () => {
     assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
   });
 
+  it("keeps the Windows download available when a complete collision-free Mac set is present", async () => {
+    const fixture = releaseFixture({ includeMac: true });
+    const api = loadApi({
+      latest: fixture.release,
+      releases: [fixture.release],
+      textAssets: fixture.textAssets,
+    });
+
+    const info = await api.loadReleaseInfo();
+
+    assert.equal(info.available, true);
+    assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
+  });
+
+  it("fails closed for a partial Mac set or an unknown extra asset", async () => {
+    const partial = releaseFixture({
+      includeMac: true,
+      missing: ["RaioPDF-0.1.2-macos-arm64-component-manifest.json"],
+    });
+    const unknown = releaseFixture({ extraAssets: [asset("unexpected-notes.txt")] });
+
+    const partialInfo = await loadApi({
+      latest: partial.release,
+      releases: [partial.release],
+      textAssets: partial.textAssets,
+    }).loadReleaseInfo();
+    const unknownInfo = await loadApi({
+      latest: unknown.release,
+      releases: [unknown.release],
+      textAssets: unknown.textAssets,
+    }).loadReleaseInfo();
+
+    assert.equal(partialInfo.available, false);
+    assert.equal(unknownInfo.available, false);
+  });
+
   it("stays pending for a GitHub prerelease because the updater latest endpoint cannot discover it", async () => {
     const fixture = releaseFixture({ prerelease: true });
     const api = loadApi({
@@ -159,11 +195,12 @@ function releaseFixture({
   extraAssets = [],
   latestSignature = "trusted-signature",
   prerelease = false,
+  includeMac = false,
 } = {}) {
   const tag = `v${version}`;
   const installer = `RaioPDF-${version}-windows-x64-setup.exe`;
   const signature = `${installer}.sig`;
-  const names = [
+  const windowsNames = [
     installer,
     signature,
     `RaioPDF-${version}-third-party-notices.txt`,
@@ -174,7 +211,23 @@ function releaseFixture({
     "ghostscript-10.07.1-source.tar.xz",
     "latest.json",
     "SHA256SUMS.txt",
-  ].filter((name) => !missing.includes(name));
+  ];
+  const macUpdater = `RaioPDF-${version}-macos-arm64.app.tar.gz`;
+  const macNames = includeMac
+    ? [
+        `RaioPDF-${version}-macos-arm64.dmg`,
+        macUpdater,
+        `${macUpdater}.sig`,
+        `RaioPDF-${version}-macos-arm64-third-party-notices.txt`,
+        `RaioPDF-${version}-macos-arm64-component-manifest.json`,
+        `RaioPDF-${version}-macos-arm64-source-correspondence.md`,
+        `RaioPDF-${version}-macos-arm64-license-notices.txt`,
+        `RaioPDF-${version}-macos-arm64-ghostscript-source-offer.txt`,
+        "ghostscript-10.08.0-macos-arm64-source.tar.xz",
+        "SHA256SUMS-macos-arm64.txt",
+      ]
+    : [];
+  const names = [...windowsNames, ...macNames].filter((name) => !missing.includes(name));
   const assets = names.map((name) =>
     asset(name, name === installer ? { digest: sha256("installer-bytes"), size: 123 } : {}),
   );
@@ -197,6 +250,14 @@ function releaseFixture({
           signature: latestSignature,
           url: `https://github.com/Macrify-LLC/raiopdf/releases/download/${tag}/${installer}`,
         },
+        ...(includeMac
+          ? {
+              "darwin-aarch64": {
+                signature: "trusted-mac-signature",
+                url: `https://github.com/Macrify-LLC/raiopdf/releases/download/${tag}/${macUpdater}`,
+              },
+            }
+          : {}),
       },
     }),
   );

@@ -22,15 +22,17 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { mkdtemp, rm, access } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { getHostPlatformId, platformPath } from "../installer/platforms.mjs";
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const IS_WINDOWS = process.platform === "win32";
 
-const DEFAULT_PAYLOAD_DIR = path.join(REPO_ROOT, "apps", "shell", "src-tauri", "payload");
+const DEFAULT_PAYLOAD_DIR = platformPath(REPO_ROOT, getHostPlatformId(), "payloadOutputDir");
 const ENGINE_HOST_BIN = path.join(
   REPO_ROOT,
   "target",
@@ -57,21 +59,31 @@ function commandPath(command) {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-function localDevToolchainEnv() {
+function localDevToolchainEnv(payloadDir) {
   if (IS_WINDOWS) {
     return {};
   }
 
+  // Prefer the OCR tools inside the assembled payload so the canary exercises
+  // exactly what ships. Only fall back to a system/Homebrew tool when the payload
+  // does not provide it (e.g. a dev box running against an incomplete cross-platform
+  // payload). Java stays on the system fallback because Stirling is JRE-agnostic and
+  // the standalone host does not always resolve the bundled JRE.
   return {
     RAIOPDF_ENGINE_JAVA: process.env.RAIOPDF_ENGINE_JAVA?.trim() || "java",
-    ...envFileOverride("RAIOPDF_ENGINE_QPDF", "qpdf"),
-    ...envFileOverride("RAIOPDF_ENGINE_GHOSTSCRIPT", "gs"),
-    ...envFileOverride("RAIOPDF_ENGINE_OCRMYPDF", "ocrmypdf"),
+    ...bundledOrFallback("RAIOPDF_ENGINE_QPDF", payloadDir, ["ocr", "qpdf", "bin", "qpdf"], "qpdf"),
+    ...bundledOrFallback("RAIOPDF_ENGINE_GHOSTSCRIPT", payloadDir, ["ocr", "gs", "bin", "gs"], "gs"),
+    ...bundledOrFallback("RAIOPDF_ENGINE_OCRMYPDF", payloadDir, ["ocr", "ocrmypdf"], "ocrmypdf"),
   };
 }
 
-function envFileOverride(key, command) {
+function bundledOrFallback(key, payloadDir, relParts, command) {
   if (process.env[key]?.trim()) {
+    return {};
+  }
+  // The engine-host discovers the bundled tool from the payload directory; leaving
+  // the override unset keeps the canary on the shipped binary.
+  if (existsSync(path.join(payloadDir, ...relParts))) {
     return {};
   }
   const found = commandPath(command);
@@ -120,7 +132,7 @@ export async function bootPayloadEngine(options = {}) {
     env: {
       ...process.env,
       RAIOPDF_ENGINE_PAYLOAD_DIR: payloadDir,
-      ...localDevToolchainEnv(),
+      ...localDevToolchainEnv(payloadDir),
       RAIOPDF_APP_DATA_DIR: appDataDir,
     },
   });

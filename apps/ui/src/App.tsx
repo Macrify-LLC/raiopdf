@@ -1575,7 +1575,6 @@ export function App() {
   const preserveOcrStateForGenerationRef = useRef<number | null>(null);
   const pendingOcrTypeRef = useRef<OcrType>("skip-text");
   const savingRef = useRef(false);
-  const startupFileTakenRef = useRef(false);
   const pendingMoveToNewWindowTabIdRef = useRef<string | null>(null);
   const batesApplyingRef = useRef(false);
   const redactionIdRef = useRef(0);
@@ -3617,20 +3616,48 @@ export function App() {
   }, [openFileSource, setError]);
 
   useEffect(() => {
-    if (startupFileTakenRef.current) {
-      return;
-    }
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let drainChain = Promise.resolve();
 
-    startupFileTakenRef.current = true;
-    void takeStartupFile()
-      .then((source) => {
-        if (source) {
+    const drainPendingFiles = () => {
+      drainChain = drainChain.then(async () => {
+        while (!disposed) {
+          const source = await takeStartupFile();
+          if (!source) {
+            break;
+          }
           openFileSource(source);
         }
-      })
-      .catch(() => {
+      }).catch(() => {
         setError("This startup PDF could not be opened. The file may be corrupt or unsupported.");
       });
+    };
+
+    if (!isTauriRuntime()) {
+      drainPendingFiles();
+      return () => {
+        disposed = true;
+      };
+    }
+
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("raiopdf-opened-pdf", drainPendingFiles))
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+        // Register the wake-up listener before draining so a Finder Opened
+        // event cannot land in the gap between the initial take and listen.
+        drainPendingFiles();
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [openFileSource, setError]);
 
   const openFileInSeparateWindow = useCallback(() => {

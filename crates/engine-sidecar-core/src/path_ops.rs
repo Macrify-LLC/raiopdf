@@ -31,10 +31,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{current_exe_dir, dev_payload_dir, find_payload_dir, payload_path_entries};
+use crate::{
+    current_exe_dir, dev_payload_dir, find_payload_dir,
+    runtime::{find_payload_tool, payload_path_entries, PayloadTool, RuntimePlatform},
+};
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::{fs::DirBuilderExt, fs::OpenOptionsExt};
 
@@ -298,33 +299,21 @@ impl PathOpsToolchain {
     }
 
     pub fn from_payload_dir(payload_dir: &Path) -> Self {
+        Self::from_payload_dir_for(payload_dir, RuntimePlatform::current())
+    }
+
+    pub fn from_payload_dir_for(payload_dir: &Path, platform: RuntimePlatform) -> Self {
         Self {
-            qpdf: find_binary(
-                &payload_dir.join("ocr").join("qpdf").join("bin"),
-                &["qpdf.exe", "qpdf"],
-            ),
-            ghostscript: find_binary(
-                &payload_dir.join("ocr").join("gs").join("bin"),
-                &["gs.exe", "gs"],
-            ),
-            ocrmypdf: {
-                let candidate = payload_dir.join("ocr").join("ocrmypdf.cmd");
-                candidate.is_file().then_some(candidate)
-            },
+            qpdf: find_payload_tool(payload_dir, PayloadTool::Qpdf, platform),
+            ghostscript: find_payload_tool(payload_dir, PayloadTool::Ghostscript, platform),
+            ocrmypdf: find_payload_tool(payload_dir, PayloadTool::Ocrmypdf, platform),
             node_one_shot: {
-                let node = payload_dir.join("mcp").join("node").join(if cfg!(windows) {
-                    "node.exe"
-                } else {
-                    "node"
-                });
+                let node = find_payload_tool(payload_dir, PayloadTool::Node, platform);
                 let entrypoint = payload_dir.join("mcp").join("app").join("index.mjs");
-                node.is_file() && entrypoint.is_file()
+                node.is_some() && entrypoint.is_file()
             },
-            ocr_progress: {
-                let candidate = payload_dir.join("ocr").join("raiopdf-ocr-progress.cmd");
-                candidate.is_file().then_some(candidate)
-            },
-            path_entries: payload_path_entries(payload_dir),
+            ocr_progress: find_payload_tool(payload_dir, PayloadTool::OcrProgress, platform),
+            path_entries: payload_path_entries(payload_dir, platform),
             tool_timeout: None,
         }
     }
@@ -360,13 +349,6 @@ fn env_file(key: &str) -> Option<PathBuf> {
     env::var_os(key)
         .map(PathBuf::from)
         .filter(|path| path.is_file())
-}
-
-fn find_binary(bin_dir: &Path, names: &[&str]) -> Option<PathBuf> {
-    names
-        .iter()
-        .map(|name| bin_dir.join(name))
-        .find(|candidate| candidate.is_file())
 }
 
 // ---------------------------------------------------------------------------
@@ -949,42 +931,12 @@ where
     )))
 }
 
-#[cfg(windows)]
 fn kill_child_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    let mut command = Command::new("taskkill.exe");
-    command.args(["/PID", &pid, "/T", "/F"]);
-    crate::apply_platform_spawn_flags(&mut command);
-    let _ = command.output();
-    let _ = child.kill();
-}
-
-#[cfg(not(windows))]
-fn kill_child_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        // `--` ends option parsing: a standalone `kill` binary would otherwise
-        // parse the leading-dash process-group operand as an option.
-        let process_group = format!("-{}", child.id());
-        let _ = Command::new("kill")
-            .args(["-TERM", "--", process_group.as_str()])
-            .output();
-        thread::sleep(Duration::from_millis(250));
-        if child.try_wait().ok().flatten().is_none() {
-            let _ = Command::new("kill")
-                .args(["-KILL", "--", process_group.as_str()])
-                .output();
-        }
-    }
-    let _ = child.kill();
+    crate::kill_process_tree(child);
 }
 
 fn configure_cancelable_command(command: &mut Command) {
-    crate::apply_platform_spawn_flags(command);
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
+    crate::configure_child_process(command);
 }
 
 fn check_cancelled(cancel_flag: Option<&AtomicBool>) -> OpResult<()> {
@@ -4554,7 +4506,7 @@ mod tests {
     // ---- toolchain-backed tests (skipped when the payload is absent) ----
     //
     // Run with the bundled toolchain:
-    //   RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload cargo test
+    //   RAIOPDF_ENGINE_PAYLOAD_DIR=<repo>/apps/shell/src-tauri/payload/windows-x64 cargo test
 
     fn test_toolchain() -> Option<PathOpsToolchain> {
         let toolchain = PathOpsToolchain::discover(None);

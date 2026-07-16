@@ -47,8 +47,9 @@ read from an environment variable.
    - **JDK 21** plus the vendored Stirling engine dist — run `pnpm engine:vendor` (or
      `pnpm engine:build`) once so `engine/dist/` holds the Stirling jar the payload
      assembler expects.
-   - **Git Bash** (or WSL) — the payload assembler (`installer/assemble-payload.sh`) is a
-     `bash` script invoked by `installer/run-payload-assembler.mjs`.
+   - **Git Bash** (or WSL) — the Windows payload assembler
+     (`installer/assemble-windows-x64.sh`) is invoked through the explicit
+     platform dispatcher, `installer/run-payload-assembler.mjs`.
 
    See `installer/README.md` for payload details. Validate the payload independently with
    `pnpm prepare:shell-bundle` before your first signed build.
@@ -105,7 +106,7 @@ pnpm prepare:release-assets -- --tag $tag
 pnpm validate:release-assets -- --tag $tag
 
 # 8. Upload the exact signed installer, updater signature, latest.json, and checksum file.
-gh release upload $tag (Get-ChildItem release-assets\signed\* | ForEach-Object { $_.FullName }) --clobber
+gh release upload $tag (Get-ChildItem release-assets\signed\windows-x64\* | ForEach-Object { $_.FullName }) --clobber
 
 # 9. After publishing the GitHub release, verify the published assets too.
 #    This rejects draft/prerelease state, confirms /releases/latest resolves to
@@ -118,7 +119,7 @@ The signed Tauri build normally lands in the workspace bundle directory
 `target/release/bundle/nsis/` (`apps/shell/src-tauri/target/release/bundle/nsis/` is
 also searched as a fallback). The release-prep script copies exactly one signed NSIS
 installer and its matching `.sig` into the ignored local staging directory
-`release-assets/signed/`, renaming the installer to the canonical public asset name,
+`release-assets/signed/windows-x64/`, renaming the installer to the canonical public asset name,
 and stages the release compliance assets from the built payload:
 
 ```text
@@ -149,7 +150,7 @@ signature for that exact release asset.
 ### Verify the signature
 
 ```powershell
-$exe = Get-ChildItem release-assets\signed\RaioPDF-*-windows-x64-setup.exe | Select-Object -First 1
+$exe = Get-ChildItem release-assets\signed\windows-x64\RaioPDF-*-windows-x64-setup.exe | Select-Object -First 1
 Get-AuthenticodeSignature $exe.FullName | Format-List Status, SignerCertificate, TimeStamperCertificate
 # Status should be "Valid" and a timestamp should be present.
 ```

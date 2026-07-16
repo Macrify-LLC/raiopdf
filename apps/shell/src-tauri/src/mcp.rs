@@ -7,8 +7,6 @@
 
 use std::fs;
 use std::io::Write;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -20,8 +18,6 @@ use crate::FileGrants;
 const FLAG_DIR: &str = "me.macrify.raiopdf";
 const FLAG_FILE: &str = "mcp-enabled";
 const ENABLED_MARKERS: [&str; 6] = ["1", "true", "enabled", "enable", "on", "yes"];
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -264,17 +260,18 @@ pub(crate) fn mcp_one_shot_runtime_available(resource_dir: Option<&Path>) -> boo
     let Some(resource_dir) = resolve_mcp_resource_dir(resource_dir) else {
         return false;
     };
-    let node = resource_dir
-        .join("payload")
-        .join("mcp")
-        .join("node")
-        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    let payload_dir = resource_dir.join("payload");
+    let node = engine_sidecar_core::runtime::find_payload_tool(
+        &payload_dir,
+        engine_sidecar_core::runtime::PayloadTool::Node,
+        engine_sidecar_core::runtime::RuntimePlatform::current(),
+    );
     let entrypoint = resource_dir
         .join("payload")
         .join("mcp")
         .join("app")
         .join("index.mjs");
-    node.is_file() && entrypoint.is_file()
+    node.is_some() && entrypoint.is_file()
 }
 
 fn resolve_mcp_resource_dir(app_resource_dir: Option<&Path>) -> Option<PathBuf> {
@@ -690,7 +687,7 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_platform_spawn_flags(&mut command);
+    engine_sidecar_core::configure_child_process(&mut command);
 
     let child = command.spawn().map_err(|_| {
         "RaioPDF couldn't start its built-in tools. Reinstall RaioPDF and try again.".to_string()
@@ -839,28 +836,9 @@ fn join_io(
 /// The Node one-shot spawns its own helpers (qpdf, Ghostscript, the engine
 /// host); killing only the direct child would orphan them with open handles
 /// inside the work dir, so take the whole tree down.
-#[cfg(windows)]
 fn kill_child_tree(child: &mut std::process::Child) {
-    let pid = child.id().to_string();
-    let mut command = Command::new("taskkill.exe");
-    command.args(["/PID", &pid, "/T", "/F"]);
-    apply_platform_spawn_flags(&mut command);
-    let _ = command.output();
-    let _ = child.kill();
+    engine_sidecar_core::kill_process_tree(child);
 }
-
-#[cfg(not(windows))]
-fn kill_child_tree(child: &mut std::process::Child) {
-    let _ = child.kill();
-}
-
-#[cfg(windows)]
-fn apply_platform_spawn_flags(command: &mut Command) {
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn apply_platform_spawn_flags(_command: &mut Command) {}
 
 fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
     match error {

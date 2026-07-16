@@ -27,7 +27,8 @@
   const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/;
   const SIGNED_WINDOWS_INSTALLER =
     /^RaioPDF-([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)-windows-x64-setup\.exe$/;
-  const GHOSTSCRIPT_SOURCE = /^ghostscript-\d+\.\d+\.\d+-source\.tar\.xz$/;
+  const GHOSTSCRIPT_SOURCE = /^ghostscript-(\d+\.\d+\.\d+)-source\.tar\.xz$/;
+  const MAC_GHOSTSCRIPT_SOURCE = /^ghostscript-(\d+\.\d+\.\d+)-macos-arm64-source\.tar\.xz$/;
 
   function pickAsset(assets, pattern) {
     return (assets || []).find((asset) => pattern.test(asset.name));
@@ -63,6 +64,21 @@
     ].sort((a, b) => a.localeCompare(b));
   }
 
+  function optionalMacAssetNames(version, ghostscriptVersion) {
+    return [
+      `RaioPDF-${version}-macos-arm64.dmg`,
+      `RaioPDF-${version}-macos-arm64.app.tar.gz`,
+      `RaioPDF-${version}-macos-arm64.app.tar.gz.sig`,
+      `RaioPDF-${version}-macos-arm64-third-party-notices.txt`,
+      `RaioPDF-${version}-macos-arm64-component-manifest.json`,
+      `RaioPDF-${version}-macos-arm64-source-correspondence.md`,
+      `RaioPDF-${version}-macos-arm64-license-notices.txt`,
+      `RaioPDF-${version}-macos-arm64-ghostscript-source-offer.txt`,
+      `ghostscript-${ghostscriptVersion}-macos-arm64-source.tar.xz`,
+      "SHA256SUMS-macos-arm64.txt",
+    ].sort((a, b) => a.localeCompare(b));
+  }
+
   function releaseAssetSet(release) {
     const assets = release?.assets || [];
     const version = versionFromRelease(release);
@@ -76,13 +92,28 @@
     const ghostscriptSources = assets.filter((asset) => GHOSTSCRIPT_SOURCE.test(asset.name));
     if (ghostscriptSources.length !== 1) return null;
 
-    const expected = expectedAssetNames(version, ghostscriptSources[0].name);
+    const expectedWindows = expectedAssetNames(version, ghostscriptSources[0].name);
+    const ghostscriptMatch = GHOSTSCRIPT_SOURCE.exec(ghostscriptSources[0].name);
+    if (!ghostscriptMatch) return null;
+    const hasMacAssets = assets.some((asset) => asset.name.includes("macos-arm64"));
+    const macGhostscriptSources = assets.filter((asset) => MAC_GHOSTSCRIPT_SOURCE.test(asset.name));
+    const macGhostscriptMatch = macGhostscriptSources.length === 1
+      ? MAC_GHOSTSCRIPT_SOURCE.exec(macGhostscriptSources[0].name)
+      : null;
+    const expectedCombined = macGhostscriptMatch
+      ? [
+          ...expectedWindows,
+          ...optionalMacAssetNames(version, macGhostscriptMatch[1]),
+        ].sort((a, b) => a.localeCompare(b))
+      : [];
     const actual = assets.map((asset) => asset.name).sort((a, b) => a.localeCompare(b));
     if (actual.some((name) => /unsigned/i.test(name))) return null;
     if (actual.some((name) => name.toLowerCase().endsWith(".exe") && name !== installer.name)) {
       return null;
     }
-    if (expected.length !== actual.length || expected.some((name, index) => name !== actual[index])) {
+    const matches = (expected) =>
+      expected.length === actual.length && expected.every((name, index) => name === actual[index]);
+    if (!matches(expectedWindows) && !(hasMacAssets && matches(expectedCombined))) {
       return null;
     }
 
@@ -92,7 +123,7 @@
       installerSig: assetByName(assets, `${installer.name}.sig`),
       latestJson: assetByName(assets, "latest.json"),
       checksums: assetByName(assets, "SHA256SUMS.txt"),
-      expected,
+      expected: actual,
     };
   }
 

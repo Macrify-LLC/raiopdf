@@ -4,8 +4,14 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  PLATFORM_IDS,
+  canonicalArtifactNames,
+  getPlatform,
+} from "../installer/platforms.mjs";
+
 const REPO = "Macrify-LLC/raiopdf";
-const PLATFORM = "windows-x86_64";
+const DEFAULT_PLATFORM_ID = "windows-x64";
 const LATEST_JSON = "latest.json";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
 const SEMVER_PRERELEASE = /^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(?:\+[0-9A-Za-z.-]+)?$/;
@@ -60,7 +66,19 @@ export function canonicalInstallerFilename(version) {
       )}).`,
     );
   }
-  return `RaioPDF-${version}-windows-x64-setup.exe`;
+  return canonicalArtifactNames(DEFAULT_PLATFORM_ID, version).installer;
+}
+
+export function canonicalUpdaterFilename(version, platformId = DEFAULT_PLATFORM_ID) {
+  requireNonEmptyString("version", version);
+  if (!SEMVER.test(version)) {
+    throw new Error(
+      `generate-latest-json: version must be semver like 1.2.3 (got ${JSON.stringify(
+        version,
+      )}).`,
+    );
+  }
+  return canonicalArtifactNames(platformId, version).updater;
 }
 
 function normalizePubDate(pubDate) {
@@ -155,90 +173,156 @@ export function assertSourceInstallerMatchesTag(
   );
 }
 
-export function buildLatestJsonManifest({ tag, exeFilename, signature, pubDate }) {
+function normalizePlatformArtifacts({ resolved, exeFilename, signature, platformArtifacts }) {
+  const artifacts = platformArtifacts ?? [
+    { platformId: DEFAULT_PLATFORM_ID, filename: exeFilename, signature },
+  ];
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    throw new Error("generate-latest-json: at least one platform artifact is required.");
+  }
+
+  const normalized = [];
+  const seenUpdaterPlatforms = new Set();
+  for (const artifact of artifacts) {
+    const platform = getPlatform(artifact?.platformId);
+    requireNonEmptyString(`${platform.payloadId} updater filename`, artifact?.filename);
+    requireNonEmptyString(`${platform.payloadId} signature`, artifact?.signature);
+    if (/[\\/]/.test(artifact.filename)) {
+      throw new Error(
+        `generate-latest-json: ${platform.payloadId} updater filename must not be a path.`,
+      );
+    }
+    const expectedFilename = canonicalUpdaterFilename(resolved.version, platform.payloadId);
+    if (artifact.filename !== expectedFilename) {
+      throw new Error(
+        `generate-latest-json: ${platform.payloadId} updater asset must be ${expectedFilename} for ${resolved.tag} (got ${artifact.filename}).`,
+      );
+    }
+    if (seenUpdaterPlatforms.has(platform.updaterPlatform)) {
+      throw new Error(
+        `generate-latest-json: duplicate updater platform ${platform.updaterPlatform}.`,
+      );
+    }
+    seenUpdaterPlatforms.add(platform.updaterPlatform);
+    normalized.push({
+      platformId: platform.payloadId,
+      updaterPlatform: platform.updaterPlatform,
+      filename: artifact.filename,
+      signature: artifact.signature,
+    });
+  }
+  return normalized;
+}
+
+export function buildLatestJsonManifest({
+  tag,
+  exeFilename,
+  signature,
+  pubDate,
+  platformArtifacts,
+}) {
   const resolved = normalizeTag(tag);
-  requireNonEmptyString("exeFilename", exeFilename);
-  requireNonEmptyString("signature", signature);
-  if (/[\\/]/.test(exeFilename) || !exeFilename.toLowerCase().endsWith(".exe")) {
-    throw new Error(
-      `generate-latest-json: exeFilename must be the installer filename, not a path (got ${JSON.stringify(
-        exeFilename,
-      )}).`,
-    );
-  }
-  if (!CANONICAL_INSTALLER_RE.test(exeFilename)) {
-    throw new Error(
-      `generate-latest-json: installer asset must use the canonical public filename ` +
-        `RaioPDF-<version>-windows-x64-setup.exe (got ${JSON.stringify(exeFilename)}).`,
-    );
-  }
-  const installerVersion = extractInstallerVersion(exeFilename);
-  if (installerVersion !== resolved.version) {
-    throw new Error(
-      `generate-latest-json: installer version ${JSON.stringify(
-        installerVersion,
-      )} does not match release tag version ${JSON.stringify(
-        resolved.version,
-      )} for ${exeFilename}. Rebuild the signed installer for ${resolved.tag}.`,
-    );
+  const artifacts = normalizePlatformArtifacts({
+    resolved,
+    exeFilename,
+    signature,
+    platformArtifacts,
+  });
+
+  const platforms = {};
+  for (const artifact of artifacts) {
+    platforms[artifact.updaterPlatform] = {
+      signature: artifact.signature,
+      url: `https://github.com/${REPO}/releases/download/${resolved.tag}/${artifact.filename}`,
+    };
   }
 
   return {
     version: resolved.version,
     pub_date: normalizePubDate(pubDate),
-    platforms: {
-      [PLATFORM]: {
-        signature,
-        url: `https://github.com/${REPO}/releases/download/${resolved.tag}/${exeFilename}`,
-      },
-    },
+    platforms,
   };
 }
 
-export function validateLatestJsonManifest(manifest, { tag, exeFilename }) {
-  const { version } = normalizeTag(tag);
-  requireNonEmptyString("exeFilename", exeFilename);
+export function validateLatestJsonManifest(
+  manifest,
+  { tag, exeFilename, platformArtifacts },
+) {
+  const resolved = normalizeTag(tag);
+  const artifacts = normalizePlatformArtifacts({
+    resolved,
+    exeFilename,
+    signature: platformArtifacts ? undefined : "validation-placeholder",
+    platformArtifacts: platformArtifacts?.map((artifact) => ({
+      ...artifact,
+      signature: artifact.signature ?? "validation-placeholder",
+    })),
+  });
 
   if (!manifest || typeof manifest !== "object") {
     throw new Error("generate-latest-json: latest.json must be a JSON object.");
   }
-  if (manifest.version !== version) {
+  if (manifest.version !== resolved.version) {
     throw new Error(
       `generate-latest-json: latest.json version ${JSON.stringify(
         manifest.version,
-      )} does not match tag version ${JSON.stringify(version)}.`,
+      )} does not match tag version ${JSON.stringify(resolved.version)}.`,
     );
   }
   requireNonEmptyString("latest.json pub_date", manifest.pub_date);
 
-  const platform = manifest.platforms?.[PLATFORM];
-  if (!platform || typeof platform !== "object") {
-    throw new Error(`generate-latest-json: latest.json is missing platforms.${PLATFORM}.`);
-  }
-  requireNonEmptyString(`platforms.${PLATFORM}.signature`, platform.signature);
-  requireNonEmptyString(`platforms.${PLATFORM}.url`, platform.url);
-
-  let urlFilename;
-  try {
-    const url = new URL(platform.url);
-    urlFilename = decodeURIComponent(url.pathname.split("/").pop() ?? "");
-  } catch {
+  const expectedKeys = artifacts.map((artifact) => artifact.updaterPlatform).sort();
+  const actualKeys = Object.keys(manifest.platforms ?? {}).sort();
+  if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
     throw new Error(
-      `generate-latest-json: platforms.${PLATFORM}.url is not a valid URL: ${platform.url}`,
+      `generate-latest-json: latest.json platform keys ${actualKeys.join(", ") || "(none)"} do not match expected ${expectedKeys.join(", ")}.`,
     );
   }
 
-  if (urlFilename !== exeFilename) {
-    throw new Error(
-      `generate-latest-json: URL filename ${JSON.stringify(
-        urlFilename,
-      )} does not match local installer ${JSON.stringify(exeFilename)}.`,
+  for (const artifact of artifacts) {
+    const platform = manifest.platforms?.[artifact.updaterPlatform];
+    if (!platform || typeof platform !== "object") {
+      throw new Error(
+        `generate-latest-json: latest.json is missing platforms.${artifact.updaterPlatform}.`,
+      );
+    }
+    requireNonEmptyString(
+      `platforms.${artifact.updaterPlatform}.signature`,
+      platform.signature,
     );
+    if (artifact.signature !== "validation-placeholder" && platform.signature !== artifact.signature) {
+      throw new Error(
+        `generate-latest-json: platforms.${artifact.updaterPlatform}.signature does not match the staged updater .sig.`,
+      );
+    }
+    requireNonEmptyString(`platforms.${artifact.updaterPlatform}.url`, platform.url);
+
+    let url;
+    try {
+      url = new URL(platform.url);
+    } catch {
+      throw new Error(
+        `generate-latest-json: platforms.${artifact.updaterPlatform}.url is not a valid URL: ${platform.url}`,
+      );
+    }
+    const urlFilename = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+    const expectedPath = `/Macrify-LLC/raiopdf/releases/download/${resolved.tag}/${artifact.filename}`;
+    if (url.hostname !== "github.com" || url.pathname !== expectedPath || urlFilename !== artifact.filename) {
+      throw new Error(
+        `generate-latest-json: platforms.${artifact.updaterPlatform}.url is not the canonical URL for ${artifact.filename}.`,
+      );
+    }
   }
 }
 
 function parseArgs(argv) {
-  const args = { tag: undefined, upload: false, allowVersionMismatch: false };
+  const args = {
+    tag: undefined,
+    upload: false,
+    allowVersionMismatch: false,
+    stageRoot: undefined,
+    platformIds: [],
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--tag") {
@@ -253,6 +337,14 @@ function parseArgs(argv) {
       args.upload = true;
     } else if (arg === "--allow-version-mismatch") {
       args.allowVersionMismatch = true;
+    } else if (arg === "--stage-root") {
+      args.stageRoot = argv[++index];
+    } else if (arg.startsWith("--stage-root=")) {
+      args.stageRoot = arg.slice("--stage-root=".length);
+    } else if (arg === "--platform") {
+      args.platformIds.push(argv[++index]);
+    } else if (arg.startsWith("--platform=")) {
+      args.platformIds.push(arg.slice("--platform=".length));
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -265,9 +357,13 @@ function parseArgs(argv) {
 function printUsage() {
   console.log(`Usage: node scripts/generate-latest-json.mjs [--tag vX.Y.Z] [--upload]
        [--allow-version-mismatch]
+       [--stage-root release-assets/signed [--platform windows-x64] [--platform macos-arm64]]
 
 Generates apps/shell/src-tauri/target/release/bundle/nsis/latest.json for the
-signed NSIS installer and its updater .sig file.
+signed NSIS installer and its updater .sig file. With --stage-root, reads the
+independent platform subdirectories and writes one lockstep latest.json at the
+stage root. Existing platform directories are auto-detected unless --platform
+is supplied.
 
 The source installer's embedded version must match the tag; a stale build in
 the NSIS directory otherwise publishes the previous version's signature under
@@ -317,6 +413,50 @@ function findNsisArtifacts(nsisDir) {
   return { exeFilename, sigPath };
 }
 
+export function findStagedUpdaterArtifacts(stageRoot, platformIds = []) {
+  requireNonEmptyString("stageRoot", stageRoot);
+  const resolvedRoot = path.resolve(stageRoot);
+  const selected = platformIds.length > 0 ? platformIds : PLATFORM_IDS;
+  const artifacts = [];
+  for (const platformId of selected) {
+    const platform = getPlatform(platformId);
+    const platformDir = path.join(resolvedRoot, path.basename(platform.paths.releaseStageDir));
+    if (!existsSync(platformDir)) {
+      if (platformIds.length > 0) {
+        throw new Error(
+          `generate-latest-json: requested platform stage does not exist: ${platformDir}`,
+        );
+      }
+      continue;
+    }
+    const candidates = readdirSync(platformDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && platform.artifact.updaterPattern.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+    if (candidates.length !== 1) {
+      throw new Error(
+        `generate-latest-json: ${platformId} stage must contain exactly one updater artifact; found ${candidates.join(", ") || "(none)"}.`,
+      );
+    }
+    const filename = candidates[0];
+    const sigPath = path.join(platformDir, `${filename}.sig`);
+    if (!existsSync(sigPath)) {
+      throw new Error(`generate-latest-json: missing updater signature: ${sigPath}`);
+    }
+    artifacts.push({
+      platformId,
+      filename,
+      signature: readFileSync(sigPath, "utf8").trim(),
+    });
+  }
+  if (artifacts.length === 0) {
+    throw new Error(
+      `generate-latest-json: no platform updater artifacts found below ${resolvedRoot}.`,
+    );
+  }
+  return artifacts;
+}
+
 function uploadLatestJson(tag, latestJsonPath) {
   console.log(`generate-latest-json: uploading ${latestJsonPath} to release ${tag}`);
   execFileSync("gh", ["release", "upload", tag, latestJsonPath, "--clobber"], {
@@ -355,28 +495,45 @@ function main() {
     return;
   }
 
-  const { exeFilename: sourceExeFilename, sigPath } = findNsisArtifacts(NSIS_DIR);
-  assertSourceInstallerMatchesTag(sourceExeFilename, resolved.version, {
-    allowVersionMismatch: args.allowVersionMismatch,
-  });
-  const publicExeFilename = canonicalInstallerFilename(resolved.version);
-  const signature = readFileSync(sigPath, "utf8").trim();
+  let platformArtifacts;
+  let latestJsonPath;
+  let sourceExeFilename;
+  if (args.stageRoot) {
+    platformArtifacts = findStagedUpdaterArtifacts(args.stageRoot, args.platformIds);
+    latestJsonPath = path.join(path.resolve(args.stageRoot), LATEST_JSON);
+  } else {
+    const legacy = findNsisArtifacts(NSIS_DIR);
+    sourceExeFilename = legacy.exeFilename;
+    assertSourceInstallerMatchesTag(sourceExeFilename, resolved.version, {
+      allowVersionMismatch: args.allowVersionMismatch,
+    });
+    platformArtifacts = [{
+      platformId: DEFAULT_PLATFORM_ID,
+      filename: canonicalInstallerFilename(resolved.version),
+      signature: readFileSync(legacy.sigPath, "utf8").trim(),
+    }];
+    latestJsonPath = path.join(NSIS_DIR, LATEST_JSON);
+  }
   const manifest = buildLatestJsonManifest({
     tag: resolved.tag,
-    exeFilename: publicExeFilename,
-    signature,
+    platformArtifacts,
     pubDate: new Date(),
   });
 
-  const latestJsonPath = path.join(NSIS_DIR, LATEST_JSON);
   writeFileSync(latestJsonPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const readBack = JSON.parse(readFileSync(latestJsonPath, "utf8"));
-  validateLatestJsonManifest(readBack, { tag: resolved.tag, exeFilename: publicExeFilename });
+  validateLatestJsonManifest(readBack, { tag: resolved.tag, platformArtifacts });
 
   console.log(`generate-latest-json: wrote ${latestJsonPath}`);
-  console.log(`generate-latest-json: source installer = ${sourceExeFilename}`);
-  console.log(`generate-latest-json: public installer asset = ${publicExeFilename}`);
+  if (sourceExeFilename) {
+    console.log(`generate-latest-json: source installer = ${sourceExeFilename}`);
+  }
+  for (const artifact of platformArtifacts) {
+    console.log(
+      `generate-latest-json: ${artifact.platformId} updater asset = ${artifact.filename}`,
+    );
+  }
 
   if (args.upload) {
     uploadLatestJson(resolved.tag, latestJsonPath);

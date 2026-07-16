@@ -4,18 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getHostPlatformId, platformPath } from "../installer/platforms.mjs";
+
 const PROGRESS_PREFIX = "@@RAIOPDF_OCR_PROGRESS@@ ";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
 const args = parseArgs(process.argv.slice(2));
-const payloadDir = path.resolve(args.payloadDir ?? process.env.RAIOPDF_PAYLOAD_DIR ?? path.join(
-  repoRoot,
-  "apps",
-  "shell",
-  "src-tauri",
-  "payload",
-));
+const payloadDir = path.resolve(
+  args.payloadDir
+    ?? process.env.RAIOPDF_PAYLOAD_DIR
+    ?? platformPath(repoRoot, getHostPlatformId(), "payloadOutputDir"),
+);
 const fixture = path.resolve(args.fixture ?? path.join(
   repoRoot,
   "apps",

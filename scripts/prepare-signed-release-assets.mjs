@@ -20,20 +20,23 @@ import {
 } from "./generate-latest-json.mjs";
 import { verifyAuthenticodeSignature } from "./authenticode.mjs";
 import { verifyTauriUpdaterSignature } from "./minisign.mjs";
+import { getPlatform, platformPath } from "../installer/platforms.mjs";
 
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/;
 const DEFAULT_NSIS_SEARCH_DIRS = [
   fileURLToPath(new URL("../target/release/bundle/nsis/", import.meta.url)),
   fileURLToPath(new URL("../apps/shell/src-tauri/target/release/bundle/nsis/", import.meta.url)),
 ];
-const DEFAULT_ASSET_DIR = fileURLToPath(new URL("../release-assets/signed/", import.meta.url));
-const DEFAULT_PINS_PATH = fileURLToPath(new URL("../installer/PINS.env", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const WINDOWS_PLATFORM = getPlatform("windows-x64");
+const DEFAULT_ASSET_DIR = platformPath(REPO_ROOT, "windows-x64", "releaseStageDir");
+const DEFAULT_PINS_PATH = path.resolve(REPO_ROOT, WINDOWS_PLATFORM.pinsFile);
 const DEFAULT_BUILT_PAYLOAD_SEARCH_ROOTS = [
   fileURLToPath(new URL("../target/release/", import.meta.url)),
   fileURLToPath(new URL("../apps/shell/src-tauri/target/release/", import.meta.url)),
 ];
 const DEFAULT_SOURCE_PAYLOAD_SEARCH_ROOTS = [
-  fileURLToPath(new URL("../apps/shell/src-tauri/payload/", import.meta.url)),
+  platformPath(REPO_ROOT, "windows-x64", "payloadOutputDir"),
 ];
 const REQUIRED_LEGAL_FILES = [
   ["THIRD-PARTY-NOTICES.txt", (version) => `RaioPDF-${version}-third-party-notices.txt`],
@@ -62,11 +65,14 @@ function parseArgs(argv) {
     pinsPath: DEFAULT_PINS_PATH,
     ghostscriptSource: undefined,
     upload: false,
+    platformStageOnly: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--tag") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--tag") {
       args.tag = argv[++index];
     } else if (arg.startsWith("--tag=")) {
       args.tag = arg.slice("--tag=".length);
@@ -92,6 +98,8 @@ function parseArgs(argv) {
       args.ghostscriptSource = arg.slice("--ghostscript-source=".length);
     } else if (arg === "--upload") {
       args.upload = true;
+    } else if (arg === "--platform-stage-only") {
+      args.platformStageOnly = true;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -105,15 +113,18 @@ function parseArgs(argv) {
 function usage() {
   console.log(`Usage: node scripts/prepare-signed-release-assets.mjs --tag vX.Y.Z [--upload]
        [--nsis-dir PATH] [--payload-dir PATH] [--out-dir PATH]
-       [--ghostscript-source PATH] [--pins PATH]
+       [--ghostscript-source PATH] [--pins PATH] [--platform-stage-only]
 
 Copies the locally signed NSIS installer and updater signature into canonical
 public release asset names, stages release legal/source-correspondence assets,
 writes latest.json, and writes SHA256SUMS.txt.
 
+--platform-stage-only omits latest.json from the Windows stage and its checksum
+so one shared cross-platform manifest can be generated at the stage root.
+
 Default NSIS search: target/release/bundle/nsis, apps/shell/src-tauri/target/release/bundle/nsis
 Default payload search: target/release, apps/shell/src-tauri/target/release; source payload fallback
-Default output: release-assets/signed
+Default output: release-assets/signed/windows-x64
 
 Requires RAIOPDF_SIGN_EXPECTED_THUMBPRINT, RAIOPDF_SIGN_THUMBPRINT, or exact
 RAIOPDF_SIGN_EXPECTED_SUBJECT so the staged installer must have a valid
@@ -291,7 +302,7 @@ function collectPayloadLegalDirs(root) {
   if (!rootStats.isDirectory()) {
     return found;
   }
-  if (path.basename(root) === "payload" && existsSync(path.join(root, "legal"))) {
+  if (existsSync(path.join(root, "legal"))) {
     found.push(path.join(root, "legal"));
   }
   collectPayloadLegalDirsInto(root, found);
@@ -427,6 +438,7 @@ export function prepareSignedReleaseAssets({
   skipUpdaterSignature = false,
   skipLegalCheck = false,
   updaterPubkey,
+  platformStageOnly = false,
 }) {
   const releaseTag = resolveTag(tag);
   const version = versionFromTag(releaseTag);
@@ -467,15 +479,17 @@ export function prepareSignedReleaseAssets({
   assetNames.push(...stageLegalAssets({ legalDir, outDir, version }));
   assetNames.push(stageGhostscriptSource({ pins, sourceArchive: ghostscriptSource, outDir }));
 
-  const signature = readFileSync(path.join(outDir, canonicalSig), "utf8").trim();
-  const manifest = buildLatestJsonManifest({
-    tag: releaseTag,
-    exeFilename: canonicalExe,
-    signature,
-    pubDate: new Date(),
-  });
-  writeFileSync(path.join(outDir, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-  assetNames.push("latest.json");
+  if (!platformStageOnly) {
+    const signature = readFileSync(path.join(outDir, canonicalSig), "utf8").trim();
+    const manifest = buildLatestJsonManifest({
+      tag: releaseTag,
+      exeFilename: canonicalExe,
+      signature,
+      pubDate: new Date(),
+    });
+    writeFileSync(path.join(outDir, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    assetNames.push("latest.json");
+  }
   writeSha256Sums(outDir, assetNames);
   assetNames.push("SHA256SUMS.txt");
 

@@ -16,7 +16,7 @@ use range_read::{
 use serde::Serialize;
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -37,6 +37,20 @@ use uuid::Uuid;
 
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
+#[cfg(target_os = "macos")]
+const OPENED_PDF_EVENT: &str = "raiopdf-opened-pdf";
+/// Documents Finder hands us before `setup` has managed the app state.
+///
+/// Launching by double-clicking a PDF delivers the open-documents Apple Event
+/// before the setup hook runs, so `State::<T>()` — which panics when its type
+/// isn't managed yet — would fire inside tao's Objective-C `application_open_urls`
+/// callback. A panic cannot unwind across that frame, so it aborts the process
+/// instead of opening the document. Park the path here and let `setup` drain it
+/// once the state it needs exists.
+#[cfg(target_os = "macos")]
+static EARLY_OPENED_PATHS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+#[cfg(target_os = "macos")]
+const STATE_NOT_READY: &str = "app state not ready yet";
 const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
 const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
@@ -88,7 +102,7 @@ struct DirectoryGrants {
 
 #[derive(Default)]
 struct StartupPdf {
-    pending: Mutex<Option<OpenedPdf>>,
+    pending: Mutex<VecDeque<OpenedPdf>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -488,12 +502,12 @@ impl DirectoryGrants {
 }
 
 impl StartupPdf {
-    fn set(&self, pdf: OpenedPdf) -> Result<(), String> {
+    fn push(&self, pdf: OpenedPdf) -> Result<(), String> {
         let mut pending = self
             .pending
             .lock()
             .map_err(|_| "Startup PDF lock poisoned".to_string())?;
-        *pending = Some(pdf);
+        pending.push_back(pdf);
         Ok(())
     }
 
@@ -502,7 +516,7 @@ impl StartupPdf {
             .pending
             .lock()
             .map_err(|_| "Startup PDF lock poisoned".to_string())?;
-        Ok(pending.take())
+        Ok(pending.pop_front())
     }
 }
 
@@ -660,8 +674,13 @@ fn opened_pdf_for_temp_upload(
     })
 }
 
+// Dialog commands are `async` on purpose: Tauri runs synchronous commands on the
+// main thread, and `blocking_pick_*` schedules the native panel onto the main
+// thread and blocks the caller until it answers. Called from the main thread that
+// deadlocks — on macOS the panel appears but never populates. `async` moves the
+// command onto the async runtime, so the panel gets the main thread it needs.
 #[tauri::command]
-fn open_pdf_dialog(
+async fn open_pdf_dialog(
     app: tauri::AppHandle,
     pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
     file_grants: tauri::State<'_, FileGrants>,
@@ -691,7 +710,7 @@ fn take_startup_pdf(
 }
 
 #[tauri::command]
-fn open_pdf_in_new_window_dialog(app: tauri::AppHandle) -> Result<bool, String> {
+async fn open_pdf_in_new_window_dialog(app: tauri::AppHandle) -> Result<bool, String> {
     let Some(path) = app
         .dialog()
         .file()
@@ -721,7 +740,7 @@ fn open_in_new_window(
 /// (`read_pdf_range(grant, 0, sizeBytes)`), above it the descriptors feed
 /// the path-op pipeline [R5-1][R7-2].
 #[tauri::command]
-fn pick_pdfs_for_add(
+async fn pick_pdfs_for_add(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedPdfs>, String> {
@@ -763,7 +782,7 @@ fn pick_pdfs_for_add(
 }
 
 #[tauri::command]
-fn pick_pdf_for_word(
+async fn pick_pdf_for_word(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedPdfForWord>, String> {
@@ -790,7 +809,7 @@ fn pick_pdf_for_word(
 }
 
 #[tauri::command]
-fn pick_docx_for_import(
+async fn pick_docx_for_import(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedDocxForImport>, String> {
@@ -1017,7 +1036,7 @@ async fn save_pdf_copy_dialog(
 }
 
 #[tauri::command]
-fn pick_output_directory(
+async fn pick_output_directory(
     app: tauri::AppHandle,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<Option<PickedDirectory>, String> {
@@ -1981,15 +2000,16 @@ fn validate_pdf_file_arg(path: &Path) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
-fn startup_pdf_arg_from_args<I>(args: I) -> (Option<PathBuf>, Vec<String>)
+fn startup_pdf_args_from_args<I>(args: I) -> (Vec<PathBuf>, Vec<String>)
 where
     I: IntoIterator<Item = PathBuf>,
 {
+    let mut paths = Vec::new();
     let mut diagnostics = Vec::new();
 
     for arg in args {
         match validate_pdf_file_arg(&arg) {
-            Ok(path) => return (Some(path), diagnostics),
+            Ok(path) => paths.push(path),
             Err(error) => diagnostics.push(format!(
                 "Ignoring startup file argument {}: {error}",
                 arg.to_string_lossy()
@@ -1997,7 +2017,40 @@ where
         }
     }
 
-    (None, diagnostics)
+    (paths, diagnostics)
+}
+
+#[cfg(target_os = "macos")]
+fn queue_opened_pdf_path(app: &tauri::AppHandle, path: PathBuf) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("app data dir unavailable: {error}"))?;
+    path_ops::adopt_containing_output_dir(&app_data_dir, &path);
+    // `try_state`, never `state`: this can run from tao's non-unwinding
+    // `application_open_urls` callback, where `state`'s panic would abort.
+    let pending_pdf_bytes = app
+        .try_state::<PendingPdfBytes>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let file_grants = app
+        .try_state::<FileGrants>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let startup_pdf = app
+        .try_state::<StartupPdf>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let pdf = opened_pdf_for_path(path, pending_pdf_bytes.inner(), file_grants.inner())?;
+    startup_pdf.push(pdf)?;
+    let _ = app.emit(OPENED_PDF_EVENT, ());
+    Ok(())
+}
+
+/// Record a Finder-open failure without panicking — same non-unwinding callback
+/// constraint as [`queue_opened_pdf_path`].
+#[cfg(target_os = "macos")]
+fn record_finder_open_error(app: &tauri::AppHandle, error: &str) {
+    if let Some(diagnostics) = app.try_state::<AppDiagnostics>() {
+        let _ = diagnostics.record_shell_event("finder-open", error);
+    }
 }
 
 fn open_in_new_window_path(path: &Path) -> Result<(), String> {
@@ -2085,14 +2138,30 @@ pub fn run() {
             app.manage(print::PrintJobs::default());
             app.manage(word::WordCapabilityCache::default());
 
-            let (startup_pdf_path, startup_arg_diagnostics) =
-                startup_pdf_arg_from_args(env::args_os().skip(1).map(PathBuf::from));
+            // Finder can hand us the launch document before this hook runs, in
+            // which case the open-urls handler parked the path rather than
+            // touching state that did not exist yet. It exists now — drain it.
+            #[cfg(target_os = "macos")]
+            {
+                let parked = EARLY_OPENED_PATHS
+                    .lock()
+                    .map(|mut paths| std::mem::take(&mut *paths))
+                    .unwrap_or_default();
+                for path in parked {
+                    if let Err(error) = queue_opened_pdf_path(app.handle(), path) {
+                        record_finder_open_error(app.handle(), &error);
+                    }
+                }
+            }
+
+            let (startup_pdf_paths, startup_arg_diagnostics) =
+                startup_pdf_args_from_args(env::args_os().skip(1).map(PathBuf::from));
             for message in startup_arg_diagnostics {
                 let _ = app
                     .state::<AppDiagnostics>()
                     .record_shell_event("startup-arg", &message);
             }
-            if let Some(path) = startup_pdf_path {
+            for path in startup_pdf_paths {
                 // An "Open in New Window" handoff points at the spawning
                 // instance's path-op output dir — adopt it so it survives
                 // sweeps after that instance exits (including our own below).
@@ -2103,7 +2172,7 @@ pub fn run() {
                     app.state::<FileGrants>().inner(),
                 ) {
                     Ok(pdf) => {
-                        let _ = app.state::<StartupPdf>().set(pdf);
+                        let _ = app.state::<StartupPdf>().push(pdf);
                     }
                     Err(error) => {
                         let _ = app.state::<AppDiagnostics>().record_shell_event(
@@ -2220,6 +2289,45 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build RaioPDF shell")
         .run(|app_handle, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                for url in urls {
+                    let Ok(path) = url.to_file_path() else {
+                        record_finder_open_error(app_handle, "Finder supplied a non-file URL");
+                        continue;
+                    };
+                    // Launch-by-open delivers this before `setup` manages the
+                    // state there is to queue into; park it for setup to drain.
+                    if app_handle.try_state::<StartupPdf>().is_none() {
+                        if let Ok(mut parked) = EARLY_OPENED_PATHS.lock() {
+                            parked.push(path);
+                        }
+                        continue;
+                    }
+                    if let Err(error) = queue_opened_pdf_path(app_handle, path) {
+                        record_finder_open_error(app_handle, &error);
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" => {
+                api.prevent_close();
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
             tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::Destroyed,
@@ -2250,6 +2358,12 @@ pub fn run() {
 }
 
 fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let policy = native_menu_policy(if cfg!(target_os = "macos") {
+        NativeMenuPlatform::MacOs
+    } else {
+        NativeMenuPlatform::Windows
+    });
+
     let file = SubmenuBuilder::new(app, "File")
         .text("file:open", "Open...")
         .text("file:open-new-window", "Open in New Window...")
@@ -2262,18 +2376,26 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("file:protect", "Create Protected Copy...")
         .text("file:properties", "Document Properties")
         .separator()
-        .text("file:export-diagnostics", "Export Diagnostics...")
-        .separator()
-        .text("file:preferences", "Preferences...")
-        .text("file:open-raio-to-ai", "Open Raio to AI...")
-        .separator()
-        .text("file:about-macrify", "About Macrify...")
-        .separator()
-        .text(MENU_EXIT, "Exit")
-        .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .text("edit:undo", "Undo")
-        .build()?;
+        .text("file:export-diagnostics", "Export Diagnostics...");
+    let file = if policy.file_has_app_commands {
+        file.separator()
+            .text("file:preferences", "Preferences...")
+            .text("file:open-raio-to-ai", "Open Raio to AI...")
+            .separator()
+            .text("file:about-macrify", "About Macrify...")
+            .separator()
+            .text(MENU_EXIT, "Exit")
+    } else {
+        file
+    }
+    .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit").text("edit:undo", "Undo");
+    let edit = if policy.native_edit_items {
+        edit.separator().cut().copy().paste().select_all()
+    } else {
+        edit
+    }
+    .build()?;
     let view = SubmenuBuilder::new(app, "View")
         .text("view:zoom-in", "Zoom In")
         .text("view:zoom-out", "Zoom Out")
@@ -2283,12 +2405,77 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         .text("help:open", "RaioPDF Help")
         .build()?;
 
-    MenuBuilder::new(app)
-        .item(&file)
-        .item(&edit)
-        .item(&view)
-        .item(&help)
-        .build()
+    let application = policy.app_menu.then(|| {
+        SubmenuBuilder::new(app, "RaioPDF")
+            .text("file:about-macrify", "About RaioPDF")
+            .separator()
+            .text("file:preferences", "Preferences...")
+            .text("file:open-raio-to-ai", "Open Raio to AI...")
+            .separator()
+            .services()
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit_with_text("Quit RaioPDF")
+            .build()
+    });
+    let application = application.transpose()?;
+    let window = policy.window_menu.then(|| {
+        SubmenuBuilder::new(app, "Window")
+            .minimize()
+            .fullscreen()
+            .separator()
+            .close_window()
+            .build()
+    });
+    let window = window.transpose()?;
+
+    let menu = MenuBuilder::new(app);
+    let menu = if let Some(application) = application.as_ref() {
+        menu.item(application)
+    } else {
+        menu
+    };
+    let menu = menu.item(&file).item(&edit).item(&view);
+    let menu = if let Some(window) = window.as_ref() {
+        menu.item(window)
+    } else {
+        menu
+    };
+    menu.item(&help).build()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeMenuPlatform {
+    Windows,
+    MacOs,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeMenuPolicy {
+    app_menu: bool,
+    file_has_app_commands: bool,
+    native_edit_items: bool,
+    window_menu: bool,
+}
+
+const fn native_menu_policy(platform: NativeMenuPlatform) -> NativeMenuPolicy {
+    match platform {
+        NativeMenuPlatform::Windows => NativeMenuPolicy {
+            app_menu: false,
+            file_has_app_commands: true,
+            native_edit_items: false,
+            window_menu: false,
+        },
+        NativeMenuPlatform::MacOs => NativeMenuPolicy {
+            app_menu: true,
+            file_has_app_commands: false,
+            native_edit_items: true,
+            window_menu: true,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -2362,9 +2549,9 @@ mod tests {
         let ignored = dir.path().join("notes.txt");
         fs::write(&ignored, b"not a pdf").expect("write text");
 
-        let (path, diagnostics) = startup_pdf_arg_from_args(vec![ignored, pdf.clone()]);
+        let (paths, diagnostics) = startup_pdf_args_from_args(vec![ignored, pdf.clone()]);
 
-        assert_eq!(path, Some(pdf));
+        assert_eq!(paths, vec![pdf]);
         assert_eq!(diagnostics.len(), 1);
     }
 
@@ -2373,10 +2560,72 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let missing = dir.path().join("missing.pdf");
 
-        let (path, diagnostics) = startup_pdf_arg_from_args(vec![missing]);
+        let (paths, diagnostics) = startup_pdf_args_from_args(vec![missing]);
 
-        assert!(path.is_none());
+        assert!(paths.is_empty());
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn startup_pdf_queue_preserves_finder_order() {
+        let queue = StartupPdf::default();
+        let opened = |name: &str| OpenedPdf {
+            name: name.to_string(),
+            file_grant: format!("grant-{name}"),
+            size_bytes: 1,
+            bytes_token: None,
+            threshold_bytes: 2,
+        };
+
+        queue.push(opened("first.pdf")).expect("queue first");
+        queue.push(opened("second.pdf")).expect("queue second");
+
+        assert_eq!(queue.take().expect("take first").unwrap().name, "first.pdf");
+        assert_eq!(
+            queue.take().expect("take second").unwrap().name,
+            "second.pdf"
+        );
+        assert!(queue.take().expect("take empty").is_none());
+    }
+
+    #[test]
+    fn startup_pdf_args_queue_every_valid_pdf() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.PDF");
+        fs::write(&first, b"%PDF-1.7").expect("write first");
+        fs::write(&second, b"%PDF-1.7").expect("write second");
+
+        let (paths, diagnostics) = startup_pdf_args_from_args(vec![first.clone(), second.clone()]);
+
+        assert_eq!(paths, vec![first, second]);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn windows_menu_keeps_existing_file_commands() {
+        assert_eq!(
+            native_menu_policy(NativeMenuPlatform::Windows),
+            NativeMenuPolicy {
+                app_menu: false,
+                file_has_app_commands: true,
+                native_edit_items: false,
+                window_menu: false,
+            }
+        );
+    }
+
+    #[test]
+    fn macos_menu_uses_application_and_window_sections() {
+        assert_eq!(
+            native_menu_policy(NativeMenuPlatform::MacOs),
+            NativeMenuPolicy {
+                app_menu: true,
+                file_has_app_commands: false,
+                native_edit_items: true,
+                window_menu: true,
+            }
+        );
     }
 
     #[test]

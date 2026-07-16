@@ -178,7 +178,7 @@ app, resolved at runtime and shown to the user in the "Open Raio to AI" snippet:
   This intentionally uses **bundled Node** instead of Node SEA. SEA would require
   proving the full ESM dependency graph and pdf.js asset loading inside a blob;
   the launcher/runtime split keeps the installed connector inspectable and keeps
-  pdf.js assets as ordinary files. `installer/assemble-payload.sh` pins and
+  pdf.js assets as ordinary files. `installer/assemble-windows-x64.sh` pins and
   copies `node.exe`, `installer/build-mcp-runtime.mjs` bundles the MCP JS
   entrypoint with `esbuild`, and the MCP pdf.js loader resolves `cmaps/`,
   `standard_fonts/`, and `wasm/` from the installed payload before falling back

@@ -52,7 +52,14 @@ const engineHostBin =
   path.join(repoRoot, "target", "release", engineHostName);
 const payloadDir =
   process.env.RAIOPDF_ENGINE_PAYLOAD_DIR ??
-  path.join(repoRoot, "apps", "shell", "src-tauri", "payload");
+  path.join(
+    repoRoot,
+    "apps",
+    "shell",
+    "src-tauri",
+    "payload",
+    isWindows ? "windows-x64" : "macos-arm64",
+  );
 
 // The connector we drive is the exact artifact that ships: the esbuild-bundled
 // runtime under the assembled payload (produced by `installer/build-mcp-runtime.mjs`
@@ -60,8 +67,13 @@ const payloadDir =
 // what the `raiopdf-mcp` launcher runs — NOT the raw tsc `apps/mcp/dist/index.js`,
 // which relies on extensionless workspace imports esbuild resolves at bundle time.
 const bundledConnector = path.join(payloadDir, "mcp", "app", "index.mjs");
-const bundledNode = path.join(payloadDir, "mcp", "node", isWindows ? "node.exe" : "node");
-const nodeBin = existsSync(bundledNode) ? bundledNode : process.execPath;
+const bundledNodeCandidates = isWindows
+  ? [path.join(payloadDir, "mcp", "node", "node.exe")]
+  : [
+      path.join(payloadDir, "mcp", "node", "bin", "node"),
+      path.join(payloadDir, "mcp", "node", "node"),
+    ];
+const nodeBin = bundledNodeCandidates.find((candidate) => existsSync(candidate)) ?? process.execPath;
 
 // process.env is Record<string, string | undefined>; the SDK transport's env wants
 // Record<string, string>. Drop undefined values once, at module scope.
@@ -77,8 +89,17 @@ function commandPath(command: string): string | undefined {
   }
 }
 
-function existingEnvFile(key: string, fallbackCommand: string): Record<string, string> {
+function existingEnvFile(
+  key: string,
+  payloadRelative: readonly string[],
+  fallbackCommand: string,
+): Record<string, string> {
   if (process.env[key]?.trim()) return {};
+  // Prefer the bundled payload tool so the canary exercises exactly what ships:
+  // leaving the override unset lets the engine-host discover the bundled binary
+  // (for OCRmyPDF, the wrapper that sets TESSDATA_PREFIX for the source-built
+  // tesseract). Fall back to a system tool only when the payload lacks it.
+  if (existsSync(path.join(payloadDir, ...payloadRelative))) return {};
   const found = commandPath(fallbackCommand);
   return found ? { [key]: found } : {};
 }
@@ -108,9 +129,9 @@ const DEV_ENGINE_TOOLCHAIN_ENV: Record<string, string> = isWindows
   ? {}
   : {
       RAIOPDF_ENGINE_JAVA: process.env.RAIOPDF_ENGINE_JAVA?.trim() || "java",
-      ...existingEnvFile("RAIOPDF_ENGINE_QPDF", "qpdf"),
-      ...existingEnvFile("RAIOPDF_ENGINE_GHOSTSCRIPT", "gs"),
-      ...existingEnvFile("RAIOPDF_ENGINE_OCRMYPDF", "ocrmypdf"),
+      ...existingEnvFile("RAIOPDF_ENGINE_QPDF", ["ocr", "qpdf", "bin", "qpdf"], "qpdf"),
+      ...existingEnvFile("RAIOPDF_ENGINE_GHOSTSCRIPT", ["ocr", "gs", "bin", "gs"], "gs"),
+      ...existingEnvFile("RAIOPDF_ENGINE_OCRMYPDF", ["ocr", "ocrmypdf"], "ocrmypdf"),
     };
 
 // The tools the connector advertises. Canonical count lives in docs/MCP.md; this set

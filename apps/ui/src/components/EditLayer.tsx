@@ -2520,7 +2520,6 @@ function FormFieldOverlay({
             className="edit-layer__form-field-input"
             aria-label={`Initial value for ${edit.name}`}
             value={edit.initialValue ?? ""}
-            onPointerDown={stopFieldInteraction}
             onChange={(event) => onChange({ ...edit, initialValue: event.target.value })}
           />
         ) : (
@@ -2528,7 +2527,6 @@ function FormFieldOverlay({
             className="edit-layer__form-field-input"
             aria-label={`Initial value for ${edit.name}`}
             value={edit.initialValue ?? ""}
-            onPointerDown={stopFieldInteraction}
             onChange={(event) => onChange({ ...edit, initialValue: event.target.value })}
           />
         )
@@ -2538,7 +2536,6 @@ function FormFieldOverlay({
           type="checkbox"
           aria-label={`Initial value for ${edit.name}`}
           checked={edit.initialValue ?? false}
-          onPointerDown={stopFieldInteraction}
           onChange={(event) => onChange({ ...edit, initialValue: event.target.checked })}
         />
       )}

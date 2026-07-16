@@ -613,6 +613,48 @@ describe("EditLayer shape removal", () => {
     expect(checkbox?.checked).toBe(true);
   });
 
+  it("selects and drags a reusable text field through its value input", async () => {
+    await renderEditLayer(
+      [
+        {
+          kind: "formField",
+          fieldType: "text",
+          id: "client-name",
+          name: "client.name",
+          pageIndex: 0,
+          rect: { x: 20, y: 20, w: 120, h: 24 },
+          initialValue: "Jane Doe",
+        },
+      ],
+      "select",
+    );
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const valueInput = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-input");
+    expect(field).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+
+    await act(async () => {
+      dispatchPointerEvent(valueInput!, "pointerdown", 25, 25);
+      dispatchPointerEvent(valueInput!, "pointerup", 25, 25);
+      await Promise.resolve();
+    });
+
+    expect(field?.dataset.selected).toBe("true");
+    const initialLeft = Number.parseFloat(field?.style.left ?? "0");
+    const initialTop = Number.parseFloat(field?.style.top ?? "0");
+
+    await act(async () => {
+      dispatchPointerEvent(valueInput!, "pointerdown", 25, 25);
+      dispatchPointerEvent(valueInput!, "pointermove", 45, 35);
+      dispatchPointerEvent(valueInput!, "pointerup", 45, 35);
+      await Promise.resolve();
+    });
+
+    expect(field?.style.left).toBe(`${initialLeft + 20}px`);
+    expect(field?.style.top).toBe(`${initialTop + 10}px`);
+  });
+
   it("shows an armed image ghost at the pointer before placement", async () => {
     await renderEditLayer([], "image", {
       armedImage: {

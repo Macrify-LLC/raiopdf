@@ -580,7 +580,9 @@ describe("EditLayer shape removal", () => {
     expect(field?.style.width).toBe("180px");
     expect(field?.style.height).toBe("24px");
     expect(valueInput?.value).toBe("");
-    expect(nameInput?.value).toMatch(/^raio\.text\.edit-/);
+    expect(nameInput?.value).toMatch(
+      /^raio\.text\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   it("places and fills a reusable checkbox in form-authoring mode", async () => {

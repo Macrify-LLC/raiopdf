@@ -803,6 +803,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
       const id = newEditId();
       const fieldType = tool === "formText" ? "text" : "checkbox";
+      const fieldName = `raio.${fieldType}.${crypto.randomUUID()}`;
       const widthPt = fieldType === "text"
         ? DEFAULT_FORM_TEXT_WIDTH_PT
         : DEFAULT_FORM_CHECKBOX_SIZE_PT;
@@ -825,7 +826,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               kind: "formField",
               fieldType,
               id,
-              name: `raio.text.${id}`,
+              name: fieldName,
               pageIndex,
               rect,
               initialValue: "",
@@ -835,7 +836,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               kind: "formField",
               fieldType,
               id,
-              name: `raio.checkbox.${id}`,
+              name: fieldName,
               pageIndex,
               rect,
               initialValue: false,

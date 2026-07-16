@@ -3342,6 +3342,16 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       if (edit.fieldType === "text" && edit.fontSizePt !== undefined) {
         assertPositiveNumber(edit.fontSizePt, "fontSizePt");
       }
+      if (
+        edit.fieldType === "checkbox" &&
+        edit.initialValue !== undefined &&
+        typeof edit.initialValue !== "boolean"
+      ) {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Checkbox initial value must be a boolean.",
+        );
+      }
       return;
   }
 }

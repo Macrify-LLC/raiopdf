@@ -1117,6 +1117,24 @@ describe("LocalPdfEngine.applyEdits", () => {
     });
   });
 
+  it("rejects non-boolean checkbox defaults at the runtime boundary", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[300, 400]]));
+    const invalidDefault = {
+      type: "formField",
+      fieldType: "checkbox",
+      name: "terms.accepted",
+      pageIndex: 0,
+      rect: { x: 40, y: 300, w: 18, h: 18 },
+      initialValue: "true",
+    } as unknown as PdfEdit;
+
+    await expect(applyBakedEdits(engine, document, [invalidDefault])).rejects.toMatchObject({
+      code: "INVALID_DOCUMENT",
+      message: "Checkbox initial value must be a boolean.",
+    });
+  });
+
   it("rejects form values for unknown fields", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createFormPdf());

@@ -139,6 +139,28 @@ describe("useEditing pin state", () => {
     },
   );
 
+  it.each(["formText", "formCheckbox"] as const)(
+    "clears inherited %s mode when a tab snapshot is restored",
+    async (tool) => {
+      const getEditing = renderHookValue();
+
+      await act(async () => {
+        getEditing().addEdit(textBoxEdit("streamed-tab-edit"));
+        await Promise.resolve();
+      });
+      const snapshot = getEditing().captureDocumentState();
+
+      await act(async () => {
+        getEditing().setTool(tool);
+        getEditing().restoreDocumentState(snapshot);
+        await Promise.resolve();
+      });
+
+      expect(getEditing().tool).toBe("select");
+      expect(statuses(getEditing())).toEqual({ "streamed-tab-edit": "draft" });
+    },
+  );
+
   it("keeps authored fields reusable when saving existing form values", async () => {
     const getEditing = renderHookValue();
 

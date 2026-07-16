@@ -64,6 +64,10 @@ const MAX_SAVED_SIGNATURES = 12;
 const MAX_SAVED_SIGNATURE_BYTES = 500 * 1024;
 const MAX_SAVED_SIGNATURES_BYTES = 2 * 1024 * 1024;
 
+function resetFormAuthoringTool(tool: EditToolId): EditToolId {
+  return tool === "formText" || tool === "formCheckbox" ? "select" : tool;
+}
+
 export interface EditingState {
   tool: EditToolId;
   setTool: (tool: EditToolId) => void;
@@ -471,9 +475,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const collectMarkupAnnotationSavePlan = useCallback(() => annotationSavePlan, [annotationSavePlan]);
 
   const resetForDocument = useCallback(() => {
-    setToolState((current) =>
-      current === "formText" || current === "formCheckbox" ? "select" : current,
-    );
+    setToolState(resetFormAuthoringTool);
     setPendingEdits([]);
     setImportedAnnotIds(new Set());
     setFormValues({});
@@ -488,6 +490,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }), [formValues, importedAnnotIds, pendingEdits]);
 
   const restoreDocumentState = useCallback((snapshot: EditingDocumentSnapshot) => {
+    setToolState(resetFormAuthoringTool);
     setPendingEdits(snapshot.pendingEdits);
     setImportedAnnotIds(snapshot.importedAnnotIds);
     setFormValues({ ...snapshot.formValues });

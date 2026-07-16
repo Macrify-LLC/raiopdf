@@ -39,6 +39,18 @@ const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
 #[cfg(target_os = "macos")]
 const OPENED_PDF_EVENT: &str = "raiopdf-opened-pdf";
+/// Documents Finder hands us before `setup` has managed the app state.
+///
+/// Launching by double-clicking a PDF delivers the open-documents Apple Event
+/// before the setup hook runs, so `State::<T>()` — which panics when its type
+/// isn't managed yet — would fire inside tao's Objective-C `application_open_urls`
+/// callback. A panic cannot unwind across that frame, so it aborts the process
+/// instead of opening the document. Park the path here and let `setup` drain it
+/// once the state it needs exists.
+#[cfg(target_os = "macos")]
+static EARLY_OPENED_PATHS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+#[cfg(target_os = "macos")]
+const STATE_NOT_READY: &str = "app state not ready yet";
 const HEADER_FILE_GRANT: &str = "x-raio-file-grant";
 const HEADER_DIRECTORY_GRANT: &str = "x-raio-directory-grant";
 const HEADER_SUGGESTED_NAME: &str = "x-raio-suggested-name";
@@ -662,8 +674,13 @@ fn opened_pdf_for_temp_upload(
     })
 }
 
+// Dialog commands are `async` on purpose: Tauri runs synchronous commands on the
+// main thread, and `blocking_pick_*` schedules the native panel onto the main
+// thread and blocks the caller until it answers. Called from the main thread that
+// deadlocks — on macOS the panel appears but never populates. `async` moves the
+// command onto the async runtime, so the panel gets the main thread it needs.
 #[tauri::command]
-fn open_pdf_dialog(
+async fn open_pdf_dialog(
     app: tauri::AppHandle,
     pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
     file_grants: tauri::State<'_, FileGrants>,
@@ -693,7 +710,7 @@ fn take_startup_pdf(
 }
 
 #[tauri::command]
-fn open_pdf_in_new_window_dialog(app: tauri::AppHandle) -> Result<bool, String> {
+async fn open_pdf_in_new_window_dialog(app: tauri::AppHandle) -> Result<bool, String> {
     let Some(path) = app
         .dialog()
         .file()
@@ -723,7 +740,7 @@ fn open_in_new_window(
 /// (`read_pdf_range(grant, 0, sizeBytes)`), above it the descriptors feed
 /// the path-op pipeline [R5-1][R7-2].
 #[tauri::command]
-fn pick_pdfs_for_add(
+async fn pick_pdfs_for_add(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedPdfs>, String> {
@@ -765,7 +782,7 @@ fn pick_pdfs_for_add(
 }
 
 #[tauri::command]
-fn pick_pdf_for_word(
+async fn pick_pdf_for_word(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedPdfForWord>, String> {
@@ -792,7 +809,7 @@ fn pick_pdf_for_word(
 }
 
 #[tauri::command]
-fn pick_docx_for_import(
+async fn pick_docx_for_import(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedDocxForImport>, String> {
@@ -1019,7 +1036,7 @@ async fn save_pdf_copy_dialog(
 }
 
 #[tauri::command]
-fn pick_output_directory(
+async fn pick_output_directory(
     app: tauri::AppHandle,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<Option<PickedDirectory>, String> {
@@ -2010,14 +2027,30 @@ fn queue_opened_pdf_path(app: &tauri::AppHandle, path: PathBuf) -> Result<(), St
         .app_data_dir()
         .map_err(|error| format!("app data dir unavailable: {error}"))?;
     path_ops::adopt_containing_output_dir(&app_data_dir, &path);
-    let pdf = opened_pdf_for_path(
-        path,
-        app.state::<PendingPdfBytes>().inner(),
-        app.state::<FileGrants>().inner(),
-    )?;
-    app.state::<StartupPdf>().push(pdf)?;
+    // `try_state`, never `state`: this can run from tao's non-unwinding
+    // `application_open_urls` callback, where `state`'s panic would abort.
+    let pending_pdf_bytes = app
+        .try_state::<PendingPdfBytes>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let file_grants = app
+        .try_state::<FileGrants>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let startup_pdf = app
+        .try_state::<StartupPdf>()
+        .ok_or_else(|| STATE_NOT_READY.to_string())?;
+    let pdf = opened_pdf_for_path(path, pending_pdf_bytes.inner(), file_grants.inner())?;
+    startup_pdf.push(pdf)?;
     let _ = app.emit(OPENED_PDF_EVENT, ());
     Ok(())
+}
+
+/// Record a Finder-open failure without panicking — same non-unwinding callback
+/// constraint as [`queue_opened_pdf_path`].
+#[cfg(target_os = "macos")]
+fn record_finder_open_error(app: &tauri::AppHandle, error: &str) {
+    if let Some(diagnostics) = app.try_state::<AppDiagnostics>() {
+        let _ = diagnostics.record_shell_event("finder-open", error);
+    }
 }
 
 fn open_in_new_window_path(path: &Path) -> Result<(), String> {
@@ -2104,6 +2137,22 @@ pub fn run() {
             app.manage(path_ops::PathOpJobs::default());
             app.manage(print::PrintJobs::default());
             app.manage(word::WordCapabilityCache::default());
+
+            // Finder can hand us the launch document before this hook runs, in
+            // which case the open-urls handler parked the path rather than
+            // touching state that did not exist yet. It exists now — drain it.
+            #[cfg(target_os = "macos")]
+            {
+                let parked = EARLY_OPENED_PATHS
+                    .lock()
+                    .map(|mut paths| std::mem::take(&mut *paths))
+                    .unwrap_or_default();
+                for path in parked {
+                    if let Err(error) = queue_opened_pdf_path(app.handle(), path) {
+                        record_finder_open_error(app.handle(), &error);
+                    }
+                }
+            }
 
             let (startup_pdf_paths, startup_arg_diagnostics) =
                 startup_pdf_args_from_args(env::args_os().skip(1).map(PathBuf::from));
@@ -2243,14 +2292,20 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Opened { urls } => {
                 for url in urls {
-                    let result = url
-                        .to_file_path()
-                        .map_err(|()| "Finder supplied a non-file URL".to_string())
-                        .and_then(|path| queue_opened_pdf_path(app_handle, path));
-                    if let Err(error) = result {
-                        let _ = app_handle
-                            .state::<AppDiagnostics>()
-                            .record_shell_event("finder-open", &error);
+                    let Ok(path) = url.to_file_path() else {
+                        record_finder_open_error(app_handle, "Finder supplied a non-file URL");
+                        continue;
+                    };
+                    // Launch-by-open delivers this before `setup` manages the
+                    // state there is to queue into; park it for setup to drain.
+                    if app_handle.try_state::<StartupPdf>().is_none() {
+                        if let Ok(mut parked) = EARLY_OPENED_PATHS.lock() {
+                            parked.push(path);
+                        }
+                        continue;
+                    }
+                    if let Err(error) = queue_opened_pdf_path(app_handle, path) {
+                        record_finder_open_error(app_handle, &error);
                     }
                 }
             }

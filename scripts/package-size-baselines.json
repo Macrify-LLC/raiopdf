@@ -19,7 +19,7 @@
       "installer": null,
       "payload": {
         "baselineVersion": "0.1.0",
-        "baselineBytes": 762966770,
+        "baselineBytes": 762971330,
         "maxGrowthBytes": 52428800,
         "maxGrowthPercent": 5
       }

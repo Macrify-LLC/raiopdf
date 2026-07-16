@@ -49,6 +49,8 @@ REQUIRED_PAYLOAD_FILES=(
   "ocr/tesseract/bin/tesseract"
   "ocr/tesseract/share/tessdata/eng.traineddata"
   "ocr/gs/bin/gs"
+  "ocr/gs/lib/PDFA_def.ps"
+  "ocr/gs/iccprofiles/srgb.icc"
   "ocr/qpdf/bin/qpdf"
   "legal/THIRD-PARTY-NOTICES.txt"
   "legal/COMPONENT-MANIFEST.json"
@@ -265,7 +267,8 @@ build_tesseract() {
 }
 
 build_ghostscript() {
-  if [[ -x "$PREFIX_GS/bin/gs" ]] && "$PREFIX_GS/bin/gs" -v >/dev/null 2>&1; then
+  local icc_dest="$PREFIX_GS/share/ghostscript/$GHOSTSCRIPT_VERSION/iccprofiles/srgb.icc"
+  if [[ -x "$PREFIX_GS/bin/gs" && -f "$icc_dest" ]] && "$PREFIX_GS/bin/gs" -v >/dev/null 2>&1; then
     echo "Using cached ghostscript build" >&2
     return
   fi
@@ -284,6 +287,11 @@ build_ghostscript() {
       --without-tesseract --with-libpaper=no --disable-fontconfig
     make -j"$NCPU"
     make install )
+  # Ghostscript bakes its ICC profiles into %rom% and does not install them as
+  # files, but the engine's PDF/A path needs srgb.icc on disk (PDFA_def.ps opens
+  # it by relative name). Persist it from the source tree.
+  mkdir -p "$PREFIX_GS/share/ghostscript/$GHOSTSCRIPT_VERSION/iccprofiles"
+  cp "$work/iccprofiles/srgb.icc" "$PREFIX_GS/share/ghostscript/$GHOSTSCRIPT_VERSION/iccprofiles/srgb.icc"
 }
 
 build_qpdf() {
@@ -319,6 +327,11 @@ stage_native_ocr_tools() {
   mkdir -p -- "$PAYLOAD_DIR/ocr/gs/bin" "$PAYLOAD_DIR/ocr/qpdf/bin" \
     "$PAYLOAD_DIR/ocr/tesseract/bin" "$PAYLOAD_DIR/ocr/tesseract/share/tessdata"
   cp -- "$PREFIX_GS/bin/gs" "$PAYLOAD_DIR/ocr/gs/bin/gs"
+  # PDF/A conversion resources the engine copies into its work dir: the sRGB
+  # output-intent profile and the stock PDF/A definition (found relative to gs).
+  mkdir -p "$PAYLOAD_DIR/ocr/gs/lib" "$PAYLOAD_DIR/ocr/gs/iccprofiles"
+  cp -- "$PREFIX_GS/share/ghostscript/$GHOSTSCRIPT_VERSION/lib/PDFA_def.ps" "$PAYLOAD_DIR/ocr/gs/lib/PDFA_def.ps"
+  cp -- "$PREFIX_GS/share/ghostscript/$GHOSTSCRIPT_VERSION/iccprofiles/srgb.icc" "$PAYLOAD_DIR/ocr/gs/iccprofiles/srgb.icc"
   cp -- "$PREFIX_QPDF/bin/qpdf" "$PAYLOAD_DIR/ocr/qpdf/bin/qpdf"
   cp -- "$PREFIX_TESS/bin/tesseract" "$PAYLOAD_DIR/ocr/tesseract/bin/tesseract"
   chmod +x "$PAYLOAD_DIR/ocr/gs/bin/gs" "$PAYLOAD_DIR/ocr/qpdf/bin/qpdf" \

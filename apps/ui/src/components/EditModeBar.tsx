@@ -27,6 +27,8 @@ const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
   underline: "Underline mode",
   strikethrough: "Strikethrough mode",
   textBox: "Text box mode",
+  formText: "Create fillable text fields",
+  formCheckbox: "Create fillable checkboxes",
   callout: "Callout mode",
   image: "Image mode",
   comment: "Comment mode",
@@ -501,6 +503,10 @@ function getToolHint(editing: EditingState): string {
       return "Drag over text to strike through. Double-click a strikethrough to remove it.";
     case "textBox":
       return "Click the page to place a text box. Enter commits, Esc cancels.";
+    case "formText":
+      return "Click the page to place a reusable text field, then type its initial value.";
+    case "formCheckbox":
+      return "Click the page to place a reusable checkbox.";
     case "callout":
       return "Drag a box, click the target point, then type. Use the × to remove; pin to lock it.";
     case "image":

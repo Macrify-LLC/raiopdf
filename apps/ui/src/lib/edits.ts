@@ -33,6 +33,8 @@ export type EditToolId =
   | "underline"
   | "strikethrough"
   | "textBox"
+  | "formText"
+  | "formCheckbox"
   | "callout"
   | "image"
   | "comment"
@@ -128,6 +130,26 @@ export interface PendingComment extends PendingEditBase {
   text: string;
 }
 
+type PendingFormFieldBase = PendingEditBase & {
+  kind: "formField";
+  name: string;
+  rect: PdfEditRect;
+  required?: boolean;
+  readOnly?: boolean;
+};
+
+export type PendingFormField =
+  | (PendingFormFieldBase & {
+      fieldType: "text";
+      initialValue?: string;
+      multiline?: boolean;
+      fontSizePt?: number;
+    })
+  | (PendingFormFieldBase & {
+      fieldType: "checkbox";
+      initialValue?: boolean;
+    });
+
 export interface PendingInk extends PendingEditBase {
   kind: "ink";
   strokes: ReadonlyArray<readonly PdfEditPoint[]>;
@@ -160,6 +182,7 @@ export type PendingEdit =
   | PendingCallout
   | PendingStamp
   | PendingComment
+  | PendingFormField
   | PendingInk
   | PendingShape;
 
@@ -280,6 +303,31 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
         at: edit.at,
         text: edit.text,
       };
+    case "formField": {
+      const common = {
+        type: "formField" as const,
+        fieldType: edit.fieldType,
+        name: edit.name,
+        pageIndex: edit.pageIndex,
+        rect: edit.rect,
+        ...(edit.required ? { required: true } : {}),
+        ...(edit.readOnly ? { readOnly: true } : {}),
+      };
+
+      return edit.fieldType === "text"
+        ? {
+            ...common,
+            fieldType: "text",
+            ...(edit.initialValue !== undefined ? { initialValue: edit.initialValue } : {}),
+            ...(edit.multiline ? { multiline: true } : {}),
+            ...(edit.fontSizePt !== undefined ? { fontSizePt: edit.fontSizePt } : {}),
+          }
+        : {
+            ...common,
+            fieldType: "checkbox",
+            ...(edit.initialValue !== undefined ? { initialValue: edit.initialValue } : {}),
+          };
+    }
     case "ink":
       return {
         type: "ink",
@@ -478,6 +526,11 @@ export function describePendingEdit(edit: PendingEdit): {
       return { label: "Signature", detail: null };
     case "comment":
       return { label: "Comment", detail: excerpt(edit.text) };
+    case "formField":
+      return {
+        label: edit.fieldType === "text" ? "Fillable text field" : "Fillable checkbox",
+        detail: edit.name,
+      };
     case "ink":
       return { label: "Drawing", detail: null };
     case "shape":

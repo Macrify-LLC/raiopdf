@@ -21,6 +21,7 @@ import {
   type PendingCallout,
   type PendingComment,
   type PendingEdit,
+  type PendingFormField,
   type PendingShape,
   type PendingStamp,
   type PendingTextBox,
@@ -82,6 +83,9 @@ const ARROW_HEAD_MIN_PT = 8;
 const ARROW_HEAD_MAX_PT = 32;
 const DEFAULT_TEXT_BOX_WIDTH_PT = 180;
 const TEXT_BOX_PADDING_PT = 4;
+const DEFAULT_FORM_TEXT_WIDTH_PT = 180;
+const DEFAULT_FORM_TEXT_HEIGHT_PT = 24;
+const DEFAULT_FORM_CHECKBOX_SIZE_PT = 18;
 
 interface TextDraft {
   kind: "textBox" | "callout";
@@ -792,6 +796,61 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
       return;
     }
 
+    if (tool === "formText" || tool === "formCheckbox") {
+      if (!guardPlacement()) {
+        return;
+      }
+
+      const id = newEditId();
+      const fieldType = tool === "formText" ? "text" : "checkbox";
+      const fieldName = `raio.${fieldType}.${crypto.randomUUID()}`;
+      const widthPt = fieldType === "text"
+        ? DEFAULT_FORM_TEXT_WIDTH_PT
+        : DEFAULT_FORM_CHECKBOX_SIZE_PT;
+      const heightPt = fieldType === "text"
+        ? DEFAULT_FORM_TEXT_HEIGHT_PT
+        : DEFAULT_FORM_CHECKBOX_SIZE_PT;
+      const rect = viewportRectToPdfRect(
+        {
+          left: clamp(point.x, 0, Math.max(0, viewport.width - widthPt * scale)),
+          top: clamp(point.y, 0, Math.max(0, viewport.height - heightPt * scale)),
+          width: widthPt * scale,
+          height: heightPt * scale,
+        },
+        viewport,
+      );
+
+      addEdit(
+        fieldType === "text"
+          ? {
+              kind: "formField",
+              fieldType,
+              id,
+              name: fieldName,
+              pageIndex,
+              rect,
+              initialValue: "",
+              fontSizePt: 12,
+            }
+          : {
+              kind: "formField",
+              fieldType,
+              id,
+              name: fieldName,
+              pageIndex,
+              rect,
+              initialValue: false,
+            },
+      );
+      setSelectedId(id);
+      editing.setMessage(
+        fieldType === "text"
+          ? "Fillable text field placed. Type a value or adjust its properties."
+          : "Fillable checkbox placed. Check it for an initial value or adjust its properties.",
+      );
+      return;
+    }
+
     if (tool === "comment") {
       if (!guardPlacement()) {
         return;
@@ -1033,7 +1092,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   function beginItemDrag(
     event: ReactPointerEvent<HTMLElement | SVGElement>,
-    edit: PendingTextBox | PendingStamp | PendingShape | PendingCallout,
+    edit: PendingTextBox | PendingStamp | PendingShape | PendingCallout | PendingFormField,
     mode: "move" | "resize",
     corner: ResizeCorner | null = null,
   ) {
@@ -1166,6 +1225,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
         edit.kind === "image" ||
         edit.kind === "signature" ||
         edit.kind === "callout" ||
+        edit.kind === "formField" ||
         (edit.kind === "shape" && !isLinePendingShape(edit))
           ? { ...edit, rect: pdfRect }
           : edit,
@@ -1409,6 +1469,33 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               onTextStyleChange={(style) =>
                 updateEdit(edit.id, (current) =>
                   current.kind === "textBox" ? { ...current, ...style } : current,
+                )
+              }
+              onRemove={() => removeEdit(edit.id)}
+              onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
+            />
+          );
+        }
+
+        if (edit.kind === "formField") {
+          return (
+            <FormFieldOverlay
+              key={edit.id}
+              edit={edit}
+              viewport={viewport}
+              selected={selectedId === edit.id}
+              previewRect={
+                dragPreview?.id === edit.id && dragPreview.kind === "rect"
+                  ? dragPreview.rect
+                  : null
+              }
+              onPointerDown={(event) => beginItemDrag(event, edit, "move")}
+              onPointerMove={handleItemPointerMove}
+              onPointerUp={handleItemPointerUp}
+              onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
+              onChange={(next) =>
+                updateEdit(edit.id, (current) =>
+                  current.kind === "formField" ? next : current,
                 )
               }
               onRemove={() => removeEdit(edit.id)}
@@ -1665,6 +1752,7 @@ function editHitTest(edit: PendingEdit, point: PdfSpacePoint): boolean {
     case "callout":
     case "image":
     case "signature":
+    case "formField":
       return pdfRectContainsPoint(edit.rect, point);
     case "comment":
       return pdfRectContainsPoint(
@@ -2379,6 +2467,144 @@ function computeCalloutLeaderAnchor(rect: ViewportRect, tip: ViewportPoint): Vie
     case "bottom":
       return { x: tip.x, y: maxY };
   }
+}
+
+function FormFieldOverlay({
+  edit,
+  viewport,
+  selected,
+  previewRect,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onResizeStart,
+  onChange,
+  onRemove,
+  onTogglePin,
+}: {
+  edit: PendingFormField;
+  viewport: PageViewport;
+  selected: boolean;
+  previewRect: ViewportRect | null;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
+  onChange: (edit: PendingFormField) => void;
+  onRemove: () => void;
+  onTogglePin: () => void;
+}) {
+  const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const pinned = edit.pinned === true;
+  const stopFieldInteraction = (event: ReactPointerEvent<HTMLElement>) => {
+    event.stopPropagation();
+  };
+
+  return (
+    <div
+      className="edit-layer__item edit-layer__form-field"
+      data-field-type={edit.fieldType}
+      data-selected={selected ? "true" : undefined}
+      data-status={edit.status}
+      data-pinned={pinned ? "true" : undefined}
+      data-required={edit.required ? "true" : undefined}
+      data-read-only={edit.readOnly ? "true" : undefined}
+      style={toOverlayStyle(rect)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      {edit.fieldType === "text" ? (
+        edit.multiline ? (
+          <textarea
+            className="edit-layer__form-field-input"
+            aria-label={`Initial value for ${edit.name}`}
+            value={edit.initialValue ?? ""}
+            onChange={(event) => onChange({ ...edit, initialValue: event.target.value })}
+          />
+        ) : (
+          <input
+            className="edit-layer__form-field-input"
+            aria-label={`Initial value for ${edit.name}`}
+            value={edit.initialValue ?? ""}
+            onChange={(event) => onChange({ ...edit, initialValue: event.target.value })}
+          />
+        )
+      ) : (
+        <input
+          className="edit-layer__form-field-checkbox"
+          type="checkbox"
+          aria-label={`Initial value for ${edit.name}`}
+          checked={edit.initialValue ?? false}
+          onChange={(event) => onChange({ ...edit, initialValue: event.target.checked })}
+        />
+      )}
+
+      {selected && !pinned ? (
+        <div
+          className="edit-layer__item-chrome edit-layer__form-field-chrome"
+          onPointerDown={stopFieldInteraction}
+        >
+          <label>
+            <span>Name</span>
+            <input
+              aria-label="Field name"
+              type="text"
+              value={edit.name}
+              onChange={(event) => onChange({ ...edit, name: event.target.value })}
+            />
+          </label>
+          {edit.fieldType === "text" ? (
+            <label>
+              <span>Size</span>
+              <input
+                aria-label="Field font size"
+                type="number"
+                min="1"
+                step="1"
+                value={edit.fontSizePt ?? 12}
+                onChange={(event) => {
+                  const fontSizePt = Number(event.target.value);
+                  if (Number.isFinite(fontSizePt) && fontSizePt > 0) {
+                    onChange({ ...edit, fontSizePt });
+                  }
+                }}
+              />
+            </label>
+          ) : null}
+          <label>
+            <input
+              type="checkbox"
+              checked={edit.required ?? false}
+              onChange={(event) => onChange({ ...edit, required: event.target.checked })}
+            />
+            Required
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={edit.readOnly ?? false}
+              onChange={(event) => onChange({ ...edit, readOnly: event.target.checked })}
+            />
+            Read-only
+          </label>
+          {edit.fieldType === "text" ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={edit.multiline ?? false}
+                onChange={(event) => onChange({ ...edit, multiline: event.target.checked })}
+              />
+              Multiline
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+
+      <PinControls pinned={pinned} onTogglePin={onTogglePin} onRemove={onRemove} />
+      {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
+    </div>
+  );
 }
 
 function TextBoxOverlay({

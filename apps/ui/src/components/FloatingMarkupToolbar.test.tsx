@@ -30,7 +30,7 @@ describe("FloatingMarkupToolbar", () => {
     const buttons = getButtons();
 
     expect(toolbar.getAttribute("aria-orientation")).toBe("horizontal");
-    expect(buttons).toHaveLength(14);
+    expect(buttons).toHaveLength(COMMAND_BAR_EDIT_TOOLS.length);
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(
       COMMAND_BAR_EDIT_TOOLS.map((tool) => tool.label),
     );

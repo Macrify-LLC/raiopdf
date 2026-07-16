@@ -15,6 +15,7 @@ import type {
   PdfEditPoint,
   PdfEditRect,
   PdfEngine,
+  PdfFormFieldEdit,
   PdfFormFieldValue,
   PdfFormValuesEdit,
   PdfHighlightEdit,
@@ -60,6 +61,7 @@ import type {
 } from "@raiopdf/engine-api";
 import { PdfEngineError, wrapTextBoxLines } from "@raiopdf/engine-api";
 import {
+  assessPdfAConversionImpact,
   createPdfOutlinePageItem,
   mapPdfOutlineItems,
   offsetPdfOutlineItems,
@@ -1066,6 +1068,8 @@ export class LocalPdfEngine implements PdfEngine {
     for (const edit of edits) {
       assertValidEdit(edit, pageCount);
     }
+    assertFormAuthoringSupported(output, edits);
+    assertFormFieldNamesAvailable(output, edits);
 
     const textBoxFonts = new Map<TextBoxFontKey, PDFFont>();
     const resolveTextBoxFont: TextBoxFontResolver = async (edit) => {
@@ -1080,7 +1084,14 @@ export class LocalPdfEngine implements PdfEngine {
       return font;
     };
 
-    for (const edit of edits) {
+    // Form values may refer to fields authored in this same transaction. Hoist
+    // all field creation while preserving the relative order of every group.
+    const orderedEdits = [
+      ...edits.filter((edit) => edit.type === "formField"),
+      ...edits.filter((edit) => edit.type !== "formField"),
+    ];
+
+    for (const edit of orderedEdits) {
       await applyEditInPlace(output, edit, resolveTextBoxFont, markupMode, markupAnnotationOptions);
     }
 
@@ -2181,6 +2192,9 @@ async function applyEditInPlace(
     case "comment":
       applyCommentEdit(pdf, edit);
       return;
+    case "formField":
+      applyFormFieldEdit(pdf, edit);
+      return;
     case "formValues":
       applyFormValuesEdit(pdf, edit);
       return;
@@ -3053,6 +3067,93 @@ function applyCommentEdit(pdf: PDFDocument, edit: PdfCommentEdit): void {
   addAnnotationToPage(page, annotation);
 }
 
+function applyFormFieldEdit(pdf: PDFDocument, edit: PdfFormFieldEdit): void {
+  const form = pdf.getForm();
+  const page = pdf.getPage(edit.pageIndex);
+
+  try {
+    let field: PDFField;
+    const widgetOptions = {
+      x: edit.rect.x,
+      y: edit.rect.y,
+      width: edit.rect.w,
+      height: edit.rect.h,
+      borderWidth: 0,
+    };
+
+    if (edit.fieldType === "text") {
+      const textField = form.createTextField(edit.name);
+      textField.addToPage(page, widgetOptions);
+      if (edit.multiline === true) textField.enableMultiline();
+      if (edit.fontSizePt !== undefined) textField.setFontSize(edit.fontSizePt);
+      if (edit.initialValue !== undefined) textField.setText(edit.initialValue);
+      field = textField;
+    } else {
+      const checkBox = form.createCheckBox(edit.name);
+      checkBox.addToPage(page, widgetOptions);
+      if (edit.initialValue === true) checkBox.check();
+      field = checkBox;
+    }
+
+    if (edit.required === true) field.enableRequired();
+    if (edit.readOnly === true) field.enableReadOnly();
+  } catch (error) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Form field "${edit.name}" could not be created.`,
+      { cause: error },
+    );
+  }
+}
+
+function assertFormFieldNamesAvailable(pdf: PDFDocument, edits: readonly PdfEdit[]): void {
+  if (!edits.some((edit) => edit.type === "formField")) return;
+
+  const knownNames = pdf.getForm().getFields().map((field) => field.getName());
+
+  for (const edit of edits) {
+    if (edit.type !== "formField") continue;
+
+    if (knownNames.includes(edit.name)) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `Form field "${edit.name}" already exists.`,
+      );
+    }
+
+    const incompatibleName = knownNames.find(
+      (name) => name.startsWith(`${edit.name}.`) || edit.name.startsWith(`${name}.`),
+    );
+    if (incompatibleName !== undefined) {
+      throw new PdfEngineError(
+        "INVALID_DOCUMENT",
+        `Form field "${edit.name}" conflicts with the existing field hierarchy at "${incompatibleName}".`,
+      );
+    }
+
+    knownNames.push(edit.name);
+  }
+}
+
+function assertFormAuthoringSupported(pdf: PDFDocument, edits: readonly PdfEdit[]): void {
+  if (!edits.some((edit) => edit.type === "formField")) return;
+
+  const acroForm = pdf.catalog.lookupMaybe(PDFName.of("AcroForm"), PDFDict);
+  if (acroForm?.has(PDFName.of("XFA"))) {
+    throw new PdfEngineError(
+      "UNSUPPORTED",
+      "Form fields cannot be authored in an XFA PDF.",
+    );
+  }
+
+  if (assessPdfAConversionImpact(pdf).signedSignatureFields > 0) {
+    throw new PdfEngineError(
+      "SIGNED_DOCUMENT",
+      "Form fields cannot be authored in a signed PDF.",
+    );
+  }
+}
+
 function applyFormValuesEdit(pdf: PDFDocument, edit: PdfFormValuesEdit): void {
   const form = pdf.getForm();
 
@@ -3228,6 +3329,19 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
       return;
     case "comment":
       assertNonEmptyEditText(edit.text, "Comment");
+      return;
+    case "formField":
+      assertNonEmptyEditText(edit.name, "Form field name");
+      assertEditRect(edit.rect);
+      if (edit.fieldType !== "text" && edit.fieldType !== "checkbox") {
+        throw new PdfEngineError(
+          "INVALID_DOCUMENT",
+          "Form field type must be text or checkbox.",
+        );
+      }
+      if (edit.fieldType === "text" && edit.fontSizePt !== undefined) {
+        assertPositiveNumber(edit.fontSizePt, "fontSizePt");
+      }
       return;
   }
 }

@@ -558,6 +558,59 @@ describe("EditLayer shape removal", () => {
     expect(textBox?.style.top).toBe("30px");
   });
 
+  it("places a live reusable text field in form-authoring mode", async () => {
+    await renderEditLayer([], "formText");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 20, 30);
+      await Promise.resolve();
+    });
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const valueInput = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-input");
+    const nameInput = field?.querySelector<HTMLInputElement>('input[aria-label="Field name"]');
+
+    expect(field?.dataset.fieldType).toBe("text");
+    expect(field?.style.left).toBe("20px");
+    expect(field?.style.top).toBe("30px");
+    expect(field?.style.width).toBe("180px");
+    expect(field?.style.height).toBe("24px");
+    expect(valueInput?.value).toBe("");
+    expect(nameInput?.value).toMatch(/^raio\.text\.edit-/);
+  });
+
+  it("places and fills a reusable checkbox in form-authoring mode", async () => {
+    await renderEditLayer([], "formCheckbox");
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    expect(layer).not.toBeNull();
+    stubLayerBounds(layer!);
+
+    await act(async () => {
+      dispatchPointerEvent(layer!, "pointerdown", 40, 50);
+      await Promise.resolve();
+    });
+
+    const field = container?.querySelector<HTMLElement>(".edit-layer__form-field");
+    const checkbox = field?.querySelector<HTMLInputElement>(".edit-layer__form-field-checkbox");
+
+    expect(field?.dataset.fieldType).toBe("checkbox");
+    expect(field?.style.width).toBe("18px");
+    expect(field?.style.height).toBe("18px");
+    expect(checkbox?.checked).toBe(false);
+
+    await act(async () => {
+      checkbox?.click();
+      await Promise.resolve();
+    });
+
+    expect(checkbox?.checked).toBe(true);
+  });
+
   it("shows an armed image ghost at the pointer before placement", async () => {
     await renderEditLayer([], "image", {
       armedImage: {

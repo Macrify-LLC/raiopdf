@@ -32,6 +32,8 @@ const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   underline: (size) => <UnderlineIcon size={size} />,
   strikethrough: (size) => <StrikethroughIcon size={size} />,
   textBox: (size) => <TextBoxIcon size={size} />,
+  formText: (size) => <TextBoxIcon size={size} />,
+  formCheckbox: (size) => <RectangleIcon size={size} />,
   callout: (size) => <CalloutIcon size={size} />,
   image: (size) => <ImageIcon size={size} />,
   comment: (size) => <CommentIcon size={size} />,
@@ -47,6 +49,7 @@ const GROUP_ENDS = new Set<EditToolId>([
   "select",
   "strikethrough",
   "image",
+  "formCheckbox",
   "comment",
   "shapeArrow",
 ]);

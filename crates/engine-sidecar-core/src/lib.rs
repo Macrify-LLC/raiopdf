@@ -3333,6 +3333,15 @@ pub fn find_payload_dir(
 ) -> Option<PathBuf> {
     if let Some(path) = [
         exe_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
+        // A macOS .app keeps its executables in Contents/MacOS and its bundled
+        // resources in Contents/Resources, so the payload is not a sibling of the
+        // executable the way an installed Windows tree makes it. Without this
+        // candidate every caller that cannot supply a resource_dir — the loopback
+        // `/local/*` handlers all use `discover(None)` — finds no payload inside a
+        // packaged app and silently degrades to an empty toolchain.
+        exe_dir
+            .and_then(Path::parent)
+            .map(|contents| contents.join("Resources").join(PAYLOAD_DIR_NAME)),
         resource_dir.map(|dir| dir.join(PAYLOAD_DIR_NAME)),
     ]
     .into_iter()
@@ -4184,6 +4193,42 @@ mod tests {
                         .expect("tessdata parent")
                         .as_os_str()
         }));
+    }
+
+    #[test]
+    fn payload_resolution_finds_the_payload_inside_a_macos_app_bundle() {
+        // A packaged .app puts the executable in Contents/MacOS and the payload in
+        // Contents/Resources — not side by side as an installed Windows tree does.
+        // The loopback `/local/*` handlers resolve with `discover(None)`, so the
+        // exe dir is the only hint available and this is the sole candidate that
+        // can find the payload. Without it the packaged app silently ran with an
+        // empty toolchain and every OCR attempt failed.
+        let root = test_temp_dir("macos-app-bundle-payload");
+        let contents = root.join("RaioPDF.app").join("Contents");
+        let exe_dir = contents.join("MacOS");
+        let payload = contents.join("Resources").join(PAYLOAD_DIR_NAME);
+        touch(&exe_dir.join("raiopdf-shell"));
+        touch(&payload.join("engine").join("stirling.jar"));
+
+        assert_eq!(find_payload_dir(Some(&exe_dir), None, None), Some(payload));
+    }
+
+    #[test]
+    fn payload_resolution_still_prefers_an_executable_sibling_payload() {
+        // The installed Windows layout keeps the payload next to the executable;
+        // that must keep winning over the macOS bundle candidate.
+        let root = test_temp_dir("sibling-payload-wins");
+        let exe_dir = root.join("app");
+        let sibling = exe_dir.join(PAYLOAD_DIR_NAME);
+        touch(&sibling.join("engine").join("stirling.jar"));
+        touch(
+            &root
+                .join("Resources")
+                .join(PAYLOAD_DIR_NAME)
+                .join("engine/stirling.jar"),
+        );
+
+        assert_eq!(find_payload_dir(Some(&exe_dir), None, None), Some(sibling));
     }
 
     #[test]

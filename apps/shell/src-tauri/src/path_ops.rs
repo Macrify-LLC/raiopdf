@@ -1968,6 +1968,7 @@ pub async fn path_op_ocr(
         None => None,
     };
     let job_token_for_cleanup = job_token.clone();
+    let log_app = app.clone();
     let result = run_single_output_op(
         app,
         grants,
@@ -2004,6 +2005,15 @@ pub async fn path_op_ocr(
     .await;
     if let Some(token) = job_token_for_cleanup {
         jobs.remove(&token);
+    }
+    // The UI collapses a failed op into one generic sentence, so the ocrmypdf /
+    // tesseract diagnostics this error carries are otherwise lost the moment it
+    // crosses the IPC boundary — leaving a failed OCR with no trace anywhere.
+    if let Err(error) = &result {
+        if let Some(diagnostics) = log_app.try_state::<crate::diagnostics::AppDiagnostics>() {
+            let _ = diagnostics
+                .record_shell_event("path_op_ocr", &format!("{}: {}", error.code, error.message));
+        }
     }
     result
 }

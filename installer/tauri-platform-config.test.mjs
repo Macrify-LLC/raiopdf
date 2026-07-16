@@ -27,8 +27,8 @@ test("Windows overlay maps only the Windows payload into the canonical installed
 
 test("macOS overlay is Apple Silicon-only by command contract and contains no Windows packaging", () => {
   const macos = config("tauri.macos.conf.json");
-  assert.equal(macos.bundle.active, false);
-  assert.deepEqual(macos.bundle.targets, ["dmg"]);
+  assert.equal(macos.bundle.active, true);
+  assert.deepEqual(macos.bundle.targets, ["app", "dmg"]);
   assert.deepEqual(macos.bundle.resources, { "payload/macos-arm64": "payload" });
   assert.equal(macos.bundle.macOS.minimumSystemVersion, "13.0");
   assert.equal(macos.app.windows[0].decorations, true);

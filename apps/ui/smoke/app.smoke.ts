@@ -455,6 +455,90 @@ test("highlight-to-redact merges a real multi-span browser selection into one ar
   ).toHaveAttribute("aria-pressed", "true");
 });
 
+test("selection dragged into inter-paragraph whitespace does not run into the next paragraph", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect.poll(() => textLayer.locator("span").count()).toBeGreaterThan(10);
+  // The whitespace guard's sentinel lands when the text layer finishes
+  // rendering; the drags below rely on it.
+  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await selectMarkupTool(page, "Select");
+
+  // Find the widest whitespace band between consecutive text lines, then
+  // drag from the line above it down into the band. Before the endOfContent
+  // sentinel guard, the browser snapped the selection focus to the nearest
+  // text below the cursor and the highlight ran to the bottom of the next
+  // paragraph; with the guard, the selection stops at the swept text.
+  //
+  // Retried as a whole: an early drag can race the page's layout (the tool
+  // panel expanding shifts the canvas), so the geometry is re-measured each
+  // attempt. The start point is jittered per attempt and the selection
+  // cleared, so a retry cannot escalate into a double/triple-click.
+  let attempt = 0;
+
+  await expect(async () => {
+    attempt += 1;
+    const gap = await textLayer.evaluate((layer) => {
+      const spans = [...layer.querySelectorAll("span")]
+        .filter((span) => span.textContent && span.textContent.trim().length > 0)
+        .map((span) => {
+          const rect = span.getBoundingClientRect();
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            left: rect.left,
+            right: rect.right,
+            text: span.textContent ?? "",
+          };
+        })
+        .filter((rect) => rect.bottom > rect.top)
+        .sort((a, b) => a.top - b.top);
+      let best: { above: (typeof spans)[0]; below: (typeof spans)[0]; size: number } | null = null;
+
+      for (let i = 0; i < spans.length - 1; i++) {
+        const above = spans[i]!;
+        const below = spans.slice(i + 1).find((span) => span.top > above.bottom + 2);
+
+        if (!below) {
+          continue;
+        }
+        const size = below.top - above.bottom;
+
+        if (!best || size > best.size) {
+          best = { above, below, size };
+        }
+      }
+      return best;
+    });
+
+    if (!gap) {
+      throw new Error("The fixture's text layer exposed no inter-paragraph gap.");
+    }
+
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    const startX = gap.above.left + (gap.above.right - gap.above.left) * (0.5 + 0.05 * (attempt % 5));
+    const startY = (gap.above.top + gap.above.bottom) / 2;
+
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(
+      Math.max(gap.below.left + 5, gap.above.left + 5),
+      gap.above.bottom + gap.size * 0.55,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+    const selectedText = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+    expect(selectedText.length).toBeGreaterThan(0);
+    expect(selectedText).not.toContain(gap.below.text.slice(0, 12));
+  }).toPass({ timeout: 15_000 });
+});
+
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");

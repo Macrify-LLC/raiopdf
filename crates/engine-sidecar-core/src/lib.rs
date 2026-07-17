@@ -2799,12 +2799,12 @@ fn resolve_qpdf() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let payload = env::var_os("RAIOPDF_ENGINE_PAYLOAD_DIR")?;
-    let bin_dir = PathBuf::from(payload).join("ocr").join("qpdf").join("bin");
-    ["qpdf.exe", "qpdf"]
-        .into_iter()
-        .map(|name| bin_dir.join(name))
-        .find(|candidate| candidate.is_file())
+    // Same payload-discovery fallback as `resolve_ghostscript`: reading only the
+    // environment meant a packaged app — which sets neither variable — never
+    // found its own bundled qpdf, so `/local/decrypt`, `/local/compress`, and
+    // `/local/redact-areas` failed with "qpdf binary not found in payload"
+    // while dev and the canary (whose boot scripts export the variables) passed.
+    path_ops::PathOpsToolchain::discover(None).qpdf
 }
 
 /// Generous, size-scaled wall-clock bound for one external tool invocation on

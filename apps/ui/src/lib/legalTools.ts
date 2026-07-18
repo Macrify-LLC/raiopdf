@@ -257,7 +257,7 @@ export async function verifyRedactionAreasClear(
   }
 
   const uniqueTerms = uniqueRedactionTerms(redactedTerms);
-  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms, pdfDocument);
+  const textLayer = await verifyRedactedAreasTextLayer(bytes, areas, uniqueTerms, pdfDocument);
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const redactedPageIndexes = uniquePageIndexes(areas);
 
@@ -286,19 +286,37 @@ export async function collectRedactionAreaTexts(
 
   return uniqueRedactionTerms(
     [
-      ...pages.flatMap((page) =>
-        page.spans.map((span) => ({
-          pageIndex: page.pageIndex,
-          text: page.text.slice(span.start, span.end),
-          area: span.area,
-        }))
-      )
-        .filter((box) => box.text.trim().length > 0)
-        .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
-        .map((box) => box.text),
+      ...pages.flatMap((page) => pageSpanTextsIntersectingAreas(page, areas)),
       ...garbledMarkers,
     ],
   );
+}
+
+/**
+ * Texts of the page's spans that carry non-empty text and geometrically
+ * intersect one of that page's redaction areas. Shared by term collection
+ * and verification so both apply the identical page + geometry predicate:
+ * what collection considers "inside the redaction" is exactly what
+ * verification later requires to be gone.
+ */
+function pageSpanTextsIntersectingAreas(
+  page: ExtractedPageText,
+  areas: readonly PdfRedactionArea[],
+): string[] {
+  const pageAreas = areas.filter((area) => area.pageIndex === page.pageIndex);
+
+  if (pageAreas.length === 0) {
+    return [];
+  }
+
+  return page.spans
+    .map((span) => ({ text: page.text.slice(span.start, span.end), area: span.area }))
+    .filter(
+      (box) =>
+        box.text.trim().length > 0 &&
+        pageAreas.some((area) => areasIntersect(box.area, area)),
+    )
+    .map((box) => box.text);
 }
 
 export async function readMetadataSummary(
@@ -400,8 +418,9 @@ function areasIntersect(left: PdfRedactionArea, right: PdfRedactionArea): boolea
   );
 }
 
-async function verifyFullDocumentTextLayer(
+async function verifyRedactedAreasTextLayer(
   bytes: Uint8Array,
+  areas: readonly PdfRedactionArea[],
   terms: readonly string[],
   injectedPdfDocument: PDFDocumentProxy | null = null,
 ): Promise<RedactionVerificationCheck> {
@@ -423,15 +442,24 @@ async function verifyFullDocumentTextLayer(
       ?? await (await import("./pdfjs")).loadPdfDocument(bytes);
 
     try {
+      // Geometric check, deliberately not a text search: the same words
+      // legitimately appear elsewhere in most documents (redacting one
+      // "toilet" must not fail because the word survives in unredacted
+      // text, even on the same page). What redaction promises is that no
+      // extractable text remains INSIDE the marked areas, so that -- and
+      // only that -- is what gets verified.
       const pages = await extractPageText({ bytes, pdfDocument });
-      const documentText = normalizeSearchText(pages.map((page) => page.text).join("\n"));
-      const remainingTerm = terms.find((term) => documentText.includes(normalizeSearchText(term)));
+      const dirtyPages = pages
+        .filter((page) => pageSpanTextsIntersectingAreas(page, areas).length > 0)
+        .map((page) => page.pageIndex);
 
-      if (remainingTerm) {
-        return fail(`Text layer still contains "${remainingTerm}".`);
+      if (dirtyPages.length > 0) {
+        return fail(
+          `Text is still extractable inside a redacted area on page(s) ${formatPageNumbers(dirtyPages)}.`,
+        );
       }
 
-      return pass("Text layer verified clean across the full document.");
+      return pass("No extractable text remains inside the redacted areas.");
     } finally {
       if (pdfDocument !== injectedPdfDocument) {
         await pdfDocument.loadingTask.destroy();
@@ -627,10 +655,6 @@ function garbledRedactionPagesFromTerms(terms: readonly string[]): readonly numb
 
 function normalizeDisplayText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
-}
-
-function normalizeSearchText(text: string): string {
-  return normalizeDisplayText(text).toLocaleLowerCase();
 }
 
 function formatPageNumbers(pageIndexes: readonly number[]): string {

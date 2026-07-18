@@ -2550,7 +2550,10 @@ fn read_local_pdf_body(
 /// dir as its cwd. `-dPDFACompatibilityPolicy=2` (strict) makes Ghostscript
 /// refuse to write a non-conformant file; policy `1` converts best-effort.
 fn run_gs_pdfa(pdf: &[u8], level: u8, strict: bool) -> Result<Vec<u8>, String> {
-    let ghostscript = resolve_ghostscript()
+    // `discover` owns the whole resolution, env overrides included (see the
+    // matching note in `run_qpdf_decrypt`).
+    let ghostscript = path_ops::PathOpsToolchain::discover(None)
+        .ghostscript
         .ok_or_else(|| "ghostscript binary not found in payload".to_string())?;
     let (icc_source, def_source) = resolve_pdfa_resources(&ghostscript)?;
 
@@ -2700,23 +2703,6 @@ fn run_path_op_redact_areas(pdf: &[u8], areas: &[path_ops::RedactArea]) -> Resul
     Ok(redacted)
 }
 
-fn resolve_ghostscript() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("RAIOPDF_ENGINE_GHOSTSCRIPT") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    // Fall back to the same payload discovery every other local handler uses.
-    // Reading only the environment meant a packaged app — which sets neither
-    // variable; only dev and the canary's boot script export them — never found
-    // its own bundled Ghostscript, so `/local/pdfa` failed with "ghostscript
-    // binary not found in payload" while dev and the canary both passed.
-    // `discover` still honours RAIOPDF_ENGINE_PAYLOAD_DIR internally, so the
-    // previous env-driven behaviour is preserved.
-    path_ops::PathOpsToolchain::discover(None).ghostscript
-}
-
 fn resolve_pdfa_resources(ghostscript: &Path) -> Result<(PathBuf, PathBuf), String> {
     let gs_root = ghostscript
         .parent()
@@ -2768,7 +2754,17 @@ fn ghostscript_share_root(ghostscript: &Path) -> Option<PathBuf> {
 /// Losslessly strip encryption with the bundled qpdf. Input/output live only in
 /// a private work directory; the password travels through qpdf `@-` stdin.
 fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
-    let qpdf = resolve_qpdf().ok_or_else(|| "qpdf binary not found in payload".to_string())?;
+    // `discover` owns the whole resolution, env overrides included. Reading
+    // the environment here as well is how the packaged app -- which sets no
+    // RAIOPDF_ENGINE_* variables, unlike dev and the canary boot scripts --
+    // once diverged and failed with "qpdf binary not found in payload".
+    let toolchain = path_ops::PathOpsToolchain {
+        tool_timeout: Some(local_tool_timeout(pdf.len())),
+        ..path_ops::PathOpsToolchain::discover(None)
+    };
+    if toolchain.qpdf.is_none() {
+        return Err("qpdf binary not found in payload".to_string());
+    }
 
     let work_dir = create_unique_temp_dir("raiopdf-decrypt")?;
     let _cleanup = TempDirGuard::hold(work_dir.clone())?;
@@ -2778,11 +2774,6 @@ fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
     path_ops::write_private_file(&in_path, pdf).map_err(|error| error.to_string())?;
     let password = std::str::from_utf8(password)
         .map_err(|_| "PDF password was not valid UTF-8".to_string())?;
-    let toolchain = path_ops::PathOpsToolchain {
-        qpdf: Some(qpdf),
-        tool_timeout: Some(local_tool_timeout(pdf.len())),
-        ..Default::default()
-    };
     path_ops::decrypt(&toolchain, &in_path, password, &out_path, &work_dir)
         .map_err(|error| error.to_string())?;
     let output = fs::read(&out_path).map_err(|error| format!("read decrypted output: {error}"))?;
@@ -2790,21 +2781,6 @@ fn run_qpdf_decrypt(pdf: &[u8], password: &[u8]) -> Result<Vec<u8>, String> {
         return Err("qpdf produced no output".to_string());
     }
     Ok(output)
-}
-
-fn resolve_qpdf() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("RAIOPDF_ENGINE_QPDF") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    // Same payload-discovery fallback as `resolve_ghostscript`: reading only the
-    // environment meant a packaged app — which sets neither variable — never
-    // found its own bundled qpdf, so `/local/decrypt`, `/local/compress`, and
-    // `/local/redact-areas` failed with "qpdf binary not found in payload"
-    // while dev and the canary (whose boot scripts export the variables) passed.
-    path_ops::PathOpsToolchain::discover(None).qpdf
 }
 
 /// Generous, size-scaled wall-clock bound for one external tool invocation on

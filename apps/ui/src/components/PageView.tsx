@@ -12,6 +12,7 @@ import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
 import { closestTextLayer } from "../lib/selectedTextEdit";
+import { registerTextSelectionGuard } from "../lib/textSelectionGuard";
 import { redactionAreasFromClientRects } from "../lib/selectionRedaction";
 import {
   clamp,
@@ -245,12 +246,21 @@ export function PageView({
       viewport,
     });
 
-    void textLayer.render().catch(() => {
-      // Cancellation and text-extraction failures both leave the page
-      // usable (just not selectable); the canvas is the source of truth.
-    });
+    // Whitespace-selection guard (see textSelectionGuard.ts): registered
+    // after the streamed spans land so the sentinel stays the last child.
+    let unregisterGuard: (() => void) | null = null;
+    void textLayer.render().then(
+      () => {
+        unregisterGuard = registerTextSelectionGuard(container);
+      },
+      () => {
+        // Cancellation and text-extraction failures both leave the page
+        // usable (just not selectable); the canvas is the source of truth.
+      },
+    );
 
     return () => {
+      unregisterGuard?.();
       textLayer?.cancel();
       textLayer = null;
       container.replaceChildren();

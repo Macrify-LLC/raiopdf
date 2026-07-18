@@ -143,6 +143,28 @@
   color: transparent;
 }
 
+/* Selection whitespace guard (pdf.js "endOfContent" sentinel, recreated in
+   textSelectionGuard.ts). Parked as a zero-height strip at the bottom; while
+   a selection is live in the layer it expands to cover the layer beneath the
+   spans (z-index 0 vs. the spans' 1), so a drag through inter-paragraph
+   whitespace lands on this unselectable div instead of snapping to the next
+   paragraph's text. Descendant selectors: the guard re-parents the sentinel
+   next to the selection edge, which can sit inside a .markedContent wrapper.
+   Declared after the `> :not(.markedContent)` rule above so the z-index wins
+   the tie when the sentinel is a direct child. */
+.page-view__text-layer .page-view__text-end {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.page-view__text-layer--selecting .page-view__text-end {
+  top: 0;
+}
+
 /* Rotated pages: pdf.js sizes the text layer in unrotated page space and
    stamps data-main-rotation; CSS turns it into place. */
 .page-view [data-main-rotation="90"] {

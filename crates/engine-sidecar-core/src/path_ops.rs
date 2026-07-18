@@ -124,8 +124,14 @@ pub fn restrict_private_file(path: &Path) -> OpResult<()> {
 
 #[cfg(windows)]
 fn restrict_directory_to_current_user(path: &Path) -> OpResult<()> {
-    let whoami = Command::new("whoami.exe")
-        .args(["/user", "/fo", "csv", "/nh"])
+    // Both children here are console-subsystem tools spawned from a GUI
+    // process: without CREATE_NO_WINDOW each one flashes a conhost window
+    // (visible as two quick "PowerShell windows" on every redaction, whose
+    // work dir creation lands here).
+    let mut whoami_command = Command::new("whoami.exe");
+    whoami_command.args(["/user", "/fo", "csv", "/nh"]);
+    crate::apply_platform_spawn_flags(&mut whoami_command);
+    let whoami = whoami_command
         .output()
         .map_err(|error| PathOpError::io("read current Windows identity", error))?;
     if !whoami.status.success() {
@@ -144,13 +150,16 @@ fn restrict_directory_to_current_user(path: &Path) -> OpResult<()> {
         })
         .collect();
     let grant = format!("*{sid}:(OI)(CI)F");
-    let status = Command::new("icacls.exe")
+    let mut icacls_command = Command::new("icacls.exe");
+    icacls_command
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(grant)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    crate::apply_platform_spawn_flags(&mut icacls_command);
+    let status = icacls_command
         .status()
         .map_err(|error| PathOpError::io("restrict private directory", error))?;
     if !status.success() {

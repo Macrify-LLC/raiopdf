@@ -10,6 +10,8 @@ import {
   buildAnnotationSavePlan,
   dataUrlToBytes,
   pendingEditsFromRaioAnnotations,
+  isTextMarkupTool,
+  MARKUP_FROM_SELECTION_EVENT,
   toPdfEdits,
   type AnnotationSavePlan,
   type EditToolId,
@@ -18,6 +20,7 @@ import {
   type ShapeToolId,
   type TextMarkupToolId,
 } from "../lib/edits";
+import { closestTextLayer } from "../lib/selectedTextEdit";
 import {
   DEFAULT_INK_STROKE_WIDTH_PT,
   DEFAULT_CALLOUT_STROKE_WIDTH_PT,
@@ -223,6 +226,30 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setMessage(null);
     setSelectedEditId(null);
     setSignatureCardOpen(nextTool === "sign");
+
+    // A live page-text selection must not linger inert across a tool switch.
+    // Switching to a text-markup tool converts it into that markup (the
+    // mounted EditLayers handle the event synchronously, each for its own
+    // page); switching to anything else just drops it. Selections outside
+    // the page text layers (search box, form fields) are left alone.
+    if (nextTool === "select") {
+      return;
+    }
+    const selection = window.getSelection();
+    if (
+      !selection ||
+      selection.isCollapsed ||
+      !selection.anchorNode ||
+      !closestTextLayer(selection.anchorNode)
+    ) {
+      return;
+    }
+    if (isTextMarkupTool(nextTool)) {
+      window.dispatchEvent(
+        new CustomEvent(MARKUP_FROM_SELECTION_EVENT, { detail: { kind: nextTool } }),
+      );
+    }
+    selection.removeAllRanges();
   }, []);
 
   const addEdit = useCallback((edit: PendingEdit) => {

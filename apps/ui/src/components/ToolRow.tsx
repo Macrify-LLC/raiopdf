@@ -9,6 +9,13 @@ export interface ToolRowProps {
   description?: string;
   selected?: boolean;
   disabled?: boolean;
+  /**
+   * Keep a live page-text selection alive through the click: the browser
+   * collapses a selection on mousedown outside it, which would race the
+   * select handler's selection-into-markup conversion (see setTool in
+   * useEditing). Set on the text-markup tool rows.
+   */
+  preserveTextSelection?: boolean;
   onSelect?: (() => void) | undefined;
   onHelp?: (() => void) | undefined;
 }
@@ -19,6 +26,7 @@ export function ToolRow({
   description,
   selected = false,
   disabled = false,
+  preserveTextSelection = false,
   onSelect,
   onHelp,
 }: ToolRowProps) {
@@ -33,6 +41,7 @@ export function ToolRow({
         aria-current={selected ? "true" : undefined}
         title={description ?? label}
         disabled={disabled}
+        onMouseDown={preserveTextSelection ? (event) => event.preventDefault() : undefined}
         onClick={onSelect}
       >
         <span className="tool-row__icon">{icon}</span>

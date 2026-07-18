@@ -571,7 +571,83 @@ test("selection dragged into inter-paragraph whitespace does not run into the ne
 
     expect(selectedText.length).toBeGreaterThan(0);
     expect(selectedText).not.toContain(gap.below.text.slice(0, 12));
+
+    // The module paints the selection itself (native ::selection is
+    // transparent in the text layer): a live selection must have produced
+    // merged per-line paint boxes in the overlay.
+    expect(
+      await page.locator(".page-view__selection-paint > div").count(),
+    ).toBeGreaterThan(0);
   }).toPass({ timeout: 15_000 });
+});
+
+test("switching from Select to a markup tool converts the selection; other tools clear it", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await selectMarkupTool(page, "Select");
+
+  // Deterministic single-line target, anchored by content: position-based
+  // finders can grab the multi-line caption block depending on scroll state,
+  // which turns the converted markup into a different rect count per run.
+  const selectBodyText = async () => {
+    let attempt = 0;
+
+    await expect(async () => {
+      attempt += 1;
+      const line = await textLayer.evaluate((layer, jitter) => {
+        const span = [...layer.querySelectorAll("span")].find((s) =>
+          s.textContent?.includes("comes before the Court"),
+        );
+        if (!span) {
+          return null;
+        }
+        const r = span.getBoundingClientRect();
+        return { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 };
+      }, (attempt % 5) * 9);
+
+      if (!line) {
+        throw new Error("body line not found");
+      }
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+      await page.mouse.move(line.left, line.y);
+      await page.mouse.down();
+      await page.mouse.move(line.left + (line.right - line.left) * 0.6, line.y, { steps: 6 });
+      await page.mouse.up();
+      const text = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+      expect(text.length).toBeGreaterThan(5);
+    }).toPass({ timeout: 15_000 });
+  };
+
+  // Select text, switch to Highlight: the selection becomes highlight
+  // markup and the browser selection clears.
+  await selectBodyText();
+  await selectMarkupTool(page, "Highlight");
+  await expect(page.locator(".edit-layer__highlight").first()).toBeVisible();
+  const highlightCount = await page.locator(".edit-layer__highlight").count();
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
+
+  // Select text, switch to a non-markup tool: the selection clears without
+  // creating any further markup.
+  await selectMarkupTool(page, "Select");
+  await selectBodyText();
+  await selectMarkupTool(page, "Rectangle");
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
+  await expect(page.locator(".edit-layer__highlight")).toHaveCount(highlightCount);
+
+  // The side panel's Edit rows are a second tool-switch entry point and must
+  // preserve the selection the same way the floating toolbar does.
+  await selectMarkupTool(page, "Select");
+  await selectBodyText();
+  await toolPanel.getByRole("button", { name: "Underline", exact: true }).click();
+  await expect(page.locator(".edit-layer__text-markup-lines").first()).toBeVisible();
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 });
 
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {

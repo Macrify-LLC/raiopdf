@@ -23,13 +23,29 @@
  *   then hovers it, the browser extends the selection into the empty
  *   sentinel -- i.e. to a boundary immediately adjacent to where the
  *   selection already ends -- so the focus stays put instead of running away.
+ *
+ * The module also OWNS THE SELECTION PAINT. Native `::selection` is
+ * translucent and paints one rect per text node; pdf.js text layers fragment
+ * lines into many overlapping runs (word processors emit a run per word), so
+ * the native paint double-tints wherever runs overlap -- visibly darker
+ * bands over the spaces between words. Native `::selection` is therefore
+ * transparent in the text layer (PageList.css), and this module paints the
+ * selection itself: client rects merged into one box per visual line, drawn
+ * once per line into a per-page overlay. Same approach as pdf.js's
+ * `enableSelectionRendering` draw layer, sized to this app.
  */
 
+import { mergeClientRectsIntoLines } from "./clientRectLines";
 import { closestTextLayer } from "./selectedTextEdit";
 
 const SELECTING_CLASS = "page-view__text-layer--selecting";
 
-const textLayers = new Map<HTMLElement, HTMLElement>();
+interface GuardedLayer {
+  endOfContent: HTMLElement;
+  paintOverlay: HTMLElement;
+}
+
+const textLayers = new Map<HTMLElement, GuardedLayer>();
 
 let selectionChangeAC: AbortController | null = null;
 let prevRange: Range | null = null;
@@ -47,7 +63,15 @@ export function registerTextSelectionGuard(container: HTMLElement): () => void {
   const endOfContent = document.createElement("div");
   endOfContent.className = "page-view__text-end";
   container.append(endOfContent);
-  textLayers.set(container, endOfContent);
+
+  // The paint overlay lives OUTSIDE the text layer, as its earlier sibling:
+  // it must not rotate with `data-main-rotation` (client rects are already
+  // visual coordinates) and must paint beneath the layer's spans.
+  const paintOverlay = document.createElement("div");
+  paintOverlay.className = "page-view__selection-paint";
+  container.parentElement?.insertBefore(paintOverlay, container);
+
+  textLayers.set(container, { endOfContent, paintOverlay });
 
   // Arm the guard the moment a drag could start: with `--selecting` set
   // before the first pointer move, the expanded sentinel catches a drag that
@@ -67,6 +91,7 @@ export function registerTextSelectionGuard(container: HTMLElement): () => void {
 
   return () => {
     mousedownAC.abort();
+    paintOverlay.remove();
     textLayers.delete(container);
     container.classList.remove(SELECTING_CLASS);
     if (textLayers.size === 0) {
@@ -77,10 +102,13 @@ export function registerTextSelectionGuard(container: HTMLElement): () => void {
   };
 }
 
-function reset(endOfContent: HTMLElement, container: HTMLElement): void {
+function reset(layer: GuardedLayer, container: HTMLElement): void {
+  const { endOfContent } = layer;
   // Fast path: nothing to undo. This runs for every registered layer on
   // every selectionchange outside the viewer (typing in the search box, form
   // fields), so skip the DOM writes when the sentinel is already parked.
+  // NOTE: reset() runs on pointerup while the selection persists, so it must
+  // never clear the paint overlay -- paint syncs only to selectionchange.
   if (
     endOfContent.parentNode === container &&
     endOfContent.nextSibling === null &&
@@ -96,6 +124,87 @@ function reset(endOfContent: HTMLElement, container: HTMLElement): void {
   endOfContent.style.height = "";
   endOfContent.style.userSelect = "";
   container.classList.remove(SELECTING_CLASS);
+}
+
+/**
+ * Enumerate the live selection's non-empty client rects once per
+ * selectionchange -- a cross-page selection reports rects for every page, so
+ * per-layer re-enumeration would repeat the full (layout-forcing) walk.
+ */
+function collectSelectionRects(selection: Selection): DOMRect[] {
+  const rects: DOMRect[] = [];
+
+  for (let i = 0; i < selection.rangeCount; i++) {
+    for (const rect of selection.getRangeAt(i).getClientRects()) {
+      if (rect.width > 0 && rect.height > 0) {
+        rects.push(rect);
+      }
+    }
+  }
+
+  return rects;
+}
+
+/**
+ * Repaint one layer's selection overlay from the collected client rects.
+ * Rects are clipped to the layer's own bounds, the sentinel's box is
+ * excluded (mid-drag it is selectable and sized to the whole layer), and the
+ * result is merged into one box per visual line so overlapping text runs
+ * tint exactly once.
+ */
+function paintSelection(
+  layer: GuardedLayer,
+  container: HTMLElement,
+  selectionRects: readonly DOMRect[],
+): void {
+  const containerBounds = container.getBoundingClientRect();
+  const sentinelBounds = layer.endOfContent.getBoundingClientRect();
+  const rects: DOMRect[] = [];
+
+  for (const rect of selectionRects) {
+    if (
+      rect.right < containerBounds.left ||
+      rect.left > containerBounds.right ||
+      rect.bottom < containerBounds.top ||
+      rect.top > containerBounds.bottom
+    ) {
+      continue;
+    }
+    if (
+      Math.abs(rect.left - sentinelBounds.left) < 1 &&
+      Math.abs(rect.top - sentinelBounds.top) < 1 &&
+      Math.abs(rect.right - sentinelBounds.right) < 1 &&
+      Math.abs(rect.bottom - sentinelBounds.bottom) < 1
+    ) {
+      continue;
+    }
+    rects.push(rect);
+  }
+
+  const lines = mergeClientRectsIntoLines(rects);
+  const overlay = layer.paintOverlay;
+  const overlayBounds = overlay.getBoundingClientRect();
+
+  while (overlay.childElementCount > lines.length) {
+    overlay.lastElementChild?.remove();
+  }
+  while (overlay.childElementCount < lines.length) {
+    overlay.append(document.createElement("div"));
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const box = overlay.children[i] as HTMLElement;
+    box.style.left = `${line.left - overlayBounds.left}px`;
+    box.style.top = `${line.top - overlayBounds.top}px`;
+    box.style.width = `${line.right - line.left}px`;
+    box.style.height = `${line.bottom - line.top}px`;
+  }
+}
+
+function clearPaint(layer: GuardedLayer): void {
+  if (layer.paintOverlay.childElementCount > 0) {
+    layer.paintOverlay.replaceChildren();
+  }
 }
 
 function enableGlobalSelectionListener(): void {
@@ -145,6 +254,7 @@ function enableGlobalSelectionListener(): void {
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0) {
         textLayers.forEach(reset);
+        textLayers.forEach(clearPaint);
         return;
       }
 
@@ -159,11 +269,15 @@ function enableGlobalSelectionListener(): void {
           }
         }
       }
-      for (const [textLayerDiv, endDiv] of textLayers) {
+      let selectionRects: DOMRect[] | null = null;
+      for (const [textLayerDiv, layer] of textLayers) {
         if (activeTextLayers.has(textLayerDiv)) {
           textLayerDiv.classList.add(SELECTING_CLASS);
+          selectionRects ??= collectSelectionRects(selection);
+          paintSelection(layer, textLayerDiv, selectionRects);
         } else {
-          reset(endDiv, textLayerDiv);
+          reset(layer, textLayerDiv);
+          clearPaint(layer);
         }
       }
 
@@ -221,7 +335,7 @@ function enableGlobalSelectionListener(): void {
       // below -- which uses anchor.parentElement -- would move the sentinel
       // OUTSIDE the layer, disarming the guard until the next reset.
       const parentTextLayer = anchor.parentElement ? closestTextLayer(anchor.parentElement) : null;
-      const endDiv = parentTextLayer ? textLayers.get(parentTextLayer) : undefined;
+      const endDiv = parentTextLayer ? textLayers.get(parentTextLayer)?.endOfContent : undefined;
       if (endDiv && parentTextLayer && anchor.parentElement) {
         endDiv.style.width = parentTextLayer.style.width;
         endDiv.style.height = parentTextLayer.style.height;

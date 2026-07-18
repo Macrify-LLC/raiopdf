@@ -2220,11 +2220,17 @@ pub fn run() {
                 return;
             }
 
-            if let Some(webview) = app
+            let focused = app
                 .webview_windows()
                 .into_values()
-                .find(|window| window.is_focused().unwrap_or(false))
-            {
+                .find(|window| window.is_focused().unwrap_or(false));
+            let fallback_to_main = focused.is_none();
+            if let Some(webview) = focused.or_else(|| app.get_webview_window("main")) {
+                if fallback_to_main {
+                    let _ = webview.show();
+                    let _ = webview.unminimize();
+                    let _ = webview.set_focus();
+                }
                 let _ = webview.emit(MENU_EVENT, id);
             }
         })

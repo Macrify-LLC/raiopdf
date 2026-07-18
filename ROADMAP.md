@@ -33,8 +33,6 @@ buried in "later," that's exactly the kind of thing worth telling us about — s
 
 ## Later — planned, no date
 
-- **macOS.** RaioPDF is Windows-first. A macOS build is planned, with no
-  committed date.
 - **Additional automations and workflows** — driven by what people request and
   whatever proves broadly useful.
 
@@ -43,6 +41,8 @@ buried in "later," that's exactly the kind of thing worth telling us about — s
 These are on the table but not promised. Interest from users is what moves them
 up.
 
+- **Intel Mac support.** The macOS build targets Apple Silicon (M-series) today;
+  Intel support depends on demand.
 - Additional annotation and form-filling tooling.
 - More document-assembly and packaging workflows for specific practice areas.
 - Community-requested conveniences that fit the "free, local, no-nonsense" spirit

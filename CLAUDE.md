@@ -8,7 +8,7 @@ sign) and adds legal workflows: e-filing prep with rule-cited preflight, exhibit
 filing packets, production sets, verified redaction, Bates numbering, sensitive-info
 scanning, metadata scrubbing. No cloud, no account, no telemetry, no AI in the product —
 the only automatic network access is the signed update check against GitHub Releases.
-Windows-first; macOS later.
+Runs on Windows and macOS (Apple Silicon; Intel later).
 
 **Status (2026-07-12):** public alpha, version 0.1.3. Signed Windows installers are
 published and downloadable on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases)

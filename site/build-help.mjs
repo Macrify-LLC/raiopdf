@@ -171,7 +171,7 @@ function renderShell({ title, description, canonicalPath, bodyHtml, extraBodyEnd
 <a class="skip-link" href="#main">Skip to content</a>
 
 <div class="status-bar">
-  <p><strong>Public alpha</strong> — Windows build available from GitHub Releases.
+  <p><strong>Public alpha</strong> — download from GitHub Releases.
     <a href="https://github.com/Macrify-LLC/raiopdf/releases" target="_blank" rel="noopener">Get the latest release</a>.</p>
 </div>
 

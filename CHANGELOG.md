@@ -24,6 +24,10 @@ fades as download volume accrues.
   text with the pointer and each line becomes a marked area, alongside the existing
   draw-a-box and search-text methods. It needs no full-document text extraction, so it
   also works on very large files where search-to-redact isn't available.
+- **macOS (Apple Silicon) build.** RaioPDF now ships for Macs with Apple Silicon
+  (M-series), distributed as a Developer ID-signed, notarized `.dmg` alongside the
+  Windows installer. The landing page and updater pick the right download per
+  platform automatically. Intel Macs aren't supported yet.
 
 ## [0.1.3] - 2026-07-12
 

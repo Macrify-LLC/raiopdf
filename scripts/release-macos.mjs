@@ -195,7 +195,11 @@ function notarize(artifactPath, label) {
 }
 
 const stepImplementations = {
-  assemble() {
+  assemble(context) {
+    // Stamp BEFORE assembly: the payload's legal records (COMPONENT-MANIFEST
+    // releaseVersion, RaioPDF component version) are baked in at assembly time
+    // and must match the version the release ships as.
+    run("node", ["scripts/stamp-shell-version.mjs", context.version]);
     run("pnpm", ["--filter", "@raiopdf/mcp", "build"]);
     run("node", ["installer/run-payload-assembler.mjs", "--platform", PLATFORM_ID], {
       env: { RAIOPDF_MACOS_SIGN_PAYLOAD: "1" },
@@ -301,6 +305,10 @@ const stepImplementations = {
       archive,
       "--updater-sig",
       `${archive}.sig`,
+      // Two built payloads exist after a bundle (the .app's copy and Tauri's
+      // build-time staging copy); compliance assets come from the shipped one.
+      "--payload-dir",
+      path.join(appPath(), "Contents", "Resources", "payload"),
     ]);
     run("node", [
       "scripts/validate-package-boundary.mjs",

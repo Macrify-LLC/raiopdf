@@ -16,10 +16,15 @@
       }
     },
     "macos-arm64": {
-      "installer": null,
+      "installer": {
+        "baselineVersion": "0.1.4",
+        "baselineBytes": 431412835,
+        "maxGrowthBytes": 20971520,
+        "maxGrowthPercent": 5
+      },
       "payload": {
-        "baselineVersion": "0.1.0",
-        "baselineBytes": 762971330,
+        "baselineVersion": "0.1.4",
+        "baselineBytes": 762978566,
         "maxGrowthBytes": 52428800,
         "maxGrowthPercent": 5
       }

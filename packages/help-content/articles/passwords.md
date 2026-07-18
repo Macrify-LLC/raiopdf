@@ -50,7 +50,7 @@ original is not changed.
 - **Protection does not clean the PDF.** Metadata — hidden details such as the
   author and the software that made the file — is encrypted, not removed.
   Use **Scrub Metadata** or **Sanitize** separately when you need those changes.
-- **This is a Windows installed-app feature.** It is not available in the browser
+- **This is an installed-app feature.** It is not available in the browser
   help preview or through RaioPDF's AI connector.
 
 ## Related

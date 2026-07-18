@@ -26,11 +26,16 @@ node installer/run-payload-assembler.mjs --platform windows-x64 --verify
 
 ## macOS arm64
 
-The Mac namespace and verifier are present, but full payload assembly remains
-disabled until the relocatable Python/OCR inputs are pinned and exercised on
-Apple Silicon. `assemble-macos-arm64.sh --verify` defines the required layout
-and rejects Windows files. It does not claim that an incomplete payload is a
-release payload.
+`assemble-macos-arm64.sh` assembles the full relocatable payload on Apple
+Silicon: Ghostscript, qpdf, and Tesseract (plus their image libraries) are
+built from pinned source with `MACOSX_DEPLOYMENT_TARGET` pinned so shipped
+binaries never inherit the build machine's SDK default, and the JRE, Node,
+python-build-standalone CPython, and OCRmyPDF wheel set come from pinned
+archives (`PINS.macos-arm64.env`). `assemble-macos-arm64.sh --verify` defines
+the required layout and rejects Windows files. For signed releases, the
+assembler's `RAIOPDF_MACOS_SIGN_PAYLOAD=1` hook Developer ID-signs every
+payload Mach-O before the manifest is generated (see `docs/SIGNING.md`), and
+`scripts/scan-macos-min-os.mjs` enforces the deployment-target floor.
 
 A compile-only CI job may create an unmistakable empty resource directory:
 

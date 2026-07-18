@@ -7020,6 +7020,7 @@ export function App() {
       if (
         event.defaultPrevented ||
         (!event.metaKey && !event.ctrlKey) ||
+        event.shiftKey ||
         event.key.toLowerCase() !== "z" ||
         isTextEntryTarget(event.target)
       ) {
@@ -7989,17 +7990,26 @@ export function App() {
 
       const window = getCurrentWindow();
       const syncIfFocused = async () => {
-        if (await window.isFocused()) {
+        if (!disposed && await window.isFocused() && !disposed) {
           await invoke("sync_native_menu_state", { state });
         }
       };
 
       await syncIfFocused();
-      unlisten = await window.onFocusChanged(({ payload: focused }) => {
+      if (disposed) {
+        return;
+      }
+
+      const nextUnlisten = await window.onFocusChanged(({ payload: focused }) => {
         if (focused) {
           void invoke("sync_native_menu_state", { state }).catch(() => undefined);
         }
       });
+      if (disposed) {
+        nextUnlisten();
+      } else {
+        unlisten = nextUnlisten;
+      }
     }).catch(() => undefined);
 
     return () => {

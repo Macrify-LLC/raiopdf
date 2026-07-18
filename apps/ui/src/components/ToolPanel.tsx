@@ -8,7 +8,7 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { OcrUiState } from "../App";
-import { describePendingEdit, excerpt, type PendingEdit } from "../lib/edits";
+import { describePendingEdit, excerpt, isTextMarkupTool, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
 import {
@@ -296,6 +296,7 @@ export function ToolPanel({
                 description={tool.description}
                 selected={selected}
                 disabled={tool.id === "edit-text" && longProcessLocked}
+                preserveTextSelection={isTextMarkupTool(tool.id)}
                 onSelect={() => {
                   if (tool.id === "edit-text") {
                     onTextEditSelected?.();

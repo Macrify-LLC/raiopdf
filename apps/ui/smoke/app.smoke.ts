@@ -610,6 +610,14 @@ test("switching from Select to a markup tool converts the selection; other tools
   await selectMarkupTool(page, "Rectangle");
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
   await expect(page.locator(".edit-layer__highlight")).toHaveCount(highlightCount);
+
+  // The side panel's Edit rows are a second tool-switch entry point and must
+  // preserve the selection the same way the floating toolbar does.
+  await selectMarkupTool(page, "Select");
+  await selectBodyText();
+  await toolPanel.getByRole("button", { name: "Underline", exact: true }).click();
+  await expect(page.locator(".edit-layer__text-markup-lines").first()).toBeVisible();
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 });
 
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {

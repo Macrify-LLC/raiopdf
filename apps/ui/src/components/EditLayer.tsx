@@ -13,6 +13,7 @@ import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
   clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
+  MARKUP_FROM_SELECTION_EVENT,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
   TEXT_BOX_LINE_HEIGHT,
@@ -53,6 +54,7 @@ import {
   pdfEditColorToHex,
 } from "../lib/editStyles";
 import { newEditId, type ArmedStamp, type EditingState } from "../hooks/useEditing";
+import { mergeClientRectsIntoLines } from "../lib/clientRectLines";
 import { isTextEntryTarget } from "../lib/domGuards";
 import type { PDFPageProxy } from "../lib/pdfjs";
 import {
@@ -1415,6 +1417,35 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
     window.addEventListener("contextmenu", handleContextMenu, true);
     return () => window.removeEventListener("contextmenu", handleContextMenu, true);
+  }, []);
+
+  // Tool-switch markup conversion (see MARKUP_FROM_SELECTION_EVENT): when the
+  // user switches from Select to a markup tool with a live selection, every
+  // mounted EditLayer converts the parts of that selection on its own page.
+  // Ref-reassigned handler + one-time listener, same pattern as the context
+  // menu above; markupRectsFromSelection returns [] for pages the selection
+  // does not touch, so non-owning pages are no-ops.
+  const markupFromSelectionRef = useRef<(kind: TextMarkupToolId) => void>(() => {});
+  markupFromSelectionRef.current = (kind: TextMarkupToolId) => {
+    const layer = layerRef.current;
+    const rects = layer ? markupRectsFromSelection(layer, viewport) : [];
+
+    if (rects.length > 0) {
+      addTextMarkup(kind, rects);
+    }
+  };
+
+  useEffect(() => {
+    function handleMarkupFromSelection(event: Event) {
+      const kind = (event as CustomEvent<{ kind?: TextMarkupToolId }>).detail?.kind;
+
+      if (kind === "highlight" || kind === "underline" || kind === "strikethrough") {
+        markupFromSelectionRef.current(kind);
+      }
+    }
+
+    window.addEventListener(MARKUP_FROM_SELECTION_EVENT, handleMarkupFromSelection);
+    return () => window.removeEventListener(MARKUP_FROM_SELECTION_EVENT, handleMarkupFromSelection);
   }, []);
 
   const interactive = tool !== "select";
@@ -3504,43 +3535,6 @@ function markupRectsFromSelection(
 }
 
 /** Unions the per-span client rects of a selection into one rect per line. */
-function mergeClientRectsIntoLines(
-  rects: readonly DOMRect[],
-): { left: number; top: number; right: number; bottom: number }[] {
-  const sorted = [...rects].sort((left, right) => left.top - right.top || left.left - right.left);
-  const lines: { left: number; top: number; right: number; bottom: number }[] = [];
-
-  for (const rect of sorted) {
-    const line = lines.find((candidate) => {
-      const lineHeight = Math.min(candidate.bottom - candidate.top, rect.height);
-      const verticalOverlap =
-        Math.min(candidate.bottom, rect.bottom) - Math.max(candidate.top, rect.top);
-
-      if (verticalOverlap <= lineHeight * 0.5) {
-        return false;
-      }
-
-      // Same visual line — but only union runs that are horizontally
-      // contiguous. A wide horizontal gap is a multi-column gutter; merging
-      // across it would paint the highlight over the whitespace between the
-      // columns. A normal inter-word/run gap is well under one line height.
-      const horizontalGap = Math.max(rect.left - candidate.right, candidate.left - rect.right, 0);
-      return horizontalGap <= lineHeight;
-    });
-
-    if (line) {
-      line.left = Math.min(line.left, rect.left);
-      line.right = Math.max(line.right, rect.right);
-      line.top = Math.min(line.top, rect.top);
-      line.bottom = Math.max(line.bottom, rect.bottom);
-    } else {
-      lines.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
-    }
-  }
-
-  return lines;
-}
-
 type TextContentItemLike = {
   str?: unknown;
   transform?: unknown;

@@ -46,6 +46,14 @@ export type EditToolId =
   | "sign";
 
 export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
+
+/**
+ * Fired by useEditing's setTool when the user switches from Select to a
+ * text-markup tool while a text selection is live: each mounted EditLayer
+ * converts the parts of the selection on its page into that markup, so the
+ * selection is acted on instead of lingering inert. detail: { kind }.
+ */
+export const MARKUP_FROM_SELECTION_EVENT = "raiopdf:markup-from-selection";
 export type ShapeToolId = "shapeRect" | "shapeEllipse" | "shapeLine" | "shapeArrow";
 export type PendingShapeKind = PdfShapeKind;
 export type PendingEditStatus = "draft" | "applied";

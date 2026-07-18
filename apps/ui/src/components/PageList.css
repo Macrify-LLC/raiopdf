@@ -138,9 +138,26 @@
   display: contents;
 }
 
+/* Native selection paint is OFF in the text layer: pdf.js fragments lines
+   into overlapping runs, so the browser's per-text-node translucent rects
+   double-tint wherever runs overlap (dark bands over inter-word spaces on
+   word-processor PDFs). textSelectionGuard paints the selection instead --
+   merged one-box-per-line into .page-view__selection-paint below. */
 .page-view__text-layer ::selection {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: transparent;
   color: transparent;
+}
+
+.page-view__selection-paint {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.page-view__selection-paint > div {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* Selection whitespace guard (pdf.js "endOfContent" sentinel, recreated in

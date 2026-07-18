@@ -541,7 +541,69 @@ test("selection dragged into inter-paragraph whitespace does not run into the ne
 
     expect(selectedText.length).toBeGreaterThan(0);
     expect(selectedText).not.toContain(gap.below.text.slice(0, 12));
+
+    // The module paints the selection itself (native ::selection is
+    // transparent in the text layer): a live selection must have produced
+    // merged per-line paint boxes in the overlay.
+    expect(
+      await page.locator(".page-view__selection-paint > div").count(),
+    ).toBeGreaterThan(0);
   }).toPass({ timeout: 15_000 });
+});
+
+test("switching from Select to a markup tool converts the selection; other tools clear it", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
+
+  const toolPanel = page.locator(".tool-panel");
+  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await selectMarkupTool(page, "Select");
+
+  const selectBodyText = async () => {
+    let attempt = 0;
+
+    await expect(async () => {
+      attempt += 1;
+      const line = await textLayer.evaluate((layer, jitter) => {
+        const spans = [...layer.querySelectorAll("span")]
+          .filter((s) => s.textContent && s.textContent.trim().length > 10)
+          .map((s) => s.getBoundingClientRect())
+          .filter((r) => r.top > 550)
+          .sort((a, b) => a.top - b.top);
+        const r = spans[0];
+        return r ? { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 } : null;
+      }, (attempt % 5) * 9);
+
+      if (!line) {
+        throw new Error("no body line");
+      }
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+      await page.mouse.move(line.left, line.y);
+      await page.mouse.down();
+      await page.mouse.move(line.left + (line.right - line.left) * 0.6, line.y, { steps: 6 });
+      await page.mouse.up();
+      const text = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+      expect(text.length).toBeGreaterThan(5);
+    }).toPass({ timeout: 15_000 });
+  };
+
+  // Select text, switch to Highlight: the selection becomes a highlight
+  // markup and the browser selection clears.
+  await selectBodyText();
+  await selectMarkupTool(page, "Highlight");
+  await expect(page.locator(".edit-layer__highlight")).toHaveCount(1);
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
+
+  // Select text, switch to a non-markup tool: the selection just clears.
+  await selectMarkupTool(page, "Select");
+  await selectBodyText();
+  await selectMarkupTool(page, "Rectangle");
+  expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
+  await expect(page.locator(".edit-layer__highlight")).toHaveCount(1);
 });
 
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {

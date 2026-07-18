@@ -11,6 +11,7 @@
 
 .floating-dialog-layer[data-scrim="true"] {
   background: var(--modal-scrim);
+  pointer-events: auto;
 }
 
 @keyframes floating-dialog-scrim-in {

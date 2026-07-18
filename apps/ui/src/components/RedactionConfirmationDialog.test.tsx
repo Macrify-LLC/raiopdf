@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,4 +40,3 @@ describe("RedactionConfirmationDialog", () => {
     act(() => root.unmount());
   });
 });
-// @vitest-environment jsdom

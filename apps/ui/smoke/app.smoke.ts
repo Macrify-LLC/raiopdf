@@ -283,8 +283,12 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   await page.getByRole("button", { name: "Make Searchable (OCR)", exact: true }).click();
   await page.getByRole("button", { name: "Make searchable", exact: true }).click();
 
-  await expect(page.getByText("OCR ran, but 1 page still has no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.")).toBeVisible();
+  const errorDialog = page.getByRole("dialog", { name: "Make Searchable" });
+  const errorMessage = "OCR ran, but 1 page still has no searchable text — the original was kept unchanged; the underlying scan is likely too low-quality to read.";
+  await expect(errorDialog.getByText(errorMessage)).toBeVisible();
+  await expect(page.locator(".tool-panel").getByText(errorMessage)).toHaveCount(0);
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
+  await errorDialog.getByRole("button", { name: "Cancel" }).click();
 
   const saved = await savePdf(page);
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);

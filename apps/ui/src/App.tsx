@@ -140,6 +140,7 @@ import { useTextEdit } from "./hooks/useTextEdit";
 import { useEditing, type EditingDocumentSnapshot } from "./hooks/useEditing";
 import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
+import { confirmWithUser } from "./lib/nativeConfirm";
 import {
   checkForSignedUpdate,
   downloadSignedUpdate,
@@ -751,9 +752,9 @@ export function App() {
     return confirmed ? notice : null;
   }, [confirmSignatureInvalidation, document.bytes, document.fileName, document.filePath]);
   const confirmTextEditPdfAIdentificationRemoval = useCallback(
-    () => Promise.resolve(window.confirm(
+    () => confirmWithUser(
       "Editing will drop this file's PDF/A (archival) format — you can convert it back afterward.",
-    )),
+    ),
     [],
   );
   const textEditSource = useMemo(
@@ -3584,24 +3585,25 @@ export function App() {
     const closesVisibleDocument = tabId === activeTabId;
     const nextVisibleState = documentTabs.length > 1 ? "document" : "empty";
 
-    if (tab.document.dirty) {
-      const fileName = tab.document.fileName ?? "this document";
-      const confirmed = window.confirm(
-        `Close ${fileName} and discard unsaved changes?`,
-      );
-      if (!confirmed) {
-        return;
+    void (async () => {
+      if (tab.document.dirty) {
+        const fileName = tab.document.fileName ?? "this document";
+        const confirmed = await confirmWithUser(
+          `Close ${fileName} and discard unsaved changes?`,
+        );
+        if (!confirmed) {
+          return;
+        }
       }
-    }
 
-    void closeDocumentTab(tabId).then((closed) => {
+      const closed = await closeDocumentTab(tabId);
       if (closed) {
         tabEditingSnapshotsRef.current.delete(tab.document.generation);
       }
       if (closed && closesVisibleDocument) {
         resetVisibleDocumentAppState(nextVisibleState);
       }
-    });
+    })();
   }, [activeTabId, closeDocumentTab, documentTabs, resetVisibleDocumentAppState]);
 
   const openFile = useCallback(() => {
@@ -4389,28 +4391,30 @@ export function App() {
       return;
     }
 
-    if (tab.document.dirty) {
-      const fileName = tab.document.fileName ?? "this document";
-      const confirmed = window.confirm(
-        `Save changes to ${fileName} before moving it to a new window?`,
-      );
-      if (!confirmed) {
+    void (async () => {
+      if (tab.document.dirty) {
+        const fileName = tab.document.fileName ?? "this document";
+        const confirmed = await confirmWithUser(
+          `Save changes to ${fileName} before moving it to a new window?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      if (tabId !== activeTabId) {
+        const switched = switchDocumentTab(tabId);
+        if (!switched) {
+          return;
+        }
+        stashVisibleDocumentEditingState();
+        resetVisibleDocumentAppState("document");
+        pendingMoveToNewWindowTabIdRef.current = tabId;
         return;
       }
-    }
 
-    if (tabId !== activeTabId) {
-      const switched = switchDocumentTab(tabId);
-      if (!switched) {
-        return;
-      }
-      stashVisibleDocumentEditingState();
-      resetVisibleDocumentAppState("document");
-      pendingMoveToNewWindowTabIdRef.current = tabId;
-      return;
-    }
-
-    void moveActiveTabToNewWindow(tabId, tab.document.filePath as FileGrant, tab.document.dirty);
+      await moveActiveTabToNewWindow(tabId, tab.document.filePath as FileGrant, tab.document.dirty);
+    })();
   }, [activeTabId, documentTabs, longProcessRunning, moveActiveTabToNewWindow, resetVisibleDocumentAppState, setError, stashVisibleDocumentEditingState, switchDocumentTab]);
 
   useEffect(() => {
@@ -7168,7 +7172,7 @@ export function App() {
 
     void (async () => {
       if (unappliedRedactionMarks > 0) {
-        const confirmed = window.confirm(
+        const confirmed = await confirmWithUser(
           `${unappliedRedactionMarks} pending redaction `
             + `${unappliedRedactionMarks === 1 ? "mark has" : "marks have"} not been applied. `
             + "Exporting PDF/A now saves a copy of the document exactly as it looks now, so those boxes "
@@ -7187,7 +7191,7 @@ export function App() {
       const markupAnnotationCount = await countRaioPdfMarkupAnnotations(sourceBytes);
 
       if ((impact && hasPdfAConversionImpact(impact)) || markupAnnotationCount > 0) {
-        const confirmed = window.confirm(
+        const confirmed = await confirmWithUser(
           "Converting to PDF/A merges form fields and interactive markup permanently into the page. "
             + "The exported copy keeps how they look, but they'll no longer be fillable or editable. "
             + "Export anyway?",
@@ -7327,9 +7331,9 @@ export function App() {
 
     if (
       pdfSecurityDocumentState.pdfA &&
-      !window.confirm(
+      !(await confirmWithUser(
         "The protected copy will no longer conform to PDF/A because PDF/A does not allow encryption. Create it anyway?",
-      )
+      ))
     ) {
       return { status: "cancelled" };
     }

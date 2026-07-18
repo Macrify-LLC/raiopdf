@@ -204,6 +204,7 @@ export function useTextEdit({
   const [staged, setStaged] = useState<TextEditStagedResult | null>(null);
   const [selectionResolving, setSelectionResolving] = useState(false);
   const runRef = useRef(0);
+  const reviewRunRef = useRef(0);
   const opIdRef = useRef(0);
   const sourceRef = useRef(source);
   const generationRef = useRef(documentGeneration);
@@ -265,7 +266,7 @@ export function useTextEdit({
   useEffect(() => {
     clear();
     setPages([]);
-  }, [clear, documentGeneration]);
+  }, [clear, documentGeneration, sourceOpenToken]);
 
   const setFind = useCallback((nextFind: string) => {
     runRef.current += 1;
@@ -556,108 +557,135 @@ export function useTextEdit({
 
     const runId = runRef.current + 1;
     runRef.current = runId;
+    reviewRunRef.current = runId;
     setPhase("staging");
     setMessage(null);
     setStaged(null);
+
+    // When this run is superseded mid-staging, its result is discarded — but
+    // "staging" must never outlive the run that owns it, or the review dialog
+    // spins forever with no work in flight. Only demote when no newer review
+    // has taken over the phase, and only out of "staging" so a cancel that
+    // already reset to idle keeps its own message and state.
+    const releaseStrandedStaging = () => {
+      if (reviewRunRef.current === runId) {
+        setPhase((current) => (current === "staging" ? "idle" : current));
+      }
+    };
 
     let signatureInvalidationNotice: SignatureInvalidationNotice | null = null;
     let allowSignatureInvalidation = false;
     let allowPdfAIdentificationRemoval = false;
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const result = await runTextEditEngineReplacement({
-          engineBridge,
-          sourceBytes,
-          operations,
-          allowSignatureInvalidation,
-          allowPdfAIdentificationRemoval,
-        });
-
-        if (
-          runRef.current !== runId ||
-          openTokenRef.current !== reviewOpenToken ||
-          generationRef.current !== reviewGeneration
-        ) {
-          return;
-        }
-
-        const originalPages = await extractPageText({ bytes: sourceBytes, pdfDocument: sourceProxy });
-        const candidatePdf = await loadPdfDocument(result.bytes);
-        let candidatePages: readonly ExtractedPageText[] = [];
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          candidatePages = await extractPageText({ bytes: result.bytes, pdfDocument: candidatePdf });
-        } finally {
-          await candidatePdf.loadingTask.destroy();
-        }
+          const result = await runTextEditEngineReplacement({
+            engineBridge,
+            sourceBytes,
+            operations,
+            allowSignatureInvalidation,
+            allowPdfAIdentificationRemoval,
+          });
 
-        if (
-          runRef.current !== runId ||
-          openTokenRef.current !== reviewOpenToken ||
-          generationRef.current !== reviewGeneration
-        ) {
-          return;
-        }
-
-        const report = buildTextEditReviewReport({
-          operations,
-          originalPages,
-          candidatePages,
-        });
-
-        setStaged({
-          bytes: result.bytes,
-          warnings: result.warnings,
-          replacedCounts: result.replacedCounts,
-          report,
-          originalPages,
-          candidatePages,
-          signatureInvalidationNotice,
-          sourceOpenToken: reviewOpenToken,
-          sourceGeneration: reviewGeneration,
-        });
-        setPhase("review");
-        setMessage(formatReplaceTextResult(report));
-        return;
-      } catch (error) {
-        if (
-          error instanceof PdfEngineError &&
-          error.code === "SIGNED_DOCUMENT" &&
-          !allowSignatureInvalidation
-        ) {
-          signatureInvalidationNotice = await confirmSignatureInvalidation();
-          if (!signatureInvalidationNotice) {
-            setPhase("idle");
-            setMessage("Text editing was cancelled; the signed document was not modified.");
+          if (
+            runRef.current !== runId ||
+            openTokenRef.current !== reviewOpenToken ||
+            generationRef.current !== reviewGeneration
+          ) {
+            releaseStrandedStaging();
             return;
           }
-          allowSignatureInvalidation = true;
-          continue;
-        }
 
-        if (
-          error instanceof PdfEngineError &&
-          error.code === "UNSUPPORTED" &&
-          /pdf\/a|pdfa|conformance/i.test(error.message) &&
-          !allowPdfAIdentificationRemoval
-        ) {
-          const confirmed = await confirmPdfAIdentificationRemoval();
-          if (!confirmed) {
-            setPhase("idle");
-            setMessage("Text editing was cancelled; the PDF/A (archival format) document was not modified.");
+          const originalPages = await extractPageText({ bytes: sourceBytes, pdfDocument: sourceProxy });
+          const candidatePdf = await loadPdfDocument(result.bytes);
+          let candidatePages: readonly ExtractedPageText[] = [];
+          try {
+            candidatePages = await extractPageText({ bytes: result.bytes, pdfDocument: candidatePdf });
+          } finally {
+            await candidatePdf.loadingTask.destroy();
+          }
+
+          if (
+            runRef.current !== runId ||
+            openTokenRef.current !== reviewOpenToken ||
+            generationRef.current !== reviewGeneration
+          ) {
+            releaseStrandedStaging();
             return;
           }
-          allowPdfAIdentificationRemoval = true;
-          continue;
-        }
 
-        if (runRef.current !== runId) {
+          const report = buildTextEditReviewReport({
+            operations,
+            originalPages,
+            candidatePages,
+          });
+
+          setStaged({
+            bytes: result.bytes,
+            warnings: result.warnings,
+            replacedCounts: result.replacedCounts,
+            report,
+            originalPages,
+            candidatePages,
+            signatureInvalidationNotice,
+            sourceOpenToken: reviewOpenToken,
+            sourceGeneration: reviewGeneration,
+          });
+          setPhase("review");
+          setMessage(formatReplaceTextResult(report));
+          return;
+        } catch (error) {
+          if (
+            error instanceof PdfEngineError &&
+            error.code === "SIGNED_DOCUMENT" &&
+            !allowSignatureInvalidation
+          ) {
+            signatureInvalidationNotice = await confirmSignatureInvalidation();
+            if (!signatureInvalidationNotice) {
+              setPhase("idle");
+              setMessage("Text editing was cancelled; the signed document was not modified.");
+              return;
+            }
+            allowSignatureInvalidation = true;
+            continue;
+          }
+
+          if (
+            error instanceof PdfEngineError &&
+            error.code === "UNSUPPORTED" &&
+            /pdf\/a|pdfa|conformance/i.test(error.message) &&
+            !allowPdfAIdentificationRemoval
+          ) {
+            const confirmed = await confirmPdfAIdentificationRemoval();
+            if (!confirmed) {
+              setPhase("idle");
+              setMessage("Text editing was cancelled; the PDF/A (archival format) document was not modified.");
+              return;
+            }
+            allowPdfAIdentificationRemoval = true;
+            continue;
+          }
+
+          if (runRef.current !== runId) {
+            releaseStrandedStaging();
+            return;
+          }
+
+          setPhase("error");
+          setMessage(textEditErrorMessage(error));
           return;
         }
-
+      }
+    } catch (error) {
+      // The confirmation callbacks above can themselves throw (e.g. the shell
+      // denying a native dialog). Without this net, an exception escaping the
+      // retry loop leaves phase at "staging" with no work in flight.
+      if (runRef.current === runId) {
         setPhase("error");
         setMessage(textEditErrorMessage(error));
-        return;
+      } else {
+        releaseStrandedStaging();
       }
     }
   }, [
@@ -684,15 +712,23 @@ export function useTextEdit({
     }
 
     setPhase("applying");
-    const replaced = await replaceBytes(candidate.bytes, {
-      dirty: true,
-      hasTextLayer: null,
-      expectedOpenToken: candidate.sourceOpenToken,
-      expectedGeneration: candidate.sourceGeneration,
-      ...(fileName ? { fileName } : {}),
-      filePath: null,
-      signatureInvalidationNotice: candidate.signatureInvalidationNotice,
-    });
+    let replaced: ReplaceBytesResult;
+    try {
+      replaced = await replaceBytes(candidate.bytes, {
+        dirty: true,
+        hasTextLayer: null,
+        expectedOpenToken: candidate.sourceOpenToken,
+        expectedGeneration: candidate.sourceGeneration,
+        ...(fileName ? { fileName } : {}),
+        filePath: null,
+        signatureInvalidationNotice: candidate.signatureInvalidationNotice,
+      });
+    } catch (error) {
+      // A rejection here would otherwise leave phase at "applying" forever.
+      setPhase("error");
+      setMessage(textEditErrorMessage(error));
+      return;
+    }
 
     if (replaced !== "replaced") {
       setPhase("error");

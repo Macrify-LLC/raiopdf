@@ -2581,7 +2581,8 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         file
     }
     .build()?;
-    let undo = native_menu_item(app, "edit:undo", "Undo", false, Some("CmdOrCtrl+Z"))?;
+    // Keep the accelerator in the webview so text controls retain their native undo stack.
+    let undo = native_menu_item(app, "edit:undo", "Undo", false, None)?;
     let edit = SubmenuBuilder::new(app, "Edit").item(&undo);
     let edit = if policy.native_edit_items {
         edit.separator().cut().copy().paste().select_all()

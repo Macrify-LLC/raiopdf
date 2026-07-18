@@ -7015,6 +7015,25 @@ export function App() {
     }
   }, [editing]);
 
+  useEffect(() => {
+    function handleUndoShortcut(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.key.toLowerCase() !== "z" ||
+        isTextEntryTarget(event.target)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      undoLastPendingEdit();
+    }
+
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [undoLastPendingEdit]);
+
   const exportDocx = useCallback(() => {
     if (!document.source) {
       setError("Open a PDF before exporting editable Word.");

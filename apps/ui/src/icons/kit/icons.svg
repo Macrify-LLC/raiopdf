@@ -208,4 +208,93 @@
     <path class="rp-part g-nudge" style="--nx:-.8px;--ny:.8px" d="M3.5 6H14v10.5"></path>
     <path class="rp-part g-nudge" style="--nx:-.8px;--ny:-.8px" d="M8.5 8.5H14V14"></path>
   </symbol>
+
+  <symbol id="rp-icon-sensitive-scan" viewBox="0 0 20 20">
+    <path class="rp-part" d="M15 8V3.5H4.5v11h5"></path>
+    <path class="rp-part" style="opacity:.45" d="M6.5 6.5h5.5"></path>
+    <circle class="rp-part g-pulse" style="transform-origin:13.5px 12.5px;--ps:1.2" cx="13.5" cy="12.5" r="3.2"></circle>
+    <path class="rp-part g-nudge" style="--nx:1.2px;--ny:1.2px" d="m15.8 14.8 2.2 2.2"></path>
+  </symbol>
+
+  <symbol id="rp-icon-lock" viewBox="0 0 20 20">
+    <rect class="rp-part" x="4.5" y="9" width="11" height="7.5" rx="1"></rect>
+    <path class="rp-part g-nudge" style="--ny:-2px" d="M7 9V6.5a3 3 0 0 1 6 0V9"></path>
+    <path class="rp-part g-pulse" style="transform-origin:10px 12.5px;--ps:1.3" d="M10 11.5v2"></path>
+  </symbol>
+
+  <symbol id="rp-icon-wrench" viewBox="0 0 20 20">
+    <path class="rp-part" d="M6.5 13.5 13.5 6.5"></path>
+    <path class="rp-part g-nudge" style="--nx:1px;--ny:-1px" d="M12 5.2 14.7 2.8 16.5 4.6 14.1 7.3"></path>
+    <path class="rp-part g-nudge" style="--nx:-1px;--ny:1px" d="M8 14.8 5.3 17.2 3.5 15.4 5.9 12.7"></path>
+  </symbol>
+
+  <symbol id="rp-icon-production-set" viewBox="0 0 20 20">
+    <path class="rp-part" d="M8 3.5h6v10H8z"></path>
+    <path class="rp-part g-nudge" style="--nx:-1.4px;--ny:1.4px" d="M6 5.5h6v10H6z"></path>
+    <rect class="rp-part g-nudge" style="--nx:-2.8px;--ny:2.8px" x="4" y="7.5" width="6" height="10"></rect>
+  </symbol>
+
+  <symbol id="rp-icon-page-numbers" viewBox="0 0 20 20">
+    <path class="rp-part" d="M5 3.5h6l3 3v10H5Z"></path>
+    <path class="rp-part" d="M11 3.5v3h3"></path>
+    <path class="rp-part g-pulse" style="transform-origin:9.5px 14.3px;--ps:1.18" d="M8.3 12.8v3M10.7 12.8v3M7.6 13.8h4.8M7.6 15.4h4.8"></path>
+  </symbol>
+
+  <symbol id="rp-icon-table-of-authorities" viewBox="0 0 20 20">
+    <path class="rp-part g-nudge" style="--nx:-1px" d="M10 6 4 4.5v10L10 16Z"></path>
+    <path class="rp-part g-nudge" style="--nx:1px" d="M10 6 16 4.5v10L10 16Z"></path>
+    <path class="rp-part" d="M10 6v10"></path>
+    <path class="rp-part" style="opacity:.45" d="M6 8.3l2.3.9M6 10.8l2.3.9"></path>
+  </symbol>
+
+  <symbol id="rp-icon-doc-properties" viewBox="0 0 20 20">
+    <path class="rp-part" d="M5 3.5h6l3 3v9.5H5Z"></path>
+    <path class="rp-part" d="M11 3.5v3h3"></path>
+    <circle class="rp-part g-pulse" style="transform-origin:9.5px 11.3px;--ps:1.2" cx="9.5" cy="11.3" r="2.6"></circle>
+    <path class="rp-part rp-heavy" d="M9.5 10.3h.01"></path>
+    <path class="rp-part" d="M9.5 11.1v1.6"></path>
+  </symbol>
+
+  <symbol id="rp-icon-watermark" viewBox="0 0 20 20">
+    <path class="rp-part" style="opacity:.4" d="M4.5 3.5h7v13h-7z"></path>
+    <path class="rp-part g-pulse" style="transform-origin:11.5px 11px;--ps:1.15" d="M11.5 5.5 14.5 11a3 3 0 1 1-6 0Z"></path>
+  </symbol>
+
+  <symbol id="rp-icon-merge" viewBox="0 0 20 20">
+    <path class="rp-part g-nudge" style="--nx:1.4px" d="M4 4h4v12H4z"></path>
+    <path class="rp-part g-nudge" style="--nx:-1.4px" d="M12 4h4v12h-4z"></path>
+    <path class="rp-part g-pulse" style="transform-origin:10px 10px;--ps:1.2" d="M8.5 8 10 10 8.5 12M11.5 8 10 10 11.5 12"></path>
+  </symbol>
+
+  <symbol id="rp-icon-compress" viewBox="0 0 20 20">
+    <path class="rp-part g-nudge" style="--nx:1px;--ny:1px" d="M8.5 16.5V11.5H3.5M8.5 11.5 2.5 17.5"></path>
+    <path class="rp-part g-nudge" style="--nx:-1px;--ny:-1px" d="M11.5 3.5V8.5H16.5M11.5 8.5 17.5 2.5"></path>
+  </symbol>
+
+  <symbol id="rp-icon-pdf-to-word" viewBox="0 0 20 20">
+    <rect class="rp-part" x="2" y="3.5" width="5" height="13"></rect>
+    <path class="rp-part g-nudge" style="--nx:1.2px" d="M8.5 10h3.4M10.3 8.2l2 1.8-2 1.8"></path>
+    <rect class="rp-part" x="13" y="3.5" width="5" height="13"></rect>
+    <path class="rp-part" style="opacity:.5" d="M14.6 6.5h1.8M14.6 9h2.6M14.6 11.5h2"></path>
+  </symbol>
+
+  <symbol id="rp-icon-insert-image" viewBox="0 0 20 20">
+    <rect class="rp-part" x="2.5" y="4" width="11" height="10"></rect>
+    <circle class="rp-part" cx="6" cy="7.3" r="1"></circle>
+    <path class="rp-part" d="m3 12.5 3-3 2.5 2.5 2-2 3 3"></path>
+    <path class="rp-part g-pulse" style="transform-origin:16px 15px;--ps:1.25" d="M16 12.5v5M13.5 15h5"></path>
+  </symbol>
+
+  <symbol id="rp-icon-batch-cleanup" viewBox="0 0 20 20">
+    <rect class="rp-part" x="3.5" y="6" width="9" height="10.5"></rect>
+    <path class="rp-part g-nudge" style="--nx:1.6px;--ny:-1.6px" d="M6 6V3.5h9v10.5h-2.5"></path>
+    <path class="rp-part g-pulse" style="transform-origin:15.5px 5.5px;--ps:1.3" d="M15.5 3v5M13 5.5h5M13.7 3.7l3.6 3.6M17.3 3.7l-3.6 3.6"></path>
+  </symbol>
+
+  <symbol id="rp-icon-pages" viewBox="0 0 20 20">
+    <rect class="rp-part g-nudge" style="--nx:-0.8px;--ny:-0.8px" x="3" y="3" width="6" height="7"></rect>
+    <rect class="rp-part g-nudge" style="--nx:0.8px;--ny:-0.8px" x="11" y="3" width="6" height="7"></rect>
+    <rect class="rp-part g-nudge" style="--nx:-0.8px;--ny:0.8px" x="3" y="12" width="6" height="7"></rect>
+    <rect class="rp-part g-nudge" style="--nx:0.8px;--ny:0.8px" x="11" y="12" width="6" height="7"></rect>
+  </symbol>
 </svg>

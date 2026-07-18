@@ -1,17 +1,17 @@
 ---
 id: scanner-2425
-title: 2.425 Scanner
+title: Sensitive Info Scanner
 group: legal
 summary: Scan a document for sensitive personal information — Social Security and account numbers, and the like — before you file.
 order: 30
 ---
 
-# 2.425 Scanner
+# Sensitive Info Scanner
 
 Courts require you to keep certain personal information out of public filings.
-The 2.425 Scanner — named for a court rule on protecting that information — reads
-through a document and flags likely sensitive data so you can catch it before it
-goes out.
+The Sensitive Info Scanner reads through a document and flags likely sensitive
+data so you can catch it before it goes out. (Florida practitioners may know
+this check by the rule that governs it there, Fla. R. Jud. Admin. 2.425.)
 
 ## What it looks for
 
@@ -27,7 +27,7 @@ characters — so the scan results don't themselves expose the information.
 ## How to do it
 
 1. Open the document.
-2. In the **Legal** tools, choose **2.425 Scanner**.
+2. In the **Legal** tools, choose **Sensitive Info Scanner**.
 3. Click **Scan Document**.
 4. Review the list. Each item shows what kind of data it is and the page it's on.
 5. Click **Mark for redaction** on anything that should come out. That switches

@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Make Searchable (OCR) — RaioPDF Help</title>
-<meta name="description" content="Turn a scanned PDF into one you can search and select text in — entirely on your computer.">
-<link rel="canonical" href="https://raio.macrify.me/help/make-searchable.html">
+<title>Create Fillable Fields — RaioPDF Help</title>
+<meta name="description" content="Turn a fieldless form into a reusable PDF with real text fields and checkboxes.">
+<link rel="canonical" href="https://raio.macrify.me/help/form-authoring.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
-<meta property="og:url" content="https://raio.macrify.me/help/make-searchable.html">
-<meta property="og:title" content="Make Searchable (OCR) — RaioPDF Help">
-<meta property="og:description" content="Turn a scanned PDF into one you can search and select text in — entirely on your computer.">
+<meta property="og:url" content="https://raio.macrify.me/help/form-authoring.html">
+<meta property="og:title" content="Create Fillable Fields — RaioPDF Help">
+<meta property="og:description" content="Turn a fieldless form into a reusable PDF with real text fields and checkboxes.">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Make Searchable (OCR) — RaioPDF Help">
-<meta name="twitter:description" content="Turn a scanned PDF into one you can search and select text in — entirely on your computer.">
+<meta name="twitter:title" content="Create Fillable Fields — RaioPDF Help">
+<meta name="twitter:description" content="Turn a fieldless form into a reusable PDF with real text fields and checkboxes.">
 
 <link rel="stylesheet" href="/shared/reset.css">
 <link rel="stylesheet" href="/shared/help.css">
@@ -58,36 +58,35 @@
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
         <a href="/help/">Help</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <a href="/help/#group-comment-ocr">Comment &amp; OCR</a>
+        <a href="/help/#group-edit">Edit</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <span class="help-breadcrumb__current" aria-current="page">Make Searchable (OCR)</span>
+        <span class="help-breadcrumb__current" aria-current="page">Create Fillable Fields</span>
       </nav>
 
       <div class="help-article-layout">
         <article class="help-article">
-          <div class="help-article__body"><h1>Make Searchable (OCR)</h1><p>A scanned document is really just a picture of a page. You can see the words, but
-the computer can't — so you can't search it or select its text. <strong>Make
-Searchable</strong> fixes that with OCR (optical character recognition — the computer
-reading the text in the image) and adds an invisible text layer, all on your own
-machine.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Open the scanned PDF.</li><li>Click <strong>Make Searchable (OCR)</strong> in the Tools panel.</li><li>Wait while it works — you'll see it move through <strong>Starting</strong>,
-<strong>Processing</strong>, and <strong>Verifying</strong>.</li><li>When it says <strong>Searchable — verified</strong>, use <strong>Save</strong> (or <strong>Save As</strong>) to keep
-the searchable version.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>It runs on your computer.</strong> The text recognition happens locally, using
-tools built into RaioPDF. Your pages are never uploaded.</li><li><strong>The page looks the same.</strong> OCR adds a hidden text layer behind the image — it
-doesn't alter how the document looks. Afterward you can search it and select
-text.</li><li><strong>It checks its own work.</strong> RaioPDF confirms a real, readable text layer was
-actually added. If OCR comes up empty, it leaves your document unchanged and
-tells you, rather than handing you a file that isn't really searchable.</li><li><strong>A few pages with thin text over a scan get a heads-up, not a wall.</strong> Normal OCR
-leaves pages that already carry a sliver of text alone, so a mostly-scanned page under
-a thin text layer comes through as-is. RaioPDF still hands you the searchable copy and
-names those pages, with a nudge to run <strong>Force OCR</strong> on them if you need real text
-there too.</li><li><strong>Your OCR'd copy is treated as unsaved.</strong> It opens as a fresh document, so closing it
-prompts you to save first — use <strong>Save As</strong> to keep it.</li><li><strong>You only need it for scans.</strong> A PDF that already has real text is searchable
-as-is.</li></ul></div>
-        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/scanner-2425.html">Sensitive Info Scanner</a> — after OCR, scan for sensitive information</li><li><a href="/help/data-stays-local.html">Your data never leaves your computer</a> — why OCR is offline</li></ul></div>
+          <div class="help-article__body"><h1>Create Fillable Fields</h1><p>Add real fillable fields to a static or scanned form, then save a reusable PDF.
+The fields remain interactive when the PDF is reopened in RaioPDF or another
+ordinary PDF viewer.</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Open the PDF and choose <strong>Create Fillable Text Field</strong> or <strong>Create Fillable
+Checkbox</strong> under <strong>Edit</strong>. The same tools are available in the page toolbar.</li><li>Click where the field should begin. RaioPDF places a pending field on the page.</li><li>Type an initial value in a text field, or select a checkbox if it should start
+checked.</li><li>Drag the field to move it. Select it and use the corner handles to resize it.</li><li>While the field is selected, change its name or mark it <strong>Required</strong> or
+<strong>Read-only</strong>. Text fields also offer font size and <strong>Multiline</strong> controls.</li><li>Choose <strong>Save</strong> or <strong>Save As</strong>. The field and its value are written together.</li></ol><h2 id="fill-anywhere-or-create-fillable-fields">Fill anywhere or create fillable fields?</h2><ul><li>Use <a href="/help/textBox.html">Text Box</a> to fill one static form quickly. It saves visible
+text as a PDF annotation.</li><li>Use <strong>Create Fillable Text Field</strong> or <strong>Create Fillable Checkbox</strong> when the PDF
+should remain fillable and reusable after you save it.</li></ul><h2 id="what-to-know">What to know</h2><ul><li><strong>Field names must be unique.</strong> RaioPDF supplies a name when you place a field.
+You can change it while the field is selected.</li><li><strong>Nothing is written until you save.</strong> Move, resize, fill, or remove pending
+fields before committing them to the PDF.</li><li><strong>Signed and XFA forms are not rewritten.</strong> RaioPDF stops and explains the
+limitation instead of changing those documents.</li><li><strong>Large streamed documents are not supported yet.</strong> Use an ordinary locally
+opened PDF for field authoring.</li><li><strong>Prepare for Filing can flatten fields later.</strong> Flattening locks their current
+appearance into the page and removes their fillable controls.</li></ul></div>
+        <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/textBox.html">Text Box</a> — fill anywhere without creating a reusable field</li><li><a href="/help/prepare-for-filing.html">Prepare for Filing</a> — review and optionally flatten fields</li></ul></div>
         <nav class="help-pager" aria-label="More in this category">
-          <a class="help-pager__link help-pager__link--next" href="/help/comment.html">
+          <a class="help-pager__link help-pager__link--prev" href="/help/callout.html">
+            <span class="help-pager__eyebrow">← Previous</span>
+            <span class="help-pager__title">Callout</span>
+          </a>
+          <a class="help-pager__link help-pager__link--next" href="/help/image.html">
             <span class="help-pager__eyebrow">Next →</span>
-            <span class="help-pager__title">Comment</span>
+            <span class="help-pager__title">Image</span>
           </a>
         </nav>
         </article>
@@ -95,6 +94,7 @@ as-is.</li></ul></div>
           <p class="help-toc__label">On this page</p>
           <ul>
           <li><a href="#how-to-do-it">How to do it</a></li>
+          <li><a href="#fill-anywhere-or-create-fillable-fields">Fill anywhere or create fillable fields?</a></li>
           <li><a href="#what-to-know">What to know</a></li>
           <li><a href="#related">Related</a></li>
           </ul>

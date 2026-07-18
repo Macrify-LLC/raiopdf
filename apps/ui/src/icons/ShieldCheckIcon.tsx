@@ -2,7 +2,7 @@ import { ICON_VIEWBOX, ICON_STROKE_WIDTH, type IconProps } from "./types";
 
 export interface ShieldCheckIconProps extends IconProps {
   /**
-   * The 2.425 Scanner tool row shows the shield with its checkmark; the
+   * The Sanitize tool row shows the shield with its checkmark; the
    * status bar's permanent local-processing trust line reuses the bare
    * shield without it, matching the reference mockup.
    */

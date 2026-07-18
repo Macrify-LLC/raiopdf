@@ -21,7 +21,7 @@ export const LEGAL_TOOLS = [
   { id: "sanitize", label: "Sanitize...", group: "legal", helpArticleId: "sanitize", description: "Remove active content such as JavaScript, links, and embedded files." },
   { id: "redact", label: "Redact", group: "legal", helpArticleId: "redact", description: "Mark areas for permanent removal, then verify redacted content is gone." },
   { id: "bates-numbering", label: "Bates Numbering", group: "legal", helpArticleId: "bates-numbering", description: "Stamp page numbers into the PDF content with a prefix and fixed digit width." },
-  { id: "scanner-2425", label: "2.425 Scanner", group: "legal", helpArticleId: "scanner-2425", description: "Look for common Florida Rule 2.425 sensitive-information patterns." },
+  { id: "scanner-2425", label: "Sensitive Info Scanner", group: "legal", helpArticleId: "scanner-2425", description: "Look for sensitive personal information -- Social Security, account, and license numbers." },
   { id: "scrub-metadata", label: "Scrub Metadata", group: "legal", helpArticleId: "scrub-metadata", description: "Inspect and remove document metadata without changing page content." },
   { id: "passwords", label: "PDF Security", group: "legal", helpArticleId: "passwords", description: "Review protection and create a separately verified, AES-256 protected copy." },
 ] as const satisfies readonly ToolRegistryEntry[];

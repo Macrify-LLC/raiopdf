@@ -7,7 +7,10 @@ import { describe, it } from "node:test";
 
 import { verifyMinisignSignature } from "./minisign.mjs";
 import { validatePlatformReleaseStage } from "./validate-package-boundary.mjs";
-import { prepareSignedReleaseAssets } from "./prepare-signed-release-assets.mjs";
+import {
+  combineSignedReleaseAssets,
+  prepareSignedReleaseAssets,
+} from "./prepare-signed-release-assets.mjs";
 import {
   validateGitHubLatestRelease,
   validateGitHubReleaseState,
@@ -357,6 +360,324 @@ describe("signed release asset preparation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects an unknown staging platform", () => {
+    assert.throws(
+      () => prepareSignedReleaseAssets({ tag: "v0.1.2", platform: "linux-x64" }),
+      /unsupported --platform "linux-x64"/,
+    );
+  });
+});
+
+describe("macOS release asset staging", () => {
+  const MAC_ASSET_NAMES = [
+    "RaioPDF-0.1.2-macos-arm64.dmg",
+    "RaioPDF-0.1.2-macos-arm64.app.tar.gz",
+    "RaioPDF-0.1.2-macos-arm64.app.tar.gz.sig",
+    "RaioPDF-0.1.2-macos-arm64-third-party-notices.txt",
+    "RaioPDF-0.1.2-macos-arm64-component-manifest.json",
+    "RaioPDF-0.1.2-macos-arm64-source-correspondence.md",
+    "RaioPDF-0.1.2-macos-arm64-license-notices.txt",
+    "RaioPDF-0.1.2-macos-arm64-ghostscript-source-offer.txt",
+    "ghostscript-10.07.1-macos-arm64-source.tar.xz",
+    "SHA256SUMS-macos-arm64.txt",
+  ];
+
+  it("stages canonical macOS names and checksums the platform validator accepts", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-mac-release-assets-"));
+    try {
+      const outDir = path.join(root, "signed", "macos-arm64");
+      const { prepared, payloadDir } = stageMacFixture({
+        root: path.join(root, "mac"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir,
+      });
+
+      assert.deepEqual(prepared.assetNames, MAC_ASSET_NAMES);
+      assert.equal(
+        readFileSync(path.join(outDir, "RaioPDF-0.1.2-macos-arm64.dmg"), "utf8"),
+        "fake signed dmg bytes",
+      );
+      assert.equal(
+        readFileSync(path.join(outDir, "RaioPDF-0.1.2-macos-arm64.app.tar.gz"), "utf8"),
+        "test",
+      );
+      assert.equal(
+        readFileSync(path.join(outDir, "RaioPDF-0.1.2-macos-arm64.app.tar.gz.sig"), "utf8").trim(),
+        TEST_TAURI_SIGNATURE,
+      );
+      assert.equal(existsSync(path.join(outDir, "latest.json")), false);
+
+      const checksumLines = readFileSync(path.join(outDir, "SHA256SUMS-macos-arm64.txt"), "utf8")
+        .trim()
+        .split("\n");
+      const hashed = MAC_ASSET_NAMES.filter((name) => name !== "SHA256SUMS-macos-arm64.txt");
+      assert.deepEqual(
+        checksumLines,
+        hashed
+          .sort((a, b) => a.localeCompare(b))
+          .map((name) => `${sha256File(path.join(outDir, name))}  ${name}`),
+      );
+
+      assert.doesNotThrow(() =>
+        validatePlatformReleaseStage({
+          rootDir: outDir,
+          platformId: "macos-arm64",
+          version: "0.1.2",
+          ghostscriptVersion: "10.07.1",
+          updaterPubkey: TEST_UPDATER_PUBKEY,
+          payloadRoot: payloadDir,
+          baselines: testBaselines("macos-arm64"),
+        }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on a missing updater signature or a stale DMG version", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-mac-release-negative-"));
+    try {
+      const missingSig = writeMacBuildFixture({ root: path.join(root, "no-sig"), version: "0.1.2" });
+      rmSync(path.join(missingSig.macosDir, "RaioPDF.app.tar.gz.sig"));
+      assert.throws(
+        () =>
+          prepareSignedReleaseAssets({
+            tag: "v0.1.2",
+            platform: "macos-arm64",
+            dmgSearchDirs: [missingSig.dmgDir],
+            updaterSearchDirs: [missingSig.macosDir],
+            outDir: path.join(root, "no-sig-out"),
+            payloadDir: missingSig.payloadDir,
+            pinsPath: missingSig.pinsPath,
+            ghostscriptSource: missingSig.ghostscriptSource,
+            skipAuthenticode: true,
+            skipLegalCheck: true,
+            updaterPubkey: TEST_UPDATER_PUBKEY,
+          }),
+        /missing updater signature/,
+      );
+
+      const staleDmg = writeMacBuildFixture({ root: path.join(root, "stale"), version: "0.1.2" });
+      rmSync(path.join(staleDmg.dmgDir, "RaioPDF_0.1.2_aarch64.dmg"));
+      writeFileSync(path.join(staleDmg.dmgDir, "RaioPDF_0.1.3_aarch64.dmg"), "stale dmg bytes");
+      assert.throws(
+        () =>
+          prepareSignedReleaseAssets({
+            tag: "v0.1.2",
+            platform: "macos-arm64",
+            dmgSearchDirs: [staleDmg.dmgDir],
+            updaterSearchDirs: [staleDmg.macosDir],
+            outDir: path.join(root, "stale-out"),
+            payloadDir: staleDmg.payloadDir,
+            pinsPath: staleDmg.pinsPath,
+            ghostscriptSource: staleDmg.ghostscriptSource,
+            skipAuthenticode: true,
+            skipLegalCheck: true,
+            updaterPubkey: TEST_UPDATER_PUBKEY,
+          }),
+        /is version 0\.1\.3, not 0\.1\.2/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("cross-platform combine", () => {
+  it("writes the shared latest.json and release-wide SHA256SUMS.txt from complete stages", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-combine-release-assets-"));
+    try {
+      const stageRoot = path.join(root, "signed");
+      const windows = stageWindowsFixture({
+        root: path.join(root, "win"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir: path.join(stageRoot, "windows-x64"),
+        platformStageOnly: true,
+      });
+      stageMacFixture({
+        root: path.join(root, "mac"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir: path.join(stageRoot, "macos-arm64"),
+      });
+
+      const combined = combineSignedReleaseAssets({
+        tag: "v0.1.2",
+        stageRoot,
+        updaterPubkey: TEST_UPDATER_PUBKEY,
+      });
+
+      assert.equal(combined.version, "0.1.2");
+      const manifest = JSON.parse(readFileSync(combined.latestJsonPath, "utf8"));
+      assert.equal(manifest.version, "0.1.2");
+      assert.deepEqual(Object.keys(manifest.platforms).sort(), [
+        "darwin-aarch64",
+        "windows-x86_64",
+      ]);
+      assert.equal(
+        manifest.platforms["windows-x86_64"].url,
+        "https://github.com/Macrify-LLC/raiopdf/releases/download/v0.1.2/RaioPDF-0.1.2-windows-x64-setup.exe",
+      );
+      assert.equal(
+        manifest.platforms["darwin-aarch64"].url,
+        "https://github.com/Macrify-LLC/raiopdf/releases/download/v0.1.2/RaioPDF-0.1.2-macos-arm64.app.tar.gz",
+      );
+      assert.equal(manifest.platforms["windows-x86_64"].signature, TEST_TAURI_SIGNATURE);
+      assert.equal(manifest.platforms["darwin-aarch64"].signature, TEST_TAURI_SIGNATURE);
+
+      const rootChecksums = new Map(
+        readFileSync(combined.sha256SumsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const [hash, name] = line.split(/\s{2}/);
+            return [name, hash];
+          }),
+      );
+      const expectedRootNames = [
+        "RaioPDF-0.1.2-windows-x64-setup.exe",
+        "RaioPDF-0.1.2-windows-x64-setup.exe.sig",
+        "RaioPDF-0.1.2-third-party-notices.txt",
+        "RaioPDF-0.1.2-component-manifest.json",
+        "RaioPDF-0.1.2-source-correspondence.md",
+        "RaioPDF-0.1.2-license-notices.txt",
+        "RaioPDF-0.1.2-ghostscript-source-offer.txt",
+        "ghostscript-10.07.1-source.tar.xz",
+        "latest.json",
+      ].sort((a, b) => a.localeCompare(b));
+      assert.deepEqual([...rootChecksums.keys()], expectedRootNames);
+      assert.equal(rootChecksums.get("latest.json"), sha256File(combined.latestJsonPath));
+      assert.equal(
+        rootChecksums.get("RaioPDF-0.1.2-windows-x64-setup.exe"),
+        sha256File(path.join(stageRoot, "windows-x64", "RaioPDF-0.1.2-windows-x64-setup.exe")),
+      );
+
+      const uploadNames = combined.uploadPlan.map((filePath) => path.basename(filePath));
+      assert.equal(
+        combined.uploadPlan.includes(path.join(stageRoot, "windows-x64", "SHA256SUMS.txt")),
+        false,
+      );
+      assert.equal(combined.uploadPlan.includes(combined.sha256SumsPath), true);
+      assert.equal(combined.uploadPlan.includes(combined.latestJsonPath), true);
+      assert.equal(uploadNames.includes("SHA256SUMS-macos-arm64.txt"), true);
+      assert.equal(
+        new Set(uploadNames).size,
+        combined.uploadPlan.length,
+        "upload plan must not contain colliding asset names",
+      );
+
+      // The exact public asset name set the release validator accepts for a
+      // combined Windows + macOS release.
+      assert.deepEqual(
+        validatePublicAssetNames(
+          uploadNames,
+          "0.1.2",
+          { GHOSTSCRIPT_VERSION: "10.07.1" },
+          { allowMac: true },
+        ),
+        { includesMac: true, macGhostscriptVersion: "10.07.1" },
+      );
+
+      // Windows stage stays platform-stage-only and valid on its own.
+      assert.doesNotThrow(() =>
+        validatePlatformReleaseStage({
+          rootDir: path.join(stageRoot, "windows-x64"),
+          platformId: "windows-x64",
+          version: "0.1.2",
+          ghostscriptVersion: "10.07.1",
+          updaterPubkey: TEST_UPDATER_PUBKEY,
+          payloadRoot: windows.payloadDir,
+          baselines: testBaselines("windows-x64"),
+        }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to combine when a platform stage is missing", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-combine-missing-"));
+    try {
+      const stageRoot = path.join(root, "signed");
+      stageWindowsFixture({
+        root: path.join(root, "win"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir: path.join(stageRoot, "windows-x64"),
+        platformStageOnly: true,
+      });
+      assert.throws(
+        () =>
+          combineSignedReleaseAssets({
+            tag: "v0.1.2",
+            stageRoot,
+            skipUpdaterSignature: true,
+          }),
+        /macos-arm64 platform stage is missing/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to combine platform stages built from different versions", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-combine-mismatch-"));
+    try {
+      const stageRoot = path.join(root, "signed");
+      stageWindowsFixture({
+        root: path.join(root, "win"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir: path.join(stageRoot, "windows-x64"),
+        platformStageOnly: true,
+      });
+      stageMacFixture({
+        root: path.join(root, "mac"),
+        tag: "v0.1.3",
+        version: "0.1.3",
+        outDir: path.join(stageRoot, "macos-arm64"),
+      });
+      assert.throws(
+        () =>
+          combineSignedReleaseAssets({
+            tag: "v0.1.2",
+            stageRoot,
+            skipUpdaterSignature: true,
+          }),
+        /macos-arm64 stage holds version 0\.1\.3/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a Windows stage that still contains its own latest.json", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "raiopdf-combine-latestjson-"));
+    try {
+      const stageRoot = path.join(root, "signed");
+      stageWindowsFixture({
+        root: path.join(root, "win"),
+        tag: "v0.1.2",
+        version: "0.1.2",
+        outDir: path.join(stageRoot, "windows-x64"),
+        platformStageOnly: false,
+      });
+      assert.throws(
+        () =>
+          combineSignedReleaseAssets({
+            tag: "v0.1.2",
+            stageRoot,
+            skipUpdaterSignature: true,
+          }),
+        /--platform-stage-only/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function sha256Text(value) {
@@ -489,4 +810,108 @@ function writeValidatedReleaseAssets({ root, tag, version }) {
 
 function sha256File(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function testBaselines(platformId) {
+  return {
+    schemaVersion: 1,
+    platforms: {
+      [platformId]: {
+        installer: {
+          baselineVersion: "test",
+          baselineBytes: 1024,
+          maxGrowthBytes: 100,
+          maxGrowthPercent: 10,
+        },
+        payload: {
+          baselineVersion: "test",
+          baselineBytes: 1024 * 1024,
+          maxGrowthBytes: 1024,
+          maxGrowthPercent: 10,
+        },
+      },
+    },
+  };
+}
+
+function writeMacBuildFixture({ root, version }) {
+  const dmgDir = path.join(root, "bundle", "dmg");
+  const macosDir = path.join(root, "bundle", "macos");
+  const payloadDir = path.join(root, "payload");
+  const pinsPath = path.join(root, "PINS.macos.env");
+  const ghostscriptSource = path.join(root, "ghostscript-source.tar.xz");
+  const ghostscriptSourceBytes = "fake ghostscript source archive";
+  const ghostscriptSourceSha = sha256Text(ghostscriptSourceBytes);
+
+  mkdirSync(dmgDir, { recursive: true });
+  mkdirSync(macosDir, { recursive: true });
+  writeFileSync(path.join(dmgDir, `RaioPDF_${version}_aarch64.dmg`), "fake signed dmg bytes");
+  // "test" matches the minisign test vector so real updater verification runs.
+  writeFileSync(path.join(macosDir, "RaioPDF.app.tar.gz"), "test");
+  writeFileSync(path.join(macosDir, "RaioPDF.app.tar.gz.sig"), `${TEST_TAURI_SIGNATURE}\n`);
+  writeLegalPayload({
+    legalDir: path.join(payloadDir, "legal"),
+    version,
+    ghostscriptSourceSha,
+    thirdPartyNotices: "mac third party notices",
+  });
+  writeFileSync(ghostscriptSource, ghostscriptSourceBytes);
+  writePins(pinsPath, ghostscriptSourceSha);
+
+  return { dmgDir, macosDir, payloadDir, pinsPath, ghostscriptSource };
+}
+
+function stageMacFixture({ root, tag, version, outDir }) {
+  const fixture = writeMacBuildFixture({ root, version });
+  const prepared = prepareSignedReleaseAssets({
+    tag,
+    platform: "macos-arm64",
+    dmgSearchDirs: [fixture.dmgDir],
+    updaterSearchDirs: [fixture.macosDir],
+    outDir,
+    payloadDir: fixture.payloadDir,
+    pinsPath: fixture.pinsPath,
+    ghostscriptSource: fixture.ghostscriptSource,
+    skipAuthenticode: true,
+    skipLegalCheck: true,
+    updaterPubkey: TEST_UPDATER_PUBKEY,
+  });
+  return { ...fixture, prepared };
+}
+
+function stageWindowsFixture({ root, tag, version, outDir, platformStageOnly = true }) {
+  const nsisDir = path.join(root, "nsis");
+  const payloadDir = path.join(root, "payload");
+  const pinsPath = path.join(root, "PINS.env");
+  const ghostscriptSource = path.join(root, "ghostscript-source.tar.xz");
+  const ghostscriptSourceBytes = "fake ghostscript source archive";
+  const ghostscriptSourceSha = sha256Text(ghostscriptSourceBytes);
+
+  mkdirSync(nsisDir, { recursive: true });
+  // "test" matches the minisign test vector so real updater verification runs.
+  writeFileSync(path.join(nsisDir, `RaioPDF_${version}_x64-setup.exe`), "test");
+  writeFileSync(path.join(nsisDir, `RaioPDF_${version}_x64-setup.exe.sig`), `${TEST_TAURI_SIGNATURE}\n`);
+  writeLegalPayload({
+    legalDir: path.join(payloadDir, "legal"),
+    version,
+    ghostscriptSourceSha,
+    thirdPartyNotices: "win third party notices",
+  });
+  writeFileSync(ghostscriptSource, ghostscriptSourceBytes);
+  writePins(pinsPath, ghostscriptSourceSha);
+
+  const prepared = prepareSignedReleaseAssets({
+    tag,
+    platform: "windows-x64",
+    nsisDir,
+    outDir,
+    payloadDir,
+    pinsPath,
+    ghostscriptSource,
+    skipAuthenticode: true,
+    skipLegalCheck: true,
+    updaterPubkey: TEST_UPDATER_PUBKEY,
+    platformStageOnly,
+  });
+  return { nsisDir, payloadDir, pinsPath, prepared };
 }

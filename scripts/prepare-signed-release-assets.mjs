@@ -518,9 +518,7 @@ function writeSha256Sums(outDir, assetNames, filename = "SHA256SUMS.txt") {
 }
 
 function uploadAssets(tag, outDir, assetNames) {
-  execFileSync("gh", ["release", "upload", tag, ...assetNames.map((name) => path.join(outDir, name)), "--clobber"], {
-    stdio: "inherit",
-  });
+  uploadFiles(tag, assetNames.map((name) => path.join(outDir, name)));
 }
 
 function macDmgVersion(filename) {
@@ -622,7 +620,8 @@ function resolveMacUpdaterPair(updaterPath, updaterSigPath, version) {
   if (!existsSync(sig)) {
     throw new Error(
       `prepare-signed-release-assets: missing updater signature ${sig}. ` +
-        "The signed macOS build must be produced with createUpdaterArtifacts and the Tauri updater key.",
+        "The updater archive is minisigned by the release orchestrator's `updater` step " +
+        "(scripts/release-macos.mjs), which needs TAURI_SIGNING_PRIVATE_KEY set.",
     );
   }
   return { updaterPath: resolved, updaterSigPath: sig };

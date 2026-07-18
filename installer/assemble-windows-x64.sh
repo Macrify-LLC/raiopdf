@@ -106,7 +106,10 @@ find_python() {
 }
 
 sha256_file() {
-  sha256sum "$1" | awk '{print $1}'
+  # Hash from stdin: passing the path as an argument makes GNU sha256sum
+  # backslash-escape it (Windows paths contain "\"), which prefixes the whole
+  # output line with "\" and corrupts the extracted hash.
+  sha256sum < "$1" | awk '{print $1}'
 }
 
 download_verified() {

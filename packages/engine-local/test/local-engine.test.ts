@@ -15,7 +15,7 @@ import {
   rgb,
   StandardFonts,
 } from "pdf-lib";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   readPdfOutline,
   writePdfAIdentificationInPlace,
@@ -34,6 +34,19 @@ import {
   resolveCaptionStyle,
   sanitizeIndexTextForFont,
 } from "../src/index";
+
+// Freeze Date for the whole file: pdf-lib stamps document metadata with the
+// current time inside a compressed object stream, so two serializations that
+// straddle a clock tick can differ by a byte after compression. The
+// split-by-max-bytes tests compare exact byteLengths across independently
+// serialized documents and flaked on CI whenever that happened (#239).
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-01-02T03:04:05Z") });
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 describe("LocalPdfEngine", () => {
   it("reorders pages", async () => {

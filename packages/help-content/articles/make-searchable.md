@@ -45,5 +45,5 @@ machine.
 
 ## Related
 
-- [2.425 Scanner](tool:scanner-2425) — after OCR, scan for sensitive information
+- [Sensitive Info Scanner](tool:scanner-2425) — after OCR, scan for sensitive information
 - [Your data never leaves your computer](tool:data-stays-local) — why OCR is offline

@@ -341,7 +341,7 @@ test("builds an exhibit binder round trip from a keyboard-only assembly path", a
   ]);
 });
 
-test("2.425 scanner finds and masks a planted SSN", async ({ page }) => {
+test("sensitive info scanner finds and masks a planted SSN", async ({ page }) => {
   await page.goto("/");
   await openPdf(
     page,
@@ -349,7 +349,7 @@ test("2.425 scanner finds and masks a planted SSN", async ({ page }) => {
     await createTextPdf("Client SSN 123-45-6789 Account 987654321"),
   );
 
-  await page.getByRole("button", { name: "2.425 Scanner", exact: true }).click();
+  await page.getByRole("button", { name: "Sensitive Info Scanner", exact: true }).click();
   await page.getByRole("button", { name: "Scan Document" }).click();
 
   await expect(page.getByText("•••-••-6789")).toBeVisible();

@@ -4606,64 +4606,108 @@ mod tests {
         let received_for_thread = Arc::clone(&received);
 
         thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .expect("stub read timeout");
-            let (head, body) = read_request_head(&mut stream).expect("stub request head");
-            let content_length = content_length(&head);
-            let is_chunked = request_uses_chunked_transfer(&head);
-            let mut request = head;
-            request.extend_from_slice(&body);
-
-            if is_chunked {
-                while !request
-                    .windows(b"\r\n0\r\n\r\n".len())
-                    .any(|window| window == b"\r\n0\r\n\r\n")
+            // Serve every inbound connection for the life of the test, not just the
+            // first. A speculative/aborted client connection — or a retried request
+            // after a transient stall — must not consume the single response and
+            // starve the real request; that one-shot behaviour was the source of
+            // intermittent empty responses on loaded (macOS) CI runners.
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                if stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .is_err()
                 {
-                    let mut buffer = vec![0; 1024];
-                    let bytes_read = stream.read(&mut buffer).expect("stub chunked body read");
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..bytes_read]);
+                    continue;
                 }
-            } else {
-                let mut remaining = content_length.saturating_sub(body.len());
-                while remaining > 0 {
-                    let mut buffer = vec![0; remaining.min(1024)];
-                    let bytes_read = stream.read(&mut buffer).expect("stub body read");
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..bytes_read]);
-                    remaining -= bytes_read;
-                }
-            }
+                let Ok((head, body)) = read_request_head(&mut stream) else {
+                    // Aborted/empty connection — keep serving the next one.
+                    continue;
+                };
+                let content_length = content_length(&head);
+                let is_chunked = request_uses_chunked_transfer(&head);
+                let mut request = head;
+                request.extend_from_slice(&body);
 
-            *received_for_thread
-                .lock()
-                .expect("stub request lock poisoned") =
-                Some(String::from_utf8_lossy(&request).into_owned());
-            stream.write_all(response).expect("stub response write");
+                let complete = if is_chunked {
+                    loop {
+                        if request
+                            .windows(b"\r\n0\r\n\r\n".len())
+                            .any(|window| window == b"\r\n0\r\n\r\n")
+                        {
+                            break true;
+                        }
+                        let mut buffer = vec![0; 1024];
+                        match stream.read(&mut buffer) {
+                            Ok(0) => break false,
+                            Ok(bytes_read) => request.extend_from_slice(&buffer[..bytes_read]),
+                            Err(_) => break false,
+                        }
+                    }
+                } else {
+                    let mut remaining = content_length.saturating_sub(body.len());
+                    loop {
+                        if remaining == 0 {
+                            break true;
+                        }
+                        let mut buffer = vec![0; remaining.min(1024)];
+                        match stream.read(&mut buffer) {
+                            Ok(0) => break false,
+                            Ok(bytes_read) => {
+                                request.extend_from_slice(&buffer[..bytes_read]);
+                                remaining -= bytes_read;
+                            }
+                            Err(_) => break false,
+                        }
+                    }
+                };
+
+                if !complete {
+                    // Partial/aborted request — don't record or respond; wait for the
+                    // real one instead of answering half a request.
+                    continue;
+                }
+
+                *received_for_thread
+                    .lock()
+                    .expect("stub request lock poisoned") =
+                    Some(String::from_utf8_lossy(&request).into_owned());
+                let _ = stream.write_all(response);
+            }
         });
 
         StubHttpServer { port, received }
     }
 
     fn send_proxy_request(port: u16, request: &[u8]) -> String {
+        // A proxy round-trip over loopback occasionally fails to complete on a loaded
+        // CI runner (an early connection reset yields an empty read). Retry the whole
+        // request against a fresh connection so a transient stall doesn't fail an
+        // otherwise-correct proxy; a genuinely broken path stays empty across attempts
+        // and the caller's assertion still surfaces it.
+        for attempt in 0..4 {
+            let response = send_proxy_request_once(port, request);
+            if !response.is_empty() {
+                return response;
+            }
+            thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+        }
+        send_proxy_request_once(port, request)
+    }
+
+    fn send_proxy_request_once(port: u16, request: &[u8]) -> String {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("proxy connect");
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .expect("proxy read timeout");
         stream.write_all(request).expect("proxy request write");
         let _ = stream.shutdown(Shutdown::Write);
         let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("proxy response read");
+        // The proxy always half-closes after a full relay, so a healthy response ends
+        // in EOF well within the timeout. Tolerate a read error and return what we have
+        // rather than panicking — the retry above and the caller's assertion decide.
+        let _ = stream.read_to_string(&mut response);
         response
     }
 

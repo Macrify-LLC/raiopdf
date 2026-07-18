@@ -257,7 +257,7 @@ export async function verifyRedactionAreasClear(
   }
 
   const uniqueTerms = uniqueRedactionTerms(redactedTerms);
-  const textLayer = await verifyFullDocumentTextLayer(bytes, uniqueTerms, pdfDocument);
+  const textLayer = await verifyRedactedAreasTextLayer(bytes, areas, uniqueTerms, pdfDocument);
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const redactedPageIndexes = uniquePageIndexes(areas);
 
@@ -400,8 +400,9 @@ function areasIntersect(left: PdfRedactionArea, right: PdfRedactionArea): boolea
   );
 }
 
-async function verifyFullDocumentTextLayer(
+async function verifyRedactedAreasTextLayer(
   bytes: Uint8Array,
+  areas: readonly PdfRedactionArea[],
   terms: readonly string[],
   injectedPdfDocument: PDFDocumentProxy | null = null,
 ): Promise<RedactionVerificationCheck> {
@@ -423,15 +424,46 @@ async function verifyFullDocumentTextLayer(
       ?? await (await import("./pdfjs")).loadPdfDocument(bytes);
 
     try {
+      // Geometric check, deliberately not a text search: the same words
+      // legitimately appear elsewhere in most documents (redacting one
+      // "toilet" must not fail because the word survives in unredacted
+      // text, even on the same page). What redaction promises is that no
+      // extractable text remains INSIDE the marked areas, so that -- and
+      // only that -- is what gets verified.
       const pages = await extractPageText({ bytes, pdfDocument });
-      const documentText = normalizeSearchText(pages.map((page) => page.text).join("\n"));
-      const remainingTerm = terms.find((term) => documentText.includes(normalizeSearchText(term)));
-
-      if (remainingTerm) {
-        return fail(`Text layer still contains "${remainingTerm}".`);
+      const areasByPage = new Map<number, PdfRedactionArea[]>();
+      for (const area of areas) {
+        const pageAreas = areasByPage.get(area.pageIndex);
+        if (pageAreas) {
+          pageAreas.push(area);
+        } else {
+          areasByPage.set(area.pageIndex, [area]);
+        }
       }
 
-      return pass("Text layer verified clean across the full document.");
+      const dirtyPages: number[] = [];
+      for (const page of pages) {
+        const pageAreas = areasByPage.get(page.pageIndex);
+        if (!pageAreas) {
+          continue;
+        }
+        const survivingText = page.spans.some(
+          (span) =>
+            page.text.slice(span.start, span.end).trim().length > 0 &&
+            pageAreas.some((area) => areasIntersect(span.area, area)),
+        );
+        if (survivingText) {
+          dirtyPages.push(page.pageIndex);
+        }
+      }
+
+      if (dirtyPages.length > 0) {
+        return fail(
+          `Text is still extractable inside a redacted area on page(s) ${formatPageNumbers(dirtyPages)}.`,
+        );
+      }
+
+      return pass("No extractable text remains inside the redacted areas.");
     } finally {
       if (pdfDocument !== injectedPdfDocument) {
         await pdfDocument.loadingTask.destroy();
@@ -627,10 +659,6 @@ function garbledRedactionPagesFromTerms(terms: readonly string[]): readonly numb
 
 function normalizeDisplayText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
-}
-
-function normalizeSearchText(text: string): string {
-  return normalizeDisplayText(text).toLocaleLowerCase();
 }
 
 function formatPageNumbers(pageIndexes: readonly number[]): string {

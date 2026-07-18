@@ -178,6 +178,51 @@ describe("legalTools", () => {
     });
   });
 
+  it("passes verification when the redacted word legitimately survives outside the areas", async () => {
+    const term = "toilet";
+    // Source: the word appears twice on the page; only the FIRST occurrence
+    // is redacted. The second occurrence surviving in the output must not
+    // fail verification -- redaction promises the marked AREAS are clean,
+    // not that the word is globally absent.
+    const sourcePdf = mockPdf([
+      textItem(term, 36, 60),
+      textItem(term, 300, 60),
+    ]);
+    const areas = [{ pageIndex: 0, x: 30, y: 95, w: 80, h: 20 }];
+    const redactedTerms = await collectRedactionAreaTexts(sourcePdf, areas);
+
+    const outputBytes = await createRedactionFixturePdf({
+      annotationText: "",
+      visibleText: "",
+    });
+    pdfjsMock.document = mockPdf([textItem(term, 300, 60)]);
+    const result = await verifyRedactionAreasClear(outputBytes, areas, redactedTerms);
+
+    expect(redactedTerms).toContain(term);
+    expect(result.textLayer.status).toBe("pass");
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails verification when text is still extractable inside a redacted area", async () => {
+    const term = "toilet";
+    const sourcePdf = mockPdf([textItem(term, 36, 60)]);
+    const areas = [{ pageIndex: 0, x: 30, y: 95, w: 80, h: 20 }];
+    const redactedTerms = await collectRedactionAreaTexts(sourcePdf, areas);
+
+    const outputBytes = await createRedactionFixturePdf({
+      annotationText: "",
+      visibleText: "",
+    });
+    pdfjsMock.document = mockPdf([textItem(term, 36, 60)]);
+    const result = await verifyRedactionAreasClear(outputBytes, areas, redactedTerms);
+
+    expect(result.ok).toBe(false);
+    expect(result.textLayer).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("inside a redacted area"),
+    });
+  });
+
   it("does not confidently clear redactions when the source page text layer is garbled", async () => {
     const garbledText = "xqz!@#$ brt%^&* crw+=? plk[]{} mnn<>/ ".repeat(4);
     const sourcePdf = mockPdf([

@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-1B3A5C.svg"></a>
-  <a href="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Macrify-LLC/raiopdf/releases/latest"><img alt="Download the latest release" src="https://img.shields.io/github/v/release/Macrify-LLC/raiopdf?label=download&color=2565A0"></a>
   <img alt="Status: public alpha" src="https://img.shields.io/badge/status-public_alpha-D97706.svg">
   <img alt="Platform: Windows and macOS" src="https://img.shields.io/badge/platform-Windows_%7C_macOS-2565A0.svg">
   <img alt="Telemetry: none" src="https://img.shields.io/badge/telemetry-none-166534.svg">

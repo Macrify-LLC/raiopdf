@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the RaioPDF app binary and the Rust externalBin sidecars
+  (raiopdf-engine-host, raiopdf-mcp-launcher), signed by Tauri with the
+  hardened runtime enabled.
+
+  Intentionally empty: the app itself needs nothing beyond hardened-runtime
+  defaults. WKWebView's JavaScript JIT runs in Apple's out-of-process
+  com.apple.WebKit.WebContent XPC service, which carries its own system
+  entitlements - the host app does not need allow-jit for it. The Rust
+  sidecars are plain native binaries with no JIT, no plugin loading, and no
+  library injection.
+
+  Runtime entitlements for the bundled payload interpreters live next to this
+  file: jvm.entitlements (Temurin JRE) and node.entitlements (MCP Node
+  runtime). Grant new entitlements here only with a proven necessity,
+  documented in a comment.
+-->
+<dict/>
+</plist>

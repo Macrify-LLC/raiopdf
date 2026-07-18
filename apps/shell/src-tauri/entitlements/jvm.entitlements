@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the bundled Temurin JRE executables (payload jre/bin/* and
+  jre/lib/jspawnhelper), signed with the hardened runtime.
+
+  - allow-jit + allow-unsigned-executable-memory: HotSpot compiles bytecode to
+    native code in writable+executable pages. Without both, the JVM aborts at
+    startup under the hardened runtime.
+
+  - disable-library-validation: REQUIRED because the bundled Stirling engine
+    jar ships JNI natives (jpdfium) that the JVM extracts to a temp directory
+    at runtime and dlopen()s. Those extracted dylibs cannot carry our team's
+    Developer ID signature, so library validation (which requires loaded
+    libraries to be signed by the same team or Apple) would reject them and
+    break every engine operation that touches pdfium.
+
+  These grants apply only to the JRE executables - not to the app binary, the
+  Rust sidecars, or the other payload CLIs, which are signed with no
+  entitlements (see app.entitlements).
+-->
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

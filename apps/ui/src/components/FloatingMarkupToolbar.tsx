@@ -135,6 +135,12 @@ export function FloatingMarkupToolbar({ editing }: FloatingMarkupToolbarProps) {
               title={tool.tooltip}
               tabIndex={index === tabStopIndex ? 0 : -1}
               onFocus={() => setTabStopIndex(index)}
+              // Formatting-toolbar convention: the browser collapses a live
+              // text selection on mousedown outside it, which would race the
+              // click handler's selection-into-markup conversion (setTool).
+              // Preventing the default keeps the selection alive through the
+              // click; keyboard activation is unaffected.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => toggleTool(tool.id)}
             >
               <span className="floating-markup-toolbar__icon" aria-hidden="true">

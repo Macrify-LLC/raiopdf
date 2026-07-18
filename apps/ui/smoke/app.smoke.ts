@@ -562,23 +562,27 @@ test("switching from Select to a markup tool converts the selection; other tools
   await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
   await selectMarkupTool(page, "Select");
 
+  // Deterministic single-line target, anchored by content: position-based
+  // finders can grab the multi-line caption block depending on scroll state,
+  // which turns the converted markup into a different rect count per run.
   const selectBodyText = async () => {
     let attempt = 0;
 
     await expect(async () => {
       attempt += 1;
       const line = await textLayer.evaluate((layer, jitter) => {
-        const spans = [...layer.querySelectorAll("span")]
-          .filter((s) => s.textContent && s.textContent.trim().length > 10)
-          .map((s) => s.getBoundingClientRect())
-          .filter((r) => r.top > 550)
-          .sort((a, b) => a.top - b.top);
-        const r = spans[0];
-        return r ? { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 } : null;
+        const span = [...layer.querySelectorAll("span")].find((s) =>
+          s.textContent?.includes("comes before the Court"),
+        );
+        if (!span) {
+          return null;
+        }
+        const r = span.getBoundingClientRect();
+        return { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 };
       }, (attempt % 5) * 9);
 
       if (!line) {
-        throw new Error("no body line");
+        throw new Error("body line not found");
       }
       await page.evaluate(() => window.getSelection()?.removeAllRanges());
       await page.mouse.move(line.left, line.y);
@@ -591,19 +595,21 @@ test("switching from Select to a markup tool converts the selection; other tools
     }).toPass({ timeout: 15_000 });
   };
 
-  // Select text, switch to Highlight: the selection becomes a highlight
+  // Select text, switch to Highlight: the selection becomes highlight
   // markup and the browser selection clears.
   await selectBodyText();
   await selectMarkupTool(page, "Highlight");
-  await expect(page.locator(".edit-layer__highlight")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__highlight").first()).toBeVisible();
+  const highlightCount = await page.locator(".edit-layer__highlight").count();
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 
-  // Select text, switch to a non-markup tool: the selection just clears.
+  // Select text, switch to a non-markup tool: the selection clears without
+  // creating any further markup.
   await selectMarkupTool(page, "Select");
   await selectBodyText();
   await selectMarkupTool(page, "Rectangle");
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
-  await expect(page.locator(".edit-layer__highlight")).toHaveCount(1);
+  await expect(page.locator(".edit-layer__highlight")).toHaveCount(highlightCount);
 });
 
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {

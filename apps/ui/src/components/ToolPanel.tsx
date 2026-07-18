@@ -80,7 +80,7 @@ import "./ToolPanel.css";
 type GroupId = "edit" | "organize" | "comment" | "legal";
 export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 
-const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
+const TOOL_PANEL_ICONS = {
   "prepare-for-filing": <BoltIcon variant="outline" size={16} />,
   "case-caption": <SlipSheetIcon size={16} />,
   "table-of-authorities": <TableOfAuthoritiesIcon size={16} />,
@@ -120,7 +120,10 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   "edit-text": <EditIcon size={16} />,
   "page-numbers": <PageNumbersIcon size={16} />,
   watermark: <WatermarkIcon size={16} />,
-};
+} satisfies Record<
+  LegalToolId | OrganizeToolId | EditDialogToolId | (typeof TOOL_PANEL_EDIT_TOOLS)[number]["id"],
+  ReactNode
+>;
 
 const MAKE_SEARCHABLE_TOOL = HELP_ONLY_TOOL_ENTRIES[0];
 

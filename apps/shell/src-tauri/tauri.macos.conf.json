@@ -26,7 +26,7 @@
       "payload/macos-arm64": "payload"
     },
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "14.0"
     }
   }
 }

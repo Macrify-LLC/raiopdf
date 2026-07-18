@@ -68,11 +68,11 @@ When you see **Verified**, the content is actually gone.
 - **If it can't be verified, nothing changes.** If RaioPDF can't confirm the
   text is truly gone, it leaves your document exactly as it was and tells you
   what failed — it won't hand you a file it isn't sure about.
-- **Catch what you missed first.** Run the **2.425 Scanner** before you file to
+- **Catch what you missed first.** Run the **Sensitive Info Scanner** before you file to
   flag Social Security and account numbers you might have overlooked.
 
 ## Related
 
-- [2.425 Scanner](tool:scanner-2425) — find sensitive numbers before you file
+- [Sensitive Info Scanner](tool:scanner-2425) — find sensitive numbers before you file
 - [Scrub Metadata](tool:scrub-metadata) — remove the hidden info a file carries
 - [Prepare for Filing](tool:prepare-for-filing) — get the file ready for the portal

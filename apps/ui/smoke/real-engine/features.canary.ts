@@ -22,7 +22,7 @@ test("Sensitive-data scanner: finds and masks a planted SSN, offers one-click re
   await page.goto("/");
   await openPdf(page, "scanner.pdf", await createTextPdf("Client SSN 123-45-6789 filed under seal"));
 
-  await page.getByRole("button", { name: "2.425 Scanner", exact: true }).click();
+  await page.getByRole("button", { name: "Sensitive Info Scanner", exact: true }).click();
   await page.getByRole("button", { name: "Scan Document" }).click();
 
   // The advertised outcome (Fla. R. Jud. Admin. 2.425): the SSN is detected,

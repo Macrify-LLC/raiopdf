@@ -6133,7 +6133,7 @@ export function App() {
         scanning: false,
         message: streamedDocument
           ? "The document is still opening. Try again in a moment."
-          : "Open a PDF before running the 2.425 scanner.",
+          : "Open a PDF before running the sensitive info scanner.",
         hits: [],
       });
       return;
@@ -8779,7 +8779,7 @@ function batchCleanupCompletionMessage(files: readonly {
 }
 
 /**
- * Streamed-mode gate list for the legal tool group [R1-2]: the 2.425 scanner
+ * Streamed-mode gate list for the legal tool group [R1-2]: the sensitive-info scanner
  * (proxy-based, user-initiated) and PDF Security are always
  * open; the delegated set opens when the document has a shell grant for the
  * PathOpsEngine (Prepare for Filing runs the reduced path pipeline; Batch

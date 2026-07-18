@@ -22,11 +22,14 @@ import {
   type OrganizeToolId,
 } from "../lib/toolRegistry";
 import {
+  BatchCleanupIcon,
   BatesIcon,
   BoltIcon,
   CombineExhibitsIcon,
   CommentIcon,
+  CompressIcon,
   CropIcon,
+  DocPropertiesIcon,
   DrawIcon,
   EditIcon,
   EllipseIcon,
@@ -34,9 +37,16 @@ import {
   HighlightIcon,
   ImageIcon,
   InsertIcon,
+  InsertImageIcon,
   LineIcon,
+  LockIcon,
+  MergeIcon,
   OcrSearchIcon,
   OrganizeIcon,
+  PageNumbersIcon,
+  PagesIcon,
+  PdfToWordIcon,
+  ProductionSetIcon,
   ArrowLineIcon,
   CalloutIcon,
   PlugIcon,
@@ -45,12 +55,16 @@ import {
   RotateIcon,
   ScaleIcon,
   ScrubMetadataIcon,
+  SensitiveScanIcon,
   ShieldCheckIcon,
   SignIcon,
   SlipSheetIcon,
   StrikethroughIcon,
+  TableOfAuthoritiesIcon,
   TextBoxIcon,
   UnderlineIcon,
+  WatermarkIcon,
+  WrenchIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
 import type { TextEditState } from "../hooks/useTextEdit";
@@ -69,25 +83,25 @@ export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   "prepare-for-filing": <BoltIcon variant="outline" size={16} />,
   "case-caption": <SlipSheetIcon size={16} />,
-  "table-of-authorities": <ScaleIcon size={16} />,
-  "batch-cleanup": <OcrSearchIcon size={16} />,
-  "production-set": <BatesIcon size={16} />,
+  "table-of-authorities": <TableOfAuthoritiesIcon size={16} />,
+  "batch-cleanup": <BatchCleanupIcon size={16} />,
+  "production-set": <ProductionSetIcon size={16} />,
   "combine-exhibits": <CombineExhibitsIcon size={16} />,
   sanitize: <ShieldCheckIcon size={16} />,
   redact: <RedactIcon size={16} />,
   "bates-numbering": <BatesIcon size={16} />,
-  "scanner-2425": <ShieldCheckIcon size={16} />,
+  "scanner-2425": <SensitiveScanIcon size={16} />,
   "scrub-metadata": <ScrubMetadataIcon size={16} />,
-  passwords: <ShieldCheckIcon size={16} />,
-  pages: <OrganizeIcon size={16} />,
-  compress: <CropIcon size={16} />,
-  repair: <ShieldCheckIcon size={16} />,
-  "pdf-to-word": <EditIcon size={16} />,
-  merge: <CombineExhibitsIcon size={16} />,
+  passwords: <LockIcon size={16} />,
+  pages: <PagesIcon size={16} />,
+  compress: <CompressIcon size={16} />,
+  repair: <WrenchIcon size={16} />,
+  "pdf-to-word": <PdfToWordIcon size={16} />,
+  merge: <MergeIcon size={16} />,
   insert: <InsertIcon size={16} />,
-  "insert-images": <ImageIcon size={16} />,
+  "insert-images": <InsertImageIcon size={16} />,
   crop: <CropIcon size={16} />,
-  properties: <ScrubMetadataIcon size={16} />,
+  properties: <DocPropertiesIcon size={16} />,
   rotate: <RotateIcon size={16} />,
   textBox: <TextBoxIcon size={16} />,
   formText: <TextBoxIcon size={16} />,
@@ -104,8 +118,8 @@ const TOOL_PANEL_ICONS: Record<string, ReactNode> = {
   shapeArrow: <ArrowLineIcon size={16} />,
   sign: <SignIcon size={16} />,
   "edit-text": <EditIcon size={16} />,
-  "page-numbers": <BatesIcon size={16} />,
-  watermark: <ScrubMetadataIcon size={16} />,
+  "page-numbers": <PageNumbersIcon size={16} />,
+  watermark: <WatermarkIcon size={16} />,
 };
 
 const MAKE_SEARCHABLE_TOOL = HELP_ONLY_TOOL_ENTRIES[0];
@@ -799,7 +813,7 @@ function ScannerPanel({
         <p className="tool-panel__note">
           Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
         </p>
-        <IconButton icon={<HelpIcon size={14} />} label="Help: 2.425 Scanner" onClick={onHelp} />
+        <IconButton icon={<HelpIcon size={14} />} label="Help: Sensitive Info Scanner" onClick={onHelp} />
       </div>
       <button
         type="button"

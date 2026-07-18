@@ -295,7 +295,6 @@ import {
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
 import { editToolStreamedGateMessage } from "./lib/editToolGate";
-import { runtimePlatform } from "./lib/runtimePlatform";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -7968,7 +7967,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (runtimePlatform() !== "macos") {
+    if (!isTauriRuntime()) {
       return;
     }
 

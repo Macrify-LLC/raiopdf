@@ -103,7 +103,9 @@ test("Redact: really removes searched text via the engine (verified by re-extrac
 
   await expect(page.locator(".legal-mode-bar__status")).toContainText("1 area marked");
   await page.getByRole("button", { name: "Apply Redactions" }).click();
-  await page.locator(".tool-panel__danger-button", { hasText: "Apply Redactions" }).click();
+  // The bar button opens a document-level confirmation dialog (PR #270); the actual
+  // apply is its danger button, not the edit-text tool panel's.
+  await page.locator(".redaction-confirmation__danger-button").click();
 
   await expect(page.getByText(/Redacted and verified/)).toBeVisible({ timeout: 120_000 });
   const saved = await savePdf(page);

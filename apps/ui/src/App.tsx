@@ -295,6 +295,7 @@ import {
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
 import { editToolStreamedGateMessage } from "./lib/editToolGate";
+import { runtimePlatform } from "./lib/runtimePlatform";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -7014,6 +7015,26 @@ export function App() {
     }
   }, [editing]);
 
+  useEffect(() => {
+    function handleUndoShortcut(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "z" ||
+        isTextEntryTarget(event.target)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      undoLastPendingEdit();
+    }
+
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [undoLastPendingEdit]);
+
   const exportDocx = useCallback(() => {
     if (!document.source) {
       setError("Open a PDF before exporting editable Word.");
@@ -7945,6 +7966,57 @@ export function App() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (runtimePlatform() !== "macos") {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const state = {
+      hasDocument: document.source !== null,
+      canUndo: editing.pendingEdits.length > 0,
+      wordAvailable,
+    };
+
+    void Promise.all([
+      import("@tauri-apps/api/core"),
+      import("@tauri-apps/api/window"),
+    ]).then(async ([{ invoke }, { getCurrentWindow }]) => {
+      if (disposed) {
+        return;
+      }
+
+      const window = getCurrentWindow();
+      const syncIfFocused = async () => {
+        if (!disposed && await window.isFocused() && !disposed) {
+          await invoke("sync_native_menu_state", { state });
+        }
+      };
+
+      await syncIfFocused();
+      if (disposed) {
+        return;
+      }
+
+      const nextUnlisten = await window.onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          void invoke("sync_native_menu_state", { state }).catch(() => undefined);
+        }
+      });
+      if (disposed) {
+        nextUnlisten();
+      } else {
+        unlisten = nextUnlisten;
+      }
+    }).catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [document.source, editing.pendingEdits.length, wordAvailable]);
 
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,

@@ -68,7 +68,7 @@ describe("MenuBar", () => {
       expect(getMenuItem(label).disabled).toBe(true);
     }
 
-    for (const label of ["Open...", "Export Diagnostics...", "Preferences...", "Open Raio to AI...", "About Macrify...", "Exit"]) {
+    for (const label of ["Open...", "Export Diagnostics...", "Settings...", "Open Raio to AI...", "About Macrify...", "Exit"]) {
       expect(getMenuItem(label).disabled).toBe(false);
     }
 

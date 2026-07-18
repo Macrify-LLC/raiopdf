@@ -79,6 +79,44 @@ describe("TitleBar tab context menu", () => {
     expect(document.querySelector("[role='menu']")).toBeNull();
   });
 
+  it("uses native macOS chrome without losing document tabs or desktop tab actions", () => {
+    render({
+      platform: "macos",
+      tabs: [
+        { id: "tab-1", fileName: "alpha.pdf", active: true, canMoveToNewWindow: true },
+      ],
+    });
+
+    expect(document.querySelector(".title-bar--macos")).not.toBeNull();
+    expect(document.querySelector(".title-bar__traffic-light-space")).not.toBeNull();
+    expect(document.querySelector("[role='menubar']")).toBeNull();
+    expect(document.querySelector(".title-bar__window-controls")).toBeNull();
+    expect(document.querySelector(".title-bar__hint")).toBeNull();
+    expect(getTab("alpha.pdf")).not.toBeNull();
+    expect(document.querySelector(".title-bar__byline-mark")).not.toBeNull();
+    expect(document.querySelector(".title-bar__byline-compact-mark")).not.toBeNull();
+
+    contextMenu(getTab("alpha.pdf"));
+    expect(getMenuItem("Move to New Window").disabled).toBe(false);
+  });
+
+  it("keeps the HTML menu and custom controls in the Windows composition", () => {
+    render({ platform: "windows" });
+
+    expect(document.querySelector(".title-bar--windows")).not.toBeNull();
+    expect(document.querySelector("[role='menubar']")).not.toBeNull();
+    expect(document.querySelector(".title-bar__window-controls")).not.toBeNull();
+    expect(document.querySelector(".title-bar__hint")?.textContent).toContain("Open a PDF");
+  });
+
+  it("keeps the Mac empty-document title strip as draggable whitespace", () => {
+    render({ platform: "macos", tabs: [] });
+
+    const emptyRegion = document.querySelector(".title-bar__empty-drag-region");
+    expect(emptyRegion?.hasAttribute("data-tauri-drag-region")).toBe(true);
+    expect(document.querySelector(".title-bar__hint")).toBeNull();
+  });
+
   function render(overrides: Partial<TitleBarProps>) {
     container = document.createElement("div");
     document.body.appendChild(container);

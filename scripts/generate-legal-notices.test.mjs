@@ -121,6 +121,9 @@ test("Windows legal payload keeps the byte-identical Ghostscript alias narrative
 
   const notices = readFileSync(path.join(payloadDir, "legal", "THIRD-PARTY-NOTICES.txt"), "utf8");
   assert.match(notices, /byte-identical convenience alias/);
+  // The macOS-only image-library attribution section must never leak into the
+  // Windows notices (Windows output is byte-frozen).
+  assert.doesNotMatch(notices, /Statically Linked Image Libraries/);
 });
 
 test("macOS legal payload records the source-built pins and platform", (context) => {
@@ -159,16 +162,28 @@ test("macOS legal payload records the source-built pins and platform", (context)
   assert.ok(python, "expected a python-build-standalone component on macOS");
   assert.deepEqual(python.payloadPaths, ["ocr/python/bin/python3"]);
 
-  for (const name of ["Leptonica", "libpng", "libtiff", "libjpeg-turbo"]) {
-    assert.ok(
-      manifest.components.some((entry) => entry.name === name),
-      `expected ${name} in the macOS component manifest`,
-    );
+  // SPDX expressions verified against the license files shipped in the exact
+  // pinned source tarballs (leptonica-license.txt, libpng LICENSE, libtiff
+  // LICENSE.md, libjpeg-turbo LICENSE.md + README.ijg). libjpeg-turbo's
+  // BSD-3-Clause portions (TurboJPEG API, build system) are not linked, so
+  // only IJG AND Zlib apply to the shipped binaries.
+  const imageLibraryLicenses = {
+    Leptonica: "Leptonica",
+    libpng: "libpng-2.0",
+    libtiff: "libtiff",
+    "libjpeg-turbo": "IJG AND Zlib",
+  };
+  for (const [name, license] of Object.entries(imageLibraryLicenses)) {
+    const entry = manifest.components.find((candidate) => candidate.name === name);
+    assert.ok(entry, `expected ${name} in the macOS component manifest`);
+    assert.equal(entry.license, license, `expected verified SPDX expression for ${name}`);
   }
 
   const notices = readFileSync(path.join(payloadDir, "legal", "THIRD-PARTY-NOTICES.txt"), "utf8");
   assert.doesNotMatch(notices, /gswin64c\.exe/);
   assert.match(notices, /built from the pinned upstream AGPL-3\.0 source archive/i);
+  // IJG license clause 2: binary distributions must carry this statement.
+  assert.match(notices, /This software is based in part on the work of the Independent JPEG Group\./);
 
   const correspondence = readFileSync(
     path.join(payloadDir, "legal", "RELEASE-SOURCE-CORRESPONDENCE.md"),

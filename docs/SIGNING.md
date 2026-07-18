@@ -5,8 +5,8 @@ RaioPDF's Windows installers are signed with a **Certum "Open Source Code Signin
 Desktop — no signing credentials live in CI. This keeps the private key on Certum's
 cloud HSM (as CA/Browser Forum rules now require) and out of GitHub.
 
-> macOS signing/notarization is a separate track (Apple Developer Program) and is not
-> covered here yet.
+> macOS signing/notarization is a separate trust chain (Apple Developer Program,
+> Developer ID + notarization) — see the [macOS](#macos) section below.
 
 ## How it fits together
 
@@ -185,3 +185,128 @@ can't silently ship unsigned. For an intentional unsigned build, run plain
 - **SmartScreen reputation:** a standard (non-EV) certificate is trusted immediately for
   validity, but Microsoft SmartScreen reputation still builds up over download volume, so
   early downloaders may briefly see a warning until reputation accrues.
+
+## macOS
+
+macOS releases are signed with a **Developer ID Application** certificate and
+**notarized** by Apple. Like Windows, signing is **maintainer-local**: the
+certificate lives in the maintainer Mac's keychain, notarization credentials live
+in that keychain as a `notarytool` profile, and CI never sees either. Unlike
+SmartScreen, notarization has no reputation ramp — a notarized app passes
+Gatekeeper immediately.
+
+### One-time setup
+
+1. **Certificate.** In the Apple Developer Program, create a **Developer ID
+   Application** certificate (not Mac Development, not the App Store
+   distribution types, not Developer ID Installer — RaioPDF ships a `.dmg`, not
+   a `.pkg`). Install it in the login keychain and confirm:
+   ```bash
+   security find-identity -v -p codesigning
+   # -> 1) ... "Developer ID Application: <name> (<TEAMID>)"
+   ```
+2. **Notarization profile.** Generate an app-specific password for your Apple ID
+   (account.apple.com -> Sign-In and Security -> App-Specific Passwords), then:
+   ```bash
+   xcrun notarytool store-credentials raiopdf-notary \
+     --apple-id <apple-id-email> --team-id <TEAMID> --password <app-specific-password>
+   ```
+3. **Updater key.** The same Tauri minisign key the Windows release uses
+   (`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), from
+   your secret manager. On the Mac build host, storing it in the login keychain
+   once makes releases prompt-free (same trust model as the notary profile):
+   ```bash
+   # one-time (each prompts you to paste the value from your secret manager):
+   security add-generic-password -s raiopdf-updater-key -a credential -w
+   security add-generic-password -s raiopdf-updater-key -a password -w
+   ```
+   Beware truncated pastes — the credential is a long base64 blob; verify the
+   stored byte length against the source before trusting it. At release time:
+   ```bash
+   export TAURI_SIGNING_PRIVATE_KEY="$(security find-generic-password -s raiopdf-updater-key -a credential -w)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(security find-generic-password -s raiopdf-updater-key -a password -w)"
+   ```
+
+### Cutting a signed macOS release
+
+```bash
+export RAIOPDF_MAC_SIGN_IDENTITY="Developer ID Application: <name> (<TEAMID>)"
+export TAURI_SIGNING_PRIVATE_KEY="$(...from your secret manager...)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(...)"
+
+git tag vX.Y.Z          # version is stamped from the tag, as on Windows
+pnpm release:macos      # or: node scripts/release-macos.mjs --version X.Y.Z
+```
+
+`scripts/release-macos.mjs` runs the whole chain in the **final-byte order** the
+release contract requires — the payload manifest and every signature must
+describe the exact bytes that ship:
+
+1. **assemble** — payload assembled, then every payload Mach-O is Developer ID
+   signed (`scripts/sign-macos-payload.mjs`, invoked by the assembler's
+   `RAIOPDF_MACOS_SIGN_PAYLOAD=1` hook), and only then is the payload manifest
+   generated — over the signed bytes. The deployment-target floor is enforced by
+   `scripts/scan-macos-min-os.mjs` against `bundle.macOS.minimumSystemVersion`.
+2. **build** — version stamped from the tag, sidecars compiled, Tauri builds and
+   signs the `.app` with hardened runtime via
+   `tauri.macos.signing.conf.json`.
+3. **verify-app / notarize-app / staple-app** — strict recursive codesign
+   verification, `notarytool submit --wait` (the notary log is fetched on
+   failure), staple, and a Gatekeeper assessment.
+4. **updater** — the `.app.tar.gz` is built **from the stapled app**, signed with
+   the Tauri updater key, and the signature is verified against the configured
+   updater pubkey before anything is staged.
+5. **dmg / notarize-dmg** — the DMG is built from the stapled app (drag-install
+   layout), codesigned, notarized, and stapled itself.
+6. **stage** — canonical `macos-arm64` release assets are staged and validated
+   (`prepare-signed-release-assets.mjs` / `validate-release-assets.mjs`).
+
+Every step is resumable: `node scripts/release-macos.mjs --resume-from <step>`
+re-enters after a failure without redoing earlier work, and `--stop-after <step>`
+runs a partial chain (useful for a signing spike without publishing anything).
+
+### Entitlements
+
+Hardened runtime is on for everything; entitlement exceptions are granted only to
+the executables that prove the need (`apps/shell/src-tauri/entitlements/`):
+
+- the app + Rust sidecars: none (WKWebView's JIT lives in a system XPC process);
+- the bundled JRE: JIT, unsigned executable memory, and
+  `disable-library-validation` — the engine jar extracts JNI natives to a temp
+  dir at runtime, which can never carry our team signature;
+- the bundled Node runtime: JIT only.
+
+### Release rules shared with Windows
+
+Stable releases are **lockstep**: one version tag publishes complete signed
+assets for both platforms, and the shared `latest.json` (containing
+`windows-x86_64` and `darwin-aarch64` entries) is generated only after both
+platform stages are final, and uploaded last. Published bytes are immutable —
+fixes ship as a new patch version.
+
+### Publishing the combined release
+
+Stable releases are lockstep, so publishing takes three staging moves — the two
+platform stages are built independently (each on its own build host), then
+combined wherever both are present:
+
+```bash
+# On the Windows box (note --platform-stage-only: the per-platform stage must
+# NOT contain latest.json; the combined one is generated at the stage root):
+pnpm prepare:release-assets -- --tag vX.Y.Z --platform-stage-only
+
+# On the Mac (the release orchestrator's `stage` step runs this for you):
+node scripts/prepare-signed-release-assets.mjs --tag vX.Y.Z --platform macos-arm64
+
+# Wherever both release-assets/signed/{windows-x64,macos-arm64}/ stages exist:
+node scripts/prepare-signed-release-assets.mjs --tag vX.Y.Z --combine
+```
+
+`--combine` cross-checks both stages (same version, complete asset sets, valid
+updater signatures), writes the cross-platform `latest.json` (`windows-x86_64` +
+`darwin-aarch64`) and the release-wide `SHA256SUMS.txt` at the stage root, and
+prints an **upload plan**. Upload exactly that plan (or pass `--combine
+--upload`) — do not blind-glob the stage directories: the Windows stage's own
+platform-scoped checksum file is superseded by the stage-root one and is
+deliberately excluded. As with Windows-only releases, `latest.json` is uploaded
+last, to a **published, non-prerelease** release.

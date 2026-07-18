@@ -158,6 +158,14 @@ single_child_dir() {
 # source; nothing under /opt/homebrew is linked into the results.
 # ---------------------------------------------------------------------------
 
+# Every source build targets a pinned minimum macOS. Without this, clang/ld
+# default the deployment target to the build machine's SDK, so shipped
+# binaries would silently require whatever macOS this Mac happens to run.
+# Keep in sync with bundle.macOS.minimumSystemVersion in
+# apps/shell/src-tauri/tauri.macos.conf.json; scripts/scan-macos-min-os.mjs
+# enforces the floor across the assembled payload.
+export MACOSX_DEPLOYMENT_TARGET="14.0"
+
 PREFIX_JPEG="$PREFIX_ROOT/jpeg"
 PREFIX_PNG="$PREFIX_ROOT/png"
 PREFIX_TIFF="$PREFIX_ROOT/tiff"
@@ -178,7 +186,9 @@ build_libjpeg_turbo() {
   rm -rf -- "$PREFIX_JPEG" "$WORK_DIR/jpeg-build"
   cmake -S "$work" -B "$WORK_DIR/jpeg-build" \
     -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=0 -DENABLE_STATIC=1 \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_PREFIX="$PREFIX_JPEG"
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX_JPEG"
   cmake --build "$WORK_DIR/jpeg-build" -j"$NCPU"
   cmake --install "$WORK_DIR/jpeg-build"
 }
@@ -314,7 +324,9 @@ build_qpdf() {
       -DREQUIRE_CRYPTO_NATIVE=1 -DUSE_IMPLICIT_CRYPTO=0 \
       -DBUILD_STATIC_LIBS=1 -DBUILD_SHARED_LIBS=0 \
       -DINSTALL_MANUAL=0 -DBUILD_DOC=0 \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_PREFIX="$PREFIX_QPDF"
+      -DCMAKE_OSX_ARCHITECTURES=arm64 \
+      -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+      -DCMAKE_INSTALL_PREFIX="$PREFIX_QPDF"
     cmake --build "$WORK_DIR/qpdf-build" -j"$NCPU"
     cmake --install "$WORK_DIR/qpdf-build" )
 }
@@ -700,5 +712,17 @@ node "$SCRIPT_DIR/build-mcp-runtime.mjs" --platform macos-arm64
 node "$REPO_ROOT/scripts/generate-legal-notices.mjs" --platform macos-arm64 --payload-dir "$PAYLOAD_DIR"
 make_relocatable
 rm -f -- "$PAYLOAD_DIR/.gitkeep"
+
+# Release signing hook. When RAIOPDF_MACOS_SIGN_PAYLOAD=1 (set by the release
+# orchestrator), every Mach-O in the payload is Developer ID signed BEFORE the
+# manifest is generated, so the manifest always describes the bytes that ship
+# (the final-byte invariant). Unset for dev/canary builds: payload binaries
+# keep their ad-hoc signatures.
+if [[ "${RAIOPDF_MACOS_SIGN_PAYLOAD:-0}" == "1" ]]; then
+  node "$REPO_ROOT/scripts/sign-macos-payload.mjs" --payload-dir "$PAYLOAD_DIR"
+  node "$REPO_ROOT/scripts/sign-macos-payload.mjs" --payload-dir "$PAYLOAD_DIR" --verify
+  node "$REPO_ROOT/scripts/scan-macos-min-os.mjs" --payload-dir "$PAYLOAD_DIR"
+fi
+
 generate_payload_manifest
 verify_payload

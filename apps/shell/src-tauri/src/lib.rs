@@ -2604,7 +2604,13 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         false,
         Some("CmdOrCtrl+Minus"),
     )?;
-    let fit = native_menu_item(app, "view:fit", "Fit Page", false, Some("CmdOrCtrl+0"))?;
+    let fit = native_menu_item(
+        app,
+        "view:fit",
+        "Fit Page",
+        false,
+        Some(policy.fit_accelerator),
+    )?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&zoom_in)
         .item(&zoom_out)
@@ -2667,6 +2673,7 @@ struct NativeMenuPolicy {
     file_has_app_commands: bool,
     native_edit_items: bool,
     window_menu: bool,
+    fit_accelerator: &'static str,
 }
 
 const fn native_menu_policy(platform: NativeMenuPlatform) -> NativeMenuPolicy {
@@ -2676,12 +2683,14 @@ const fn native_menu_policy(platform: NativeMenuPlatform) -> NativeMenuPolicy {
             file_has_app_commands: true,
             native_edit_items: false,
             window_menu: false,
+            fit_accelerator: "CmdOrCtrl+1",
         },
         NativeMenuPlatform::MacOs => NativeMenuPolicy {
             app_menu: true,
             file_has_app_commands: false,
             native_edit_items: true,
             window_menu: true,
+            fit_accelerator: "CmdOrCtrl+0",
         },
     }
 }
@@ -2819,6 +2828,7 @@ mod tests {
                 file_has_app_commands: true,
                 native_edit_items: false,
                 window_menu: false,
+                fit_accelerator: "CmdOrCtrl+1",
             }
         );
     }
@@ -2832,6 +2842,7 @@ mod tests {
                 file_has_app_commands: false,
                 native_edit_items: true,
                 window_menu: true,
+                fit_accelerator: "CmdOrCtrl+0",
             }
         );
     }

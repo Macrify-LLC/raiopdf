@@ -127,44 +127,58 @@ function reset(layer: GuardedLayer, container: HTMLElement): void {
 }
 
 /**
- * Repaint one layer's selection overlay from the live selection's client
- * rects. Rects are clipped to the layer's own bounds (a cross-page selection
- * reports rects for every page), the sentinel's box is excluded (mid-drag it
- * is selectable and sized to the whole layer), and the result is merged into
- * one box per visual line so overlapping text runs tint exactly once.
+ * Enumerate the live selection's non-empty client rects once per
+ * selectionchange -- a cross-page selection reports rects for every page, so
+ * per-layer re-enumeration would repeat the full (layout-forcing) walk.
+ */
+function collectSelectionRects(selection: Selection): DOMRect[] {
+  const rects: DOMRect[] = [];
+
+  for (let i = 0; i < selection.rangeCount; i++) {
+    for (const rect of selection.getRangeAt(i).getClientRects()) {
+      if (rect.width > 0 && rect.height > 0) {
+        rects.push(rect);
+      }
+    }
+  }
+
+  return rects;
+}
+
+/**
+ * Repaint one layer's selection overlay from the collected client rects.
+ * Rects are clipped to the layer's own bounds, the sentinel's box is
+ * excluded (mid-drag it is selectable and sized to the whole layer), and the
+ * result is merged into one box per visual line so overlapping text runs
+ * tint exactly once.
  */
 function paintSelection(
   layer: GuardedLayer,
   container: HTMLElement,
-  selection: Selection,
+  selectionRects: readonly DOMRect[],
 ): void {
   const containerBounds = container.getBoundingClientRect();
   const sentinelBounds = layer.endOfContent.getBoundingClientRect();
   const rects: DOMRect[] = [];
 
-  for (let i = 0; i < selection.rangeCount; i++) {
-    for (const rect of selection.getRangeAt(i).getClientRects()) {
-      if (rect.width <= 0 || rect.height <= 0) {
-        continue;
-      }
-      if (
-        rect.right < containerBounds.left ||
-        rect.left > containerBounds.right ||
-        rect.bottom < containerBounds.top ||
-        rect.top > containerBounds.bottom
-      ) {
-        continue;
-      }
-      if (
-        Math.abs(rect.left - sentinelBounds.left) < 1 &&
-        Math.abs(rect.top - sentinelBounds.top) < 1 &&
-        Math.abs(rect.right - sentinelBounds.right) < 1 &&
-        Math.abs(rect.bottom - sentinelBounds.bottom) < 1
-      ) {
-        continue;
-      }
-      rects.push(rect);
+  for (const rect of selectionRects) {
+    if (
+      rect.right < containerBounds.left ||
+      rect.left > containerBounds.right ||
+      rect.bottom < containerBounds.top ||
+      rect.top > containerBounds.bottom
+    ) {
+      continue;
     }
+    if (
+      Math.abs(rect.left - sentinelBounds.left) < 1 &&
+      Math.abs(rect.top - sentinelBounds.top) < 1 &&
+      Math.abs(rect.right - sentinelBounds.right) < 1 &&
+      Math.abs(rect.bottom - sentinelBounds.bottom) < 1
+    ) {
+      continue;
+    }
+    rects.push(rect);
   }
 
   const lines = mergeClientRectsIntoLines(rects);
@@ -255,10 +269,12 @@ function enableGlobalSelectionListener(): void {
           }
         }
       }
+      let selectionRects: DOMRect[] | null = null;
       for (const [textLayerDiv, layer] of textLayers) {
         if (activeTextLayers.has(textLayerDiv)) {
           textLayerDiv.classList.add(SELECTING_CLASS);
-          paintSelection(layer, textLayerDiv, selection);
+          selectionRects ??= collectSelectionRects(selection);
+          paintSelection(layer, textLayerDiv, selectionRects);
         } else {
           reset(layer, textLayerDiv);
           clearPaint(layer);

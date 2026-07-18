@@ -13,6 +13,7 @@ import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
   clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
+  isTextMarkupTool,
   MARKUP_FROM_SELECTION_EVENT,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
@@ -1437,9 +1438,9 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
 
   useEffect(() => {
     function handleMarkupFromSelection(event: Event) {
-      const kind = (event as CustomEvent<{ kind?: TextMarkupToolId }>).detail?.kind;
+      const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind;
 
-      if (kind === "highlight" || kind === "underline" || kind === "strikethrough") {
+      if (typeof kind === "string" && isTextMarkupTool(kind)) {
         markupFromSelectionRef.current(kind);
       }
     }
@@ -2163,10 +2164,6 @@ function isPendingTextMarkup(
   edit: PendingEdit,
 ): edit is Extract<PendingEdit, { kind: TextMarkupToolId }> {
   return isTextMarkupTool(edit.kind);
-}
-
-function isTextMarkupTool(tool: string): tool is TextMarkupToolId {
-  return tool === "highlight" || tool === "underline" || tool === "strikethrough";
 }
 
 function isShapeTool(tool: string): tool is ShapeToolId {

@@ -10,6 +10,7 @@ import {
   buildAnnotationSavePlan,
   dataUrlToBytes,
   pendingEditsFromRaioAnnotations,
+  isTextMarkupTool,
   MARKUP_FROM_SELECTION_EVENT,
   toPdfEdits,
   type AnnotationSavePlan,
@@ -243,7 +244,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     ) {
       return;
     }
-    if (nextTool === "highlight" || nextTool === "underline" || nextTool === "strikethrough") {
+    if (isTextMarkupTool(nextTool)) {
       window.dispatchEvent(
         new CustomEvent(MARKUP_FROM_SELECTION_EVENT, { detail: { kind: nextTool } }),
       );

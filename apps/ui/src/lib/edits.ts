@@ -47,6 +47,10 @@ export type EditToolId =
 
 export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
 
+export function isTextMarkupTool(tool: string): tool is TextMarkupToolId {
+  return tool === "highlight" || tool === "underline" || tool === "strikethrough";
+}
+
 /**
  * Fired by useEditing's setTool when the user switches from Select to a
  * text-markup tool while a text selection is live: each mounted EditLayer

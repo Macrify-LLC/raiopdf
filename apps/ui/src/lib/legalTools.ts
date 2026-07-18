@@ -286,19 +286,37 @@ export async function collectRedactionAreaTexts(
 
   return uniqueRedactionTerms(
     [
-      ...pages.flatMap((page) =>
-        page.spans.map((span) => ({
-          pageIndex: page.pageIndex,
-          text: page.text.slice(span.start, span.end),
-          area: span.area,
-        }))
-      )
-        .filter((box) => box.text.trim().length > 0)
-        .filter((box) => areas.some((area) => areasIntersect(box.area, area)))
-        .map((box) => box.text),
+      ...pages.flatMap((page) => pageSpanTextsIntersectingAreas(page, areas)),
       ...garbledMarkers,
     ],
   );
+}
+
+/**
+ * Texts of the page's spans that carry non-empty text and geometrically
+ * intersect one of that page's redaction areas. Shared by term collection
+ * and verification so both apply the identical page + geometry predicate:
+ * what collection considers "inside the redaction" is exactly what
+ * verification later requires to be gone.
+ */
+function pageSpanTextsIntersectingAreas(
+  page: ExtractedPageText,
+  areas: readonly PdfRedactionArea[],
+): string[] {
+  const pageAreas = areas.filter((area) => area.pageIndex === page.pageIndex);
+
+  if (pageAreas.length === 0) {
+    return [];
+  }
+
+  return page.spans
+    .map((span) => ({ text: page.text.slice(span.start, span.end), area: span.area }))
+    .filter(
+      (box) =>
+        box.text.trim().length > 0 &&
+        pageAreas.some((area) => areasIntersect(box.area, area)),
+    )
+    .map((box) => box.text);
 }
 
 export async function readMetadataSummary(
@@ -431,31 +449,9 @@ async function verifyRedactedAreasTextLayer(
       // extractable text remains INSIDE the marked areas, so that -- and
       // only that -- is what gets verified.
       const pages = await extractPageText({ bytes, pdfDocument });
-      const areasByPage = new Map<number, PdfRedactionArea[]>();
-      for (const area of areas) {
-        const pageAreas = areasByPage.get(area.pageIndex);
-        if (pageAreas) {
-          pageAreas.push(area);
-        } else {
-          areasByPage.set(area.pageIndex, [area]);
-        }
-      }
-
-      const dirtyPages: number[] = [];
-      for (const page of pages) {
-        const pageAreas = areasByPage.get(page.pageIndex);
-        if (!pageAreas) {
-          continue;
-        }
-        const survivingText = page.spans.some(
-          (span) =>
-            page.text.slice(span.start, span.end).trim().length > 0 &&
-            pageAreas.some((area) => areasIntersect(span.area, area)),
-        );
-        if (survivingText) {
-          dirtyPages.push(page.pageIndex);
-        }
-      }
+      const dirtyPages = pages
+        .filter((page) => pageSpanTextsIntersectingAreas(page, areas).length > 0)
+        .map((page) => page.pageIndex);
 
       if (dirtyPages.length > 0) {
         return fail(

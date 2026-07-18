@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { CheckIcon, CopyIcon, PlugIcon, ShieldCheckIcon } from "../icons";
+import { CheckIcon, ChevronDownIcon, CopyIcon, PlugIcon, ShieldCheckIcon } from "../icons";
 import { useSectionFocus } from "../hooks/useSectionFocus";
 import { Switch } from "./Switch";
 import "./SettingsSectionCard.css";
@@ -14,6 +14,8 @@ const MCP_DOCS_URL = "https://github.com/Macrify-LLC/raiopdf/blob/main/docs/MCP.
 
 const COPIED_LABEL_MS = 1600;
 const COPY_FAILED_LABEL_MS = 2400;
+
+const WAITING_FOR_PATH_TITLE = "Waiting for Raio to resolve its install path";
 
 export interface OpenRaioToAiSectionProps {
   /** Whether the MCP connector's access gate is on. Off by default. */
@@ -54,6 +56,10 @@ export function OpenRaioToAiSection({
   const { sectionRef, showFocusRing } = useSectionFocus(focused, onFocusHandled);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
+  // The guided prompt is hidden by default, so once a copy attempt fails we keep
+  // the selectable text on screen until a later copy succeeds — the transient
+  // copyFailedKey label clears in a couple seconds, too fast to hand-select.
+  const [promptFallbackShown, setPromptFallbackShown] = useState(false);
 
   useEffect(() => {
     if (!copiedKey) {
@@ -72,6 +78,14 @@ export function OpenRaioToAiSection({
     const timeoutId = window.setTimeout(() => setCopyFailedKey(null), COPY_FAILED_LABEL_MS);
     return () => window.clearTimeout(timeoutId);
   }, [copyFailedKey]);
+
+  useEffect(() => {
+    if (copyFailedKey === "prompt") {
+      setPromptFallbackShown(true);
+    } else if (copiedKey === "prompt") {
+      setPromptFallbackShown(false);
+    }
+  }, [copyFailedKey, copiedKey]);
 
   const copy = useCallback((key: string, text: string) => {
     setCopyFailedKey(null);
@@ -102,6 +116,7 @@ export function OpenRaioToAiSection({
   const resolvedOrPlaceholder = mcpPath ?? PLACEHOLDER_PATH;
   const desktopSnippet = buildClaudeDesktopSnippet(resolvedOrPlaceholder);
   const codeCommand = buildClaudeCodeCommand(resolvedOrPlaceholder);
+  const setupPrompt = buildSetupPrompt(resolvedOrPlaceholder);
 
   return (
     <section
@@ -163,39 +178,81 @@ export function OpenRaioToAiSection({
         <div className="open-raio-to-ai__connect">
           <h4>Connect your AI</h4>
           <p className="open-raio-to-ai__connect-lede">
-            Paste the block for whichever assistant you use, then restart it once.
+            Easiest option: copy the setup prompt below and hand it to your AI assistant
+            &mdash; it&rsquo;ll take it from there. Want to wire it up yourself instead? The
+            manual config is tucked below.
           </p>
 
-          <CopyBlock
-            label="Claude Desktop"
-            caption={
+          <div className="open-raio-to-ai__guided">
+            <div className="open-raio-to-ai__guided-text">
+              <p className="open-raio-to-ai__guided-title">Let your AI set it up</p>
+              <p className="open-raio-to-ai__guided-body">
+                Copy this and paste it into Claude Code, Claude Desktop, or any assistant that
+                can run commands. It reads the instructions, finds the right config file for
+                your computer, and gets Raio&rsquo;s connector registered.
+              </p>
+            </div>
+            <CopyButton
+              copyKey="prompt"
+              text={setupPrompt}
+              label="Copy setup prompt"
+              title="Copy the guided setup prompt"
+              copiedKey={copiedKey}
+              copyFailedKey={copyFailedKey}
+              onCopy={copy}
+              pathResolved={pathResolved}
+              className="open-raio-to-ai__guided-button"
+              iconSize={14}
+            />
+            {promptFallbackShown ? (
               <>
-                Add to <code>claude_desktop_config.json</code>, then restart Claude Desktop.
+                <ClipboardBlockedNote />
+                <pre className="open-raio-to-ai__code">
+                  <code>{setupPrompt}</code>
+                </pre>
               </>
-            }
-            code={desktopSnippet}
-            copyKey="desktop"
-            copiedKey={copiedKey}
-            copyFailedKey={copyFailedKey}
-            onCopy={copy}
-            pathResolved={pathResolved}
-          />
+            ) : null}
+          </div>
 
-          <CopyBlock
-            label="Claude Code"
-            caption="Run once in a terminal. Claude Code remembers it from then on."
-            code={codeCommand}
-            copyKey="code"
-            copiedKey={copiedKey}
-            copyFailedKey={copyFailedKey}
-            onCopy={copy}
-            pathResolved={pathResolved}
-          />
+          <details className="open-raio-to-ai__manual">
+            <summary className="open-raio-to-ai__manual-summary">
+              <ChevronDownIcon size={13} className="open-raio-to-ai__manual-chevron" />
+              Rather set it up by hand?
+            </summary>
+            <div className="open-raio-to-ai__manual-body">
+              <CopyBlock
+                label="Claude Desktop"
+                caption={
+                  <>
+                    Add to <code>claude_desktop_config.json</code>, then restart Claude
+                    Desktop.
+                  </>
+                }
+                code={desktopSnippet}
+                copyKey="desktop"
+                copiedKey={copiedKey}
+                copyFailedKey={copyFailedKey}
+                onCopy={copy}
+                pathResolved={pathResolved}
+              />
+
+              <CopyBlock
+                label="Claude Code"
+                caption="Run once in a terminal. Claude Code remembers it from then on."
+                code={codeCommand}
+                copyKey="code"
+                copiedKey={copiedKey}
+                copyFailedKey={copyFailedKey}
+                onCopy={copy}
+                pathResolved={pathResolved}
+              />
+            </div>
+          </details>
 
           {!pathResolved ? (
             <p className="open-raio-to-ai__resolving" id="open-raio-to-ai-resolving" role="status">
-              Still resolving Raio&rsquo;s install path — reopen this panel if the blocks above
-              still show <code>{PLACEHOLDER_PATH}</code>.
+              Still resolving Raio&rsquo;s install path — the copy buttons switch on once it
+              lands. Reopen this panel if it stays stuck.
             </p>
           ) : null}
 
@@ -216,6 +273,73 @@ export function OpenRaioToAiSection({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ClipboardBlockedNote() {
+  return (
+    <p className="open-raio-to-ai__block-status" role="status">
+      Clipboard access was blocked. Select the text below and copy it manually.
+    </p>
+  );
+}
+
+interface CopyButtonProps {
+  /** Distinguishes this button in the shared copy-state machine. */
+  copyKey: string;
+  /** The text placed on the clipboard. */
+  text: string;
+  /** Resting button label, e.g. "Copy" or "Copy setup prompt". */
+  label: string;
+  /** Tooltip shown while the button is active (path resolved). */
+  title: string;
+  copiedKey: string | null;
+  copyFailedKey: string | null;
+  onCopy: (key: string, text: string) => void;
+  pathResolved: boolean;
+  /** Skin class — the subtle chip or the primary guided treatment. */
+  className: string;
+  iconSize?: number;
+}
+
+/**
+ * The single copy button used across this section. Owns the shared copy-state
+ * contract (icon swap, "Copied"/"Could not copy" text, `data-copy-state`, and
+ * the path-not-resolved disabled state) so it lives in exactly one place;
+ * callers pass a skin `className` and the text to copy.
+ */
+function CopyButton({
+  copyKey,
+  text,
+  label,
+  title,
+  copiedKey,
+  copyFailedKey,
+  onCopy,
+  pathResolved,
+  className,
+  iconSize = 13,
+}: CopyButtonProps) {
+  const justCopied = copiedKey === copyKey;
+  const copyFailed = copyFailedKey === copyKey;
+
+  return (
+    <button
+      type="button"
+      className={className}
+      data-copy-state={justCopied ? "copied" : copyFailed ? "failed" : undefined}
+      aria-disabled={pathResolved ? undefined : "true"}
+      aria-describedby={pathResolved ? undefined : "open-raio-to-ai-resolving"}
+      onClick={() => {
+        if (pathResolved) {
+          onCopy(copyKey, text);
+        }
+      }}
+      title={pathResolved ? title : WAITING_FOR_PATH_TITLE}
+    >
+      {justCopied ? <CheckIcon size={iconSize} /> : <CopyIcon size={iconSize} />}
+      {justCopied ? "Copied" : copyFailed ? "Could not copy" : label}
+    </button>
   );
 }
 
@@ -240,35 +364,26 @@ function CopyBlock({
   onCopy,
   pathResolved,
 }: CopyBlockProps) {
-  const justCopied = copiedKey === copyKey;
   const copyFailed = copyFailedKey === copyKey;
 
   return (
     <div className="open-raio-to-ai__block">
       <div className="open-raio-to-ai__block-header">
         <span className="open-raio-to-ai__block-label">{label}</span>
-        <button
-          type="button"
+        <CopyButton
+          copyKey={copyKey}
+          text={code}
+          label="Copy"
+          title={`Copy the ${label} snippet`}
+          copiedKey={copiedKey}
+          copyFailedKey={copyFailedKey}
+          onCopy={onCopy}
+          pathResolved={pathResolved}
           className="open-raio-to-ai__copy-button"
-          data-copy-state={justCopied ? "copied" : copyFailed ? "failed" : undefined}
-          aria-disabled={pathResolved ? undefined : "true"}
-          aria-describedby={pathResolved ? undefined : "open-raio-to-ai-resolving"}
-          onClick={() => {
-            if (pathResolved) {
-              onCopy(copyKey, code);
-            }
-          }}
-          title={pathResolved ? `Copy the ${label} snippet` : "Waiting for Raio to resolve its install path"}
-        >
-          {justCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          {justCopied ? "Copied" : copyFailed ? "Could not copy" : "Copy"}
-        </button>
+          iconSize={13}
+        />
       </div>
-      {copyFailed ? (
-        <p className="open-raio-to-ai__block-status" role="status">
-          Clipboard access was blocked. Select the text below and copy it manually.
-        </p>
-      ) : null}
+      {copyFailed ? <ClipboardBlockedNote /> : null}
       <pre className="open-raio-to-ai__code">
         <code>{code}</code>
       </pre>
@@ -285,4 +400,40 @@ function buildClaudeCodeCommand(command: string): string {
   // Quote the path so a binary path with spaces (or a custom RAIOPDF_MCP_BIN)
   // reaches `claude mcp add` as a single command argument.
   return `claude mcp add raiopdf -- "${command}"`;
+}
+
+/**
+ * The plain-language prompt behind the "Copy setup prompt" button. Composes
+ * the two manual snippets above so path-escaping stays correct on Windows,
+ * and hands the whole job to whatever AI assistant the user pastes it into
+ * -- including finding the right config file and restarting the assistant,
+ * which is the part a newcomer is least equipped to do by hand. Exported so
+ * it can be unit-tested independent of the component.
+ */
+export function buildSetupPrompt(command: string): string {
+  const desktopSnippet = buildClaudeDesktopSnippet(command);
+  const codeCommand = buildClaudeCodeCommand(command);
+
+  return [
+    "I want to connect RaioPDF's local connector to my AI assistant so it can operate RaioPDF for me — things like splitting PDFs, running OCR, redacting text, and stamping Bates numbers. RaioPDF runs entirely on my own computer and this connector makes no network calls; every operation stays on my machine.",
+    "",
+    "Please set it up for me and confirm it works.",
+    "",
+    "RaioPDF's connector is a local program at this path:",
+    command,
+    "",
+    "There are two ways to register it, depending on which assistant I'm using:",
+    "",
+    "1. Claude Code (command line): run this once, then restart Claude Code:",
+    codeCommand,
+    "",
+    "2. Claude Desktop: add this to the claude_desktop_config.json file, then fully quit and reopen Claude Desktop:",
+    desktopSnippet,
+    "",
+    "If you're able to run commands or edit files yourself, please just do it for me: work out which assistant this is, find the right config file for my operating system, make the change, and restart it if you can. If you can't, walk me through the exact steps one at a time.",
+    "",
+    "When you're finished, check the connection by listing RaioPDF's tools. If a tool comes back refused, the safety switch is still off — tell me to open RaioPDF, go to Settings → \"Open Raio to AI\", and turn on \"Let your AI operate Raio\".",
+    "",
+    `More detail and troubleshooting: ${MCP_DOCS_URL}`,
+  ].join("\n");
 }

@@ -23,7 +23,10 @@ refuses to serve any tool until you enable it.
 2. Flip the toggle on. RaioPDF writes a small enable flag to your user config dir
    (`$XDG_CONFIG_HOME` / `%APPDATA%` / `~/.config` → `me.macrify.raiopdf/mcp-enabled`)
    that the connector checks on startup.
-3. Copy the shown config snippet into your AI client (below) and restart it.
+3. Connect your AI client. The easiest way is to click **Copy setup prompt** and
+   paste it into your AI assistant — it registers the connector for you and
+   confirms it works. Prefer to do it by hand? Copy a config snippet yourself
+   (below). Either way, restart the client once it is registered.
 
 Turning the toggle off removes the flag; the connector then serves nothing, even
 if it is still registered in your AI client.
@@ -31,6 +34,12 @@ if it is still registered in your AI client.
 ## Connecting your AI client
 
 RaioPDF shows the exact snippet with the real binary path once the toggle is on.
+
+**Not sure what to do with these?** In the "Open Raio to AI" panel, **Copy setup
+prompt** copies a plain-language prompt you can paste into Claude Code, Claude
+Desktop, or any assistant that can follow steps — it finds the right config file
+for your OS, registers RaioPDF, and verifies the connection. The raw snippets
+below are the manual alternative.
 
 **Claude Desktop** — add to `claude_desktop_config.json`:
 

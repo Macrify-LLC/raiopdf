@@ -33,6 +33,36 @@ test("disables doc-dependent chrome and hover echoes for reduced motion", async 
   }).toBe("none");
 });
 
+test("keeps command-bar icons inside explicitly sized buttons", async ({ page }) => {
+  await page.goto("/");
+
+  const buttons = page.locator(".command-bar .icon-button");
+  await expect(buttons).toHaveCount(9);
+
+  for (const button of await buttons.all()) {
+    const geometry = await button.evaluate((element) => {
+      const buttonRect = element.getBoundingClientRect();
+      const slotRect = element.querySelector(".icon-button__icon")?.getBoundingClientRect();
+      const iconRect = element.querySelector(".rp-icon")?.getBoundingClientRect();
+
+      return {
+        button: { left: buttonRect.left, right: buttonRect.right, width: buttonRect.width },
+        slot: slotRect
+          ? { left: slotRect.left, right: slotRect.right, width: slotRect.width }
+          : null,
+        icon: iconRect ? { left: iconRect.left, right: iconRect.right } : null,
+      };
+    });
+
+    expect(geometry.button.width).toBe(30);
+    expect(geometry.slot?.width).toBe(28);
+    expect(geometry.slot?.left).toBeGreaterThanOrEqual(geometry.button.left);
+    expect(geometry.slot?.right).toBeLessThanOrEqual(geometry.button.right);
+    expect(geometry.icon?.left).toBeGreaterThan(geometry.button.left);
+    expect(geometry.icon?.right).toBeLessThan(geometry.button.right);
+  }
+});
+
 test("opens legal workflow dialogs before a document is loaded", async ({ page }) => {
   await page.goto("/");
 

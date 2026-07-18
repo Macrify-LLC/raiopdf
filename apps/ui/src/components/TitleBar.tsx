@@ -1,5 +1,6 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
-import { MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { MacrifyMarkIcon, MacrifyWordmarkIcon, RaioWordmarkIcon } from "../icons";
+import { runtimePlatform, type RuntimePlatform } from "../lib/runtimePlatform";
 import { ContextMenu } from "./ContextMenu";
 import { MenuBar } from "./MenuBar";
 import "./TitleBar.css";
@@ -32,6 +33,8 @@ export interface TitleBarProps {
   onMenuCommand?: (command: string) => void;
   /** Optional update indicator (the UpdatePill), rendered in the right-side meta area. */
   updateSlot?: ReactNode;
+  /** Deterministic override for component tests; runtime callers use platform detection. */
+  platform?: RuntimePlatform;
 }
 
 export function TitleBar({
@@ -45,15 +48,44 @@ export function TitleBar({
   wordAvailable = true,
   onMenuCommand,
   updateSlot,
+  platform = runtimePlatform(),
 }: TitleBarProps) {
-  const showWindowControls = isTauriRuntime();
+  const desktopRuntime = platform !== "web";
+  const macOS = platform === "macos";
+  const showWindowControls = platform === "windows";
   const hasTabs = tabs.length > 0;
   const [tabMenu, setTabMenu] = useState<{
     tabId: string;
     x: number;
     y: number;
   } | null>(null);
+  const [windowFocused, setWindowFocused] = useState(true);
   const contextTab = tabMenu ? tabs.find((tab) => tab.id === tabMenu.tabId) ?? null : null;
+
+  useEffect(() => {
+    if (!desktopRuntime || platform !== runtimePlatform()) {
+      setWindowFocused(true);
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/window")
+      .then(async ({ getCurrentWindow }) => {
+        if (disposed) {
+          return;
+        }
+        const window = getCurrentWindow();
+        setWindowFocused(await window.isFocused());
+        unlisten = await window.onFocusChanged(({ payload }) => setWindowFocused(payload));
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [desktopRuntime, platform]);
 
   function handleDragRegionDoubleClick(event: MouseEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest("button")) {
@@ -64,7 +96,7 @@ export function TitleBar({
   }
 
   function handleTabContextMenu(event: MouseEvent<HTMLElement>, tabId: string) {
-    if (!showWindowControls) {
+    if (!desktopRuntime) {
       return;
     }
 
@@ -75,21 +107,27 @@ export function TitleBar({
 
   return (
     <header
-      className="title-bar"
+      className={`title-bar title-bar--${platform}`}
+      data-window-focused={windowFocused ? "true" : "false"}
       data-tauri-drag-region
-      onDoubleClick={handleDragRegionDoubleClick}
+      onDoubleClick={showWindowControls ? handleDragRegionDoubleClick : undefined}
     >
+      {macOS ? (
+        <span className="title-bar__traffic-light-space" data-tauri-drag-region aria-hidden="true" />
+      ) : null}
       <div className="title-bar__brand" data-tauri-drag-region>
         <RaioWordmarkIcon height={24} className="title-bar__wordmark-mark" />
       </div>
 
-      <MenuBar
-        hasDocument={hasDocument}
-        canUndo={canUndo}
-        wordAvailable={wordAvailable}
-        onCommand={(command) => onMenuCommand?.(command)}
-        onExit={() => void closeWindow()}
-      />
+      {!macOS ? (
+        <MenuBar
+          hasDocument={hasDocument}
+          canUndo={canUndo}
+          wordAvailable={wordAvailable}
+          onCommand={(command) => onMenuCommand?.(command)}
+          onExit={() => void closeWindow()}
+        />
+      ) : null}
 
       {hasTabs ? (
         <div
@@ -138,11 +176,11 @@ export function TitleBar({
             </div>
           ))}
         </div>
-      ) : (
+      ) : !macOS ? (
         <p className="title-bar__hint" data-tauri-drag-region>
           Open a PDF to work locally
         </p>
-      )}
+      ) : <span className="title-bar__empty-drag-region" data-tauri-drag-region />}
 
       <div className="title-bar__meta" data-tauri-drag-region>
         {updateSlot}
@@ -155,10 +193,13 @@ export function TitleBar({
         >
           <span className="title-bar__byline-text">Built by</span>
           <MacrifyWordmarkIcon height={16} decorative className="title-bar__byline-mark" />
+          {macOS ? (
+            <MacrifyMarkIcon size={16} className="title-bar__byline-compact-mark" />
+          ) : null}
         </button>
         {showWindowControls ? <WindowControls /> : null}
       </div>
-      {showWindowControls && tabMenu && contextTab ? (
+      {desktopRuntime && tabMenu && contextTab ? (
         <ContextMenu
           x={tabMenu.x}
           y={tabMenu.y}
@@ -223,8 +264,4 @@ async function toggleMaximizeWindow(): Promise<void> {
 async function closeWindow(): Promise<void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().close();
-}
-
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }

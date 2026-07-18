@@ -7,6 +7,42 @@
   font-family: var(--font-ui);
 }
 
+.app-shell > .app-shell__accent-bar {
+  grid-row: 1;
+}
+
+.app-shell > .title-bar {
+  grid-row: 2;
+}
+
+.app-shell > .command-bar {
+  grid-row: 3;
+}
+
+.app-shell > .app-shell__document-banner {
+  grid-row: 4;
+}
+
+.app-shell > .app-shell__body {
+  grid-row: 5;
+}
+
+.app-shell > .status-bar {
+  grid-row: 6;
+}
+
+.app-shell--macos {
+  grid-template-rows: 48px 2px 42px auto minmax(0, 1fr) 30px;
+}
+
+.app-shell--macos > .title-bar {
+  grid-row: 1;
+}
+
+.app-shell--macos > .app-shell__accent-bar {
+  grid-row: 2;
+}
+
 .app-shell__accent-bar {
   background: linear-gradient(
     90deg,

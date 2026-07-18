@@ -13,7 +13,7 @@ use range_read::{
     large_doc_threshold_bytes, range_call_cap_bytes, read_file_range, snapshot_file, FileSnapshot,
     RangeReadError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
@@ -28,7 +28,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    menu::{Menu, MenuBuilder, SubmenuBuilder},
+    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager,
 };
 use tauri_plugin_dialog::DialogExt;
@@ -37,6 +37,17 @@ use uuid::Uuid;
 
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct NativeMenuState {
+    has_document: bool,
+    can_undo: bool,
+    word_available: bool,
+}
+
+#[derive(Default)]
+struct NativeMenuStateStore(Mutex<HashMap<String, NativeMenuState>>);
 #[cfg(target_os = "macos")]
 const OPENED_PDF_EVENT: &str = "raiopdf-opened-pdf";
 /// Documents Finder hands us before `setup` has managed the app state.
@@ -2105,6 +2116,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(NativeMenuStateStore::default())
         .setup(|app| {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
@@ -2208,9 +2220,39 @@ pub fn run() {
                 return;
             }
 
-            let _ = app.emit(MENU_EVENT, id);
+            if let Some(webview) = app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
+                let _ = webview.emit(MENU_EVENT, id);
+            }
+        })
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(true) => {
+                let Some(store) = window.try_state::<NativeMenuStateStore>() else {
+                    return;
+                };
+                let state = store
+                    .0
+                    .lock()
+                    .ok()
+                    .and_then(|states| states.get(window.label()).copied());
+                if let Some(state) = state {
+                    let _ = apply_native_menu_state(window.app_handle(), state);
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
+                if let Some(store) = window.try_state::<NativeMenuStateStore>() {
+                    if let Ok(mut states) = store.0.lock() {
+                        states.remove(window.label());
+                    }
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            sync_native_menu_state,
             open_pdf_dialog,
             take_startup_pdf,
             open_pdf_in_new_window_dialog,
@@ -2357,6 +2399,85 @@ pub fn run() {
         });
 }
 
+#[tauri::command]
+fn sync_native_menu_state(
+    window: tauri::WebviewWindow,
+    state: NativeMenuState,
+    store: tauri::State<'_, NativeMenuStateStore>,
+) -> Result<(), String> {
+    store
+        .0
+        .lock()
+        .map_err(|_| "native menu state lock poisoned".to_string())?
+        .insert(window.label().to_string(), state);
+
+    if window.is_focused().unwrap_or(false) {
+        apply_native_menu_state(window.app_handle(), state).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn apply_native_menu_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: NativeMenuState,
+) -> tauri::Result<()> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+
+    let enabled = native_menu_enabled_state(state);
+    for (id, value) in enabled {
+        for top_level in menu.items()? {
+            let Some(submenu) = top_level.as_submenu() else {
+                continue;
+            };
+            let Some(item) = submenu.get(id) else {
+                continue;
+            };
+            if let Some(item) = item.as_menuitem() {
+                item.set_enabled(value)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn native_menu_enabled_state(state: NativeMenuState) -> [(&'static str, bool); 12] {
+    [
+        ("file:save", state.has_document),
+        ("file:save-as", state.has_document),
+        ("file:export-pdfa", state.has_document),
+        (
+            "file:export-docx",
+            state.has_document && state.word_available,
+        ),
+        ("file:import-docx", state.word_available),
+        ("file:print", state.has_document),
+        ("file:protect", state.has_document),
+        ("file:properties", state.has_document),
+        ("edit:undo", state.has_document && state.can_undo),
+        ("view:zoom-in", state.has_document),
+        ("view:zoom-out", state.has_document),
+        ("view:fit", state.has_document),
+    ]
+}
+
+fn native_menu_item<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &str,
+    text: &str,
+    enabled: bool,
+    accelerator: Option<&str>,
+) -> tauri::Result<tauri::menu::MenuItem<R>> {
+    let mut builder = MenuItemBuilder::with_id(id, text).enabled(enabled);
+    if let Some(accelerator) = accelerator {
+        builder = builder.accelerator(accelerator);
+    }
+    builder.build(app)
+}
+
 fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let policy = native_menu_policy(if cfg!(target_os = "macos") {
         NativeMenuPlatform::MacOs
@@ -2364,53 +2485,133 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
         NativeMenuPlatform::Windows
     });
 
+    let open = native_menu_item(app, "file:open", "Open...", true, Some("CmdOrCtrl+O"))?;
+    let open_new = native_menu_item(
+        app,
+        "file:open-new-window",
+        "Open in New Window...",
+        true,
+        Some("CmdOrCtrl+Shift+O"),
+    )?;
+    let import_docx = native_menu_item(
+        app,
+        "file:import-docx",
+        "Import Word Document (.docx, experimental)...",
+        false,
+        None,
+    )?;
+    let save = native_menu_item(app, "file:save", "Save", false, Some("CmdOrCtrl+S"))?;
+    let save_as = native_menu_item(
+        app,
+        "file:save-as",
+        "Save As...",
+        false,
+        Some("CmdOrCtrl+Shift+S"),
+    )?;
+    let export_pdfa = native_menu_item(
+        app,
+        "file:export-pdfa",
+        "Export PDF/A (archival format)...",
+        false,
+        None,
+    )?;
+    let export_docx = native_menu_item(
+        app,
+        "file:export-docx",
+        "Export Editable Word (.docx, experimental)...",
+        false,
+        None,
+    )?;
+    let print = native_menu_item(app, "file:print", "Print...", false, Some("CmdOrCtrl+P"))?;
+    let protect = native_menu_item(app, "file:protect", "Create Protected Copy...", false, None)?;
+    let properties = native_menu_item(app, "file:properties", "Document Properties", false, None)?;
+    let diagnostics = native_menu_item(
+        app,
+        "file:export-diagnostics",
+        "Export Diagnostics...",
+        true,
+        None,
+    )?;
+    let settings = native_menu_item(
+        app,
+        "file:preferences",
+        "Settings...",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
+    let open_raio = native_menu_item(
+        app,
+        "file:open-raio-to-ai",
+        "Open Raio to AI...",
+        true,
+        None,
+    )?;
+    let about = native_menu_item(app, "file:about-macrify", "About RaioPDF", true, None)?;
+    let exit = native_menu_item(app, MENU_EXIT, "Exit", true, None)?;
+
     let file = SubmenuBuilder::new(app, "File")
-        .text("file:open", "Open...")
-        .text("file:open-new-window", "Open in New Window...")
-        .text("file:save", "Save")
-        .text("file:save-as", "Save As...")
+        .item(&open)
+        .item(&open_new)
+        .item(&import_docx)
+        .item(&save)
+        .item(&save_as)
         .separator()
-        .text("file:export-pdfa", "Export PDF/A...")
-        .text("file:export-docx", "Export Editable Word (.docx)...")
-        .text("file:print", "Print...")
-        .text("file:protect", "Create Protected Copy...")
-        .text("file:properties", "Document Properties")
+        .item(&export_pdfa)
+        .item(&export_docx)
+        .item(&print)
+        .item(&protect)
+        .item(&properties)
         .separator()
-        .text("file:export-diagnostics", "Export Diagnostics...");
+        .item(&diagnostics);
     let file = if policy.file_has_app_commands {
         file.separator()
-            .text("file:preferences", "Preferences...")
-            .text("file:open-raio-to-ai", "Open Raio to AI...")
+            .item(&settings)
+            .item(&open_raio)
             .separator()
-            .text("file:about-macrify", "About Macrify...")
+            .item(&about)
             .separator()
-            .text(MENU_EXIT, "Exit")
+            .item(&exit)
     } else {
         file
     }
     .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit").text("edit:undo", "Undo");
+    let undo = native_menu_item(app, "edit:undo", "Undo", false, Some("CmdOrCtrl+Z"))?;
+    let edit = SubmenuBuilder::new(app, "Edit").item(&undo);
     let edit = if policy.native_edit_items {
         edit.separator().cut().copy().paste().select_all()
     } else {
         edit
     }
     .build()?;
+    let zoom_in = native_menu_item(
+        app,
+        "view:zoom-in",
+        "Zoom In",
+        false,
+        Some("CmdOrCtrl+Plus"),
+    )?;
+    let zoom_out = native_menu_item(
+        app,
+        "view:zoom-out",
+        "Zoom Out",
+        false,
+        Some("CmdOrCtrl+Minus"),
+    )?;
+    let fit = native_menu_item(app, "view:fit", "Fit Page", false, Some("CmdOrCtrl+0"))?;
     let view = SubmenuBuilder::new(app, "View")
-        .text("view:zoom-in", "Zoom In")
-        .text("view:zoom-out", "Zoom Out")
-        .text("view:fit", "Fit")
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&fit)
         .build()?;
-    let help = SubmenuBuilder::new(app, "Help")
-        .text("help:open", "RaioPDF Help")
-        .build()?;
+    let help_item = native_menu_item(app, "help:open", "RaioPDF Help", true, None)?;
+    let help = SubmenuBuilder::new(app, "Help").item(&help_item).build()?;
 
     let application = policy.app_menu.then(|| {
         SubmenuBuilder::new(app, "RaioPDF")
-            .text("file:about-macrify", "About RaioPDF")
+            .item(&about)
             .separator()
-            .text("file:preferences", "Preferences...")
-            .text("file:open-raio-to-ai", "Open Raio to AI...")
+            .item(&settings)
+            .item(&open_raio)
             .separator()
             .services()
             .separator()
@@ -2626,6 +2827,33 @@ mod tests {
                 window_menu: true,
             }
         );
+    }
+
+    #[test]
+    fn native_menu_enabled_state_tracks_the_focused_document() {
+        let empty = HashMap::from(native_menu_enabled_state(NativeMenuState::default()));
+        assert!(empty.values().all(|enabled| !enabled));
+
+        let document = HashMap::from(native_menu_enabled_state(NativeMenuState {
+            has_document: true,
+            can_undo: false,
+            word_available: false,
+        }));
+        assert!(document["file:save"]);
+        assert!(!document["file:export-docx"]);
+        assert!(!document["file:import-docx"]);
+        assert!(!document["edit:undo"]);
+
+        let document_with_word_and_undo =
+            HashMap::from(native_menu_enabled_state(NativeMenuState {
+                has_document: true,
+                can_undo: true,
+                word_available: true,
+            }));
+        assert!(document_with_word_and_undo["file:export-docx"]);
+        assert!(document_with_word_and_undo["file:import-docx"]);
+        assert!(document_with_word_and_undo["edit:undo"]);
+        assert!(document_with_word_and_undo["view:fit"]);
     }
 
     #[test]

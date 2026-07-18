@@ -9,6 +9,36 @@
   user-select: none;
 }
 
+.title-bar--macos {
+  --mac-traffic-light-safe-area: 78px;
+  height: 48px;
+  gap: var(--space-2);
+  padding-left: 0;
+  border-bottom: 0;
+  background: var(--panel);
+}
+
+.title-bar__traffic-light-space {
+  width: var(--mac-traffic-light-safe-area);
+  height: 100%;
+  flex: 0 0 var(--mac-traffic-light-safe-area);
+}
+
+.title-bar--macos .title-bar__wordmark-mark {
+  width: auto;
+  height: 20px;
+}
+
+.title-bar--macos .title-bar__brand {
+  padding-right: var(--space-2);
+}
+
+.title-bar--macos[data-window-focused="false"] .title-bar__brand,
+.title-bar--macos[data-window-focused="false"] .title-bar__tab,
+.title-bar--macos[data-window-focused="false"] .title-bar__meta {
+  opacity: 0.62;
+}
+
 .title-bar__brand {
   display: flex;
   align-items: center;
@@ -26,6 +56,11 @@
   height: 100%;
   overflow: hidden;
   min-width: 0;
+}
+
+.title-bar--macos .title-bar__tabs {
+  align-items: center;
+  gap: 2px;
 }
 
 .title-bar__hint {
@@ -49,6 +84,22 @@
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
+}
+
+.title-bar--macos .title-bar__tab {
+  align-self: center;
+  border-color: transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+}
+
+.title-bar--macos .title-bar__tab:hover {
+  background: var(--hover-ground);
+}
+
+.title-bar--macos .title-bar__tab[data-active="true"] {
+  border-color: var(--border-soft);
+  background: var(--chrome);
 }
 
 .title-bar__tab[data-active="true"] {
@@ -120,6 +171,16 @@
   align-self: stretch;
 }
 
+.title-bar--macos .title-bar__meta {
+  padding-right: var(--space-3);
+}
+
+.title-bar__empty-drag-region {
+  min-width: var(--space-4);
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
 .title-bar__byline {
   display: inline-flex;
   align-items: center;
@@ -152,6 +213,27 @@
 
 .title-bar__byline-mark {
   flex-shrink: 0;
+}
+
+.title-bar__byline-compact-mark {
+  display: none;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1180px) {
+  .title-bar--macos .title-bar__byline-text {
+    display: none;
+  }
+}
+
+@media (max-width: 1080px) {
+  .title-bar--macos .title-bar__byline-mark {
+    display: none;
+  }
+
+  .title-bar--macos .title-bar__byline-compact-mark {
+    display: block;
+  }
 }
 
 .title-bar__window-controls {

@@ -18,7 +18,7 @@ const HELP_GROUPS = [
   { id: "comment-ocr", label: "Comment & OCR" },
   { id: "organize", label: "Organize" },
   { id: "legal", label: "Legal" },
-  { id: "preferences", label: "Preferences" },
+  { id: "preferences", label: "Settings" },
 ] as const;
 
 const articleById = new Map<string, HelpArticle>(helpArticles.map((article) => [article.id, article]));

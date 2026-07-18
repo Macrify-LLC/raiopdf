@@ -183,11 +183,11 @@ export function SettingsDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="settings-dialog__header">
-          <h2 id="settings-dialog-title">Preferences</h2>
+          <h2 id="settings-dialog-title">Settings</h2>
           <button
             type="button"
             className="settings-dialog__close"
-            aria-label="Close preferences"
+            aria-label="Close settings"
             onClick={onClose}
           >
             {"×"}

@@ -31,6 +31,7 @@ import type {
 import type { EditingState } from "../hooks/useEditing";
 import type { SensitiveHit } from "../lib/legalTools";
 import { deriveTextLayerStatus } from "../lib/textLayerStatus";
+import { runtimePlatform } from "../lib/runtimePlatform";
 import "./AppShell.css";
 
 function isOcrDialogPhase(phase: OcrUiState["phase"]): boolean {
@@ -211,6 +212,7 @@ export function AppShell({
   onFlattenMarkupAnnotations,
   markupAnnotationMessage,
 }: AppShellProps) {
+  const platform = runtimePlatform();
   const fileInputRef = useRef<HTMLInputElement>(null);
   // "Is a document open" is source-based [R1-1]: a streamed document has no
   // engine handle and no bytes but is absolutely open.
@@ -232,7 +234,7 @@ export function AppShell({
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell app-shell--${platform}`}>
       <div className="app-shell__accent-bar" aria-hidden="true" />
       <input
         ref={fileInputRef}
@@ -243,6 +245,7 @@ export function AppShell({
         onChange={handleFileInputChange}
       />
       <TitleBar
+        platform={platform}
         tabs={tabs}
         onTabSelected={onTabSelected}
         onTabCloseRequested={onTabCloseRequested}

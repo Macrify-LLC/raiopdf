@@ -106,7 +106,12 @@ test("Find & Replace: image-bearing mixed document stays within the Phase 0 size
 
 async function expectTextEditReviewReady(page: Page): Promise<ReturnType<Page["getByRole"]>> {
   const dialog = page.getByRole("dialog", { name: "Review text replacements" });
-  await expect(dialog, "Review should open the staging dialog before the engine request completes.").toBeVisible();
+  // The review dialog mounts only after the real engine finishes staging (a docked
+  // loader covers that window, PR #202), which can run for minutes on image-heavy
+  // documents — so wait the full review budget, not the default 20s expect timeout.
+  await expect(dialog, "Review dialog should open once staging completes.").toBeVisible({
+    timeout: REVIEW_TIMEOUT_MS,
+  });
 
   try {
     await expect(dialog.getByText(REVIEW_DISCLOSURE)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });

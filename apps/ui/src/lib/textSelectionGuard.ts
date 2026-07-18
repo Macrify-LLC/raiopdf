@@ -25,13 +25,17 @@
  *   selection already ends -- so the focus stays put instead of running away.
  */
 
+import { closestTextLayer } from "./selectedTextEdit";
+
 const SELECTING_CLASS = "page-view__text-layer--selecting";
-const LAYER_SELECTOR = ".page-view__text-layer";
 
 const textLayers = new Map<HTMLElement, HTMLElement>();
 
 let selectionChangeAC: AbortController | null = null;
 let prevRange: Range | null = null;
+// Cached Gecko probe (upstream pdf.js caches this too): selectionchange is a
+// hot path and getComputedStyle forces a style resolution per call.
+let isGecko: boolean | null = null;
 
 /**
  * Register a rendered text-layer container: creates and appends the sentinel
@@ -74,13 +78,20 @@ export function registerTextSelectionGuard(container: HTMLElement): () => void {
 }
 
 function reset(endOfContent: HTMLElement, container: HTMLElement): void {
-  // Re-park the sentinel as the layer's last child; the selectionchange
-  // handler may have moved it next to a span deep inside the layer. Skip the
-  // no-op case -- every DOM mutation near a live drag-selection is a chance
-  // for Chromium to abandon the drag.
-  if (endOfContent.parentNode !== container || endOfContent.nextSibling !== null) {
-    container.append(endOfContent);
+  // Fast path: nothing to undo. This runs for every registered layer on
+  // every selectionchange outside the viewer (typing in the search box, form
+  // fields), so skip the DOM writes when the sentinel is already parked.
+  if (
+    endOfContent.parentNode === container &&
+    endOfContent.nextSibling === null &&
+    !container.classList.contains(SELECTING_CLASS) &&
+    endOfContent.style.width === ""
+  ) {
+    return;
   }
+  // Re-park the sentinel as the layer's last child; the selectionchange
+  // handler may have moved it next to a span deep inside the layer.
+  container.append(endOfContent);
   endOfContent.style.width = "";
   endOfContent.style.height = "";
   endOfContent.style.userSelect = "";
@@ -156,14 +167,27 @@ function enableGlobalSelectionListener(): void {
         }
       }
 
+      // Selection lives entirely outside the viewer (search box, form
+      // fields, dialogs) -- by far the most frequent case. Everything below
+      // only matters for a selection inside a text layer, so stop here.
+      // (Deviation from pdf.js, which runs the tail unconditionally.)
+      if (activeTextLayers.size === 0) {
+        prevRange = null;
+        return;
+      }
+
       // Gecko handles the whitespace hit-test well on its own; the sentinel
-      // repositioning below is the Blink/WebKit path (WebView2 today, WKWebView
-      // for the future macOS build).
-      const firstLayer = textLayers.keys().next().value;
-      if (
-        firstLayer &&
-        getComputedStyle(firstLayer).getPropertyValue("-moz-user-select") === "none"
-      ) {
+      // repositioning below is the Blink/WebKit path (WebView2 today,
+      // WKWebView for the future macOS build).
+      if (isGecko === null) {
+        const firstLayer = textLayers.keys().next().value;
+        if (!firstLayer) {
+          return;
+        }
+        isGecko =
+          getComputedStyle(firstLayer).getPropertyValue("-moz-user-select") === "none";
+      }
+      if (isGecko) {
         return;
       }
 
@@ -190,21 +214,14 @@ function enableGlobalSelectionListener(): void {
         return;
       }
 
-      const anchorElement = anchor instanceof Element ? anchor : anchor.parentElement;
-      const parentTextLayer = anchorElement?.closest<HTMLElement>(LAYER_SELECTOR);
+      const parentTextLayer = closestTextLayer(anchor);
       const endDiv = parentTextLayer ? textLayers.get(parentTextLayer) : undefined;
       if (endDiv && parentTextLayer && anchor.parentElement) {
-        if (endDiv.style.width !== parentTextLayer.style.width) {
-          endDiv.style.width = parentTextLayer.style.width;
-        }
-        if (endDiv.style.height !== parentTextLayer.style.height) {
-          endDiv.style.height = parentTextLayer.style.height;
-        }
+        endDiv.style.width = parentTextLayer.style.width;
+        endDiv.style.height = parentTextLayer.style.height;
         // Selectable while parked at the edge: the browser extends the
         // selection into the empty sentinel instead of hunting past it.
-        if (endDiv.style.userSelect !== "text") {
-          endDiv.style.userSelect = "text";
-        }
+        endDiv.style.userSelect = "text";
         // Skip the insert when already in position -- insertBefore detaches
         // and reattaches even for a same-position move, and every mutation
         // near a live drag-selection risks Chromium abandoning the drag.

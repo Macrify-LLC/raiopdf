@@ -502,15 +502,20 @@ test("selection dragged into inter-paragraph whitespace does not run into the ne
 
       for (let i = 0; i < spans.length - 1; i++) {
         const above = spans[i]!;
-        const below = spans.slice(i + 1).find((span) => span.top > above.bottom + 2);
 
-        if (!below) {
-          continue;
-        }
-        const size = below.top - above.bottom;
+        // Spans are sorted by top, so the first hit is the nearest line below.
+        for (let j = i + 1; j < spans.length; j++) {
+          const below = spans[j]!;
 
-        if (!best || size > best.size) {
-          best = { above, below, size };
+          if (below.top <= above.bottom + 2) {
+            continue;
+          }
+          const size = below.top - above.bottom;
+
+          if (!best || size > best.size) {
+            best = { above, below, size };
+          }
+          break;
         }
       }
       return best;

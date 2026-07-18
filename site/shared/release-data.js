@@ -5,9 +5,12 @@
 //
 // RaioPDF is public alpha, but the GitHub Release must be a normal published
 // release because the desktop updater reads /releases/latest/download/latest.json.
-// Product copy can still say "alpha"; this page only shows a Windows download
-// when the latest normal release metadata has the complete signed/compliance
-// asset set expected by the release validator. Deep checks for latest.json,
+// Product copy can still say "alpha"; this page only surfaces a platform's
+// download when the latest normal release metadata carries that platform's
+// complete signed/compliance asset set expected by the release validator —
+// Windows is the baseline, and a macOS (Apple Silicon) download appears only
+// once a signed DMG is attached alongside the full mac asset set. Deep checks
+// for latest.json,
 // updater signatures, checksums, and Authenticode happen in the release
 // validator because GitHub release asset bytes are not reliable to browser-fetch
 // cross-origin from a static page.
@@ -117,12 +120,22 @@
       return null;
     }
 
+    // A macOS DMG (and its checksums) is only reachable here inside a fully
+    // validated *combined* release: the gate above returns null unless either
+    // the exact Windows-only set OR the exact Windows+macOS set matches, so a
+    // present DMG always belongs to a complete, signed mac asset set. That makes
+    // a plain null-safe lookup safe — no need to re-derive which branch matched.
+    const macInstaller = assetByName(assets, `RaioPDF-${version}-macos-arm64.dmg`);
+    const macChecksums = assetByName(assets, "SHA256SUMS-macos-arm64.txt");
+
     return {
       version,
       installer,
       installerSig: assetByName(assets, `${installer.name}.sig`),
       latestJson: assetByName(assets, "latest.json"),
       checksums: assetByName(assets, "SHA256SUMS.txt"),
+      macInstaller,
+      macChecksums,
       expected: actual,
     };
   }
@@ -262,11 +275,24 @@
         releaseUrl: release ? release.html_url : null,
         releaseName: release ? release.name || release.tag_name : null,
         notesMarkdown: release ? release.body : null,
+        mac: null,
         totalDownloads,
       };
     }
 
     const { release, assetSet } = selected;
+    // Additive macOS surface: present only when the validated release carries a
+    // signed macOS (Apple Silicon) DMG. Windows fields below stay the baseline,
+    // so the page keeps working unchanged for Windows-only releases (mac: null).
+    const mac = assetSet.macInstaller
+      ? {
+          downloadUrl: assetSet.macInstaller.browser_download_url,
+          downloadName: assetSet.macInstaller.name,
+          sizeBytes: assetSet.macInstaller.size,
+          sha256: digestToSha256(assetSet.macInstaller.digest),
+          checksumsUrl: assetSet.macChecksums ? assetSet.macChecksums.browser_download_url : null,
+        }
+      : null;
     return {
       available: true,
       version: assetSet.version,
@@ -279,6 +305,7 @@
       sizeBytes: assetSet.installer.size,
       sha256: digestToSha256(assetSet.installer.digest),
       checksumsUrl: assetSet.checksums.browser_download_url,
+      mac,
       totalDownloads,
     };
   }

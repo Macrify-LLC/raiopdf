@@ -11,7 +11,11 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
-## [Unreleased]
+## [0.1.4] - 2026-07-18
+
+Fifth public alpha. Headline: **RaioPDF comes to the Mac** — the first Developer
+ID-signed, Apple-notarized macOS (Apple Silicon) build, released alongside the
+Windows installer at the same version.
 
 ### Added
 
@@ -24,6 +28,10 @@ fades as download volume accrues.
   text with the pointer and each line becomes a marked area, alongside the existing
   draw-a-box and search-text methods. It needs no full-document text extraction, so it
   also works on very large files where search-to-redact isn't available.
+- **macOS (Apple Silicon) build.** RaioPDF now ships for Macs with Apple Silicon
+  (M-series), distributed as a Developer ID-signed, notarized `.dmg` alongside the
+  Windows installer. The landing page and updater pick the right download per
+  platform automatically. Intel Macs aren't supported yet.
 
 ## [0.1.3] - 2026-07-12
 
@@ -183,7 +191,8 @@ own machine. Windows only for now (macOS later).
 - An off-by-default MCP connector so RaioPDF can talk to your own AI agents; no AI runs
   inside the app itself.
 
-[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.0...v0.1.1

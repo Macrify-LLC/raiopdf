@@ -23,8 +23,8 @@ word, but the word itself is always "RaioPDF.")
 
 ## Status banner (always visible, small, near the top)
 
-**Public alpha.** Windows build available from GitHub Releases. Get the
-latest release.
+**Public alpha.** Windows and Apple-Silicon macOS builds available from GitHub
+Releases. Get the latest release.
 
 This is not hidden or soft-pedaled. It sits near the top on every option.
 
@@ -179,7 +179,7 @@ don't isolate it into its own callout box if you're using the full text.
 - **PDF Security** — create a separate AES-256 protected copy with an open
   password and optional advisory print/copy restrictions, or save an unlocked
   copy of a protected PDF. Unsaved edits can go into the new copy; the original
-  stays untouched. Available in the installed Windows app.
+  stays untouched. Available in the installed desktop app.
 - **Sensitive-info scanner** — assistive detection of SSNs and account
   numbers before a filing goes out (no rule-number citation in marketing
   copy per the 2026-07-04 note above). Always pair with the honest caveat: this is assistive only — never trust AI with
@@ -223,8 +223,8 @@ paragraph.)
 
 - Not "AI-powered." No AI features built into RaioPDF — if I wanted an AI
   summary I could go to a million other more useful places first.
-- Public alpha, Windows first. Usable and versioned, but still early.
-- Windows first. macOS later — no date promised.
+- Public alpha. Usable and versioned, but still early.
+- Not on Intel Macs yet. The macOS build targets Apple Silicon (M-series).
 - Not trying to win a features arms race. This isn't about beating anyone
   spec-for-spec — it's about proving the free, local, and genuinely
   **competitive** alternative can exist at all.
@@ -251,17 +251,22 @@ don't merge the two.)
 ## Download panel copy
 
 **Fallback state** (`available: false` from the GitHub API):
-> RaioPDF is in public alpha. Download the current Windows build from GitHub
+> RaioPDF is in public alpha. Download the current build from GitHub
 > Releases. [Open GitHub Releases →]
 
 **Live release state** (`available: true`):
-- Primary button: "Download for Windows" → the evergreen release asset URL
-- Small print under the button: version, file size, published date — all
-  pulled live from GitHub, never hand-typed
-- A secondary link to the SHA-256 checksum for anyone who wants to verify the
-  download themselves
-- The app checks GitHub Releases for signed updates after install
-- Windows only today; macOS later
+- One download button per platform that has a signed build in the latest release —
+  "Download for Windows" and, when present, "Download for macOS." The button
+  matching the visitor's OS is surfaced first; both stay visible.
+- The macOS build is Apple Silicon (M-series) only — labeled as such, since the
+  browser can't tell Apple Silicon from an Intel Mac.
+- Small print under each button: version, file size, published date — all pulled
+  live from GitHub, never hand-typed.
+- A secondary link to that platform's SHA-256 checksum for anyone who wants to
+  verify the download themselves.
+- The app checks GitHub Releases for signed updates after install.
+- The macOS download appears only once a signed DMG is attached to the latest
+  release; until then the page shows Windows alone.
 
 ## Download counter
 

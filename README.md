@@ -9,7 +9,7 @@
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-1B3A5C.svg"></a>
   <a href="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Macrify-LLC/raiopdf/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Status: public alpha" src="https://img.shields.io/badge/status-public_alpha-D97706.svg">
-  <img alt="Platform: Windows first" src="https://img.shields.io/badge/platform-Windows-2565A0.svg">
+  <img alt="Platform: Windows and macOS" src="https://img.shields.io/badge/platform-Windows_%7C_macOS-2565A0.svg">
   <img alt="Telemetry: none" src="https://img.shields.io/badge/telemetry-none-166534.svg">
 </p>
 
@@ -30,7 +30,7 @@
 
 <br>
 
-> **Public alpha — version 0.1.3.** Download the signed Windows alpha from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
+> **Public alpha — version 0.1.3.** Download the signed alpha for Windows or Apple-Silicon macOS from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
 
 ## The philosophy
 
@@ -76,7 +76,7 @@ Four ways it fits into an actual day at the firm:
 | Fill & sign | Fill existing forms or add reusable text fields and checkboxes to fieldless PDFs; add text, images, and signature stamps; flatten when needed for filing |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
 | **Word ↔ PDF** *(experimental)* | Import a Word document (with a tracked-changes check first), or export a PDF back to editable Word. Runs through your own installed copy of Microsoft Word — the menu items say so and gray out if Word isn't installed. Formatting is approximate; check the result. |
-| PDF Security | Create a separate AES-256 protected copy, with optional advisory print/copy restrictions, or save an unlocked copy of a protected PDF. Unsaved edits can go into the new copy; the original stays untouched. Available in the installed Windows app. |
+| PDF Security | Create a separate AES-256 protected copy, with optional advisory print/copy restrictions, or save an unlocked copy of a protected PDF. Unsaved edits can go into the new copy; the original stays untouched. Available in the installed desktop app. |
 | In-app help | Built-in, offline help for every tool — the same articles published at [raio.macrify.me/help](https://raio.macrify.me/help/) |
 | Native MCP Integration | No AI features (intentional), but ships with a connector so your own AI agents can run supported local tools |
 | No catches | No watermarks, no nag screens, ever |
@@ -104,7 +104,7 @@ Everything above is implemented and working in the public alpha today. Expect ro
 
 - **Not "AI-powered."** No AI features built into RaioPDF — if I wanted an AI summary I could go to a million other more useful places first.
 - **Not stable software yet.** This is a public alpha: usable, public, and versioned, but still early.
-- **Not cross-platform yet.** Windows first. macOS later — no date promised.
+- **Not on Intel Macs yet.** The macOS build targets Apple Silicon (M-series); Intel support depends on demand.
 - **Not trying to win a features arms race.** This isn't about beating anyone spec-for-spec — it's about proving the free, local, and genuinely **competitive** alternative can exist at all.
 - **Not phoning home with your files.** No telemetry, no background analytics, no document upload. RaioPDF's only automatic internet access is a signed update check against GitHub Releases; everything that touches your PDFs stays on your machine. If it ever crashes, it asks — once — whether to report it, your choice of two ways: open a pre-filled GitHub issue in your browser, or save the report to a file you can email in yourself (no account needed). Either way you review every word before anything is sent, and you can switch the prompt off entirely.
 
@@ -132,9 +132,9 @@ Optionally, an off-by-default "bring your own AI" connector — bundled right in
 
 ## Status
 
-**Public alpha, version 0.1.3.** Built in the open — the features above are implemented and working in the packaged Windows alpha; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is signed, the maintainer signing pipeline is local-only, and signed update checks are wired into the desktop app. Windows ships first; macOS is planned with no committed date.
+**Public alpha, version 0.1.3.** Built in the open — the features above are implemented and working in the packaged Windows and Apple-Silicon macOS alphas; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is Certum-signed and the macOS build is Developer ID-signed and notarized; signed update checks are wired into the desktop app.
 
-The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed Windows installer when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
+The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed installer for the visitor's platform when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 
 What changed in each release is recorded in [`CHANGELOG.md`](CHANGELOG.md).
 

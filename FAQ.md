@@ -89,20 +89,24 @@ we might change later.
 
 ### What do I need to run it?
 
-A Windows PC. RaioPDF is Windows-first; the installer bundles everything it
-needs (the PDF engine, the OCR toolchain), so there's no Docker, Java setup, or
-separate downloads.
+A Windows PC, or a Mac with Apple Silicon (an M-series chip). On either platform
+the installer bundles everything it needs (the PDF engine, the OCR toolchain), so
+there's no Docker, Java setup, or separate downloads. (Intel Macs aren't
+supported yet.)
 
 ### Is there a Mac version?
 
-Not yet. Windows ships first and macOS is planned, but there's no committed
-date. See the [roadmap](ROADMAP.md).
+Yes. RaioPDF runs on Windows and on Macs with Apple Silicon (M-series chips). The
+macOS build is Developer ID-signed and notarized by Apple, so it opens without any
+Gatekeeper workaround. Intel Macs aren't supported yet — see the
+[roadmap](ROADMAP.md).
 
 ### Where do I download it, and is it safe?
 
 The only official place to download RaioPDF is
 [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases). The Windows
-installer is code-signed. It's a **public alpha**, so treat it as early software —
+installer is code-signed; the macOS build is Developer ID-signed and notarized.
+It's a **public alpha**, so treat it as early software —
 usable and versioned, but expect rough edges, and please
 [report anything that breaks](https://github.com/Macrify-LLC/raiopdf/issues).
 
@@ -156,7 +160,7 @@ at all.
 
 ### Can it add password protection / encrypt a PDF?
 
-Yes, in the installed Windows app. **PDF Security** creates a separate AES-256
+Yes, in the installed desktop app. **PDF Security** creates a separate AES-256
 protected copy with an open password. It can include your current unsaved edits,
 while the original file stays open and unchanged.
 

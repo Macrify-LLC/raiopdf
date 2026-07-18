@@ -22,6 +22,8 @@ describe("site release data", () => {
     assert.equal(info.version, "0.1.2");
     assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
     assert.equal(info.checksumsUrl, fixture.assetUrl("SHA256SUMS.txt"));
+    // A Windows-only release surfaces no macOS download.
+    assert.equal(info.mac, null);
   });
 
   it("does not browser-fetch release asset bytes while resolving the download", async () => {
@@ -50,6 +52,44 @@ describe("site release data", () => {
 
     assert.equal(info.available, true);
     assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
+  });
+
+  it("surfaces the macOS DMG download when a complete Mac set is present", async () => {
+    const fixture = releaseFixture({ includeMac: true });
+    const api = loadApi({
+      latest: fixture.release,
+      releases: [fixture.release],
+      textAssets: fixture.textAssets,
+    });
+
+    const info = await api.loadReleaseInfo();
+
+    assert.ok(info.mac, "expected info.mac to be populated for a combined release");
+    assert.equal(info.mac.downloadName, "RaioPDF-0.1.2-macos-arm64.dmg");
+    assert.equal(info.mac.downloadUrl, fixture.assetUrl("RaioPDF-0.1.2-macos-arm64.dmg"));
+    assert.equal(info.mac.checksumsUrl, fixture.assetUrl("SHA256SUMS-macos-arm64.txt"));
+    // The Windows baseline is unchanged by the additive mac surface.
+    assert.equal(info.available, true);
+    assert.equal(info.downloadName, "RaioPDF-0.1.2-windows-x64-setup.exe");
+  });
+
+  it("keeps macOS null when a partial Mac set fails validation", async () => {
+    const fixture = releaseFixture({
+      includeMac: true,
+      missing: ["RaioPDF-0.1.2-macos-arm64-license-notices.txt"],
+    });
+    const api = loadApi({
+      latest: fixture.release,
+      releases: [fixture.release],
+      textAssets: fixture.textAssets,
+    });
+
+    const info = await api.loadReleaseInfo();
+
+    // An incomplete mac set fails the combined gate → the whole release is
+    // treated as not-downloadable rather than exposing a half-validated DMG.
+    assert.equal(info.available, false);
+    assert.equal(info.mac, null);
   });
 
   it("fails closed for a partial Mac set or an unknown extra asset", async () => {

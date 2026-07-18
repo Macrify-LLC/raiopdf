@@ -17,6 +17,28 @@
   flex: 0 0 auto;
 }
 
+/*
+ * Command-bar actions are icon-only, so give WebKit a concrete outer and
+ * inner size instead of making it resolve the button's intrinsic width from
+ * a stretched aspect-ratio child. WKWebView can round that circular sizing
+ * dependency down at 1x, leaving the SVG underneath the button's right-hand
+ * clip. The shared IconButton stays fluid for expanding-label and compact
+ * usages elsewhere.
+ */
+.command-bar .icon-button {
+  width: 30px;
+  min-width: 30px;
+  flex: 0 0 30px;
+}
+
+.command-bar .icon-button__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-self: center;
+  aspect-ratio: auto;
+}
+
 .command-bar__divider {
   width: 1px;
   height: 22px;

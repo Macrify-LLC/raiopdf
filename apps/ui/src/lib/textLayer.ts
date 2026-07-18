@@ -4,6 +4,7 @@ import {
   type TrivialTextImagePageInfo,
 } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "./pdfjs";
+import { getPdfPageTextContent } from "./pdfTextContent";
 
 const PDFJS_SAVE_OPERATOR = 10;
 const PDFJS_RESTORE_OPERATOR = 11;
@@ -72,7 +73,7 @@ export async function pdfDocumentTextLayerCoverage(
 
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber);
-    const content = await page.getTextContent();
+    const content = await getPdfPageTextContent(page);
     const pageText = content.items.map(textItemString).join(" ");
     const hasText = pageText.trim().length > 0;
     const operatorList = await page.getOperatorList();

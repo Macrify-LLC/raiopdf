@@ -1,5 +1,6 @@
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { PDFDocumentProxy } from "./pdfjs";
+import { getPdfPageTextContent } from "./pdfTextContent";
 
 type TextItemLike = {
   str?: unknown;
@@ -122,7 +123,7 @@ async function extractSinglePageText(
 ): Promise<ExtractedPageText> {
   const pageNumber = pageIndex + 1;
   const page = await pdfDocument.getPage(pageNumber);
-  const textContent = await page.getTextContent();
+  const textContent = await getPdfPageTextContent(page);
   const spans: TextSpan[] = [];
   let text = "";
   let previousTextItem: TextItemLike | null = null;

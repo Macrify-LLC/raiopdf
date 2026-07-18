@@ -77,7 +77,6 @@ export interface AppShellProps {
   onBookmarkNavigate: (pageIndex: number) => void;
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
   ocrState: OcrUiState;
-  ocrAvailable: boolean;
   /** Whether Microsoft Word was detected on this PC (gates the Word-dependent menu items). */
   wordAvailable: boolean;
   ocrStarting: boolean;
@@ -116,8 +115,6 @@ export interface AppShellProps {
   onRedactionAreasCreated: (areas: PdfRedactionArea[]) => void;
   onRedactionSelectionRejected: (message: string) => void;
   onRedactionAreaRemoved: (id: string) => void;
-  onConfirmRedactions: () => void;
-  onCancelRedactions: () => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onOpenAbout: () => void;
@@ -163,7 +160,6 @@ export function AppShell({
   onBookmarkNavigate,
   onOutlineChange,
   ocrState,
-  ocrAvailable,
   wordAvailable,
   ocrStarting,
   documentBanner,
@@ -199,8 +195,6 @@ export function AppShell({
   onRedactionAreasCreated,
   onRedactionSelectionRejected,
   onRedactionAreaRemoved,
-  onConfirmRedactions,
-  onCancelRedactions,
   onRunScanner,
   onMarkScannerHit,
   onOpenAbout,
@@ -345,9 +339,7 @@ export function AppShell({
           hasDocument={hasDocument}
           pageCount={pageCount}
           ocrState={ocrState}
-          ocrAvailable={ocrAvailable}
           ocrStarting={ocrStarting}
-          suppressOcrErrorNotice={ocrState.phase === "error"}
           activeEditTool={editing.tool}
           activeTextEdit={activeTextEdit}
           activeEditDialogTool={activeEditDialogTool}
@@ -372,8 +364,6 @@ export function AppShell({
           scanner={scanner}
           pendingEdits={editing.pendingEdits}
           onRemovePendingEdit={editing.removeEdit}
-          onConfirmRedactions={onConfirmRedactions}
-          onCancelRedactions={onCancelRedactions}
           onRunScanner={onRunScanner}
           onMarkScannerHit={onMarkScannerHit}
           onHelpRequested={onHelpRequested}

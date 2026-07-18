@@ -12,9 +12,16 @@ Silicon (`installer/assemble-macos-arm64.sh` plus the manifest, Mach-O boundary,
 size gates), so `pnpm build:shell:macos-arm64` produces an unsigned `.app`/`.dmg`.
 CI's compile-only `shell-macos-arm64` job stays non-distributable regardless: it runs
 the payload assembler with `--prepare-empty` (an empty-payload marker) and builds Tauri
-with `--no-bundle`, so it compiles the shell without ever emitting a bundle. Signing and
-notarization remain a separate maintainer-local step (`docs/SIGNING.md`); the `.app`/`.dmg`
-produced by the bundle are unsigned.
+with `--no-bundle`, so it compiles the shell without ever emitting a bundle.
+
+Signed macOS releases are a maintainer-local pipeline: `pnpm release:macos`
+(`scripts/release-macos.mjs`) stamps the version, assembles the payload with
+every Mach-O Developer ID signed before the manifest is generated, builds the
+hardened-runtime app via `tauri.macos.signing.conf.json`, notarizes and staples
+the app, builds the Tauri-signed updater archive from the stapled app, then
+builds, signs, notarizes, and staples the DMG, and finally stages and validates
+the canonical assets. See `docs/SIGNING.md` (macOS) for credentials and the
+step-by-step contract.
 
 The platform contract is defined in `installer/platforms.mjs`. It owns the
 payload, cache, release-stage, Tauri updater, Rust target, and public artifact
@@ -27,10 +34,13 @@ release-assets/signed/
   latest.json
 ```
 
-During the Windows-only transition, `prepare:release-assets` and
-`validate:release-assets` continue to produce and validate a complete Windows
-release from `release-assets/signed/windows-x64`. A macOS stage is not required
-until a macOS release is being prepared.
+`prepare:release-assets` and `validate:release-assets` continue to produce and
+validate a complete Windows release from `release-assets/signed/windows-x64`.
+The macOS stage is produced by `prepare-signed-release-assets --platform
+macos-arm64` (normally invoked by the `stage` step of `pnpm release:macos`),
+and `--combine` cross-checks both platform stages before writing the shared
+`latest.json` and the release-wide `SHA256SUMS.txt` at the stage root — see
+`docs/SIGNING.md`, "Publishing the combined release."
 
 The default Windows command keeps its established public filenames and embeds
 the Windows-only `latest.json` for compatibility. For a combined release, stage
@@ -102,10 +112,10 @@ baseline. Growth above either the percentage
 and byte allowance fails unless the caller explicitly supplies
 `--allow-growth --growth-reason "..."`; a reviewed release should normally
 update the committed baseline instead. The Windows baselines are the published
-0.1.3 installer and its verified 986,198,913-byte unpacked payload. Both macOS
-baselines intentionally remain unset until the first fully signed and notarized
-arm64 package exists, and the gate refuses to ship a Mac stage until those real
-measurements are recorded.
+0.1.3 installer and its verified 986,198,913-byte unpacked payload. The macOS
+baselines are the first fully signed and notarized arm64 package (0.1.4): a
+431,412,835-byte DMG and a 762,978,566-byte Developer ID-signed unpacked
+payload.
 
 The release workflow runs the boundary scan on the assembled Windows payload
 and again on the resource copy produced by Tauri. Before a Mac stage is signed,

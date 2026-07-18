@@ -24,6 +24,8 @@
     "build:shell:windows-x64": "pnpm prepare:shell-bundle:windows-x64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows-x64.conf.json",
     "build:shell:macos-arm64": "pnpm prepare:shell-bundle:macos-arm64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.macos.conf.json",
     "build:shell:signed": "node scripts/stamp-shell-version.mjs && pnpm prepare:shell-bundle && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows.signing.conf.json",
+    "release:macos": "node scripts/release-macos.mjs",
+    "scan:macos-min-os": "node scripts/scan-macos-min-os.mjs",
     "prepare:release-assets": "node scripts/prepare-signed-release-assets.mjs",
     "validate:release-assets": "node scripts/validate-release-assets.mjs",
     "validate:package-boundary": "node scripts/validate-package-boundary.mjs",

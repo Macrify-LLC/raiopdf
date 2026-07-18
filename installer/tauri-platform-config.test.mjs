@@ -30,7 +30,7 @@ test("macOS overlay is Apple Silicon-only by command contract and contains no Wi
   assert.equal(macos.bundle.active, true);
   assert.deepEqual(macos.bundle.targets, ["app", "dmg"]);
   assert.deepEqual(macos.bundle.resources, { "payload/macos-arm64": "payload" });
-  assert.equal(macos.bundle.macOS.minimumSystemVersion, "13.0");
+  assert.equal(macos.bundle.macOS.minimumSystemVersion, "14.0");
   assert.equal(macos.app.windows[0].decorations, true);
   assert.equal(macos.app.windows[0].titleBarStyle, "Overlay");
   assert.equal(macos.app.windows[0].hiddenTitle, true);

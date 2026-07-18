@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for the bundled MCP Node runtime (payload mcp/node/bin/node),
+  signed with the hardened runtime.
+
+  - allow-jit: V8 compiles JavaScript to native code. On arm64 it allocates
+    its code space with MAP_JIT and toggles pthread_jit_write_protect, so
+    allow-jit alone is sufficient.
+
+  allow-unsigned-executable-memory is deliberately NOT granted: the bundled
+  node (v24) was verified to start and run JIT-compiled code under the
+  hardened runtime with only allow-jit. disable-library-validation is also
+  not granted - the MCP connector loads no native addons outside the signed
+  payload.
+-->
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>

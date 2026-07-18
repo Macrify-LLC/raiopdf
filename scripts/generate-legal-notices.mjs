@@ -476,9 +476,23 @@ function canvasComponent() {
 // Ghostscript/Tesseract/qpdf from source instead of shipping prebuilt
 // binaries. All are statically linked into those binaries; none ship as
 // standalone payload files.
+//
+// SPDX expressions below were verified against the license files shipped in
+// the exact pinned source tarballs (SHA256-checked against the pins file):
+// - Leptonica 1.84.1: leptonica-license.txt (the 2-clause Leptonica license;
+//   SPDX id "Leptonica").
+// - libpng 1.6.43: LICENSE ("PNG Reference Library License version 2", used
+//   by libpng since 1.6.36; SPDX id "libpng-2.0").
+// - libtiff 4.6.0: LICENSE.md (the Leffler/SGI libtiff license; SPDX id
+//   "libtiff").
+// - libjpeg-turbo 3.0.4: LICENSE.md + README.ijg. Only the libjpeg API
+//   library (libjpeg.a) is linked: IJG-licensed core plus zlib-licensed Arm
+//   NEON SIMD objects. The BSD-3-Clause portions cover the TurboJPEG API
+//   library and build system, neither of which is linked or shipped, so the
+//   expression for the shipped binaries is "IJG AND Zlib".
 function macSourceBuiltImageDependencies() {
   return [
-    component("Leptonica", pins.LEPTONICA_VERSION, "leptonica license", "http://leptonica.org/", {
+    component("Leptonica", pins.LEPTONICA_VERSION, "Leptonica", "http://leptonica.org/", {
       role: "Tesseract image I/O dependency (statically linked)",
       source: { url: pins.LEPTONICA_SOURCE_URL, sha256: pins.LEPTONICA_SOURCE_SHA256 },
       modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
@@ -488,12 +502,12 @@ function macSourceBuiltImageDependencies() {
       source: { url: pins.LIBPNG_SOURCE_URL, sha256: pins.LIBPNG_SOURCE_SHA256 },
       modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
     }),
-    component("libtiff", pins.LIBTIFF_VERSION, "libtiff license", "https://libtiff.gitlab.io/libtiff/", {
+    component("libtiff", pins.LIBTIFF_VERSION, "libtiff", "https://libtiff.gitlab.io/libtiff/", {
       role: "TIFF image support for Leptonica (statically linked)",
       source: { url: pins.LIBTIFF_SOURCE_URL, sha256: pins.LIBTIFF_SOURCE_SHA256 },
       modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
     }),
-    component("libjpeg-turbo", pins.LIBJPEG_TURBO_VERSION, "IJG AND BSD-3-Clause AND Zlib", "https://libjpeg-turbo.org/", {
+    component("libjpeg-turbo", pins.LIBJPEG_TURBO_VERSION, "IJG AND Zlib", "https://libjpeg-turbo.org/", {
       role: "JPEG support for Leptonica, Tesseract, and qpdf (statically linked)",
       source: { url: pins.LIBJPEG_TURBO_SOURCE_URL, sha256: pins.LIBJPEG_TURBO_SOURCE_SHA256 },
       modificationStatus: "Built from the pinned upstream source archive on the build host; no functional source modifications.",
@@ -524,7 +538,7 @@ Bundled Components
 ------------------
 
 ${rows}
-
+${isMacPlatform ? `${macImageLibraryAttribution()}\n` : ""}
 Bundled npm Dependency Inventory
 --------------------------------
 
@@ -555,6 +569,25 @@ License Texts
 - legal/licenses/AGPL-3.0.txt
 - legal/licenses/MPL-2.0.txt
 `;
+}
+
+// macOS-only THIRD-PARTY-NOTICES section. The IJG license requires binary
+// distributions to state "This software is based in part on the work of the
+// Independent JPEG Group." in the product documentation; the statically
+// linked image libraries otherwise appear only as component rows. Windows
+// output must remain byte-identical, so the caller emits "" there.
+function macImageLibraryAttribution() {
+  return `
+Statically Linked Image Libraries
+---------------------------------
+
+This software is based in part on the work of the Independent JPEG Group.
+
+The macOS Tesseract and qpdf binaries statically link their image-format
+dependencies (Leptonica, libpng, libtiff, and libjpeg-turbo's IJG-licensed
+libjpeg API library, including its zlib-licensed Arm NEON SIMD portions);
+none ships as a standalone payload file. Each library's license identifier,
+pinned source URL, and SHA256 are recorded in COMPONENT-MANIFEST.json.`;
 }
 
 function sourceCorrespondence(manifest) {

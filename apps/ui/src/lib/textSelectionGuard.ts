@@ -214,7 +214,13 @@ function enableGlobalSelectionListener(): void {
         return;
       }
 
-      const parentTextLayer = closestTextLayer(anchor);
+      // Resolve the owning layer from the anchor's PARENT, exactly like
+      // pdf.js: when the selection boundary is the text-layer element itself
+      // (the browser can land there after extending into the sentinel), a
+      // self-matching closest() would pass the layer here and the insert
+      // below -- which uses anchor.parentElement -- would move the sentinel
+      // OUTSIDE the layer, disarming the guard until the next reset.
+      const parentTextLayer = anchor.parentElement ? closestTextLayer(anchor.parentElement) : null;
       const endDiv = parentTextLayer ? textLayers.get(parentTextLayer) : undefined;
       if (endDiv && parentTextLayer && anchor.parentElement) {
         endDiv.style.width = parentTextLayer.style.width;

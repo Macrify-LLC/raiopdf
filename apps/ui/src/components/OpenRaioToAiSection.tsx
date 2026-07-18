@@ -56,6 +56,10 @@ export function OpenRaioToAiSection({
   const { sectionRef, showFocusRing } = useSectionFocus(focused, onFocusHandled);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
+  // The guided prompt is hidden by default, so once a copy attempt fails we keep
+  // the selectable text on screen until a later copy succeeds — the transient
+  // copyFailedKey label clears in a couple seconds, too fast to hand-select.
+  const [promptFallbackShown, setPromptFallbackShown] = useState(false);
 
   useEffect(() => {
     if (!copiedKey) {
@@ -74,6 +78,14 @@ export function OpenRaioToAiSection({
     const timeoutId = window.setTimeout(() => setCopyFailedKey(null), COPY_FAILED_LABEL_MS);
     return () => window.clearTimeout(timeoutId);
   }, [copyFailedKey]);
+
+  useEffect(() => {
+    if (copyFailedKey === "prompt") {
+      setPromptFallbackShown(true);
+    } else if (copiedKey === "prompt") {
+      setPromptFallbackShown(false);
+    }
+  }, [copyFailedKey, copiedKey]);
 
   const copy = useCallback((key: string, text: string) => {
     setCopyFailedKey(null);
@@ -105,7 +117,6 @@ export function OpenRaioToAiSection({
   const desktopSnippet = buildClaudeDesktopSnippet(resolvedOrPlaceholder);
   const codeCommand = buildClaudeCodeCommand(resolvedOrPlaceholder);
   const setupPrompt = buildSetupPrompt(resolvedOrPlaceholder);
-  const promptCopyFailed = copyFailedKey === "prompt";
 
   return (
     <section
@@ -193,7 +204,7 @@ export function OpenRaioToAiSection({
               className="open-raio-to-ai__guided-button"
               iconSize={14}
             />
-            {promptCopyFailed ? (
+            {promptFallbackShown ? (
               <>
                 <ClipboardBlockedNote />
                 <pre className="open-raio-to-ai__code">

@@ -169,9 +169,7 @@ export interface ToolPanelProps {
   hasDocument: boolean;
   pageCount: number;
   ocrState: OcrUiState;
-  ocrAvailable: boolean;
   ocrStarting: boolean;
-  suppressOcrErrorNotice?: boolean | undefined;
   activeEditTool: EditToolId;
   activeTextEdit?: boolean;
   activeEditDialogTool: EditDialogToolId | null;
@@ -189,8 +187,6 @@ export interface ToolPanelProps {
   scanner: ScannerPanelState;
   pendingEdits: readonly PendingEdit[];
   onRemovePendingEdit: (id: string) => void;
-  onConfirmRedactions: () => void;
-  onCancelRedactions: () => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
   onHelpRequested: (articleId: string) => void;
@@ -219,9 +215,7 @@ export function ToolPanel({
   hasDocument,
   pageCount,
   ocrState,
-  ocrAvailable,
   ocrStarting,
-  suppressOcrErrorNotice = false,
   activeEditTool,
   activeTextEdit = false,
   activeEditDialogTool,
@@ -239,8 +233,6 @@ export function ToolPanel({
   scanner,
   pendingEdits,
   onRemovePendingEdit,
-  onConfirmRedactions,
-  onCancelRedactions,
   onRunScanner,
   onMarkScannerHit,
   onHelpRequested,
@@ -438,8 +430,8 @@ export function ToolPanel({
           disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onForceOcr}
         />
-        {ocrState.phase === "done" || (ocrState.phase === "error" && !suppressOcrErrorNotice) ? (
-          <OcrResultNotice ocrState={ocrState} ocrAvailable={ocrAvailable} />
+        {ocrState.phase === "done" ? (
+          <OcrResultNotice ocrState={ocrState} />
         ) : null}
       </div>
 
@@ -473,9 +465,6 @@ export function ToolPanel({
                 <RedactionStatusPanel
                   state={redaction}
                   hasDocument={hasDocument}
-                  onConfirm={onConfirmRedactions}
-                  onCancel={onCancelRedactions}
-                  onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
               {tool.id === "bates-numbering" && selected ? (
@@ -582,7 +571,6 @@ function MarkupAnnotationControls({
 
 interface OcrResultNoticeProps {
   ocrState: OcrUiState;
-  ocrAvailable: boolean;
 }
 
 // The active phases (confirm/starting-engine/processing/verifying) live in
@@ -591,16 +579,8 @@ interface OcrResultNoticeProps {
 // buttons, reusing the same InlineMessage pattern every other tool in this
 // panel (Redact, Sanitize, Repair, Compress, Scrub Metadata)
 // already uses for its own result/availability messaging.
-function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
+function OcrResultNotice({ ocrState }: OcrResultNoticeProps) {
   const message = ocrState.message ?? "OCR finished.";
-
-  // A missing capability (no desktop engine, no OCR toolchain) is not a
-  // processing failure -- OCR never ran. Every other tool in this panel
-  // renders that same "not available here" fact as a calm, neutral note,
-  // never as an attention-grabbing error. OCR reads the same way.
-  if (ocrState.phase === "error" && !ocrAvailable) {
-    return <InlineMessage tone="neutral" message={message} />;
-  }
 
   // A "done" result that finished with imperfect pages carries a "caution"
   // tone (light amber) instead of the green success tone -- the searchable
@@ -608,22 +588,16 @@ function OcrResultNotice({ ocrState, ocrAvailable }: OcrResultNoticeProps) {
   const doneTone = ocrState.tone === "caution" ? "caution" : "ok";
 
   return (
-    <InlineMessage tone={ocrState.phase === "done" ? doneTone : "danger"} message={message} />
+    <InlineMessage tone={doneTone} message={message} />
   );
 }
 
 function RedactionStatusPanel({
   state,
   hasDocument,
-  onConfirm,
-  onCancel,
-  onHelp,
 }: {
   state: RedactionPanelState;
   hasDocument: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-  onHelp: () => void;
 }) {
   if (!hasDocument) {
     return <InlineMessage tone="neutral" message="Open a PDF before marking redactions." />;
@@ -634,28 +608,7 @@ function RedactionStatusPanel({
   }
 
   if (state.phase === "confirming") {
-    return (
-      <div className="tool-panel__inline-card">
-        <div className="tool-panel__card-header">
-          <p className="tool-panel__card-title">
-            {state.pendingCount} {state.pendingCount === 1 ? "area" : "areas"} will be permanently removed
-          </p>
-          <IconButton icon={<HelpIcon size={14} />} label="Help: Redact" onClick={onHelp} />
-        </div>
-        <p className="tool-panel__card-copy">
-          RaioPDF checks extractable source text when available, redacted page images, annotations, and metadata.
-          Your open file on disk is left untouched — Save will prompt you for a new file name.
-        </p>
-        <div className="tool-panel__button-row">
-          <button type="button" className="tool-panel__danger-button" onClick={onConfirm}>
-            Apply Redactions
-          </button>
-          <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   if (state.message) {

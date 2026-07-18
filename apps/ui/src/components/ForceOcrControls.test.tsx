@@ -58,7 +58,6 @@ describe("force OCR controls", () => {
         hasDocument
         pageCount={2}
         ocrState={{ phase: "idle", message: null }}
-        ocrAvailable
         ocrStarting={false}
         activeEditTool="select"
         activeEditDialogTool={null}
@@ -81,8 +80,6 @@ describe("force OCR controls", () => {
         scanner={{ scanning: false, message: null, hits: [] }}
         pendingEdits={[]}
         onRemovePendingEdit={() => undefined}
-        onConfirmRedactions={() => undefined}
-        onCancelRedactions={() => undefined}
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
@@ -162,7 +159,7 @@ describe("force OCR controls", () => {
     expect(document.querySelector('.tool-panel__inline-card[data-tone="ok"]')).toBeNull();
   });
 
-  it("surfaces OCR engine error details instead of only the generic failure", () => {
+  it("does not duplicate OCR dialog errors in the sidebar", () => {
     render(
       <ToolPanelHarness
         ocrState={{
@@ -172,21 +169,8 @@ describe("force OCR controls", () => {
       />,
     );
 
-    const notice = document.querySelector('.tool-panel__inline-card[data-tone="danger"]');
-    expect(notice).not.toBeNull();
-    expect(notice?.textContent).toContain("Stirling PDF request failed: connection refused");
-  });
-
-  it("shows OCR errors as a neutral note when the desktop engine is unavailable, not an alarming one", () => {
-    render(
-      <ToolPanelHarness
-        ocrState={{ phase: "error", message: "This tool only works in the installed RaioPDF app." }}
-        ocrAvailable={false}
-      />,
-    );
-
-    const notice = document.querySelector('.tool-panel__inline-card[data-tone="neutral"]');
-    expect(notice).not.toBeNull();
+    expect(document.querySelector('.tool-panel__inline-card[data-tone="danger"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("connection refused");
   });
 
   it("exposes annotation print and flatten controls", () => {
@@ -198,7 +182,6 @@ describe("force OCR controls", () => {
         hasDocument
         pageCount={2}
         ocrState={{ phase: "idle", message: null }}
-        ocrAvailable
         ocrStarting={false}
         activeEditTool="select"
         activeEditDialogTool={null}
@@ -221,8 +204,6 @@ describe("force OCR controls", () => {
         scanner={{ scanning: false, message: null, hits: [] }}
         pendingEdits={[]}
         onRemovePendingEdit={() => undefined}
-        onConfirmRedactions={() => undefined}
-        onCancelRedactions={() => undefined}
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}
@@ -279,19 +260,12 @@ describe("force OCR controls", () => {
   }
 });
 
-function ToolPanelHarness({
-  ocrState,
-  ocrAvailable = true,
-}: {
-  ocrState: OcrUiState;
-  ocrAvailable?: boolean;
-}) {
+function ToolPanelHarness({ ocrState }: { ocrState: OcrUiState }) {
   return (
     <ToolPanel
       hasDocument
       pageCount={2}
       ocrState={ocrState}
-      ocrAvailable={ocrAvailable}
       ocrStarting={false}
       activeEditTool="select"
       activeEditDialogTool={null}
@@ -314,8 +288,6 @@ function ToolPanelHarness({
       scanner={{ scanning: false, message: null, hits: [] }}
       pendingEdits={[]}
       onRemovePendingEdit={() => undefined}
-      onConfirmRedactions={() => undefined}
-      onCancelRedactions={() => undefined}
       onRunScanner={() => undefined}
       onMarkScannerHit={() => undefined}
       onHelpRequested={() => undefined}

@@ -400,8 +400,10 @@ test("redacts searched text through the mocked desktop engine and verifies outpu
 
   await expect(page.getByText("Redaction mode — 1 area marked")).toBeVisible();
   await page.getByRole("button", { name: "Apply Redactions" }).click();
-  await expect(page.getByText("1 area will be permanently removed")).toBeVisible();
-  await page.locator(".tool-panel__danger-button", { hasText: "Apply Redactions" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Apply Redactions" });
+  await expect(confirmation.getByText("Permanently remove content under 1 marked area?")).toBeVisible();
+  await expect(page.locator(".tool-panel").getByText("Permanently remove content")).toHaveCount(0);
+  await confirmation.getByRole("button", { name: "Apply Redactions", exact: true }).click();
 
   await expect(page.getByText("Redacted and verified: hidden text confirmed removed; redacted page images replaced; annotations cleaned; metadata scrubbed.")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();

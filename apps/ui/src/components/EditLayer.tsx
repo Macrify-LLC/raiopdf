@@ -55,6 +55,7 @@ import {
 import { newEditId, type ArmedStamp, type EditingState } from "../hooks/useEditing";
 import { isTextEntryTarget } from "../lib/domGuards";
 import type { PDFPageProxy } from "../lib/pdfjs";
+import { getPdfPageTextContent } from "../lib/pdfTextContent";
 import {
   clamp,
   pdfRectContainsPoint,
@@ -231,8 +232,7 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
     setTextBoxes([]);
     setTextLayerError(null);
 
-    void page
-      .getTextContent()
+    void getPdfPageTextContent(page)
       .then((textContent) => {
         if (!disposed) {
           const boxes = extractPageTextBoxes(textContent.items);

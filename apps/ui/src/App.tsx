@@ -94,6 +94,7 @@ import {
   type CrashReportPayload,
 } from "./components/CrashReportDialog";
 import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
+import { RedactionConfirmationDialog } from "./components/RedactionConfirmationDialog";
 import { DocumentBanner } from "./components/DocumentBanner";
 import { EditModeBar } from "./components/EditModeBar";
 import { EditTextModeBar } from "./components/EditTextModeBar";
@@ -156,6 +157,7 @@ import {
   PasswordException,
   type PDFDocumentProxy,
 } from "./lib/pdfjs";
+import { getPdfPageTextContent } from "./lib/pdfTextContent";
 import {
   createFileRangeTransport,
   createGrantRangeTransport,
@@ -8538,7 +8540,6 @@ export function App() {
         onBookmarkNavigate={handleBookmarkNavigate}
         onOutlineChange={replaceOutline}
         ocrState={ocrState}
-        ocrAvailable={engineBridge.ocrAvailable}
         wordAvailable={wordAvailable}
         ocrStarting={forceOcrConfirmation ? false : engineBridge.starting}
         documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
@@ -8589,8 +8590,6 @@ export function App() {
         onRedactionAreasCreated={addPendingRedactions}
         onRedactionSelectionRejected={handleRedactionSelectionRejected}
         onRedactionAreaRemoved={removePendingRedaction}
-        onConfirmRedactions={confirmRedactions}
-        onCancelRedactions={cancelRedactions}
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
         onOpenAbout={openAboutMacrify}
@@ -8624,6 +8623,14 @@ export function App() {
           pageCount={pageDeleteConfirmation.length}
           onConfirm={confirmDeletePagesRequest}
           onCancel={cancelDeletePagesRequest}
+        />
+      ) : null}
+      {redactionPhase === "confirming" ? (
+        <RedactionConfirmationDialog
+          areaCount={pendingRedactions.length}
+          onConfirm={confirmRedactions}
+          onCancel={cancelRedactions}
+          onHelp={() => openHelp("redact")}
         />
       ) : null}
       {passwordPrompt ? (
@@ -9469,7 +9476,7 @@ async function extractUiPageTextByPage(
 
     for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
       const page = await pdfDocument.getPage(pageNumber);
-      const content = await page.getTextContent();
+      const content = await getPdfPageTextContent(page);
       pages.push({
         pageIndex: pageNumber - 1,
         text: content.items.map(textItemString).join(" "),

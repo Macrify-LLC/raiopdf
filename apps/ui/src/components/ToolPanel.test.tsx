@@ -61,13 +61,11 @@ describe("ToolPanel", () => {
     }
   });
 
-  it("keeps contextual help inside an expanded tool's detail area (Redact)", () => {
+  it("does not place redaction confirmation controls in the sidebar", () => {
     render(<Harness activeLegalTool="redact" redaction={{ phase: "confirming", message: null, pendingCount: 2, available: true }} />);
 
-    // Redact's own expanded panel still carries its help affordance -- this
-    // is the "(b) contextual ? only inside an expanded tool's detail area"
-    // placement item 13 explicitly keeps, not a collapsed-row icon.
-    expect(document.querySelector("[aria-label='Help: Redact']")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Apply Redactions");
+    expect(document.body.textContent).not.toContain("will be permanently removed");
   });
 
   interface HarnessProps {
@@ -86,7 +84,6 @@ describe("ToolPanel", () => {
       <ToolPanel
         hasDocument
         ocrState={{ phase: "idle", message: null }}
-        ocrAvailable
         ocrStarting={false}
         activeEditTool="select"
         activeEditDialogTool={null}
@@ -102,8 +99,6 @@ describe("ToolPanel", () => {
         scanner={{ scanning: false, message: null, hits: [] }}
         pendingEdits={[]}
         onRemovePendingEdit={() => undefined}
-        onConfirmRedactions={() => undefined}
-        onCancelRedactions={() => undefined}
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}
         onHelpRequested={() => undefined}

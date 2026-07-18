@@ -213,7 +213,19 @@ Gatekeeper immediately.
    ```
 3. **Updater key.** The same Tauri minisign key the Windows release uses
    (`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), from
-   your secret manager.
+   your secret manager. On the Mac build host, storing it in the login keychain
+   once makes releases prompt-free (same trust model as the notary profile):
+   ```bash
+   # one-time (each prompts you to paste the value from your secret manager):
+   security add-generic-password -s raiopdf-updater-key -a credential -w
+   security add-generic-password -s raiopdf-updater-key -a password -w
+   ```
+   Beware truncated pastes — the credential is a long base64 blob; verify the
+   stored byte length against the source before trusting it. At release time:
+   ```bash
+   export TAURI_SIGNING_PRIVATE_KEY="$(security find-generic-password -s raiopdf-updater-key -a credential -w)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(security find-generic-password -s raiopdf-updater-key -a password -w)"
+   ```
 
 ### Cutting a signed macOS release
 

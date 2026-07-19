@@ -802,6 +802,60 @@ test("Bates numbering card shows the live default format preview", async ({ page
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
 });
 
+test("Bates numbering applies typed-prefix numbers into the saved page bytes", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "bates-apply.pdf", await createPdf([200, 210, 220]));
+
+  await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Bates Numbering" });
+  await expect(dialog).toBeVisible();
+
+  // Type every format field explicitly — this test must not depend on any
+  // default prefix (the default is moving from "SMITH" to a required,
+  // empty-by-default field). `exact` keeps "Prefix" from substring-matching
+  // that redesign's "No prefix (numbers only)" checkbox.
+  await dialog.getByLabel("Prefix", { exact: true }).fill("CANARY");
+  await dialog.getByLabel("Start", { exact: true }).fill("1");
+  await dialog.getByLabel("Digits", { exact: true }).fill("6");
+  await expect(dialog.getByLabel("Bates preview")).toHaveText("CANARY000001");
+
+  await dialog.getByRole("button", { name: "Apply Bates Numbers" }).click();
+  await expect(page.getByText("Bates numbers applied.")).toBeVisible();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+
+  // Stamping is client-side (pdf-lib), so per-PR CI can assert the actual
+  // advertised outcome — sequential numbers stamped into each page's CONTENT
+  // (not annotations) — instead of stopping at the preview string and leaving
+  // stamping regressions for the release canary to catch.
+  const saved = await savePdf(page);
+  await expectPageContentToContainLabel(saved, 0, "CANARY000001");
+  await expectPageContentToContainLabel(saved, 1, "CANARY000002");
+  await expectPageContentToContainLabel(saved, 2, "CANARY000003");
+});
+
+test("fills an AcroForm text field and flatten-on-save carries the value into the page bytes", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(page, "acroform.pdf", await createAcroFormPdf());
+
+  // The form layer renders the real AcroForm field as a fillable input
+  // labeled by its field name.
+  const input = page.getByLabel("client_name");
+  await expect(input).toBeVisible();
+  await input.fill("Jane Q. Public");
+
+  // Default save behavior flattens filled values permanently into the page:
+  // no interactive field survives, and the typed value lives on as drawn page
+  // content (an appearance stream flattened into the page's XObjects).
+  const saved = await savePdf(page);
+  const pdf = await PDFDocument.load(saved);
+  expect(pdf.getForm().getFields()).toHaveLength(0);
+  const streams = await readAllDecodedStreams(saved);
+  expect(
+    streams.includes(encodeTextAsHex("Jane Q. Public")) || streams.includes("(Jane Q. Public)"),
+    "the flattened field value must be drawn into the saved bytes",
+  ).toBe(true);
+});
+
 test("compresses through the mocked desktop engine from the inline Compress expansion", async ({ page }) => {
   const compressedPdf = await createPdf([180]);
   await installCompressBridgeMock(page, compressedPdf);
@@ -1493,6 +1547,16 @@ async function createTextPdf(text: string): Promise<Uint8Array> {
     font,
   });
 
+  return pdf.save();
+}
+
+async function createAcroFormPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("Client name:", { x: 72, y: 708, size: 12, font });
+  const field = pdf.getForm().createTextField("client_name");
+  field.addToPage(page, { x: 180, y: 700, width: 240, height: 24 });
   return pdf.save();
 }
 
@@ -2190,6 +2254,26 @@ async function expectPageContentToContainLabel(
   label: string,
 ): Promise<void> {
   expect(await readDecodedPageContent(bytes, pageIndex)).toContain(encodeTextAsHex(label));
+}
+
+/** Every decodable stream in the document, concatenated — for asserting on
+ * content that lives in flattened appearance XObjects rather than the page's
+ * direct content streams. */
+async function readAllDecodedStreams(bytes: Uint8Array): Promise<string> {
+  const pdf = await PDFDocument.load(bytes);
+  const decoded: string[] = [];
+
+  for (const [, object] of pdf.context.enumerateIndirectObjects()) {
+    if (object instanceof PDFStream) {
+      try {
+        decoded.push(decodePdfStream(object));
+      } catch {
+        // Not a Flate/raw text stream (e.g. an image) — skip it.
+      }
+    }
+  }
+
+  return decoded.join("\n");
 }
 
 async function readDecodedPageContent(bytes: Uint8Array, pageIndex: number): Promise<string> {

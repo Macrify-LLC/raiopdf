@@ -2,12 +2,17 @@
 // that reproduce specific field-reported failures — font-mismatch "garble" and
 // a restricted-but-not-secured (owner-permissions) PDF.
 //
-// The fixtures are REAL, often-sensitive client documents. They live in the
-// gitignored `fixtures.local/` dir (or $RAIOPDF_CANARY_FIXTURES_DIR) and are
-// NEVER committed. When they're absent (e.g. a contributor's clean checkout),
-// these tests skip. Provide them locally as:
+// TWO TIERS. The SYNTHETIC tier (first below) generates a permissions-restricted
+// PDF at test time and ALWAYS runs — on the release runner, in CI, on a fresh
+// contributor checkout — so the restricted-open and lossless-decrypt acceptances
+// can never silently skip again. The REAL tier drives the same acceptances
+// against actual client documents: those are real, often-sensitive files that
+// live in the gitignored `fixtures.local/` dir (or $RAIOPDF_CANARY_FIXTURES_DIR)
+// and are NEVER committed; when they're absent the real tier skips and the
+// synthetic tier still stands. Provide the real files locally as:
 //   fixtures.local/garble-*.pdf              — one or more font-mismatch garble PDFs
 //   fixtures.local/restricted-not-secured.pdf — owner-restricted, opens without a password
+// (The garble acceptance has no synthetic stand-in yet — it stays real-tier-only.)
 
 import { expect, test } from "@playwright/test";
 import { createSidecarPdfEngine } from "@raiopdf/engine-sidecar";
@@ -16,13 +21,66 @@ import {
   installRealEngineBridge,
   localFixture,
   localFixtureNames,
-  mainCanvas,
   openPdf,
+  openRestrictedPdfExpectUsable,
   saveCanaryArtifact,
   savePdf,
 } from "./helpers";
+import { createRestrictedTextPdf, RESTRICTED_FIXTURE_LINE } from "./synthetic-fixtures";
 
 const endpoint = readEngineEndpoint();
+
+// --- Synthetic tier (always runs) ----------------------------------------------
+
+test("Handles a restricted-but-not-secured PDF and makes it usable: synthetic (always runs)", async ({ page }) => {
+  const restricted = createRestrictedTextPdf();
+  expect(
+    Buffer.from(restricted).toString("latin1").includes("/Encrypt"),
+    "the synthetic fixture must carry an /Encrypt dict",
+  ).toBe(true);
+
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+  await openRestrictedPdfExpectUsable(page, "synthetic-restricted.pdf", restricted);
+});
+
+test("Engine decrypt preserves the text layer (lossless qpdf): synthetic (always runs)", async ({ page }) => {
+  const source = createRestrictedTextPdf();
+
+  // Decrypt through the production sidecar client so this canary exercises
+  // the same bounded binary secret envelope as the app.
+  const engine = createSidecarPdfEngine({
+    baseUrl: endpoint.baseUrl,
+    authToken: endpoint.token,
+  });
+  const decrypted = await engine.removeEncryption(new Uint8Array(source), "");
+  const latin1 = Buffer.from(decrypted).toString("latin1");
+
+  expect(latin1.includes("/Encrypt"), "encryption dict should be removed").toBe(false);
+  expect(/\/Font/.test(latin1), "the text-layer fonts must survive decryption").toBe(true);
+
+  // The fixture's text is KNOWN, so losslessness is asserted directly on the
+  // content instead of the real tier's byte-size proxy (qpdf legitimately
+  // recompresses the tiny synthetic streams, which makes output size a
+  // meaningless signal here): the decrypted copy must open in the app and
+  // render the planted sentence verbatim through the pdf.js text layer.
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+  await openPdf(page, "decrypted-synthetic-restricted.pdf", decrypted);
+  const canvasRegion = page.getByRole("region", { name: "Document canvas" });
+  await expect
+    .poll(async () => (await canvasRegion.innerText()).length, {
+      timeout: 20_000,
+      message: "decrypted PDF must render an extractable text layer",
+    })
+    .toBeGreaterThan(200);
+  expect(
+    (await canvasRegion.innerText()).includes(RESTRICTED_FIXTURE_LINE),
+    "the planted text must survive decryption verbatim",
+  ).toBe(true);
+});
+
+// --- Real-document tier (maintainer-local, skips without fixtures.local) -------
 
 // --- Garble → readable (one test per garble fixture present) -------------------
 
@@ -95,7 +153,7 @@ for (const name of garbleFixtures) {
 const restrictedFixtures = localFixtureNames(/^restricted.*\.pdf$/i);
 
 if (restrictedFixtures.length === 0) {
-  test.skip("Handles a restricted-but-not-secured PDF (no restricted-*.pdf in fixtures — skipped)", () => {});
+  test.skip("Handles a restricted-but-not-secured PDF: real tier (no restricted-*.pdf in fixtures — synthetic tier above still ran)", () => {});
 }
 
 for (const restrictedName of restrictedFixtures) {
@@ -106,34 +164,7 @@ for (const restrictedName of restrictedFixtures) {
     // the engine-backed Repair path.
     await installRealEngineBridge(page, endpoint);
     await page.goto("/");
-    await page.getByLabel("Open PDF file").setInputFiles({
-      name: restrictedName,
-      mimeType: "application/pdf",
-      buffer: Buffer.from(restricted!),
-    });
-
-    // Either it opens straight away, or the Repair dialog appears — drive
-    // whichever real path this build takes.
-    const pageOne = page.getByRole("button", { name: "Page 1" });
-    const repair = page.getByRole("button", { name: "Repair PDF" });
-    await expect(async () => {
-      expect((await pageOne.isVisible()) || (await repair.isVisible())).toBe(true);
-    }).toPass({ timeout: 30_000 });
-
-    if (await repair.isVisible()) {
-      await expect(repair, "Repair must be actionable, not disabled").toBeEnabled();
-      await repair.click();
-    }
-
-    // The end state the user cares about: the restricted PDF is open, rendered,
-    // and fully editable — NOT treated as locked. (Print is a doc-dependent
-    // action that's disabled in the empty state.)
-    await expect(pageOne).toBeVisible({ timeout: 180_000 });
-    await expect(mainCanvas(page)).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Print" }),
-      "a restricted-not-secured PDF should open fully usable, not locked",
-    ).toBeEnabled();
+    await openRestrictedPdfExpectUsable(page, restrictedName, restricted!);
 
     saveCanaryArtifact(`restricted handled: ${restrictedName}`, `opened-${restrictedName}`, await savePdf(page),
       "opened from the restricted original — confirm it's the right document");

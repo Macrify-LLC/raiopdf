@@ -10,6 +10,7 @@
 // diagnostic rather than failing silently.
 
 import { expect, test } from "@playwright/test";
+import { createSidecarPdfEngine } from "@raiopdf/engine-sidecar";
 import { readEngineEndpoint } from "./endpoint";
 import {
   captureLogs,
@@ -24,6 +25,13 @@ import {
   savePdf,
   saveCanaryArtifact,
 } from "./helpers";
+import {
+  ALL_METADATA_MARKERS,
+  createJavaScriptPdf,
+  createTaggedMetadataPdf,
+  findMetadataMarkers,
+  readJavaScriptFacts,
+} from "./synthetic-fixtures";
 
 const endpoint = readEngineEndpoint();
 
@@ -191,6 +199,85 @@ test("PDF/A: converts a real PDF to a genuine PDF/A via the bundled Ghostscript"
   await installRealEngineBridge(page, endpoint);
   await page.goto("/");
   await openPdf(page, "converted-pdfa.pdf", converted);
+  await expect(mainCanvas(page)).toBeVisible();
+  logs.assertClean(BENIGN_LOG);
+});
+
+test("Sanitize: strips embedded JavaScript via the real engine (verified structurally)", async ({ page }) => {
+  const logs = captureLogs(page);
+  // A PDF carrying embedded JavaScript both ways a dirty real-world file does:
+  // the /Names → /JavaScript tree and an auto-running catalog /OpenAction.
+  const source = await createJavaScriptPdf();
+  expect(
+    await readJavaScriptFacts(source),
+    "the fixture must start with both embedded-JavaScript shapes present",
+  ).toEqual({ namesTreeJavaScript: true, openActionJavaScript: true, rawSentinel: true });
+
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+  await openPdf(page, "sanitize.pdf", source);
+
+  // Drive the real UI flow: Sanitize posts the document to the payload
+  // engine's sanitize endpoint. This is an enablement probe as much as a
+  // behavior check — the endpoint has to be ENABLED in the packaged payload
+  // (the same silently-disabled-endpoint failure class the canary once caught
+  // on PDF/A conversion).
+  await page.getByRole("button", { name: "Sanitize...", exact: true }).click();
+  await page.getByRole("button", { name: "Sanitize PDF" }).click();
+  await expect(page.getByText("Sanitize complete.")).toBeVisible({ timeout: 120_000 });
+
+  // The advertised outcome, asserted structurally (a raw byte scan alone could
+  // false-pass if the rewrite tucked objects into compressed object streams):
+  // no /JavaScript name tree, no JavaScript OpenAction, no script body.
+  const saved = await savePdf(page);
+  expect(Buffer.from(saved.slice(0, 5)).toString("latin1")).toBe("%PDF-");
+  const after = await readJavaScriptFacts(saved);
+  expect(after.namesTreeJavaScript, "the /Names → /JavaScript tree must be removed").toBe(false);
+  expect(after.openActionJavaScript, "the OpenAction JavaScript action must be removed").toBe(false);
+  expect(after.rawSentinel, "the planted script body must be gone from the saved bytes").toBe(false);
+
+  saveCanaryArtifact("sanitize", "sanitized.pdf", saved,
+    "sanitized copy — confirm it opens clean with no scripts");
+  logs.assertClean(BENIGN_LOG);
+});
+
+test("Metadata scrub: the payload engine's scrub endpoint strips planted Info and XMP metadata", async ({ page }) => {
+  // A PDF tagged with sentinel Author/Title/Producer/... markers in BOTH
+  // metadata surfaces: the trailer Info dict and a catalog XMP packet.
+  const source = await createTaggedMetadataPdf();
+  expect(
+    await findMetadataMarkers(source),
+    "the fixture must start fully tagged in Info and XMP",
+  ).toEqual([...ALL_METADATA_MARKERS]);
+
+  // Scrub through the production sidecar client — the seam the MCP
+  // scrub_metadata tool uses. (Batch cleanup's scrub step runs on the
+  // client-side engine, same as the in-app Scrub Metadata dialog covered in
+  // features.canary.ts — its SIDE_CAR_OPERATIONS set excludes scrub-metadata.)
+  // Like the sanitize check above, this doubles as an enablement probe for
+  // the payload's update-metadata endpoint, which had never been proven
+  // enabled in the packaged build.
+  const engine = createSidecarPdfEngine({
+    baseUrl: endpoint.baseUrl,
+    authToken: endpoint.token,
+  });
+  const handle = await engine.open(new Uint8Array(source));
+  const scrubbed = await engine.saveToBytes(await engine.scrubMetadata(handle));
+
+  const leftover = await findMetadataMarkers(scrubbed);
+  expect(
+    leftover,
+    `metadata markers surviving the engine scrub: ${leftover.join(", ") || "none"}`,
+  ).toEqual([]);
+
+  saveCanaryArtifact("metadata scrub (engine)", "scrubbed-metadata.pdf", scrubbed,
+    "engine-scrubbed copy — confirm document properties show no author/title");
+
+  // End-to-end: the scrubbed bytes still open and render in the app.
+  const logs = captureLogs(page);
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+  await openPdf(page, "scrubbed-metadata.pdf", scrubbed);
   await expect(mainCanvas(page)).toBeVisible();
   logs.assertClean(BENIGN_LOG);
 });

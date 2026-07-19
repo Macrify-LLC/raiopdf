@@ -1,24 +1,68 @@
-// Over-cap split canary: verifies that a REAL filing that exceeds the portal
+// Over-cap split canary: verifies that a filing that exceeds the portal
 // file-size cap is split into portal-legal parts — the whole point of the
 // split-by-size feature. Runs the shipped split engine (LocalPdfEngine, pdf-lib)
 // directly in Node, so it can handle files far too large for the browser to open.
 //
-// Uses `oversized-*.pdf` fixtures. A file with few large pages (e.g. a plat) is
-// ideal: genuinely over the cap, but fast to split. Very high page counts are
-// slow — the split re-serializes the accumulating document per page (O(n^2)).
+// TWO TIERS. The SYNTHETIC tier generates a deterministic over-cap PDF of
+// incompressible noise pages at test time and ALWAYS runs, so this acceptance
+// can never silently skip on a machine without local fixtures (it used to skip
+// everywhere but the maintainer's). The REAL tier uses `oversized-*.pdf`
+// fixtures from the gitignored fixtures.local dir. A file with few large pages
+// (e.g. a plat) is ideal: genuinely over the cap, but fast to split. Very high
+// page counts are slow — the split re-serializes the accumulating document per
+// page (O(n^2)); the synthetic fixture keeps its page count single-digit for
+// the same reason.
 
 import { expect, test } from "@playwright/test";
 import { LocalPdfEngine } from "@raiopdf/engine-local";
 import { localFixture, localFixtureNames, saveCanaryArtifact } from "./helpers";
+import { createOversizedNoisePdf } from "./synthetic-fixtures";
 
 // packages/rules/data/florida.json → maxFileBytes (the hard portal cap).
 const FLORIDA_MAX_BYTES = 26_214_400; // 25 MiB
+
+// --- Synthetic tier (always runs) ----------------------------------------------
+
+test("Split-by-size: a synthetic over-cap filing splits into portal-legal parts (always runs)", async () => {
+  test.setTimeout(300_000);
+  const bytes = await createOversizedNoisePdf(FLORIDA_MAX_BYTES + 2 * 1024 * 1024);
+  expect(
+    bytes.byteLength,
+    "the generated fixture must exceed the portal cap to be meaningful",
+  ).toBeGreaterThan(FLORIDA_MAX_BYTES);
+
+  const engine = new LocalPdfEngine();
+  const handle = await engine.open(bytes);
+  const result = await engine.splitByMaxBytes(handle, FLORIDA_MAX_BYTES);
+
+  const parts = await Promise.all(
+    result.parts.map(async (part) => ({
+      bytes: await engine.saveToBytes(part.document),
+      oversized: part.oversized,
+    })),
+  );
+
+  // The noise pages are each far under the cap, so a correct split must yield
+  // multiple parts with every part under the portal cap — no oversized flags.
+  expect(parts.length, "an over-cap file must split into at least two parts").toBeGreaterThanOrEqual(2);
+  for (const part of parts) {
+    expect(part.oversized, "no synthetic page is unsplittably large").toBe(false);
+    expect(
+      part.bytes.byteLength,
+      "every part must fit under the portal cap",
+    ).toBeLessThanOrEqual(FLORIDA_MAX_BYTES);
+  }
+  // No review artifacts for this tier: the parts are generated noise, not
+  // documents a human should eyeball.
+});
+
+// --- Real-document tier (maintainer-local, skips without fixtures.local) -------
 
 // Engine-level (no browser), so accept much larger files than the browser cap.
 const oversizedFixtures = localFixtureNames(/^oversized.*\.pdf$/i, 128 * 1024 * 1024);
 
 if (oversizedFixtures.length === 0) {
-  test.skip("Split-by-size over the portal cap (no oversized-*.pdf in fixtures — skipped)", () => {});
+  test.skip("Split-by-size over the portal cap: real tier (no oversized-*.pdf in fixtures — synthetic tier above still ran)", () => {});
 }
 
 for (const name of oversizedFixtures) {

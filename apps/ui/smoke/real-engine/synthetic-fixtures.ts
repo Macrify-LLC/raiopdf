@@ -57,6 +57,11 @@ const STANDARD_SECURITY_PAD = Uint8Array.from([
   0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
 ]);
 
+// MD5 (like RC4 below) is REQUIRED by the PDF 1.4 V1/R2 standard security
+// handler this fixture generator implements — the whole point is emitting a
+// spec-conformant legacy restricted PDF for tests. Nothing here hashes real
+// credentials; code scanning's insufficient-password-hash alert on this file
+// is dismissed as test-fixture code.
 function md5(...chunks: readonly Uint8Array[]): Uint8Array {
   const hash = createHash("md5");
   for (const chunk of chunks) {

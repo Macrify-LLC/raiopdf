@@ -15,7 +15,17 @@ import type { PendingEdit } from "../lib/edits";
 import type { PDFPageProxy } from "../lib/pdfjs";
 import type { PageViewport } from "../lib/viewportGeometry";
 import type { EditingState } from "../hooks/useEditing";
-import { EditLayer, TextBoxDraftEditor } from "./EditLayer";
+import { captureCurrentTextSelection } from "../lib/selectedTextEdit";
+import { EditLayer, TextBoxDraftEditor, type EditLayerProps } from "./EditLayer";
+
+vi.mock("../lib/selectedTextEdit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/selectedTextEdit")>()),
+  captureCurrentTextSelection: vi.fn(() => ({
+    ok: false as const,
+    reason: "empty" as const,
+    message: "Select text on one page before queuing a selected replacement.",
+  })),
+}));
 
 type LocalEngine = ReturnType<typeof createLocalPdfEngine>;
 type ApplyEditsArgs = Parameters<LocalEngine["applyEdits"]>;
@@ -1020,6 +1030,173 @@ describe("EditLayer shape removal", () => {
     }
   });
 
+  it("offers Replace text... after Copy when the host provides the entry", async () => {
+    mockSelectionWithRects();
+    vi.mocked(captureCurrentTextSelection).mockReturnValue({
+      ok: true,
+      selection: capturedSelection(),
+    });
+    const onReplace = vi.fn();
+
+    await renderEditLayer([], "select", {}, {
+      onReplaceTextInSelection: onReplace,
+      replaceTextInSelectionBlocked: () => false,
+    });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5);
+      await Promise.resolve();
+    });
+
+    expect(contextMenuLabels(container)).toEqual([
+      "Copy",
+      "Replace text...",
+      "Highlight",
+      "Underline",
+      "Strike through",
+    ]);
+
+    const item = findContextMenuItem("Replace text...");
+    expect(item.disabled).toBe(false);
+    await act(async () => {
+      item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(onReplace).toHaveBeenCalledWith(capturedSelection());
+  });
+
+  it("renders Replace text... disabled when the page gate blocks or the capture fails", async () => {
+    mockSelectionWithRects();
+    vi.mocked(captureCurrentTextSelection).mockReturnValue({
+      ok: true,
+      selection: capturedSelection(),
+    });
+
+    await renderEditLayer([], "select", {}, {
+      onReplaceTextInSelection: () => undefined,
+      replaceTextInSelectionBlocked: () => true,
+    });
+
+    let layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5);
+      await Promise.resolve();
+    });
+    expect(findContextMenuItem("Replace text...").disabled).toBe(true);
+
+    // Capture failure (e.g. a cross-page selection) also disables the item.
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+    vi.mocked(captureCurrentTextSelection).mockReturnValue({
+      ok: false,
+      reason: "invalid",
+      message: "Selected text editing only supports one page at a time.",
+    });
+    mockSelectionWithRects();
+
+    await renderEditLayer([], "select", {}, {
+      onReplaceTextInSelection: () => undefined,
+      replaceTextInSelectionBlocked: () => false,
+    });
+    layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5);
+      await Promise.resolve();
+    });
+    expect(findContextMenuItem("Replace text...").disabled).toBe(true);
+  });
+
+  it("dispatches a stale open menu through the LATEST replace handler", async () => {
+    mockSelectionWithRects();
+    vi.mocked(captureCurrentTextSelection).mockReturnValue({
+      ok: true,
+      selection: capturedSelection(),
+    });
+    const staleHandler = vi.fn();
+    const latestHandler = vi.fn();
+
+    await renderEditLayer([], "select", {}, {
+      onReplaceTextInSelection: staleHandler,
+      replaceTextInSelectionBlocked: () => false,
+    });
+
+    const layer = container?.querySelector<HTMLElement>(".edit-layer");
+    stubLayerBounds(layer!);
+    await act(async () => {
+      dispatchContextMenu(layer!, 5, 5);
+      await Promise.resolve();
+    });
+
+    // The menu is open with items built against staleHandler; swap the prop
+    // before clicking — the ref dispatch must run the replacement handler.
+    await act(async () => {
+      root?.render(
+        <EditLayerHarness
+          initialEdits={[]}
+          tool="select"
+          overrides={{}}
+          layerProps={{
+            onReplaceTextInSelection: latestHandler,
+            replaceTextInSelectionBlocked: () => false,
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const item = findContextMenuItem("Replace text...");
+    await act(async () => {
+      item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(staleHandler).not.toHaveBeenCalled();
+    expect(latestHandler).toHaveBeenCalledWith(capturedSelection());
+  });
+
+  function mockSelectionWithRects() {
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: false,
+      toString: () => "comes before",
+      getRangeAt: () => ({
+        getClientRects: () => [
+          { left: 10, top: 20, right: 90, bottom: 32, width: 80, height: 12 },
+        ],
+      }),
+      removeAllRanges: () => undefined,
+    } as unknown as Selection);
+  }
+
+  function capturedSelection() {
+    return {
+      pageIndex: 0,
+      text: "comes before",
+      pageText: "This cause comes before the Court.",
+      start: 11,
+      end: 23,
+    };
+  }
+
+  function findContextMenuItem(label: string): HTMLButtonElement {
+    const item = [
+      ...(container?.querySelectorAll<HTMLButtonElement>(".context-menu__item") ?? []),
+    ].find((candidate) => candidate.textContent === label);
+
+    if (!item) {
+      throw new Error(`Context-menu item not found: ${label}`);
+    }
+
+    return item;
+  }
+
   it("ignores right-clicks inside a text field so the native menu survives", async () => {
     await renderEditLayer(
       [
@@ -1053,6 +1230,7 @@ describe("EditLayer shape removal", () => {
     initialEdits: readonly PendingEdit[],
     tool: EditingState["tool"] = "shapeRect",
     overrides: Partial<EditingState> = {},
+    layerProps: Pick<EditLayerProps, "onReplaceTextInSelection" | "replaceTextInSelectionBlocked"> = {},
   ): Promise<void> {
     container = document.createElement("div");
     document.body.append(container);
@@ -1060,7 +1238,12 @@ describe("EditLayer shape removal", () => {
 
     await act(async () => {
       root?.render(
-        <EditLayerHarness initialEdits={initialEdits} tool={tool} overrides={overrides} />,
+        <EditLayerHarness
+          initialEdits={initialEdits}
+          tool={tool}
+          overrides={overrides}
+          layerProps={layerProps}
+        />,
       );
       await Promise.resolve();
     });
@@ -1071,10 +1254,12 @@ function EditLayerHarness({
   initialEdits,
   tool,
   overrides,
+  layerProps = {},
 }: {
   initialEdits: readonly PendingEdit[];
   tool: EditingState["tool"];
   overrides: Partial<EditingState>;
+  layerProps?: Pick<EditLayerProps, "onReplaceTextInSelection" | "replaceTextInSelectionBlocked">;
 }) {
   const [pendingEdits, setPendingEdits] = useState(initialEdits);
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
@@ -1129,7 +1314,15 @@ function EditLayerHarness({
     [overrides, pendingEdits, selectedEditId, tool],
   );
 
-  return <EditLayer page={testPage} viewport={testViewport} pageIndex={0} editing={editing} />;
+  return (
+    <EditLayer
+      page={testPage}
+      viewport={testViewport}
+      pageIndex={0}
+      editing={editing}
+      {...layerProps}
+    />
+  );
 }
 
 const testPage = {

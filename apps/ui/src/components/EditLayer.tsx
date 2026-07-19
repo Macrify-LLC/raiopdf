@@ -74,6 +74,10 @@ import {
   type ViewportRect,
 } from "../lib/viewportGeometry";
 import { computeTextBoxPreviewLines } from "../lib/textBoxPreview";
+import {
+  captureCurrentTextSelection,
+  type CapturedTextSelection,
+} from "../lib/selectedTextEdit";
 import { CommentMarkerIcon } from "../icons";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { hasOpenDialogStackEntry } from "./FloatingDialog";
@@ -175,6 +179,13 @@ export interface EditLayerProps {
   viewport: PageViewport;
   pageIndex: number;
   editing: EditingState;
+  /** Selection context-menu "Replace text..." entry. Optional so hosts
+   * without the text-edit pipeline (tests, workspaces) omit it and the item
+   * simply doesn't render. */
+  onReplaceTextInSelection?: ((selection: CapturedTextSelection) => void) | undefined;
+  /** Returns true when a selected replacement cannot start on this page
+   * right now — renders the item disabled. */
+  replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
 }
 
 /**
@@ -183,7 +194,22 @@ export interface EditLayerProps {
  * round-trips through the shared viewport<->PDF-point mapping, so placement
  * is rotation- and zoom-correct by construction.
  */
-export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps) {
+export function EditLayer({
+  page,
+  viewport,
+  pageIndex,
+  editing,
+  onReplaceTextInSelection,
+  replaceTextInSelectionBlocked,
+}: EditLayerProps) {
+  // Menu items live in component state after the menu opens, so their
+  // closures would otherwise freeze the App callbacks from the build-time
+  // render. Dispatching through refs guarantees a click always runs the
+  // LATEST handler and gate, no matter how stale the open menu is.
+  const onReplaceTextInSelectionRef = useRef(onReplaceTextInSelection);
+  const replaceTextInSelectionBlockedRef = useRef(replaceTextInSelectionBlocked);
+  onReplaceTextInSelectionRef.current = onReplaceTextInSelection;
+  replaceTextInSelectionBlockedRef.current = replaceTextInSelectionBlocked;
   const layerRef = useRef<HTMLDivElement>(null);
   const [textBoxes, setTextBoxes] = useState<readonly PageTextBox[]>([]);
   const [textLayerError, setTextLayerError] = useState<string | null>(null);
@@ -1381,6 +1407,15 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
           window.getSelection()?.removeAllRanges();
         };
 
+        // Captured at menu-build time (clicking a menu item collapses the
+        // selection, same reason `selectedText` is captured above). The item
+        // itself carries only this data — the click dispatches through the
+        // latest-value refs so a stale open menu still runs current logic,
+        // and the gate is re-checked downstream at click time.
+        const capturedForReplace = onReplaceTextInSelectionRef.current
+          ? captureCurrentTextSelection()
+          : null;
+
         items = [
           {
             label: "Copy",
@@ -1390,6 +1425,19 @@ export function EditLayer({ page, viewport, pageIndex, editing }: EditLayerProps
               }
             },
           },
+          ...(capturedForReplace
+            ? [{
+                label: "Replace text...",
+                disabled:
+                  !capturedForReplace.ok ||
+                  (replaceTextInSelectionBlockedRef.current?.(pageIndex) ?? false),
+                onSelect: () => {
+                  if (capturedForReplace.ok) {
+                    onReplaceTextInSelectionRef.current?.(capturedForReplace.selection);
+                  }
+                },
+              }]
+            : []),
           { label: "Highlight", onSelect: markupFromSelection("highlight") },
           { label: "Underline", onSelect: markupFromSelection("underline") },
           { label: "Strike through", onSelect: markupFromSelection("strikethrough") },

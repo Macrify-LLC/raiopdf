@@ -207,7 +207,7 @@
   font-size: var(--text-xs);
 }
 
-/* Find & Replace mode bar -- same `.legal-mode-bar` shell as Redact and
+/* Edit Text mode bar -- same `.legal-mode-bar` shell as Redact and
    the add-content tools (border/radius/shadow/background/gap all inherited
    from the base rules above). These rules only arrange ITS OWN controls
    (the find/replace pairing, the prev/next stepper, the match count) under

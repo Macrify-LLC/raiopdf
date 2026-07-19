@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PdfEngineError, type PdfSelectedTextTarget } from "@raiopdf/engine-api";
+import {
+  PdfEngineError,
+  type PdfInspectTextMapResult,
+  type PdfSelectedTextTarget,
+} from "@raiopdf/engine-api";
+import type { TextLayerCoverage } from "@raiopdf/rules";
 import {
   selectedTextReviewGateMessage,
   unsafeSelectedTextPageIndexes,
@@ -17,6 +22,7 @@ import {
   type PendingTextReplacement,
 } from "../lib/textEdit";
 import { extractPageText, type ExtractedPageText } from "../lib/pageTextCache";
+import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 
 vi.mock("../lib/pdfjs", () => ({
   loadPdfDocument: async () => ({
@@ -354,6 +360,188 @@ describe("useTextEdit phase lifecycle", () => {
     expect(state().phase).toBe("error");
     expect(state().message).toContain("could not be written");
   });
+});
+
+describe("useTextEdit selected-replacement priming", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+    vi.mocked(extractPageText).mockReset();
+  });
+
+  function renderTextEdit(overrides: {
+    inspectTextMap?: (...args: never[]) => Promise<PdfInspectTextMapResult>;
+    textLayerCoverage?: TextLayerCoverage | null;
+  } = {}) {
+    const sourceBytes = new Uint8Array([1]);
+    vi.mocked(extractPageText).mockResolvedValue([page("Plaintiff files.")]);
+
+    const engineBridge = {
+      available: true,
+      warmEngine: vi.fn(),
+      inspectTextMap: overrides.inspectTextMap ?? vi.fn(async () => textMapFixture()),
+      replaceSelectedText: vi.fn(),
+      replaceText: vi.fn(),
+    };
+
+    let latest: TextEditState | null = null;
+    function Probe() {
+      latest = useTextEdit({
+        source: { bytes: sourceBytes, proxy: { numPages: 1 } as never },
+        documentGeneration: 1,
+        sourceOpenToken: 1,
+        streamed: false,
+        textLayerCoverage: overrides.textLayerCoverage ?? null,
+        engineBridge: engineBridge as never,
+        replaceBytes: (async () => "replaced" as const) as never,
+        fileName: "test.pdf",
+        confirmSignatureInvalidation: async () => null,
+        confirmPdfAIdentificationRemoval: async () => true,
+        setCurrentPage: () => undefined,
+      });
+      return null;
+    }
+
+    container = window.document.createElement("div");
+    window.document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<Probe />);
+    });
+
+    return {
+      state: () => {
+        if (!latest) {
+          throw new Error("hook did not render");
+        }
+        return latest;
+      },
+    };
+  }
+
+  it("primes a menu-built selection and bumps the prime count on every store", async () => {
+    const { state } = renderTextEdit();
+
+    await act(async () => {
+      expect(state().primeSelectedReplacement(capturedSelection())).toBe(true);
+      await Promise.resolve();
+    });
+
+    expect(state().selectedReplacementText).toBe("Plaintiff");
+    expect(state().selectionPrimeCount).toBe(1);
+    expect(state().message).toContain('Selected "Plaintiff"');
+
+    // Identical text primes again — the count is what the mode bar's focus
+    // effect keys on, so it must move even when the text does not.
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      await Promise.resolve();
+    });
+    expect(state().selectionPrimeCount).toBe(2);
+  });
+
+  it("refuses to prime while replacements are queued", async () => {
+    const { state } = renderTextEdit();
+
+    await act(async () => {
+      state().setFind("files");
+      await Promise.resolve();
+    });
+    await act(async () => {
+      state().queueReplaceAll();
+      await Promise.resolve();
+    });
+    expect(state().pendingOps).toHaveLength(1);
+
+    await act(async () => {
+      expect(state().primeSelectedReplacement(capturedSelection())).toBe(false);
+      await Promise.resolve();
+    });
+
+    expect(state().selectedReplacementText).toBeNull();
+    expect(state().selectionPrimeCount).toBe(0);
+    expect(state().message).toContain("Review or clear queued replacements");
+    expect(state().selectedReplacementGate(0).blocked).toBe(true);
+  });
+
+  it("blocks the gate on pages with unreliable text layers", () => {
+    const { state } = renderTextEdit({
+      textLayerCoverage: {
+        imageOnlyPages: [],
+        mixedPages: [],
+        textPages: [0, 1],
+        garbledPages: [{
+          pageIndex: 0,
+          confidence: 0.8,
+          reason: "low_alpha_entropy",
+          puaRatio: 0,
+          replacementRatio: 0,
+          alphaRatio: 0.01,
+        }],
+        trivialTextImagePages: [],
+      },
+    });
+
+    expect(state().selectedReplacementGate(0).blocked).toBe(true);
+    expect(state().selectedReplacementGate(0).reason).toContain("unreliable text layers");
+    expect(state().selectedReplacementGate(1).blocked).toBe(false);
+  });
+
+  it("queues a primed selection when the live window selection is collapsed", async () => {
+    const { state } = renderTextEdit();
+
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      await Promise.resolve();
+    });
+
+    // jsdom's window selection is collapsed here, so the queue path must
+    // fall back to the primed capture.
+    await act(async () => {
+      await state().queueSelectedReplacement();
+    });
+
+    expect(state().pendingOps).toHaveLength(1);
+    expect(state().pendingOps[0]?.target?.expectedText).toBe("Plaintiff");
+    expect(state().selectedReplacementText).toBeNull();
+  });
+
+  function capturedSelection(): CapturedTextSelection {
+    return {
+      pageIndex: 0,
+      text: "Plaintiff",
+      pageText: "Plaintiff files.",
+      start: 0,
+      end: 9,
+    };
+  }
+
+  function textMapFixture(): PdfInspectTextMapResult {
+    return {
+      sourceFingerprint: "document-fingerprint",
+      pages: [{
+        pageIndex: 0,
+        text: "Plaintiff files.",
+        sourceFingerprint: "page-fingerprint",
+        elements: [{
+          elementIndex: 0,
+          start: 0,
+          end: 16,
+          text: "Plaintiff files.",
+          area: { pageIndex: 0, x: 10, y: 10, w: 120, h: 12 },
+        }],
+      }],
+    };
+  }
 });
 
 function createDeferred<T>() {

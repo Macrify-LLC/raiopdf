@@ -221,8 +221,14 @@ export function buildTextEditReviewReport({
       const pageIndex = operation.target.pageIndex;
       const originalPage = originalPages.find((page) => page.pageIndex === pageIndex);
       const candidatePage = candidatePages.find((page) => page.pageIndex === pageIndex);
-      const originalText = originalPage?.text ?? "";
-      const candidateText = candidatePage?.text ?? "";
+      // The target's offsets live in the engine text-map model, which joins
+      // text items with NO separators — the same model the DOM text layer
+      // exposes. Verify against the separator-free extraction (`flatText`);
+      // `text` splices inferred spaces/newlines between items, so slicing it
+      // with engine offsets drifts on any multi-item page and every selected
+      // replacement would verify as "unchanged".
+      const originalText = originalPage?.flatText ?? originalPage?.text ?? "";
+      const candidateText = candidatePage?.flatText ?? candidatePage?.text ?? "";
       const originalStillMatches = originalText.slice(
         operation.target.start,
         operation.target.end,

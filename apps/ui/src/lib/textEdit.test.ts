@@ -116,6 +116,46 @@ describe("textEdit", () => {
     expect(report.zeroChange).toBe(false);
   });
 
+  it("verifies selected-target edits against the separator-free extraction", () => {
+    // pdf.js extraction splices inferred separators ("\n" between lines) into
+    // `text`, but the target's offsets live in the engine's separator-free
+    // model (mirrored by `flatText`). The verification must slice flatText —
+    // slicing `text` drifts on any multi-line page and reported every real
+    // replacement as "unchanged" (caught by the real-engine canary).
+    const originalFlat = "Smith files the motion.Smith replies today.";
+    const candidateFlat = "Smith files the motion.Jones replies today.";
+    const start = originalFlat.indexOf("Smith", 1);
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "Smith",
+          replace: "Jones",
+          pageIndexes: [0],
+          target: {
+            ...selectedTarget(start, start + 5),
+            expectedText: "Smith",
+          },
+        }),
+      ],
+      originalPages: [{
+        ...page(0, "Smith files the motion.\nSmith replies today."),
+        flatText: originalFlat,
+      }],
+      candidatePages: [{
+        ...page(0, "Smith files the motion.\nJones replies today."),
+        flatText: candidateFlat,
+      }],
+    });
+
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      replacedEstimate: 1,
+      status: "changed",
+    });
+    expect(report.zeroChange).toBe(false);
+  });
+
   it("reports unchanged selected-target edits as zero-change", () => {
     const report = buildTextEditReviewReport({
       operations: [

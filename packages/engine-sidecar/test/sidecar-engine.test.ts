@@ -783,6 +783,45 @@ describe("SidecarPdfEngine", () => {
     expect(pageTextElements(postedJson, 0)).toEqual(["Alpha Jane Doe Omega"]);
   });
 
+  it("accepts a selected target across conversions that differ only in volatile fields", async () => {
+    // The real Stirling engine embeds per-conversion volatile fields OUTSIDE
+    // `pages` (metadata timestamps, random font uids). The document
+    // fingerprint must ignore them, or the staleness check rejects every
+    // selected replacement staged from an earlier inspectTextMap — the exact
+    // failure the real-engine canary caught.
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["John Smith", " v. ", "John Smith"]);
+    const inspectPayload = {
+      ...sourceJson,
+      metadata: { creationDate: "2026-07-18T01:00:00Z" },
+      fonts: [{ id: "Helvetica-1", uid: "aaaa-1111:1:Helvetica-1" }],
+    };
+    const replacePayload = {
+      ...sourceJson,
+      metadata: { creationDate: "2026-07-18T01:00:07Z" },
+      fonts: [{ id: "Helvetica-1", uid: "bbbb-2222:1:Helvetica-1" }],
+    };
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse(inspectPayload),
+      jsonResponse(replacePayload),
+      pdfBytesResponse(serverBytes),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const inspected = await engine.inspectTextMap(document);
+    const page = inspected.pages[0];
+    expect(page).toBeDefined();
+
+    const result = await engine.replaceSelectedText(document, {
+      replacement: "Jane Doe",
+      target: targetForRange(inspected.sourceFingerprint, page!, 14, 24),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(pathFromUrl(calls[2]?.url ?? "")).toBe("/api/v1/convert/text-editor/pdf");
+  });
+
   it("refuses stale selected-text fingerprints before rebuilding a PDF", async () => {
     const sourceBytes = await createBasicPdf();
     const sourceJson = textEditorJson(["John Q. Smith"]);
@@ -1831,7 +1870,10 @@ function testFingerprintRawElements(elements: readonly unknown[]): string {
 }
 
 function testDocumentFingerprint(document: unknown): string {
-  return testFnv1a32Hex(testStableStringify(document));
+  // Mirrors the engine's fingerprint: pages subtree only (volatile
+  // metadata/fonts fields outside it are excluded on purpose).
+  const pages = (document as { pages?: unknown }).pages ?? null;
+  return testFnv1a32Hex(testStableStringify(pages));
 }
 
 function testStableStringify(value: unknown): string {

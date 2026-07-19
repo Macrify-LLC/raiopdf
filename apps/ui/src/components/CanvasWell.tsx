@@ -4,6 +4,7 @@ import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { PageScrollIntent } from "../hooks/useDocument";
 import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
+import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { ErrorReportButton } from "./ErrorReportButton";
 import { FloatingDialog } from "./FloatingDialog";
@@ -54,6 +55,8 @@ export interface CanvasWellProps {
   onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
+  onReplaceTextInSelection?: ((selection: CapturedTextSelection) => void) | undefined;
+  replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
   /** Streamed mode: PageList skips the full page-size sweep [R2-1]. */
@@ -99,6 +102,8 @@ export function CanvasWell({
   onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
+  onReplaceTextInSelection,
+  replaceTextInSelectionBlocked,
   searchResults = [],
   activeSearchResultId = null,
   lazyPageMeasurement = false,
@@ -222,6 +227,8 @@ export function CanvasWell({
             onRedactionSelectionRejected={onRedactionSelectionRejected}
             onRedactionAreaRemoved={onRedactionAreaRemoved}
             editing={editing}
+            onReplaceTextInSelection={onReplaceTextInSelection}
+            replaceTextInSelectionBlocked={replaceTextInSelectionBlocked}
             searchResults={searchResults}
             activeSearchResultId={activeSearchResultId}
             lazyPageMeasurement={lazyPageMeasurement}

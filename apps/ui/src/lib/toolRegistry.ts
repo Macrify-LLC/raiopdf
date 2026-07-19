@@ -43,7 +43,7 @@ export const ORGANIZE_TOOLS = [
 // (engine round-trips with review/commit), as opposed to the annotation
 // overlays in TOOL_PANEL_ANNOTATE_TOOLS.
 export const TOOL_PANEL_EDIT_TOOLS = [
-  { id: "edit-text", label: "Find & Replace", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
+  { id: "edit-text", label: "Edit Text", group: "edit", helpArticleId: "edit-text", description: "Find & replace across the document, or replace exactly the text you select — with a staged review." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 // Annotation & markup overlays — pending edits layered over the page and

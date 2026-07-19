@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Find &amp; Replace — change text in a PDF — RaioPDF Help</title>
-<meta name="description" content="Find a word or phrase in a typed PDF and replace it everywhere — a real text change, not a sticky note on top.">
+<title>Edit Text — change or replace text in a PDF — RaioPDF Help</title>
+<meta name="description" content="Change the real text in a typed PDF — find &amp; replace across the whole document, or right-click a selection to replace exactly that text.">
 <link rel="canonical" href="https://raio.macrify.me/help/edit-text.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="RaioPDF">
 <meta property="og:url" content="https://raio.macrify.me/help/edit-text.html">
-<meta property="og:title" content="Find &amp; Replace — change text in a PDF — RaioPDF Help">
-<meta property="og:description" content="Find a word or phrase in a typed PDF and replace it everywhere — a real text change, not a sticky note on top.">
+<meta property="og:title" content="Edit Text — change or replace text in a PDF — RaioPDF Help">
+<meta property="og:description" content="Change the real text in a typed PDF — find &amp; replace across the whole document, or right-click a selection to replace exactly that text.">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Find &amp; Replace — change text in a PDF — RaioPDF Help">
-<meta name="twitter:description" content="Find a word or phrase in a typed PDF and replace it everywhere — a real text change, not a sticky note on top.">
+<meta name="twitter:title" content="Edit Text — change or replace text in a PDF — RaioPDF Help">
+<meta name="twitter:description" content="Change the real text in a typed PDF — find &amp; replace across the whole document, or right-click a selection to replace exactly that text.">
 
 <link rel="stylesheet" href="/shared/reset.css">
 <link rel="stylesheet" href="/shared/help.css">
@@ -60,24 +60,34 @@
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
         <a href="/help/#group-edit">Edit</a>
         <span class="help-breadcrumb__sep" aria-hidden="true">/</span>
-        <span class="help-breadcrumb__current" aria-current="page">Find &amp; Replace — change text in a PDF</span>
+        <span class="help-breadcrumb__current" aria-current="page">Edit Text — change or replace text in a PDF</span>
       </nav>
 
       <div class="help-article-layout">
         <article class="help-article">
-          <div class="help-article__body"><h1>Find &amp; Replace — change text in a PDF</h1><p>Change the actual words in a PDF. Type what you want to find and what to put in
-its place, and RaioPDF rewrites that text in the document itself — not a box
-drawn on top, the real text.</p><h2 id="why-youd-use-it">Why you'd use it</h2><p>A wrong date slipped into a filing. A name is misspelled on every page. A
-placeholder like "[CLIENT]" never got filled in. <strong>Find &amp; Replace</strong> fixes
-those across the whole document at once, so you don't retype or re-export the
-file from the program that made it.</p><p>It works on <strong>typed (born-digital) PDFs</strong> — documents that already have real,
-selectable text. It is <strong>not</strong> for scanned documents (see <em>What to know</em>).</p><h2 id="how-to-do-it">How to do it</h2><ol><li>Open the PDF.</li><li>In the <strong>Edit</strong> tools, choose <strong>Find &amp; Replace</strong>.</li><li>Type the text to <strong>Find</strong> and the text to <strong>Replace</strong> it with. Turn on
+          <div class="help-article__body"><h1>Edit Text — change or replace text in a PDF</h1><p>Change the actual words in a PDF. RaioPDF rewrites the text in the document
+itself — not a box drawn on top, the real text. There are two ways to use it:
+find &amp; replace across the whole document, or replace exactly the text you
+select on the page.</p><h2 id="why-youd-use-it">Why you'd use it</h2><p>A wrong date slipped into a filing. A name is misspelled on every page. A
+placeholder like "[CLIENT]" never got filled in. <strong>Edit Text</strong> fixes those
+across the whole document at once, so you don't retype or re-export the file
+from the program that made it.</p><p>It works on <strong>typed (born-digital) PDFs</strong> — documents that already have real,
+selectable text. It is <strong>not</strong> for scanned documents (see <em>What to know</em>).</p><h2 id="method-1-find-amp-replace-across-the-document">Method 1 — Find &amp; replace across the document</h2><ol><li>Open the PDF.</li><li>In the <strong>Edit</strong> tools, choose <strong>Edit Text</strong>.</li><li>Type the text to <strong>Find</strong> and the text to <strong>Replace</strong> it with. Turn on
 <strong>Whole word</strong> if you only want to match the word on its own (so "art"
 doesn't also change "start").</li><li>Click <strong>Replace all</strong>. This <em>queues</em> the change — nothing happens to the
 document yet. Queue as many find/replace pairs as you need.</li><li>Click <strong>Review</strong>. RaioPDF reads the document and shows you what it found:
 which pages change, before-and-after previews, and any warnings.</li><li>If it looks right, click <strong>Apply</strong>. If nothing matched, Apply stays off and
 RaioPDF tells you the document wasn't changed.</li><li><strong>Save.</strong> RaioPDF leaves your original file untouched and asks for a new file
-name, so you keep both the original and the edited copy.</li></ol><h2 id="what-to-know">What to know</h2><ul><li><strong>Typed PDFs only — not scans.</strong> A scanned document is a picture of a page,
+name, so you keep both the original and the edited copy.</li></ol><h2 id="method-2-replace-exactly-the-text-you-select">Method 2 — Replace exactly the text you select</h2><p>When you want to change one specific occurrence — not every match in the
+document:</p><ol><li>Select the text on the page with the normal pointer.</li><li><strong>Right-click the selection and choose "Replace text..."</strong> — RaioPDF opens
+Edit Text with your selection already captured and the cursor in the
+<strong>Replace with</strong> box. (Inside Edit Text mode, you can also select text and
+click <strong>Replace selection</strong>.)</li><li>Type the replacement and click <strong>Replace selection</strong>, then <strong>Review</strong> and
+<strong>Apply</strong> as above. Only the exact text you selected changes — other
+occurrences of the same words are left alone.</li></ol><p>Selection replacement works on <strong>one page and one line at a time</strong>. If the
+right-click option is grayed out, the page has no reliable text layer (a scan),
+another replacement is still queued or being prepared, or the document is too
+large for in-app editing.</p><h2 id="what-to-know">What to know</h2><ul><li><strong>Typed PDFs only — not scans.</strong> A scanned document is a picture of a page,
 so there's no text to edit. RaioPDF turns the tool off for scanned documents
 rather than editing the hidden text layer and leaving the visible scan wrong.</li><li><strong>The text doesn't reflow.</strong> Replacing a long phrase with a short one (or the
 other way) does not re-wrap the paragraph. The words change; the layout
@@ -85,7 +95,10 @@ around them stays put, so spacing can look tight or loose, and centered text
 can shift. Read the result before you rely on it.</li><li><strong>Matching is exact and case-sensitive.</strong> "Smith" and "smith" are different,
 and the find is literal text, not a search pattern.</li><li><strong>Single distinctive words match best.</strong> A multi-word phrase can be missed
 when the words are spaced apart on the page (common in justified text). If a
-phrase doesn't take, search for one unusual word from it instead.</li><li><strong>The whole document is rewritten when you apply.</strong> Even a one-word change
+phrase doesn't take, search for one unusual word from it instead.</li><li><strong>Selection replacement is one page, one line.</strong> A selection that spans pages
+or wraps across lines can't be replaced in one go — replace it line by line,
+or use find &amp; replace. Right-to-left text isn't supported for selection
+replacement.</li><li><strong>The whole document is rewritten when you apply.</strong> Even a one-word change
 re-saves the entire file. Pages you didn't preview may shift very slightly.</li><li><strong>A substitute font may fill in.</strong> If the document's font can't produce a
 character in your replacement, RaioPDF falls back to a built-in font, so a few
 characters can look a little different from the surrounding text.</li><li><strong>Pictures are kept as-is.</strong> On a document that mixes text and images, the
@@ -113,7 +126,8 @@ then RaioPDF steers you to a new file rather than over the original.</li></ul></
           <p class="help-toc__label">On this page</p>
           <ul>
           <li><a href="#why-youd-use-it">Why you'd use it</a></li>
-          <li><a href="#how-to-do-it">How to do it</a></li>
+          <li><a href="#method-1-find-amp-replace-across-the-document">Method 1 — Find &amp;amp; replace across the document</a></li>
+          <li><a href="#method-2-replace-exactly-the-text-you-select">Method 2 — Replace exactly the text you select</a></li>
           <li><a href="#what-to-know">What to know</a></li>
           <li><a href="#related">Related</a></li>
           </ul>

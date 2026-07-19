@@ -11,6 +11,7 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { PageScrollIntent } from "../hooks/useDocument";
 import type { EditingState } from "../hooks/useEditing";
+import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import { TextLayer, type PDFDocumentProxy } from "../lib/pdfjs";
 import {
   computeMountedRange,
@@ -76,6 +77,8 @@ export interface PageListProps {
   onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
+  onReplaceTextInSelection?: ((selection: CapturedTextSelection) => void) | undefined;
+  replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
   /**
@@ -121,6 +124,8 @@ export function PageList({
   onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
+  onReplaceTextInSelection,
+  replaceTextInSelectionBlocked,
   searchResults = [],
   activeSearchResultId = null,
   lazyPageMeasurement = false,
@@ -558,6 +563,8 @@ export function PageList({
                   onRedactionSelectionRejected={onRedactionSelectionRejected}
                   onRedactionAreaRemoved={onRedactionAreaRemoved}
                   editing={editing}
+                  onReplaceTextInSelection={onReplaceTextInSelection}
+                  replaceTextInSelectionBlocked={replaceTextInSelectionBlocked}
                   searchResults={searchResults}
                   activeSearchResultId={activeSearchResultId}
                   onRenderError={onRenderError}

@@ -19,6 +19,14 @@ interface TextSpan {
 export interface ExtractedPageText {
   pageIndex: number;
   text: string;
+  /**
+   * The page's text WITHOUT the inferred separators (spaces/newlines) that
+   * `text` splices between pdf.js items. This is the same separator-free
+   * model the DOM text layer and the engine's text map use, so engine-map
+   * offsets (e.g. a selected-replacement target) slice it correctly —
+   * slicing `text` with those offsets drifts on any multi-item page.
+   */
+  flatText?: string;
   spans: TextSpan[];
 }
 
@@ -126,6 +134,7 @@ async function extractSinglePageText(
   const textContent = await getPdfPageTextContent(page);
   const spans: TextSpan[] = [];
   let text = "";
+  let flatText = "";
   let previousTextItem: TextItemLike | null = null;
 
   for (const rawItem of textContent.items) {
@@ -138,6 +147,7 @@ async function extractSinglePageText(
 
     const start = text.length;
     text += itemText;
+    flatText += itemText;
     const end = text.length;
 
     if (itemText.trim()) {
@@ -162,6 +172,7 @@ async function extractSinglePageText(
   return {
     pageIndex,
     text,
+    flatText,
     spans,
   };
 }

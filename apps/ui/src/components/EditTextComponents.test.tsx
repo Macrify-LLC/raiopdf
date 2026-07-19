@@ -85,6 +85,34 @@ describe("EditText components", () => {
     expect(captureSelectedText).toHaveBeenCalled();
   });
 
+  it("focuses the Replace-with field on every prime, including repeats of identical text", () => {
+    render(
+      <EditTextModeBar
+        textEdit={state({ selectionPrimeCount: 1, selectedReplacementText: "John Smith" })}
+        onExit={() => undefined}
+      />,
+    );
+
+    const replaceInput = getInput("Replace with");
+    expect(document.activeElement).toBe(replaceInput);
+
+    // Something else takes focus, then the same text is primed again (e.g. a
+    // second right-click "Replace text..." on the same words). The count is
+    // what re-triggers focus, not the text value.
+    act(() => {
+      getInput("Find text").focus();
+    });
+    expect(document.activeElement).not.toBe(replaceInput);
+
+    render(
+      <EditTextModeBar
+        textEdit={state({ selectionPrimeCount: 2, selectedReplacementText: "John Smith" })}
+        onExit={() => undefined}
+      />,
+    );
+    expect(document.activeElement).toBe(replaceInput);
+  });
+
   it("renders gate, advisory, and positional-space caution in the status panel", () => {
     render(
       <EditTextStatusPanel
@@ -182,10 +210,14 @@ function state(overrides: Partial<TextEditState> = {}): TextEditState {
     positionalSpaceRisk: false,
     selectionResolving: false,
     selectedReplacementText: null,
+    selectionPrimeCount: 0,
     setFind: () => undefined,
     setReplace: () => undefined,
     setWholeWord: () => undefined,
     captureSelectedText: () => undefined,
+    primeSelectedReplacement: () => true,
+    selectedReplacementGate: () => ({ blocked: false, reason: null }),
+    showMessage: () => undefined,
     queueReplaceAll: () => undefined,
     queueSelectedReplacement: async () => undefined,
     removePendingOp: () => undefined,

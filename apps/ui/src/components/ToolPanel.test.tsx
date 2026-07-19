@@ -78,7 +78,7 @@ describe("ToolPanel", () => {
       throw new Error("expected Edit and Annotate accordion panels");
     }
 
-    expect(editPanel.textContent).toContain("Find & Replace");
+    expect(editPanel.textContent).toContain("Edit Text");
     expect(editPanel.textContent).toContain("Page Numbers...");
     expect(editPanel.textContent).toContain("Watermark...");
     expect(editPanel.textContent).not.toContain("Highlight");
@@ -88,7 +88,7 @@ describe("ToolPanel", () => {
     expect(annotatePanel.textContent).toContain("Highlight");
     expect(annotatePanel.textContent).toContain("Text Box");
     expect(annotatePanel.textContent).toContain("Sign");
-    expect(annotatePanel.textContent).not.toContain("Find & Replace");
+    expect(annotatePanel.textContent).not.toContain("Edit Text");
   });
 
   it("selects the comment tool from the Annotate group", () => {

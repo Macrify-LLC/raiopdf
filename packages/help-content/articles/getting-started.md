@@ -31,7 +31,7 @@ unusual ways, and a repair pass usually fixes them.
   page to page, zoom, and search.
 - The **Tools** panel on the left is grouped into **Edit**, **Annotate**,
   **Organize**, and **Legal**, with **Make Searchable (OCR)** on its own.
-  **Edit** changes the document's real content (Find & Replace, page numbers,
+  **Edit** changes the document's real content (Edit Text, page numbers,
   watermarks); **Annotate** layers comments and markup on top of it.
 - **Select** is your normal reading mode — the plain pointer. When you're done
   with any tool, click it again or press **Esc** to return to Select.

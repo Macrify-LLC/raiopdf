@@ -656,6 +656,60 @@ test("switching from Select to a markup tool converts the selection; other tools
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 });
 
+test("right-click Replace text... enters Edit Text with the selection primed", async ({ page }) => {
+  // The bridge mock only unlocks the engine gate; priming itself is pure UI.
+  await installTextEditBridgeMock(page, await createTextPdf("unused"));
+  await page.goto("/");
+  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
+
+  // Deterministic single-line selection, anchored by content (same approach
+  // as the markup-conversion smoke above).
+  let midpoint = { x: 0, y: 0 };
+  let attempt = 0;
+  await expect(async () => {
+    attempt += 1;
+    const line = await textLayer.evaluate((layer, jitter) => {
+      const span = [...layer.querySelectorAll("span")].find((s) =>
+        s.textContent?.includes("comes before the Court"),
+      );
+      if (!span) {
+        return null;
+      }
+      const r = span.getBoundingClientRect();
+      return { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 };
+    }, (attempt % 5) * 9);
+
+    if (!line) {
+      throw new Error("body line not found");
+    }
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await page.mouse.move(line.left, line.y);
+    await page.mouse.down();
+    const endX = line.left + (line.right - line.left) * 0.6;
+    await page.mouse.move(endX, line.y, { steps: 6 });
+    await page.mouse.up();
+    const text = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+    expect(text.length).toBeGreaterThan(5);
+    midpoint = { x: (line.left + endX) / 2, y: line.y };
+  }).toPass({ timeout: 15_000 });
+
+  await page.mouse.click(midpoint.x, midpoint.y, { button: "right" });
+
+  const replaceItem = page.getByRole("menuitem", { name: "Replace text..." });
+  await expect(replaceItem).toBeVisible();
+  await expect(replaceItem).toBeEnabled();
+  await replaceItem.click();
+
+  // The Edit Text mode bar opens with the selection captured and the
+  // Replace-with field focused, ready to type.
+  await expect(page.getByRole("toolbar", { name: "Edit document text" })).toBeVisible();
+  await expect(page.getByText("Selection captured")).toBeVisible();
+  await expect(page.getByLabel("Replace with")).toBeFocused();
+});
+
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
@@ -664,7 +718,7 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
   await openPdf(page, "edit-text.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await expect(page.getByText("Replacements never reflow the page", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Search document")).toBeDisabled();
 
@@ -692,7 +746,7 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
   await openPdf(page, "edit-text-zero.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -719,13 +773,13 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Pending annotations" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await openPdf(page, "image-only.pdf", await createPdf([200]));
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
 });
 

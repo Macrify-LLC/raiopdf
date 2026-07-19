@@ -141,6 +141,7 @@ import { useEditing, type EditingDocumentSnapshot } from "./hooks/useEditing";
 import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import { confirmWithUser } from "./lib/nativeConfirm";
+import type { CapturedTextSelection } from "./lib/selectedTextEdit";
 import {
   checkForSignedUpdate,
   downloadSignedUpdate,
@@ -835,7 +836,14 @@ export function App() {
     null,
   );
   const [activeTextEdit, setActiveTextEdit] = useState(false);
-  const [textEditAnnotationPrompt, setTextEditAnnotationPrompt] = useState(false);
+  // The pending-annotations prompt carries its ORIGIN in its own state (null
+  // = closed) so every dismissal path — cancel, X, legal-state resets,
+  // document changes — atomically forgets why it was opened. The
+  // "replace-selection" origin only routes a "reselect" hint into the mode
+  // the prompt opens; the selection itself is never carried across.
+  const [textEditAnnotationPrompt, setTextEditAnnotationPrompt] = useState<
+    null | "default" | "replace-selection"
+  >(null);
   const [activeOrganizeTool, setActiveOrganizeTool] = useState<OrganizeToolId | null>(
     null,
   );
@@ -1627,7 +1635,7 @@ export function App() {
     preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
     setActiveTextEdit(false);
-    setTextEditAnnotationPrompt(false);
+    setTextEditAnnotationPrompt(null);
     setRedactionPhase("idle");
     setRedactionMessage(null);
     setRedactionSearchOpen(false);
@@ -1679,7 +1687,7 @@ export function App() {
     }
     setPendingRedactions([]);
     setActiveTextEdit(false);
-    setTextEditAnnotationPrompt(false);
+    setTextEditAnnotationPrompt(null);
     setScannerState({ scanning: false, message: null, hits: [] });
     setFilingReport(null);
     setFilingReportLoading(false);
@@ -2336,12 +2344,26 @@ export function App() {
     }
 
     if (editing.hasUnsavedEdits) {
-      setTextEditAnnotationPrompt(true);
+      setTextEditAnnotationPrompt("default");
       return;
     }
 
     enterTextEditMode();
   }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, longProcessRunning, setError, streamedDocument, textEdit.gate.message]);
+
+  // When the right-click "Replace text..." entry defers to the
+  // pending-annotations prompt, the selection is NOT carried across (saving
+  // rebuilds the document and its text layer, so the capture would be stale
+  // by construction — locked scope decision). The prompt's own state carries
+  // its origin, so entering the mode from a "replace-selection" prompt only
+  // surfaces a reselect hint.
+  const consumeReplaceSelectionReselectHint = useCallback(() => {
+    if (textEditAnnotationPrompt !== "replace-selection") {
+      return;
+    }
+
+    textEdit.showMessage("Reselect the text you want to replace, then use Replace selection.");
+  }, [textEdit, textEditAnnotationPrompt]);
 
   const saveAnnotationsAndEnterTextEdit = useCallback(async () => {
     const pendingApply = editing.collectAnnotationSavePlan();
@@ -2363,15 +2385,43 @@ export function App() {
       editing.clearPending();
     }
 
-    setTextEditAnnotationPrompt(false);
+    setTextEditAnnotationPrompt(null);
     enterTextEditMode();
-  }, [applyAnnotationSavePlan, editing, enterTextEditMode, printMarkupAnnotations, setError]);
+    consumeReplaceSelectionReselectHint();
+  }, [applyAnnotationSavePlan, consumeReplaceSelectionReselectHint, editing, enterTextEditMode, printMarkupAnnotations, setError]);
 
   const discardAnnotationsAndEnterTextEdit = useCallback(() => {
     editing.clearPendingEdits();
-    setTextEditAnnotationPrompt(false);
+    setTextEditAnnotationPrompt(null);
     enterTextEditMode();
-  }, [editing, enterTextEditMode]);
+    consumeReplaceSelectionReselectHint();
+  }, [consumeReplaceSelectionReselectHint, editing, enterTextEditMode]);
+
+  // Right-click "Replace text..." entry. The disabled state shown in the
+  // context menu composes the hook-owned gate with the one App-level
+  // condition (a running long process); the handler re-checks the same gate
+  // at click time because an open menu can outlive the state it was built in.
+  const replaceTextInSelectionBlocked = useCallback(
+    (pageIndex: number) =>
+      longProcessRunning || textEdit.selectedReplacementGate(pageIndex).blocked,
+    [longProcessRunning, textEdit],
+  );
+
+  const requestReplaceTextFromSelection = useCallback((selection: CapturedTextSelection) => {
+    // Same composed policy as the menu item's disabled state, re-evaluated at
+    // click time because an open menu can outlive the state it was built in.
+    if (replaceTextInSelectionBlocked(selection.pageIndex)) {
+      return;
+    }
+
+    if (editing.hasUnsavedEdits) {
+      setTextEditAnnotationPrompt("replace-selection");
+      return;
+    }
+
+    enterTextEditMode();
+    textEdit.primeSelectedReplacement(selection);
+  }, [editing.hasUnsavedEdits, enterTextEditMode, longProcessRunning, textEdit]);
 
   // Esc exits any edit mode. Inline editors (text draft, comment popover)
   // consume their own Escape via stopPropagation before this fires.
@@ -8130,7 +8180,7 @@ export function App() {
 
     if (textEdit.phase === "staging" || textEdit.phase === "applying") {
       return {
-        label: "Find & Replace",
+        label: "Edit Text",
         loader: {
           phaseLabel: textEdit.phase === "staging" ? "Staging replacement" : "Applying replacement",
           message: textEdit.phase === "staging"
@@ -8590,6 +8640,8 @@ export function App() {
         pendingRedactions={pendingRedactions}
         modeBar={modeBar}
         editing={editingForShell}
+        onReplaceTextInSelection={requestReplaceTextFromSelection}
+        replaceTextInSelectionBlocked={replaceTextInSelectionBlocked}
         onRedactionAreaCreated={addPendingRedaction}
         onRedactionAreasCreated={addPendingRedactions}
         onRedactionSelectionRejected={handleRedactionSelectionRejected}
@@ -8724,9 +8776,9 @@ export function App() {
       {textEditAnnotationPrompt ? (
         <FloatingDialog
           title="Pending annotations"
-          eyebrow="Find & Replace"
+          eyebrow="Edit Text"
           width="sm"
-          onClose={() => setTextEditAnnotationPrompt(false)}
+          onClose={() => setTextEditAnnotationPrompt(null)}
         >
           <div className="tool-panel__inline-card">
             <p className="tool-panel__card-copy">
@@ -8752,7 +8804,7 @@ export function App() {
               <button
                 type="button"
                 className="tool-panel__secondary-button"
-                onClick={() => setTextEditAnnotationPrompt(false)}
+                onClick={() => setTextEditAnnotationPrompt(null)}
               >
                 Cancel
               </button>

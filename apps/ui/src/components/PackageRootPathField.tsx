@@ -8,7 +8,9 @@ import "./PackageRootPathField.css";
  * The text input stays the source of truth: Browse fills it with the picked
  * folder's real path, and typing a path by hand keeps working. Browse is
  * desktop-only (the browser runtime has no directory picker — it renders
- * disabled with the reason) and gated while the owning workflow runs.
+ * disabled with the reason). While the owning workflow runs, BOTH the input
+ * and Browse lock — editing the destination mid-build would only desync the
+ * field from the build already writing to the old path.
  */
 export function PackageRootPathField({
   value,
@@ -18,7 +20,7 @@ export function PackageRootPathField({
 }: {
   value: string;
   onChange: (value: string) => void;
-  /** True while the owning workflow runs — gates the Browse picker. */
+  /** True while the owning workflow runs — locks the input and Browse. */
   disabled?: boolean;
   /** The owning dialog's secondary-button class, so Browse matches its chrome. */
   browseButtonClassName: string;
@@ -38,6 +40,7 @@ export function PackageRootPathField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="Choose an empty folder..."
+        disabled={disabled}
       />
       <button
         type="button"

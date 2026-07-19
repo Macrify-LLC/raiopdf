@@ -161,6 +161,47 @@ describe("useEditing pin state", () => {
     },
   );
 
+  it("never offers an imported annotation as an undo target", async () => {
+    const getEditing = renderHookValue();
+
+    expect(getEditing().lastUndoableEditId).toBeNull();
+
+    await act(async () => {
+      getEditing().loadImportedAnnotations([
+        {
+          pageIndex: 0,
+          annotId: "existing-1",
+          edit: {
+            type: "textBox",
+            annotId: "existing-1",
+            pageIndex: 0,
+            rect: { x: 10, y: 10, w: 100, h: 40 },
+            text: "already in the document",
+          },
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    // A freshly-opened annotated document has nothing to undo.
+    expect(getEditing().lastUndoableEditId).toBeNull();
+
+    await act(async () => {
+      getEditing().addEdit(textBoxEdit("user-edit"));
+      await Promise.resolve();
+    });
+
+    // The user's own edit is undoable; removing it exposes nothing imported.
+    expect(getEditing().lastUndoableEditId).toBe("user-edit");
+
+    await act(async () => {
+      getEditing().removeEdit("user-edit");
+      await Promise.resolve();
+    });
+
+    expect(getEditing().lastUndoableEditId).toBeNull();
+  });
+
   it("keeps authored fields reusable when saving existing form values", async () => {
     const getEditing = renderHookValue();
 

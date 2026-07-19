@@ -213,8 +213,10 @@ export function AppShell({
   const hasDocument = document.source !== null;
   const streamedDocument = document.source !== null && document.source.kind !== "memory";
   // The single undo gate — every undo door (menu, Ctrl+Z, toolbar) consumes
-  // this one value so they can't drift apart.
-  const canUndo = hasDocument && editing.pendingEdits.length > 0;
+  // this one value so they can't drift apart. Imported annotations are not
+  // undo targets (see lastUndoableEditId), so a freshly-opened annotated
+  // document starts with Undo disabled.
+  const canUndo = hasDocument && editing.lastUndoableEditId !== null;
   const showEngineStartingOverlay = ocrStarting && !isOcrDialogPhase(ocrState.phase);
   function requestOpen() {
     onOpenRequested();

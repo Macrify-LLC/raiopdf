@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetDialogStackForTests } from "./FloatingDialog";
 import { ToolPanel } from "./ToolPanel";
+import type { PendingEdit } from "../lib/edits";
 
 describe("ToolPanel", () => {
   let root: Root | null = null;
@@ -68,8 +69,60 @@ describe("ToolPanel", () => {
     expect(document.body.textContent).not.toContain("will be permanently removed");
   });
 
+  it("keeps substantive edits and annotation tools in separate groups", () => {
+    render(<Harness />);
+
+    const editPanel = document.getElementById("accordion-panel-edit");
+    const annotatePanel = document.getElementById("accordion-panel-annotate");
+    if (!editPanel || !annotatePanel) {
+      throw new Error("expected Edit and Annotate accordion panels");
+    }
+
+    expect(editPanel.textContent).toContain("Find & Replace");
+    expect(editPanel.textContent).toContain("Page Numbers...");
+    expect(editPanel.textContent).toContain("Watermark...");
+    expect(editPanel.textContent).not.toContain("Highlight");
+    expect(editPanel.textContent).not.toContain("Comment");
+
+    expect(annotatePanel.textContent).toContain("Comment");
+    expect(annotatePanel.textContent).toContain("Highlight");
+    expect(annotatePanel.textContent).toContain("Text Box");
+    expect(annotatePanel.textContent).toContain("Sign");
+    expect(annotatePanel.textContent).not.toContain("Find & Replace");
+  });
+
+  it("selects the comment tool from the Annotate group", () => {
+    const onEditToolSelected = vi.fn();
+    render(<Harness onEditToolSelected={onEditToolSelected} />);
+
+    click(getButtonByText("Comment"));
+
+    expect(onEditToolSelected).toHaveBeenCalledWith("comment");
+  });
+
+  it("renders no standalone Comment group and no empty-state placeholder", () => {
+    render(<Harness />);
+
+    expect(document.getElementById("accordion-panel-comment")).toBeNull();
+    expect(document.body.textContent).not.toContain("No comments.");
+  });
+
+  it("lists pending comments inside the Annotate group once they exist", () => {
+    render(<Harness pendingEdits={[comment("c1", "Check this cite")]} />);
+
+    const annotatePanel = document.getElementById("accordion-panel-annotate");
+    expect(annotatePanel?.textContent).toContain("1 comment");
+    expect(annotatePanel?.textContent).toContain("Check this cite");
+  });
+
+  function comment(id: string, text: string): PendingEdit {
+    return { kind: "comment", id, pageIndex: 0, at: { x: 10, y: 10 }, text };
+  }
+
   interface HarnessProps {
     onConnectToAi?: () => void;
+    onEditToolSelected?: (toolId: string) => void;
+    pendingEdits?: readonly PendingEdit[];
     activeLegalTool?: string | null;
     redaction?: {
       phase: "idle" | "confirming" | "applying" | "verified" | "error";
@@ -79,7 +132,7 @@ describe("ToolPanel", () => {
     };
   }
 
-  function Harness({ onConnectToAi, activeLegalTool = null, redaction }: HarnessProps) {
+  function Harness({ onConnectToAi, onEditToolSelected, pendingEdits = [], activeLegalTool = null, redaction }: HarnessProps) {
     return (
       <ToolPanel
         hasDocument
@@ -89,7 +142,7 @@ describe("ToolPanel", () => {
         activeEditDialogTool={null}
         activeLegalTool={activeLegalTool}
         activeOrganizeTool={null}
-        onEditToolSelected={() => undefined}
+        onEditToolSelected={onEditToolSelected ?? (() => undefined)}
         onEditDialogToolSelected={() => undefined}
         onLegalToolSelected={() => undefined}
         onOrganizeToolSelected={() => undefined}
@@ -97,7 +150,7 @@ describe("ToolPanel", () => {
         onForceOcr={() => undefined}
         redaction={redaction ?? { phase: "idle", message: null, pendingCount: 0, available: true }}
         scanner={{ scanning: false, message: null, hits: [] }}
-        pendingEdits={[]}
+        pendingEdits={pendingEdits}
         onRemovePendingEdit={() => undefined}
         onRunScanner={() => undefined}
         onMarkScannerHit={() => undefined}

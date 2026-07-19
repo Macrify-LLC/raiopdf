@@ -12,7 +12,7 @@ Image puts a PNG or JPEG picture onto a page — a logo, a stamp, a photo.
 
 ## How to do it
 
-1. Choose **Image**, from the toolbar or the **Edit** tools.
+1. Choose **Image**, from the toolbar or the **Annotate** tools.
 2. Pick a PNG or JPEG file.
 3. Click the page where you want it.
 

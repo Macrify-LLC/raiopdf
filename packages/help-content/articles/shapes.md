@@ -14,7 +14,7 @@ arrows. When you save, the shapes become real PDF annotations.
 ## How to do it
 
 1. Choose **Rectangle**, **Ellipse**, **Line**, or **Arrow** from the toolbar or
-   the **Edit** tools.
+   the **Annotate** tools.
 2. Pick a stroke color, stroke width, and fill color if the shape supports one.
 3. Drag on the page to size and place the shape.
 

@@ -14,8 +14,8 @@ in any PDF program — not marks baked into the page.
 
 ## How to do it
 
-1. Choose **Comment**, from the toolbar or the **Comment** group in the Tools
-   panel.
+1. Choose **Comment**, from the toolbar or the **Annotate** group in the Tools
+   panel. Your saved comments are listed in the same group.
 2. Click the spot on the page where you want the note. A little box opens.
 3. Type your note and click **Save Note** (or press **Enter**; use
    **Shift+Enter** for a new line, **Esc** to cancel).

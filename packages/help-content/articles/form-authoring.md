@@ -15,7 +15,7 @@ ordinary PDF viewer.
 ## How to do it
 
 1. Open the PDF and choose **Create Fillable Text Field** or **Create Fillable
-   Checkbox** under **Edit**. The same tools are available in the page toolbar.
+   Checkbox** under **Annotate**. The same tools are available in the page toolbar.
 2. Click where the field should begin. RaioPDF places a pending field on the page.
 3. Type an initial value in a text field, or select a checkbox if it should start
    checked.

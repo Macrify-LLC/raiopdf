@@ -205,12 +205,14 @@ describe("useTextEdit phase lifecycle", () => {
     vi.mocked(extractPageText).mockReset();
   });
 
+  type EngineResult = {
+    bytes: Uint8Array;
+    replacedCounts: readonly number[] | null;
+    warnings: readonly never[];
+  };
+
   function renderTextEdit(overrides: {
-    replaceText?: (...args: never[]) => Promise<{
-      bytes: Uint8Array;
-      replacedCounts: readonly number[] | null;
-      warnings: readonly never[];
-    }>;
+    replaceText?: (...args: never[]) => Promise<EngineResult>;
     confirmPdfAIdentificationRemoval?: () => Promise<boolean>;
     replaceBytes?: () => Promise<"replaced" | "stale" | "failed">;
   } = {}) {
@@ -284,19 +286,8 @@ describe("useTextEdit phase lifecycle", () => {
   }
 
   it("releases a stranded staging phase when the run is superseded mid-review", async () => {
-    let resolveEngine!: (result: {
-      bytes: Uint8Array;
-      replacedCounts: readonly number[] | null;
-      warnings: readonly never[];
-    }) => void;
-    const engineResult = new Promise<{
-      bytes: Uint8Array;
-      replacedCounts: readonly number[] | null;
-      warnings: readonly never[];
-    }>((resolve) => {
-      resolveEngine = resolve;
-    });
-    const { state } = renderTextEdit({ replaceText: vi.fn(() => engineResult) });
+    const engineResult = createDeferred<EngineResult>();
+    const { state } = renderTextEdit({ replaceText: vi.fn(() => engineResult.promise) });
 
     await queueReplacement(state);
 
@@ -314,7 +305,7 @@ describe("useTextEdit phase lifecycle", () => {
     });
 
     await act(async () => {
-      resolveEngine({ bytes: new Uint8Array([9]), replacedCounts: [1], warnings: [] });
+      engineResult.resolve({ bytes: new Uint8Array([9]), replacedCounts: [1], warnings: [] });
       await reviewDone;
     });
 
@@ -364,6 +355,17 @@ describe("useTextEdit phase lifecycle", () => {
     expect(state().message).toContain("could not be written");
   });
 });
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
 
 function op(overrides: Partial<PendingTextReplacement> = {}): PendingTextReplacement {
   return {

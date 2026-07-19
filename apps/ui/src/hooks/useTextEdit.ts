@@ -562,17 +562,6 @@ export function useTextEdit({
     setMessage(null);
     setStaged(null);
 
-    // When this run is superseded mid-staging, its result is discarded — but
-    // "staging" must never outlive the run that owns it, or the review dialog
-    // spins forever with no work in flight. Only demote when no newer review
-    // has taken over the phase, and only out of "staging" so a cancel that
-    // already reset to idle keeps its own message and state.
-    const releaseStrandedStaging = () => {
-      if (reviewRunRef.current === runId) {
-        setPhase((current) => (current === "staging" ? "idle" : current));
-      }
-    };
-
     let signatureInvalidationNotice: SignatureInvalidationNotice | null = null;
     let allowSignatureInvalidation = false;
     let allowPdfAIdentificationRemoval = false;
@@ -593,7 +582,6 @@ export function useTextEdit({
             openTokenRef.current !== reviewOpenToken ||
             generationRef.current !== reviewGeneration
           ) {
-            releaseStrandedStaging();
             return;
           }
 
@@ -611,7 +599,6 @@ export function useTextEdit({
             openTokenRef.current !== reviewOpenToken ||
             generationRef.current !== reviewGeneration
           ) {
-            releaseStrandedStaging();
             return;
           }
 
@@ -667,25 +654,25 @@ export function useTextEdit({
             continue;
           }
 
-          if (runRef.current !== runId) {
-            releaseStrandedStaging();
-            return;
-          }
-
-          setPhase("error");
-          setMessage(textEditErrorMessage(error));
-          return;
+          throw error;
         }
       }
     } catch (error) {
-      // The confirmation callbacks above can themselves throw (e.g. the shell
-      // denying a native dialog). Without this net, an exception escaping the
-      // retry loop leaves phase at "staging" with no work in flight.
+      // Terminal errors land here, including confirmation callbacks that
+      // themselves throw (e.g. the shell denying a native dialog).
       if (runRef.current === runId) {
         setPhase("error");
         setMessage(textEditErrorMessage(error));
-      } else {
-        releaseStrandedStaging();
+      }
+    } finally {
+      // The invariant this defends: "staging" must never outlive the run
+      // that owns it, or the review dialog spins forever with no work in
+      // flight. Every exit path funnels through here — completed reviews,
+      // cancels, and errors have already moved phase off "staging", so the
+      // demotion only fires for a superseded run's stale bail-outs, and only
+      // when no newer review() call has taken ownership of the phase.
+      if (reviewRunRef.current === runId) {
+        setPhase((current) => (current === "staging" ? "idle" : current));
       }
     }
   }, [

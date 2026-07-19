@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PDFDocument } from "pdf-lib";
 import type { OpenedFile } from "../lib/filePort";
+import { useBatesPrefix } from "../hooks/useBatesPrefix";
 import { tooLargeToAddMessage, type FileAddResult } from "../lib/readFileForAdd";
 import {
   productionHintMessage,
@@ -9,6 +10,7 @@ import {
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, HelpIcon, PlusIcon } from "../icons";
 import { ErrorReportButton } from "./ErrorReportButton";
 import { IconButton } from "./IconButton";
+import { PackageRootPathField } from "./PackageRootPathField";
 import "./ProductionSetWorkspace.css";
 
 export interface ProductionSetFile {
@@ -73,6 +75,8 @@ export interface ProductionSetWorkspaceProps {
   progress: ProductionSetProgress;
   onAddFile: () => Promise<FileAddResult | null>;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
+  /** Opens the finished package root in the system file manager (desktop only). */
+  onOpenPackageRoot?: ((path: string) => void) | undefined;
   onHelpRequested?: (() => void) | undefined;
 }
 
@@ -90,6 +94,7 @@ export function ProductionSetWorkspace({
   progress,
   onAddFile,
   onRun,
+  onOpenPackageRoot,
   onHelpRequested,
 }: ProductionSetWorkspaceProps) {
   const mountedRef = useRef(true);
@@ -97,7 +102,15 @@ export function ProductionSetWorkspace({
   const [files, setFiles] = useState<ProductionSetFile[]>(() =>
     currentFile ? [fromSourceFile(currentFile, currentPageCount)] : [],
   );
-  const [prefix, setPrefix] = useState("SMITH");
+  const {
+    prefix,
+    setPrefix,
+    noPrefix,
+    setNoPrefix,
+    effectivePrefix,
+    prefixMissing,
+    gateMessage,
+  } = useBatesPrefix();
   const [start, setStart] = useState(1);
   const [digits, setDigits] = useState(6);
   const [outputDir, setOutputDir] = useState("");
@@ -109,13 +122,14 @@ export function ProductionSetWorkspace({
   const [addingFile, setAddingFile] = useState(false);
   const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
   const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
-  const hint = useMemo(() => productionHintMessage(prefix), [prefix]);
+  const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
   const addFileBusy = addingFile || pendingPageCountReads > 0;
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
+    !prefixMissing &&
     !overflows &&
     !addFileBusy &&
     !progress.running;
@@ -127,11 +141,11 @@ export function ProductionSetWorkspace({
   }, []);
 
   useEffect(() => {
-    const lastUsed = readProductionLastUsed(prefix);
+    const lastUsed = readProductionLastUsed(effectivePrefix);
     if (lastUsed !== null) {
       setStart(lastUsed + 1);
     }
-  }, [prefix]);
+  }, [effectivePrefix]);
 
   async function addFile() {
     if (addFilePendingRef.current) {
@@ -224,7 +238,7 @@ export function ProductionSetWorkspace({
 
     await onRun({
       files,
-      prefix: prefix.trim(),
+      prefix: effectivePrefix.trim(),
       start,
       digits,
       outputDir: outputDir.trim(),
@@ -337,7 +351,12 @@ export function ProductionSetWorkspace({
         <div className="production-workspace__grid">
           <label title="Letters before the Bates number, for example SMITH000001.">
             <span>Prefix</span>
-            <input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+            <input
+              value={prefix}
+              placeholder="e.g. SMITH"
+              disabled={noPrefix}
+              onChange={(event) => setPrefix(event.target.value)}
+            />
           </label>
           <label title="First Bates number to use for the first selected page.">
             <span>Start</span>
@@ -360,16 +379,31 @@ export function ProductionSetWorkspace({
           </label>
           <label title="Choose an empty folder where RaioPDF can write the production package.">
             <span>Package root folder</span>
-            <input
+            <PackageRootPathField
               value={outputDir}
-              onChange={(event) => setOutputDir(event.target.value)}
-              placeholder="Choose an empty folder..."
+              onChange={setOutputDir}
+              disabled={progress.running}
+              browseButtonClassName="production-workspace__secondary-button"
             />
           </label>
         </div>
+        <label
+          className="production-workspace__checkbox-row"
+          title="Stamp Bates numbers with no letter prefix — numbers only."
+        >
+          <input
+            type="checkbox"
+            checked={noPrefix}
+            onChange={(event) => setNoPrefix(event.target.checked)}
+          />
+          <span>No prefix (numbers only)</span>
+        </label>
         {hint ? <p className="production-workspace__status">{hint}</p> : null}
         {overflows ? (
           <p className="production-workspace__status">The last Bates number would exceed the configured digit width.</p>
+        ) : null}
+        {prefixMissing ? (
+          <p className="production-workspace__status">{gateMessage}</p>
         ) : null}
       </section>
 
@@ -427,6 +461,7 @@ export function ProductionSetWorkspace({
           type="button"
           className="production-workspace__primary-button"
           disabled={!canRun}
+          title={prefixMissing ? gateMessage : undefined}
           onClick={() => void run()}
         >
           Build Production
@@ -471,6 +506,17 @@ export function ProductionSetWorkspace({
               <span className="production-workspace__result-part-value">{progress.result.nextNumber}</span>
             </div>
           </div>
+          {onOpenPackageRoot ? (
+            <div className="package-workflow-result-actions">
+              <button
+                type="button"
+                className="production-workspace__secondary-button"
+                onClick={() => onOpenPackageRoot(progress.result!.packageRoot)}
+              >
+                Open folder
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
     </section>

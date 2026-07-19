@@ -58,21 +58,28 @@
   font-weight: 500;
 }
 
-/* garbled -- the one state that has to read as a genuine attention signal.
-   Filled amber chip (not just colored text) using the app's semantic warn
-   tokens -- --identity-amber is reserved for brand/loading accents, not
-   status semantics, so this deliberately does not reach for it. */
+/* Interactive chip -- shared affordances (cursor, elevation, press) for any
+   chip that opens a flow. Color vocabulary stays per-status below. */
 .status-bar__search-chip--button {
   padding: 3px var(--space-2) 3px 7px;
-  border-color: var(--warn);
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-weight: 700;
   cursor: pointer;
   box-shadow: var(--shadow-control);
   transition:
     box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+/* garbled -- the one state that has to read as a genuine attention signal.
+   Filled amber chip (not just colored text) using the app's semantic warn
+   tokens -- --identity-amber is reserved for brand/loading accents, not
+   status semantics, so this deliberately does not reach for it. The
+   image_only button keeps the neutral outlined pill from its rule above:
+   worth noticing, not worth alarming. */
+.status-bar__search-chip--button[data-status="garbled"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 700;
   animation: status-bar-chip-alert-in 220ms ease;
 }
 
@@ -118,7 +125,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-bar__search-chip--button {
+  .status-bar__search-chip--button[data-status="garbled"] {
     animation: none;
   }
 }

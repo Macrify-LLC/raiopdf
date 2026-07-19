@@ -32,6 +32,24 @@ describe("StatusBar searchability chip", () => {
     expect(html).toContain("No searchable text — run Make Searchable");
   });
 
+  it("renders the image-only chip as a button when Make Searchable is wired", () => {
+    const html = renderToStaticMarkup(
+      <StatusBar textLayerStatus={imageOnlyStatus} onMakeSearchable={() => undefined} />,
+    );
+
+    expect(html).toContain("<button");
+    expect(html).toContain('data-status="image_only"');
+    expect(html).toContain("No searchable text — run Make Searchable");
+  });
+
+  it("keeps the image-only chip inert without a Make Searchable handler", () => {
+    const html = renderToStaticMarkup(
+      <StatusBar textLayerStatus={imageOnlyStatus} />,
+    );
+
+    expect(html).not.toContain("<button");
+  });
+
   it("renders the unknown muted state", () => {
     const html = renderToStaticMarkup(
       <StatusBar textLayerStatus={unknownStatus} />,

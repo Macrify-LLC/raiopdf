@@ -1,0 +1,19 @@
+/* Package-root input + Browse button on one row inside a workflow grid cell.
+   Shared by Production Set, Batch Cleanup, and the Filing Packet builder. */
+.package-root-path-field {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.package-root-path-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Completion-card actions row (Open folder) for the same package workflows —
+   loaded alongside the field because every workspace that shows a completion
+   card also renders the field. */
+.package-workflow-result-actions {
+  display: flex;
+  justify-content: flex-start;
+}

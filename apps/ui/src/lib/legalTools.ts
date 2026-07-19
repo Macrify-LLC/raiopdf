@@ -193,10 +193,80 @@ export function findTextMatchAreasInPages(
   return collectQueryAreas(pages, query, matchAreaForTextRange);
 }
 
-export async function scanSensitivePatterns(
+/**
+ * Minimum non-whitespace characters the text layer must yield before a
+ * "no patterns found" scan result is trustworthy. Below this, the scanner
+ * effectively read nothing — reporting "clean" would be a false reassurance
+ * on what is almost certainly a scan/image-only document.
+ *
+ * Distinct from `GARBLE_MIN_NON_WHITESPACE_CHARS` in `@raiopdf/rules`
+ * (a per-page floor for garble scoring); this is a whole-document floor.
+ */
+export const MIN_SCANNABLE_TEXT_CHARS = 10;
+
+/**
+ * Total non-whitespace characters across every extracted page. When `stopAt`
+ * is given, stops walking pages as soon as the running total reaches it —
+ * threshold checks on large documents don't need an exact grand total.
+ */
+export function countScannableTextChars(
+  pages: ReadonlyArray<Pick<ExtractedPageText, "text">>,
+  stopAt?: number,
+): number {
+  let total = 0;
+
+  for (const page of pages) {
+    total += page.text.replace(/\s+/g, "").length;
+
+    if (stopAt !== undefined && total >= stopAt) {
+      return total;
+    }
+  }
+
+  return total;
+}
+
+/**
+ * Pure near-empty-text gate for the sensitive-info scanner: did extraction
+ * yield enough readable text that a zero-hit scan means anything?
+ */
+export function hasScannableText(
+  pages: ReadonlyArray<Pick<ExtractedPageText, "text">>,
+  minChars: number = MIN_SCANNABLE_TEXT_CHARS,
+): boolean {
+  return countScannableTextChars(pages, minChars) >= minChars;
+}
+
+export interface SensitiveScanOutcome {
+  hits: SensitiveHit[];
+  /**
+   * True when the scan came back empty AND extraction produced ~no readable
+   * text — the honest read is "nothing could be scanned," never "clean."
+   * A scan with hits is never flagged: found patterns prove readable text.
+   */
+  noReadableText: boolean;
+}
+
+/**
+ * Scanner entry point that reports text-layer readability alongside the
+ * hits, so callers can distinguish "scanned and found nothing" from
+ * "there was nothing to scan."
+ */
+export async function scanSensitivePatternsWithReadability(
   input: PageTextInput,
-): Promise<SensitiveHit[]> {
+): Promise<SensitiveScanOutcome> {
   const pages = await extractPageText(input);
+  const hits = scanPagesForSensitivePatterns(pages);
+
+  return {
+    hits,
+    noReadableText: hits.length === 0 && !hasScannableText(pages),
+  };
+}
+
+export function scanPagesForSensitivePatterns(
+  pages: readonly ExtractedPageText[],
+): SensitiveHit[] {
   const hits: SensitiveHit[] = [];
 
   pages.forEach((page) => {

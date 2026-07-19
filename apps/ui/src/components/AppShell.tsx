@@ -120,6 +120,7 @@ export interface AppShellProps {
   onRedactionAreaRemoved: (id: string) => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
+  onMarkAllScannerHits?: (() => void) | undefined;
   onOpenAbout: () => void;
   onHelpRequested: (articleId?: string) => void;
   onConnectToAi: () => void;
@@ -202,6 +203,7 @@ export function AppShell({
   onRedactionAreaRemoved,
   onRunScanner,
   onMarkScannerHit,
+  onMarkAllScannerHits,
   onOpenAbout,
   onHelpRequested,
   onConnectToAi,
@@ -387,6 +389,7 @@ export function AppShell({
           onRemovePendingEdit={editing.removeEdit}
           onRunScanner={onRunScanner}
           onMarkScannerHit={onMarkScannerHit}
+          onMarkAllScannerHits={onMarkAllScannerHits}
           onHelpRequested={onHelpRequested}
           onConnectToAi={onConnectToAi}
           printMarkupAnnotations={printMarkupAnnotations}
@@ -404,6 +407,7 @@ export function AppShell({
         textLayerStatus={hasDocument ? deriveTextLayerStatus(document.textLayerCoverage) : null}
         outlineStatus={hasDocument ? document.outlineStatus : null}
         onFixGarbledText={onForceOcr}
+        onMakeSearchable={onMakeSearchable}
       />
     </div>
   );

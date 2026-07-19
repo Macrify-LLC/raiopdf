@@ -349,6 +349,22 @@ export async function saveStreamedCopyIntoDirectory(
   return { name: suggestedName, path: null };
 }
 
+/**
+ * Browse for a package-root output folder: opens the OS directory picker and
+ * returns the picked folder's real path for display in a text input. The
+ * package workflows are path-addressed on purpose — the shell's
+ * `resolve_output_dir` accepts the same string a user could type — so this is
+ * the one directory flow that hands the path (not the grant) back to the UI.
+ * Tauri-only in practice: the browser runtime has no directory picker
+ * (`pickDirectory` resolves null there), so callers disable the affordance
+ * via `isTauriRuntime()`.
+ */
+export async function browseForOutputDirPath(): Promise<string | null> {
+  const directory = await filePort.pickDirectory();
+
+  return directory?.path ?? null;
+}
+
 function createBrowserFilePort(): FilePort {
   return {
     async openFile() {

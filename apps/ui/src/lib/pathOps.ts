@@ -406,6 +406,17 @@ export function revealGrantInFolder(grant: PathOpsFileGrant): Promise<void> {
   return invokePathOp("reveal_file_grant", { grant });
 }
 
+/**
+ * Open a finished package-root folder in the system file manager. Takes the
+ * same path string the workflow completion cards display (`packageRoot` from
+ * `build_production_set` / `batch_cleanup`) — package roots are
+ * path-addressed end-to-end, unlike single-file outputs, which stay
+ * grant-addressed and go through `revealGrantInFolder`.
+ */
+export function openPackageRoot(path: string): Promise<void> {
+  return invokePathOp("open_package_root", { path });
+}
+
 export function pickProtectedOutputTarget(
   suggestedName: string,
   sourceGrants?: readonly PathOpsFileGrant[],

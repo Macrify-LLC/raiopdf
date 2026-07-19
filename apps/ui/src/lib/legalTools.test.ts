@@ -11,11 +11,14 @@ import {
 import type { PDFDocumentProxy } from "./pdfjs";
 import {
   collectRedactionAreaTexts,
+  countScannableTextChars,
   extractPageText,
   findTextMatchAreasInPages,
   findTextRedactionAreas,
   findTextRedactionAreasInPages,
-  scanSensitivePatterns,
+  hasScannableText,
+  MIN_SCANNABLE_TEXT_CHARS,
+  scanSensitivePatternsWithReadability,
   verifyRedactionAreasClear,
 } from "./legalTools";
 
@@ -44,7 +47,7 @@ describe("legalTools", () => {
       textItem("6789", 108, 24),
     ]);
 
-    const hits = await scanSensitivePatterns(pdf);
+    const { hits } = await scanSensitivePatternsWithReadability(pdf);
 
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
@@ -62,7 +65,7 @@ describe("legalTools", () => {
       textItem("Possible SSN 123456789", 10, 120),
     ]);
 
-    const hits = await scanSensitivePatterns(pdf);
+    const { hits } = await scanSensitivePatternsWithReadability(pdf);
 
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
@@ -266,6 +269,62 @@ describe("legalTools", () => {
     expect(result.ok).toBe(false);
     expect(result.rasterizedPages.status).toBe("fail");
     expect(result.rasterizedPages.detail).toContain("text operators");
+  });
+});
+
+describe("scanner readability gate", () => {
+  it("counts only non-whitespace characters across pages", () => {
+    expect(countScannableTextChars([])).toBe(0);
+    expect(countScannableTextChars([{ text: "   \n\t " }])).toBe(0);
+    expect(countScannableTextChars([{ text: "ab c" }, { text: " d " }])).toBe(4);
+  });
+
+  it("stops counting once stopAt is reached", () => {
+    const pages = [{ text: "abcde" }, { text: "fghij" }, { text: "klmno" }];
+
+    // Early exit after the second page: 10 >= 7, third page never counted.
+    expect(countScannableTextChars(pages, 7)).toBe(10);
+    expect(countScannableTextChars(pages)).toBe(15);
+  });
+
+  it("treats empty and near-empty text layers as unscannable", () => {
+    expect(hasScannableText([])).toBe(false);
+    expect(hasScannableText([{ text: "" }])).toBe(false);
+    // A stray stamp of fewer than MIN_SCANNABLE_TEXT_CHARS non-whitespace
+    // characters is still "nothing was actually read."
+    expect(hasScannableText([{ text: "stamp 17" }])).toBe(false);
+    expect(hasScannableText([{ text: "This page has real readable words." }])).toBe(true);
+  });
+
+  it("honors a caller-provided minimum", () => {
+    expect(hasScannableText([{ text: "abc" }], 3)).toBe(true);
+    expect(hasScannableText([{ text: "abc" }], 4)).toBe(false);
+    expect(MIN_SCANNABLE_TEXT_CHARS).toBeGreaterThan(0);
+  });
+
+  it("flags an image-only document instead of reporting a clean scan", async () => {
+    const outcome = await scanSensitivePatternsWithReadability(mockPdf([]));
+
+    expect(outcome.hits).toHaveLength(0);
+    expect(outcome.noReadableText).toBe(true);
+  });
+
+  it("never flags a scan that produced hits", async () => {
+    const outcome = await scanSensitivePatternsWithReadability(
+      mockPdf([textItem("Client SSN 123-45-6789", 10, 130)]),
+    );
+
+    expect(outcome.hits.length).toBeGreaterThan(0);
+    expect(outcome.noReadableText).toBe(false);
+  });
+
+  it("does not flag a readable document that simply has no sensitive patterns", async () => {
+    const outcome = await scanSensitivePatternsWithReadability(
+      mockPdf([textItem("A perfectly ordinary paragraph of narrative text.", 10, 260)]),
+    );
+
+    expect(outcome.hits).toHaveLength(0);
+    expect(outcome.noReadableText).toBe(false);
   });
 });
 

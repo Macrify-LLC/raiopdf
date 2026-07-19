@@ -111,6 +111,47 @@ test("settings offers every jurisdiction pack in an enabled default-jurisdiction
   await expect(jurisdictionSelect).toHaveValue("florida");
 });
 
+test("package-root inputs pair a Browse button, gated outside the desktop app", async ({ page }) => {
+  await page.goto("/");
+
+  const browseGateTitle = "Browsing for a folder only works in the installed RaioPDF app.";
+
+  for (const legalTool of ["Batch Cleanup", "Production Set"]) {
+    await page
+      .locator(".tool-panel")
+      .getByRole("button", { name: legalTool, exact: true })
+      .click();
+
+    const dialog = page.getByRole("dialog", { name: legalTool });
+    await expect(dialog).toBeVisible();
+
+    const browse = dialog.getByRole("button", { name: "Browse…" });
+    await expect(browse).toBeVisible();
+    // The browser runtime has no directory picker — the affordance stays
+    // visible but disabled, with the reason on hover.
+    await expect(browse).toBeDisabled();
+    await expect(browse).toHaveAttribute("title", browseGateTitle);
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  }
+
+  // Prepare for Filing keeps its package-root input on the Filing packet tab.
+  // Scope to the tool panel: the command-bar CTA shares this name.
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Prepare for Filing", exact: true })
+    .click();
+  const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
+  await expect(filingDialog).toBeVisible();
+  await filingDialog.getByRole("tab", { name: "Filing packet" }).click();
+
+  const filingBrowse = filingDialog.getByRole("button", { name: "Browse…" });
+  await expect(filingBrowse).toBeVisible();
+  await expect(filingBrowse).toBeDisabled();
+  await expect(filingBrowse).toHaveAttribute("title", browseGateTitle);
+});
+
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "round-trip.pdf", await createPdf([200, 210, 220, 230]));
@@ -314,6 +355,23 @@ test("leaves the document unchanged when OCR returns no text layer", async ({ pa
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
 });
 
+test("status-bar image-only chip opens the Make Searchable confirm flow", async ({ page }) => {
+  await installOcrBridgeMock(page, await createTextPdf("Verified OCR text"));
+  await page.goto("/");
+  await openPdf(page, "scan.pdf", await createPdf([200]));
+
+  // UX-12: the chip that names the fix IS the fix — a button, like the
+  // garbled chip, not an inert label.
+  const chip = page.getByRole("contentinfo").getByRole("button", {
+    name: "No searchable text — run Make Searchable",
+  });
+  await expect(chip).toBeVisible();
+  await chip.click();
+
+  await expect(page.getByText("All 1 page will be processed.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Make searchable", exact: true })).toBeVisible();
+});
+
 test("mutating the document mid-OCR discards the stale OCR result", async ({ page }) => {
   const sourcePdf = await createPdf([200]);
   const searchablePdf = await createTextPdf("Verified OCR text");
@@ -408,6 +466,60 @@ test("sensitive info scanner finds and masks a planted SSN", async ({ page }) =>
 
   await expect(page.getByText("•••-••-6789")).toBeVisible();
   await expect(page.getByRole("button", { name: "Mark for redaction" }).first()).toBeVisible();
+});
+
+test("sensitive info scanner refuses to report clean on a document with no readable text", async ({ page }) => {
+  await installOcrBridgeMock(page, await createTextPdf("Verified OCR text"));
+  await page.goto("/");
+  await openPdf(page, "image-only-scan.pdf", await createPdf([200]));
+
+  await page.getByRole("button", { name: "Sensitive Info Scanner", exact: true }).click();
+  await page.getByRole("button", { name: "Scan Document" }).click();
+
+  // UX-4: an image-only document must never read as "no patterns found" —
+  // the scanner says the text couldn't be read and offers OCR instead.
+  await expect(
+    page.getByText("This document has no readable text to scan — it looks like a scanned image. Run Make Searchable (OCR) first, then scan again."),
+  ).toBeVisible();
+  await expect(page.getByText("No obvious sensitive patterns found. Review remains yours.")).toHaveCount(0);
+
+  // The affordance is live: it opens the standard Make Searchable confirm flow.
+  await page.getByRole("button", { name: "Make Searchable (OCR)…", exact: true }).click();
+  await expect(page.getByText("All 1 page will be processed.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Make searchable", exact: true })).toBeVisible();
+});
+
+test("scanner Mark all queues every hit for redaction in one click", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "scanner-mark-all.pdf",
+    // Two hyphenated SSNs on a letter-size page (the narrow createTextPdf
+    // canvas runs the second SSN off the page edge and loses its hit area),
+    // so Mark all has more than one hit to queue.
+    await createMultiPageTextPdf(["SSN 123-45-6789 and SSN 987-65-4321"]),
+  );
+
+  await page.getByRole("button", { name: "Sensitive Info Scanner", exact: true }).click();
+  await page.getByRole("button", { name: "Scan Document" }).click();
+
+  const markAll = page.getByRole("button", { name: /Mark all \(\d+\) for redaction/ });
+  await expect(markAll).toBeVisible();
+  const markAllLabel = await markAll.textContent();
+  const hitCount = Number(/\((\d+)\)/.exec(markAllLabel ?? "")?.[1] ?? "0");
+  expect(hitCount).toBeGreaterThan(1);
+
+  await markAll.click();
+
+  // Marking switches to redaction mode with every hit queued as an area.
+  await expect(
+    page.getByText(`Redaction mode — ${hitCount} areas marked`),
+  ).toBeVisible();
+
+  // Back on the scanner panel, the hits reflect their queued state.
+  await page.getByRole("button", { name: "Sensitive Info Scanner", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Mark all (0) for redaction" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Marked for redaction" }).first()).toBeDisabled();
 });
 
 test("redacts searched text through the mocked desktop engine and verifies output", async ({ page }) => {
@@ -803,17 +915,35 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
 });
 
-test("Bates numbering card shows the live default format preview", async ({ page }) => {
+test("Bates numbering gates Apply until a prefix is entered or no-prefix is chosen", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "bates.pdf", await createPdf([200, 210]));
 
   await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
   await expect(mainCanvas(page)).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
-  await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
-  await page.getByLabel("Prefix").fill("CASE");
+
+  // UX-3: no sample "SMITH" default — the prefix starts empty (placeholder
+  // only) and Apply stays disabled until the user names the matter.
+  // (exact: the "No prefix (numbers only)" checkbox label also contains "prefix")
+  const prefixInput = page.getByLabel("Prefix", { exact: true });
+  await expect(prefixInput).toHaveValue("");
+  await expect(prefixInput).toHaveAttribute("placeholder", "e.g. SMITH");
+  await expect(page.getByRole("button", { name: "Apply Bates Numbers" })).toBeDisabled();
+
+  await prefixInput.fill("CASE");
+  await expect(page.getByRole("button", { name: "Apply Bates Numbers" })).toBeEnabled();
   await page.getByLabel("Start").fill("42");
   await page.getByLabel("Digits").fill("4");
+  await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
+
+  // The explicit numbers-only opt-in also unlocks Apply and drops the prefix.
+  await page.getByLabel("No prefix (numbers only)").check();
+  await expect(prefixInput).toBeDisabled();
+  await expect(page.getByLabel("Bates preview")).toHaveText("0042");
+  await expect(page.getByRole("button", { name: "Apply Bates Numbers" })).toBeEnabled();
+
+  await page.getByLabel("No prefix (numbers only)").uncheck();
   await expect(page.getByLabel("Bates preview")).toHaveText("CASE0042");
 });
 

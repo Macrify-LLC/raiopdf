@@ -1174,6 +1174,28 @@ pub fn reveal_file_grant(
         })
 }
 
+/// Open a finished package-root folder in the system file manager. Package
+/// roots are path-addressed end-to-end (the workflow commands take the typed
+/// `output_dir` string and return `package_root` as a display path, never a
+/// grant), so this takes the same path the completion card shows — and only
+/// ever opens an existing directory.
+#[tauri::command]
+pub fn open_package_root(app: tauri::AppHandle, path: String) -> Result<(), PathOpError> {
+    let path = PathBuf::from(path);
+    if !path.is_dir() {
+        return Err(PathOpError {
+            code: core_ops::ERR_INVALID_INPUT,
+            message: "The package folder is no longer available.".to_string(),
+        });
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|error| PathOpError {
+            code: core_ops::ERR_IO,
+            message: format!("Could not open the package folder: {error}"),
+        })
+}
+
 /// Choose and snapshot a protected-copy destination before receiving any
 /// password. The native dialog owns overwrite confirmation; this command then
 /// refuses the open source and returns only an opaque, one-use target token.

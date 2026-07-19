@@ -4580,6 +4580,22 @@ mod tests {
     struct StubHttpServer {
         port: u16,
         received: Arc<Mutex<Option<String>>>,
+        shutdown: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl Drop for StubHttpServer {
+        fn drop(&mut self) {
+            // The serving thread blocks in `listener.incoming()`; signal shutdown,
+            // then poke a dummy connection so the accept call wakes up, notices the
+            // flag, and exits. Joining keeps repeated helper invocations in one test
+            // process from accumulating live threads and bound loopback ports.
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(("127.0.0.1", self.port));
+            if let Some(handle) = self.thread.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     impl StubHttpServer {
@@ -4604,14 +4620,21 @@ mod tests {
         let port = listener.local_addr().expect("stub addr").port();
         let received = Arc::new(Mutex::new(None));
         let received_for_thread = Arc::clone(&received);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_for_thread = Arc::clone(&shutdown);
 
-        thread::spawn(move || {
+        let thread = thread::spawn(move || {
             // Serve every inbound connection for the life of the test, not just the
             // first. A speculative/aborted client connection — or a retried request
             // after a transient stall — must not consume the single response and
             // starve the real request; that one-shot behaviour was the source of
             // intermittent empty responses on loaded (macOS) CI runners.
             for stream in listener.incoming() {
+                // Drop wakes this accept loop with a dummy connection after setting
+                // the flag; exit before treating that connection as a request.
+                if shutdown_for_thread.load(Ordering::SeqCst) {
+                    return;
+                }
                 let Ok(mut stream) = stream else {
                     return;
                 };
@@ -4677,7 +4700,12 @@ mod tests {
             }
         });
 
-        StubHttpServer { port, received }
+        StubHttpServer {
+            port,
+            received,
+            shutdown,
+            thread: Some(thread),
+        }
     }
 
     fn send_proxy_request(port: u16, request: &[u8]) -> String {

@@ -29,6 +29,7 @@ import type {
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
 import type { EditingState } from "../hooks/useEditing";
+import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import type { SensitiveHit } from "../lib/legalTools";
 import { deriveTextLayerStatus } from "../lib/textLayerStatus";
 import { runtimePlatform } from "../lib/runtimePlatform";
@@ -111,6 +112,8 @@ export interface AppShellProps {
   pendingRedactions: readonly PendingRedactionOverlay[];
   modeBar: ReactNode;
   editing: EditingState;
+  onReplaceTextInSelection?: ((selection: CapturedTextSelection) => void) | undefined;
+  replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   onRedactionAreaCreated: (area: PdfRedactionArea) => void;
   onRedactionAreasCreated: (areas: PdfRedactionArea[]) => void;
   onRedactionSelectionRejected: (message: string) => void;
@@ -191,6 +194,8 @@ export function AppShell({
   pendingRedactions,
   modeBar,
   editing,
+  onReplaceTextInSelection,
+  replaceTextInSelectionBlocked,
   onRedactionAreaCreated,
   onRedactionAreasCreated,
   onRedactionSelectionRejected,
@@ -273,7 +278,7 @@ export function AppShell({
         searchResultLabel={documentSearch.resultLabel}
         searchBusy={documentSearch.status === "searching"}
         searchDisabled={activeTextEdit}
-        searchDisabledReason="Document search is disabled while Find & Replace owns the page highlights."
+        searchDisabledReason="Document search is disabled while Edit Text owns the page highlights."
         searchCanNavigate={documentSearch.canNavigate}
         onSearchChange={documentSearch.setQuery}
         onSearchPrevious={documentSearch.goToPrevious}
@@ -325,6 +330,8 @@ export function AppShell({
           modeBar={modeBar}
           onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
           editing={editing}
+          onReplaceTextInSelection={onReplaceTextInSelection}
+          replaceTextInSelectionBlocked={replaceTextInSelectionBlocked}
           pendingRedactions={pendingRedactions}
           onRedactionAreaCreated={onRedactionAreaCreated}
           onRedactionAreasCreated={onRedactionAreasCreated}

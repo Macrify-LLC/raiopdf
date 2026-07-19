@@ -1,4 +1,4 @@
-import type { FormEvent, KeyboardEvent } from "react";
+import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import type { TextEditState } from "../hooks/useTextEdit";
 import { ChevronLeftIcon, ChevronRightIcon, SearchIcon } from "../icons";
 import { Switch } from "./Switch";
@@ -17,6 +17,16 @@ export function EditTextModeBar({
   const hasSelectedOperation = textEdit.pendingOps.some((operation) => operation.target);
   const canQueue = Boolean(textEdit.find.trim()) && !busy && !textEdit.gate.blocked && !hasSelectedOperation;
   const canQueueSelection = !busy && !textEdit.gate.blocked && textEdit.pendingOps.length === 0;
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the Replace-with field on every stored capture — keyed on the
+  // monotonic prime count (not the text) so capturing identical text twice,
+  // e.g. two right-click "Replace text..." invocations, still refocuses.
+  useEffect(() => {
+    if (textEdit.selectionPrimeCount > 0 && textEdit.selectedReplacementText) {
+      replaceInputRef.current?.focus();
+    }
+  }, [textEdit.selectionPrimeCount, textEdit.selectedReplacementText]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -67,6 +77,7 @@ export function EditTextModeBar({
         </label>
         <label className="edit-text-mode-bar__field">
           <input
+            ref={replaceInputRef}
             type="text"
             placeholder="Replace with"
             aria-label="Replace with"

@@ -47,6 +47,11 @@ export interface TextEditStagedResult {
   sourceGeneration: number;
 }
 
+export interface SelectedReplacementGateResult {
+  blocked: boolean;
+  reason: string | null;
+}
+
 export interface TextEditState {
   find: string;
   replace: string;
@@ -63,10 +68,25 @@ export interface TextEditState {
   positionalSpaceRisk: boolean;
   selectionResolving: boolean;
   selectedReplacementText: string | null;
+  /** Bumped on every stored selection capture — the mode bar keys its
+   * focus-the-replace-field effect on this so consecutive captures of
+   * identical text still focus. */
+  selectionPrimeCount: number;
   setFind: (find: string) => void;
   setReplace: (replace: string) => void;
   setWholeWord: (wholeWord: boolean) => void;
   captureSelectedText: () => void;
+  /** Context-menu entry point: gate-checked variant of captureSelectedText
+   * for a selection captured at menu-build time. Returns false (with a
+   * status message) when the gate blocks. */
+  primeSelectedReplacement: (selection: CapturedTextSelection) => boolean;
+  /** Surface a host-provided status line in the text-edit message slot
+   * (e.g. "reselect the text to replace" after the annotation prompt). */
+  showMessage: (message: string) => void;
+  /** Single authority for "can a selected replacement start on this page
+   * right now" — used for the context-menu disabled state and re-checked at
+   * click time. */
+  selectedReplacementGate: (pageIndex: number) => SelectedReplacementGateResult;
   queueReplaceAll: () => void;
   queueSelectedReplacement: () => Promise<void>;
   removePendingOp: (id: string) => void;
@@ -203,6 +223,7 @@ export function useTextEdit({
   const [message, setMessage] = useState<string | null>(null);
   const [staged, setStaged] = useState<TextEditStagedResult | null>(null);
   const [selectionResolving, setSelectionResolving] = useState(false);
+  const [selectionPrimeCount, setSelectionPrimeCount] = useState(0);
   const runRef = useRef(0);
   const reviewRunRef = useRef(0);
   const opIdRef = useRef(0);
@@ -374,38 +395,66 @@ export function useTextEdit({
     engineBridge.warmEngine();
   }, [engineBridge, find, gate.blocked, replace, wholeWord]);
 
+  // Single authority for "can a selected replacement start on this page right
+  // now". Click-time freshness comes from EditLayer's latest-value ref
+  // dispatch: a stale open menu always calls the newest closure of this gate.
+  const selectedReplacementGate = useCallback((pageIndex: number): SelectedReplacementGateResult => {
+    if (gate.blocked) {
+      return { blocked: true, reason: gate.message };
+    }
+    if (unsafeSelectedPageIndexes.has(pageIndex)) {
+      return {
+        blocked: true,
+        reason: "Selected-text editing is not available on pages with scanned or unreliable text layers.",
+      };
+    }
+    if (pendingOpsRef.current.length > 0) {
+      return { blocked: true, reason: "Review or clear queued replacements before adding a selected-text edit." };
+    }
+    if (selectionResolvingRef.current) {
+      return { blocked: true, reason: "Selected text is already being resolved." };
+    }
+    if (phase === "staging" || phase === "applying") {
+      return { blocked: true, reason: "Wait for the current review to finish before selecting new text." };
+    }
+    return { blocked: false, reason: null };
+  }, [gate.blocked, gate.message, phase, unsafeSelectedPageIndexes]);
+
+  const storeSelectedReplacement = useCallback((selection: CapturedTextSelection) => {
+    selectedReplacementRef.current = selection;
+    setSelectedReplacementText(selection.text);
+    setSelectionPrimeCount((count) => count + 1);
+    setMessage(`Selected "${selection.text}" for replacement.`);
+  }, []);
+
   const captureSelectedText = useCallback(() => {
     const captured = captureCurrentTextSelection();
     if (!captured.ok) {
       return;
     }
 
-    selectedReplacementRef.current = captured.selection;
-    setSelectedReplacementText(captured.selection.text);
-    setMessage(`Selected "${captured.selection.text}" for replacement.`);
-  }, []);
+    storeSelectedReplacement(captured.selection);
+  }, [storeSelectedReplacement]);
+
+  const primeSelectedReplacement = useCallback((selection: CapturedTextSelection) => {
+    const entryGate = selectedReplacementGate(selection.pageIndex);
+    if (entryGate.blocked) {
+      if (entryGate.reason) {
+        setMessage(entryGate.reason);
+      }
+      return false;
+    }
+
+    storeSelectedReplacement(selection);
+    return true;
+  }, [selectedReplacementGate, storeSelectedReplacement]);
 
   const queueSelectedReplacement = useCallback(async () => {
     const currentSource = sourceRef.current;
     const sourceBytes = currentSource.bytes;
 
-    if (gate.blocked) {
-      setMessage(gate.message);
-      return;
-    }
-
     if (!sourceBytes || !currentSource.proxy) {
       setMessage("Open a PDF before editing document text.");
-      return;
-    }
-
-    if (selectionResolvingRef.current) {
-      setMessage("Selected text is already being resolved.");
-      return;
-    }
-
-    if (pendingOpsRef.current.length > 0) {
-      setMessage("Review or clear queued replacements before adding a selected-text edit.");
       return;
     }
 
@@ -419,8 +468,11 @@ export function useTextEdit({
     }
     const selectedText = queuedSelection.selection;
 
-    if (unsafeSelectedPageIndexes.has(selectedText.pageIndex)) {
-      setMessage("Selected-text editing is not available on pages with scanned or unreliable text layers.");
+    // One gate for every entry point (context menu, mode-bar button, direct
+    // call) — the eligibility rules and their copy live only there.
+    const entryGate = selectedReplacementGate(selectedText.pageIndex);
+    if (entryGate.blocked) {
+      setMessage(entryGate.reason);
       return;
     }
 
@@ -490,7 +542,7 @@ export function useTextEdit({
         setSelectionResolving(false);
       }
     }
-  }, [engineBridge, gate.blocked, gate.message, replace, setCurrentPage, unsafeSelectedPageIndexes]);
+  }, [engineBridge, replace, selectedReplacementGate, setCurrentPage]);
 
   const removePendingOp = useCallback((id: string) => {
     const removed = pendingOpsRef.current.find((operation) => operation.id === id);
@@ -771,10 +823,14 @@ export function useTextEdit({
     positionalSpaceRisk,
     selectionResolving,
     selectedReplacementText,
+    selectionPrimeCount,
     setFind,
     setReplace,
     setWholeWord,
     captureSelectedText,
+    primeSelectedReplacement,
+    selectedReplacementGate,
+    showMessage: setMessage,
     queueReplaceAll,
     queueSelectedReplacement,
     removePendingOp,

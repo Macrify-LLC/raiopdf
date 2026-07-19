@@ -1,31 +1,32 @@
 ---
 id: edit-text
-title: Find & Replace — change text in a PDF
+title: Edit Text — change or replace text in a PDF
 group: edit
-summary: Find a word or phrase in a typed PDF and replace it everywhere — a real text change, not a sticky note on top.
+summary: Change the real text in a typed PDF — find & replace across the whole document, or right-click a selection to replace exactly that text.
 order: 15
 ---
 
-# Find & Replace — change text in a PDF
+# Edit Text — change or replace text in a PDF
 
-Change the actual words in a PDF. Type what you want to find and what to put in
-its place, and RaioPDF rewrites that text in the document itself — not a box
-drawn on top, the real text.
+Change the actual words in a PDF. RaioPDF rewrites the text in the document
+itself — not a box drawn on top, the real text. There are two ways to use it:
+find & replace across the whole document, or replace exactly the text you
+select on the page.
 
 ## Why you'd use it
 
 A wrong date slipped into a filing. A name is misspelled on every page. A
-placeholder like "[CLIENT]" never got filled in. **Find & Replace** fixes
-those across the whole document at once, so you don't retype or re-export the
-file from the program that made it.
+placeholder like "[CLIENT]" never got filled in. **Edit Text** fixes those
+across the whole document at once, so you don't retype or re-export the file
+from the program that made it.
 
 It works on **typed (born-digital) PDFs** — documents that already have real,
 selectable text. It is **not** for scanned documents (see *What to know*).
 
-## How to do it
+## Method 1 — Find & replace across the document
 
 1. Open the PDF.
-2. In the **Edit** tools, choose **Find & Replace**.
+2. In the **Edit** tools, choose **Edit Text**.
 3. Type the text to **Find** and the text to **Replace** it with. Turn on
    **Whole word** if you only want to match the word on its own (so "art"
    doesn't also change "start").
@@ -37,6 +38,25 @@ selectable text. It is **not** for scanned documents (see *What to know*).
    RaioPDF tells you the document wasn't changed.
 7. **Save.** RaioPDF leaves your original file untouched and asks for a new file
    name, so you keep both the original and the edited copy.
+
+## Method 2 — Replace exactly the text you select
+
+When you want to change one specific occurrence — not every match in the
+document:
+
+1. Select the text on the page with the normal pointer.
+2. **Right-click the selection and choose "Replace text..."** — RaioPDF opens
+   Edit Text with your selection already captured and the cursor in the
+   **Replace with** box. (Inside Edit Text mode, you can also select text and
+   click **Replace selection**.)
+3. Type the replacement and click **Replace selection**, then **Review** and
+   **Apply** as above. Only the exact text you selected changes — other
+   occurrences of the same words are left alone.
+
+Selection replacement works on **one page and one line at a time**. If the
+right-click option is grayed out, the page has no reliable text layer (a scan),
+another replacement is still queued or being prepared, or the document is too
+large for in-app editing.
 
 ## What to know
 
@@ -52,6 +72,10 @@ selectable text. It is **not** for scanned documents (see *What to know*).
 - **Single distinctive words match best.** A multi-word phrase can be missed
   when the words are spaced apart on the page (common in justified text). If a
   phrase doesn't take, search for one unusual word from it instead.
+- **Selection replacement is one page, one line.** A selection that spans pages
+  or wraps across lines can't be replaced in one go — replace it line by line,
+  or use find & replace. Right-to-left text isn't supported for selection
+  replacement.
 - **The whole document is rewritten when you apply.** Even a one-word change
   re-saves the entire file. Pages you didn't preview may shift very slightly.
 - **A substitute font may fill in.** If the document's font can't produce a

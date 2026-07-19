@@ -73,7 +73,7 @@ test.describe("streamed large-PDF handling", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+    await page.getByRole("button", { name: "Edit Text", exact: true }).click();
     await expect(
       page.getByText("This document is too large for in-app text editing.", { exact: false }),
     ).toBeVisible();

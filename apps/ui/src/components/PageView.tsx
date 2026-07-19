@@ -11,7 +11,7 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
-import { closestTextLayer } from "../lib/selectedTextEdit";
+import { closestTextLayer, type CapturedTextSelection } from "../lib/selectedTextEdit";
 import { registerTextSelectionGuard } from "../lib/textSelectionGuard";
 import { redactionAreasFromClientRects } from "../lib/selectionRedaction";
 import {
@@ -55,6 +55,8 @@ export interface PageViewProps {
   onRedactionSelectionRejected?: ((message: string) => void) | undefined;
   onRedactionAreaRemoved?: ((id: string) => void) | undefined;
   editing?: EditingState | undefined;
+  onReplaceTextInSelection?: ((selection: CapturedTextSelection) => void) | undefined;
+  replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
   onRenderError?: ((message: string) => void) | undefined;
@@ -90,6 +92,8 @@ export function PageView({
   onRedactionSelectionRejected,
   onRedactionAreaRemoved,
   editing,
+  onReplaceTextInSelection,
+  replaceTextInSelectionBlocked,
   searchResults = [],
   activeSearchResultId = null,
   onRenderError,
@@ -508,6 +512,8 @@ export function PageView({
           viewport={viewport}
           pageIndex={pageIndex}
           editing={editing}
+          onReplaceTextInSelection={onReplaceTextInSelection}
+          replaceTextInSelectionBlocked={replaceTextInSelectionBlocked}
         />
       ) : null}
       {viewport

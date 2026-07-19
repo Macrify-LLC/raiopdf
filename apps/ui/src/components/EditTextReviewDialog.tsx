@@ -20,7 +20,7 @@ export function EditTextReviewDialog({
     return (
       <FloatingDialog
         title="Review text replacements"
-        eyebrow="Find & Replace"
+        eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
       >
@@ -37,7 +37,7 @@ export function EditTextReviewDialog({
     return (
       <FloatingDialog
         title="Review text replacements"
-        eyebrow="Find & Replace"
+        eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
       >
@@ -57,7 +57,7 @@ export function EditTextReviewDialog({
   return (
     <FloatingDialog
       title="Review text replacements"
-      eyebrow="Find & Replace"
+      eyebrow="Edit Text"
       width="lg"
       onClose={textEdit.cancelReview}
     >

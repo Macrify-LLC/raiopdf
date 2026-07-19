@@ -1854,7 +1854,14 @@ function readTextMatrix(element: TextEditorTextElement): readonly number[] | nul
 }
 
 function fingerprintTextEditorDocument(document: TextEditorDocument): string {
-  return fnv1a32Hex(stableStringify(document));
+  // Fingerprint ONLY the pages subtree. Stirling's text-editor payload embeds
+  // per-conversion volatile fields outside it (metadata timestamps, random
+  // font uids), so hashing the whole payload made two conversions of the
+  // SAME bytes read as different documents — replaceSelectedText's staleness
+  // check then rejected every selected replacement staged from an earlier
+  // inspectTextMap. The check defends the editable content, and that lives
+  // entirely under `pages`.
+  return fnv1a32Hex(stableStringify(document.pages ?? null));
 }
 
 function fingerprintTextEditorElements(elements: readonly TextEditorTextElement[]): string {

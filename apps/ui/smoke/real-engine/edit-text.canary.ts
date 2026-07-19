@@ -1,4 +1,4 @@
-// Real-engine canary for Find & Replace. Authored for `pnpm canary`;
+// Real-engine canary for Edit Text. Authored for `pnpm canary`;
 // do not run from the ordinary UI test command.
 
 import { expect, test, type Page } from "@playwright/test";
@@ -36,7 +36,7 @@ const BENIGN_LOG = [
 
 test.describe.configure({ timeout: TEST_TIMEOUT_MS });
 
-test("Find & Replace: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
+test("Edit Text: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
   await page.goto("/");
@@ -45,7 +45,7 @@ test("Find & Replace: real engine replaces born-digital text and preserves resto
   await openPdf(page, "edit-text-bookmarked.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -75,7 +75,7 @@ test("Find & Replace: real engine replaces born-digital text and preserves resto
   logs.assertClean(BENIGN_LOG);
 });
 
-test("Find & Replace: image-bearing mixed document stays within the Phase 0 size envelope", async ({ page }) => {
+test("Edit Text: image-bearing mixed document stays within the Phase 0 size envelope", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
   await page.goto("/");
@@ -84,7 +84,7 @@ test("Find & Replace: image-bearing mixed document stays within the Phase 0 size
   await openPdf(page, "edit-text-image-bearing.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Find & Replace", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await page.getByLabel("Find text").fill("Acme");
   await page.getByLabel("Replace with").fill("Raio");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -101,6 +101,73 @@ test("Find & Replace: image-bearing mixed document stays within the Phase 0 size
   await openPdf(page, "edit-text-image-bearing-output.pdf", saved);
   expect(await searchHitCount(page, "Raio")).toBeGreaterThan(0);
   expect(await searchHitCount(page, "Acme")).toBe(0);
+  logs.assertClean(BENIGN_LOG);
+});
+
+test("Edit Text: right-click selected replacement changes only the chosen occurrence", async ({ page }) => {
+  const logs = captureLogs(page);
+  await installRealEngineBridge(page, endpoint);
+  await page.goto("/");
+
+  // Two occurrences of the same word on separate lines; the test replaces
+  // ONLY the second, which is exactly what selected replacement exists for
+  // (whole-document Find & Replace would change both).
+  const source = await createTwoLinePdf("Smith files the motion.", "Smith replies today.");
+  await openPdf(page, "edit-text-selected.pdf", source);
+
+  // Programmatic selection over the leading "Smith" of the SECOND line — a
+  // real DOM Range against the pdf.js text layer, the same selection the
+  // capture path consumes in production.
+  const textLayer = page.locator(".page-view__text-layer").first();
+  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
+  const anchor = await textLayer.evaluate((layer) => {
+    const span = [...layer.querySelectorAll("span")].find((candidate) =>
+      candidate.textContent?.startsWith("Smith replies"),
+    );
+    const node = span?.firstChild;
+    if (!span || !node || node.nodeType !== Node.TEXT_NODE) {
+      return null;
+    }
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, "Smith".length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  expect(anchor).not.toBeNull();
+
+  await page.mouse.click(anchor!.x, anchor!.y, { button: "right" });
+  const replaceItem = page.getByRole("menuitem", { name: "Replace text..." });
+  await expect(replaceItem).toBeEnabled();
+  await replaceItem.click();
+
+  await expect(page.getByText("Selection captured")).toBeVisible();
+  await page.getByLabel("Replace with").fill("Jones");
+  await page.getByRole("button", { name: "Replace selection" }).click();
+  // Selection resolution runs against the real engine's text map; the queued
+  // chip flips once the exact span is resolved.
+  await expect(page.getByText("1 queued")).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+
+  // Review lives in the sidebar status panel under the Edit Text row — the
+  // right-click entry never opened the accordion, so open it now.
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Review" }).click();
+  const reviewDialog = await expectTextEditReviewReady(page);
+  await expect(
+    reviewDialog.getByText(/1 selected replacement staged on page 1/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Apply" }).click();
+
+  const saved = await savePdf(page);
+  saveCanaryArtifact("edit text", "edit-text-selected-output.pdf", saved,
+    "real replaceSelectedText output; confirm ONLY the second Smith became Jones");
+
+  await openPdf(page, "edit-text-selected-output.pdf", saved);
+  expect(await searchHitCount(page, "Jones")).toBe(1);
+  expect(await searchHitCount(page, "Smith")).toBe(1);
   logs.assertClean(BENIGN_LOG);
 });
 
@@ -130,6 +197,15 @@ async function expectTextEditReviewReady(page: Page): Promise<ReturnType<Page["g
   }
 
   return dialog;
+}
+
+async function createTwoLinePdf(lineOne: string, lineTwo: string): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const page = pdf.addPage([612, 792]);
+  page.drawText(lineOne, { x: 72, y: 700, size: 14, font });
+  page.drawText(lineTwo, { x: 72, y: 660, size: 14, font });
+  return pdf.save();
 }
 
 async function createBookmarkedTextPdf(text: string): Promise<Uint8Array> {

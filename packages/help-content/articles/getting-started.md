@@ -29,7 +29,9 @@ unusual ways, and a repair pass usually fixes them.
 
 - The **toolbar** across the top handles the basics: open, save, print, moving
   page to page, zoom, and search.
-- The **Tools** panel on the left is grouped into **Edit**, **Annotate**,
+- The panel on the **left** shows page thumbnails and the document's bookmarks,
+  for jumping to a page or reordering pages.
+- The **Tools** panel on the right is grouped into **Edit**, **Annotate**,
   **Organize**, and **Legal**, with **Make Searchable (OCR)** on its own.
   **Edit** changes the document's real content (Edit Text, page numbers,
   watermarks); **Annotate** layers comments and markup on top of it.

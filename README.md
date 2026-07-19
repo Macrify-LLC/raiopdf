@@ -30,7 +30,7 @@
 
 <br>
 
-> **Public alpha — version 0.1.3.** Download the signed alpha for Windows or Apple-Silicon macOS from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
+> **Public alpha — version 0.1.4.** Download the signed alpha for Windows or Apple-Silicon macOS from [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases) or from [raio.macrify.me](https://raio.macrify.me), which tracks the latest complete signed release automatically.
 
 ## The philosophy
 
@@ -87,7 +87,7 @@ Four ways it fits into an actual day at the firm:
 |---|---|
 | **Prepare for Filing** | Pick your court, get a prep checklist and a preflight report with the actual rule citations, normalize pages to the portal's requirements, and split an oversized file into properly labeled sequential parts |
 | **Jurisdiction packs** | E-filing rules for the Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS) — every constraint cites its authority and the date it was last verified. Guidance, not legal advice. |
-| **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
+| **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks from your jurisdiction pack, like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
 | **Case caption & cover page** | Fill a case caption once, choose a local caption style with live previews, save it as a PDF, or put it at the front of the open document |
 | **Table of Authorities** | Scan a brief for cited cases, statutes, rules, and constitutional provisions, review the hits, fix or merge them, then save the finished table or drop it onto the front of the PDF |
 | **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
@@ -95,7 +95,7 @@ Four ways it fits into an actual day at the firm:
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
 | **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |
 | **True redaction** | Content is actually removed and verified by re-extraction — not a black box drawn over text that's still underneath. Mark what to remove by drawing a box, searching for text, or highlighting text with the pointer. The verifier is garble-aware, so a broken text layer can't fake a clean result; if verification fails, no output is written. |
-| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers, per Fla. R. Jud. Admin. 2.425. Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
+| **Sensitive-info scanner** | Assistive detection of SSNs and account numbers your jurisdiction's rules say shouldn't be in filings (in Florida, Fla. R. Jud. Admin. 2.425). Just a flag — this is vibe coded and you should never trust AI with legal reasoning. |
 | **Metadata scrubbing** | Before production or filing |
 
 Everything above is implemented and working in the public alpha today. Expect rough edges, and please report anything that breaks. See [Status](#status).
@@ -132,7 +132,7 @@ Optionally, an off-by-default "bring your own AI" connector — bundled right in
 
 ## Status
 
-**Public alpha, version 0.1.3.** Built in the open — the features above are implemented and working in the packaged Windows and Apple-Silicon macOS alphas; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is Certum-signed and the macOS build is Developer ID-signed and notarized; signed update checks are wired into the desktop app.
+**Public alpha, version 0.1.4.** Built in the open — the features above are implemented and working in the packaged Windows and Apple-Silicon macOS alphas; none of this is a roadmap slide, but the first public builds should still be treated as early software. The Windows installer is Certum-signed and the macOS build is Developer ID-signed and notarized; signed update checks are wired into the desktop app.
 
 The landing page at [raio.macrify.me](https://raio.macrify.me) tracks the live GitHub release automatically, so the download link points at the current signed installer for the visitor's platform when the complete signed release asset set is present. Canonical downloads live on [GitHub Releases](https://github.com/Macrify-LLC/raiopdf/releases).
 

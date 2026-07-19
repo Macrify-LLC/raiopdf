@@ -14,8 +14,8 @@ import "./HelpPanel.css";
 
 const HELP_GROUPS = [
   { id: "getting-started", label: "Getting Started" },
-  { id: "edit", label: "Edit" },
-  { id: "comment-ocr", label: "Comment & OCR" },
+  { id: "edit", label: "Edit & Annotate" },
+  { id: "comment-ocr", label: "Make Searchable (OCR)" },
   { id: "organize", label: "Organize" },
   { id: "legal", label: "Legal" },
   { id: "preferences", label: "Settings" },

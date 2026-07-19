@@ -38,11 +38,11 @@ const SITE_URL = "https://raio.macrify.me";
 // articles are categorized.
 const GROUPS = [
   { id: "getting-started", label: "Getting Started" },
-  { id: "edit", label: "Edit" },
-  { id: "comment-ocr", label: "Comment & OCR" },
+  { id: "edit", label: "Edit & Annotate" },
+  { id: "comment-ocr", label: "Make Searchable (OCR)" },
   { id: "organize", label: "Organize" },
   { id: "legal", label: "Legal" },
-  { id: "preferences", label: "Preferences" },
+  { id: "preferences", label: "Settings" },
 ];
 
 async function main() {

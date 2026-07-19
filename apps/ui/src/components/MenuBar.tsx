@@ -19,10 +19,11 @@ import "./MenuBar.css";
  * points (native menu event on macOS later, this bar on every platform now).
  *
  * "Exit" is the one command the native menu intercepts in Rust before it
- * ever reaches the frontend (`on_menu_event` calls `app.exit(0)` directly
- * for `MENU_EXIT`), so there is no frontend case for it to share. Here it
- * routes to `onExit`, which the caller wires to the same window-close path
- * the title bar's own close button already uses.
+ * ever reaches the frontend (`on_menu_event` routes `MENU_EXIT` through the
+ * guarded quit path, `request_app_exit`, which confirms when unsaved work
+ * exists before exiting), so there is no frontend case for it to share.
+ * Here it routes to `onExit`, which the caller wires to the same
+ * window-close path the title bar's own close button already uses.
  */
 
 export const MENU_BAR_EXIT_COMMAND = "file:exit";

@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
@@ -31,12 +31,17 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager,
 };
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 const MENU_EVENT: &str = "raiopdf-menu";
 const MENU_EXIT: &str = "file:exit";
+/// The macOS app-menu Quit item (Cmd+Q). A custom item rather than the
+/// predefined Quit: the predefined item sends `terminate:` straight to the
+/// system, which skips the run loop entirely, so an unsaved-work check could
+/// never run. Routing it through `on_menu_event` makes quit interceptable.
+const MENU_QUIT: &str = "app:quit";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +53,20 @@ struct NativeMenuState {
 
 #[derive(Default)]
 struct NativeMenuStateStore(Mutex<HashMap<String, NativeMenuState>>);
+
+/// Whether the webview currently holds unsaved work (any dirty tab, pending
+/// annotation edits, or unapplied redaction marks). The UI reports every
+/// change of its dirty aggregate via `set_unsaved_state`; the native quit
+/// path consults it before exiting so a menu quit can't silently discard
+/// work. One app instance owns exactly one document window ("Open in New
+/// Window" spawns a separate process), so a single flag is enough.
+#[derive(Default)]
+struct UnsavedWorkState {
+    unsaved: AtomicBool,
+    /// Guards against stacking confirm dialogs when quit is requested again
+    /// while a confirm is already on screen (e.g. mashing Cmd+Q).
+    quit_prompt_active: AtomicBool,
+}
 #[cfg(target_os = "macos")]
 const OPENED_PDF_EVENT: &str = "raiopdf-opened-pdf";
 /// Documents Finder hands us before `setup` has managed the app state.
@@ -2117,6 +2136,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .manage(NativeMenuStateStore::default())
+        .manage(UnsavedWorkState::default())
         .setup(|app| {
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
@@ -2206,17 +2226,8 @@ pub fn run() {
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
 
-            if id == MENU_EXIT {
-                let _ = app
-                    .state::<AppDiagnostics>()
-                    .record_shell_event("shutdown", "menu exit requested");
-                let _ = app.state::<AppDiagnostics>().mark_session_clean();
-                // `app.exit(0)` skips window destruction, so the Destroyed
-                // hook never fires on this path. RunEvent::Exit below also
-                // stops the sidecar; doing it here too is belt and braces
-                // against the engine java process outliving the app.
-                app.state::<sidecar::SidecarManager>().shutdown();
-                app.exit(0);
+            if id == MENU_EXIT || id == MENU_QUIT {
+                request_app_exit(app);
                 return;
             }
 
@@ -2259,6 +2270,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sync_native_menu_state,
+            set_unsaved_state,
             open_pdf_dialog,
             take_startup_pdf,
             open_pdf_in_new_window_dialog,
@@ -2424,6 +2436,77 @@ fn sync_native_menu_state(
     Ok(())
 }
 
+/// The UI reports its dirty aggregate (any dirty tab, pending annotation
+/// edits, unapplied redaction marks) whenever it changes, so the quit path
+/// can consult it without a webview round trip at quit time.
+#[tauri::command]
+fn set_unsaved_state(state: tauri::State<'_, UnsavedWorkState>, unsaved: bool) {
+    state.unsaved.store(unsaved, Ordering::SeqCst);
+}
+
+/// The guarded quit path for every native-menu exit: the macOS app-menu
+/// "Quit RaioPDF" (Cmd+Q) and the File > Exit item. With unsaved work
+/// reported by the webview, confirm before exiting; the dialog is
+/// non-blocking so the main thread keeps pumping events while it is up.
+///
+/// On Windows/Linux the window-close guard in the UI is the primary gate
+/// (the rendered menu bar's Exit closes the window, which fires a
+/// close-requested event); this path additionally covers the native menu's
+/// Exit item. Not covered anywhere: macOS Dock "Quit" and OS logout send
+/// `terminate:` directly to the process, which bypasses the run loop.
+fn request_app_exit(app: &tauri::AppHandle) {
+    let unsaved_state = app.state::<UnsavedWorkState>();
+    if !unsaved_state.unsaved.load(Ordering::SeqCst) {
+        perform_app_exit(app);
+        return;
+    }
+    if unsaved_state
+        .quit_prompt_active
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    // The window may be hidden (macOS close-to-Dock keeps the app running);
+    // surface it so the confirm has visible context.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+
+    let app_handle = app.clone();
+    app.dialog()
+        .message("Quit RaioPDF and discard unsaved changes?")
+        .title("Unsaved changes")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Discard and Quit".to_string(),
+            "Cancel".to_string(),
+        ))
+        .show(move |confirmed| {
+            app_handle
+                .state::<UnsavedWorkState>()
+                .quit_prompt_active
+                .store(false, Ordering::SeqCst);
+            if confirmed {
+                perform_app_exit(&app_handle);
+            }
+        });
+}
+
+fn perform_app_exit(app: &tauri::AppHandle) {
+    let _ = app
+        .state::<AppDiagnostics>()
+        .record_shell_event("shutdown", "menu exit requested");
+    let _ = app.state::<AppDiagnostics>().mark_session_clean();
+    // `app.exit(0)` skips window destruction, so the Destroyed hook never
+    // fires on this path. RunEvent::Exit also stops the sidecar; doing it
+    // here too is belt and braces against the engine java process outliving
+    // the app.
+    app.state::<sidecar::SidecarManager>().shutdown();
+    app.exit(0);
+}
+
 fn apply_native_menu_state<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     state: NativeMenuState,
@@ -2554,6 +2637,11 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
     )?;
     let about = native_menu_item(app, "file:about-macrify", "About RaioPDF", true, None)?;
     let exit = native_menu_item(app, MENU_EXIT, "Exit", true, None)?;
+    // Custom Quit instead of `.quit_with_text(..)`: the predefined item's
+    // `terminate:` bypasses the run loop, so the unsaved-work quit guard in
+    // `request_app_exit` would never see Cmd+Q. Same label, same key
+    // equivalent, but routed through `on_menu_event`.
+    let quit = native_menu_item(app, MENU_QUIT, "Quit RaioPDF", true, Some("CmdOrCtrl+Q"))?;
 
     let file = SubmenuBuilder::new(app, "File")
         .item(&open)
@@ -2632,7 +2720,7 @@ fn build_native_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Res
             .hide_others()
             .show_all()
             .separator()
-            .quit_with_text("Quit RaioPDF")
+            .item(&quit)
             .build()
     });
     let application = application.transpose()?;

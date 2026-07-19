@@ -219,6 +219,11 @@ export const OVERSIZED_NOISE_BYTES_PER_PAGE = 2048 * 2048;
  */
 export async function createOversizedNoisePdf(targetBytes: number): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
+  // Pin the Info-dict dates so two generations are byte-identical — pdf-lib
+  // otherwise stamps the wall clock, and the determinism test compares bytes.
+  const fixedDate = new Date("2026-01-01T00:00:00Z");
+  pdf.setCreationDate(fixedDate);
+  pdf.setModificationDate(fixedDate);
   let seed = 0x9e3779b9;
   const nextNoise = (length: number): Uint8Array => {
     const out = new Uint8Array(length);

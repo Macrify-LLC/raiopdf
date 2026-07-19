@@ -116,18 +116,9 @@ describe("createOversizedNoisePdf", () => {
   it("is deterministic", async () => {
     const first = await createOversizedNoisePdf(OVERSIZED_NOISE_BYTES_PER_PAGE);
     const second = await createOversizedNoisePdf(OVERSIZED_NOISE_BYTES_PER_PAGE);
-    // pdf-lib stamps a CreationDate into fresh documents; compare everything
-    // around the two Info-dict date strings by comparing lengths and the raw
-    // noise stream, which dominates the bytes.
-    expect(first.byteLength).toBe(second.byteLength);
-    const firstStream = Buffer.from(first).indexOf(Buffer.from("stream\n"));
-    const secondStream = Buffer.from(second).indexOf(Buffer.from("stream\n"));
-    expect(firstStream).toBe(secondStream);
-    expect(
-      Buffer.from(first.subarray(firstStream, firstStream + 4096)).equals(
-        Buffer.from(second.subarray(secondStream, secondStream + 4096)),
-      ),
-    ).toBe(true);
+    // The generator pins its Info-dict dates, so the whole file is
+    // byte-identical across generations — no stream-locating heuristics.
+    expect(Buffer.from(first).equals(Buffer.from(second))).toBe(true);
   }, 30_000);
 });
 

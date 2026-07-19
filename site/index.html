@@ -591,6 +591,13 @@
     .faq__answer{ padding:0 18px 20px; }
   }
 
+  /* At 320px the compact header can't fit the brand group AND the action
+     links (the wordmark images can't shrink) — below 375px the Macrify mark
+     yields entirely; full attribution remains in the footer. */
+  @media (max-width:374px){
+    .nav__by{ display:none; }
+  }
+
   /* ==================== embedded motion primitives ==================== */
   .motion-frame{ border:0; display:block; width:100%; height:100%; background:transparent; }
 

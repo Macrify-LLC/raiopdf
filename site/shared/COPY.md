@@ -47,9 +47,10 @@ the original set:
   light-on-dark Macrify wordmark file as-is (`assets/macrify-wordmark-light.png`,
   same asset the footer already uses) — never CSS-invert a variant that
   already exists, never hand-type "Macrify" next to a mark. On mobile it
-  sheds its "by" text label but the mark itself stays reachable (not
-  hidden) — full attribution ("Published as a public good... by Macrify
-  LLC") remains in the footer either way.
+  sheds its "by" text label but the mark itself stays visible down to
+  375px; below that (320px-class phones) the header physically can't fit
+  it and the mark yields entirely — full attribution ("Published as a
+  public good... by Macrify LLC") remains in the footer either way.
 
 ## One-liner (hero headline)
 

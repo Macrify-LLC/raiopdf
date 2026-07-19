@@ -80,11 +80,19 @@ in the same PR and say so. Docs-only, marketing-site (`site/`), or tooling-only 
 it. This is enforced by convention during review, not by a required CI check (the canary
 needs the full payload, which is heavier than the standard CI jobs).
 
-**Can't run the canary locally?** The payload engine is Windows-first, so on Linux there's
-no local real-engine path. Add the `run-canary` label to your PR (or ask a maintainer in a
-PR comment to add it, or to dispatch the **Canary** workflow on your branch), then link the
-green run in your PR in place of the pasted summary line. Triggers and limitations:
-[`docs/RELEASE-CANARY.md`](docs/RELEASE-CANARY.md), "Running it in CI".
+**Can't run the canary locally?** The payload engine is desktop-native (Windows or macOS
+arm64), so on Linux there's no local real-engine path. Add the `run-canary` label to your PR
+(or ask a maintainer in a PR comment to add it, or to dispatch the **Canary** workflow on
+your branch), then link the green run in your PR in place of the pasted summary line. The
+label runs the real-engine canary on **both** a Windows and a macOS arm64 runner. Triggers
+and limitations: [`docs/RELEASE-CANARY.md`](docs/RELEASE-CANARY.md), "Running it in CI".
+
+**Nightly macOS coverage.** Two more macOS arm64 jobs run on the nightly/dispatch schedule
+(not on PRs): the real-engine canary above, and a **bundled engine-host smoke** that packages
+the `.app`, runs the payload/boundary/codesign/architecture integrity gates, and boots the
+bundle's own engine-host against its loopback endpoints. Neither is a required check; the
+packaged Tauri window and native dialogs stay on the manual real-Mac checklist in
+[`docs/RELEASE-CANARY.md`](docs/RELEASE-CANARY.md).
 
 ## Reporting bugs
 

@@ -23,7 +23,8 @@
 //   (defaults to target/release/bundle/macos/RaioPDF.app)
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,41 @@ function fail(message) {
 
 function ok(message) {
   console.log(`ok    ${message}`);
+}
+
+/** Where the engine-host's stderr is teed so CI can upload it on failure. */
+function stderrLogPath() {
+  if (process.env.RAIOPDF_SMOKE_STDERR_LOG) {
+    return path.resolve(process.env.RAIOPDF_SMOKE_STDERR_LOG);
+  }
+  const dir = process.env.RAIOPDF_APP_DATA_DIR
+    ? path.resolve(process.env.RAIOPDF_APP_DATA_DIR)
+    : os.tmpdir();
+  return path.join(dir, "engine-host.stderr.log");
+}
+
+/**
+ * Drain the child's stderr into a file and keep a tail for failure messages.
+ * The child's stderr was previously piped but never read: a chatty host would
+ * fill the pipe buffer and deadlock before it ever announced a port, and there
+ * was nothing to upload when a boot failed. Attach this the instant the child is
+ * spawned, before waiting on the announcement.
+ */
+function teeStderr(child) {
+  const logPath = stderrLogPath();
+  mkdirSync(path.dirname(logPath), { recursive: true });
+  const stream = createWriteStream(logPath);
+  let tail = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stream.write(chunk);
+    tail = (tail + chunk).slice(-4000);
+  });
+  return {
+    logPath,
+    tail: () => tail,
+    close: () => new Promise((resolve) => stream.end(resolve)),
+  };
 }
 
 /** The PATH a Finder-launched app inherits from launchd — not a developer shell's. */
@@ -137,9 +173,15 @@ async function main() {
   }
   const pdf = readFileSync(fixture);
   const child = spawnEngineHost();
+  const stderr = teeStderr(child);
+  console.log(`engine-host stderr → ${stderr.logPath}`);
   try {
     // Boots at all ⇒ it located its payload inside Contents/Resources.
-    const engine = await announcement(child);
+    const engine = await announcement(child).catch((error) => {
+      // Surface the host's own diagnostics inline — a boot failure is exactly
+      // the case where the stderr tee earns its keep.
+      throw new Error(`${error.message}\n--- engine-host stderr (tail) ---\n${stderr.tail()}`);
+    });
     ok(`engine-host booted from the bundle and found its payload (port ${engine.port})`);
 
     const status = await fetch(`http://localhost:${engine.port}/api/v1/info/status`, {
@@ -165,6 +207,7 @@ async function main() {
   } finally {
     child.stdin.end();
     child.kill();
+    await stderr.close();
   }
 }
 

@@ -1,10 +1,15 @@
 # RaioPDF Release Canary — Feature Acceptance Runbook
 
-> **What this is.** A prerelease runbook that drives the **real, packaged app against the
-> real bundled engine** and confirms every advertised feature actually does what the
-> marketing says — OCR makes a scan readable, the sensitive-data scanner catches an SSN,
-> Prepare for Filing regulates page size and splits by file size, the exhibit binder
-> stamps and bookmarks, and so on.
+> **What this is.** A prerelease runbook that drives the **real UI against the real bundled
+> engine** and confirms every advertised feature actually does what the marketing says —
+> OCR makes a scan readable, the sensitive-data scanner catches an SSN, Prepare for Filing
+> regulates page size and splits by file size, the exhibit binder stamps and bookmarks, and
+> so on. It boots the real engine-host — the exact Rust auth-proxy + bundled Stirling-PDF +
+> offline OCR toolchain the packaged app ships — but drives it through a `vite preview` UI,
+> not the packaged Tauri window, so it proves the engine and the feature logic rather than
+> the desktop shell. The packaged shell itself (payload discovery from inside the `.app`,
+> native panels, launch-time Apple Events) is covered separately by the bundled engine-host
+> smoke job and the manual real-Mac checklist under "Known gaps & findings" below.
 >
 > It is **not** the mocked smoke suite. The fast [`test:smoke`](../apps/ui/smoke/app.smoke.ts)
 > suite mocks the desktop engine and proves the UI logic on every PR. This canary boots the
@@ -91,28 +96,44 @@ node scripts/boot-payload-engine.mjs      # prints the live base URL + token, st
 ## Running it in CI
 
 The same runbook also runs in GitHub Actions via the **Canary** workflow
-([`.github/workflows/canary.yml`](../.github/workflows/canary.yml)), on a `windows-latest`
-runner with the identical toolchain the release build uses. It assembles the payload and
-external bins (`pnpm prepare:shell-bundle:windows-x64`), verifies the payload, then runs
-`pnpm canary` — both the UI and MCP arms. Playwright traces are uploaded as a workflow
-artifact when a run fails.
+([`.github/workflows/canary.yml`](../.github/workflows/canary.yml)) as **three jobs**:
 
-It triggers three ways:
+- **Real-engine canary (Windows)** — `windows-latest`, the original arm. Assembles the
+  payload and external bins (`pnpm prepare:shell-bundle:windows-x64`), verifies the payload,
+  then runs `pnpm canary` — both the UI and MCP arms. Mirrors release.yml's build-windows.
+- **Real-engine canary (macOS arm64)** — `macos-15`, Apple Silicon. Builds the macOS payload
+  for real (Tesseract/Ghostscript/qpdf compiled from pinned source; JRE 25 and the Stirling
+  JAR staged), then runs the same `pnpm canary`. It boots Stirling on the bundled **Temurin 25
+  JRE inside the payload** — the runtime the packaged app actually ships — not the runner's
+  ambient Java.
+- **Bundled engine-host smoke (macOS arm64)** — `macos-15`, `needs:` the macOS canary.
+  Packages the app with Tauri (ad-hoc CI signature + hardened runtime), runs the bundle
+  integrity gates (payload-manifest verification against the copy inside `RaioPDF.app`, the
+  package-boundary validator, `codesign --verify`, and an arm64 architecture assert on the
+  bundled engine-host), then boots the bundle's **own** `Contents/MacOS/raiopdf-engine-host`
+  with the dev-shell environment stripped and hits its loopback health/OCR/PDF-A endpoints.
+  That is precisely the packaged payload-discovery + toolchain-resolution layer a green
+  canary can't see (see "Known gaps & findings"). It does **not** launch the Tauri window,
+  WKWebView, Apple Events, or native panels — the manual real-Mac checklist under "Known gaps
+  & findings" stays the only coverage for those.
 
-- **Nightly** against `main` (scheduled) — repeated full-suite runs between releases, so
-  intermittent failures (like the OCR-stall class below) surface instead of hiding until
-  the next release build.
-- **Manual dispatch** on any branch, from the Actions tab.
-- **Pull requests carrying the `run-canary` label** — the CI path for contributors who
-  can't run the canary locally (the payload engine is Windows-first). Adding the label to
-  an already-open PR triggers a run.
+On failure, each job uploads a per-platform artifact: Playwright traces for the canary jobs
+(`canary-playwright-results-windows-x64`, `canary-playwright-results-macos-arm64`) and the
+engine-host's app-data dir + teed stderr for the smoke job (`engine-smoke-logs-macos-arm64`).
 
-What it does **not** do: it is not a required check (the payload is far heavier than the
-standard CI jobs — required gates remain the `Web` + `Shell` jobs), and it does not
-replace the release workflow's own canary step, which stays the release gate. The
-packaged-app-environment gaps below (`smoke:packaged-macos`, the manual desktop checks)
-are also outside its reach — it drives the engine through the same harness as a local
-`pnpm canary`, with the same blind spots.
+**Triggers.** Both canary jobs run **nightly** against `main`, on **manual dispatch** from
+the Actions tab, and on **pull requests carrying the `run-canary` label** — the CI path for
+contributors who can't run the canary locally (the payload engine is desktop-native, Windows
+or macOS arm64). The engine-smoke job is **schedule/dispatch only** (it never runs on a PR);
+a `run-engine-smoke` label can be added later if per-PR demand appears.
+
+**First runs are measurement runs.** The macOS jobs assemble a large payload cold; the first
+nightly/dispatch runs exist to record per-step time and disk (the jobs carry `df -h` / `du`
+instrumentation) before anyone relies on their timing.
+
+What it does **not** do: none of these are required checks (the payload is far heavier than
+the standard CI jobs — required gates remain the `Web` + `Shell` jobs), and they do not
+replace the release workflow's own canary step, which stays the release gate.
 
 ## The runbook — advertised claim → acceptance check
 

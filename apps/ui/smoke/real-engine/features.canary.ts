@@ -51,7 +51,10 @@ test("Bates numbering: stamps sequential numbers into every page's content", asy
   // The prefix has no sample default any more (UX-3) — Apply stays disabled
   // until the user names the matter or explicitly opts into numbers-only.
   await expect(page.getByRole("button", { name: "Apply Bates Numbers" })).toBeDisabled();
-  await page.getByLabel("Prefix").fill("SMITH");
+  // Scope to the textbox role: #284 added a "No prefix (numbers only)" checkbox
+  // whose label also contains "prefix", so a bare getByLabel("Prefix") now
+  // resolves two controls.
+  await page.getByRole("textbox", { name: "Prefix" }).fill("SMITH");
   await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
   await page.getByRole("button", { name: "Apply Bates Numbers" }).click();
 
@@ -84,7 +87,9 @@ test("Scrub Metadata: the in-app scrub removes planted Info and XMP metadata fro
   await page.getByRole("button", { name: "Scrub Metadata", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Scrub Metadata" });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Scrub Metadata" }).click();
+  // exact: #280 gave every FloatingDialog "Help: <title>" and "Close <title>"
+  // buttons, so an inexact name matches the action button plus both of those.
+  await dialog.getByRole("button", { name: "Scrub Metadata", exact: true }).click();
   await expect(page.getByLabel("Unsaved changes")).toBeVisible();
 
   // The advertised outcome: no marker survives in the saved bytes — checked

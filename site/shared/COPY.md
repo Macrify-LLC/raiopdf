@@ -28,6 +28,30 @@ Releases. Get the latest release.
 
 This is not hidden or soft-pedaled. It sits near the top on every option.
 
+## Header nav — added 2026-07-18
+
+The nav's link inventory, left to right: `What's new` (conditional, only when
+a recent release exists) → `Features` → `FAQ` → `How it works` → `Why` →
+`What it isn't` → `Help` → **GitHub** → **Download** (CTA). Two items beyond
+the original set:
+
+- **GitHub link** — a quiet outlined pill (distinct from the gold Download
+  CTA) that reads as "view the source," pointing at
+  `https://github.com/Macrify-LLC/raiopdf`. Before this change the only
+  repo link on the whole page was in the footer. On mobile it collapses to
+  an icon-only button next to Download rather than disappearing with the
+  other nav links — it isn't an in-page anchor, it's a destination, same
+  category as Download.
+- **"by Macrify" mark** — a small, clearly-subordinate attribution next to
+  the RaioPDF nav lockup, linking to `macrify.me`. Uses the purpose-built
+  light-on-dark Macrify wordmark file as-is (`assets/macrify-wordmark-light.png`,
+  same asset the footer already uses) — never CSS-invert a variant that
+  already exists, never hand-type "Macrify" next to a mark. On mobile it
+  sheds its "by" text label but the mark itself stays visible down to
+  375px; below that (320px-class phones) the header physically can't fit
+  it and the mark yields entirely — full attribution ("Published as a
+  public good... by Macrify LLC") remains in the footer either way.
+
 ## One-liner (hero headline)
 
 Everything you use Acrobat for, day to day — free, full-featured, and it
@@ -188,7 +212,7 @@ don't isolate it into its own callout box if you're using the full text.
 - **Metadata scrubbing** before production or filing.
 - **Native MCP integration** (added 2026-07-03) — no AI built into RaioPDF
   itself, but it speaks natively to a user's own AI agents and tools: the
-  installer bundles an off-by-default connector exposing 25 local tools
+  installer bundles an off-by-default connector exposing 27 local tools
   (OCR, verified redaction, Bates, binders, production sets, filing
   preflight, and more). Keep the "no AI in the product" claim and the
   "MCP-native" claim next to each other so it doesn't read as a
@@ -199,7 +223,7 @@ don't isolate it into its own callout box if you're using the full text.
 
 (Consistency notes — quoted facts and every surface that repeats them, so a
 change propagates instead of drifting:
-— The MCP tool count ("25 tools") is canonical in `docs/MCP.md` next to
+— The MCP tool count ("27 tools") is canonical in `docs/MCP.md` next to
   its Tools table; quoted by `README.md`, this file, the landing page, and
   nowhere else.
 — The jurisdiction-pack list (Florida / Federal CM/ECF / Georgia eFileGA +

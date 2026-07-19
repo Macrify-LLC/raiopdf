@@ -132,6 +132,7 @@ const TOOL_PANEL_ICONS = {
 >;
 
 const MAKE_SEARCHABLE_TOOL = HELP_ONLY_TOOL_ENTRIES[0];
+const EDIT_TEXT_TOOL = TOOL_PANEL_EDIT_TOOLS[0];
 
 export type RedactionPhase = "idle" | "confirming" | "applying" | "verified" | "error";
 
@@ -281,28 +282,20 @@ export function ToolPanel({
         isOpen={openGroup === "edit"}
         onToggle={() => toggleGroup("edit")}
       >
-        {TOOL_PANEL_EDIT_TOOLS.map((tool) => {
-          const selected = activeTextEdit;
-
-          return (
-            <div key={tool.id}>
-              <ToolRow
-                icon={TOOL_PANEL_ICONS[tool.id]}
-                label={tool.label}
-                description={tool.description}
-                selected={selected}
-                disabled={longProcessLocked}
-                onSelect={() => onTextEditSelected?.()}
-              />
-              {selected && textEdit ? (
-                <EditTextStatusPanel
-                  textEdit={textEdit}
-                  onHelp={() => onHelpRequested(tool.helpArticleId)}
-                />
-              ) : null}
-            </div>
-          );
-        })}
+        <ToolRow
+          icon={TOOL_PANEL_ICONS[EDIT_TEXT_TOOL.id]}
+          label={EDIT_TEXT_TOOL.label}
+          description={EDIT_TEXT_TOOL.description}
+          selected={activeTextEdit}
+          disabled={longProcessLocked}
+          onSelect={() => onTextEditSelected?.()}
+        />
+        {activeTextEdit && textEdit ? (
+          <EditTextStatusPanel
+            textEdit={textEdit}
+            onHelp={() => onHelpRequested(EDIT_TEXT_TOOL.helpArticleId)}
+          />
+        ) : null}
         {EDIT_DIALOG_TOOLS.map((tool) => {
           const selected = activeEditDialogTool === tool.id;
 

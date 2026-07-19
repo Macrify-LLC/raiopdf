@@ -321,14 +321,11 @@ export function BatchCleanupWorkspace({
         <button type="button" className="batch-workspace__primary-button" disabled={!canRun} onClick={run}>
           {progress.running ? "Running..." : "Run Batch"}
         </button>
-        <button
-          type="button"
-          className="batch-workspace__secondary-button"
-          disabled
-          title="Cancel isn't available yet -- let the run finish."
-        >
-          Cancel
-        </button>
+        {progress.running ? (
+          <p className="batch-workspace__status">
+            Cancel isn't available yet — let the run finish.
+          </p>
+        ) : null}
       </div>
 
       {localMessage || progress.message ? (

@@ -212,7 +212,9 @@ export function AppShell({
   // engine handle and no bytes but is absolutely open.
   const hasDocument = document.source !== null;
   const streamedDocument = document.source !== null && document.source.kind !== "memory";
-  const canUndo = editing.pendingEdits.length > 0;
+  // The single undo gate — every undo door (menu, Ctrl+Z, toolbar) consumes
+  // this one value so they can't drift apart.
+  const canUndo = hasDocument && editing.pendingEdits.length > 0;
   const showEngineStartingOverlay = ocrStarting && !isOcrDialogPhase(ocrState.phase);
   function requestOpen() {
     onOpenRequested();
@@ -269,6 +271,11 @@ export function AppShell({
         pageCount={document.pageCount}
         zoom={document.zoom}
         hasDocument={hasDocument}
+        canUndo={canUndo}
+        // Same action as Edit > Undo in the menu bar (and Ctrl+Z) — route
+        // through the shared menu-command handler so all three doors stay
+        // one code path.
+        onUndo={() => onMenuCommand("edit:undo")}
         searchValue={documentSearch.query}
         searchResultLabel={documentSearch.resultLabel}
         searchBusy={documentSearch.status === "searching"}
@@ -293,6 +300,11 @@ export function AppShell({
           outline={document.outline}
           outlineStatus={document.outlineStatus}
           bookmarksDisabled={streamedDocument}
+          bookmarksDisabledReason={
+            streamedDocument
+              ? "This document is very large, so bookmarks are turned off for it."
+              : undefined
+          }
           onPageClick={onThumbnailClick}
           onRotateSelected={onRotateSelected}
           onDeleteSelected={onDeleteSelected}

@@ -14,6 +14,7 @@ export interface DocumentNavPanelProps {
   outline: PdfOutlineState | null;
   outlineStatus: string | null;
   bookmarksDisabled?: boolean | undefined;
+  bookmarksDisabledReason?: string | undefined;
   onPageClick?: ((pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void) | undefined;
   onRotateSelected?: (() => void) | undefined;
   onDeleteSelected?: (() => void) | undefined;
@@ -33,6 +34,7 @@ export function DocumentNavPanel({
   outline,
   outlineStatus,
   bookmarksDisabled = false,
+  bookmarksDisabledReason,
   onPageClick,
   onRotateSelected,
   onDeleteSelected,
@@ -117,6 +119,7 @@ export function DocumentNavPanel({
             pageCount={pageCount}
             currentPage={currentPage}
             disabled={bookmarksDisabled}
+            disabledReason={bookmarksDisabledReason}
             onNavigate={onBookmarkNavigate}
             onChange={onOutlineChange}
           />

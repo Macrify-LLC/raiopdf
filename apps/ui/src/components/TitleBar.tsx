@@ -171,7 +171,7 @@ export function TitleBar({
                   onTabCloseRequested?.(tab.id);
                 }}
               >
-                <span aria-hidden="true">x</span>
+                <span aria-hidden="true">×</span>
               </button>
             </div>
           ))}

@@ -422,7 +422,7 @@ export function ToolPanel({
           icon={<OcrSearchIcon size={16} />}
           label={MAKE_SEARCHABLE_TOOL.label}
           description={MAKE_SEARCHABLE_TOOL.description}
-          disabled={longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
+          disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
           onSelect={onMakeSearchable}
         />
         <ToolRow

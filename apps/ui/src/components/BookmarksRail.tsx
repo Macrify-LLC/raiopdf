@@ -18,6 +18,8 @@ export interface BookmarksRailProps {
   pageCount: number;
   currentPage: number;
   disabled?: boolean | undefined;
+  /** Shown in place of the generic empty state when the caller disabled bookmarks. */
+  disabledReason?: string | undefined;
   onNavigate: (pageIndex: number) => void;
   onChange: (outline: PdfOutlineState) => Promise<boolean>;
 }
@@ -30,6 +32,7 @@ export function BookmarksRail({
   pageCount,
   currentPage,
   disabled = false,
+  disabledReason,
   onNavigate,
   onChange,
 }: BookmarksRailProps) {
@@ -87,7 +90,9 @@ export function BookmarksRail({
   if (!outline) {
     return (
       <section className="bookmarks-rail" aria-label="Bookmarks">
-        <p className="bookmarks-rail__empty">Bookmarks are unavailable for this document.</p>
+        <p className="bookmarks-rail__empty">
+          {(disabled && disabledReason) || "Bookmarks are unavailable for this document."}
+        </p>
       </section>
     );
   }

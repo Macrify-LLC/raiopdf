@@ -55,7 +55,10 @@ const separator: MenuSeparatorDef = { type: "separator" };
 export interface MenuBarProps {
   /** Gates every File-menu action that operates on the open document. */
   hasDocument: boolean;
-  /** Gates Edit > Undo -- mirrors `undoLastPendingEdit`'s own no-op guard. */
+  /**
+   * Gates Edit > Undo -- AppShell derives this (open document + a pending
+   * edit), and every undo door consumes the same value.
+   */
   canUndo: boolean;
   /**
    * Whether Microsoft Word was detected on this PC. The Word-dependent items
@@ -118,7 +121,7 @@ export function MenuBar({ hasDocument, canUndo, wordAvailable = true, onCommand,
     {
       id: "edit",
       label: "Edit",
-      items: [item("Undo", "edit:undo", !hasDocument || !canUndo)],
+      items: [item("Undo", "edit:undo", !canUndo)],
     },
     {
       id: "view",

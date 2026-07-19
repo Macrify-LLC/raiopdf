@@ -99,6 +99,14 @@ describe("force OCR controls", () => {
     expect(onForceOcr).toHaveBeenCalledTimes(1);
   });
 
+  it("disables Make Searchable when no document is open", () => {
+    render(
+      <ToolPanelHarness ocrState={{ phase: "idle", message: null }} hasDocument={false} />,
+    );
+
+    expect(getButton("Make Searchable (OCR)").disabled).toBe(true);
+  });
+
   it("disables Make Searchable while the confirm dialog is up, with no inline OCR status", () => {
     render(<ToolPanelHarness ocrState={{ phase: "confirm", message: null }} />);
 
@@ -260,10 +268,16 @@ describe("force OCR controls", () => {
   }
 });
 
-function ToolPanelHarness({ ocrState }: { ocrState: OcrUiState }) {
+function ToolPanelHarness({
+  ocrState,
+  hasDocument = true,
+}: {
+  ocrState: OcrUiState;
+  hasDocument?: boolean;
+}) {
   return (
     <ToolPanel
-      hasDocument
+      hasDocument={hasDocument}
       pageCount={2}
       ocrState={ocrState}
       ocrStarting={false}

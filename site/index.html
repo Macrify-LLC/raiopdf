@@ -92,6 +92,7 @@
     max-width:1120px; margin:0 auto; padding:16px 24px;
     display:flex; align-items:center; justify-content:space-between; gap:16px;
   }
+  .nav__brand-group{ display:flex; align-items:center; gap:14px; min-width:0; }
   .nav__brand{ display:flex; align-items:center; }
   .nav__logo{
     height:28px; width:auto;
@@ -107,18 +108,63 @@
     filter:brightness(0) invert(1) drop-shadow(0 0 16px rgba(245,185,66,.55));
     transform:translateY(-1px);
   }
+  /* "by Macrify" publisher mark — deliberately subordinate to the RaioPDF
+     lockup: smaller, lower contrast, set off by a hairline divider. Uses the
+     purpose-built light-on-dark wordmark PNG as-is — never CSS-invert a
+     variant that already exists, never hand-type "Macrify" next to a mark. */
+  .nav__by{
+    display:flex; align-items:center; gap:6px;
+    padding-left:14px; border-left:1px solid rgba(255,255,255,.18);
+    opacity:.68; transition:opacity .15s ease, transform .15s ease;
+  }
+  .nav__by:hover{ opacity:1; }
+  .nav__by:focus-visible{ outline:2px solid var(--gold); outline-offset:4px; border-radius:4px; }
+  .nav__by-label{
+    font-size:11px; font-weight:600; letter-spacing:.02em; color:rgba(234,242,251,.75);
+  }
+  .nav__by-logo{ height:13px; width:auto; display:block; }
   .nav__links{ display:flex; align-items:center; gap:22px; }
   .nav__links a{
     font-size:14px; font-weight:600; color:rgba(255,255,255,.82);
     padding:6px 2px; border-bottom:2px solid transparent; transition:color .15s ease, border-color .15s ease;
   }
   .nav__links a:hover{ color:#fff; border-color:var(--accent); }
+  /* GitHub — reads as "view the source," distinct from the gold Download CTA:
+     a quiet outlined pill (same vocabulary as .btn--ghost) rather than a
+     filled/gold treatment. */
+  .nav__links .nav__github{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:7px 13px; border:1px solid rgba(255,255,255,.2); border-radius:999px;
+    font-size:13px;
+  }
+  .nav__links .nav__github svg{ width:15px; height:15px; flex:none; }
+  .nav__links .nav__github:hover{
+    color:#fff; border-color:var(--gold); background:rgba(245,185,66,.08);
+  }
+  .nav__links .nav__github:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
   .nav__links .nav__cta{
     background:var(--gold); color:var(--navy-deep); border-radius:999px;
     padding:9px 18px; border:0; font-weight:700;
   }
   .nav__links .nav__cta:hover{ background:var(--gold-pale); border-color:transparent; }
   .nav__toggle{ display:none; }
+
+  /* The full text nav (7 links + GitHub pill + Macrify mark) needs ~1075px
+     of clear width to stay on one line — narrower than that, "How it
+     works"/"What it isn't" wrap mid-label. That's earlier than the general
+     860px tablet breakpoint below (which governs unrelated section grids),
+     so the nav gets its own, wider collapse point straight to the compact
+     treatment: section anchors + Help fold away, GitHub goes icon-only, the
+     Macrify mark sheds its "by" label. Verified empirically against real
+     rendered widths, not eyeballed. */
+  @media (max-width:1080px){
+    .nav__links{ gap:14px; }
+    .nav__links a:not(.nav__cta):not(.nav__github){ display:none; }
+    .nav__links .nav__github{ padding:8px; }
+    .nav__links .nav__github-label{ display:none; }
+    .nav__by{ padding-left:10px; gap:0; }
+    .nav__by-label{ display:none; }
+  }
 
   /* ---------- hero / storm ---------- */
   .hero{
@@ -510,9 +556,10 @@
   }
 
   /* ---------- responsive ---------- */
+  /* Nav's own collapse point lives further up, at max-width:1080px (see the
+     nav rules above) — the two rules below are unrelated section-grid
+     layouts that still change at the general tablet breakpoint. */
   @media (max-width:860px){
-    .nav__links{ gap:14px; }
-    .nav__links a:not(.nav__cta){ display:none; }
     .inputs-grid{ grid-template-columns:1fr; }
     .outcomes-grid{ grid-template-columns:1fr 1fr; }
     .outcomes-grid .outcome-card--wide{ grid-column:span 2; }
@@ -525,6 +572,14 @@
   }
 
   @media (max-width:560px){
+    .nav__inner{ padding:14px 16px; gap:10px; }
+    .nav__brand-group{ gap:8px; }
+    .nav__logo{ height:24px; }
+    .nav__by{ padding-left:8px; }
+    .nav__by-logo{ height:11px; }
+    .nav__links{ gap:8px; }
+    .nav__links .nav__github{ padding:7px; }
+    .nav__links .nav__cta{ padding:9px 14px; }
     .outcomes-grid{ grid-template-columns:1fr; }
     .outcomes-grid .outcome-card--wide{ grid-column:span 1; }
     .download-panel{ padding:22px; }
@@ -803,9 +858,15 @@
 
 <header class="nav">
   <div class="nav__inner">
-    <a class="nav__brand" href="#top">
-      <img class="nav__logo" src="./assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
-    </a>
+    <div class="nav__brand-group">
+      <a class="nav__brand" href="#top">
+        <img class="nav__logo" src="./assets/raiopdf/raiopdf-wordmark-full.svg" alt="RaioPDF — home" width="332" height="80">
+      </a>
+      <a class="nav__by" href="https://macrify.me" target="_blank" rel="noopener" aria-label="RaioPDF is published by Macrify — opens macrify.me">
+        <span class="nav__by-label">by</span>
+        <img class="nav__by-logo" src="./assets/macrify-wordmark-light.png" alt="Macrify" width="1114" height="287">
+      </a>
+    </div>
     <nav class="nav__links" aria-label="Primary">
       <a id="navWhatsNew" class="is-hidden" href="#latest-update">What's new</a>
       <a href="#outcomes">Features</a>
@@ -814,6 +875,10 @@
       <a href="#philosophy">Why</a>
       <a href="#honest">What it isn't</a>
       <a href="/help/">Help</a>
+      <a class="nav__github" href="https://github.com/Macrify-LLC/raiopdf" target="_blank" rel="noopener" aria-label="View RaioPDF's source on GitHub">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="nav__github-label">GitHub</span>
+      </a>
       <a class="nav__cta" href="#top">Download</a>
     </nav>
   </div>
@@ -1027,7 +1092,7 @@
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-            <p><strong>Native MCP integration</strong> — still no AI built into RaioPDF itself, but the installer bundles an off-by-default connector exposing 25 supported local tools to your own AI agents.</p>
+            <p><strong>Native MCP integration</strong> — still no AI built into RaioPDF itself, but the installer bundles an off-by-default connector exposing 27 supported local tools to your own AI agents.</p>
           </div>
           <div class="outcome-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
@@ -1203,7 +1268,7 @@
         </li>
         <li>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          <span><strong>25 local tools</strong> — highlight, redact, Bates, split, OCR…</span>
+          <span><strong>27 local tools</strong> — highlight, redact, Bates, split, OCR…</span>
         </li>
         <li>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>

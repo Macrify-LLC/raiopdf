@@ -595,7 +595,7 @@ test("switching from Select to a markup tool converts the selection; other tools
   await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
 
   const toolPanel = page.locator(".tool-panel");
-  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Annotate", exact: true }).click();
   await selectMarkupTool(page, "Select");
 
   // Deterministic single-line target, anchored by content: position-based
@@ -897,7 +897,7 @@ test("stacked floating dialogs let Escape close only the top dialog", async ({ p
   await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Bates Numbering" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Annotate" }).click();
   await page.locator(".tool-panel").getByRole("button", { name: "Sign", exact: true }).click();
   const signatureDialog = page.getByRole("dialog", { name: "Signature", exact: true });
   await expect(signatureDialog).toBeVisible();
@@ -1104,19 +1104,22 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
   await page.getByRole("button", { name: "Save Note" }).click();
   await expect(page.locator(".edit-layer__comment-pin")).toHaveCount(1);
 
-  // The Edit panel group lists content edits only; comments live in Comment.
+  // Annotations and comments both live in the Annotate group; the Edit group
+  // holds only substantive content edits.
   const toolPanel = page.locator(".tool-panel");
   await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
-  await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
   await expect(
     toolPanel.locator("#accordion-panel-edit").getByText("Check exhibit reference"),
   ).toHaveCount(0);
+  await expect(
+    toolPanel.locator("#accordion-panel-edit").getByText("pending edit", { exact: false }),
+  ).toHaveCount(0);
 
-  // The Comment panel group lists the note with its page and excerpt.
-  await toolPanel.getByRole("button", { name: "Comment", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Annotate", exact: true }).click();
+  await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
   await expect(toolPanel.getByText("1 comment", { exact: true })).toBeVisible();
   await expect(
-    toolPanel.locator("#accordion-panel-comment").getByText("Check exhibit reference"),
+    toolPanel.locator("#accordion-panel-annotate").getByText("Check exhibit reference"),
   ).toBeVisible();
 
   const saved = await savePdf(page);
@@ -1156,7 +1159,8 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
 
   await expect.poll(() => canvasRegionInkPixels(page, 0.25, 0.34, 0.72, 0.47)).toBe(0);
   await expect.poll(() => canvasRegionInkPixels(page, 0.56, 0.46, 0.7, 0.58)).toBe(0);
-  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  // The Annotate group is still open from above; the re-imported overlays
+  // land back in its pending list.
   await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
   await expect(page.getByLabel("Unsaved changes")).toBeHidden();
 });
@@ -1171,7 +1175,7 @@ test("flattens pending markup into page content on an annotation-free PDF", asyn
   await expect(page.locator("svg.edit-layer__shapes rect.edit-layer__shape-item")).toHaveCount(1);
 
   const toolPanel = page.locator(".tool-panel");
-  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Annotate", exact: true }).click();
   await toolPanel.getByRole("button", { name: "Make markup permanent" }).click();
   await expect(
     toolPanel.getByText("Merged 1 markup item permanently into the page."),
@@ -1201,7 +1205,7 @@ test("flattens reopened imported markup once without re-appending it", async ({ 
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
 
   const toolPanel = page.locator(".tool-panel");
-  await toolPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await toolPanel.getByRole("button", { name: "Annotate", exact: true }).click();
   await toolPanel.getByRole("button", { name: "Make markup permanent" }).click();
   await expect(
     toolPanel.getByText("Merged 1 markup item permanently into the page."),

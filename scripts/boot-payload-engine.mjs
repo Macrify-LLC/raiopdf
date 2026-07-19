@@ -64,13 +64,18 @@ function localDevToolchainEnv(payloadDir) {
     return {};
   }
 
-  // Prefer the OCR tools inside the assembled payload so the canary exercises
-  // exactly what ships. Only fall back to a system/Homebrew tool when the payload
-  // does not provide it (e.g. a dev box running against an incomplete cross-platform
-  // payload). Java stays on the system fallback because Stirling is JRE-agnostic and
-  // the standalone host does not always resolve the bundled JRE.
+  // Prefer the tools inside the assembled payload so the canary exercises exactly
+  // what ships. Only fall back to a system/Homebrew tool when the payload does not
+  // provide it (e.g. a dev box running against an incomplete cross-platform payload).
+  // Java is routed the same way: when the payload ships a bundled JRE (jre/bin/java)
+  // leave RAIOPDF_ENGINE_JAVA UNSET so the engine-host discovers and runs Stirling
+  // on that JRE (crates/engine-sidecar-core/src/lib.rs → payload_java_path, falling
+  // back to a bare "java" only when neither env nor payload provides one). Forcing
+  // it to the ambient "java" — as this did before — booted Stirling on whatever JDK
+  // the runner happened to have instead of the Temurin 25 JRE the packaged app
+  // actually ships, so the canary was not proving the bundled runtime at all.
   return {
-    RAIOPDF_ENGINE_JAVA: process.env.RAIOPDF_ENGINE_JAVA?.trim() || "java",
+    ...bundledOrFallback("RAIOPDF_ENGINE_JAVA", payloadDir, ["jre", "bin", "java"], "java"),
     ...bundledOrFallback("RAIOPDF_ENGINE_QPDF", payloadDir, ["ocr", "qpdf", "bin", "qpdf"], "qpdf"),
     ...bundledOrFallback("RAIOPDF_ENGINE_GHOSTSCRIPT", payloadDir, ["ocr", "gs", "bin", "gs"], "gs"),
     ...bundledOrFallback("RAIOPDF_ENGINE_OCRMYPDF", payloadDir, ["ocr", "ocrmypdf"], "ocrmypdf"),

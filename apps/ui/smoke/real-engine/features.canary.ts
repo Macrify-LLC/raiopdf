@@ -13,6 +13,11 @@ import {
   openPdf,
   savePdf,
 } from "./helpers";
+import {
+  ALL_METADATA_MARKERS,
+  createTaggedMetadataPdf,
+  findMetadataMarkers,
+} from "./synthetic-fixtures";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
 const BENIGN_LOG = [/Setting up fake worker/i, /Warning: /i, /fontkit/i];
@@ -52,6 +57,40 @@ test("Bates numbering: stamps sequential numbers into every page's content", asy
   await expectPageStamp(saved, 0, "SMITH000001");
   await expectPageStamp(saved, 1, "SMITH000002");
   await expectPageStamp(saved, 2, "SMITH000003");
+
+  logs.assertClean(BENIGN_LOG);
+});
+
+test("Scrub Metadata: the in-app scrub removes planted Info and XMP metadata from the saved bytes", async ({ page }) => {
+  const logs = captureLogs(page);
+  // Sentinel Author/Title/Producer/... markers planted in BOTH surfaces a
+  // scrub must clear: the trailer Info dict and a catalog XMP packet.
+  const source = await createTaggedMetadataPdf();
+  expect(
+    await findMetadataMarkers(source),
+    "the fixture must start fully tagged in Info and XMP",
+  ).toEqual([...ALL_METADATA_MARKERS]);
+
+  await page.goto("/");
+  await openPdf(page, "tagged-metadata.pdf", source);
+
+  // The user-facing scrub flow (client-side, no engine round trip) — the
+  // same engine batch cleanup's scrub step runs on. The sidecar-seam scrub
+  // used by the MCP scrub_metadata tool is covered in engine-ops.canary.ts.
+  await page.getByRole("button", { name: "Scrub Metadata", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Scrub Metadata" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Scrub Metadata" }).click();
+  await expect(page.getByLabel("Unsaved changes")).toBeVisible();
+
+  // The advertised outcome: no marker survives in the saved bytes — checked
+  // structurally (decoded Info values + every /Metadata stream) and raw.
+  const saved = await savePdf(page);
+  const leftover = await findMetadataMarkers(saved);
+  expect(
+    leftover,
+    `metadata markers surviving the in-app scrub: ${leftover.join(", ") || "none"}`,
+  ).toEqual([]);
 
   logs.assertClean(BENIGN_LOG);
 });

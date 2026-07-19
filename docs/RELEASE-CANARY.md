@@ -101,6 +101,9 @@ engine" rows exercise the bundled Stirling/OCR stack; "Real build" rows are clie
 | **Verified redaction** | Content is actually removed, not just covered | Searched text is gone from the saved bytes (re-extraction) | `engine-ops` · real engine |
 | Redaction — no-match edge | Honest when nothing matches | "No matching text was found." | `engine-ops` · real engine |
 | **Compression** | Shrinks a PDF for filing | Real compress pass runs, saves a valid PDF | `engine-ops` · real engine |
+| **Sanitize** | Removes active content (JavaScript, auto-run actions) | A PDF planted with name-tree JavaScript AND an auto-running OpenAction comes back with both removed (structural check, not a byte scan) and the script body gone from the saved bytes | `engine-ops` · real engine |
+| **Metadata scrub — engine seam** | The payload engine's scrub endpoint strips document metadata | Planted Info-dict + XMP sentinel markers are all absent after a scrub through the production sidecar client — this doubles as the enablement probe for the payload's update-metadata endpoint (the same silently-disabled-endpoint class as the PDF/A finding below) | `engine-ops` · real engine |
+| **Metadata scrub — in-app** | The Scrub Metadata dialog clears document metadata | The same planted Info + XMP markers are absent from the saved bytes after the user-facing dialog flow (client-side scrub) | `features` · real build |
 | **PDF/A export** | Produces a genuine PDF/A for e-filing | Output carries a PDF/A OutputIntent + embedded ICC profile + `pdfaid:part=2` XMP, and opens in the app | `engine-ops` · real engine (bundled Ghostscript) |
 | Engine error handling | Fails loud, never silent | Unreachable engine → user-facing error, no blank-app hang | `engine-ops` · real engine |
 | **Sensitive-data scanner** | Catches SSNs/account numbers (Fla. R. Jud. Admin. 2.425) | Planted SSN detected, shown masked, one-click redaction offered | `features` · real build |
@@ -110,8 +113,31 @@ engine" rows exercise the bundled Stirling/OCR stack; "Real build" rows are clie
 | **Prepare for Filing — page size** | Normalizes to letter-portrait | Every page of every output part is letter-portrait (612×792) | `filing-binder` · real build |
 | **Prepare for Filing — split by size** | Splits oversized filings into portal-compliant parts | Output is ≥2 files, each named "… Part N of M" | `filing-binder` · real build |
 | **Exhibit binder** | Properly named, stamped, bookmarked | Each exhibit stamped ("Exhibit A/B") + bookmarked in order | `filing-binder` · real build |
+| **Restricted-but-not-secured** (synthetic, always runs) | Opens an owner-restricted PDF without treating it as locked | A generated RC4-40 owner-restricted PDF (empty user password, real `/Encrypt` dict) opens, renders, and is fully usable | `real-fixtures` · generated fixture |
+| **Lossless decrypt** (synthetic, always runs) | Engine decrypt preserves the text layer | The generated restricted PDF, decrypted through the sidecar client with an empty password, loses `/Encrypt`, keeps `/Font`, and renders its known planted sentence **verbatim** in the app | `real-fixtures` · generated fixture |
+| **Split-by-size over the portal cap** (synthetic, always runs) | Splits oversized filings into portal-compliant parts | A generated ~28 MB incompressible-noise PDF splits through the real split engine into ≥2 parts, every part under the FL portal cap | `split-oversize` · generated fixture |
 | **Garble → readable** (real doc) | Force-OCR rebuilds a broken/font-mismatch text layer into readable text | A real garbled scan becomes **searchable in the app** after Force re-OCR (hits for "the" go from ~0 to many) | `real-fixtures` · local fixture |
 | **Restricted-but-not-secured** (real doc) | Opens an owner-restricted PDF without treating it as locked | The PDF opens (via the engine Repair path), renders, and is fully editable | `real-fixtures` · local fixture |
+
+### Synthetic always-run tier (generated fixtures)
+
+The restricted-open, lossless-decrypt, and oversized-split acceptances used to be
+gated **entirely** on the private local fixtures below — so on any machine without
+them (including the release runner) those safety-critical checks silently skipped.
+They now run a synthetic tier first, on every canary run, driven by generators in
+[`smoke/real-engine/synthetic-fixtures.ts`](../apps/ui/smoke/real-engine/synthetic-fixtures.ts)
+(unit-tested in CI by `synthetic-fixtures.test.ts`):
+
+- **Restricted PDF** — a deterministic, hand-assembled RC4-40 (V1/R2) PDF with an
+  owner password and permission restrictions but an **empty user password**, plus a
+  real Helvetica text layer of known content. Validated against qpdf, the engine's
+  own decrypt flags, and pdf.js.
+- **Oversized-noise PDF** — a deterministic ~28 MB PDF of incompressible
+  pseudo-random raster pages (4 MiB per page, single-digit page count so the
+  O(n²) split stays fast). Generated in well under a second; never committed.
+
+The real-document tier below remains as an **additional maintainer-local layer** —
+the synthetic tier proves the mechanism, the real tier proves field documents.
 
 ### Local regression fixtures (real, uncommitted PDFs)
 
@@ -221,6 +247,17 @@ These advertised features run in [`app.smoke.ts`](../apps/ui/smoke/app.smoke.ts)
 same commit and don't need the real engine, so the canary doesn't duplicate them: view/render,
 organize (merge/split/reorder/extract/insert/rotate/crop), annotations (text box, highlight,
 comment, callout), zoom, search, insert-image, and the filing-dialog choreography.
+
+Two client-side legal outcomes are byte-level-asserted in the mocked lane too, so a
+regression fails per-PR CI rather than waiting for the release canary:
+
+- **Bates apply** — the mocked suite types an explicit prefix, applies, and asserts
+  the sequential numbers are stamped into each page's content bytes (previously the
+  per-PR check stopped at the preview string, so an actual stamping regression
+  passed CI).
+- **AcroForm fill + flatten** — fills a real AcroForm text field through the form
+  layer, saves, and asserts the interactive field is flattened away with the typed
+  value drawn into the saved bytes.
 
 ### Auto-update (partly automated, partly manual acceptance)
 
@@ -424,10 +461,14 @@ Committed as a work-in-progress. Open items, roughly in priority order:
 - **Browser UI canary still uses small files for split-by-size.** Genuinely huge filings
   are covered by the opt-in `pnpm canary:large` path-op tier because the browser canary
   should not materialize 132-283 MB legal filings into the WebView.
-- **Review artifacts** are saved for the real-fixture tests (garble, restricted, decrypt) and
-  the split test only. The synthetic engine-ops / features / filing-binder tests don't yet
-  write their outputs to `test-output/` — add `saveCanaryArtifact` calls as wanted.
-- **Metadata scrub** needs its endpoint confirmed enabled in the payload, then a check.
+- **Review artifacts** are saved for the real-fixture tests (garble, restricted, decrypt),
+  the split test, and the sanitize / engine-scrub checks. The remaining engine-ops /
+  features / filing-binder tests don't yet write their outputs to `test-output/` — add
+  `saveCanaryArtifact` calls as wanted.
+- **Garble re-OCR has no synthetic stand-in.** Unlike restricted-open, lossless-decrypt,
+  and oversized-split, the garble → readable acceptance still runs only against real
+  `garble-*.pdf` fixtures — on a machine without them, only garble *detection* logic is
+  exercised (by its unit tests), not the re-OCR rebuild.
 
 ## Adding a feature check
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 import { readEngineEndpoint } from "./endpoint";
+import { assembleClassicPdf, latin1Bytes } from "./pdf-assembly";
 import {
   decodePDFRawStream,
   PDFArray,
@@ -106,6 +107,46 @@ export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): 
 
 export function mainCanvas(page: Page): ReturnType<Page["locator"]> {
   return page.locator('[data-testid="pdf-page-canvas"]').first();
+}
+
+/**
+ * Open a restricted-but-not-secured PDF (an /Encrypt dict, empty user
+ * password) and assert it ends up fully usable. Either it opens straight away
+ * or the Repair dialog appears — this drives whichever real path the build
+ * takes. Shared by the synthetic and real-document tiers of the restricted
+ * acceptance in real-fixtures.canary.ts.
+ */
+export async function openRestrictedPdfExpectUsable(
+  page: Page,
+  fileName: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  await page.getByLabel("Open PDF file").setInputFiles({
+    name: fileName,
+    mimeType: "application/pdf",
+    buffer: Buffer.from(bytes),
+  });
+
+  const pageOne = page.getByRole("button", { name: "Page 1" });
+  const repair = page.getByRole("button", { name: "Repair PDF" });
+  await expect(async () => {
+    expect((await pageOne.isVisible()) || (await repair.isVisible())).toBe(true);
+  }).toPass({ timeout: 30_000 });
+
+  if (await repair.isVisible()) {
+    await expect(repair, "Repair must be actionable, not disabled").toBeEnabled();
+    await repair.click();
+  }
+
+  // The end state the user cares about: the restricted PDF is open, rendered,
+  // and fully usable — NOT treated as locked. (Print is a doc-dependent
+  // action that's disabled in the empty state.)
+  await expect(pageOne).toBeVisible({ timeout: 180_000 });
+  await expect(mainCanvas(page)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Print" }),
+    "a restricted-not-secured PDF should open fully usable, not locked",
+  ).toBeEnabled();
 }
 
 export async function savePdf(page: Page): Promise<Uint8Array> {
@@ -238,43 +279,27 @@ export function createImageOnlyPdf(): Uint8Array {
 
   // Assemble via Buffer chunks — never spread the multi-KB pixel array into
   // push()/concat args (that overflows the call stack).
-  const bytes = (value: string): Buffer => Buffer.from(value, "latin1");
-  const content = bytes("q\n500 0 0 160 56 520 cm\n/Im1 Do\nQ\n");
+  const content = latin1Bytes("q\n500 0 0 160 56 520 cm\n/Im1 Do\nQ\n");
   const imageStream = Buffer.concat([
-    bytes(
+    latin1Bytes(
       `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} ` +
         `/ColorSpace /DeviceGray /BitsPerComponent 8 /Length ${pixels.length} >>\nstream\n`,
     ),
     Buffer.from(pixels),
-    bytes("\nendstream"),
+    latin1Bytes("\nendstream"),
   ]);
   const contentStream = Buffer.concat([
-    bytes(`<< /Length ${content.length} >>\nstream\n`),
+    latin1Bytes(`<< /Length ${content.length} >>\nstream\n`),
     content,
-    bytes("endstream"),
+    latin1Bytes("endstream"),
   ]);
-  const objects: Buffer[] = [
-    bytes("<< /Type /Catalog /Pages 2 0 R >>"),
-    bytes("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-    bytes("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>"),
+  return assembleClassicPdf([
+    latin1Bytes("<< /Type /Catalog /Pages 2 0 R >>"),
+    latin1Bytes("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    latin1Bytes("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>"),
     imageStream,
     contentStream,
-  ];
-
-  const parts: Buffer[] = [bytes("%PDF-1.4\n")];
-  const totalLength = (): number => parts.reduce((sum, part) => sum + part.length, 0);
-  const offsets: number[] = [];
-  objects.forEach((body, index) => {
-    offsets.push(totalLength());
-    parts.push(bytes(`${index + 1} 0 obj\n`), body, bytes("\nendobj\n"));
-  });
-  const xref = totalLength();
-  parts.push(bytes(`xref\n0 ${objects.length + 1}\n`), bytes("0000000000 65535 f \n"));
-  for (const offset of offsets) {
-    parts.push(bytes(`${String(offset).padStart(10, "0")} 00000 n \n`));
-  }
-  parts.push(bytes(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`));
-  return new Uint8Array(Buffer.concat(parts));
+  ]);
 }
 
 // --- Local regression fixtures (real, uncommitted PDFs) -----------------------

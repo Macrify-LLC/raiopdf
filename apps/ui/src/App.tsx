@@ -224,6 +224,7 @@ import {
   pathOpWatermark,
   pickProtectedOutputTarget,
   listenProtectProgress,
+  openPackageRoot,
   protectToTarget,
   releaseProtectedOutputTarget,
   revealGrantInFolder,
@@ -304,11 +305,12 @@ import {
   extractTextBoxes,
   findTextRedactionAreas,
   readMetadataSummary,
-  scanSensitivePatterns,
+  scanSensitivePatternsWithReadability,
   verifyRedactionAreasClear,
   type PdfMetadataSummary,
   type RedactionVerificationResult,
   type SensitiveHit,
+  type SensitiveScanOutcome,
 } from "./lib/legalTools";
 import type { SignatureInvalidationNotice } from "./hooks/useDocument";
 import {
@@ -345,6 +347,9 @@ const AVAILABLE_FILING_PACKS: readonly JurisdictionPack[] = listPacks();
 const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
 const OCR_FAILURE_MESSAGE = "Couldn't make this document searchable.";
+const SCANNER_NO_TEXT_MESSAGE =
+  "This document has no readable text to scan — it looks like a scanned image. " +
+  "Run Make Searchable (OCR) first, then scan again.";
 const DROPPED_PDF_MATERIALIZE_MESSAGE = "Preparing this document for filing…";
 
 declare global {
@@ -866,6 +871,8 @@ export function App() {
     scanning: false,
     message: null,
     hits: [],
+    noReadableText: false,
+    markedHitIds: [],
   });
   const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
   const [filingPreferences, setFilingPreferences] = useState<FilingPreferences>(() => readFilingPreferences());
@@ -1648,7 +1655,7 @@ export function App() {
     setRedactionSearchOpen(false);
     setRedactionSearchText("");
     setRedactionSelectMode("draw");
-    setScannerState({ scanning: false, message: null, hits: [] });
+    setScannerState({ scanning: false, message: null, hits: [], noReadableText: false, markedHitIds: [] });
     setBatesState({ applying: false, message: null });
     setScrubState({ scrubbing: false, message: null, removedFields: [] });
     setFilingReport(null);
@@ -1695,7 +1702,7 @@ export function App() {
     setPendingRedactions([]);
     setActiveTextEdit(false);
     setTextEditAnnotationPrompt(null);
-    setScannerState({ scanning: false, message: null, hits: [] });
+    setScannerState({ scanning: false, message: null, hits: [], noReadableText: false, markedHitIds: [] });
     setFilingReport(null);
     setFilingReportLoading(false);
     setFilingReportError(null);
@@ -6198,6 +6205,24 @@ export function App() {
           ? "The document is still opening. Try again in a moment."
           : "Open a PDF before running the sensitive info scanner.",
         hits: [],
+        noReadableText: false,
+        markedHitIds: [],
+      });
+      return;
+    }
+
+    // The status bar already knows when the text layer is absent — running
+    // the pattern scan there would "pass" vacuously and read as a clean bill
+    // of health. Report the missing text honestly and offer OCR instead.
+    if (deriveTextLayerStatus(document.textLayerCoverage).state === "image_only") {
+      // Invalidate any in-flight scan so its late result can't overwrite this.
+      scannerRunRef.current += 1;
+      setScannerState({
+        scanning: false,
+        message: SCANNER_NO_TEXT_MESSAGE,
+        hits: [],
+        noReadableText: true,
+        markedHitIds: [],
       });
       return;
     }
@@ -6213,9 +6238,13 @@ export function App() {
       scanning: true,
       message: "Scanning extracted text...",
       hits: [],
+      noReadableText: false,
+      markedHitIds: [],
     }));
 
-    void (async () => {
+    const supersededOutcome: SensitiveScanOutcome = { hits: [], noReadableText: false };
+
+    void (async (): Promise<SensitiveScanOutcome> => {
       if (!sourceBytes) {
         // Streamed: walk pages in windows first (fills the proxy-keyed text
         // cache) so the user sees progress, then run the pattern scan over
@@ -6231,7 +6260,7 @@ export function App() {
           );
 
           if (!isCurrentScannerRun()) {
-            return [];
+            return supersededOutcome;
           }
 
           setScannerState((current) => (
@@ -6241,33 +6270,37 @@ export function App() {
           ));
         }
 
-        return scanSensitivePatterns(scanProxy);
+        return scanSensitivePatternsWithReadability(scanProxy);
       }
 
       const loadedForScan = pdfDocument ? null : await loadPdfDocument(sourceBytes);
       const scanDocument = pdfDocument ?? loadedForScan;
 
       if (!scanDocument) {
-        return [];
+        return supersededOutcome;
       }
 
       try {
-        return await scanSensitivePatterns({ bytes: sourceBytes, pdfDocument: scanDocument });
+        return await scanSensitivePatternsWithReadability({ bytes: sourceBytes, pdfDocument: scanDocument });
       } finally {
         await loadedForScan?.loadingTask.destroy();
       }
     })()
-      .then((hits) => {
+      .then(({ hits, noReadableText }) => {
         if (!isCurrentScannerRun()) {
           return;
         }
 
         setScannerState({
           scanning: false,
-          message: hits.length
-            ? `${hits.length} possible ${hits.length === 1 ? "item" : "items"} found.`
-            : "No obvious sensitive patterns found. Review remains yours.",
+          message: noReadableText
+            ? SCANNER_NO_TEXT_MESSAGE
+            : hits.length
+              ? `${hits.length} possible ${hits.length === 1 ? "item" : "items"} found.`
+              : "No obvious sensitive patterns found. Review remains yours.",
           hits,
+          noReadableText,
+          markedHitIds: [],
         });
       })
       .catch(() => {
@@ -6279,18 +6312,44 @@ export function App() {
           scanning: false,
           message: "The scanner could not read text from this PDF.",
           hits: [],
+          noReadableText: false,
+          markedHitIds: [],
         });
       });
-  }, [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, streamedDocument]);
+  }, [document.bytes, document.generation, document.textLayerCoverage, getOpenToken, isCurrentDocument, pdfDocument, streamedDocument]);
 
   const markScannerHit = useCallback(
     (hit: SensitiveHit) => {
       setActiveLegalTool("redact");
       addPendingRedaction(hit.area);
+      setScannerState((current) => (
+        (current.markedHitIds ?? []).includes(hit.id)
+          ? current
+          : { ...current, markedHitIds: [...(current.markedHitIds ?? []), hit.id] }
+      ));
       setRedactionMessage(`${hit.category} on page ${hit.pageIndex + 1} marked for redaction.`);
     },
     [addPendingRedaction],
   );
+
+  const markAllScannerHits = useCallback(() => {
+    const markedHitIds = scannerState.markedHitIds ?? [];
+    const unmarked = scannerState.hits.filter((hit) => !markedHitIds.includes(hit.id));
+
+    if (unmarked.length === 0) {
+      return;
+    }
+
+    setActiveLegalTool("redact");
+    addPendingRedactions(unmarked.map((hit) => hit.area));
+    setScannerState((current) => ({
+      ...current,
+      markedHitIds: [...(current.markedHitIds ?? []), ...unmarked.map((hit) => hit.id)],
+    }));
+    setRedactionMessage(
+      `${unmarked.length} scanner ${unmarked.length === 1 ? "hit" : "hits"} marked for redaction.`,
+    );
+  }, [addPendingRedactions, scannerState]);
 
   const scrubDocumentMetadata = useCallback(async () => {
     if (!document.bytes) {
@@ -7829,6 +7888,15 @@ export function App() {
     }
   }, [setError]);
 
+  // Same reveal pattern for the package workflows' completion cards
+  // (Production Set, Batch Cleanup) — their outputs are path-addressed
+  // package roots, not single-file grants.
+  const openPackageRootFolder = useCallback((path: string) => {
+    void openPackageRoot(path).catch(() => {
+      setError("The package was built, but its folder could not be opened.");
+    });
+  }, [setError]);
+
   const fitToPageWidth = useCallback(() => {
     if (document.source === null) {
       return;
@@ -8385,6 +8453,7 @@ export function App() {
             progress={batchCleanupProgress}
             onAddFile={openBatchCleanupFile}
             onRun={buildBatchCleanupFromUi}
+            onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("batch-cleanup")}
           />
         </FloatingDialog>
@@ -8407,6 +8476,7 @@ export function App() {
             progress={productionProgress}
             onAddFile={openProductionFile}
             onRun={buildProductionSetFromUi}
+            onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("production-set")}
           />
         </FloatingDialog>
@@ -8655,6 +8725,7 @@ export function App() {
         onRedactionAreaRemoved={removePendingRedaction}
         onRunScanner={runScanner}
         onMarkScannerHit={markScannerHit}
+        onMarkAllScannerHits={markAllScannerHits}
         onOpenAbout={openAboutMacrify}
         onHelpRequested={openHelp}
         onConnectToAi={openConnectToAi}

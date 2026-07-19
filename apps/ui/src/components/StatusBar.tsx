@@ -12,6 +12,8 @@ export interface StatusBarProps {
   textLayerStatus?: TextLayerStatus | null;
   outlineStatus?: string | null;
   onFixGarbledText?: (() => void) | undefined;
+  /** Opens the Make Searchable (OCR) confirm flow from the image-only chip. */
+  onMakeSearchable?: (() => void) | undefined;
 }
 
 export function StatusBar({
@@ -22,6 +24,7 @@ export function StatusBar({
   textLayerStatus = null,
   outlineStatus = null,
   onFixGarbledText,
+  onMakeSearchable,
 }: StatusBarProps) {
   const [detailOpen, setDetailOpen] = useState(false);
 
@@ -34,6 +37,7 @@ export function StatusBar({
         <SearchabilityChip
           status={textLayerStatus}
           onOpenDetail={() => setDetailOpen(true)}
+          onMakeSearchable={onMakeSearchable}
         />
       ) : null}
       {outlineStatus ? <span className="status-bar__outline-status">{outlineStatus}</span> : null}
@@ -55,9 +59,11 @@ export function StatusBar({
 function SearchabilityChip({
   status,
   onOpenDetail,
+  onMakeSearchable,
 }: {
   status: TextLayerStatus;
   onOpenDetail: () => void;
+  onMakeSearchable?: (() => void) | undefined;
 }) {
   if (status.state === "clean") {
     return (
@@ -90,10 +96,30 @@ function SearchabilityChip({
   }
 
   if (status.state === "image_only") {
+    const imageOnlyLabel = "No searchable text — run Make Searchable";
+
+    // Same interactive treatment as the garbled chip: the chip that names an
+    // action should BE the action, not a dead label next to one.
+    if (onMakeSearchable) {
+      return (
+        <button
+          type="button"
+          className="status-bar__search-chip status-bar__search-chip--button"
+          data-status="image_only"
+          title="This document has no searchable text. Open Make Searchable (OCR)."
+          onClick={onMakeSearchable}
+        >
+          <OcrSearchIcon size={12} />
+          <span className="status-bar__search-chip-label">{imageOnlyLabel}</span>
+          <ChevronRightIcon size={10} className="status-bar__search-chip-chevron" />
+        </button>
+      );
+    }
+
     return (
       <span className="status-bar__search-chip" data-status="image_only">
         <OcrSearchIcon size={12} />
-        <span className="status-bar__search-chip-label">No searchable text — run Make Searchable</span>
+        <span className="status-bar__search-chip-label">{imageOnlyLabel}</span>
       </span>
     );
   }

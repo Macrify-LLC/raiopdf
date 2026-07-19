@@ -2301,6 +2301,7 @@ pub fn run() {
             path_ops::path_op_document_facts,
             path_ops::path_op_inspect_protection,
             path_ops::reveal_file_grant,
+            path_ops::open_package_root,
             path_ops::pick_protected_output_target,
             path_ops::release_protected_output_target,
             path_ops::protect_to_target,

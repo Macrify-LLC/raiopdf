@@ -25,6 +25,7 @@ import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusI
 import { ErrorReportButton } from "./ErrorReportButton";
 import { LoadingSun } from "./LoadingSun";
 import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
+import { PackageRootPathField } from "./PackageRootPathField";
 import "./PrepareForFilingWorkspace.css";
 
 export type FilingProgressPhase =
@@ -917,10 +918,13 @@ function PacketBuilderPanel({
       <div className="filing-packet__grid">
         <label>
           <span>Package root folder</span>
-          <input
+          {/* Browse gates on progress.running like Batch Cleanup and
+              Production Set — a mid-build root swap would only confuse. */}
+          <PackageRootPathField
             value={outputDir}
-            onChange={(event) => onOutputDirChange(event.currentTarget.value)}
-            placeholder="Choose an empty folder..."
+            onChange={onOutputDirChange}
+            disabled={progress.running}
+            browseButtonClassName="filing-card__secondary-button"
           />
         </label>
         <label>

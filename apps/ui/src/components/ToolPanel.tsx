@@ -68,6 +68,7 @@ import {
   WrenchIcon,
 } from "../icons";
 import type { EditToolId } from "../lib/edits";
+import { useBatesPrefix } from "../hooks/useBatesPrefix";
 import type { TextEditState } from "../hooks/useTextEdit";
 import { AccordionGroup } from "./AccordionGroup";
 import { EditTextStatusPanel } from "./EditTextStatusPanel";
@@ -152,6 +153,14 @@ export interface ScannerPanelState {
   scanning: boolean;
   message: string | null;
   hits: readonly SensitiveHit[];
+  /**
+   * True when the last scan could not read any text (image-only/near-empty
+   * text layer) — the panel offers Make Searchable (OCR) instead of letting
+   * a vacuous "no patterns found" read as a clean bill of health.
+   */
+  noReadableText?: boolean;
+  /** Hit ids already sent to the redaction queue for the current scan. */
+  markedHitIds?: readonly string[];
 }
 
 export interface ScrubMetadataPanelState {
@@ -196,6 +205,8 @@ export interface ToolPanelProps {
   onRemovePendingEdit: (id: string) => void;
   onRunScanner: () => void;
   onMarkScannerHit: (hit: SensitiveHit) => void;
+  /** Batch counterpart of onMarkScannerHit: queues every unmarked hit. */
+  onMarkAllScannerHits?: (() => void) | undefined;
   onHelpRequested: (articleId: string) => void;
   /**
    * Top-level entry point for "Connect to AI Agent" -- opens the same
@@ -242,6 +253,7 @@ export function ToolPanel({
   onRemovePendingEdit,
   onRunScanner,
   onMarkScannerHit,
+  onMarkAllScannerHits,
   onHelpRequested,
   onConnectToAi,
   onRotateLeft,
@@ -476,8 +488,11 @@ export function ToolPanel({
                 <ScannerPanel
                   state={scanner}
                   hasDocument={hasDocument}
+                  ocrBusy={isOcrActive(ocrState.phase, ocrStarting)}
                   onRunScanner={onRunScanner}
                   onMarkHit={onMarkScannerHit}
+                  onMarkAllHits={onMarkAllScannerHits}
+                  onMakeSearchable={onMakeSearchable}
                   onHelp={() => onHelpRequested(tool.helpArticleId)}
                 />
               ) : null}
@@ -642,7 +657,15 @@ export function BatesPanel({
   pageCount: number;
   onApply: (options: PdfBatesStampOptions) => Promise<boolean>;
 }) {
-  const [prefix, setPrefix] = useState("SMITH");
+  const {
+    prefix,
+    setPrefix,
+    noPrefix,
+    setNoPrefix,
+    effectivePrefix,
+    prefixMissing,
+    gateMessage,
+  } = useBatesPrefix();
   const [start, setStart] = useState(1);
   const [digits, setDigits] = useState(6);
   const [placement, setPlacement] = useState<PdfStampPlacement>({
@@ -651,8 +674,8 @@ export function BatesPanel({
   });
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const preview = useMemo(
-    () => `${prefix}${String(Math.max(0, start)).padStart(Math.max(1, digits), "0")}`,
-    [digits, prefix, start],
+    () => `${effectivePrefix}${String(Math.max(0, start)).padStart(Math.max(1, digits), "0")}`,
+    [digits, effectivePrefix, start],
   );
   const lastNumber = start + Math.max(0, pageCount - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
@@ -667,13 +690,18 @@ export function BatesPanel({
       return;
     }
 
+    if (prefixMissing) {
+      setLocalMessage(gateMessage);
+      return;
+    }
+
     if (overflows) {
       setLocalMessage("Increase digits or lower the start number so every page fits.");
       return;
     }
 
     const applied = await onApply({
-      prefix,
+      prefix: effectivePrefix,
       start,
       digits,
       placement,
@@ -689,8 +717,22 @@ export function BatesPanel({
     <form className="tool-panel__inline-card" onSubmit={apply}>
       <div className="tool-panel__field">
         <label htmlFor="bates-prefix">Prefix</label>
-        <input id="bates-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+        <input
+          id="bates-prefix"
+          value={prefix}
+          placeholder="e.g. SMITH"
+          disabled={noPrefix}
+          onChange={(event) => setPrefix(event.target.value)}
+        />
       </div>
+      <label className="tool-panel__check-row" title="Stamp Bates numbers with no letter prefix — numbers only.">
+        <input
+          type="checkbox"
+          checked={noPrefix}
+          onChange={(event) => setNoPrefix(event.target.checked)}
+        />
+        No prefix (numbers only)
+      </label>
       <div className="tool-panel__field-grid">
         <div className="tool-panel__field">
           <label htmlFor="bates-start">Start</label>
@@ -740,7 +782,8 @@ export function BatesPanel({
       <button
         type="submit"
         className="tool-panel__primary-button"
-        disabled={!hasDocument || state.applying || overflows}
+        disabled={!hasDocument || state.applying || overflows || prefixMissing}
+        title={prefixMissing ? gateMessage : undefined}
       >
         Apply Bates Numbers
       </button>
@@ -751,21 +794,32 @@ export function BatesPanel({
 function ScannerPanel({
   state,
   hasDocument,
+  ocrBusy,
   onRunScanner,
   onMarkHit,
+  onMarkAllHits,
+  onMakeSearchable,
   onHelp,
 }: {
   state: ScannerPanelState;
   hasDocument: boolean;
+  ocrBusy: boolean;
   onRunScanner: () => void;
   onMarkHit: (hit: SensitiveHit) => void;
+  onMarkAllHits?: (() => void) | undefined;
+  onMakeSearchable: () => void;
   onHelp: () => void;
 }) {
+  const markedHitIds = new Set(state.markedHitIds ?? []);
+  const unmarkedCount = state.hits.filter((hit) => !markedHitIds.has(hit.id)).length;
+
   return (
     <div className="tool-panel__inline-card">
       <div className="tool-panel__card-header">
         <p className="tool-panel__note">
-          Assistive scan — not a substitute for review. Fla. R. Jud. Admin. 2.425 governs.
+          Assistive scan — not a substitute for review. Your jurisdiction&apos;s rules
+          on sensitive information in filings govern (in Florida, Fla. R. Jud.
+          Admin. 2.425).
         </p>
         <IconButton icon={<HelpIcon size={14} />} label="Help: Sensitive Info Scanner" onClick={onHelp} />
       </div>
@@ -785,28 +839,60 @@ function ScannerPanel({
           a real failure -- telling the reader the scan came back clean right
           after saying it didn't run. Don't duplicate/contradict it. */}
       {state.message ? <p className="tool-panel__status-line">{state.message}</p> : null}
+      {state.noReadableText && !state.scanning ? (
+        <button
+          type="button"
+          className="tool-panel__secondary-button"
+          disabled={ocrBusy}
+          title={ocrBusy ? "OCR is already running." : "Rebuild the searchable text, then run the scan again."}
+          onClick={onMakeSearchable}
+        >
+          Make Searchable (OCR)…
+        </button>
+      ) : null}
       {state.hits.length ? (
-        <div className="tool-panel__hit-list" role="list">
-          {state.hits.map((hit) => (
-            <div key={hit.id} className="tool-panel__hit" role="listitem">
-              <div className="tool-panel__hit-head">
-                <span className="tool-panel__category-chip">{hit.category}</span>
-                {hit.confidence === "lower" ? (
-                  <span className="tool-panel__confidence-chip">Lower confidence</span>
-                ) : null}
-                <span>Page {hit.pageIndex + 1}</span>
-              </div>
-              <p>{hit.excerpt}</p>
-              <button
-                type="button"
-                className="tool-panel__secondary-button"
-                onClick={() => onMarkHit(hit)}
-              >
-                Mark for redaction
-              </button>
-            </div>
-          ))}
-        </div>
+        <>
+          <button
+            type="button"
+            className="tool-panel__secondary-button"
+            disabled={unmarkedCount === 0 || !onMarkAllHits}
+            title={
+              unmarkedCount === 0
+                ? "Every hit is already marked for redaction."
+                : "Queue every remaining hit as a redaction area in one step."
+            }
+            onClick={onMarkAllHits}
+          >
+            Mark all ({unmarkedCount}) for redaction
+          </button>
+          <div className="tool-panel__hit-list" role="list">
+            {state.hits.map((hit) => {
+              const marked = markedHitIds.has(hit.id);
+
+              return (
+                <div key={hit.id} className="tool-panel__hit" role="listitem">
+                  <div className="tool-panel__hit-head">
+                    <span className="tool-panel__category-chip">{hit.category}</span>
+                    {hit.confidence === "lower" ? (
+                      <span className="tool-panel__confidence-chip">Lower confidence</span>
+                    ) : null}
+                    <span>Page {hit.pageIndex + 1}</span>
+                  </div>
+                  <p>{hit.excerpt}</p>
+                  <button
+                    type="button"
+                    className="tool-panel__secondary-button"
+                    disabled={marked}
+                    title={marked ? "Already queued — review marked areas in Redact." : undefined}
+                    onClick={() => onMarkHit(hit)}
+                  >
+                    {marked ? "Marked for redaction" : "Mark for redaction"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
       ) : null}
     </div>
   );

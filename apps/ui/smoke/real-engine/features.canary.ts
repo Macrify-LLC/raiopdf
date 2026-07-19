@@ -48,6 +48,10 @@ test("Bates numbering: stamps sequential numbers into every page's content", asy
   await openPdf(page, "bates.pdf", await createPdf([200, 210, 220]));
 
   await page.getByRole("button", { name: "Bates Numbering", exact: true }).click();
+  // The prefix has no sample default any more (UX-3) — Apply stays disabled
+  // until the user names the matter or explicitly opts into numbers-only.
+  await expect(page.getByRole("button", { name: "Apply Bates Numbers" })).toBeDisabled();
+  await page.getByLabel("Prefix").fill("SMITH");
   await expect(page.getByLabel("Bates preview")).toHaveText("SMITH000001");
   await page.getByRole("button", { name: "Apply Bates Numbers" }).click();
 

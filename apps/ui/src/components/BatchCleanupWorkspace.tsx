@@ -4,6 +4,7 @@ import { tooLargeToAddMessage, type FileAddResult } from "../lib/readFileForAdd"
 import { formatBatchFailureReason } from "../lib/userMessages";
 import { CheckIcon, HelpIcon, PlusIcon } from "../icons";
 import { IconButton } from "./IconButton";
+import { PackageRootPathField } from "./PackageRootPathField";
 import "./BatchCleanupWorkspace.css";
 
 export type BatchCleanupStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -85,6 +86,8 @@ export interface BatchCleanupWorkspaceProps {
    * carry the grant, browser `tooLarge` adds render an honest gate here. */
   onAddFile: () => Promise<FileAddResult | null>;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
+  /** Opens the finished package root in the system file manager (desktop only). */
+  onOpenPackageRoot?: ((path: string) => void) | undefined;
   onHelpRequested?: (() => void) | undefined;
 }
 
@@ -118,6 +121,7 @@ export function BatchCleanupWorkspace({
   progress,
   onAddFile,
   onRun,
+  onOpenPackageRoot,
   onHelpRequested,
 }: BatchCleanupWorkspaceProps) {
   const [files, setFiles] = useState<BatchCleanupFile[]>(() =>
@@ -275,10 +279,11 @@ export function BatchCleanupWorkspace({
           </label>
           <label title="Choose an empty folder where RaioPDF can write the cleaned PDFs and reports.">
             <span>Package root folder</span>
-            <input
+            <PackageRootPathField
               value={outputDir}
-              onChange={(event) => setOutputDir(event.target.value)}
-              placeholder="Choose an empty folder..."
+              onChange={setOutputDir}
+              disabled={progress.running}
+              browseButtonClassName="batch-workspace__secondary-button"
             />
           </label>
         </div>
@@ -356,6 +361,17 @@ export function BatchCleanupWorkspace({
               <span className="batch-workspace__result-part-value">{progress.result.reportJson}</span>
             </div>
           </div>
+          {onOpenPackageRoot ? (
+            <div className="package-workflow-result-actions">
+              <button
+                type="button"
+                className="batch-workspace__secondary-button"
+                onClick={() => onOpenPackageRoot(progress.result!.packageRoot)}
+              >
+                Open folder
+              </button>
+            </div>
+          ) : null}
           {signatureInvalidatedFiles.length > 0 ? (
             <p className="batch-workspace__signature-summary" role="status">
               {signatureInvalidatedFiles.length} unlocked file{signatureInvalidatedFiles.length === 1 ? "" : "s"} had digital signatures invalidated:{" "}

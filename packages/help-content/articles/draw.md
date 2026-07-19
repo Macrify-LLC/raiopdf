@@ -13,7 +13,7 @@ spot. When you save, the mark becomes a real PDF annotation.
 
 ## How to do it
 
-1. Choose **Draw**, from the toolbar or the **Edit** tools.
+1. Choose **Draw**, from the toolbar or the **Annotate** tools.
 2. Pick a color or line width if you want a different mark.
 3. Drag on the page to draw.
 

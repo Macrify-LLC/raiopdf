@@ -16,6 +16,7 @@ import {
   HELP_ONLY_TOOL_ENTRIES,
   LEGAL_TOOLS,
   ORGANIZE_TOOLS,
+  TOOL_PANEL_ANNOTATE_TOOLS,
   TOOL_PANEL_EDIT_TOOLS,
   type EditDialogToolId,
   type LegalToolId,
@@ -77,7 +78,7 @@ import { Switch } from "./Switch";
 import { ToolRow } from "./ToolRow";
 import "./ToolPanel.css";
 
-type GroupId = "edit" | "organize" | "comment" | "legal";
+type GroupId = "edit" | "annotate" | "organize" | "legal";
 export type { EditDialogToolId, LegalToolId, OrganizeToolId };
 
 const TOOL_PANEL_ICONS = {
@@ -117,11 +118,16 @@ const TOOL_PANEL_ICONS = {
   shapeLine: <LineIcon size={16} />,
   shapeArrow: <ArrowLineIcon size={16} />,
   sign: <SignIcon size={16} />,
+  comment: <CommentIcon size={16} />,
   "edit-text": <EditIcon size={16} />,
   "page-numbers": <PageNumbersIcon size={16} />,
   watermark: <WatermarkIcon size={16} />,
 } satisfies Record<
-  LegalToolId | OrganizeToolId | EditDialogToolId | (typeof TOOL_PANEL_EDIT_TOOLS)[number]["id"],
+  | LegalToolId
+  | OrganizeToolId
+  | EditDialogToolId
+  | (typeof TOOL_PANEL_EDIT_TOOLS)[number]["id"]
+  | (typeof TOOL_PANEL_ANNOTATE_TOOLS)[number]["id"],
   ReactNode
 >;
 
@@ -276,9 +282,7 @@ export function ToolPanel({
         onToggle={() => toggleGroup("edit")}
       >
         {TOOL_PANEL_EDIT_TOOLS.map((tool) => {
-          const selected = tool.id === "edit-text"
-            ? activeTextEdit
-            : activeEditTool === tool.id;
+          const selected = activeTextEdit;
 
           return (
             <div key={tool.id}>
@@ -287,17 +291,10 @@ export function ToolPanel({
                 label={tool.label}
                 description={tool.description}
                 selected={selected}
-                disabled={tool.id === "edit-text" && longProcessLocked}
-                preserveTextSelection={isTextMarkupTool(tool.id)}
-                onSelect={() => {
-                  if (tool.id === "edit-text") {
-                    onTextEditSelected?.();
-                  } else if (isAnnotationEditToolId(tool.id)) {
-                    onEditToolSelected(tool.id);
-                  }
-                }}
+                disabled={longProcessLocked}
+                onSelect={() => onTextEditSelected?.()}
               />
-              {tool.id === "edit-text" && selected && textEdit ? (
+              {selected && textEdit ? (
                 <EditTextStatusPanel
                   textEdit={textEdit}
                   onHelp={() => onHelpRequested(tool.helpArticleId)}
@@ -343,6 +340,30 @@ export function ToolPanel({
             </div>
           );
         })}
+      </AccordionGroup>
+
+      <AccordionGroup
+        id="annotate"
+        icon={<HighlightIcon size={16} />}
+        label="Annotate"
+        isOpen={openGroup === "annotate"}
+        onToggle={() => toggleGroup("annotate")}
+      >
+        {TOOL_PANEL_ANNOTATE_TOOLS.map((tool) => {
+          const selected = activeEditTool === tool.id;
+
+          return (
+            <ToolRow
+              key={tool.id}
+              icon={TOOL_PANEL_ICONS[tool.id]}
+              label={tool.label}
+              description={tool.description}
+              selected={selected}
+              preserveTextSelection={isTextMarkupTool(tool.id)}
+              onSelect={() => onEditToolSelected(tool.id)}
+            />
+          );
+        })}
         <MarkupAnnotationControls
           hasDocument={hasDocument}
           printMarkupAnnotations={printMarkupAnnotations}
@@ -352,6 +373,9 @@ export function ToolPanel({
         />
         {pendingContentEdits.length > 0 ? (
           <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
+        ) : null}
+        {pendingComments.length > 0 ? (
+          <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
         ) : null}
       </AccordionGroup>
 
@@ -398,22 +422,6 @@ export function ToolPanel({
             </div>
           );
         })}
-      </AccordionGroup>
-
-      <AccordionGroup
-        id="comment"
-        icon={<CommentIcon size={16} />}
-        label="Comment"
-        isOpen={openGroup === "comment"}
-        onToggle={() => toggleGroup("comment")}
-      >
-        {pendingComments.length > 0 ? (
-          <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
-        ) : (
-          <p className="accordion-group__empty">
-            No comments.
-          </p>
-        )}
       </AccordionGroup>
 
       <div className="tool-panel__top-row">
@@ -515,10 +523,6 @@ function ConnectToAiRow({ onSelect }: { onSelect: () => void }) {
       </button>
     </div>
   );
-}
-
-function isAnnotationEditToolId(toolId: string): toolId is Exclude<EditToolId, "select" | "comment"> {
-  return toolId !== "edit-text";
 }
 
 function MarkupAnnotationControls({

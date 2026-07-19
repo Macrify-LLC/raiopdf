@@ -14,7 +14,7 @@ real PDF annotation.
 
 ## How to do it
 
-1. Choose **Callout**, from the toolbar or the **Edit** tools.
+1. Choose **Callout**, from the toolbar or the **Annotate** tools.
 2. Pick text and leader-line styling if you want something other than the defaults.
 3. Drag the text box.
 4. Click the page spot the arrow should point to.

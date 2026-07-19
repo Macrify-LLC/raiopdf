@@ -13,7 +13,7 @@ PDF annotation you can toggle, delete, or flatten later.
 
 ## How to do it
 
-1. Choose **Highlight**, from the toolbar or the **Edit** tools.
+1. Choose **Highlight**, from the toolbar or the **Annotate** tools.
 2. Drag across the text you want to mark.
 3. Pick a color or opacity if you want something other than the default yellow.
 4. To remove one, double-click a highlight you've added.

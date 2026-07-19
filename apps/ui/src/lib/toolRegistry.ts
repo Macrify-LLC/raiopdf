@@ -39,8 +39,18 @@ export const ORGANIZE_TOOLS = [
   { id: "rotate", label: "Rotate Pages", group: "organize", helpArticleId: "rotate", description: "Rotate the selected pages clockwise." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
+// Substantive document edits — operations that change the real PDF content
+// (engine round-trips with review/commit), as opposed to the annotation
+// overlays in TOOL_PANEL_ANNOTATE_TOOLS.
 export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "edit-text", label: "Find & Replace", group: "edit", helpArticleId: "edit-text", description: "Find and replace real PDF text with a staged review." },
+] as const satisfies readonly ToolRegistryEntry[];
+
+// Annotation & markup overlays — pending edits layered over the page and
+// applied on save. Comment leads the list because this group replaced the
+// old standalone Comment section in the sidebar.
+export const TOOL_PANEL_ANNOTATE_TOOLS = [
+  { id: "comment", label: "Comment", group: "comment-ocr", helpArticleId: "comment", description: "Add a PDF note annotation on the current page." },
   { id: "textBox", label: "Text Box", group: "edit", helpArticleId: "textBox", description: "Place editable text on the current page before saving." },
   { id: "formText", label: "Create Fillable Text Field", group: "edit", helpArticleId: "form-authoring", description: "Add a reusable text field that remains fillable in ordinary PDF viewers." },
   { id: "formCheckbox", label: "Create Fillable Checkbox", group: "edit", helpArticleId: "form-authoring", description: "Add a reusable checkbox that remains fillable in ordinary PDF viewers." },
@@ -55,7 +65,7 @@ export const TOOL_PANEL_EDIT_TOOLS = [
   { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", description: "Drag a straight line that will be saved with the PDF." },
   { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", description: "Drag an arrow that will be saved with the PDF." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
-] as const satisfies readonly ToolRegistryEntry[];
+] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 
 export const EDIT_DIALOG_TOOLS = [
   { id: "page-numbers", label: "Page Numbers...", group: "edit", helpArticleId: "page-numbers", description: "Stamp generated page numbers into selected page positions." },
@@ -89,6 +99,7 @@ export const TOOL_REGISTRY = [
   ...LEGAL_TOOLS,
   ...ORGANIZE_TOOLS,
   ...TOOL_PANEL_EDIT_TOOLS,
+  ...TOOL_PANEL_ANNOTATE_TOOLS,
   ...EDIT_DIALOG_TOOLS,
   ...COMMAND_BAR_EDIT_TOOLS,
   ...HELP_ONLY_TOOL_ENTRIES,

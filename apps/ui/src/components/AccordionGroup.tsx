@@ -9,7 +9,7 @@ export interface AccordionGroupProps {
   isOpen: boolean;
   onToggle: () => void;
   /**
-   * The Legal group is a first-class peer of Edit/Organize/Comment, but
+   * The Legal group is a first-class peer of Edit/Annotate/Organize, but
    * carries its own header wash so it reads as the flagship group.
    */
   variant?: "default" | "legal";

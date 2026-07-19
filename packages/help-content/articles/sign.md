@@ -13,7 +13,7 @@ image you've saved before.
 
 ## How to do it
 
-1. Choose **Sign**, from the toolbar or the **Edit** tools — the **Signature**
+1. Choose **Sign**, from the toolbar or the **Annotate** tools — the **Signature**
    card opens.
 2. **Draw** your signature, or choose **Image from file** to upload one.
 3. Click **Use Signature**, then click the page to place it.

@@ -49,7 +49,8 @@ cargo test --workspace
 ```
 
 - `pnpm install` wires a pre-push hook that runs `pnpm --filter @raiopdf/ui run typecheck`,
-  ensures Playwright Chromium is installed, then runs `pnpm --filter @raiopdf/ui test:smoke`.
+  then the fast `pnpm --filter @raiopdf/ui test` unit suite, then ensures Playwright
+  Chromium is installed and runs `pnpm --filter @raiopdf/ui test:smoke`.
   For emergencies, bypass it with `git push --no-verify`.
 - Keep PRs focused — one logical change per PR is easier to review and easier to revert if something's wrong.
 - Write a clear PR description: what changed and why, not just what.
@@ -78,6 +79,12 @@ red because your change deliberately alters behavior, update the corresponding r
 in the same PR and say so. Docs-only, marketing-site (`site/`), or tooling-only PRs can skip
 it. This is enforced by convention during review, not by a required CI check (the canary
 needs the full payload, which is heavier than the standard CI jobs).
+
+**Can't run the canary locally?** The payload engine is Windows-first, so on Linux there's
+no local real-engine path. Add the `run-canary` label to your PR (or ask a maintainer in a
+PR comment to add it, or to dispatch the **Canary** workflow on your branch), then link the
+green run in your PR in place of the pasted summary line. Triggers and limitations:
+[`docs/RELEASE-CANARY.md`](docs/RELEASE-CANARY.md), "Running it in CI".
 
 ## Reporting bugs
 

@@ -98,13 +98,11 @@ const COMMON_WORDS = /\b(the|and|of|to|in|is|for|that|with|shall|this|court|coun
 // The garble check is split into two independent tests on purpose. DETECTION
 // (below) is fast and deterministic — the app reads the broken text layer and
 // flags it. RE-OCR VERIFICATION (further below) drives the real OCRmyPDF pass,
-// whose completion is nondeterministic under full-suite load: Stirling caps
-// concurrent OCR at `ocrMyPdfSessionLimit` (2), and a slot not yet released by an
-// earlier OCR test can make this — the suite's 3rd OCR call — queue and stall.
-// Keeping them separate means a re-OCR stall reports as exactly that, and never
-// masks that detection (the reliable half) works. See docs/RELEASE-CANARY.md
-// "Unfinished" for the determinism follow-up (raise the session limit above the
-// suite's OCR-call count, or split the engine onto a fresh session per OCR).
+// which historically stalled intermittently when OCR session slots ran out;
+// the sidecar now sets `ocrMyPdfSessionLimit` above the suite's OCR-call count
+// (see docs/RELEASE-CANARY.md "Unfinished"). The split stays so any future
+// re-OCR stall reports as exactly that, and never masks that detection (the
+// reliable half) works.
 for (const name of garbleFixtures) {
   test(`Detects a garbled text layer: ${name}`, async ({ page }) => {
     await installRealEngineBridge(page, endpoint);

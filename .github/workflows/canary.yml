@@ -1,0 +1,119 @@
+name: Canary
+
+# Runs the real-engine feature-acceptance canary (`pnpm canary`) on a Windows
+# runner between releases — nightly, on demand, and on PRs labeled `run-canary`.
+# Intentionally NOT a required check. Full story: docs/RELEASE-CANARY.md
+# ("Running it in CI"). The toolchain steps below mirror release.yml's
+# build-windows job — keep the two in lockstep when bumping actions or steps.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at a quiet hour (off the top of the hour to dodge the cron rush).
+    - cron: "17 6 * * *"
+  pull_request:
+    # `labeled` is included so adding the `run-canary` label to an already-open
+    # PR triggers a run without needing a new push.
+    types: [opened, synchronize, reopened, labeled]
+
+# The canary only reads the repo and uploads workflow artifacts.
+permissions:
+  contents: read
+
+# Supersede older runs on the same ref. The event name is part of the group so
+# a nightly run on main never cancels an in-flight manual dispatch (or vice
+# versa); PR pushes still cancel their own superseded runs.
+concurrency:
+  group: canary-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: Real-engine canary (Windows)
+    # On pull_request events, only run when the PR carries the `run-canary`
+    # label; dispatch and schedule runs are unconditional.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    env:
+      PAYLOAD_PLATFORM: windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # corepack must run before setup-node: the pnpm cache resolver needs pnpm on PATH
+      - name: Enable pnpm from packageManager
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Unlike release.yml: the canary's only Rust build is build:external-bins,
+          # which runs in the root Cargo workspace (no Tauri shell bundle here).
+          workspaces: . -> target
+
+      - name: Set up JDK
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: 21
+          # no gradle cache: gradle files only exist inside engine/upstream after vendoring
+
+      - name: Cache payload downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: installer/.payload-cache/windows-x64
+          key: payload-windows-x64-${{ runner.os }}-${{ hashFiles('installer/PINS.windows-x64.env', 'installer/ocrmypdf-windows-requirements.txt', 'engine/PINNED_TAG') }}
+          restore-keys: |
+            payload-windows-x64-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Everything else `pnpm canary` needs is (re)built downstream: the prepare
+      # step's MCP build compiles the engine/rules package chain, and the canary's
+      # Playwright webServer builds the UI. Only help-content (resolved by the UI
+      # via its dist/) is built by nothing else.
+      - name: Build help content
+        run: pnpm --filter @raiopdf/help-content build
+
+      # Assembles payload/windows-x64 + bundled MCP runtime + external bins
+      # (target/release/raiopdf-engine-host.exe) — everything `pnpm canary` boots.
+      - name: Prepare shell bundle (payload + external bins)
+        shell: bash
+        run: pnpm prepare:shell-bundle:windows-x64
+
+      - name: Verify Windows payload
+        shell: bash
+        run: node installer/run-payload-assembler.mjs --platform windows-x64 --verify
+
+      - name: Install Playwright Chromium
+        shell: bash
+        run: pnpm --filter @raiopdf/ui exec playwright install chromium
+
+      # Drives the real UI and the real MCP connector against the real payload
+      # engine through every advertised feature. See docs/RELEASE-CANARY.md.
+      - name: Feature-acceptance canary
+        shell: bash
+        run: pnpm canary
+
+      - name: Upload Playwright traces and results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-playwright-results
+          path: apps/ui/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

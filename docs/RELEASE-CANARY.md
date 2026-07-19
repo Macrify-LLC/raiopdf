@@ -88,6 +88,32 @@ To boot just the engine and poke it by hand (or point your own AI agent / MCP cl
 node scripts/boot-payload-engine.mjs      # prints the live base URL + token, stays up until Ctrl-C
 ```
 
+## Running it in CI
+
+The same runbook also runs in GitHub Actions via the **Canary** workflow
+([`.github/workflows/canary.yml`](../.github/workflows/canary.yml)), on a `windows-latest`
+runner with the identical toolchain the release build uses. It assembles the payload and
+external bins (`pnpm prepare:shell-bundle:windows-x64`), verifies the payload, then runs
+`pnpm canary` — both the UI and MCP arms. Playwright traces are uploaded as a workflow
+artifact when a run fails.
+
+It triggers three ways:
+
+- **Nightly** against `main` (scheduled) — repeated full-suite runs between releases, so
+  intermittent failures (like the OCR-stall class below) surface instead of hiding until
+  the next release build.
+- **Manual dispatch** on any branch, from the Actions tab.
+- **Pull requests carrying the `run-canary` label** — the CI path for contributors who
+  can't run the canary locally (the payload engine is Windows-first). Adding the label to
+  an already-open PR triggers a run.
+
+What it does **not** do: it is not a required check (the payload is far heavier than the
+standard CI jobs — required gates remain the `Web` + `Shell` jobs), and it does not
+replace the release workflow's own canary step, which stays the release gate. The
+packaged-app-environment gaps below (`smoke:packaged-macos`, the manual desktop checks)
+are also outside its reach — it drives the engine through the same harness as a local
+`pnpm canary`, with the same blind spots.
+
 ## The runbook — advertised claim → acceptance check
 
 Each row is a feature RaioPDF advertises and the check that proves it does the job. "Real
@@ -441,18 +467,25 @@ tools below do.
 
 Committed as a work-in-progress. Open items, roughly in priority order:
 
-- **Garble re-OCR verification is nondeterministic under load — now split from detection.**
-  The check is two independent tests: **`Detects a garbled text layer`** (fast, reliable —
-  the app reads the broken text layer and flags it) and **`Force re-OCR rebuilds … readable
-  text`** (drives the real OCRmyPDF pass). The re-OCR half occasionally stalls in a
-  full-suite run (never returns readable text within the 3-min poll). Likely cause: Stirling
-  caps concurrent OCR at `ocrMyPdfSessionLimit` (2), and a slot not yet released by an earlier
-  OCR test (`engine-ops` runs two) makes this — the suite's 3rd OCR call — queue. The split
-  means a stall reports as exactly that and never masks that detection works. **Determinism
-  follow-up (not yet done):** raise `ocrMyPdfSessionLimit` above the suite's OCR-call count in
-  `stirling_settings_yaml` (a slot-exhaustion band-aid, cheap), and/or boot the engine on a
-  fresh OCR session per call so a leaked slot can't accumulate — verify by looping the full
-  canary. Root cause confirmation needs repeated full-suite runs (the stall is intermittent).
+- **Garble re-OCR verification was nondeterministic under load — split from detection, and
+  the session-limit fix is now applied.** The check is two independent tests: **`Detects a
+  garbled text layer`** (fast, reliable — the app reads the broken text layer and flags it)
+  and **`Force re-OCR rebuilds … readable text`** (drives the real OCRmyPDF pass). The
+  re-OCR half occasionally stalled in a full-suite run (never returned readable text within
+  the 3-min poll). Likely cause: Stirling capped concurrent OCR at `ocrMyPdfSessionLimit`
+  (2), and a slot not yet released by an earlier OCR test (`engine-ops` runs two) made
+  this — the suite's 3rd OCR call — queue. The split means a stall reports as exactly that
+  and never masks that detection works. **Determinism fix (applied):**
+  `stirling_settings_yaml` (`crates/engine-sidecar-core`) now sets
+  `ocrMyPdfSessionLimit: 4` — above the suite's OCR-call count (3), with headroom — so the
+  suite's OCR calls cannot exhaust the session slots. The heavier alternative (booting the
+  engine on a fresh OCR session per call so a leaked slot can't accumulate) remains
+  unimplemented. Root-cause confirmation still needs repeated full-suite runs (the stall
+  was intermittent). One honest caveat: the garble fixtures live in the maintainer-local
+  `fixtures.local/` tier, so the nightly CI canary (see "Running it in CI" above) skips
+  this specific test — it loops the suite's other OCR paths (`engine-ops`) nightly, but
+  the re-OCR determinism loop itself still needs local runs until a committed synthetic
+  garble fixture exists (tracked as a coverage follow-up).
 - **Separate-files two-parter is verified only at the unit level.** `packages/filing-packet`
   tests prove an oversized exhibit splits into `Part 1 of 2 …` in separate-files mode. The
   **desktop packet builder itself** (`build_filing_packet` Tauri command + its UI, which

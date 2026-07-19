@@ -25,7 +25,7 @@ Run every article against this list before it ships.
 - [ ] **Every claim is true of the current app.** If the app doesn't do it, don't say it.
 - [ ] **No claims beyond the approved marketing copy** (`site/shared/COPY.md`). Help
       explains; it doesn't sell.
-- [ ] **Legal-safety caveats are mandatory where they apply.** The 2.425 scanner and
+- [ ] **Legal-safety caveats are mandatory where they apply.** The sensitive-info scanner and
       anything assistive says, in plain words, "this is a helper — always check it
       yourself before you rely on it." Never imply the software makes the legal call.
 - [ ] **Name the permanent/irreversible steps.** If an action can't be undone, say so

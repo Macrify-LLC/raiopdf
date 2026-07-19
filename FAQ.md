@@ -226,8 +226,9 @@ for what you file.
 
 ### Can I trust the sensitive-info scanner to catch everything?
 
-Treat it as **assistive only**. It flags likely SSNs and account numbers (in the
-spirit of Florida's rule on minimizing sensitive information in filings), but you
+Treat it as **assistive only**. It flags likely SSNs and account numbers, in the
+spirit of court rules that keep sensitive information out of filings — Florida's
+Rule 2.425 is the model — but you
 should never rely on automated detection for legal judgment — verify before you
 file.
 

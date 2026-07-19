@@ -106,7 +106,7 @@ engine" rows exercise the bundled Stirling/OCR stack; "Real build" rows are clie
 | **Metadata scrub — in-app** | The Scrub Metadata dialog clears document metadata | The same planted Info + XMP markers are absent from the saved bytes after the user-facing dialog flow (client-side scrub) | `features` · real build |
 | **PDF/A export** | Produces a genuine PDF/A for e-filing | Output carries a PDF/A OutputIntent + embedded ICC profile + `pdfaid:part=2` XMP, and opens in the app | `engine-ops` · real engine (bundled Ghostscript) |
 | Engine error handling | Fails loud, never silent | Unreachable engine → user-facing error, no blank-app hang | `engine-ops` · real engine |
-| **Sensitive-data scanner** | Catches SSNs/account numbers (Fla. R. Jud. Admin. 2.425) | Planted SSN detected, shown masked, one-click redaction offered | `features` · real build |
+| **Sensitive-data scanner** | Catches SSNs/account numbers that court rules keep out of filings (in Florida, Fla. R. Jud. Admin. 2.425) | Planted SSN detected, shown masked, one-click redaction offered | `features` · real build |
 | **Case caption & cover page** | Renders caption pages locally with selectable styles | The UI saves valid caption PDFs in at least two styles, and the bytes differ by style | `features` · real build |
 | **Table of Authorities** | Builds a grouped, reviewed authority table from a brief | A brief with planted case/statute/rule citations produces a saved ToA PDF with grouped headings and citation rows | `features` · real build |
 | **Bates numbering** | Sequential numbers stamped across a set | `SMITH000001/2/3` stamped into each page's content bytes | `features` · real build |

@@ -1,7 +1,7 @@
 ---
 id: comment
 title: Comment
-group: comment-ocr
+group: edit
 summary: Drop note pins on a page. They're saved as real PDF annotations when you save.
 order: 20
 ---

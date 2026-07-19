@@ -263,5 +263,7 @@ async function toggleMaximizeWindow(): Promise<void> {
 
 async function closeWindow(): Promise<void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  // `close()` fires a close-requested event exactly like a user-initiated
+  // close, so App's unsaved-work close guard intercepts this path too.
   await getCurrentWindow().close();
 }

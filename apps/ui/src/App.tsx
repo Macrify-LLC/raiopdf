@@ -142,6 +142,12 @@ import { annotationSavePlanHasChanges, type EditToolId } from "./lib/edits";
 import { isTextEntryTarget } from "./lib/domGuards";
 import { confirmWithUser } from "./lib/nativeConfirm";
 import type { CapturedTextSelection } from "./lib/selectedTextEdit";
+import { runtimePlatform } from "./lib/runtimePlatform";
+import {
+  hasUnsavedWork,
+  tabCloseNeedsConfirm,
+  WINDOW_CLOSE_CONFIRM_MESSAGE,
+} from "./lib/unsavedWork";
 import {
   checkForSignedUpdate,
   downloadSignedUpdate,
@@ -3643,7 +3649,19 @@ export function App() {
     const nextVisibleState = documentTabs.length > 1 ? "document" : "empty";
 
     void (async () => {
-      if (tab.document.dirty) {
+      // Dirty covers committed-but-unsaved mutations. The active tab's
+      // pending annotation edits and unapplied redaction marks live in
+      // app-level state (not the tab), and a background tab's equivalent is
+      // its switch-away snapshot — all of them are discarded by a close, so
+      // all of them earn the same confirm.
+      const needsConfirm = tabCloseNeedsConfirm({
+        tabDirty: tab.document.dirty,
+        isActiveTab: closesVisibleDocument,
+        activeTabHasPendingEdits: editing.hasUnsavedEdits,
+        activeTabPendingRedactionCount: pendingRedactions.length,
+        tabHasStashedWork: tabEditingSnapshotsRef.current.has(tab.document.generation),
+      });
+      if (needsConfirm) {
         const fileName = tab.document.fileName ?? "this document";
         const confirmed = await confirmWithUser(
           `Close ${fileName} and discard unsaved changes?`,
@@ -3661,7 +3679,7 @@ export function App() {
         resetVisibleDocumentAppState(nextVisibleState);
       }
     })();
-  }, [activeTabId, closeDocumentTab, documentTabs, resetVisibleDocumentAppState]);
+  }, [activeTabId, closeDocumentTab, documentTabs, editing.hasUnsavedEdits, pendingRedactions.length, resetVisibleDocumentAppState]);
 
   const openFile = useCallback(() => {
     void filePort
@@ -8079,6 +8097,103 @@ export function App() {
       unlisten?.();
     };
   }, [document.source, editing.pendingEdits.length, wordAvailable]);
+
+  /**
+   * The window-close dirty aggregate: the close guard below reads it from a
+   * ref (its listener registers once), and the shell mirrors it via
+   * `set_unsaved_state` so the native quit path (macOS Cmd+Q / Quit
+   * RaioPDF) can confirm before exiting. The snapshot count comes from a
+   * ref, but the dependency list still covers it: every mutation of
+   * `tabEditingSnapshotsRef` (stash on switch-away, restore on switch-back,
+   * delete on tab close) happens inside a flow that also changes
+   * `documentTabs`, `editing.hasUnsavedEdits`, or the pending-redaction
+   * count, so no snapshot transition can be missed.
+   */
+  const unsavedWorkPresentRef = useRef(false);
+  const lastReportedUnsavedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const unsaved = hasUnsavedWork({
+      tabDirtyFlags: documentTabs.map((tab) => tab.document.dirty),
+      activeTabHasPendingEdits: editing.hasUnsavedEdits,
+      activeTabPendingRedactionCount: pendingRedactions.length,
+      stashedBackgroundTabCount: tabEditingSnapshotsRef.current.size,
+    });
+    unsavedWorkPresentRef.current = unsaved;
+
+    if (!isTauriRuntime() || lastReportedUnsavedRef.current === unsaved) {
+      return;
+    }
+
+    lastReportedUnsavedRef.current = unsaved;
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("set_unsaved_state", { unsaved }))
+      .catch(() => undefined);
+  }, [documentTabs, editing.hasUnsavedEdits, pendingRedactions.length]);
+
+  useEffect(() => {
+    // Windows only (the tri-state platform maps every non-mac Tauri runtime
+    // here, so this also covers a Linux dev shell; "web" has no Tauri
+    // window). On macOS the shell hides the window on close and the guard
+    // lives on the quit path instead — and merely REGISTERING a JS
+    // close-requested listener would take over close handling from the
+    // shell's hide-on-close hook and destroy the window.
+    if (runtimePlatform() !== "windows") {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let confirmInFlight = false;
+
+    void import("@tauri-apps/api/window")
+      .then(async ({ getCurrentWindow }) => {
+        if (disposed) {
+          return;
+        }
+
+        const currentWindow = getCurrentWindow();
+        // Covers every window-close path: the title-bar close button and
+        // MenuBar Exit (both call `window.close()`, which fires a
+        // close-requested event exactly like a user-initiated close),
+        // Alt+F4, and the taskbar close.
+        const nextUnlisten = await currentWindow.onCloseRequested(async (event) => {
+          if (!unsavedWorkPresentRef.current) {
+            return;
+          }
+
+          // preventDefault-first: if the confirm dialog hangs or fails, the
+          // window stays open instead of closing over unsaved work.
+          event.preventDefault();
+          if (confirmInFlight) {
+            return;
+          }
+
+          confirmInFlight = true;
+          try {
+            if (!(await confirmWithUser(WINDOW_CLOSE_CONFIRM_MESSAGE))) {
+              return;
+            }
+          } finally {
+            confirmInFlight = false;
+          }
+
+          // The user chose to discard: destroy() behaves like close() but
+          // skips the close-requested event, so the guard cannot re-prompt.
+          await currentWindow.destroy().catch(() => undefined);
+        });
+        if (disposed) {
+          nextUnlisten();
+        } else {
+          unlisten = nextUnlisten;
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PdfCoverStyle } from "@raiopdf/engine-api";
+import type { JurisdictionPack, JurisdictionPackId } from "@raiopdf/rules";
 import { AboutMacrifySection } from "./AboutMacrifySection";
 import { CoverStylePicker } from "./CoverStylePicker";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
@@ -24,6 +25,10 @@ export interface SettingsDialogProps {
   diagnosticsStatus?: string | null | undefined;
   onExportDiagnostics: () => void;
   updateStatus: AppUpdateStatus;
+  /** The registry pack list, threaded from App like the other pack pickers. */
+  filingPacks: readonly JurisdictionPack[];
+  defaultFilingPackId: JurisdictionPackId;
+  onDefaultFilingPackChange: (packId: JurisdictionPackId) => void;
   defaultCoverStyle: PdfCoverStyle;
   onDefaultCoverStyleChange: (style: PdfCoverStyle) => void;
   onCheckForUpdates: () => void;
@@ -43,6 +48,9 @@ export function SettingsDialog({
   diagnosticsStatus,
   onExportDiagnostics,
   updateStatus,
+  filingPacks,
+  defaultFilingPackId,
+  onDefaultFilingPackChange,
   defaultCoverStyle,
   onDefaultCoverStyleChange,
   onCheckForUpdates,
@@ -228,9 +236,21 @@ export function SettingsDialog({
               <strong>Default jurisdiction</strong>
               <small>Used for filing-preflight defaults</small>
             </span>
-            <select value="florida" disabled>
-              <option value="florida">Florida</option>
+            <select
+              value={defaultFilingPackId}
+              onChange={(event) => onDefaultFilingPackChange(event.target.value as JurisdictionPackId)}
+            >
+              {filingPacks.map((pack) => (
+                <option key={pack.id} value={pack.id}>
+                  {pack.jurisdiction} - {pack.portal}
+                </option>
+              ))}
             </select>
+            <small className="settings-dialog__status">
+              Applies the next time RaioPDF opens; this window keeps its current
+              jurisdiction. Switching jurisdiction inside Prepare for Filing also
+              updates this default.
+            </small>
           </label>
           <div className="settings-dialog__row settings-dialog__row--stacked">
             <span>

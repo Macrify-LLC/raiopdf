@@ -91,6 +91,21 @@ test("opens legal workflow dialogs before a document is loaded", async ({ page }
   }
 });
 
+test("settings offers every jurisdiction pack in an enabled default-jurisdiction select", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("menuitem", { name: "File" }).click();
+  await page.getByRole("menuitem", { name: "Settings..." }).click();
+
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(settingsDialog).toBeVisible();
+
+  const jurisdictionSelect = settingsDialog.getByRole("combobox", { name: "Default jurisdiction" });
+  await expect(jurisdictionSelect).toBeEnabled();
+  await expect(jurisdictionSelect.locator("option")).toHaveCount(5);
+  await expect(jurisdictionSelect).toHaveValue("florida");
+});
+
 test("opens, rotates, deletes, reorders, and saves a PDF round trip", async ({ page }) => {
   await page.goto("/");
   await openPdf(page, "round-trip.pdf", await createPdf([200, 210, 220, 230]));

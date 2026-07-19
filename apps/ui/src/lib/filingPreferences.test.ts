@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFilingPreferences,
+  selectDefaultPack,
   setPrepStepDefaultOverrides,
   writeFilingPreferences,
 } from "./filingPreferences";
@@ -23,6 +24,18 @@ describe("filing preferences", () => {
     }));
 
     expect(readFilingPreferences().stepDefaultOverridesByPack).toEqual({});
+  });
+
+  it("leaves the default pack unset until one is chosen", () => {
+    expect(readFilingPreferences().defaultPackId).toBeUndefined();
+  });
+
+  it("round-trips the default jurisdiction pack", () => {
+    const next = selectDefaultPack(readFilingPreferences(), "federal-cmecf");
+
+    writeFilingPreferences(next);
+
+    expect(readFilingPreferences().defaultPackId).toBe("federal-cmecf");
   });
 
   it("round-trips per-pack prep step default overrides", () => {

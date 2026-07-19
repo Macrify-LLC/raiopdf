@@ -7,6 +7,7 @@ import {
   preflight,
   shouldConvertToPdfA,
   verifyBundledPackIntegrity,
+  type DocumentFacts,
   type JurisdictionPack,
   type PackManifest,
 } from "../src/index";
@@ -68,6 +69,35 @@ describe("bundled jurisdiction packs", () => {
         expect(policy.lastVerified, `${packId}.${key}`).toBe("2026-07-02");
       }
     }
+  });
+
+  it("scopes clerk-stamp-space checks to the selected pack's own geometry", () => {
+    // First page content sits squarely inside Florida's reserved 3x3-inch
+    // top-right stamp corner. clerkStampSpaceBlank is deliberately absent so
+    // preflight derives the overlap from occupiedRegions per pack.
+    const occupiedFirstPageFacts: DocumentFacts = {
+      filename: "motion.pdf",
+      fileBytes: 2 * MiB,
+      searchableText: true,
+      pdfaCompliant: true,
+      pages: [
+        {
+          pageIndex: 0,
+          size: { w: 8.5, h: 11, in: true },
+          orientation: "portrait",
+          occupiedRegions: [{ x: 5.75, y: 8.25, w: 2, h: 2 }],
+        },
+      ],
+    };
+
+    const federalReport = preflight(occupiedFirstPageFacts, getPack("federal-cmecf"));
+    expect(federalReport.checks.map((check) => check.checkId)).not.toContain("clerk-stamp-space");
+    expect(federalReport.checks.filter((check) => check.status === "warn")).toEqual([]);
+
+    const floridaReport = preflight(occupiedFirstPageFacts, getPack("florida"));
+    expect(floridaReport.checks.find((check) => check.checkId === "clerk-stamp-space")).toMatchObject({
+      status: "warn",
+    });
   });
 
   it("preserves the Federal CM/ECF national baseline choices", () => {

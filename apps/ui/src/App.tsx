@@ -338,7 +338,8 @@ import { SearchIcon } from "./icons";
 import "./components/LegalModeBar.css";
 
 const ZOOM_STEP = 0.25;
-const FLORIDA_PACK: JurisdictionPack = getPack();
+/** The registry's default jurisdiction pack — the fallback when no preference is stored. */
+const DEFAULT_PACK: JurisdictionPack = getPack();
 const AVAILABLE_FILING_PACKS: readonly JurisdictionPack[] = listPacks();
 const PACK_INTEGRITY_BANNER = getPackIntegrityBanner();
 const POINTS_PER_INCH = 72;
@@ -861,7 +862,7 @@ export function App() {
   const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
   const [filingPreferences, setFilingPreferences] = useState<FilingPreferences>(() => readFilingPreferences());
   const [filingPackId, setFilingPackId] = useState<JurisdictionPackId>(() => (
-    filingPreferences.defaultPackId ?? FLORIDA_PACK.id
+    filingPreferences.defaultPackId ?? DEFAULT_PACK.id
   ));
   const [filingReport, setFilingReport] = useState<PreflightReport | null>(null);
   const [filingFacts, setFilingFacts] = useState<DocumentFacts | null>(null);
@@ -911,7 +912,7 @@ export function App() {
     try {
       return getPack(filingPackId);
     } catch {
-      return FLORIDA_PACK;
+      return DEFAULT_PACK;
     }
   }, [filingPackId]);
   const selectedCourtProfile = useMemo(() => {
@@ -1101,6 +1102,12 @@ export function App() {
   }, [baseFilingPack.id, filingPreferences, updateFilingPreferences]);
   const handleDefaultCoverStyleChange = useCallback((style: PdfCoverStyle) => {
     updateFilingPreferences(selectDefaultCoverStyle(filingPreferences, style));
+  }, [filingPreferences, updateFilingPreferences]);
+  // Settings-dialog default: persists the preference only. The in-session pack
+  // (filingPackId) initializes from it at mount and is deliberately left alone
+  // here so an open filing tool doesn't switch jurisdictions underneath the user.
+  const handleDefaultFilingPackChange = useCallback((packId: JurisdictionPackId) => {
+    updateFilingPreferences(selectDefaultPack(filingPreferences, packId));
   }, [filingPreferences, updateFilingPreferences]);
   const handleToggleMcpEnabled = useCallback((next: boolean) => {
     const requestId = mcpToggleRequestRef.current + 1;
@@ -8690,6 +8697,9 @@ export function App() {
           diagnosticsStatus={diagnosticsStatus}
           onExportDiagnostics={handleExportDiagnostics}
           updateStatus={updateStatus}
+          filingPacks={AVAILABLE_FILING_PACKS}
+          defaultFilingPackId={filingPreferences.defaultPackId ?? DEFAULT_PACK.id}
+          onDefaultFilingPackChange={handleDefaultFilingPackChange}
           defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
           onDefaultCoverStyleChange={handleDefaultCoverStyleChange}
           onCheckForUpdates={() => {
@@ -9436,11 +9446,10 @@ async function readFilingFacts(
     facts.searchableText = hasExtractedTextOnEveryPage;
   }
 
-  if (pageOccupiedRegions.has(0)) {
-    facts.clerkStampSpaceBlank = !pageOccupiedRegions
-      .get(0)!
-      .some((region) => intersects(region, FLORIDA_PACK.clerkStampSpace.firstPage));
-  }
+  // clerkStampSpaceBlank is intentionally left unset: preflight computes the
+  // clerk-stamp overlap from firstPage.occupiedRegions using the selected
+  // pack's own geometry, so precomputing it here would hardwire one court's
+  // stamp space into every jurisdiction.
 
   return facts;
 }
@@ -9772,15 +9781,6 @@ function hasCertificateContent(certificate: CertificateOfServiceDraft): boolean 
     certificate.caseCaption.trim() ||
     certificate.serviceList.trim() ||
     certificate.date.trim(),
-  );
-}
-
-function intersects(a: RectInches, b: RectInches): boolean {
-  return (
-    a.x < b.x + b.w &&
-    a.x + a.w > b.x &&
-    a.y < b.y + b.h &&
-    a.y + a.h > b.y
   );
 }
 

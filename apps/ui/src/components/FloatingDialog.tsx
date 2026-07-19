@@ -200,7 +200,7 @@ export function FloatingDialog({
               aria-label={`Close ${title}`}
               onClick={onClose}
             >
-              x
+              ×
             </button>
           </div>
         </header>

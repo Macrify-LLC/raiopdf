@@ -432,6 +432,7 @@ const mockEditing: EditingState = {
     hasSignatureEdit: false,
   }),
   hasUnsavedEdits: false,
+  lastUndoableEditId: null,
   resetForDocument: noop,
   captureDocumentState: () => ({
     pendingEdits: [],

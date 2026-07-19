@@ -41,6 +41,13 @@ export interface CommandBarProps {
   searchDisabled?: boolean;
   searchDisabledReason?: string;
   searchCanNavigate?: boolean;
+  /**
+   * Toolbar Undo mirrors Edit > Undo in the menu bar: same action, same
+   * gate — AppShell derives the single value (open document + a pending
+   * edit) that every undo door consumes.
+   */
+  canUndo?: boolean;
+  onUndo?: (() => void) | undefined;
   onSearchChange?: ((value: string) => void) | undefined;
   onSearchPrevious?: (() => void) | undefined;
   onSearchNext?: (() => void) | undefined;
@@ -77,6 +84,8 @@ export function CommandBar({
   searchDisabled = false,
   searchDisabledReason,
   searchCanNavigate = false,
+  canUndo = false,
+  onUndo,
   onSearchChange,
   onSearchPrevious,
   onSearchNext,
@@ -183,7 +192,7 @@ export function CommandBar({
       <span className="command-bar__divider" aria-hidden="true" />
 
       <div className="command-bar__group">
-        <IconButton icon={<UndoIcon size={17} />} label="Undo" disabled />
+        <IconButton icon={<UndoIcon size={17} />} label="Undo" onClick={onUndo} disabled={!canUndo} />
       </div>
 
       <div className="command-bar__group command-bar__help-group">
@@ -312,7 +321,7 @@ export function CommandBar({
           onClick={onPrepareForFiling}
         >
           <BoltIcon variant="outline" size={14} />
-          Make Filing Ready
+          Prepare for Filing
         </button>
         {longProcessLockoutLabel ? (
           <span className="command-bar__lockout-note">{longProcessLockoutLabel}</span>

@@ -142,6 +142,13 @@ export interface EditingState {
   } | null;
   collectMarkupAnnotationSavePlan: () => AnnotationSavePlan;
   hasUnsavedEdits: boolean;
+  /**
+   * The id of the newest pending edit that undo may remove, or null. Imported
+   * annotations (opened with the document) are never undo targets — undoing
+   * "your last edit" must not delete pre-existing document content. Every
+   * undo door (menu, Ctrl+Z, toolbar) derives from this one value.
+   */
+  lastUndoableEditId: string | null;
   /** Clears all document-bound edit state (pending items + form values). */
   resetForDocument: () => void;
   /** Captures the document-bound edit state for a tab switch-away. */
@@ -472,6 +479,17 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     return annotationSavePlanHasChanges(annotationSavePlan) || Object.keys(formValues).length > 0;
   }, [annotationSavePlan, formValues]);
 
+  const lastUndoableEditId = useMemo(() => {
+    const last = pendingEdits[pendingEdits.length - 1];
+    if (!last) {
+      return null;
+    }
+    // Same imported-annotation test the save plan uses: an edit carrying an
+    // annotId that was loaded with the document is existing content.
+    const imported = Boolean(last.annotId) && importedAnnotIds.has(last.annotId!);
+    return imported ? null : last.id;
+  }, [importedAnnotIds, pendingEdits]);
+
   const collectAnnotationSavePlan = useCallback(() => {
     const hasFormWrite = Object.keys(formValues).length > 0;
 
@@ -577,6 +595,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       collectAnnotationSavePlan,
       collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
+      lastUndoableEditId,
       resetForDocument,
       captureDocumentState,
       restoreDocumentState,
@@ -628,6 +647,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       collectAnnotationSavePlan,
       collectMarkupAnnotationSavePlan,
       hasUnsavedEdits,
+      lastUndoableEditId,
       resetForDocument,
       captureDocumentState,
       restoreDocumentState,

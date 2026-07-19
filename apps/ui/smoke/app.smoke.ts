@@ -80,7 +80,12 @@ test("opens legal workflow dialogs before a document is loaded", async ({ page }
       emptyState: "Add PDFs to build the production order.",
     },
   ]) {
-    await page.getByRole("button", { name: legalTool.name, exact: true }).click();
+    // Scope to the tool panel: "Prepare for Filing" also names the
+    // command-bar CTA, which stays mounted (disabled) with no document.
+    await page
+      .locator(".tool-panel")
+      .getByRole("button", { name: legalTool.name, exact: true })
+      .click();
 
     const dialog = page.getByRole("dialog", { name: legalTool.name });
     await expect(dialog).toBeVisible();
@@ -1033,7 +1038,12 @@ test("prepares an oversize landscape filing copy and re-runs preflight on output
   await installFilingBridgeMock(page, convertedPdf);
   await page.goto("/");
   await openPdf(page, "landscape-oversize.pdf", sourcePdf);
-  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
+  // Enter through the command-bar CTA (renamed to match the tool's one name,
+  // "Prepare for Filing") — same handler as the Legal sidebar row.
+  await page
+    .locator(".command-bar")
+    .getByRole("button", { name: "Prepare for Filing", exact: true })
+    .click();
 
   const filingDialog = page.getByRole("dialog", { name: "Prepare for Filing" });
   await expect(filingDialog).toBeVisible();
@@ -1077,7 +1087,10 @@ test("prepare for filing closes an open organize workspace", async ({ page }) =>
   await expect(page.getByRole("list", { name: "Page grid" })).toBeVisible();
 
   await page.getByRole("button", { name: "Legal" }).click();
-  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Prepare for Filing", exact: true })
+    .click();
 
   await expect(page.getByRole("list", { name: "Page grid" })).toHaveCount(0);
   await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
@@ -1096,7 +1109,10 @@ test("compressing an oversize filing under the cap clears the split prompt", asy
   });
   await page.goto("/");
   await openPdf(page, "oversize-compressed.pdf", sourcePdf);
-  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Prepare for Filing", exact: true })
+    .click();
 
   await expect(page.getByRole("button", { name: "Compress first" })).toBeVisible();
   await page.getByRole("button", { name: "Compress first" }).click();
@@ -1171,6 +1187,10 @@ test("places a text box, highlight, and comment, saves, and re-opens with all pr
 
   await toolPanel.getByRole("button", { name: "Annotate", exact: true }).click();
   await expect(toolPanel.getByText("2 pending edits")).toBeVisible();
+  // The toolbar Undo mirrors Edit > Undo: enabled while pending edits exist.
+  await expect(
+    page.locator(".command-bar").getByRole("button", { name: "Undo" }),
+  ).toBeEnabled();
   await expect(toolPanel.getByText("1 comment", { exact: true })).toBeVisible();
   await expect(
     toolPanel.locator("#accordion-panel-annotate").getByText("Check exhibit reference"),

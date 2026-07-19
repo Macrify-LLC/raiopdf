@@ -7063,10 +7063,10 @@ export function App() {
   }, [compressDocument, document.generation]);
 
   const undoLastPendingEdit = useCallback(() => {
-    const lastEdit = editing.pendingEdits[editing.pendingEdits.length - 1];
-
-    if (lastEdit) {
-      editing.removeEdit(lastEdit.id);
+    // Only ever removes the user's own newest edit — imported annotations
+    // (opened with the document) are existing content, not undo targets.
+    if (editing.lastUndoableEditId) {
+      editing.removeEdit(editing.lastUndoableEditId);
     }
   }, [editing]);
 

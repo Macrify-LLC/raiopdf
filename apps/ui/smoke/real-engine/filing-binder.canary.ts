@@ -34,7 +34,12 @@ test("Prepare for Filing: normalizes landscape to letter-portrait AND splits by 
   // page to portrait.
   await openPdf(page, "filing.pdf", await createHeavyLandscapePdf(4));
 
-  await page.getByRole("button", { name: "Prepare for Filing", exact: true }).click();
+  // Scope to the tool panel: the command-bar CTA shares the name
+  // "Prepare for Filing".
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Prepare for Filing", exact: true })
+    .click();
   await expect(page.getByRole("dialog", { name: "Prepare for Filing" })).toBeVisible();
 
   // Focus this test on the two claims under test — page-size regulation and

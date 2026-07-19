@@ -8,19 +8,45 @@ vi.hoisted(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
-describe("CommandBar page input", () => {
-  let root: Root | null = null;
-  let host: HTMLDivElement | null = null;
+let root: Root | null = null;
+let host: HTMLDivElement | null = null;
 
-  afterEach(() => {
-    if (root) {
-      act(() => root?.unmount());
-    }
-    host?.remove();
-    root = null;
-    host = null;
+afterEach(() => {
+  if (root) {
+    act(() => root?.unmount());
+  }
+  host?.remove();
+  root = null;
+  host = null;
+});
+
+function mountCommandBar(overrides: Partial<CommandBarProps> = {}): HTMLDivElement {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  act(() => {
+    root?.render(
+      <CommandBar
+        hasDocument
+        currentPage={2}
+        pageCount={10}
+        onOpen={() => undefined}
+        onSave={() => undefined}
+        onPrint={() => undefined}
+        onPreviousPage={() => undefined}
+        onNextPage={() => undefined}
+        onZoomOut={() => undefined}
+        onZoomIn={() => undefined}
+        {...overrides}
+      />,
+    );
   });
 
+  return host;
+}
+
+describe("CommandBar page input", () => {
   it("jumps to a typed page on Enter", () => {
     const onGoToPage = vi.fn();
     const input = renderCommandBar({ onGoToPage });
@@ -78,35 +104,48 @@ describe("CommandBar page input", () => {
   });
 
   function renderCommandBar(overrides: Partial<CommandBarProps> = {}): HTMLInputElement {
-    host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-
-    act(() => {
-      root?.render(
-        <CommandBar
-          hasDocument
-          currentPage={2}
-          pageCount={10}
-          onOpen={() => undefined}
-          onSave={() => undefined}
-          onPrint={() => undefined}
-          onPreviousPage={() => undefined}
-          onNextPage={() => undefined}
-          onZoomOut={() => undefined}
-          onZoomIn={() => undefined}
-          {...overrides}
-        />,
-      );
-    });
-
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Go to page"]');
+    const input = mountCommandBar(overrides).querySelector<HTMLInputElement>(
+      'input[aria-label="Go to page"]',
+    );
 
     if (!input) {
       throw new Error("Page input was not rendered.");
     }
 
     return input;
+  }
+});
+
+describe("CommandBar undo button", () => {
+  it("invokes onUndo when a pending edit can be undone", () => {
+    const onUndo = vi.fn();
+    const button = renderUndoButton({ canUndo: true, onUndo });
+
+    expect(button.disabled).toBe(false);
+
+    act(() => button.click());
+
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays disabled without an undoable edit", () => {
+    const onUndo = vi.fn();
+    const button = renderUndoButton({ canUndo: false, onUndo });
+
+    expect(button.disabled).toBe(true);
+  });
+
+
+  function renderUndoButton(overrides: Partial<CommandBarProps> = {}): HTMLButtonElement {
+    const button = mountCommandBar(overrides).querySelector<HTMLButtonElement>(
+      'button[aria-label="Undo"]',
+    );
+
+    if (!button) {
+      throw new Error("Undo button was not rendered.");
+    }
+
+    return button;
   }
 });
 

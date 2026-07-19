@@ -148,7 +148,7 @@ export function HelpPanel({ onClose, initialArticleId }: HelpPanelProps) {
                     ))}
                   </ul>
                 ) : (
-                  <p className="help-panel__empty-group">No Phase 1 articles.</p>
+                  <p className="help-panel__empty-group">No articles here yet.</p>
                 )}
               </section>
             ))}

@@ -3382,6 +3382,11 @@ fn child_path(config: &SidecarConfig) -> Option<OsString> {
     env::join_paths(paths).ok()
 }
 
+// Must stay above the canary suite's OCR-call count with headroom, or the
+// suite's later OCR calls can queue on an unreleased slot and stall — see
+// docs/RELEASE-CANARY.md ("Unfinished" → garble re-OCR).
+const OCRMYPDF_SESSION_LIMIT: u32 = 4;
+
 fn stirling_settings_yaml(ocrmypdf_path: &Path, tessdata_dir: &Path) -> String {
     format!(
         "\
@@ -3392,7 +3397,7 @@ system:
   tessdataDir: {}
 processExecutor:
   sessionLimit:
-    ocrMyPdfSessionLimit: 2
+    ocrMyPdfSessionLimit: {}
   timeoutMinutes:
     ocrMyPdfTimeoutMinutes: 30
 endpoints:
@@ -3403,7 +3408,8 @@ springdoc:
     enabled: false
 ",
         yaml_single_quote(ocrmypdf_path),
-        yaml_single_quote(tessdata_dir)
+        yaml_single_quote(tessdata_dir),
+        OCRMYPDF_SESSION_LIMIT
     )
 }
 
@@ -4161,7 +4167,7 @@ mod tests {
                 .as_ref()
         ));
         assert!(settings.contains("tessdataDir: '"));
-        assert!(settings.contains("ocrMyPdfSessionLimit: 2"));
+        assert!(settings.contains(&format!("ocrMyPdfSessionLimit: {OCRMYPDF_SESSION_LIMIT}")));
         assert!(settings.contains("enabled: false"));
         assert!(spec.envs.iter().any(|(key, value)| {
             key.to_string_lossy() == "TESSDATA_PREFIX"

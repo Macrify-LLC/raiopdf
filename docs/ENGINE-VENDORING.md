@@ -165,7 +165,9 @@ Config keys (`{STIRLING_BASE_PATH}/configs/settings.yml`, generated from
   startup availability probe and invocation).
 - `system.tessdataDir` — tessdata dir; priority: key > `TESSDATA_PREFIX` env > distro
   default. API language list = the `.traineddata` files present.
-- `processExecutor.sessionLimit.ocrMyPdfSessionLimit: 2`,
+- `processExecutor.sessionLimit.ocrMyPdfSessionLimit: 4` (the sidecar's generated
+  `custom_settings.yml` raises it from 2 so the release canary's three OCR calls
+  never queue on an unreleased slot — see `docs/RELEASE-CANARY.md`),
   `processExecutor.timeoutMinutes.ocrMyPdfTimeoutMinutes: 30`.
 - **`tesseract` and `gs` have no path key** — they must be on the sidecar process `PATH`;
   the shell must prepend the bundle dir to `PATH` when spawning the JVM.

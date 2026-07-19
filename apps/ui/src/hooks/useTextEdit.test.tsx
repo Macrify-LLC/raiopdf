@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import type { PdfSelectedTextTarget } from "@raiopdf/engine-api";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PdfEngineError, type PdfSelectedTextTarget } from "@raiopdf/engine-api";
 import {
   selectedTextReviewGateMessage,
   unsafeSelectedTextPageIndexes,
   useTextEdit,
   runTextEditEngineReplacement,
+  type TextEditState,
 } from "./useTextEdit";
 import {
   TEXT_EDIT_ZERO_CHANGE_MESSAGE,
@@ -13,13 +16,18 @@ import {
   formatReplaceTextResult,
   type PendingTextReplacement,
 } from "../lib/textEdit";
-import type { ExtractedPageText } from "../lib/pageTextCache";
+import { extractPageText, type ExtractedPageText } from "../lib/pageTextCache";
 
 vi.mock("../lib/pdfjs", () => ({
   loadPdfDocument: async () => ({
     numPages: 1,
     loadingTask: { destroy: async () => undefined },
   }),
+}));
+
+vi.mock("../lib/pageTextCache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/pageTextCache")>()),
+  extractPageText: vi.fn(),
 }));
 
 describe("useTextEdit contract helpers", () => {
@@ -180,6 +188,184 @@ describe("useTextEdit contract helpers", () => {
     expect(selectedTextReviewGateMessage(selected, new Set([0]))).toContain("unreliable text layers");
   });
 });
+
+describe("useTextEdit phase lifecycle", () => {
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+    vi.mocked(extractPageText).mockReset();
+  });
+
+  type EngineResult = {
+    bytes: Uint8Array;
+    replacedCounts: readonly number[] | null;
+    warnings: readonly never[];
+  };
+
+  function renderTextEdit(overrides: {
+    replaceText?: (...args: never[]) => Promise<EngineResult>;
+    confirmPdfAIdentificationRemoval?: () => Promise<boolean>;
+    replaceBytes?: () => Promise<"replaced" | "stale" | "failed">;
+  } = {}) {
+    const sourceBytes = new Uint8Array([1]);
+    const proxy = { numPages: 1 };
+
+    vi.mocked(extractPageText).mockImplementation(async (input) => (
+      "bytes" in input && input.bytes === sourceBytes
+        ? [page("Plaintiff files.")]
+        : [page("Petitioner files.")]
+    ));
+
+    const engineBridge = {
+      available: true,
+      warmEngine: vi.fn(),
+      inspectTextMap: vi.fn(),
+      replaceSelectedText: vi.fn(),
+      replaceText: overrides.replaceText ?? vi.fn(async () => ({
+        bytes: new Uint8Array([9]),
+        replacedCounts: [1] as readonly number[],
+        warnings: [],
+      })),
+    };
+
+    let latest: TextEditState | null = null;
+    function Probe() {
+      latest = useTextEdit({
+        source: { bytes: sourceBytes, proxy: proxy as never },
+        documentGeneration: 1,
+        sourceOpenToken: 1,
+        streamed: false,
+        textLayerCoverage: null,
+        engineBridge: engineBridge as never,
+        replaceBytes: (overrides.replaceBytes ?? (async () => "replaced" as const)) as never,
+        fileName: "test.pdf",
+        confirmSignatureInvalidation: async () => null,
+        confirmPdfAIdentificationRemoval:
+          overrides.confirmPdfAIdentificationRemoval ?? (async () => true),
+        setCurrentPage: () => undefined,
+      });
+      return null;
+    }
+
+    container = window.document.createElement("div");
+    window.document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<Probe />);
+    });
+
+    return {
+      state: () => {
+        if (!latest) {
+          throw new Error("hook did not render");
+        }
+        return latest;
+      },
+    };
+  }
+
+  async function queueReplacement(state: () => TextEditState) {
+    await act(async () => {
+      state().setFind("Plaintiff");
+      await Promise.resolve();
+    });
+    await act(async () => {
+      state().queueReplaceAll();
+      await Promise.resolve();
+    });
+    expect(state().pendingOps).toHaveLength(1);
+  }
+
+  it("releases a stranded staging phase when the run is superseded mid-review", async () => {
+    const engineResult = createDeferred<EngineResult>();
+    const { state } = renderTextEdit({ replaceText: vi.fn(() => engineResult.promise) });
+
+    await queueReplacement(state);
+
+    let reviewDone: Promise<void> = Promise.resolve();
+    await act(async () => {
+      reviewDone = state().review();
+      await Promise.resolve();
+    });
+    expect(state().phase).toBe("staging");
+
+    // Supersede the run while the engine call is still in flight.
+    await act(async () => {
+      state().setFind("Different");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      engineResult.resolve({ bytes: new Uint8Array([9]), replacedCounts: [1], warnings: [] });
+      await reviewDone;
+    });
+
+    expect(state().phase).toBe("idle");
+  });
+
+  it("surfaces a throwing confirmation callback as an error instead of spinning", async () => {
+    const { state } = renderTextEdit({
+      replaceText: vi.fn(async () => {
+        throw new PdfEngineError("UNSUPPORTED", "PDF/A conformance blocks text edits.");
+      }),
+      confirmPdfAIdentificationRemoval: async () => {
+        throw new Error("Command plugin:dialog|confirm not allowed by ACL");
+      },
+    });
+
+    await queueReplacement(state);
+
+    await act(async () => {
+      await state().review();
+    });
+
+    expect(state().phase).toBe("error");
+    expect(state().message).toContain("not allowed by ACL");
+  });
+
+  it("moves to error when applying staged bytes rejects", async () => {
+    const { state } = renderTextEdit({
+      replaceBytes: async () => {
+        throw new Error("The edited copy could not be written.");
+      },
+    });
+
+    await queueReplacement(state);
+
+    await act(async () => {
+      await state().review();
+    });
+    expect(state().phase).toBe("review");
+    expect(state().staged).not.toBeNull();
+
+    await act(async () => {
+      await state().apply();
+    });
+
+    expect(state().phase).toBe("error");
+    expect(state().message).toContain("could not be written");
+  });
+});
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
 
 function op(overrides: Partial<PendingTextReplacement> = {}): PendingTextReplacement {
   return {

@@ -12,6 +12,11 @@ name: Canary
 
 on:
   workflow_dispatch:
+    inputs:
+      webdriver_only:
+        description: "Run only the self-hosted WebDriver tier (skip the real-engine canary + macOS jobs)"
+        type: boolean
+        default: false
   schedule:
     # Nightly at a quiet hour (off the top of the hour to dodge the cron rush).
     - cron: "17 6 * * *"
@@ -36,7 +41,7 @@ jobs:
     name: Real-engine canary (Windows)
     # On pull_request events, only run when the PR carries the `run-canary`
     # label; dispatch and schedule runs are unconditional.
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')) && github.event.inputs.webdriver_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -129,7 +134,7 @@ jobs:
     # Same PR-label gate as the Windows job: this job is expensive, so on
     # pull_request events it only runs when the PR carries `run-canary`; dispatch
     # and schedule runs are unconditional.
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')
+    if: (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')) && github.event.inputs.webdriver_only != 'true'
     runs-on: macos-15
     timeout-minutes: 90
 
@@ -268,7 +273,7 @@ jobs:
     # Schedule/dispatch only. The workflow still receives PR events, so a job-level
     # condition — not the trigger list — is what keeps this off pull requests. A
     # `run-engine-smoke` label could be added later if per-PR demand appears.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event.inputs.webdriver_only != 'true'
     runs-on: macos-15
     timeout-minutes: 90
 

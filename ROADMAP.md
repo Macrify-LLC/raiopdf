@@ -24,10 +24,15 @@ buried in "later," that's exactly the kind of thing worth telling us about — s
 - **More e-filing jurisdiction packs.** The alpha covers Florida, Federal
   CM/ECF, Georgia, and Indiana. Which jurisdictions come next will be driven by
   what people ask for.
-- **Additional editing options, especially with large PDFs.** In-app editing on
-  very large documents is currently limited (they open streamed, and direct edits
-  are gated by size); widening what you can do to big files is a priority, since a
-  lot of work is gated on it today.
+- **Custom exhibit stamps.** Design your own digital exhibit sticker —
+  "Plaintiff's Exhibit ___" with a number that advances automatically as you
+  stamp — save it to a stamp gallery, and drop it onto a page. The e-sticker
+  workflow that takes a tutorial and a hidden stamps folder in Acrobat, as a
+  first-class tool.
+- **Direct editing on very large PDFs.** Big documents that open streamed now
+  get the full file-to-file toolset (split, extract, compress, OCR, and the
+  rest — shipped in 0.1.3). The remaining gap is direct in-page editing and
+  markup on those very large files, and closing it is a priority.
 - **Deeper batch and production-set options** for firms working across large
   document sets.
 
@@ -43,6 +48,14 @@ up.
 
 - **Intel Mac support.** The macOS build targets Apple Silicon (M-series) today;
   Intel support depends on demand.
+- **A mobile companion app (view + annotate).** A lower-capability build,
+  Android tablets first, focused on what runs fully on-device: viewing,
+  highlighting, handwritten ink notes, comments, bookmarks, stamps, and Bates
+  numbering. The heavy engine work — OCR, PDF/A, compression, verified
+  redaction, page surgery — would stay on desktop. Saving to OneDrive,
+  SharePoint, Google Drive, or Dropbox would ride the device's own share sheet
+  and file picker, so the app itself still never touches the network or asks
+  for an account.
 - Additional annotation and form-filling tooling.
 - More document-assembly and packaging workflows for specific practice areas.
 - Community-requested conveniences that fit the "free, local, no-nonsense" spirit

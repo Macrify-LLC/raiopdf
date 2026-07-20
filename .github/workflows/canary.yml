@@ -538,11 +538,10 @@ jobs:
       - name: Install tauri-driver
         run: cargo install tauri-driver --version "^2" --locked
 
-      # The payload assembler needs Python 3.11+ for the bundled OCR toolchain.
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
+      # NOTE: the payload assembler needs Python 3.11+ (`python`/`py` on PATH). We
+      # do NOT use actions/setup-python here — on this self-hosted runner its
+      # python.org installer hangs indefinitely. Install Python on the runner
+      # machine instead (e.g. `winget install Python.Python.3.12`).
 
       # Assembles the payload + external bins, then builds the shell exe WITH the
       # e2e-webdriver feature (raw exe, no bundle). The suite drives that exe and

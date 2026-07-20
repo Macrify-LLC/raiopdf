@@ -482,7 +482,7 @@ jobs:
       # self-hosted box resolves to WSL bash and mangles the script path — so
       # ensure the toolchain via PowerShell instead.
       - name: Ensure Rust (stable) is available
-        shell: pwsh
+        shell: powershell
         run: |
           rustup default stable
           rustc --version
@@ -535,11 +535,11 @@ jobs:
       # e2e-webdriver feature (raw exe, no bundle). The suite drives that exe and
       # points the path-op toolchain at the assembled payload via env.
       - name: Build shell with e2e-webdriver feature
-        shell: pwsh
+        shell: powershell
         run: pnpm build:shell:e2e:windows-x64
 
       - name: Run WebDriver dialog canary
-        shell: pwsh
+        shell: powershell
         run: pnpm --filter @raiopdf/shell-e2e test:e2e:windows-x64
 
       - name: Upload WebDriver logs

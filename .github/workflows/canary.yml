@@ -465,15 +465,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Enable pnpm from packageManager
-        run: corepack enable
-
+      # Node first, so corepack's shims land in the writable tool-cache Node — not
+      # a self-hosted runner's protected system Node (Program Files), where
+      # `corepack enable` fails with EPERM. No GitHub pnpm cache: a persistent
+      # self-hosted runner keeps its own pnpm store between runs.
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Enable pnpm from packageManager
+        run: corepack enable
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable

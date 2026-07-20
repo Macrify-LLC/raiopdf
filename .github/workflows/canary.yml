@@ -477,8 +477,16 @@ jobs:
       - name: Enable pnpm from packageManager
         run: corepack enable
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      # Use the runner's existing Rust (this is a RaioPDF dev machine). The
+      # dtolnay action runs `shell: bash` internally, which on a WSL-equipped
+      # self-hosted box resolves to WSL bash and mangles the script path — so
+      # ensure the toolchain via PowerShell instead.
+      - name: Ensure Rust (stable) is available
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustc --version
+          cargo --version
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -527,11 +535,11 @@ jobs:
       # e2e-webdriver feature (raw exe, no bundle). The suite drives that exe and
       # points the path-op toolchain at the assembled payload via env.
       - name: Build shell with e2e-webdriver feature
-        shell: bash
+        shell: pwsh
         run: pnpm build:shell:e2e:windows-x64
 
       - name: Run WebDriver dialog canary
-        shell: bash
+        shell: pwsh
         run: pnpm --filter @raiopdf/shell-e2e test:e2e:windows-x64
 
       - name: Upload WebDriver logs

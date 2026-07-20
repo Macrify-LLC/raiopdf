@@ -1,25 +1,16 @@
 /**
- * Shared WebDriver helpers: app readiness, per-flow reset, and the small set of
- * UI drivers the specs reuse. These lean on stable accessibility hooks
- * (`aria-label`, `role`, `data-testid`) rather than brittle geometry.
+ * Shared WebDriver helpers: app readiness and the small set of UI drivers the
+ * specs reuse. These lean on stable accessibility hooks (`aria-label`, `role`,
+ * `data-testid`) rather than brittle geometry.
  */
-import { clearDialogControl } from "./dialogControl";
-
-/** The app is booted once the always-present command-bar "Open" button shows. */
-async function waitForAppReady(): Promise<void> {
-  await $('[aria-label="Open"]').waitForDisplayed({ timeout: 60_000 });
-}
 
 /**
- * Reset to a clean React state between flows without restarting the process
- * (which would drop the fixed dialog-control env). Reloading the webview
- * re-mounts the app; the Rust side and its env persist. Clears the control file
- * so no stale canned path leaks into the next flow.
+ * The app is booted once the always-present command-bar "Open" button shows.
+ * Each spec file is its own session (a fresh app launch), so waiting for this
+ * per test is enough — no webview reload between flows is needed.
  */
-export async function resetApp(): Promise<void> {
-  clearDialogControl();
-  await browser.execute(() => window.location.reload());
-  await waitForAppReady();
+export async function waitForAppReady(): Promise<void> {
+  await $('[aria-label="Open"]').waitForDisplayed({ timeout: 60_000 });
 }
 
 /** A document is open once page 1 and its canvas are on screen. */

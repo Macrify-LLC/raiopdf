@@ -437,14 +437,18 @@ jobs:
   # locally on the same class of machine). Runner setup + requirements:
   # apps/shell/e2e/README.md.
   #
-  # Explicit opt-in only (workflow_dispatch, or the `run-webdriver` PR label): the
-  # run pops real app windows on the runner's desktop, so it must not fire on
-  # every push or nightly. INFORMATIONAL (continue-on-error) until proven stable.
+  # `workflow_dispatch` ONLY — deliberately not triggerable by pull_request.
+  # This is a PUBLIC repo and the runner is a personal Windows desktop: a fork PR
+  # that ran here would execute the fork's code (including its own edits to this
+  # workflow) on that machine. Restricting to manual dispatch means only a
+  # maintainer (write access) can start it, on a ref they choose — no PR, labeled
+  # or not, can ever run it. If a PR-triggered path is ever added back, also add
+  # `github.event.pull_request.head.repo.full_name == github.repository` and keep
+  # "require approval for outside collaborators" on in the repo Actions settings.
+  # The run also pops real app windows on the runner's desktop. INFORMATIONAL.
   webdriver-windows:
     name: Real-app WebDriver dialog canary (self-hosted Windows)
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'run-webdriver')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, windows, webview2]
     timeout-minutes: 90
     continue-on-error: true

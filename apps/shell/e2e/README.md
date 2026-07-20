@@ -84,8 +84,14 @@ Runner requirements:
 The workflow installs Node/Rust/JDK and builds the payload + shell itself, so a
 bare Windows runner works; pre-installed toolchains just make it faster.
 
-Triggering: **explicit opt-in only** — `workflow_dispatch` on `canary.yml`, or add
-the **`run-webdriver`** label to a PR. It is not on every push/nightly because the
-run pops real app windows on the runner's desktop. If the runner's username has a
-space, set the `RAIO_E2E_TAURI_DRIVER` / `RAIO_E2E_MSEDGEDRIVER` repo variables (or
-`env`) to space-free driver copies (see above).
+Triggering: **`workflow_dispatch` only** — a maintainer manually runs `canary.yml`
+on a chosen ref. It is deliberately **not** triggerable by `pull_request`: this is
+a public repo and the runner is a personal desktop, so a fork PR that ran here
+would execute the fork's code (including its own edits to the workflow) on that
+machine. Manual dispatch means only someone with write access can start it, on a
+ref they choose. Keep "require approval for outside collaborators" enabled in the
+repo's Actions settings as defense-in-depth. The run also pops real app windows on
+the desktop and takes ~15–25 min.
+
+If the runner's username has a space, set the `RAIO_E2E_TAURI_DRIVER` /
+`RAIO_E2E_MSEDGEDRIVER` repo variables (or `env`) to space-free driver copies.

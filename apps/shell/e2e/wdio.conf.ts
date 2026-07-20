@@ -27,6 +27,11 @@ import { waitForAppReady } from "./support/app";
 // there inherits these.
 process.env.RAIOPDF_ENGINE_PAYLOAD_DIR ??= payloadDir;
 process.env.RAIO_E2E_DIALOG_CONTROL = controlFile;
+// WebView2 (Chromium) won't open its remote-debugging port under a CI runner's
+// account without these — the classic "DevToolsActivePort file doesn't exist"
+// session-creation failure. WebView2 reads this env var and appends the flags.
+process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ??=
+  "--no-sandbox --disable-gpu --disable-dev-shm-usage";
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -45,8 +50,8 @@ export const config: WebdriverIO.Config = {
       "tauri",
       {
         appBinaryPath: appPath,
-        // Windows: drive the WebView2 app via the official tauri-driver route.
-        driverProvider: "official",
+        // Windows: drive the WebView2 app via the external tauri-driver route.
+        driverProvider: "external",
         // tauri-driver is provided by CI (cached cargo install) and, locally,
         // per the README; the service consumes it from PATH.
         autoInstallTauriDriver: false,

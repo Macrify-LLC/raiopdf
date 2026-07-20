@@ -1,0 +1,27 @@
+{
+  "name": "@raiopdf/shell-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-app WebDriver dialog canary for the RaioPDF shell (Windows).",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e:windows-x64": "wdio run ./wdio.conf.ts"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.1.1",
+    "@wdio/cli": "^9.20.0",
+    "@wdio/globals": "^9.20.0",
+    "@wdio/local-runner": "^9.20.0",
+    "@wdio/mocha-framework": "^9.20.0",
+    "@wdio/spec-reporter": "^9.20.0",
+    "@wdio/types": "^9.20.0",
+    "edgedriver": "^6.1.6",
+    "expect-webdriverio": "^5.5.0",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3",
+    "webdriverio": "^9.20.0"
+  }
+}

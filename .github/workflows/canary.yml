@@ -405,3 +405,157 @@ jobs:
           path: ${{ runner.temp }}/raiopdf-appdata
           if-no-files-found: ignore
           retention-days: 7
+
+  # --- Release-feature guard (fast, always runs) ---
+  # The `e2e-webdriver` Cargo feature compiles the native-dialog test stub. It
+  # must never be reachable from a release build. This static guard runs on every
+  # canary trigger, independent of the path filter below.
+  release-feature-guard:
+    name: Guard — e2e-webdriver never in a release build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Assert no release build path enables the feature
+        run: node scripts/assert-e2e-webdriver-not-in-release.mjs
+
+      - name: Guard unit test
+        run: node --test scripts/assert-e2e-webdriver-not-in-release.test.mjs
+
+  # --- Path filter for the WebDriver tier ---
+  # Job-level path filtering: run the (expensive) WebDriver tier on schedule /
+  # dispatch always, and on PRs only when app-affecting paths changed. Uses a
+  # git diff (no external action) and always succeeds, so the dependent job's
+  # `needs` gate never trips the skipped-dependency footgun.
+  changes:
+    name: Detect app-affecting changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to run the WebDriver tier
+        id: decide
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          # Three-dot (merge-base) diff: the changes the PR actually introduces,
+          # not base-branch churn. Includes the app/engine/payload surface plus the
+          # root build files and this workflow, so a change to the harness itself
+          # still exercises the tier.
+          if git diff --name-only "$base...$head" \
+              | grep -qE '^(apps/ui/|apps/shell/|engine/|installer/|crates/|packages/|scripts/|package\.json|pnpm-lock\.yaml|\.github/workflows/canary\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # --- Real-app WebDriver dialog canary (Windows) ---
+  # Drives the actual packaged shell binary (built with the e2e-webdriver feature)
+  # through WebdriverIO + tauri-driver + msedgedriver — the dialog-heavy paths the
+  # mocked Playwright/Vite suites can't reach. INFORMATIONAL for now
+  # (continue-on-error) until it has proven stable; promote to blocking later.
+  webdriver-windows:
+    name: Real-app WebDriver dialog canary (Windows)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    continue-on-error: true
+
+    env:
+      PAYLOAD_PLATFORM: windows-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Enable pnpm from packageManager
+        run: corepack enable
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: . -> target
+
+      - name: Set up JDK
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache payload downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: installer/.payload-cache/windows-x64
+          key: payload-windows-x64-${{ runner.os }}-${{ hashFiles('installer/PINS.windows-x64.env', 'installer/ocrmypdf-windows-requirements.txt', 'engine/PINNED_TAG') }}
+          restore-keys: |
+            payload-windows-x64-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build help content
+        run: pnpm --filter @raiopdf/help-content build
+
+      # tauri-driver is the external WebDriver bridge to the WebView2 app. The
+      # matching msedgedriver is auto-downloaded by the `edgedriver` package the
+      # wdio config resolves at runtime.
+      - name: Cache tauri-driver
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # The binary plus the crates metadata cargo consults to skip a rebuild.
+          path: |
+            ~/.cargo/bin/tauri-driver.exe
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: tauri-driver-${{ runner.os }}-v2
+
+      # On a cache hit cargo sees the installed ^2 binary via the restored metadata
+      # and skips the compile; otherwise it builds and populates the cache.
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --version "^2" --locked
+
+      # Assembles the payload + external bins, then builds the shell exe WITH the
+      # e2e-webdriver feature (raw exe, no bundle). The suite drives that exe and
+      # points the path-op toolchain at the assembled payload via env.
+      - name: Build shell with e2e-webdriver feature
+        shell: bash
+        run: pnpm build:shell:e2e:windows-x64
+
+      - name: Run WebDriver dialog canary
+        shell: bash
+        run: pnpm --filter @raiopdf/shell-e2e test:e2e:windows-x64
+
+      - name: Upload WebDriver logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webdriver-logs-windows-x64
+          path: |
+            apps/shell/e2e/logs/
+            apps/shell/e2e/.wdio-tmp/
+          if-no-files-found: ignore
+          retention-days: 7

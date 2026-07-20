@@ -500,11 +500,15 @@ jobs:
         with:
           workspaces: . -> target
 
+      # Java 25: a cold runner rebuilds Stirling from source, and its classfiles
+      # are Java 25 (docs/ENGINE-VENDORING.md) — Gradle needs a matching toolchain.
+      # (The hosted Windows canary uses 21 because its payload cache is warm; this
+      # tier's runner starts cold.)
       - name: Set up JDK
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 25
 
       - name: Cache payload downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

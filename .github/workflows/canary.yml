@@ -477,16 +477,23 @@ jobs:
       - name: Enable pnpm from packageManager
         run: corepack enable
 
-      # Use the runner's existing Rust (this is a RaioPDF dev machine). The
-      # dtolnay action runs `shell: bash` internally, which on a WSL-equipped
-      # self-hosted box resolves to WSL bash and mangles the script path — so
-      # ensure the toolchain via PowerShell instead.
-      - name: Ensure Rust (stable) is available
+      # Install Rust via rustup-init in PowerShell. The dtolnay action shells out
+      # to bash internally, which on this WSL-equipped runner resolves to WSL bash
+      # and mangles the script path; and the runner has no pre-installed Rust.
+      # Idempotent: skips the download when cargo is already present, always adds
+      # cargo to PATH for later steps.
+      - name: Install Rust (stable)
         shell: powershell
         run: |
-          rustup default stable
-          rustc --version
-          cargo --version
+          $ErrorActionPreference = 'Stop'
+          $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path (Join-Path $cargoBin 'cargo.exe'))) {
+            $init = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile $init
+            & $init -y --default-toolchain stable --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "rustup-init failed ($LASTEXITCODE)" }
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $cargoBin
 
       - name: Cache Rust build output
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2

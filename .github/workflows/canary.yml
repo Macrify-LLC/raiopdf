@@ -424,54 +424,28 @@ jobs:
       - name: Guard unit test
         run: node --test scripts/assert-e2e-webdriver-not-in-release.test.mjs
 
-  # --- Path filter for the WebDriver tier ---
-  # Job-level path filtering: run the (expensive) WebDriver tier on schedule /
-  # dispatch always, and on PRs only when app-affecting paths changed. Uses a
-  # git diff (no external action) and always succeeds, so the dependent job's
-  # `needs` gate never trips the skipped-dependency footgun.
-  changes:
-    name: Detect app-affecting changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      run: ${{ steps.decide.outputs.run }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - name: Decide whether to run the WebDriver tier
-        id: decide
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base='${{ github.event.pull_request.base.sha }}'
-          head='${{ github.event.pull_request.head.sha }}'
-          # Three-dot (merge-base) diff: the changes the PR actually introduces,
-          # not base-branch churn. Includes the app/engine/payload surface plus the
-          # root build files and this workflow, so a change to the harness itself
-          # still exercises the tier.
-          if git diff --name-only "$base...$head" \
-              | grep -qE '^(apps/ui/|apps/shell/|engine/|installer/|crates/|packages/|scripts/|package\.json|pnpm-lock\.yaml|\.github/workflows/canary\.yml)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # --- Real-app WebDriver dialog canary (Windows) ---
+  # --- Real-app WebDriver dialog canary (self-hosted Windows) ---
   # Drives the actual packaged shell binary (built with the e2e-webdriver feature)
-  # through WebdriverIO + tauri-driver + msedgedriver — the dialog-heavy paths the
-  # mocked Playwright/Vite suites can't reach. INFORMATIONAL for now
-  # (continue-on-error) until it has proven stable; promote to blocking later.
+  # through WebdriverIO + @wdio/tauri-service — the dialog-heavy paths the mocked
+  # Playwright/Vite suites can't reach.
+  #
+  # RUNS ON A SELF-HOSTED WINDOWS RUNNER (custom label `webview2`), NOT a
+  # GitHub-hosted runner: hosted Windows runners launch the app in an account
+  # where WebView2 refuses to open its remote-debugging port ("DevToolsActivePort
+  # file doesn't exist"), so a session can never be created. A self-hosted runner
+  # in an INTERACTIVE desktop session drives the real WebView2 fine (verified
+  # locally on the same class of machine). Runner setup + requirements:
+  # apps/shell/e2e/README.md.
+  #
+  # Explicit opt-in only (workflow_dispatch, or the `run-webdriver` PR label): the
+  # run pops real app windows on the runner's desktop, so it must not fire on
+  # every push or nightly. INFORMATIONAL (continue-on-error) until proven stable.
   webdriver-windows:
-    name: Real-app WebDriver dialog canary (Windows)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: windows-latest
+    name: Real-app WebDriver dialog canary (self-hosted Windows)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-webdriver')
+    runs-on: [self-hosted, windows, webview2]
     timeout-minutes: 90
     continue-on-error: true
 

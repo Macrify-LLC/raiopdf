@@ -51,6 +51,41 @@ cargo install tauri-driver --locked
 pnpm --filter @raiopdf/shell-e2e test:e2e:windows-x64
 ```
 
-Overridable env: `RAIO_E2E_APP` (exe path), `RAIO_E2E_PAYLOAD_DIR`, `RAIO_E2E_TMP`.
+Overridable env: `RAIO_E2E_APP` (exe path), `RAIO_E2E_PAYLOAD_DIR`, `RAIO_E2E_TMP`,
+and — for machines whose username contains a space, which the service's
+tauri-driver spawn mishandles — `RAIO_E2E_TAURI_DRIVER` / `RAIO_E2E_MSEDGEDRIVER`
+pointed at copies of those binaries under a space-free path.
 
-CI runs this as an **informational** (non-blocking) tier of `canary.yml`.
+## CI: self-hosted Windows runner (required)
+
+This tier runs in `canary.yml` as an **informational** (non-blocking) job, but
+**only on a self-hosted Windows runner** — never a GitHub-hosted one.
+
+Why: GitHub-hosted Windows runners launch the app in an account/session where
+WebView2 refuses to open its remote-debugging port, so session creation fails
+with `DevToolsActivePort file doesn't exist`. The exact same build drives WebView2
+fine on a normal interactive Windows desktop.
+
+Runner requirements:
+
+1. **Windows, x64.** WebView2 is Windows-only.
+2. **Accessible to this repo.** Register the runner at the **org level**
+   (`Macrify-LLC`, shared across repos) or directly to `Macrify-LLC/raiopdf`.
+   A runner scoped to a *different* repo will not pick up these jobs.
+3. **Interactive desktop session — NOT a service.** WebView2 automation needs a
+   real desktop; a runner installed as a Windows service (session 0) can't drive
+   the GUI. Run the runner from a logged-in desktop session
+   (`run.cmd`), or configure it for autologon + interactive run.
+4. **Custom label `webview2`.** The job targets
+   `runs-on: [self-hosted, windows, webview2]`. Add `webview2` when configuring
+   the runner so only the designated (interactive) machine is chosen. Edge +
+   WebView2 runtime must be present (they are on any Windows dev machine).
+
+The workflow installs Node/Rust/JDK and builds the payload + shell itself, so a
+bare Windows runner works; pre-installed toolchains just make it faster.
+
+Triggering: **explicit opt-in only** — `workflow_dispatch` on `canary.yml`, or add
+the **`run-webdriver`** label to a PR. It is not on every push/nightly because the
+run pops real app windows on the runner's desktop. If the runner's username has a
+space, set the `RAIO_E2E_TAURI_DRIVER` / `RAIO_E2E_MSEDGEDRIVER` repo variables (or
+`env`) to space-free driver copies (see above).

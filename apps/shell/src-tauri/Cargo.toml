@@ -35,3 +35,10 @@ uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[features]
+# Real-app WebDriver canary. NEVER enabled for a release build — no release path
+# passes `--features`, and this is not a default feature. Gates the test-only
+# native-dialog overrides in `e2e_dialog.rs` so the packaged app can be driven
+# without native OS pickers while the real command bodies still run.
+e2e-webdriver = []

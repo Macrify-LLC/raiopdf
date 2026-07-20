@@ -9,13 +9,7 @@
  * no new logging command).
  */
 
-type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-
-declare global {
-  interface Window {
-    __RAIOPDF_TEST_TAURI_INVOKE__?: TauriInvoke;
-  }
-}
+import { getTauriInvoke } from "./tauriInvoke";
 
 /**
  * A diagnostic event, retained in memory so the user can attach the most recent
@@ -132,12 +126,4 @@ export function logWorkflowFailure(
   ]);
 }
 
-async function getTauriInvoke(): Promise<TauriInvoke> {
-  if (window.__RAIOPDF_TEST_TAURI_INVOKE__) {
-    return window.__RAIOPDF_TEST_TAURI_INVOKE__;
-  }
-
-  const { invoke } = await import("@tauri-apps/api/core");
-
-  return invoke;
-}
+// getTauriInvoke is provided by ./tauriInvoke (single shared seam).

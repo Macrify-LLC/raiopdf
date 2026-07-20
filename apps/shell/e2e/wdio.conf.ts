@@ -27,11 +27,9 @@ import { waitForAppReady } from "./support/app";
 // there inherits these.
 process.env.RAIOPDF_ENGINE_PAYLOAD_DIR ??= payloadDir;
 process.env.RAIO_E2E_DIALOG_CONTROL = controlFile;
-// WebView2 (Chromium) won't open its remote-debugging port under a CI runner's
-// account without these — the classic "DevToolsActivePort file doesn't exist"
-// session-creation failure. WebView2 reads this env var and appends the flags.
-process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ??=
-  "--no-sandbox --disable-gpu --disable-dev-shm-usage";
+// Note: the WebView2 --no-sandbox flags (for the "DevToolsActivePort" failure
+// under a CI runner account) are set by the app itself, in code, behind the
+// e2e-webdriver feature — so they apply however the app is launched.
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -84,7 +82,9 @@ export const config: WebdriverIO.Config = {
   reporters: ["spec"],
   mochaOpts: {
     ui: "bdd",
-    timeout: 180_000,
+    // Generous: @wdio/tauri-service adds a few seconds of window-state polling
+    // to every WebDriver command, so multi-step flows need headroom.
+    timeout: 300_000,
   },
 
   onPrepare: () => {

@@ -31,8 +31,10 @@ buried in "later," that's exactly the kind of thing worth telling us about — s
   first-class tool.
 - **Direct editing on very large PDFs.** Big documents that open streamed now
   get the full file-to-file toolset (split, extract, compress, OCR, and the
-  rest — shipped in 0.1.3). The remaining gap is direct in-page editing and
-  markup on those very large files, and closing it is a priority.
+  rest — shipped in 0.1.3), and markup like highlights and comments already
+  works within size limits. The remaining gap is direct text editing and
+  reworking existing annotations on the very largest files, and closing it is
+  a priority.
 - **Deeper batch and production-set options** for firms working across large
   document sets.
 

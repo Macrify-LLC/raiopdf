@@ -50,6 +50,11 @@ export const config: WebdriverIO.Config = {
       "tauri",
       {
         appBinaryPath: appPath,
+        // The service spawns the app with the env given here — NOT the worker's
+        // env by default. Pass it through so the app inherits the dialog-stub
+        // control file and payload dir; without this the app shows the real
+        // native picker and the flows hang.
+        env: { ...process.env },
         // Windows: drive the WebView2 app via the external tauri-driver route.
         driverProvider: "external",
         // tauri-driver is provided by CI (cached cargo install) and, locally,
@@ -58,6 +63,16 @@ export const config: WebdriverIO.Config = {
         // The fix for "DevToolsActivePort": match msedgedriver to the binary's
         // WebView2 runtime, downloading it if the versions differ.
         autoDownloadEdgeDriver: true,
+        // Escape hatch for machines whose driver paths contain a space (e.g. a
+        // Windows username with a space): the service spawns tauri-driver with a
+        // shell and doesn't escape the path, so point it at space-free copies.
+        // When a driver is supplied, skip the auto-download of that one.
+        ...(process.env.RAIO_E2E_TAURI_DRIVER
+          ? { tauriDriverPath: process.env.RAIO_E2E_TAURI_DRIVER }
+          : {}),
+        ...(process.env.RAIO_E2E_MSEDGEDRIVER
+          ? { nativeDriverPath: process.env.RAIO_E2E_MSEDGEDRIVER }
+          : {}),
       },
     ],
   ],

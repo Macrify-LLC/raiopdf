@@ -1,148 +1,234 @@
-# macOS Word export/import (PDF ↔ .docx via installed Word) — Roadmap plan (v1, draft)
+# macOS Word export/import (PDF ↔ .docx via installed Word) — Roadmap plan (v2, post-critique)
 
-Goal: bring the two existing Word features — **PDF → Word (.docx) reflow export** and
-**Import Word Document (.docx → PDF)** — to the macOS build, keeping the exact product
-contract already shipped on Windows: conversions run through the user's own installed
-Microsoft Word, fully local, labeled experimental, with the menu items grayed-and-explained
-when Word can't run. No LibreOffice, no bundled converter, no cloud.
+> v2 (2026-07-21): revised after adversarial review. Material changes from v1: the spike
+> is split into terminal-testable vs signed-bundle-only items (TCC attribution can only
+> be validated from a signed, hardened-runtime RaioPDF build — never in CI); the
+> cooperative-cancel claim is corrected (Word conversions are timeout-only in the current
+> code — no job token is threaded through `word.rs`; the CHANGELOG 0.1.2 cancel claim
+> needs separate investigation); the third Word surface (`convert_docx_for_add` batch
+> import) is now in scope; the Apple Events entitlement needs a per-binary split so the
+> MCP/engine-host sidecars don't inherit it; estimate raised to 3–4 weeks.
 
-Non-goals: bundling any conversion engine; supporting Word older than 16.31 (the first
-Word for Mac that opens PDFs); Pages/TextEdit fallbacks; changing conversion fidelity or
-the Windows implementation's behavior.
+Goal: bring the existing Word features — **PDF → Word (.docx) reflow export**,
+**Import Word Document (.docx → PDF)**, and the **batch "add Word documents" flow** — to
+the macOS build, using the user's own installed Microsoft Word, fully local, labeled
+experimental, with menu items grayed-and-explained when Word can't run. No LibreOffice,
+no bundled converter, no cloud.
+
+Non-goals: bundling any conversion engine; Pages/TextEdit fallbacks; changing the
+Windows implementation's behavior; hidden-Word parity with Windows (impossible on macOS
+— see "UX contract" below).
 
 ## Where we are
 
 - All Word logic lives in `crates/engine-sidecar-core/src/word_ops.rs`. The public
   surface (`word_capability`, `convert_pdf_to_docx`, `convert_docx_to_pdf`,
-  `WordCapability`, error codes) is platform-neutral; everything real is `#[cfg(windows)]`
-  (PowerShell + COM: `Documents.Open` → `SaveAs2(…, 16)` / `ExportAsFixedFormat`).
-- Non-Windows returns `WordCapabilityState::NotApplicable` and `WORD_NOT_SUPPORTED`.
-- The Tauri command layer (`apps/shell/src-tauri/src/word.rs`), grants, capability cache,
-  UI gating (`apps/ui/src/lib/wordCapability.ts`, `wordReflow.ts`, `wordImport.ts`,
-  Settings dialog) are already platform-agnostic and need only new states/copy.
-- Windows has elaborate timeout-kill machinery (attributable hidden WINWORD pid +
-  windowless-process fallback). This machinery must NOT be ported — macOS semantics
-  differ (see Phase 1).
+  `WordCapability`, error codes) is platform-neutral; everything real is
+  `#[cfg(windows)]` (PowerShell + COM: read-only `Documents.Open` → `SaveAs2(…, 16)` /
+  `ExportAsFixedFormat`). Non-Windows returns `NotApplicable` / `WORD_NOT_SUPPORTED`.
+- **Three** integration surfaces, not two: `word_convert_docx` and
+  `word_reflow_pdf_to_docx` (`apps/shell/src-tauri/src/word.rs`), plus
+  `convert_docx_for_add` (`apps/shell/src-tauri/src/lib.rs`) — a sequential batch loop
+  with per-file progress events (`docx-convert:progress` phase `"startingWord"`,
+  `docx-convert:file-done`), driven by `apps/ui/src/lib/readFileForAdd.ts`. All three
+  ungray automatically the moment capability stops returning `notApplicable`.
+- Conversions are **timeout-only** (120 s, `run_word_powershell`); the `PathOpJobs`
+  cooperative-cancel system is wired into OCR/prepare-filing, not Word. The Windows
+  timeout-kill machinery (attributable WINWORD pid + windowless-process fallback) must
+  NOT be ported — macOS scripts a shared visible Word instance.
+- Open item to investigate (independent of this plan, flagged during review):
+  CHANGELOG 0.1.2 says Word conversions can be cancelled mid-run; the current command
+  surface accepts no job token. Reconcile the claim or the code.
 
-## Phase 0 — Spike on real hardware (gate for everything else)
+## macOS UX contract (differs from Windows by design)
 
-Timebox: 2–3 days on an Apple Silicon Mac with Microsoft 365 Word installed.
-Deliverable: a short findings note appended to this plan; go/no-go per direction.
+Windows runs an invisible dedicated COM instance. Word for Mac has no hidden-instance
+equivalent: conversions open a real document window in the user's shared, visible Word.
+The contract we ship and document honestly:
 
-Validate, with throwaway `osascript` scripts:
+- Word may launch and become visible during a conversion; UI copy and the help articles
+  say so ("Word will open briefly to do the conversion").
+- We always hand Word a **temp copy** of the input, never the user's original — this
+  prevents mid-conversion user edits corrupting output, avoids `~$` lock/AutoRecovery
+  artifacts landing in synced client folders, and keeps `ensure_unchanged` honest.
+- Output is saved to a Word-writable staging location, then moved to the destination.
+- We never kill the Word process. On timeout we close our document (`saving no`); we
+  quit Word only if it was not running when we started. Across the batch flow, one
+  launch is reused and quit once at the end (if we launched it).
+- The capability probe must not cause a visible launch-and-quit on top of the
+  conversion's own launch (no double cold-launch on one click): the forced probe on
+  macOS checks the bundle version without launching, sends an attach-only Apple Event
+  when Word is already running, and otherwise defers the live check to the conversion
+  itself (which reports consent/automation failures with the same error codes).
+- After a TCC denial, macOS never re-prompts. The "check again" path and all copy must
+  direct the user to System Settings → Privacy & Security → Automation, not imply that
+  retrying will re-ask.
 
-1. **PDF open + convert works headlessly.** `open` on a PDF via Word's AppleScript
-   dictionary triggers the same reflow conversion as File > Open, with the conversion
-   alert suppressible (Word's `display alerts` setting, and/or opening with
-   `confirm conversions false`). Confirm no modal ever blocks an unattended run.
-2. **Save-as to our chosen output path succeeds.** Word for Mac is sandboxed; verify
-   `save as … file format format document` (and `format PDF` for import) can write to a
-   temp directory we control, or find the writable location (e.g. Word's own container /
-   a path pre-created by us) and plan a save-then-move. This is the highest-risk unknown.
-3. **TCC flow.** First Apple Event from a signed RaioPDF build prompts
-   "RaioPDF wants to control Microsoft Word"; denial yields error −1743. Confirm the
-   prompt appears (requires `NSAppleEventsUsageDescription` in Info.plist) and that a
-   denial is detectable and distinguishable from other failures.
-4. **Detection without launching.** Enumerate Word install + version with no side
-   effects: `LSCopyApplicationURLsForBundleIdentifier("com.microsoft.Word")` (or
-   `mdfind` with a filesystem fallback), read `CFBundleShortVersionString`, gate ≥ 16.31.
-5. **Shared-instance behavior.** With the user's Word already open on a document:
-   our scripted open/close doesn't disturb their windows, `close … saving no` closes only
-   our document, and Word quit policy (quit only if we launched it) is workable.
-6. **Cancellation.** Mid-conversion, closing our document from a second script is
-   possible; killing the Word process is never acceptable (shared instance).
+## Phase 0 — Spike (gate for everything else)
 
-If (1) or (2) fails for PDF → Word but works for .docx → PDF, ship import-only on macOS
-and keep export grayed with an honest reason.
+Apple Silicon Mac, Microsoft 365 Word installed. Deliverable: findings appended here;
+go/no-go per direction. Two tracks with different tooling:
+
+**Track A — terminal scripts (attribution-independent Word scriptability):**
+
+1. **The 16.31 claim itself.** Verify Word for Mac's AppleScript dictionary can drive
+   the PDF open/convert path at all (the dictionary predates PDF reflow; the manual
+   File > Open path existing does not prove scriptability), and on which
+   versions/licenses. Explicitly test: Microsoft 365 vs perpetual (2021/2024), and
+   whether PDF reflow is subscription-gated.
+2. **Headless-enough conversion.** `open` on a (temp-copied) PDF converts with alerts
+   suppressed (`display alerts`/`confirm conversions`); no modal blocks an unattended
+   run; unlicensed/view-only Word: what the version probe reports vs what save does.
+3. **Save-as targets.** Where sandboxed Word can write (`save as … format document` /
+   `format PDF`): our temp dir directly, or which staging location + move.
+4. **Shared-instance safety.** With the user's Word open on a document: our open/close
+   disturbs nothing; `close … saving no` closes only our document; quit policy works.
+5. **Timing on realistic inputs.** Conversion time on 100+ page legal PDFs vs the
+   AppleEvent reply timeout (−1712, ~2 min default). Determine the `with timeout`
+   value the scripts need and how the runner timeout coordinates above it.
+6. **Multi-install behavior.** With two Word copies installed, confirm which one
+   `tell application id "com.microsoft.Word"` targets, so the version gate reads the
+   same install that will be scripted.
+
+**Track B — signed-bundle items (requires the maintainer signing machine; CI can never
+cover these — `docs/SIGNING.md`, CI builds unsigned):**
+
+7. **TCC attribution and prompting.** From a signed, hardened-runtime RaioPDF build
+   carrying the candidate Info.plist + entitlement changes (Phase 2 artifacts —
+   build via the release pipeline or a minimal signed harness): does spawning
+   `/usr/bin/osascript` as a child attribute the consent prompt to RaioPDF
+   (responsibility inheritance)? Does the missing `com.apple.security.automation.apple-events`
+   entitlement produce a **silent −1743 with no prompt**? Is `NSAppleEventsUsageDescription`
+   honored? Ad-hoc dev builds (`pnpm dev:shell`) do not answer this — results don't
+   transfer.
+8. **Consent-dialog race.** First-ever conversion blocks inside the AE send while the
+   TCC dialog is up; confirm the runner's timeout doesn't expire the op under the
+   user's nose, and design the first-run state accordingly.
+
+If PDF → Word fails but .docx → PDF works, ship import-only on macOS with an honest
+grayed reason.
 
 ## Phase 1 — `engine-sidecar-core`: macOS automation module
 
-The `#[cfg(target_os = "macos")]` sibling of the Windows code, same public surface.
+The `#[cfg(target_os = "macos")]` sibling, same public surface.
 
-- **Capability probe.** Cheap path: detect install + version (no launch) →
-  `NotDetected` / `Detected` (version < 16.31 → `Unavailable` with reason). Forced path:
-  run a minimal Apple Event round-trip → `Available` / `Unavailable`, mapping −1743 to a
-  new automation-consent reason ("RaioPDF isn't allowed to control Word — System
-  Settings → Privacy & Security → Automation").
+- **Capability probe.** Cheap path: locate Word + version with no launch — needs a
+  small FFI/dependency decision (`objc2`/`core-foundation` for LaunchServices, noting
+  `LSCopyApplicationURLsForBundleIdentifier` is deprecated) with a fixed-path
+  fallback (`/Applications/Microsoft Word.app`), because `mdfind` fails on managed
+  Macs with Spotlight disabled — exactly the law-firm fleet. Version gate per spike
+  item 1 findings, read from the install that will actually be targeted (spike item 6).
+  States: `NotDetected` / `Detected` / `Unavailable` (too old, or the new
+  automation-consent-denied reason mapped from −1743) / `Available`.
 - **Conversion runner.** Spawn `osascript` with the script from a temp file and the
-  input JSON path as argv (no string interpolation of user paths — same injection-safe
-  shape as the PowerShell side). Keep the `@@RAIOPDF_WORD_RESULT@@` marker-line JSON
-  protocol and stdout/stderr drain threads so `parse_word_script_stdout` and its tests
-  are shared across platforms.
-- **Scripts.** PDF → DOCX: suppress alerts, open PDF, `save as … format document`,
-  close saving no. DOCX → PDF: open, honor `MarkupMode` (final vs. show markup) if
-  Word for Mac's dictionary supports revision-view control — spike decides; if not,
-  export final-only and surface that honestly in UI copy. Scrub exported PDF metadata
-  through the existing `scrub_metadata` path, same as Windows.
-- **Timeout & cancel semantics (differs from Windows by design).** On timeout or
-  cooperative cancel: tell Word to close our document (saving no); quit Word only if the
-  probe recorded that Word was not running when we started; never `kill -9` Word. Delete
-  partial outputs, same contract as Windows.
-- **Single-flight.** Keep the automation mutex — one Word conversion at a time.
-- **Error mapping.** Map macOS failure surface (AppleScript error codes, sandbox write
-  denials, password-protected PDFs, conversion failures) onto the existing
-  `ERR_WORD_*` codes; add codes only if a state genuinely has no Windows analog
-  (automation consent denied is the known one).
+  input JSON path as argv (no interpolation of user paths). Language choice per spike
+  (JXA has native JSON; AppleScript needs Foundation) — decide once, both scripts.
+  Stream discipline: the result marker must go to stdout (AppleScript `log` writes to
+  stderr); keep the drain threads.
+- **What's shared vs new.** Shared: the `@@RAIOPDF_WORD_RESULT@@` result-line JSON and
+  `parse_word_script_stdout` + its tests (`winword_pid` stays `None` — the PID marker
+  is Windows-only attribution machinery; do not port it). New: a macOS error
+  classifier (the Windows one lives inside the PowerShell script keyed to COM message
+  text; `word_error_code()` is `#[cfg(windows)]`), mapping AppleScript/AE errors —
+  −1743 consent, −1712 AE timeout (distinct from our runner timeout), sandbox write
+  denial, password-protected input, license-blocked save — onto `ERR_WORD_*` codes,
+  adding codes only where no Windows analog exists.
+- **Input/output handling.** Temp-copy input before Word sees it; staging save +
+  move per spike item 3; scrub exported PDF metadata via the existing `scrub_metadata`
+  path, same as Windows.
+- **Timeout semantics.** Honest scoping: **timeout-only, like Windows today** — no
+  cooperative-cancel claim. Scripts use `with timeout of N` sized from spike item 5;
+  the Rust runner timeout sits above it; first-run consent state exempted from the
+  race (spike item 8). On timeout: close our document saving no, quit only if we
+  launched Word, delete partial outputs. (Threading `PathOpJobs` cancel tokens into
+  Word commands on both platforms is a separate, explicitly-scoped follow-up if wanted.)
+- **Batch (`convert_docx_for_add`).** Reuse one Word launch across the batch; quit
+  once at the end if we launched it; per-file errors don't abort the batch (match
+  current Windows per-file semantics); progress-phase copy reviewed ("Starting Word…"
+  is wrong when Word was already running).
+- **Single-flight.** Keep the automation mutex.
+- **MarkupMode.** Honor final/show-markup on .docx → PDF if the Mac dictionary
+  supports revision-view control (spike decides); otherwise export final-only and say
+  so in UI copy.
 
 ## Phase 2 — Shell integration (`apps/shell`)
 
-- Add `NSAppleEventsUsageDescription` to the macOS bundle Info.plist via
-  `tauri.conf.json` (copy states the local-only promise: "RaioPDF controls your
-  installed Microsoft Word to convert documents on this Mac. Nothing is uploaded.").
-- `word.rs` commands work unchanged; wire the new capability reason strings through
-  diagnostics (`word_error` app.log events already exist and are platform-neutral).
-- Confirm the hardened-runtime entitlements for the notarized build permit sending
-  Apple Events (`com.apple.security.automation.apple-events` if sandboxed/hardened
-  runtime requires it) — coordinate with `docs/SIGNING.md`; signing stays
+- **Info.plist:** Tauri 2 has no config key for arbitrary plist entries — create the
+  merge file `apps/shell/src-tauri/Info.plist` with `NSAppleEventsUsageDescription`
+  ("RaioPDF controls your installed Microsoft Word to convert documents on this Mac.
+  Nothing is uploaded.") and verify it lands in both dev and signed bundles. Note the
+  layered config: base `tauri.conf.json` has `bundle.active: false`; macOS bundling
+  lives in the `tauri.macos.conf.json` / `tauri.macos.signing.conf.json` overlays.
+- **Entitlements — per-binary split (design task, not a checkbox):**
+  `com.apple.security.automation.apple-events` is required under hardened runtime
+  (without it: silent −1743). But `entitlements/app.entitlements` is applied to the
+  app binary **and** both externalBin sidecars (`raiopdf-engine-host`, `raiopdf-mcp`);
+  granting them Apple Events scripting is unnecessary capability widening. Design a
+  per-binary split — post-bundle re-sign of the app binary alone in the release
+  pipeline (precedent exists: `jvm.entitlements` / `node.entitlements` in the payload
+  signer) or Tauri per-binary support — plus `verify-app` coverage. Signing stays
   maintainer-local.
+- `word.rs` commands and diagnostics events carry over; wire the new reason strings.
 
 ## Phase 3 — UI (`apps/ui`)
 
-- No architecture change: `notApplicable` simply stops occurring on macOS. Menu items
-  ungray by the same `isWordPresent` / click-time `available` gates.
-- New copy: automation-consent-denied guidance (with the System Settings path), the
-  version-too-old reason, and — if spike says markup view isn't controllable —
-  import-dialog copy dropping the final/markup choice on macOS.
-- Settings dialog: Word capability row already renders state + reason; verify the new
-  reasons read well and the "check again" (force) path re-triggers the TCC prompt
-  usefully after the user flips the toggle.
+- `notApplicable` stops occurring on macOS; the existing `isWordPresent` /
+  click-time `available` gates carry over for all three flows (`wordReflow.ts`,
+  `wordImport.ts`, `readFileForAdd.ts`).
+- Fix the now-false platform string in `SettingsDialog.tsx` ("Word integration is only
+  available on Windows.") and review every capability-state string against the new
+  macOS states.
+- New copy: consent-denied guidance (System Settings path; retry does **not**
+  re-prompt), version-too-old, license-blocked, "Word will open briefly" expectation,
+  and final-only markup note if applicable.
+- Batch progress copy per Phase 1.
 
 ## Phase 4 — Tests & canaries
 
-- Unit: script-outcome parsing stays shared; add macOS-only tests for capability
-  parsing, version gating, error mapping, and the quit-policy decision (pure functions,
-  CI-safe on Linux/macOS runners without Word).
+- Unit (CI-safe, no Word): shared result-line parsing; macOS capability parsing,
+  version gating, error mapping (−1743/−1712/sandbox/license), quit-policy and
+  batch-reuse decisions as pure functions.
 - Canaries: macOS siblings of the three Windows self-gating canaries (docx→pdf,
-  pdf→docx, round-trip) that skip cleanly when Word isn't installed/consented — they run
-  on maintainer hardware, not CI.
-- `pnpm canary` run on a real Mac before release; paste summary line in the PR per
-  CONTRIBUTING.md.
-- Manual test matrix (release checklist addition): Microsoft 365 Word, perpetual
-  Word 2021/2024, Word absent, consent denied → re-granted, user's Word already open
-  with unsaved work, password-protected PDF, scanned PDF (OCR-first prompt path).
+  pdf→docx, round-trip) plus a batch-add canary; all skip cleanly when Word isn't
+  installed/consented; run on maintainer hardware. `pnpm canary` on a real Mac before
+  release; summary line in the PR.
+- Manual matrix: Microsoft 365 vs perpetual 2021/2024 vs unlicensed/view-only Word;
+  Mac App Store vs direct-download Word (different containers can shift the staging
+  location); Word absent; consent denied → re-granted via System Settings; user's Word
+  already open with unsaved work; password-protected PDF; scanned PDF (OCR-first
+  prompt); 100+ page PDF (timeout sizing); iCloud dataless input file (download eats
+  the clock); macOS 14 vs 15 (app floor is 14.0).
+- **Standing limitation:** every TCC/entitlement behavior is maintainer-hardware
+  validation forever — CI builds are unsigned and can never exercise it.
 
 ## Phase 5 — Docs & release
 
-Same-PR rule (per repo guide): README feature tables (drop the Windows-only caveat or
-add the macOS row), `packages/help-content/articles/pdf-to-word.md` +
-`word-import` article (state the Word-for-Mac ≥ 16.31 requirement and the one-time
-automation permission prompt), CHANGELOG entry, and `site/shared/COPY.md` only if the
-landing page ever claimed platform scope (verify; do not add new claims).
+Same-PR rule: README Word rows (platform note); `pdf-to-word.md` update (Word for Mac
+version requirement, one-time automation permission, Word-becomes-visible note);
+**write a new** word-import help article (none exists today — the import flow shipped
+without one); CHANGELOG. `site/shared/COPY.md` makes no Word claims — verify only, add
+nothing.
 
 ## Sequencing & estimate
 
-Phase 0 gates all else (2–3 days). Phases 1–2 together are the bulk (4–6 days).
-Phases 3–5 are small (2–3 days combined) but must land in the same PR as 1–2 per the
-docs-honesty rule. Realistic total: ~2 weeks elapsed including real-hardware validation.
-Ship as one feature PR (plus the spike notes PR-less), targeting the next minor alpha.
+Phase 0 Track A first (2–3 days, any Mac); Track B needs the Phase 2 Info.plist +
+entitlement candidates built early and the maintainer signing machine (1–2 days, can
+interleave with early Phase 1). Phases 1–2 are the bulk (6–8 days — three surfaces,
+entitlement pipeline work, error classifier). Phases 3–5 (2–3 days) land in the same
+PR as 1–2 per the docs-honesty rule. Realistic total: **3–4 weeks elapsed**, dominated
+by real-hardware iteration. One feature PR, targeting a minor alpha.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Sandboxed Word can't write to our output path | Spike item 2; save-then-move via a Word-writable location |
-| Conversion alert not suppressible on PDF open | Spike item 1; if hard-blocked, ship import-only on macOS |
-| TCC denial looks like generic failure | Explicit −1743 mapping + Settings guidance copy |
-| User's own Word disturbed (closed doc / killed process) | No process kills ever; close only our document; quit only if we launched Word |
-| Markup mode not scriptable on Mac | Final-only export with honest UI copy |
-| Perpetual-license Word behaves differently | Test matrix row; version/edition in capability reason |
+| TCC prompt attributes to osascript, not RaioPDF, or silent −1743 | Spike Track B item 7 on a signed bundle before committing to Phase 1 |
+| Sandboxed Word can't write to our output path | Spike item 3; staging save + move |
+| PDF open not scriptable / subscription-gated | Spike item 1; import-only fallback on macOS |
+| AE reply timeout (−1712) on large legal PDFs | Spike item 5; `with timeout` sized accordingly; distinct error mapping |
+| Consent dialog races the 120 s runner timeout | Spike item 8; first-run state exempt from the race |
+| Sidecars inherit Apple Events entitlement | Per-binary entitlement split in the release pipeline + verify-app |
+| User's Word disturbed / user edits mid-conversion | Temp-copy input; close only our doc; never kill; quit only if we launched |
+| Version gate reads a different install than gets scripted | Gate on the targeted instance (spike item 6) |
+| Unlicensed Word passes probe, fails save | License-blocked error mapping + capability reason |
+| Managed Macs with Spotlight disabled break detection | LaunchServices FFI + fixed-path fallback, no mdfind dependency |

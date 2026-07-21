@@ -23,7 +23,7 @@
     "prepare:shell-bundle:macos-arm64": "pnpm --filter @raiopdf/mcp build && node installer/run-payload-assembler.mjs --platform macos-arm64 && pnpm build:external-bins",
     "build:shell": "pnpm build:shell:windows-x64",
     "build:shell:windows-x64": "pnpm prepare:shell-bundle:windows-x64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows-x64.conf.json",
-    "build:shell:e2e:windows-x64": "pnpm prepare:shell-bundle:windows-x64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows-x64.conf.json --no-bundle --features e2e-webdriver",
+    "build:shell:e2e:windows-x64": "pnpm prepare:shell-bundle:windows-x64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows-x64.conf.json --config src-tauri/tauri.e2e.conf.json --no-bundle --features e2e-webdriver",
     "build:shell:macos-arm64": "pnpm prepare:shell-bundle:macos-arm64 && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.macos.conf.json",
     "build:shell:signed": "node scripts/stamp-shell-version.mjs && pnpm prepare:shell-bundle && pnpm --filter @raiopdf/shell tauri build --config src-tauri/tauri.windows.signing.conf.json",
     "release:macos": "node scripts/release-macos.mjs",

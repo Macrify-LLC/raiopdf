@@ -1372,7 +1372,11 @@ export function App() {
     return result?.path ?? null;
   }, [crashReportPayload]);
   useEffect(() => {
-    if (!isTauriRuntime()) {
+    // e2e-webdriver runs hard-kill the app between specs, which the diagnostics
+    // layer records as an unclean shutdown. Skip the crash-report prompt in e2e
+    // builds so its scrim modal never blocks the harness at startup. `MODE` is
+    // inlined at build time, so this is a no-op (and stripped) in shipped builds.
+    if (!isTauriRuntime() || import.meta.env.MODE === "e2e") {
       return;
     }
 

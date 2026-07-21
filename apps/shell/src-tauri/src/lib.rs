@@ -2178,6 +2178,18 @@ pub fn run() {
         .manage(NativeMenuStateStore::default())
         .manage(UnsavedWorkState::default())
         .setup(|app| {
+            // The WebDriver dialog canary drives the app through
+            // @wdio/tauri-service, which requires the companion `tauri-plugin-wdio`
+            // (execute/mock/log-forwarding + window-state commands). Register it and
+            // grant its capability ONLY under the e2e-webdriver feature: the plugin
+            // is never compiled into a release build, and the capability lives
+            // outside the auto-discovered `capabilities/` dir (embedded here via
+            // include_str!) so release builds never reference `wdio:*` permissions.
+            #[cfg(feature = "e2e-webdriver")]
+            {
+                app.handle().plugin(tauri_plugin_wdio::init())?;
+                app.add_capability(include_str!("../capabilities-e2e/wdio.json"))?;
+            }
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();

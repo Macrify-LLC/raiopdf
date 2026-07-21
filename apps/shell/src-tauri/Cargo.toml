@@ -15,7 +15,7 @@ name = "raiopdf-shell"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 engine-sidecar-core = { path = "../../../crates/engine-sidecar-core" }
@@ -24,12 +24,13 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-tauri = { version = "2.11.5" }
+tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-updater = "2"
+tauri-plugin-wdio = { version = "1", optional = true }
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 
@@ -41,4 +42,4 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 # passes `--features`, and this is not a default feature. Gates the test-only
 # native-dialog overrides in `e2e_dialog.rs` so the packaged app can be driven
 # without native OS pickers while the real command bodies still run.
-e2e-webdriver = []
+e2e-webdriver = ["dep:tauri-plugin-wdio"]

@@ -1,19 +1,26 @@
-//! Tauri command surface for the native streaming print pipeline (Lane F).
+//! Tauri command surface for the native print pipeline (Lane F).
 //!
 //! Printing follows the PathOpsEngine discipline: the WebView sends a file
 //! GRANT plus print options; the shell resolves the path and drives
-//! `engine_sidecar_core::print_ops` on the blocking pool. Document bytes
-//! never enter the WebView — Ghostscript reads the file from disk and talks
-//! to the Windows spooler directly (`mswinpr2`), so any-size PDFs print
-//! without Chromium ever holding the document.
+//! `engine_sidecar_core::print_ops` on the blocking pool. Document bytes never
+//! enter the WebView — the pipeline reads the file from disk. On Windows,
+//! Ghostscript talks to the spooler directly (`mswinpr2`), segment by segment
+//! with a `printto` fallback; on macOS, a single CUPS `lp` spool prints the
+//! file at any size. Either way, Chromium never holds the document.
 //!
-//! Long-running: progress is emitted as `raiopdf-print-progress` events keyed
-//! by a caller-generated `jobToken`; `print_cancel` flips a cooperative flag
-//! checked between Ghostscript invocations and between fallback parts.
+//! Long-running (Windows): progress is emitted as `raiopdf-print-progress`
+//! events keyed by a caller-generated `jobToken`; `print_cancel` flips a
+//! cooperative flag checked between Ghostscript invocations and fallback parts.
+//! The macOS `lp` spool is atomic — one pass, no per-segment progress or
+//! cancel.
 
-use engine_sidecar_core::path_ops::{page_count, OpResult, PathOpError};
+#[cfg(windows)]
+use engine_sidecar_core::path_ops::page_count;
+use engine_sidecar_core::path_ops::{OpResult, PathOpError};
 use engine_sidecar_core::print_ops as core_print;
-use engine_sidecar_core::print_ops::{PageSegmentRange, PrintSelection, PrinterInfo};
+#[cfg(windows)]
+use engine_sidecar_core::print_ops::PageSegmentRange;
+use engine_sidecar_core::print_ops::{PrintSelection, PrinterInfo};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -23,13 +30,17 @@ use std::{
         Arc, Mutex,
     },
 };
+#[cfg(windows)]
 use tauri::Emitter;
 
+#[cfg(windows)]
+use crate::path_ops::OpWorkDir;
 use crate::path_ops::{
-    discover_toolchain, ensure_unchanged, on_blocking_pool, resolve_grant, snapshot, OpWorkDir,
+    discover_toolchain, ensure_unchanged, on_blocking_pool, resolve_grant, snapshot,
 };
 use crate::FileGrants;
 
+#[cfg(windows)]
 pub const PRINT_PROGRESS_EVENT: &str = "raiopdf-print-progress";
 
 /// Cooperative cancel flags for in-flight print jobs, keyed by the
@@ -77,6 +88,7 @@ impl PrintJobs {
     }
 }
 
+#[cfg(windows)]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PrintProgressPayload {
@@ -93,17 +105,20 @@ struct PrintProgressPayload {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintStatusResponse {
-    /// Windows-first: false on macOS/Linux until those pipelines exist.
+    /// True on Windows and macOS; false on unsupported targets.
     pub platform_supported: bool,
+    /// Whether the bundled Ghostscript toolchain is present (the Windows print
+    /// driver). Not required on macOS, which prints through CUPS `lp`.
     pub ghostscript: bool,
-    /// The UI's single gate: platform + Ghostscript both present.
+    /// The UI's single gate. Windows needs platform + Ghostscript; macOS needs
+    /// only the platform (CUPS ships with the OS).
     pub available: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintResultResponse {
-    /// "ghostscript" | "printto"
+    /// "ghostscript" | "printto" (Windows) | "cups" (macOS/Linux)
     pub method: &'static str,
     pub gs_invocations: u32,
     pub fallback_parts: u32,
@@ -117,12 +132,11 @@ pub struct PrintResultResponse {
 #[tauri::command]
 pub fn print_status(app: tauri::AppHandle) -> PrintStatusResponse {
     let toolchain = discover_toolchain(&app);
-    let platform_supported = core_print::platform_supported();
     let ghostscript = toolchain.ghostscript.is_some();
     PrintStatusResponse {
-        platform_supported,
+        platform_supported: core_print::platform_supported(),
         ghostscript,
-        available: platform_supported && ghostscript,
+        available: core_print::print_available(ghostscript),
     }
 }
 
@@ -169,23 +183,46 @@ pub async fn print_pdf(
     };
 
     let input = resolve_grant(&grants, &grant)?;
-    let toolchain = discover_toolchain(&app);
-    // Fallback parts land in a path-ops style temp dir. Deleted when unused
-    // (gs path / failure); KEPT when parts were handed to the OS pipeline —
-    // the spooler may still be reading them — and reclaimed by a later
-    // instance's startup sweep once this instance has exited (the dir carries
-    // this instance's owner marker, so a concurrently-running instance's
-    // sweep won't pull parts out from under the spooler).
-    let work_dir = OpWorkDir::create(&app)?;
-
     let cancel_flag = jobs.register(&job_token)?;
+
+    let result = execute_native_print(
+        &app,
+        input,
+        printer,
+        selection,
+        copies,
+        job_token.clone(),
+        cancel_flag,
+    )
+    .await;
+    jobs.remove(&job_token);
+
+    result.map(JobOutcome::into_response)
+}
+
+/// Windows: drive the printer through Ghostscript segment-by-segment, with the
+/// divide-and-queue `printto` fallback. Fallback parts land in a path-ops
+/// style temp dir — deleted when unused (gs path / failure); KEPT when parts
+/// were handed to the OS pipeline (the spooler may still be reading them) and
+/// reclaimed by a later instance's startup sweep once this instance has
+/// exited (the dir carries this instance's owner marker, so a concurrently-
+/// running instance's sweep won't pull parts out from under the spooler).
+#[cfg(windows)]
+async fn execute_native_print(
+    app: &tauri::AppHandle,
+    input: PathBuf,
+    printer: String,
+    selection: PrintSelection,
+    copies: u32,
+    job_token: String,
+    cancel_flag: Arc<AtomicBool>,
+) -> OpResult<JobOutcome> {
+    let toolchain = discover_toolchain(app);
+    let work_dir = OpWorkDir::create(app)?;
     let fallback_part_queued = Arc::new(AtomicBool::new(false));
     let result = {
         let app = app.clone();
-        let input = input.clone();
-        let job_token = job_token.clone();
         let work_path = work_dir.path().to_path_buf();
-        let cancel_flag = cancel_flag.clone();
         let fallback_part_queued = fallback_part_queued.clone();
         on_blocking_pool(move || {
             run_print_job(
@@ -203,15 +240,28 @@ pub async fn print_pdf(
         })
         .await
     };
-    jobs.remove(&job_token);
-
     if should_keep_print_work_dir(&result, fallback_part_queued.load(Ordering::Relaxed)) {
-        // Parts may still be spooling in the OS handler — keep the dir; a
-        // startup sweep reclaims it after this instance exits.
         work_dir.keep();
     }
+    result
+}
 
-    result.map(JobOutcome::into_response)
+/// macOS / Linux: spool the file straight to CUPS via `lp` — any size, page
+/// range in a single pass, no bundled toolchain. `lp` is fast and atomic, so
+/// there is no per-segment progress or mid-spool cancellation to thread
+/// through; the job token is still registered upstream so the UI's cancel
+/// wiring stays uniform across platforms.
+#[cfg(unix)]
+async fn execute_native_print(
+    _app: &tauri::AppHandle,
+    input: PathBuf,
+    printer: String,
+    selection: PrintSelection,
+    copies: u32,
+    _job_token: String,
+    _cancel_flag: Arc<AtomicBool>,
+) -> OpResult<JobOutcome> {
+    on_blocking_pool(move || run_cups_print_job(&input, &printer, &selection, copies)).await
 }
 
 struct JobOutcome {
@@ -234,6 +284,7 @@ impl JobOutcome {
     }
 }
 
+#[cfg(windows)]
 fn should_keep_print_work_dir(result: &OpResult<JobOutcome>, fallback_part_queued: bool) -> bool {
     fallback_part_queued
         || matches!(
@@ -242,6 +293,28 @@ fn should_keep_print_work_dir(result: &OpResult<JobOutcome>, fallback_part_queue
         )
 }
 
+/// macOS / Linux: snapshot the input, spool it via CUPS `lp`, and report
+/// whether the file changed on disk mid-spool (the paper may mix revisions).
+#[cfg(unix)]
+fn run_cups_print_job(
+    input: &std::path::Path,
+    printer: &str,
+    selection: &PrintSelection,
+    copies: u32,
+) -> OpResult<JobOutcome> {
+    let before = snapshot(input)?;
+    core_print::lp_print(input, printer, selection, copies)?;
+    let input_changed = ensure_unchanged(input, before).is_err();
+    Ok(JobOutcome {
+        method: "cups",
+        gs_invocations: 0,
+        fallback_parts: 0,
+        fallback_reason: None,
+        input_changed,
+    })
+}
+
+#[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn run_print_job(
     app: &tauri::AppHandle,
@@ -350,6 +423,7 @@ mod tests {
         jobs.register("job-1").expect("re-register");
     }
 
+    #[cfg(windows)]
     #[test]
     fn print_work_dir_is_kept_after_fallback_part_was_queued() {
         let result = Err(PathOpError {
@@ -360,6 +434,7 @@ mod tests {
         assert!(should_keep_print_work_dir(&result, true));
     }
 
+    #[cfg(windows)]
     #[test]
     fn print_work_dir_is_kept_after_successful_fallback() {
         let result = Ok(JobOutcome {
@@ -373,6 +448,7 @@ mod tests {
         assert!(should_keep_print_work_dir(&result, false));
     }
 
+    #[cfg(windows)]
     #[test]
     fn print_work_dir_is_removed_before_fallback_parts_are_queued() {
         let result = Err(PathOpError {

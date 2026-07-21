@@ -15,6 +15,7 @@ import {
   type PrintProgressEvent,
   type PrintResult,
 } from "../lib/printPipeline";
+import { runtimePlatform } from "../lib/runtimePlatform";
 import { FloatingDialog } from "./FloatingDialog";
 import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
 
@@ -285,7 +286,7 @@ export function PrintDialog({
                 message={progressText ?? "Printing..."}
                 progress={printProgressCount(progressEvent)}
                 hideProgressText={Boolean(progressEvent)}
-                cancelMode="cancel"
+                cancelMode={runtimePlatform() === "macos" ? "none" : "cancel"}
                 cancelLabel="Cancel Printing"
                 cancelMessage="Stops after the current part."
                 onCancel={cancelRunning}
@@ -310,11 +311,11 @@ export function PrintDialog({
         {phase === "done" && result ? (
           <>
             <p className="tool-panel__status-line" role="status">
-              {result.method === "ghostscript"
-                ? `Sent to ${printerName}.`
-                : `Sent to ${printerName} in ${result.fallbackParts} part${
+              {result.method === "printto"
+                ? `Sent to ${printerName} in ${result.fallbackParts} part${
                     result.fallbackParts === 1 ? "" : "s"
-                  } via the system print pipeline.`}
+                  } via the system print pipeline.`
+                : `Sent to ${printerName}.`}
             </p>
             {result.inputChanged ? (
               <p className="tool-panel__note">

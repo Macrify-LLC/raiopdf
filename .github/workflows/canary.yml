@@ -524,9 +524,12 @@ jobs:
       - name: Build help content
         run: pnpm --filter @raiopdf/help-content build
 
-      # tauri-driver is the external WebDriver bridge to the WebView2 app. The
-      # matching msedgedriver is auto-downloaded by the `edgedriver` package the
-      # wdio config resolves at runtime.
+      # tauri-driver is the external WebDriver bridge to the WebView2 app. It
+      # resolves msedgedriver.exe from PATH only (see the "Put matched
+      # msedgedriver on PATH" step below): @wdio/tauri-service never passes it a
+      # --native-driver flag, and the service's own auto-download only mutates its
+      # launcher process env, which the spawned tauri-driver child does not
+      # inherit — so without a driver on PATH tauri-driver dies "CannotFindBinaryPath".
       - name: Cache tauri-driver
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -541,6 +544,33 @@ jobs:
       # and skips the compile; otherwise it builds and populates the cache.
       - name: Install tauri-driver
         run: cargo install tauri-driver --version "^2" --locked
+
+      # tauri-driver resolves msedgedriver.exe from PATH only, and @wdio/tauri-service
+      # does not reliably hand it the driver it downloads (the download lands on the
+      # service's own process env, which the spawned tauri-driver child never
+      # inherits). Download a msedgedriver matched to the machine's WebView2 runtime
+      # major and prepend it to PATH so both the service's version check and
+      # tauri-driver's child resolve it. Idempotent + cached under RUNNER_TEMP.
+      - name: Put matched msedgedriver on PATH
+        shell: powershell
+        run: |
+          $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction Stop).pv
+          $major = $wv.Split('.')[0]
+          Write-Host "WebView2 runtime: $wv (major $major)"
+          $resp = Invoke-WebRequest "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major" -UseBasicParsing
+          $ver = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::Unicode.GetString($resp.Content) } else { [string]$resp.Content }
+          $ver = ($ver -replace '[^\d.]', '')
+          Write-Host "Matched msedgedriver: $ver"
+          $dir = Join-Path $env:RUNNER_TEMP "msedgedriver-$ver"
+          $exe = Join-Path $dir 'msedgedriver.exe'
+          if (-not (Test-Path $exe)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $zip = Join-Path $dir 'edgedriver.zip'
+            Invoke-WebRequest "https://msedgedriver.microsoft.com/$ver/edgedriver_win64.zip" -OutFile $zip -UseBasicParsing
+            Expand-Archive $zip -DestinationPath $dir -Force
+          }
+          & $exe --version
+          "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       # NOTE: the payload assembler needs Python 3.11+ (`python`/`py` on PATH). We
       # do NOT use actions/setup-python here — on this self-hosted runner its

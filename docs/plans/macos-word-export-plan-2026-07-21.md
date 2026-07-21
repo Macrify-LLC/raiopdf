@@ -1,4 +1,4 @@
-# macOS Word export/import (PDF ↔ .docx via installed Word) — Roadmap plan (v2, post-critique)
+# macOS Word export/import (PDF ↔ .docx via installed Word) — Roadmap plan (v3, decisions locked)
 
 > v2 (2026-07-21): revised after adversarial review. Material changes from v1: the spike
 > is split into terminal-testable vs signed-bundle-only items (TCC attribution can only
@@ -8,6 +8,24 @@
 > needs separate investigation); the third Word surface (`convert_docx_for_add` batch
 > import) is now in scope; the Apple Events entitlement needs a per-binary split so the
 > MCP/engine-host sidecars don't inherit it; estimate raised to 3–4 weeks.
+>
+> v3 (2026-07-21) — decisions locked (maintainer):
+>
+> 1. **Visible Word is accepted UX.** Word opening a document window during conversion
+>    is fine, provided the copy says so plainly ("Word will open briefly").
+> 2. **Import-only fallback accepted.** If the spike kills PDF → Word export but
+>    .docx → PDF import works, ship import-only on macOS with an honest grayed reason.
+> 3. **Cooperative cancel stays out of scope.** Word conversions remain timeout-only on
+>    both platforms; threading `PathOpJobs` tokens into the Word commands is a separate
+>    follow-up if ever wanted.
+> 4. **Subscription gating is handled honestly.** If PDF reflow turns out to be
+>    Microsoft-365-gated, gate the feature with a clear "your Word edition can't open
+>    PDFs" capability reason rather than chasing perpetual-license support.
+> 5. **CHANGELOG 0.1.2 cancel claim: investigated and confirmed inaccurate** for the
+>    Word conversions (no job token was ever threaded into the Word commands; git
+>    history shows the machinery never existed). Corrected in CHANGELOG with an inline
+>    correction note, same branch as this plan. OCR and Prepare for Filing cancel are
+>    real and unaffected.
 
 Goal: bring the existing Word features — **PDF → Word (.docx) reflow export**,
 **Import Word Document (.docx → PDF)**, and the **batch "add Word documents" flow** — to
@@ -36,9 +54,9 @@ Windows implementation's behavior; hidden-Word parity with Windows (impossible o
   cooperative-cancel system is wired into OCR/prepare-filing, not Word. The Windows
   timeout-kill machinery (attributable WINWORD pid + windowless-process fallback) must
   NOT be ported — macOS scripts a shared visible Word instance.
-- Open item to investigate (independent of this plan, flagged during review):
-  CHANGELOG 0.1.2 says Word conversions can be cancelled mid-run; the current command
-  surface accepts no job token. Reconcile the claim or the code.
+- ~~Open item~~ Resolved (v3, decision 5): the CHANGELOG 0.1.2 claim that Word
+  conversions were cancellable mid-run was confirmed inaccurate and corrected in the
+  CHANGELOG; Word conversions are timeout-only by design on both platforms.
 
 ## macOS UX contract (differs from Windows by design)
 

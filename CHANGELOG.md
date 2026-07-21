@@ -116,9 +116,12 @@ machine, nothing uploaded.
   updates behind your back.
 - **Prepare for Filing shows per-page OCR progress** instead of a single indefinite
   spinner, so you can see a long scan actually moving.
-- **Cancel a long operation.** OCR, Prepare for Filing, and the Word conversions can now
-  be cancelled mid-run — the work stops promptly and any tool it started (including a
-  hidden Microsoft Word) is shut down, instead of leaving you to wait out a stuck run.
+- **Cancel a long operation.** OCR and Prepare for Filing can now be cancelled mid-run —
+  the work stops promptly and any tool it started is shut down, instead of leaving you to
+  wait out a stuck run. *(Correction 2026-07-21: this entry originally said the Word
+  conversions were cancellable mid-run too — they are not. A Word conversion that runs
+  long is stopped by its 120-second timeout, which also shuts down the hidden Word it
+  started.)*
 
 ### Changed
 

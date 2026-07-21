@@ -30,7 +30,7 @@ use crate::path_ops::{
 // Error codes (extend the PathOpError vocabulary; same wire shape)
 // ---------------------------------------------------------------------------
 
-/// Printing is not supported on this platform (macOS/Linux pending).
+/// Printing is not supported on this platform (only Windows and macOS).
 pub const ERR_PRINT_NOT_SUPPORTED: &str = "PRINT_NOT_SUPPORTED";
 /// The user cancelled between segments/parts. Not a failure.
 pub const ERR_PRINT_CANCELLED: &str = "PRINT_CANCELLED";
@@ -111,17 +111,149 @@ pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
     parse_printer_list_json(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// macOS-later: printing is Windows-first; enumeration reports an empty list
-/// so the UI's availability probe (which also checks the platform flag) can
-/// message honestly instead of erroring.
-#[cfg(not(windows))]
+// ---------------------------------------------------------------------------
+// Unix (macOS / Linux): CUPS `lp` / `lpstat`
+// ---------------------------------------------------------------------------
+//
+// macOS drives the OS print pipeline directly through CUPS, so no bundled
+// toolchain (Ghostscript / qpdf) is needed: `lp` reads the file from disk and
+// spools it at any size, and `lpstat` enumerates destinations. Argument
+// construction and output parsing are pure (fixture-tested); the thin
+// `#[cfg(unix)]` shims below run the binaries. Advertised support stays
+// Windows + macOS (`platform_supported`) — the code compiles on Linux for CI
+// coverage, but Linux is not a release target.
+
+/// Parse `lpstat -e` output (one destination name per line) into printers,
+/// flagging the one whose name matches `default` (from `lpstat -d`).
+pub fn parse_lpstat_printers(names_output: &str, default: Option<&str>) -> Vec<PrinterInfo> {
+    names_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|name| PrinterInfo {
+            name: name.to_string(),
+            is_default: default == Some(name),
+        })
+        .collect()
+}
+
+/// Extract the default destination from `lpstat -d` output, which is either
+/// `system default destination: NAME` or `no system default destination`.
+pub fn parse_lpstat_default(output: &str) -> Option<String> {
+    let line = output
+        .lines()
+        .find(|line| line.contains("system default destination"))?;
+    if line.contains("no system default") {
+        return None;
+    }
+    let name = line.rsplit(':').next()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Render a `Segments` selection into a CUPS `page-ranges` value ("1-3,5").
+/// CUPS emits pages in ascending document order regardless of listed order.
+pub fn cups_page_ranges(segments: &[PageSegmentRange]) -> String {
+    segments
+        .iter()
+        .map(|segment| {
+            if segment.first == segment.last {
+                segment.first.to_string()
+            } else {
+                format!("{}-{}", segment.first, segment.last)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build the `lp` argument vector: `-d <printer> [-n <copies>]
+/// [-o page-ranges=…] <input>`. A single copy omits `-n`; a whole-document
+/// selection omits the page-ranges option. Grant-resolved input paths are
+/// absolute, so no `--` option terminator is needed.
+pub fn lp_print_args(
+    printer: &str,
+    selection: &PrintSelection,
+    copies: u32,
+    input: &Path,
+) -> Vec<OsString> {
+    let mut arguments = args(&["-d", printer]);
+    if copies > 1 {
+        arguments.push(OsString::from("-n"));
+        arguments.push(OsString::from(copies.to_string()));
+    }
+    if let PrintSelection::Segments(segments) = selection {
+        arguments.push(OsString::from("-o"));
+        let mut option = OsString::from("page-ranges=");
+        option.push(cups_page_ranges(segments));
+        arguments.push(option);
+    }
+    arguments.push(input.as_os_str().to_os_string());
+    arguments
+}
+
+/// Run a CUPS binary and capture stdout, delegating spawn-flag handling and
+/// error shaping to the shared `path_ops` runner.
+#[cfg(unix)]
+fn run_capture(program: &str, arguments: &[&str]) -> OpResult<String> {
+    let output = path_ops::run_command(Path::new(program), &args(arguments), None, &[])?;
+    path_ops::expect_success(program, &output)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Enumerate CUPS destinations (`lpstat -e`), flagging the default
+/// (`lpstat -d`). A missing default is not an error — the list is still
+/// returned.
+#[cfg(unix)]
+pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
+    let names = run_capture("lpstat", &["-e"])?;
+    let default_raw = run_capture("lpstat", &["-d"]).unwrap_or_default();
+    Ok(parse_lpstat_printers(
+        &names,
+        parse_lpstat_default(&default_raw).as_deref(),
+    ))
+}
+
+/// Spool one print job to CUPS via `lp` — the whole document or a page range,
+/// any size, in a single pass (CUPS renders the PDF; no Ghostscript needed).
+#[cfg(unix)]
+pub fn lp_print(
+    input: &Path,
+    printer: &str,
+    selection: &PrintSelection,
+    copies: u32,
+) -> OpResult<()> {
+    let output = path_ops::run_command(
+        Path::new("lp"),
+        &lp_print_args(printer, selection, copies, input),
+        None,
+        &[],
+    )?;
+    path_ops::expect_success("lp", &output)
+}
+
+/// Targets that are neither Windows nor Unix have no native print pipeline.
+#[cfg(not(any(windows, unix)))]
 pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
     Ok(Vec::new())
 }
 
-/// Whether the native print pipeline exists on this platform at all.
+/// Whether the native print pipeline exists on this platform at all. Windows
+/// drives it through Ghostscript; macOS through CUPS `lp`.
 pub const fn platform_supported() -> bool {
-    cfg!(windows)
+    cfg!(windows) || cfg!(target_os = "macos")
+}
+
+/// Whether native printing is actually usable, given whether the bundled
+/// Ghostscript driver was found. Windows needs Ghostscript; macOS prints
+/// through the OS's CUPS `lp` and needs no bundled toolchain. Keeps all
+/// "what makes printing available where" knowledge in this module rather than
+/// the Tauri command layer.
+pub fn print_available(ghostscript_present: bool) -> bool {
+    if cfg!(target_os = "macos") {
+        platform_supported()
+    } else {
+        platform_supported() && ghostscript_present
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,5 +1223,92 @@ mod tests {
                 .code,
             ERR_INVALID_INPUT
         );
+    }
+
+    // ---- CUPS (macOS / Linux) argument + parsing ----
+
+    #[test]
+    fn platform_support_covers_windows_and_macos() {
+        assert_eq!(
+            platform_supported(),
+            cfg!(windows) || cfg!(target_os = "macos")
+        );
+    }
+
+    #[test]
+    fn cups_page_ranges_render_segments_and_single_pages() {
+        assert_eq!(
+            cups_page_ranges(&[
+                PageSegmentRange { first: 1, last: 3 },
+                PageSegmentRange { first: 5, last: 5 },
+            ]),
+            "1-3,5"
+        );
+        assert_eq!(
+            cups_page_ranges(&[PageSegmentRange { first: 8, last: 8 }]),
+            "8"
+        );
+    }
+
+    #[test]
+    fn lp_args_whole_document_omit_pages_and_single_copy() {
+        assert_eq!(
+            lp_print_args(
+                "Office_HP",
+                &PrintSelection::WholeDocument,
+                1,
+                Path::new("/tmp/a b.pdf"),
+            ),
+            os(&["-d", "Office_HP", "/tmp/a b.pdf"])
+        );
+    }
+
+    #[test]
+    fn lp_args_include_copies_and_page_ranges() {
+        let selection = PrintSelection::Segments(vec![
+            PageSegmentRange { first: 2, last: 4 },
+            PageSegmentRange { first: 9, last: 9 },
+        ]);
+        assert_eq!(
+            lp_print_args("PDF", &selection, 3, Path::new("/docs/f.pdf")),
+            os(&[
+                "-d",
+                "PDF",
+                "-n",
+                "3",
+                "-o",
+                "page-ranges=2-4,9",
+                "/docs/f.pdf",
+            ])
+        );
+    }
+
+    #[test]
+    fn lpstat_printers_flag_the_default_and_skip_blanks() {
+        let printers = parse_lpstat_printers("Office_HP\n\nBrother_QL\n", Some("Brother_QL"));
+        assert_eq!(
+            printers,
+            vec![
+                PrinterInfo {
+                    name: "Office_HP".to_string(),
+                    is_default: false,
+                },
+                PrinterInfo {
+                    name: "Brother_QL".to_string(),
+                    is_default: true,
+                },
+            ]
+        );
+        assert_eq!(parse_lpstat_printers("\n  \n", None), Vec::new());
+    }
+
+    #[test]
+    fn lpstat_default_parsing() {
+        assert_eq!(
+            parse_lpstat_default("system default destination: Brother_QL").as_deref(),
+            Some("Brother_QL")
+        );
+        assert_eq!(parse_lpstat_default("no system default destination"), None);
+        assert_eq!(parse_lpstat_default(""), None);
     }
 }

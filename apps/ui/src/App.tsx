@@ -143,6 +143,7 @@ import { isTextEntryTarget } from "./lib/domGuards";
 import { confirmWithUser } from "./lib/nativeConfirm";
 import type { CapturedTextSelection } from "./lib/selectedTextEdit";
 import { runtimePlatform } from "./lib/runtimePlatform";
+import { chooseNonStreamedPrintRoute } from "./lib/printRouting";
 import {
   hasUnsavedWork,
   tabCloseNeedsConfirm,
@@ -4555,6 +4556,28 @@ export function App() {
 
     if (!document.bytes) {
       setError("Open a PDF before printing.");
+      return;
+    }
+
+    // A normal-size document. On the desktop, print the file itself through the
+    // native pipeline (CUPS `lp` on macOS, Ghostscript on Windows) — full
+    // fidelity at any length. window.print() only captured the handful of pages
+    // the virtualized viewer keeps mounted, and is a silent no-op in the macOS
+    // WKWebView, so it stays a web-only / in-memory-on-Windows fallback.
+    const route = chooseNonStreamedPrintRoute({
+      platform: runtimePlatform(),
+      hasFileGrant: isPathOpsRuntime() && Boolean(pathOpsGrant),
+    });
+    if (route === "native") {
+      if (editing.hasUnsavedEdits) {
+        setError("Save your changes before printing — printing sends the saved file.");
+        return;
+      }
+      setPrintDialogOpen(true);
+      return;
+    }
+    if (route === "save-first") {
+      setError("Save this document before printing.");
       return;
     }
 

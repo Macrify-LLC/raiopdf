@@ -46,7 +46,8 @@ export interface PrintProgressEvent {
 }
 
 export interface PrintResult {
-  method: "ghostscript" | "printto";
+  /** `ghostscript`/`printto` on Windows; `cups` on macOS (CUPS `lp`). */
+  method: "ghostscript" | "printto" | "cups";
   gsInvocations: number;
   fallbackParts: number;
   fallbackReason: string | null;

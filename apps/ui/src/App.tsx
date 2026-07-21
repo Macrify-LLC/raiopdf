@@ -143,7 +143,6 @@ import { isTextEntryTarget } from "./lib/domGuards";
 import { confirmWithUser } from "./lib/nativeConfirm";
 import type { CapturedTextSelection } from "./lib/selectedTextEdit";
 import { runtimePlatform } from "./lib/runtimePlatform";
-import { chooseNonStreamedPrintRoute } from "./lib/printRouting";
 import {
   hasUnsavedWork,
   tabCloseNeedsConfirm,
@@ -4563,26 +4562,45 @@ export function App() {
     // native pipeline (CUPS `lp` on macOS, Ghostscript on Windows) — full
     // fidelity at any length. window.print() only captured the handful of pages
     // the virtualized viewer keeps mounted, and is a silent no-op in the macOS
-    // WKWebView, so it stays a web-only / in-memory-on-Windows fallback.
-    const route = chooseNonStreamedPrintRoute({
-      platform: runtimePlatform(),
-      hasFileGrant: isPathOpsRuntime() && Boolean(pathOpsGrant),
+    // WKWebView, so it stays a web / in-memory fallback. resolveEngineOpRoute
+    // yields the on-disk grant for a clean opened-or-saved file too (its
+    // `document.filePath` is the shell grant), not just streamed docs — and
+    // gates on unsaved edits, since the on-disk file would be the pre-edit copy.
+    const route = resolveEngineOpRoute({
+      isTauriRuntime: isPathOpsRuntime(),
+      sourceKind: document.source?.kind ?? null,
+      streamedGrant: pathOpsGrant,
+      memoryFilePath: document.filePath,
+      dirty: document.dirty,
+      hasUnsavedEdits: editing.hasUnsavedEdits,
     });
-    if (route === "native") {
-      if (editing.hasUnsavedEdits) {
-        setError("Save your changes before printing — printing sends the saved file.");
-        return;
-      }
+    if (route.via === "path-ops") {
       setPrintDialogOpen(true);
       return;
     }
-    if (route === "save-first") {
-      setError("Save this document before printing.");
+    if (route.via === "save-first") {
+      setError("Save your changes before printing — printing sends the saved file.");
       return;
     }
 
+    // `loopback`: an in-memory doc with no on-disk file (browser open, or a
+    // derived-in-app doc). The browser can print it; the macOS WKWebView cannot
+    // (window.print() is a no-op there), so ask to save first instead.
+    if (runtimePlatform() === "macos") {
+      setError("Save this document before printing.");
+      return;
+    }
     window.print();
-  }, [document.bytes, editing.hasUnsavedEdits, pathOpsGrant, setError, streamedDocument]);
+  }, [
+    document.bytes,
+    document.dirty,
+    document.filePath,
+    document.source,
+    editing.hasUnsavedEdits,
+    pathOpsGrant,
+    setError,
+    streamedDocument,
+  ]);
 
   const buildBinder = useCallback(
     async (
@@ -8914,9 +8932,9 @@ export function App() {
           onCancel={cancelPasswordPrompt}
         />
       ) : null}
-      {printDialogOpen && pathOpsGrant ? (
+      {printDialogOpen && engineDelegatedGrant ? (
         <PrintDialog
-          grant={pathOpsGrant}
+          grant={engineDelegatedGrant}
           pageCount={document.pageCount}
           fileName={document.fileName}
           onClose={() => setPrintDialogOpen(false)}

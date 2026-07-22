@@ -1033,6 +1033,34 @@ fn split_descriptors(
 // Output lifecycle
 // ---------------------------------------------------------------------------
 
+/// The release core, without the Tauri handle so it can be exercised directly
+/// in tests: resolve the grant, refuse anything that is not a per-op temp
+/// output directly under `root` (a user's own file is never deleted), then
+/// drop the grant and remove the whole per-op dir. Shared with
+/// `path_op_release_output` so tests cover the real root/gate/delete path
+/// rather than a reproduction of it.
+pub(crate) fn release_output_grant(
+    grants: &FileGrants,
+    grant: &str,
+    root: &Path,
+) -> Result<(), PathOpError> {
+    let path = grants.resolve(grant).map_err(|message| PathOpError {
+        code: "INVALID_INPUT",
+        message,
+    })?;
+    let Some(dir) = releasable_output_dir(&path, root) else {
+        return Err(PathOpError {
+            code: "INVALID_INPUT",
+            message: "grant does not reference a path-op output".to_string(),
+        });
+    };
+    grants.remove(grant);
+    fs::remove_dir_all(&dir).map_err(|error| PathOpError {
+        code: "IO_ERROR",
+        message: format!("failed to delete path-op output: {error}"),
+    })
+}
+
 /// Delete one path-op temp output eagerly (the page-range print flow reads
 /// the extracted bytes and has no further use for the file). Only grants that
 /// resolve inside `<app-data>/path-ops/<uuid>/` are releasable; the whole
@@ -1043,19 +1071,8 @@ pub fn path_op_release_output(
     grants: tauri::State<'_, FileGrants>,
     grant: String,
 ) -> Result<(), PathOpError> {
-    let path = resolve_grant(&grants, &grant)?;
     let root = path_ops_root(&app)?;
-    let Some(dir) = releasable_output_dir(&path, &root) else {
-        return Err(PathOpError {
-            code: "INVALID_INPUT",
-            message: "grant does not reference a path-op output".to_string(),
-        });
-    };
-    grants.remove(&grant);
-    fs::remove_dir_all(&dir).map_err(|error| PathOpError {
-        code: "IO_ERROR",
-        message: format!("failed to delete path-op output: {error}"),
-    })
+    release_output_grant(grants.inner(), &grant, &root)
 }
 
 // ---------------------------------------------------------------------------

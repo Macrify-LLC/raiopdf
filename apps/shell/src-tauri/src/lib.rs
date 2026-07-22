@@ -3182,9 +3182,12 @@ mod tests {
             "staged temp must sit directly under the path-ops root"
         );
 
-        // Release the backing: drop the grant + delete the per-op dir.
-        grants.remove(&opened.file_grant);
-        fs::remove_dir_all(&per_op_dir).expect("remove per-op dir");
+        // Release the backing through the REAL release path — the shared core
+        // of `path_op_release_output` (resolve grant → releasable-output gate →
+        // drop grant → delete the per-op dir), not a reproduction of it. A
+        // regression in the root resolution or the gate would fail here.
+        crate::path_ops::release_output_grant(&grants, &opened.file_grant, &canonical_root)
+            .expect("release the staged backing");
 
         // No leak: the temp file and its dir are gone, and the grant is dead.
         assert!(!staged_path.exists(), "released temp file must be deleted");
@@ -3192,6 +3195,29 @@ mod tests {
         assert!(
             grants.resolve_entry(&opened.file_grant).is_err(),
             "released grant must no longer resolve"
+        );
+    }
+
+    // The release gate must NEVER delete a user's own file — only a per-op temp
+    // output directly under the path-ops root. A grant to a file elsewhere is
+    // refused and the file is left untouched.
+    #[test]
+    fn release_output_grant_refuses_a_grant_outside_the_ops_root() {
+        let root = tempfile::tempdir().expect("root");
+        let elsewhere = tempfile::tempdir().expect("elsewhere");
+        let users_own = elsewhere.path().join("users-own.pdf");
+        fs::write(&users_own, b"%PDF-1.7\nthe user's own file\n").expect("write");
+
+        let grants = FileGrants::default();
+        let grant = grants.grant(users_own.clone()).expect("grant");
+        let canonical_root = fs::canonicalize(root.path()).expect("root");
+
+        let error = crate::path_ops::release_output_grant(&grants, &grant, &canonical_root)
+            .expect_err("a non-output grant must be refused");
+        assert_eq!(error.code, "INVALID_INPUT");
+        assert!(
+            users_own.exists(),
+            "a user's own file must never be deleted by a release"
         );
     }
 

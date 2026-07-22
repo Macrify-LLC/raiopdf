@@ -970,6 +970,7 @@ test("canceling a dirty-tab close preserves the staged text-edit review", async 
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
   await installTextEditBridgeMock(page, editedPdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-close-cancel.pdf", sourcePdf);
 
@@ -980,7 +981,7 @@ test("canceling a dirty-tab close preserves the staged text-edit review", async 
   await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByRole("dialog", { name: "Pending annotations" })
     .getByRole("button", { name: "Save annotations" })
     .click();

@@ -98,3 +98,66 @@ body {
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Print isolation — browser-print (`window.print()`) fallback only.
+
+   The native, file-based print path (Ghostscript on Windows, CUPS `lp` on
+   macOS) is the full-fidelity route and prints the file, not the DOM. This
+   block governs only the browser-print fallback — the web build, or an unsaved
+   in-memory document on the desktop — so that even then the printout is the
+   document, never the app's toolbars, panels, and banners.
+   --------------------------------------------------------------------------- */
+@media print {
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Hide the whole app, then reveal only the document page column. Using
+     visibility keeps this independent of the exact layout nesting. */
+  body * {
+    visibility: hidden !important;
+  }
+  .page-list,
+  .page-list * {
+    visibility: visible !important;
+  }
+
+  /* Unlock the fixed-height scroller chain so the pages flow onto the sheet
+     instead of being clipped to the on-screen viewport. */
+  .app-shell,
+  .app-shell__body,
+  .canvas-well,
+  .page-list__content {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* Lift the page column to the top-left of the sheet (its ancestors are now
+     static, so `absolute` anchors to the page itself). */
+  .page-list {
+    position: absolute !important;
+    inset: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Only mounted pages carry a rendered canvas; drop the placeholder spacers so
+     there's no blank filler, and flow the real pages one per printed sheet. */
+  .page-list__page:not([data-mounted="true"]) {
+    display: none !important;
+  }
+  .page-list__page[data-mounted="true"] {
+    position: static !important;
+    inset: auto !important;
+    margin: 0 auto !important;
+    break-inside: avoid;
+    page-break-after: always;
+  }
+}

@@ -36,6 +36,7 @@ const documentState = {
   protectionSource: null,
   protectionFacts: null,
   protectedSourceGrant: null,
+  tempBackingGrant: null,
   error: null,
 } satisfies DocumentState;
 

@@ -3,6 +3,7 @@ import { hasUnsavedWork, tabCloseNeedsConfirm } from "./unsavedWork";
 
 const cleanWindow = {
   tabDirtyFlags: [false, false],
+  tabTempBackedUnsavedFlags: [false, false],
   activeTabHasPendingEdits: false,
   activeTabPendingRedactionCount: 0,
   stashedBackgroundTabCount: 0,
@@ -39,6 +40,17 @@ describe("hasUnsavedWork", () => {
       hasUnsavedWork({ ...cleanWindow, stashedBackgroundTabCount: 1 }),
     ).toBe(true);
   });
+
+  it("flags a clean, temp-backed-but-never-saved tab (derived/imported doc)", () => {
+    // A derived doc staged to a temp file is clean (no pending edits) but was
+    // never saved to a real file — closing must still confirm, from any tab.
+    expect(
+      hasUnsavedWork({
+        ...cleanWindow,
+        tabTempBackedUnsavedFlags: [false, true],
+      }),
+    ).toBe(true);
+  });
 });
 
 const cleanTab = {
@@ -47,6 +59,7 @@ const cleanTab = {
   activeTabHasPendingEdits: false,
   activeTabPendingRedactionCount: 0,
   tabHasStashedWork: false,
+  tabTempBackedUnsaved: false,
 } as const;
 
 describe("tabCloseNeedsConfirm", () => {
@@ -94,6 +107,19 @@ describe("tabCloseNeedsConfirm", () => {
   it("confirms a background tab whose pending work is stashed", () => {
     expect(
       tabCloseNeedsConfirm({ ...cleanTab, tabHasStashedWork: true }),
+    ).toBe(true);
+  });
+
+  it("confirms a clean, temp-backed-but-never-saved tab from any position", () => {
+    expect(
+      tabCloseNeedsConfirm({ ...cleanTab, tabTempBackedUnsaved: true }),
+    ).toBe(true);
+    expect(
+      tabCloseNeedsConfirm({
+        ...cleanTab,
+        tabTempBackedUnsaved: true,
+        isActiveTab: true,
+      }),
     ).toBe(true);
   });
 });

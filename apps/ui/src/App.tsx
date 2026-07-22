@@ -139,6 +139,7 @@ import {
   useDocument,
   type BinderExhibitInput,
   type DocumentState,
+  type OpenFileOptions,
   type OpenFileResult,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
@@ -743,6 +744,7 @@ export function App() {
       sourceKind: document.source?.kind ?? null,
       streamedGrant: pathOpsGrant,
       memoryFilePath: document.filePath,
+      memoryBackingGrant: document.tempBackingGrant,
       dirty: document.dirty,
       hasUnsavedEdits: editing.hasUnsavedEdits,
     });
@@ -2092,7 +2094,12 @@ export function App() {
             path: null,
           },
           {
-            ...(options.markDirty ? { markDirty: true } : {}),
+            // KEEP the op's output file as the doc's temp backing (it already
+            // holds exactly these bytes) so it prints/OCRs in full via the
+            // native path. It stays clean (no `markDirty`) but temp-backed-
+            // unsaved, so Close still prompts to save. Released on
+            // close/replace/mutation/Save As.
+            tempBackingGrant: output.outputGrant,
             ...(protectionSource ? { protectionSource } : {}),
             ...(protectionFacts ? { protectionFacts } : {}),
             ...(protectedSourceGrant ? { protectedSourceGrant } : {}),
@@ -2101,11 +2108,8 @@ export function App() {
 
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
-          // The bytes live in memory now and the document deliberately has
-          // no on-disk identity (filePath null, clean, Save As flow) — the
-          // temp output file has no further use. Best-effort: the startup
-          // sweep covers anything this misses.
-          await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+          // The output file is now the document's temp backing — do NOT release
+          // it here; the document owns it and releases it on close.
           return result;
         }
 
@@ -3485,7 +3489,7 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
-    (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
+    (file: OpenedFile, options: { openInNewTab?: boolean; stageTempBacking?: boolean } = {}) => {
       const opensNewTab = Boolean(options.openInNewTab && document.source);
       if (opensNewTab && longProcessRunning) {
         // Opening into a new tab implicitly switches tabs, which would
@@ -3503,9 +3507,32 @@ export function App() {
       resetLegalState();
       setSelectedPageIndexes(new Set());
       setPasswordPrompt(null);
-      void openDocumentFile(file, {
+      void (async () => {
+      const openOptions: OpenFileOptions = {
         openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
-      }).then((result) => {
+      };
+      // A derived/imported in-memory doc (extracted range, exhibit binder, Word
+      // import, …) has no file on disk. Stage its bytes to a temp file so it
+      // prints/OCRs in full via the native path while staying unsaved. If
+      // staging can't run (web build) or fails, mark it dirty so Close still
+      // prompts to save — just without the native full-document print.
+      if (options.stageTempBacking && file.path === null && file.bytes) {
+        const staged = await materializePdfBytesGrant(file.bytes, file.name).catch(
+          () => null,
+        );
+        const backing: FileGrant | null =
+          staged?.kind === "memory"
+            ? (staged.path as FileGrant | null)
+            : staged?.kind === "rangeGrant"
+              ? staged.grant
+              : null;
+        if (backing) {
+          openOptions.tempBackingGrant = backing;
+        } else {
+          openOptions.markDirty = true;
+        }
+      }
+      await openDocumentFile(file, openOptions).then((result) => {
         if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
@@ -3534,6 +3561,7 @@ export function App() {
           setActiveOrganizeTool("repair");
         }
       });
+      })();
     },
     [document.source, longProcessRunning, openDocumentFile, resetLegalState, setError, stashVisibleDocumentEditingState],
   );
@@ -3808,6 +3836,8 @@ export function App() {
         activeTabHasPendingEdits: editing.hasUnsavedEdits,
         activeTabPendingRedactionCount: pendingRedactions.length,
         tabHasStashedWork: tabEditingSnapshotsRef.current.has(tab.document.generation),
+        tabTempBackedUnsaved:
+          tab.document.tempBackingGrant !== null && tab.document.filePath === null,
       });
       if (needsConfirm) {
         const fileName = tab.document.fileName ?? "this document";
@@ -4712,6 +4742,7 @@ export function App() {
       sourceKind: document.source?.kind ?? null,
       streamedGrant: pathOpsGrant,
       memoryFilePath: document.filePath,
+      memoryBackingGrant: document.tempBackingGrant,
       dirty: document.dirty,
       hasUnsavedEdits: editing.hasUnsavedEdits,
     });
@@ -4945,7 +4976,10 @@ export function App() {
         // regular Print button (window.print on the rendered pages) now
         // applies to exactly those pages. The temp output on disk was
         // already deleted; these bytes live only in memory.
-        openOpenedFile({ bytes: result.extraction.bytes, name: result.extraction.name, path: null });
+        openOpenedFile(
+          { bytes: result.extraction.bytes, name: result.extraction.name, path: null },
+          { stageTempBacking: true },
+        );
       });
   }, [document.fileName, document.generation, document.pageCount, getOpenToken, isCurrentDocument, openOpenedFile, pathOpsGrant]);
 
@@ -8364,6 +8398,11 @@ export function App() {
   useEffect(() => {
     const unsaved = hasUnsavedWork({
       tabDirtyFlags: documentTabs.map((tab) => tab.document.dirty),
+      // A derived/imported doc staged to a temp file is clean but was never
+      // saved to a real file — losing it on close still needs a prompt.
+      tabTempBackedUnsavedFlags: documentTabs.map(
+        (tab) => tab.document.tempBackingGrant !== null && tab.document.filePath === null,
+      ),
       activeTabHasPendingEdits: editing.hasUnsavedEdits,
       activeTabPendingRedactionCount: pendingRedactions.length,
       stashedBackgroundTabCount: tabEditingSnapshotsRef.current.size,

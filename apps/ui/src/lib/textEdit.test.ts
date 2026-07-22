@@ -279,6 +279,56 @@ describe("textEdit", () => {
     expect(canApplyTextEditReview(report)).toBe(true);
   });
 
+  it("anchors a selected review excerpt at document boundaries, including deletion", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected-boundary",
+          find: "John",
+          replace: "",
+          pageIndexes: [0],
+          target: selectedTarget(0, 4),
+        }),
+      ],
+      originalPages: [page(0, "John files at the boundary")],
+      candidatePages: [page(0, " files at the boundary")],
+    });
+
+    expect(report.operations[0]).toMatchObject({ selected: true, status: "changed" });
+    expect(report.selectedExcerpt).toEqual({
+      pageIndex: 0,
+      before: "",
+      selected: "John",
+      replacement: "",
+      after: " files at the boundary",
+    });
+  });
+
+  it("fails selected verification closed when another page's extracted text changes", () => {
+    const report = buildTextEditReviewReport({
+      operations: [
+        op({
+          id: "selected",
+          find: "John",
+          replace: "Jane",
+          pageIndexes: [0],
+          target: selectedTarget(0, 4),
+        }),
+      ],
+      originalPages: [page(0, "John files."), page(1, "Untouched page.")],
+      candidatePages: [page(0, "Jane files."), page(1, "Unexpected changed page.")],
+    });
+
+    expect(report.changedPageIndexes).toEqual([0, 1]);
+    expect(report.operations[0]).toMatchObject({
+      selected: true,
+      replacedEstimate: 0,
+      status: "unchanged",
+    });
+    expect(report.selectedExcerpt).toBeNull();
+    expect(canApplyTextEditReview(report)).toBe(false);
+  });
+
   it("only allows applying review reports where every operation changed", () => {
     const changed = buildTextEditReviewReport({
       operations: [op({ find: "Plaintiff", replace: "Petitioner" })],

@@ -29,6 +29,7 @@ export interface FloatingDialogProps {
   width?: "sm" | "md" | "lg" | undefined;
   draggable?: boolean | undefined;
   scrim?: boolean | undefined;
+  dismissible?: boolean | undefined;
 }
 
 export function FloatingDialog({
@@ -41,6 +42,7 @@ export function FloatingDialog({
   width = "md",
   draggable = true,
   scrim = false,
+  dismissible = true,
 }: FloatingDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -72,7 +74,9 @@ export function FloatingDialog({
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        if (dismissible) {
+          onClose();
+        }
         return;
       }
 
@@ -107,7 +111,7 @@ export function FloatingDialog({
       unregister();
       previouslyFocused?.focus();
     };
-  }, [onClose, stackId]);
+  }, [dismissible, onClose, stackId]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!draggable || event.button !== 0) {
@@ -194,14 +198,16 @@ export function FloatingDialog({
                 onClick={onHelp}
               />
             ) : null}
-            <button
-              type="button"
-              className="floating-dialog__close"
-              aria-label={`Close ${title}`}
-              onClick={onClose}
-            >
-              ×
-            </button>
+            {dismissible ? (
+              <button
+                type="button"
+                className="floating-dialog__close"
+                aria-label={`Close ${title}`}
+                onClick={onClose}
+              >
+                ×
+              </button>
+            ) : null}
           </div>
         </header>
         <div className="floating-dialog__body">{children}</div>

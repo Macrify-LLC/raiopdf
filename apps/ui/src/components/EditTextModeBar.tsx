@@ -51,6 +51,55 @@ export function EditTextModeBar({
     }
   }
 
+  if (textEdit.isSelectedReplacementMode) {
+    const canReviewSelection = Boolean(textEdit.selectedReplacementText) && canQueueSelection;
+
+    return (
+      <form
+        className="legal-mode-bar edit-text-mode-bar edit-text-mode-bar--selection"
+        role="toolbar"
+        aria-label="Replace selected text"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canReviewSelection) {
+            void textEdit.queueSelectedReplacement();
+          }
+        }}
+      >
+        <p className="edit-text-mode-bar__selected-label" aria-live="polite">
+          Selected text: <span>{textEdit.selectedReplacementText || "Resolving selection…"}</span>
+        </p>
+        <label className="edit-text-mode-bar__field edit-text-mode-bar__selection-field">
+          <input
+            ref={replaceInputRef}
+            type="text"
+            placeholder="Replace with"
+            aria-label="Replace selected text with"
+            value={textEdit.replace}
+            disabled={busy}
+            onPointerDown={textEdit.captureSelectedText}
+            onChange={(event) => textEdit.setReplace(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                onExit();
+              }
+            }}
+          />
+        </label>
+        <div className="edit-text-mode-bar__actions">
+          <button type="submit" className="legal-mode-bar__danger-button" disabled={!canReviewSelection}>
+            Review replacement
+          </button>
+          <button type="button" className="legal-mode-bar__button" onClick={onExit}>
+            Exit
+          </button>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <form
       className="legal-mode-bar edit-text-mode-bar"
@@ -101,9 +150,7 @@ export function EditTextModeBar({
         </span>
       </div>
       <span className="edit-text-mode-bar__match-chip" aria-live="polite">
-        {textEdit.selectedReplacementText
-          ? "Selection captured"
-          : textEdit.matchLabel || `${textEdit.pendingOps.length} queued`}
+        {textEdit.matchLabel || `${textEdit.pendingOps.length} queued`}
       </span>
       {/* Previous/next grouped as one stepper so a narrow window wraps them
           together instead of splitting the pair across two lines in the
@@ -129,17 +176,6 @@ export function EditTextModeBar({
         </button>
       </div>
       <div className="edit-text-mode-bar__actions">
-        <button
-          type="button"
-          className="legal-mode-bar__button"
-          disabled={!canQueueSelection}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => {
-            void textEdit.queueSelectedReplacement();
-          }}
-        >
-          Replace selection
-        </button>
         <button type="submit" className="legal-mode-bar__danger-button" disabled={!canQueue}>
           Replace all
         </button>

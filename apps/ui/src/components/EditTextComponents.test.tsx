@@ -29,9 +29,8 @@ describe("EditText components", () => {
     container = null;
   });
 
-  it("queues from the mode bar and navigates with Enter/Shift+Enter", () => {
+  it("queues bulk replacement from its mode bar and navigates with Enter/Shift+Enter", () => {
     const queueReplaceAll = vi.fn();
-    const queueSelectedReplacement = vi.fn(async () => undefined);
     const captureSelectedText = vi.fn();
     const goToNext = vi.fn();
     const goToPrevious = vi.fn();
@@ -40,7 +39,6 @@ describe("EditText components", () => {
         textEdit={state({
           find: "John",
           queueReplaceAll,
-          queueSelectedReplacement,
           captureSelectedText,
           goToNext,
           goToPrevious,
@@ -64,20 +62,6 @@ describe("EditText components", () => {
       getButton("Replace all").click();
     });
     expect(queueReplaceAll).toHaveBeenCalled();
-
-    const selectionButton = getButton("Replace selection");
-    let pointerAllowed = true;
-    act(() => {
-      pointerAllowed = selectionButton.dispatchEvent(new Event("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-      }));
-    });
-    act(() => {
-      selectionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(pointerAllowed).toBe(false);
-    expect(queueSelectedReplacement).toHaveBeenCalled();
 
     act(() => {
       getInput("Replace with").dispatchEvent(new Event("pointerdown", { bubbles: true }));
@@ -111,6 +95,31 @@ describe("EditText components", () => {
       />,
     );
     expect(document.activeElement).toBe(replaceInput);
+  });
+
+  it("uses a separate, selected-only mode bar with no bulk replacement controls", () => {
+    const reviewReplacement = vi.fn(async () => undefined);
+    render(
+      <EditTextModeBar
+        textEdit={state({
+          isSelectedReplacementMode: true,
+          selectedReplacementText: "the deadlines",
+          queueSelectedReplacement: reviewReplacement,
+        })}
+        onExit={() => undefined}
+      />,
+    );
+
+    expect(document.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBe("Replace selected text");
+    expect(document.body.textContent).toContain("Selected text: the deadlines");
+    expect(document.querySelector('input[aria-label="Find text"]')).toBeNull();
+    expect(document.querySelector('input[aria-label="Replace selected text with"]')).toBeInstanceOf(HTMLInputElement);
+    expect(Array.from(document.querySelectorAll("button")).map((button) => button.textContent)).not.toContain("Replace all");
+
+    act(() => {
+      getButton("Review replacement").click();
+    });
+    expect(reviewReplacement).toHaveBeenCalledTimes(1);
   });
 
   it("renders gate, advisory, and positional-space caution in the status panel", () => {
@@ -147,7 +156,6 @@ describe("EditText components", () => {
       />,
     );
 
-    expect(getButton("Replace selection").disabled).toBe(true);
     expect(getButton("Replace all").disabled).toBe(true);
   });
 
@@ -180,6 +188,31 @@ describe("EditText components", () => {
     expect(getButton("Apply").disabled).toBe(true);
   });
 
+  it("renders one verified, scoped selected replacement without bulk warnings", () => {
+    render(<EditTextReviewDialog textEdit={state({ phase: "review", staged: staged(false, "changed", true) })} />);
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("scoped to the selected occurrence");
+    expect(dialog?.textContent).toContain("verified");
+    expect(dialog?.textContent).not.toContain(TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE);
+    expect(dialog?.textContent).not.toContain("estimated replacement");
+    expect(document.querySelectorAll('[aria-label="Replacement report"] [role="listitem"]')).toHaveLength(1);
+    expect(dialog?.textContent).toContain("Before");
+    expect(dialog?.textContent).toContain("After");
+  });
+
+  it("does not dismiss an applying replacement", () => {
+    const cancelReview = vi.fn();
+    render(<EditTextReviewDialog textEdit={state({ phase: "applying", cancelReview })} />);
+
+    expect(document.querySelector('[aria-label="Close Review text replacements"]')).toBeNull();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(cancelReview).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
   function render(element: ReactNode) {
     if (!container) {
       container = document.createElement("div");
@@ -210,6 +243,7 @@ function state(overrides: Partial<TextEditState> = {}): TextEditState {
     positionalSpaceRisk: false,
     selectionResolving: false,
     selectedReplacementText: null,
+    isSelectedReplacementMode: false,
     selectionPrimeCount: 0,
     setFind: () => undefined,
     setReplace: () => undefined,
@@ -254,6 +288,13 @@ function staged(
       changedPageIndexes: zeroChange ? [] : [0],
       zeroChange,
       advisory: null,
+      selectedExcerpt: selected ? {
+        pageIndex: 0,
+        before: "Before ",
+        selected: "John",
+        replacement: "Jane",
+        after: " after.",
+      } : null,
     },
     originalPages: [{ pageIndex: 0, text: "John", spans: [] }],
     candidatePages: [{ pageIndex: 0, text: zeroChange ? "John" : "Jane", spans: [] }],

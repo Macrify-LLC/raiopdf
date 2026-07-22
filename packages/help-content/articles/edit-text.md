@@ -46,12 +46,14 @@ document:
 
 1. Select the text on the page with the normal pointer.
 2. **Right-click the selection and choose "Replace text..."** — RaioPDF opens
-   Edit Text with your selection already captured and the cursor in the
-   **Replace with** box. (Inside Edit Text mode, you can also select text and
-   click **Replace selection**.)
-3. Type the replacement and click **Replace selection**, then **Review** and
-   **Apply** as above. Only the exact text you selected changes — other
-   occurrences of the same words are left alone.
+   a focused replacement bar with your selection already captured and the
+   cursor in the **Replace with** box.
+3. Type the replacement and click **Review replacement**. RaioPDF immediately
+   stages that exact occurrence and opens a focused review — there is no
+   sidebar step and no **Replace all** action in this flow.
+4. Confirm the selected page and before-and-after text, then click **Apply**.
+   Only the exact text you selected changes — other occurrences of the same
+   words are left alone.
 
 Selection replacement works on **one page and one line at a time**. If the
 right-click option is grayed out, the page has no reliable text layer (a scan),

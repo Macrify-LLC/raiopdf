@@ -825,58 +825,51 @@ test("switching from Select to a markup tool converts the selection; other tools
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 });
 
-test("right-click Replace text... enters Edit Text with the selection primed", async ({ page }) => {
-  // The bridge mock only unlocks the engine gate; priming itself is pure UI.
-  await installTextEditBridgeMock(page, await createTextPdf("unused"));
+test("right-click selected replacement stages directly through the scoped engine path", async ({ page }) => {
+  const sourcePdf = await createTextPdf("Smith Smith");
+  const editedPdf = await createTextPdf("Smith Jones");
+  await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith");
   await page.goto("/");
-  await openPdf(page, "dcm-order.pdf", await readFixture("dcm-order.pdf"));
+  await openPdf(page, "edit-selected-text.pdf", sourcePdf);
 
   const textLayer = page.locator(".page-view__text-layer").first();
-  await expect(textLayer.locator(".page-view__text-end")).toHaveCount(1);
-
-  // Deterministic single-line selection, anchored by content (same approach
-  // as the markup-conversion smoke above).
-  let midpoint = { x: 0, y: 0 };
-  let attempt = 0;
-  await expect(async () => {
-    attempt += 1;
-    const line = await textLayer.evaluate((layer, jitter) => {
-      const span = [...layer.querySelectorAll("span")].find((s) =>
-        s.textContent?.includes("comes before the Court"),
-      );
-      if (!span) {
-        return null;
-      }
-      const r = span.getBoundingClientRect();
-      return { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 };
-    }, (attempt % 5) * 9);
-
-    if (!line) {
-      throw new Error("body line not found");
+  const anchor = await textLayer.evaluate((layer) => {
+    const span = layer.querySelector("span");
+    const node = span?.firstChild;
+    if (!span || !node || node.nodeType !== Node.TEXT_NODE) {
+      return null;
     }
-    await page.evaluate(() => window.getSelection()?.removeAllRanges());
-    await page.mouse.move(line.left, line.y);
-    await page.mouse.down();
-    const endX = line.left + (line.right - line.left) * 0.6;
-    await page.mouse.move(endX, line.y, { steps: 6 });
-    await page.mouse.up();
-    const text = await page.evaluate(() => window.getSelection()?.toString() ?? "");
-    expect(text.length).toBeGreaterThan(5);
-    midpoint = { x: (line.left + endX) / 2, y: line.y };
-  }).toPass({ timeout: 15_000 });
+    const range = document.createRange();
+    range.setStart(node, "Smith ".length);
+    range.setEnd(node, "Smith Smith".length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  expect(anchor).not.toBeNull();
 
-  await page.mouse.click(midpoint.x, midpoint.y, { button: "right" });
+  await page.mouse.click(anchor!.x, anchor!.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Replace text..." }).click();
+  await expect(page.getByRole("toolbar", { name: "Replace selected text" })).toBeVisible();
+  await expect(page.getByText("Selected text: Smith")).toBeVisible();
+  await page.getByLabel("Replace selected text with").fill("Jones");
+  await page.getByRole("button", { name: "Review replacement" }).click();
 
-  const replaceItem = page.getByRole("menuitem", { name: "Replace text..." });
-  await expect(replaceItem).toBeVisible();
-  await expect(replaceItem).toBeEnabled();
-  await replaceItem.click();
+  const review = page.getByRole("dialog", { name: "Review selected replacement" });
+  await expect(review).toBeVisible();
+  await expect(review.getByText(/scoped to the selected occurrence/i)).toBeVisible();
+  await expect(review.getByText(
+    "The whole document is rewritten by this operation. Pages not shown here may shift slightly.",
+  )).toHaveCount(0);
+  await expect(review.getByText(/estimated replacement/i)).toHaveCount(0);
+  await expect.poll(() => getSelectedTextEditCallCount(page)).toBe(1);
+  expect(await getTextEditCallCount(page)).toBe(0);
 
-  // The Edit Text mode bar opens with the selection captured and the
-  // Replace-with field focused, ready to type.
-  await expect(page.getByRole("toolbar", { name: "Edit document text" })).toBeVisible();
-  await expect(page.getByText("Selection captured")).toBeVisible();
-  await expect(page.getByLabel("Replace with")).toBeFocused();
+  await review.getByRole("button", { name: "Apply" }).click();
+  const saved = await savePdf(page);
+  await expectPageContentToContainLabel(saved, 0, "Smith Jones");
 });
 
 test("edit document text stages, reviews, applies, and saves as a changed copy", async ({ page }) => {
@@ -1973,6 +1966,77 @@ async function installTextEditBridgeMock(
   });
 }
 
+async function installSelectedTextEditBridgeMock(
+  page: Page,
+  editedBytes: Uint8Array,
+  sourceText: string,
+): Promise<void> {
+  await page.addInitScript(({ editedContents, text }) => {
+    const testWindow = window as typeof window & {
+      __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
+      __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
+      __RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__?: number;
+      __RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__?: number;
+    };
+    testWindow.__RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__ = 0;
+    testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ = 0;
+
+    testWindow.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      if (command !== "engine_start") {
+        throw new Error(`Unexpected Tauri command: ${command}`);
+      }
+
+      return { port: 39393, token: "smoke-token" } as T;
+    };
+
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const pathname = new URL(url).pathname;
+
+      if (pathname === "/api/v1/analysis/basic-info") {
+        return new Response(JSON.stringify({ pageCount: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (pathname === "/api/v1/convert/pdf/text-editor") {
+        return new Response(JSON.stringify({
+          pages: [{
+            pageNumber: 1,
+            width: 200,
+            height: 300,
+            textElements: [{ text, x: 24, y: 240, width: 120, height: 12 }],
+          }],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (pathname === "/api/v1/convert/text-editor/pdf") {
+        testWindow.__RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__ ?? 0) + 1;
+        return new Response(new Uint8Array(editedContents), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+
+      if (pathname === "/api/v1/general/edit-text") {
+        testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ =
+          (testWindow.__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ ?? 0) + 1;
+        return new Response("Bulk replacement must not run for a selected target.", { status: 500 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    };
+  }, {
+    editedContents: [...editedBytes],
+    text: sourceText,
+  });
+}
+
 async function installFilingBridgeMock(
   page: Page,
   convertedBytes: Uint8Array,
@@ -2180,6 +2244,14 @@ async function getTextEditCallCount(page: Page): Promise<number> {
     return (window as typeof window & {
       __RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__?: number;
     }).__RAIOPDF_TEST_TEXT_EDIT_CALL_COUNT__ ?? 0;
+  });
+}
+
+async function getSelectedTextEditCallCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as typeof window & {
+      __RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__?: number;
+    }).__RAIOPDF_TEST_SELECTED_TEXT_EDIT_CALL_COUNT__ ?? 0;
   });
 }
 

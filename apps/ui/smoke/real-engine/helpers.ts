@@ -382,7 +382,9 @@ export function localFixtureSetUnder(
  */
 export async function searchHitCount(page: Page, term: string): Promise<number> {
   const box = page.getByLabel("Search document");
-  await box.fill("");
+  // fill() replaces the current value. Do not clear first: that emits a real
+  // empty-query render ("0 of 0") which can satisfy the final-count wait before
+  // React commits the immediately following query.
   await box.fill(term);
   const count = page.locator(".command-bar__search-count");
   try {

@@ -13,10 +13,13 @@ fades as download volume accrues.
 
 ## [0.1.5] - 2026-07-22
 
-Sixth public alpha. Highlights: **printing on the Mac**, printing that always covers the
-**whole document** (not just the pages on screen), a **jurisdiction setting that actually
-switches rule packs**, and stronger guards against losing unsaved work — plus
-scanner/Bates/packaging fixes and a round of UI polish.
+Sixth public alpha. Highlights: **Word import/export on the Mac**, **printing on the
+Mac**, printing that always covers the **whole document** (not just the pages on
+screen), **Edit Text, Case Caption, and Table of Authorities moving behind an
+experimental opt-in**, **faster and safer selected-text edits** on large PDFs, a
+**jurisdiction setting that actually switches rule packs**, and stronger guards
+against losing unsaved work — plus scanner/Bates/packaging fixes and a round of UI
+polish.
 
 ### Added
 
@@ -34,6 +37,15 @@ scanner/Bates/packaging fixes and a round of UI polish.
 
 ### Changed
 
+- **Edit Text, Case Caption / Cover Page, and Table of Authorities are now off by
+  default.** These are RaioPDF's newest, least-battle-tested tools; turn them on in
+  **Settings > Experimental features** when you want them. Everything else — organizing,
+  annotating, OCR, redaction, Bates numbering, filing prep — stays on as always.
+- **Selected text replacements now rebuild only the page they touch,** splicing it into
+  a fresh copy instead of rewriting the whole document — faster and safer on large PDFs.
+  Bulk find & replace still rebuilds the whole file.
+- **Editing a PDF/A file now asks in plain language** whether to make a standard-PDF
+  working copy, instead of a more generic warning.
 - **The jurisdiction setting is wired for real.** Choosing your jurisdiction now switches
   the e-filing rule pack RaioPDF checks against — Florida, Federal CM/ECF, Georgia, or
   Indiana — instead of always assuming Florida.
@@ -48,6 +60,11 @@ scanner/Bates/packaging fixes and a round of UI polish.
   an extracted page range, an OCR/compress/repair result, an imported Word file — used to
   print only the handful of pages visible on screen. It now prints in full, and still
   prompts you to save so the working copy is never lost silently.
+- **Closing a tab with unsaved OCR work no longer discards it silently** — you're asked
+  to Save, Discard, or Cancel first, the same guard other unsaved edits already had.
+- **A same-word match elsewhere on the page could mask a failed selected-text
+  replacement.** RaioPDF now verifies the exact spot it edited before calling the
+  replacement done.
 - **Scanner, Bates, and packaging rough edges** — a set of trust-critical fixes to the
   sensitive-info scanner, Bates numbering, and the batch/packaging flow.
 - **Closing or quitting can no longer silently drop unsaved work** — window close and app

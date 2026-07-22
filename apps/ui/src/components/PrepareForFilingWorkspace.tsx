@@ -26,6 +26,7 @@ import { ErrorReportButton } from "./ErrorReportButton";
 import { LoadingSun } from "./LoadingSun";
 import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
 import { PackageRootPathField } from "./PackageRootPathField";
+import { ExperimentalFeatureLock } from "./ExperimentalFeatureLock";
 import "./PrepareForFilingWorkspace.css";
 
 export type FilingProgressPhase =
@@ -171,6 +172,7 @@ export interface PrepareForFilingWorkspaceProps {
   onDismissImpact: () => void;
   onCompressFirst: () => void;
   onCaptionRequested?: (() => void) | undefined;
+  experimentalFeaturesEnabled?: boolean;
 }
 
 /**
@@ -223,6 +225,7 @@ export const PrepareForFilingWorkspace = forwardRef<
     onDismissImpact,
     onCompressFirst,
     onCaptionRequested,
+    experimentalFeaturesEnabled = false,
   }: PrepareForFilingWorkspaceProps,
   ref,
 ) {
@@ -484,13 +487,22 @@ export const PrepareForFilingWorkspace = forwardRef<
 
         {onCaptionRequested ? (
           <div className="filing-card__button-row">
-            <button
-              type="button"
-              className="filing-card__secondary-button"
-              onClick={onCaptionRequested}
-            >
-              <PlusIcon size={14} /> Add caption / cover page
-            </button>
+            <div className="experimental-feature-lock">
+              <button
+                type="button"
+                className={`filing-card__secondary-button${experimentalFeaturesEnabled ? "" : " filing-card__experimental-locked"}`}
+                onClick={onCaptionRequested}
+                aria-describedby={experimentalFeaturesEnabled ? undefined : "filing-caption-experimental-description"}
+                aria-disabled={!experimentalFeaturesEnabled || undefined}
+              >
+                <PlusIcon size={14} /> Add caption / cover page <span>Experimental</span>
+              </button>
+              {!experimentalFeaturesEnabled ? (
+                <ExperimentalFeatureLock
+                  descriptionId="filing-caption-experimental-description"
+                />
+              ) : null}
+            </div>
           </div>
         ) : null}
 

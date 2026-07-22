@@ -5,17 +5,21 @@ import { AboutMacrifySection } from "./AboutMacrifySection";
 import { CoverStylePicker } from "./CoverStylePicker";
 import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import { Switch } from "./Switch";
+import { useSectionFocus } from "../hooks/useSectionFocus";
 import type { AppUpdateStatus } from "../lib/appUpdates";
 import { getWordCapability, type WordCapability } from "../lib/wordCapability";
 import "./SettingsDialog.css";
 
-export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify";
+export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify" | "experimental-features";
 
 export interface SettingsDialogProps {
   onClose: () => void;
   /** "Open Raio to AI" access gate. Off by default; the shell owns persistence. */
   mcpEnabled: boolean;
   onToggleMcpEnabled: (next: boolean) => void;
+  experimentalFeaturesEnabled: boolean;
+  onToggleExperimentalFeatures: (next: boolean) => void;
+  experimentalFeaturesStatus?: string | null | undefined;
   /** Resolved absolute path to raiopdf-mcp, once the shell has it. */
   mcpPath?: string | null | undefined;
   /** Set when Preferences was opened via "Open Raio to AI..." specifically. */
@@ -41,6 +45,9 @@ export function SettingsDialog({
   onClose,
   mcpEnabled,
   onToggleMcpEnabled,
+  experimentalFeaturesEnabled,
+  onToggleExperimentalFeatures,
+  experimentalFeaturesStatus,
   mcpPath,
   focusSection,
   onFocusSectionHandled,
@@ -58,6 +65,15 @@ export function SettingsDialog({
   onInstallUpdate,
   onRelaunchForUpdate,
 }: SettingsDialogProps) {
+  const experimentalFocus = useSectionFocus(
+    focusSection === "experimental-features",
+    onFocusSectionHandled,
+  );
+  useEffect(() => {
+    if (focusSection === "experimental-features") {
+      document.getElementById("experimental-features-switch")?.focus();
+    }
+  }, [focusSection]);
   // The update section shows at most one primary button; which one (and its
   // label/disabled state) is a pure function of the phase.
   const primaryUpdate = primaryUpdateButton(updateStatus, {
@@ -205,7 +221,7 @@ export function SettingsDialog({
           <section className="settings-dialog__section" aria-labelledby="update-checks-heading">
             <span>
               <strong id="update-checks-heading">Update checks</strong>
-              <small>Checks GitHub for signed Windows releases automatically</small>
+              <small>Checks GitHub for signed Windows and macOS releases automatically</small>
             </span>
             <div className="settings-dialog__actions">
               <button
@@ -230,6 +246,30 @@ export function SettingsDialog({
             <small className="settings-dialog__status" role="status">
               {formatUpdateStatus(updateStatus)}
             </small>
+          </section>
+          <section
+            ref={experimentalFocus.sectionRef}
+            className="settings-dialog__section"
+            aria-labelledby="experimental-features-heading"
+            data-focused={experimentalFocus.showFocusRing || undefined}
+          >
+            <span>
+              <strong id="experimental-features-heading">Experimental features</strong>
+              <small>
+                Opt in to Edit Text, Case Caption / Cover Page, and Table of Authorities.
+              </small>
+            </span>
+            <Switch
+              id="experimental-features-switch"
+              checked={experimentalFeaturesEnabled}
+              onChange={onToggleExperimentalFeatures}
+              label="Enable experimental features"
+            />
+            {experimentalFeaturesStatus ? (
+              <small className="settings-dialog__status" role="status">
+                {experimentalFeaturesStatus}
+              </small>
+            ) : null}
           </section>
           <label className="settings-dialog__row">
             <span>

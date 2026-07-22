@@ -13,6 +13,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { enableExperimentalFeatures } from "./preferences";
 
 const FIXTURE_PATH = process.env.RAIOPDF_LARGE_FIXTURE ??
   path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures.local", "synthetic-large.pdf");
@@ -38,6 +39,7 @@ test.describe("streamed large-PDF handling", () => {
   test.setTimeout(240_000);
 
   test("opens streamed, renders pages, searches lazily, and keeps byte gates honest", async ({ page }) => {
+    await enableExperimentalFeatures(page);
     await page.goto("/");
     await page.getByLabel("Open PDF file").setInputFiles(FIXTURE_PATH);
 
@@ -73,7 +75,7 @@ test.describe("streamed large-PDF handling", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+    await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
     await expect(
       page.getByText("This document is too large for in-app text editing.", { exact: false }),
     ).toBeVisible();

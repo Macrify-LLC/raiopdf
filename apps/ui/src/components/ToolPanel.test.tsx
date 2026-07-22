@@ -91,6 +91,35 @@ describe("ToolPanel", () => {
     expect(annotatePanel.textContent).not.toContain("Edit Text");
   });
 
+  it("keeps all experimental tools visible and routes their locked activation to Settings", () => {
+    const onExperimentalFeatureRequested = vi.fn();
+    render(<Harness onExperimentalFeatureRequested={onExperimentalFeatureRequested} />);
+
+    for (const label of ["Edit Text", "Case Caption...", "Table of Authorities..."]) {
+      const button = getButtonByText(label);
+      expect(button.textContent).toContain("Experimental");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      click(button);
+    }
+    expect(onExperimentalFeatureRequested).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps experimental badges after the preference is enabled and invokes their real handlers", () => {
+    const onTextEditSelected = vi.fn();
+    const onLegalToolSelected = vi.fn();
+    render(<Harness experimentalFeaturesEnabled onTextEditSelected={onTextEditSelected} onLegalToolSelected={onLegalToolSelected} />);
+
+    const text = getButtonByText("Edit Text");
+    expect(text.textContent).toContain("Experimental");
+    expect(text.getAttribute("aria-disabled")).toBeNull();
+    click(text);
+    click(getButtonByText("Case Caption..."));
+    click(getButtonByText("Table of Authorities..."));
+    expect(onTextEditSelected).toHaveBeenCalledTimes(1);
+    expect(onLegalToolSelected).toHaveBeenNthCalledWith(1, "case-caption");
+    expect(onLegalToolSelected).toHaveBeenNthCalledWith(2, "table-of-authorities");
+  });
+
   it("selects the comment tool from the Annotate group", () => {
     const onEditToolSelected = vi.fn();
     render(<Harness onEditToolSelected={onEditToolSelected} />);
@@ -122,6 +151,10 @@ describe("ToolPanel", () => {
   interface HarnessProps {
     onConnectToAi?: () => void;
     onEditToolSelected?: (toolId: string) => void;
+    onTextEditSelected?: () => void;
+    onLegalToolSelected?: (toolId: string) => void;
+    onExperimentalFeatureRequested?: () => void;
+    experimentalFeaturesEnabled?: boolean;
     pendingEdits?: readonly PendingEdit[];
     activeLegalTool?: string | null;
     redaction?: {
@@ -132,7 +165,7 @@ describe("ToolPanel", () => {
     };
   }
 
-  function Harness({ onConnectToAi, onEditToolSelected, pendingEdits = [], activeLegalTool = null, redaction }: HarnessProps) {
+  function Harness({ onConnectToAi, onEditToolSelected, onTextEditSelected, onLegalToolSelected, onExperimentalFeatureRequested, experimentalFeaturesEnabled = false, pendingEdits = [], activeLegalTool = null, redaction }: HarnessProps) {
     return (
       <ToolPanel
         hasDocument
@@ -144,7 +177,7 @@ describe("ToolPanel", () => {
         activeOrganizeTool={null}
         onEditToolSelected={onEditToolSelected ?? (() => undefined)}
         onEditDialogToolSelected={() => undefined}
-        onLegalToolSelected={() => undefined}
+        onLegalToolSelected={onLegalToolSelected ?? (() => undefined)}
         onOrganizeToolSelected={() => undefined}
         onMakeSearchable={() => undefined}
         onForceOcr={() => undefined}
@@ -168,6 +201,9 @@ describe("ToolPanel", () => {
         onPrintMarkupAnnotationsChange={() => undefined}
         onFlattenMarkupAnnotations={() => undefined}
         markupAnnotationMessage={null}
+        experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+        onExperimentalFeatureRequested={onExperimentalFeatureRequested}
+        onTextEditSelected={onTextEditSelected}
       />
     );
   }

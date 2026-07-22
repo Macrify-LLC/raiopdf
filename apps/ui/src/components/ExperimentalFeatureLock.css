@@ -1,0 +1,38 @@
+.experimental-feature-lock {
+  position: relative;
+}
+
+.experimental-feature-lock__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.experimental-feature-lock__tooltip {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  left: var(--space-2);
+  display: none;
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px 8px;
+  border-radius: var(--radius-control);
+  background: var(--ink);
+  color: var(--panel);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  box-shadow: var(--shadow-control);
+  pointer-events: none;
+}
+
+.experimental-feature-lock:hover .experimental-feature-lock__tooltip,
+.experimental-feature-lock:focus-within .experimental-feature-lock__tooltip {
+  display: block;
+}

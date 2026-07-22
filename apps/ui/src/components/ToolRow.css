@@ -100,3 +100,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tool-row[data-locked="true"] .tool-row__select {
+  color: var(--muted);
+}
+
+.tool-row__badge {
+  margin-left: auto;
+  padding: 2px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: nowrap;
+}

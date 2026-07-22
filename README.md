@@ -71,7 +71,7 @@ Four ways it fits into an actual day at the firm:
 | Organize pages | Merge, split, reorder, extract, insert, insert a slip sheet anywhere, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
-| **Edit Text** | Change the real text in a typed PDF — find & replace across the document (case-sensitive, optional whole-word), or right-click a selection and choose "Replace text..." to change exactly that occurrence. Born-digital documents only (not scans); the text doesn't reflow, and the whole document is rewritten on save |
+| **Edit Text** *(experimental; enable in Settings)* | Change the real text in a typed PDF — find & replace across the document (case-sensitive, optional whole-word), or right-click a selection and choose "Replace text..." to change exactly that occurrence. Born-digital documents only (not scans); the text doesn't reflow, and the whole document is rewritten on save |
 | Annotate | Highlight, underline, strikethrough, freehand draw, shapes and arrows, callouts, text boxes, comments, images — with color, opacity, and stroke-width controls |
 | Fill & sign | Fill existing forms or add reusable text fields and checkboxes to fieldless PDFs; add text, images, and signature stamps; flatten when needed for filing |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
@@ -88,8 +88,8 @@ Four ways it fits into an actual day at the firm:
 | **Prepare for Filing** | Pick your court, get a prep checklist and a preflight report with the actual rule citations, normalize pages to the portal's requirements, and split an oversized file into properly labeled sequential parts |
 | **Jurisdiction packs** | E-filing rules for the Florida Courts E-Filing Portal, Federal CM/ECF, Georgia (eFileGA and PeachCourt), and Indiana (IEFS) — every constraint cites its authority and the date it was last verified. Guidance, not legal advice. |
 | **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks from your jurisdiction pack, like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
-| **Case caption & cover page** | Fill a case caption once, choose a local caption style with live previews, save it as a PDF, or put it at the front of the open document |
-| **Table of Authorities** | Scan a brief for cited cases, statutes, rules, and constitutional provisions, review the hits, fix or merge them, then save the finished table or drop it onto the front of the PDF |
+| **Case caption & cover page** *(experimental; enable in Settings)* | Fill a case caption once, choose a local caption style with live previews, save it as a PDF, or put it at the front of the open document |
+| **Table of Authorities** *(experimental; enable in Settings)* | Scan a brief for cited cases, statutes, rules, and constitutional provisions, review the hits, fix or merge them, then save the finished table or drop it onto the front of the PDF |
 | **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |

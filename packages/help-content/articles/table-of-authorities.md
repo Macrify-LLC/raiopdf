@@ -8,6 +8,8 @@ order: 19
 
 # Table of Authorities
 
+**Experimental feature:** Enable Experimental features in Settings before using Table of Authorities.
+
 Build a Table of Authorities from the PDF you already have open. RaioPDF scans
 the document text, groups the citations, and lets you fix the list before it
 makes a table.

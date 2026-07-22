@@ -88,7 +88,7 @@ import {
   type ProductionSetProgress,
   type ProductionSetRunInput,
 } from "./components/ProductionSetWorkspace";
-import { SettingsDialog } from "./components/SettingsDialog";
+import { SettingsDialog, type SettingsFocusSection } from "./components/SettingsDialog";
 import {
   CrashReportDialog,
   type CrashReportPayload,
@@ -285,6 +285,7 @@ import {
   type CourtProfile,
   type FilingPreferences,
 } from "./lib/filingPreferences";
+import { readUiPreferences, writeUiPreferences } from "./lib/uiPreferences";
 import {
   buildCrashReportIssueUrl,
   fitCrashReportPayloadToIssueUrl,
@@ -907,6 +908,8 @@ export function App() {
   });
   const [metadataSummary, setMetadataSummary] = useState<PdfMetadataSummary | null>(null);
   const [filingPreferences, setFilingPreferences] = useState<FilingPreferences>(() => readFilingPreferences());
+  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] = useState(() => readUiPreferences().experimentalFeaturesEnabled);
+  const [experimentalFeaturesStatus, setExperimentalFeaturesStatus] = useState<string | null>(null);
   const [filingPackId, setFilingPackId] = useState<JurisdictionPackId>(() => (
     filingPreferences.defaultPackId ?? DEFAULT_PACK.id
   ));
@@ -1168,9 +1171,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpArticleId, setHelpArticleId] = useState<string | undefined>(undefined);
-  const [settingsFocusSection, setSettingsFocusSection] = useState<
-    "open-raio-to-ai" | "about-macrify" | null
-  >(null);
+  const [settingsFocusSection, setSettingsFocusSection] = useState<SettingsFocusSection | null>(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
@@ -2504,6 +2505,11 @@ export function App() {
     editing.setTool("select");
   }, [editing]);
 
+  const openExperimentalFeaturesSettings = useCallback(() => {
+    setSettingsFocusSection("experimental-features");
+    setSettingsOpen(true);
+  }, []);
+
   const requestTextEditMode = useCallback(() => {
     if (longProcessRunning) {
       return;
@@ -2511,6 +2517,10 @@ export function App() {
 
     if (activeTextEdit) {
       exitTextEditMode();
+      return;
+    }
+    if (!experimentalFeaturesEnabled) {
+      openExperimentalFeaturesSettings();
       return;
     }
 
@@ -2525,7 +2535,7 @@ export function App() {
     }
 
     enterTextEditMode();
-  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, exitTextEditMode, longProcessRunning, setError, streamedDocument, textEdit.gate.message]);
+  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, exitTextEditMode, experimentalFeaturesEnabled, longProcessRunning, openExperimentalFeaturesSettings, setError, streamedDocument, textEdit.gate.message]);
 
   // When the right-click "Replace text..." entry defers to the
   // pending-annotations prompt, the selection is NOT carried across (saving
@@ -2542,6 +2552,10 @@ export function App() {
   }, [textEdit, textEditAnnotationPrompt]);
 
   const saveAnnotationsAndEnterTextEdit = useCallback(async () => {
+    if (!experimentalFeaturesEnabled) {
+      openExperimentalFeaturesSettings();
+      return;
+    }
     const pendingApply = editing.collectAnnotationSavePlan();
 
     if (pendingApply) {
@@ -2564,14 +2578,18 @@ export function App() {
     setTextEditAnnotationPrompt(null);
     enterTextEditMode();
     consumeReplaceSelectionReselectHint();
-  }, [applyAnnotationSavePlan, consumeReplaceSelectionReselectHint, editing, enterTextEditMode, printMarkupAnnotations, setError]);
+  }, [applyAnnotationSavePlan, consumeReplaceSelectionReselectHint, editing, enterTextEditMode, experimentalFeaturesEnabled, openExperimentalFeaturesSettings, printMarkupAnnotations, setError]);
 
   const discardAnnotationsAndEnterTextEdit = useCallback(() => {
+    if (!experimentalFeaturesEnabled) {
+      openExperimentalFeaturesSettings();
+      return;
+    }
     editing.clearPendingEdits();
     setTextEditAnnotationPrompt(null);
     enterTextEditMode();
     consumeReplaceSelectionReselectHint();
-  }, [consumeReplaceSelectionReselectHint, editing, enterTextEditMode]);
+  }, [consumeReplaceSelectionReselectHint, editing, enterTextEditMode, experimentalFeaturesEnabled, openExperimentalFeaturesSettings]);
 
   // Right-click "Replace text..." entry. The disabled state shown in the
   // context menu composes the hook-owned gate with the one App-level
@@ -2590,6 +2608,11 @@ export function App() {
       return;
     }
 
+    if (!experimentalFeaturesEnabled) {
+      openExperimentalFeaturesSettings();
+      return;
+    }
+
     if (editing.hasUnsavedEdits) {
       setTextEditAnnotationPrompt("replace-selection");
       return;
@@ -2597,7 +2620,7 @@ export function App() {
 
     enterTextEditMode();
     textEdit.primeSelectedReplacement(selection);
-  }, [editing.hasUnsavedEdits, enterTextEditMode, longProcessRunning, textEdit]);
+  }, [editing.hasUnsavedEdits, enterTextEditMode, experimentalFeaturesEnabled, openExperimentalFeaturesSettings, replaceTextInSelectionBlocked, textEdit]);
 
   // Esc exits any edit mode. Inline editors (text draft, comment popover)
   // consume their own Escape via stopPropagation before this fires.
@@ -5011,6 +5034,10 @@ export function App() {
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
+      if (!experimentalFeaturesEnabled && (toolId === "case-caption" || toolId === "table-of-authorities")) {
+        openExperimentalFeaturesSettings();
+        return;
+      }
       if (toolId === "passwords") {
         showPasswordProtection();
         return;
@@ -5050,7 +5077,7 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [document.fileSizeBytes, editing, exitTextEditMode, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, showPasswordProtection, streamedDocument],
+    [document.fileSizeBytes, editing, exitTextEditMode, experimentalFeaturesEnabled, longProcessRunning, openExperimentalFeaturesSettings, pathOpsGeneralStatus, pathOpsGrant, setError, showPasswordProtection, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
@@ -8705,6 +8732,7 @@ export function App() {
       onHelpRequested={() => openHelp("combine-exhibits")}
       defaultCoverStyle={filingPreferences.defaultCoverStyle ?? "minimal"}
       onCaptionRequested={() => selectLegalTool("case-caption")}
+      experimentalFeaturesEnabled={experimentalFeaturesEnabled}
     />
   ) : activeOrganizeTool === "pages" ? (
     <OrganizeWorkspace
@@ -8799,8 +8827,9 @@ export function App() {
             onDismissImpact={() => setFilingImpact(null)}
             onCompressFirst={compressBeforeFiling}
             onCaptionRequested={() => {
-              setActiveLegalTool("case-caption");
+              selectLegalTool("case-caption");
             }}
+            experimentalFeaturesEnabled={experimentalFeaturesEnabled}
           />
         </FloatingDialog>
       );
@@ -9082,6 +9111,8 @@ export function App() {
         activeOrganizeTool={activeOrganizeTool}
         onEditDialogToolSelected={selectEditDialogTool}
         onTextEditSelected={requestTextEditMode}
+        experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+        onExperimentalFeatureRequested={openExperimentalFeaturesSettings}
         onLegalToolSelected={selectLegalTool}
         onOrganizeToolSelected={selectOrganizeTool}
         onMakeSearchable={makeSearchable}
@@ -9195,6 +9226,16 @@ export function App() {
           }}
           mcpEnabled={mcpEnabled}
           onToggleMcpEnabled={handleToggleMcpEnabled}
+          experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+          experimentalFeaturesStatus={experimentalFeaturesStatus}
+          onToggleExperimentalFeatures={(next) => {
+            setExperimentalFeaturesEnabled(next);
+            setExperimentalFeaturesStatus(
+              writeUiPreferences({ experimentalFeaturesEnabled: next })
+                ? null
+                : "Preference could not be saved; it will reset when RaioPDF closes.",
+            );
+          }}
           mcpPath={mcpPath}
           focusSection={settingsFocusSection}
           onFocusSectionHandled={() => setSettingsFocusSection(null)}

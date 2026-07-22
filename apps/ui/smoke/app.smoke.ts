@@ -14,6 +14,7 @@ import {
   PDFStream,
   StandardFonts,
 } from "pdf-lib";
+import { enableExperimentalFeatures } from "./preferences";
 
 test("disables doc-dependent chrome and hover echoes for reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -829,6 +830,7 @@ test("right-click selected replacement stages directly through the scoped engine
   const sourcePdf = await createTextPdf("Smith Smith");
   const editedPdf = await createTextPdf("Smith Jones");
   await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith");
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-selected-text.pdf", sourcePdf);
 
@@ -876,11 +878,12 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
   await installTextEditBridgeMock(page, editedPdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByText("Replacements never reflow the page", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Search document")).toBeDisabled();
 
@@ -904,11 +907,12 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
 test("edit document text cancel and zero-change review leave bytes untouched", async ({ page }) => {
   const sourcePdf = await createTextPdf("No replacement happens.");
   await installTextEditBridgeMock(page, sourcePdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-zero.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
   await page.getByRole("button", { name: "Replace all" }).click();
@@ -926,6 +930,7 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
 
 test("edit document text prompts for pending annotations and gates scanned documents", async ({ page }) => {
   await installTextEditBridgeMock(page, await createTextPdf("Prompt fixture."));
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-prompt.pdf", await createTextPdf("Prompt fixture."));
 
@@ -935,13 +940,13 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Pending annotations" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await openPdf(page, "image-only.pdf", await createPdf([200]));
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
 });
 

@@ -79,4 +79,20 @@ describe("BinderWorkspace", () => {
     expect(input?.accept).toBe("application/pdf,.pdf");
     expect(input?.accept).not.toContain("docx");
   });
+
+  it("does not mute the stable Add exhibits action when experiments are off", () => {
+    container = window.document.createElement("div");
+    window.document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<BinderWorkspace document={documentState} onBuildBinder={async () => true} onOpenRequested={() => undefined} onCancel={() => undefined} onCaptionRequested={() => undefined} experimentalFeaturesEnabled={false} />);
+    });
+
+    const addExhibits = Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.includes("Add exhibits"));
+    const caption = Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.includes("Add caption / cover page"));
+    expect(addExhibits?.className).not.toContain("experimental-locked");
+    expect(caption?.className).toContain("experimental-locked");
+    expect(caption?.getAttribute("aria-disabled")).toBe("true");
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Enable it in Settings");
+  });
 });

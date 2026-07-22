@@ -8,6 +8,8 @@ order: 15
 
 # Edit Text — change or replace text in a PDF
 
+**Experimental feature:** Enable Experimental features in Settings before using Edit Text.
+
 Change the actual words in a PDF. RaioPDF rewrites the text in the document
 itself — not a box drawn on top, the real text. There are two ways to use it:
 find & replace across the whole document, or replace exactly the text you

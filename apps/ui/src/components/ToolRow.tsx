@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
+import { ExperimentalFeatureLock } from "./ExperimentalFeatureLock";
 import { HelpIcon } from "../icons";
 import { IconButton } from "./IconButton";
 import "./ToolRow.css";
@@ -9,6 +10,8 @@ export interface ToolRowProps {
   description?: string;
   selected?: boolean;
   disabled?: boolean;
+  experimental?: boolean;
+  locked?: boolean;
   /**
    * Keep a live page-text selection alive through the click: the browser
    * collapses a selection on mousedown outside it, which would race the
@@ -26,27 +29,36 @@ export function ToolRow({
   description,
   selected = false,
   disabled = false,
+  experimental = false,
+  locked = false,
   preserveTextSelection = false,
   onSelect,
   onHelp,
 }: ToolRowProps) {
+  const lockId = useId();
+  const descriptionId = `experimental-feature-locked-description-${lockId}`;
+
   return (
     <div
-      className="tool-row"
-      data-selected={selected ? "true" : undefined}
+      className="tool-row experimental-feature-lock"
+      data-selected={selected ? "true" : undefined} data-locked={locked ? "true" : undefined}
     >
       <button
         type="button"
         className="tool-row__select"
         aria-current={selected ? "true" : undefined}
-        title={description ?? label}
+        title={locked ? undefined : description ?? label}
+        aria-describedby={locked ? descriptionId : undefined}
+        aria-disabled={locked || undefined}
         disabled={disabled}
         onMouseDown={preserveTextSelection ? (event) => event.preventDefault() : undefined}
         onClick={onSelect}
       >
         <span className="tool-row__icon">{icon}</span>
         <span className="tool-row__label">{label}</span>
+        {experimental ? <span className="tool-row__badge">Experimental</span> : null}
       </button>
+      {locked ? <ExperimentalFeatureLock descriptionId={descriptionId} /> : null}
       {onHelp ? (
         <IconButton
           icon={<HelpIcon size={14} />}

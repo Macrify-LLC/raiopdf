@@ -828,7 +828,7 @@ test("switching from Select to a markup tool converts the selection; other tools
 test("right-click selected replacement stages directly through the scoped engine path", async ({ page }) => {
   const sourcePdf = await createTextPdf("Smith Smith");
   const editedPdf = await createTextPdf("Smith Jones");
-  await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith");
+  await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith", "Smith Jones");
   await page.goto("/");
   await openPdf(page, "edit-selected-text.pdf", sourcePdf);
 
@@ -1970,8 +1970,9 @@ async function installSelectedTextEditBridgeMock(
   page: Page,
   editedBytes: Uint8Array,
   sourceText: string,
+  editedText: string,
 ): Promise<void> {
-  await page.addInitScript(({ editedContents, text }) => {
+  await page.addInitScript(({ editedContents, sourceMapText, editedMapText }) => {
     const testWindow = window as typeof window & {
       __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
       __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
@@ -1989,7 +1990,7 @@ async function installSelectedTextEditBridgeMock(
       return { port: 39393, token: "smoke-token" } as T;
     };
 
-    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const pathname = new URL(url).pathname;
 
@@ -2001,12 +2002,24 @@ async function installSelectedTextEditBridgeMock(
       }
 
       if (pathname === "/api/v1/convert/pdf/text-editor") {
+        const file = init?.body instanceof FormData ? init.body.get("fileInput") : null;
+        const inputBytes = file instanceof Blob
+          ? new Uint8Array(await file.arrayBuffer())
+          : null;
+        const usesEditedPdf = inputBytes?.length === editedContents.length &&
+          inputBytes.every((value, index) => value === editedContents[index]);
         return new Response(JSON.stringify({
           pages: [{
             pageNumber: 1,
             width: 200,
             height: 300,
-            textElements: [{ text, x: 24, y: 240, width: 120, height: 12 }],
+            textElements: [{
+              text: usesEditedPdf ? editedMapText : sourceMapText,
+              x: 24,
+              y: 240,
+              width: 120,
+              height: 12,
+            }],
           }],
         }), {
           status: 200,
@@ -2033,7 +2046,8 @@ async function installSelectedTextEditBridgeMock(
     };
   }, {
     editedContents: [...editedBytes],
-    text: sourceText,
+    sourceMapText: sourceText,
+    editedMapText: editedText,
   });
 }
 

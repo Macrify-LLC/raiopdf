@@ -28,6 +28,9 @@ conversion, so Word must be installed.
   RaioPDF control Microsoft Word. If you deny that request, macOS does not show
   it again when you retry. Open **System Settings > Privacy & Security >
   Automation**, allow RaioPDF to control Microsoft Word, then retry.
+- **Word is visible on a Mac.** Word may launch and briefly show the private
+  conversion copy. RaioPDF never gives Word your original PDF, and it does not
+  close or save any document you already had open.
 - **Word must be current and licensed.** Update Word if RaioPDF says its
   version is unsupported. If Word asks you to sign in or activate, finish that
   in Word before retrying.

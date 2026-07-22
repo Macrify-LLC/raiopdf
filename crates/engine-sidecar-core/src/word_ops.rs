@@ -322,6 +322,7 @@ fn build_macos_batch_word_conversion_input_json(
     input: &Path,
     output: &Path,
     markup: MarkupMode,
+    word_bundle: &Path,
 ) -> OpResult<String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -330,26 +331,31 @@ fn build_macos_batch_word_conversion_input_json(
         output_path: &'a str,
         markup: &'a str,
         keep_word_running: bool,
+        word_bundle_path: &'a str,
     }
 
     let input_path = path_to_utf8(input, "input")?;
     let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
     serde_json::to_string(&InputWire {
         input_path,
         output_path,
         markup: markup.as_script_value(),
         keep_word_running: true,
+        word_bundle_path,
     })
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
 
-/// macOS-only request data. JXA targets the bundle id, which LaunchServices
-/// resolves to the same registered default selected for capability detection.
+/// macOS-only request data. JXA still addresses Word by bundle id because
+/// path-addressed JXA stalls in Word 16.111, but receives the selected bundle
+/// path and refuses if a different installation owns the running target.
 #[cfg(target_os = "macos")]
 fn build_macos_word_conversion_input_json(
     input: &Path,
     output: &Path,
     markup: MarkupMode,
+    word_bundle: &Path,
 ) -> OpResult<String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -357,14 +363,17 @@ fn build_macos_word_conversion_input_json(
         input_path: &'a str,
         output_path: &'a str,
         markup: &'a str,
+        word_bundle_path: &'a str,
     }
 
     let input_path = path_to_utf8(input, "input")?;
     let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
     serde_json::to_string(&InputWire {
         input_path,
         output_path,
         markup: markup.as_script_value(),
+        word_bundle_path,
     })
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
@@ -387,19 +396,26 @@ pub fn build_word_reflow_input_json(input: &Path, output: &Path) -> OpResult<Str
 }
 
 #[cfg(target_os = "macos")]
-fn build_macos_word_reflow_input_json(input: &Path, output: &Path) -> OpResult<String> {
+fn build_macos_word_reflow_input_json(
+    input: &Path,
+    output: &Path,
+    word_bundle: &Path,
+) -> OpResult<String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct InputWire<'a> {
         input_path: &'a str,
         output_path: &'a str,
+        word_bundle_path: &'a str,
     }
 
     let input_path = path_to_utf8(input, "input")?;
     let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
     serde_json::to_string(&InputWire {
         input_path,
         output_path,
+        word_bundle_path,
     })
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
@@ -1082,11 +1098,16 @@ fn run_macos_word_conversion_unlocked(run_options: MacosWordConversionRun<'_>) -
     fs::write(&script_path, script)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word script: {error}")))?;
     let input_json = match markup {
-        Some(markup) if keep_word_running => {
-            build_macos_batch_word_conversion_input_json(input, output, markup)?
+        Some(markup) if keep_word_running => build_macos_batch_word_conversion_input_json(
+            input,
+            output,
+            markup,
+            &word_target.bundle_path,
+        )?,
+        Some(markup) => {
+            build_macos_word_conversion_input_json(input, output, markup, &word_target.bundle_path)?
         }
-        Some(markup) => build_macos_word_conversion_input_json(input, output, markup)?,
-        None => build_macos_word_reflow_input_json(input, output)?,
+        None => build_macos_word_reflow_input_json(input, output, &word_target.bundle_path)?,
     };
     fs::write(&input_json_path, input_json)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word input JSON: {error}")))?;
@@ -1926,29 +1947,50 @@ fn macos_word_staging_root_for_bundle(bundle: &Path) -> OpResult<PathBuf> {
         )
     })?;
     let office_container = PathBuf::from(home).join("Library/Group Containers/UBF8T346G9.Office");
-    if office_container.is_dir() {
-        // The Mac App Store edition of Word is sandboxed. Files in the normal
-        // process temp directory trigger an interactive file-access picker,
-        // which cannot be completed for an intentionally private temp path.
-        // Word's signed application-group entitlement grants it silent access
-        // to this Microsoft Office container; RaioPDF itself is not sandboxed.
-        let raio_root = office_container.join("RaioPDF");
-        path_ops::ensure_private_dir(&raio_root)?;
-        let root = raio_root.join("Word Automation");
-        path_ops::ensure_private_dir(&root)?;
-        return Ok(root);
+    let sandboxed = macos_word_bundle_is_sandboxed(bundle)?;
+    match select_macos_word_staging_kind(sandboxed, office_container.is_dir()) {
+        MacosWordStagingKind::OfficeGroup => {
+            // The Mac App Store edition of Word is sandboxed. Files in the normal
+            // process temp directory trigger an interactive file-access picker,
+            // which cannot be completed for an intentionally private temp path.
+            // Word's signed application-group entitlement grants it silent access
+            // to this Microsoft Office container; RaioPDF itself is not sandboxed.
+            let raio_root = office_container.join("RaioPDF");
+            path_ops::ensure_private_dir(&raio_root)?;
+            let root = raio_root.join("Word Automation");
+            path_ops::ensure_private_dir(&root)?;
+            Ok(root)
+        }
+        MacosWordStagingKind::PrivateTemp => {
+            let root = std::env::temp_dir().join("RaioPDF Word Automation");
+            path_ops::ensure_private_dir(&root)?;
+            Ok(root)
+        }
+        MacosWordStagingKind::Unavailable => Err(word_error(
+            ERR_WORD_STAGING_UNAVAILABLE,
+            "Microsoft Word is sandboxed but its Office group container is unavailable. Reinstall or launch Word once, then retry; RaioPDF will not expose your original document to a file-access prompt.",
+        )),
     }
+}
 
-    if !macos_word_bundle_is_sandboxed(bundle)? {
-        let root = std::env::temp_dir().join("RaioPDF Word Automation");
-        path_ops::ensure_private_dir(&root)?;
-        return Ok(root);
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosWordStagingKind {
+    OfficeGroup,
+    PrivateTemp,
+    Unavailable,
+}
+
+#[cfg(target_os = "macos")]
+fn select_macos_word_staging_kind(
+    sandboxed: bool,
+    office_container_exists: bool,
+) -> MacosWordStagingKind {
+    match (sandboxed, office_container_exists) {
+        (true, true) => MacosWordStagingKind::OfficeGroup,
+        (true, false) => MacosWordStagingKind::Unavailable,
+        (false, _) => MacosWordStagingKind::PrivateTemp,
     }
-
-    Err(word_error(
-        ERR_WORD_STAGING_UNAVAILABLE,
-        "Microsoft Word is sandboxed but its Office group container is unavailable. Reinstall or launch Word once, then retry; RaioPDF will not expose your original document to a file-access prompt.",
-    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -2003,6 +2045,7 @@ impl Drop for WordTempDir {
 #[cfg(target_os = "macos")]
 const MACOS_WORD_CONVERSION_SCRIPT: &str = r#"
 ObjC.import('Foundation');
+ObjC.import('AppKit');
 const RESULT_PREFIX = '@@RAIOPDF_WORD_RESULT@@ ';
 const LAUNCHED_PREFIX = '@@RAIOPDF_WORD_LAUNCHED@@ ';
 const APP_ID = 'com.microsoft.Word';
@@ -2019,6 +2062,38 @@ function stdout(line) {
   $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
 }
 function emit(value) { stdout(RESULT_PREFIX + JSON.stringify(value)); }
+function runningWordBundlePaths() {
+  const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier($(APP_ID));
+  const paths = [];
+  for (let index = 0; index < apps.count; index += 1) {
+    const url = apps.objectAtIndex(index).bundleURL;
+    if (url) paths.push(ObjC.unwrap(url.path));
+  }
+  return paths;
+}
+function requireSelectedWord(request) {
+  const running = runningWordBundlePaths();
+  if (running.length > 1) {
+    throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+  }
+  if (running.length > 0 && running.indexOf(request.wordBundlePath) === -1) {
+    throw new Error('Selected Word installation does not match the running Apple Events target; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+  }
+}
+function waitForSelectedWord(request) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const running = runningWordBundlePaths();
+    if (running.length === 1 && running[0] === request.wordBundlePath) return;
+    if (running.length > 1) {
+      throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+    }
+    if (running.length > 0) {
+      throw new Error('Launched Word installation does not match selection; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Selected Word installation did not become the Apple Events target: ' + request.wordBundlePath);
+}
 function documentAtPath(word, path) {
   let seen = [];
   // PDF reflow can return from `open` while Word is still constructing a
@@ -2058,14 +2133,16 @@ let keepWordRunning = false;
 let stage = 'initializing';
 try {
   const request = input();
+  requireSelectedWord(request);
   keepWordRunning = request.keepWordRunning === true;
-  // Apple Events target the registered default for this bundle id, which is
-  // the same LaunchServices selection Rust used for version/staging checks.
-  // Passing an app-bundle path here stalls Word 16.111's JXA bridge.
+  // Passing an app-bundle path here stalls Word 16.111's JXA bridge. Address
+  // by bundle id, but fail closed above if its running target is not the exact
+  // bundle Rust selected for version and staging checks.
   word = Application(APP_ID);
   word.includeStandardAdditions = true;
   launchedByUs = !word.running();
   if (launchedByUs) word.launch();
+  waitForSelectedWord(request);
   stdout(LAUNCHED_PREFIX + launchedByUs);
   stage = 'suppressing Word alerts';
   word.displayAlerts = 'alerts none';
@@ -2104,6 +2181,7 @@ try {
 #[cfg(target_os = "macos")]
 const MACOS_WORD_REFLOW_SCRIPT: &str = r#"
 ObjC.import('Foundation');
+ObjC.import('AppKit');
 const RESULT_PREFIX = '@@RAIOPDF_WORD_RESULT@@ ';
 const LAUNCHED_PREFIX = '@@RAIOPDF_WORD_LAUNCHED@@ ';
 const APP_ID = 'com.microsoft.Word';
@@ -2120,6 +2198,38 @@ function stdout(line) {
   $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
 }
 function emit(value) { stdout(RESULT_PREFIX + JSON.stringify(value)); }
+function runningWordBundlePaths() {
+  const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier($(APP_ID));
+  const paths = [];
+  for (let index = 0; index < apps.count; index += 1) {
+    const url = apps.objectAtIndex(index).bundleURL;
+    if (url) paths.push(ObjC.unwrap(url.path));
+  }
+  return paths;
+}
+function requireSelectedWord(request) {
+  const running = runningWordBundlePaths();
+  if (running.length > 1) {
+    throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+  }
+  if (running.length > 0 && running.indexOf(request.wordBundlePath) === -1) {
+    throw new Error('Selected Word installation does not match the running Apple Events target; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+  }
+}
+function waitForSelectedWord(request) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const running = runningWordBundlePaths();
+    if (running.length === 1 && running[0] === request.wordBundlePath) return;
+    if (running.length > 1) {
+      throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+    }
+    if (running.length > 0) {
+      throw new Error('Launched Word installation does not match selection; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Selected Word installation did not become the Apple Events target: ' + request.wordBundlePath);
+}
 function documentAtPath(word, path) {
   let seen = [];
   // Large PDF reflow is asynchronous on Word 16.111: `open` may return before
@@ -2157,10 +2267,12 @@ let launchedByUs = false;
 let stage = 'initializing';
 try {
   const request = input();
+  requireSelectedWord(request);
   word = Application(APP_ID);
   word.includeStandardAdditions = true;
   launchedByUs = !word.running();
   if (launchedByUs) word.launch();
+  waitForSelectedWord(request);
   stdout(LAUNCHED_PREFIX + launchedByUs);
   stage = 'suppressing Word alerts';
   word.displayAlerts = 'alerts none';
@@ -2884,13 +2996,36 @@ mod tests {
             Path::new("/tmp/input doc.docx"),
             Path::new("/tmp/output doc.pdf"),
             MarkupMode::ShowMarkup,
+            Path::new("/Applications/Microsoft Word.app"),
         )
         .unwrap();
         assert_eq!(
             json,
-            r#"{"inputPath":"/tmp/input doc.docx","outputPath":"/tmp/output doc.pdf","markup":"showMarkup","keepWordRunning":true}"#
+            r#"{"inputPath":"/tmp/input doc.docx","outputPath":"/tmp/output doc.pdf","markup":"showMarkup","keepWordRunning":true,"wordBundlePath":"/Applications/Microsoft Word.app"}"#
         );
         assert!(build_word_conversion_script().contains("request.keepWordRunning === true"));
+        assert!(build_word_conversion_script().contains("request.wordBundlePath"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_staging_follows_selected_bundle_sandbox_state() {
+        assert_eq!(
+            select_macos_word_staging_kind(true, true),
+            MacosWordStagingKind::OfficeGroup
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(true, false),
+            MacosWordStagingKind::Unavailable
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(false, true),
+            MacosWordStagingKind::PrivateTemp
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(false, false),
+            MacosWordStagingKind::PrivateTemp
+        );
     }
 
     #[cfg(any(windows, target_os = "macos"))]

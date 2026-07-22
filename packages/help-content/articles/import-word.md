@@ -39,6 +39,9 @@ pick.
   RaioPDF control Microsoft Word. If you deny that request, macOS does not show
   it again when you retry. Open **System Settings > Privacy & Security >
   Automation**, allow RaioPDF to control Microsoft Word, then retry.
+- **Word is visible on a Mac.** Word may launch and briefly show RaioPDF's
+  private conversion copy. A batch reuses the same Word session. RaioPDF does
+  not close or save documents you already had open.
 - **Your original Word file is not changed.** RaioPDF creates a separate PDF;
   it does not save over the `.docx` file.
 

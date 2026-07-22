@@ -47,7 +47,7 @@ import type {
   PdfUpdateAnnotationOptions,
   PdfWatermarkOptions,
 } from "@raiopdf/engine-api";
-import { PdfEngineError } from "@raiopdf/engine-api";
+import { PdfEngineError, visiblePdfTextForRawRange } from "@raiopdf/engine-api";
 import {
   countEmbeddedFiles,
   countPdfPages,
@@ -1659,12 +1659,14 @@ function textEditorPageToTextMapPage(
     text += elementText;
     const end = text.length;
 
+    const direction = textElementDirection(element);
     elements.push({
       elementIndex,
       start,
       end,
       text: elementText,
       area: textElementArea(pageIndex, element),
+      ...(direction ? { direction } : {}),
     });
   });
 
@@ -1704,6 +1706,13 @@ function applySelectedTextReplacement(
     throw new PdfEngineError(
       "INVALID_DOCUMENT",
       "The selected text target no longer resolves to the expected text.",
+    );
+  }
+
+  if (visiblePdfTextForRawRange(textMap, target.start, target.end) !== target.expectedVisibleText) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "The selected text target no longer resolves to the expected visible text.",
     );
   }
 
@@ -1841,6 +1850,20 @@ function textElementArea(pageIndex: number, element: TextEditorTextElement): Pdf
     w: Math.max(0, finiteNumber(element.width, 0)),
     h: height,
   };
+}
+
+function textElementDirection(element: TextEditorTextElement): { x: number; y: number } | undefined {
+  const matrix = readTextMatrix(element);
+  if (!matrix) {
+    return undefined;
+  }
+
+  const length = Math.hypot(matrix[0]!, matrix[1]!);
+  if (length === 0) {
+    return undefined;
+  }
+
+  return { x: matrix[0]! / length, y: matrix[1]! / length };
 }
 
 function readTextMatrix(element: TextEditorTextElement): readonly number[] | null {
@@ -2278,6 +2301,10 @@ function assertReplaceSelectedTextOptions(
 
   if (!target.sourceFingerprint) {
     throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target fingerprint is required.");
+  }
+
+  if (!target.expectedText || !target.expectedVisibleText) {
+    throw new PdfEngineError("INVALID_DOCUMENT", "Selected text target text is required.");
   }
 
   if (!target.sourceDocumentFingerprint) {

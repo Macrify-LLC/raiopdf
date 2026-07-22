@@ -299,6 +299,19 @@
   flex: 0 0 auto;
 }
 
+.edit-text-mode-bar__feedback {
+  flex: 1 0 100%;
+  margin: 0;
+  padding-top: 0.15rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.edit-text-mode-bar__feedback[data-tone="error"] {
+  color: var(--danger-text, var(--text-primary));
+}
+
 /* Selected replacement is purposefully a different bar, not a bulk
    Find/Replace bar with controls hidden. The selected source stays legible
    while the only editable value is its replacement. */

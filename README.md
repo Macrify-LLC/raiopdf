@@ -71,7 +71,7 @@ Four ways it fits into an actual day at the firm:
 | Organize pages | Merge, split, reorder, extract, insert, insert a slip sheet anywhere, rotate, crop, repair |
 | **Make Searchable** | Fully offline OCR for scanned documents |
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
-| **Edit Text** | Change the real text in a typed PDF — find & replace across the document (case-sensitive, optional whole-word), or right-click a selection and choose "Replace text..." to change exactly that occurrence. Born-digital documents only (not scans); the text doesn't reflow, and the whole document is rewritten on save |
+| **Edit Text** | Change the real text in a typed PDF — find & replace across the document (case-sensitive, optional whole-word), or right-click a selection and choose "Replace text..." to change exactly that occurrence. Born-digital documents only (not scans); the text doesn't reflow. In the installed app, selected edits rebuild only that page and splice it into a fresh copy; bulk replacements still rebuild the whole document |
 | Annotate | Highlight, underline, strikethrough, freehand draw, shapes and arrows, callouts, text boxes, comments, images — with color, opacity, and stroke-width controls |
 | Fill & sign | Fill existing forms or add reusable text fields and checkboxes to fieldless PDFs; add text, images, and signature stamps; flatten when needed for filing |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |

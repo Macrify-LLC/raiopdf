@@ -63,6 +63,10 @@ describe("mapPathOpsFactsToDocumentFacts", () => {
       hasByteRangeOrContentsMarkers: true,
       hasCertificationDictionary: false,
     },
+    hasAcroForm: false,
+    hasTaggedStructure: false,
+    hasEmbeddedFiles: false,
+    hasAnnotations: false,
     pages: [
       {
         index: 0,

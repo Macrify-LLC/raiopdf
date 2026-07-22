@@ -11,7 +11,11 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
-import { closestTextLayer, type CapturedTextSelection } from "../lib/selectedTextEdit";
+import {
+  closestTextLayer,
+  registerTextLayerViewport,
+  type CapturedTextSelection,
+} from "../lib/selectedTextEdit";
 import { registerTextSelectionGuard } from "../lib/textSelectionGuard";
 import { redactionAreasFromClientRects } from "../lib/selectionRedaction";
 import {
@@ -110,6 +114,7 @@ export function PageView({
   const [renderPending, setRenderPending] = useState(false);
   const [draftRect, setDraftRect] = useState<ViewportRect | null>(null);
   const dragStartRef = useRef<ViewportPoint | null>(null);
+
   // Rotation feedback: remembers the last rotation this PageView instance
   // actually displayed. A rotate mutation swaps the whole pdfDocument (a new
   // engine handle round-trips through the sidecar), so every already-mounted
@@ -124,6 +129,14 @@ export function PageView({
     () => page?.getViewport({ scale: zoom }) ?? null,
     [page, zoom],
   );
+
+  useLayoutEffect(() => {
+    const layer = textLayerRef.current;
+    if (!layer || !viewport) {
+      return;
+    }
+    return registerTextLayerViewport(layer, viewport);
+  }, [viewport]);
 
   useEffect(() => {
     let cancelled = false;

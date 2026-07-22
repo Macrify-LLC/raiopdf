@@ -2309,6 +2309,17 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| match event {
+            #[cfg(not(target_os = "macos"))]
+            tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                // The close decision belongs to the native shell. A renderer
+                // under memory pressure may be unable to run a JS
+                // `onCloseRequested` callback, which previously made the X,
+                // Alt+F4, and taskbar Close appear to do nothing. The UI keeps
+                // the shell's unsaved flag current, so this path needs no
+                // webview round trip at close time.
+                api.prevent_close();
+                request_app_exit(window.app_handle());
+            }
             tauri::WindowEvent::Focused(true) => {
                 let Some(store) = window.try_state::<NativeMenuStateStore>() else {
                     return;
@@ -2384,6 +2395,7 @@ pub fn run() {
             path_ops::path_op_extract_pages,
             path_ops::path_op_merge,
             path_ops::path_op_insert_pages,
+            path_ops::path_op_replace_page,
             path_ops::path_op_build_binder,
             path_ops::path_op_apply_edits,
             path_ops::path_op_split_by_max_bytes,
@@ -2508,15 +2520,11 @@ fn set_unsaved_state(state: tauri::State<'_, UnsavedWorkState>, unsaved: bool) {
     state.unsaved.store(unsaved, Ordering::SeqCst);
 }
 
-/// The guarded quit path for every native-menu exit: the macOS app-menu
-/// "Quit RaioPDF" (Cmd+Q) and the File > Exit item. With unsaved work
-/// reported by the webview, confirm before exiting; the dialog is
-/// non-blocking so the main thread keeps pumping events while it is up.
-///
-/// On Windows/Linux the window-close guard in the UI is the primary gate
-/// (the rendered menu bar's Exit closes the window, which fires a
-/// close-requested event); this path additionally covers the native menu's
-/// Exit item. macOS Dock Quit and OS logout are intercepted by the AppKit
+/// The guarded native close/quit path. It owns Windows/Linux window-close
+/// requests and every native-menu Exit; on macOS it owns the app-menu Quit.
+/// With unsaved work reported by the webview, confirm before exiting. The
+/// dialog is non-blocking so the main thread keeps pumping events while it is
+/// up. macOS Dock Quit and OS logout are intercepted by the AppKit
 /// `applicationShouldTerminate:` hook in `macos_termination`.
 fn request_app_exit(app: &tauri::AppHandle) {
     let unsaved_state = app.state::<UnsavedWorkState>();

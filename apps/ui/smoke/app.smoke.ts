@@ -886,8 +886,8 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
 
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
 
   const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
   await expect(reviewDialog.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible();
@@ -911,8 +911,8 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
   await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
 
   const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
   await expect(reviewDialog.getByText("Nothing was replaced — the document was not modified.")).toBeVisible();

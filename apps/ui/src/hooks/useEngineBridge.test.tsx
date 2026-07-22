@@ -198,6 +198,58 @@ describe("useEngineBridge runOcr", () => {
     });
   });
 
+  it("waits for a cancelled engine stop before starting the next operation", async () => {
+    let resolveStop: (() => void) | undefined;
+    const stop = new Promise<void>((resolve) => { resolveStop = resolve; });
+    const commands: string[] = [];
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      commands.push(command);
+      if (command === "engine_stop") {
+        await stop;
+        return undefined as T;
+      }
+      return { port: 1234, token: "test-token", ocrToolchain: { available: true, missing: [] } } as T;
+    };
+    const bridge = renderHookValue();
+    await bridge.runOcr(new Uint8Array([1]));
+
+    const stopping = bridge.stopEngine();
+    const restarting = bridge.runOcr(new Uint8Array([2]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(commands.filter((command) => command === "engine_start")).toHaveLength(1);
+
+    resolveStop?.();
+    await Promise.all([stopping, restarting]);
+    expect(commands.filter((command) => command === "engine_start")).toHaveLength(2);
+  });
+
+  it("serializes two overlapping stops before a later engine start", async () => {
+    const resolvers: Array<() => void> = [];
+    const commands: string[] = [];
+    window.__RAIOPDF_TEST_TAURI_INVOKE__ = async <T,>(command: string) => {
+      commands.push(command);
+      if (command === "engine_stop") {
+        await new Promise<void>((resolve) => resolvers.push(resolve));
+        return undefined as T;
+      }
+      return { port: 1234, token: "test-token", ocrToolchain: { available: true, missing: [] } } as T;
+    };
+    const bridge = renderHookValue();
+    await bridge.runOcr(new Uint8Array([1]));
+    const first = bridge.stopEngine();
+    const second = bridge.stopEngine();
+    const restarting = bridge.runOcr(new Uint8Array([2]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(commands.filter((command) => command === "engine_stop")).toHaveLength(1);
+    expect(commands.filter((command) => command === "engine_start")).toHaveLength(1);
+    resolvers.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(commands.filter((command) => command === "engine_stop")).toHaveLength(2);
+    resolvers.shift()?.();
+    await Promise.all([first, second, restarting]);
+    expect(commands.filter((command) => command === "engine_start")).toHaveLength(2);
+  });
+
   it("passes force-ocr through to the sidecar", async () => {
     const bridge = renderHookValue();
     const abortController = new AbortController();
@@ -653,6 +705,7 @@ describe("useEngineBridge selected text editing", () => {
           start: 0,
           end: 10,
           expectedText: "John Smith",
+          expectedVisibleText: "John Smith",
           sourceDocumentFingerprint: "document-fingerprint",
           sourceFingerprint: "fingerprint",
           firstElementIndex: 0,
@@ -697,6 +750,7 @@ describe("useEngineBridge selected text editing", () => {
             start: 0,
             end: 10,
             expectedText: "John Smith",
+            expectedVisibleText: "John Smith",
             sourceDocumentFingerprint: "document-fingerprint",
             sourceFingerprint: "fingerprint",
             firstElementIndex: 0,

@@ -13,6 +13,8 @@
 
 .app-shell > .title-bar {
   grid-row: 2;
+  position: relative;
+  z-index: 7;
 }
 
 .app-shell > .command-bar {

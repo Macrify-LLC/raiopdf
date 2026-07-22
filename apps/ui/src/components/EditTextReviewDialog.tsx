@@ -16,19 +16,31 @@ export function EditTextReviewDialog({
 }: {
   textEdit: TextEditState;
 }) {
+  const title = textEdit.isSelectedReplacementMode
+    ? "Review selected replacement"
+    : "Review text replacements";
+
   if (textEdit.phase === "staging") {
+    const resolvingSelection = textEdit.activity === "resolving-selection";
     return (
       <FloatingDialog
-        title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
+        title={title}
         eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
       >
         <LongProcessLoader
-          phaseLabel="Staging replacement"
-          message="Preparing a preview of your changes."
-          detail="There is no progress feed for this operation; image-heavy documents can take a few minutes."
+          phaseLabel={resolvingSelection ? "Reading selected text" : "Building review"}
+          message={resolvingSelection
+            ? "Matching your selection to the PDF's editable text."
+            : "Creating an edited working copy and checking the result."}
+          detail="Your original PDF is untouched. Cancel if this is taking longer than expected."
         />
+        <div className="edit-text-review__actions">
+          <button type="button" className="tool-panel__secondary-button" onClick={textEdit.cancelReview}>
+            Cancel
+          </button>
+        </div>
       </FloatingDialog>
     );
   }
@@ -36,7 +48,7 @@ export function EditTextReviewDialog({
   if (textEdit.phase === "applying") {
     return (
       <FloatingDialog
-        title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
+        title={title}
         eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
@@ -57,7 +69,7 @@ export function EditTextReviewDialog({
 
   return (
     <FloatingDialog
-      title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
+      title={title}
       eyebrow="Edit Text"
       width="lg"
       onClose={textEdit.cancelReview}

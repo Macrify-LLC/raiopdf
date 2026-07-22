@@ -1,4 +1,4 @@
-import { type DragEvent, type ReactNode } from "react";
+import { type CSSProperties, type DragEvent, type ReactNode } from "react";
 import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { PageScrollIntent } from "../hooks/useDocument";
@@ -45,6 +45,10 @@ export interface CanvasWellProps {
   workspace?: ReactNode;
   overlay?: ReactNode;
   processLoader?: ReactNode;
+  /** How many docked loaders `processLoader` renders (1 normally; 2 when a
+   * background print runs alongside a blocking op). Sizes the space reserved
+   * below the page so stacked bars don't cover it. */
+  processLoaderCount?: number;
   redactionMode?: boolean;
   redactionTextSelect?: boolean;
   modeBar?: ReactNode;
@@ -92,6 +96,7 @@ export function CanvasWell({
   workspace = null,
   overlay = null,
   processLoader = null,
+  processLoaderCount = 1,
   redactionMode = false,
   redactionTextSelect = false,
   modeBar = null,
@@ -115,6 +120,9 @@ export function CanvasWell({
   const showAnnotationActions = Boolean(viewerActive && editing && editing.pendingEdits.length > 0);
   const showMarkupRail = Boolean(viewerActive && editing);
   const showFloatingControls = showModeBar || showAnnotationActions;
+  const processLoaderInset = processLoader
+    ? PROCESS_LOADER_INSET * Math.max(processLoaderCount, 1)
+    : 0;
 
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
@@ -139,6 +147,9 @@ export function CanvasWell({
       data-mode-bar={showFloatingControls ? "true" : undefined}
       data-viewer={viewerActive ? "true" : undefined}
       aria-label="Document canvas"
+      style={
+        { "--process-loader-inset": `${processLoaderInset}px` } as CSSProperties
+      }
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
@@ -212,7 +223,7 @@ export function CanvasWell({
                   ? MODE_BAR_INSET
                   : 0)
             }
-            bottomInset={processLoader ? PROCESS_LOADER_INSET : 0}
+            bottomInset={processLoaderInset}
             onVisiblePageChange={onVisiblePageChange}
             onZoomIn={onZoomIn}
             onZoomOut={onZoomOut}

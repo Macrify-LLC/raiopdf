@@ -1,22 +1,84 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { PathOpsError, pathOpErrorMessage, type PathOpsFileGrant } from "../lib/pathOps";
+import { useCallback, useEffect, useState } from "react";
+import { pathOpErrorMessage } from "../lib/pathOps";
+import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
-  cancelPrint,
-  describePrintProgress,
-  listenPrintProgress,
   listPrinters,
-  newPrintJobToken,
   parseCopies,
   parsePrintSelection,
-  printPdf,
   printStatus,
   sortPrintersForPicker,
   type PrinterInfo,
-  type PrintProgressEvent,
-  type PrintResult,
+  type PrintOptions,
 } from "../lib/printPipeline";
+import { runtimePlatform } from "../lib/runtimePlatform";
 import { FloatingDialog } from "./FloatingDialog";
-import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader";
+import { PdfMiniThumb } from "./PdfMiniThumb";
+import "./PrintDialog.css";
+
+/** What the dialog hands back when the user commits a print. The document
+ * grant and job lifecycle live in the caller so printing runs in the docked
+ * loader — the app stays usable and the job survives closing this dialog. */
+export interface StartPrintParams {
+  printer: string;
+  pageIndexes: number[] | null;
+  copies: number;
+  options: PrintOptions;
+}
+
+interface OptionChoice {
+  value: string;
+  label: string;
+}
+
+const PAPER_SIZES: readonly OptionChoice[] = [
+  { value: "", label: "Printer default" },
+  { value: "Letter", label: "Letter (8.5 × 11 in)" },
+  { value: "Legal", label: "Legal (8.5 × 14 in)" },
+  { value: "A4", label: "A4" },
+];
+
+const DUPLEX: readonly OptionChoice[] = [
+  { value: "", label: "Printer default" },
+  { value: "one-sided", label: "Single-sided" },
+  { value: "two-sided-long-edge", label: "Double-sided (flip on long edge)" },
+  { value: "two-sided-short-edge", label: "Double-sided (flip on short edge)" },
+];
+
+const ORIENTATIONS: readonly OptionChoice[] = [
+  { value: "", label: "Printer default" },
+  { value: "portrait", label: "Portrait" },
+  { value: "landscape", label: "Landscape" },
+];
+
+/** A labeled dropdown for one print option (paper size / sides / orientation).
+ * The three CUPS-only option fields are the same field markup over different
+ * choice lists, so they share this. */
+function OptionSelect({
+  id,
+  label,
+  value,
+  choices,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  choices: readonly OptionChoice[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="tool-panel__field">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
+        {choices.map((choice) => (
+          <option key={choice.value} value={choice.value}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 /**
  * RaioPDF's own print dialog for streamed (large) documents — the native
@@ -24,44 +86,48 @@ import { LongProcessLoader, type LongProcessProgress } from "./LongProcessLoader
  * so whole-document printing is un-gated here. Small documents keep the
  * untouched `window.print()` path; this dialog exists exactly where that
  * path cannot go.
+ *
+ * Setup only: once the user commits, the caller drives the job in the docked
+ * loader (see App.tsx), so this dialog closes and printing continues in the
+ * background — completion and cancellation live at the bottom of the app.
  */
 export function PrintDialog({
-  grant,
   pageCount,
   fileName,
+  pdfDocument,
+  onStartPrint,
   onClose,
   onUseRangeFallback,
 }: {
-  grant: PathOpsFileGrant;
   pageCount: number;
   fileName: string | null;
+  pdfDocument: PDFDocumentProxy | null;
+  onStartPrint: (params: StartPrintParams) => void;
   onClose: () => void;
   onUseRangeFallback: () => void;
 }) {
-  const [phase, setPhase] = useState<
-    "probing" | "unavailable" | "ready" | "printing" | "done"
-  >("probing");
+  const [phase, setPhase] = useState<"probing" | "unavailable" | "ready">("probing");
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printerName, setPrinterName] = useState("");
   const [pagesInput, setPagesInput] = useState("");
   const [copiesInput, setCopiesInput] = useState("1");
+  const [paperSize, setPaperSize] = useState("");
+  const [duplex, setDuplex] = useState("");
+  const [orientation, setOrientation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
-  const [progressText, setProgressText] = useState<string | null>(null);
-  const [progressEvent, setProgressEvent] = useState<PrintProgressEvent | null>(null);
-  const [result, setResult] = useState<PrintResult | null>(null);
 
-  const disposedRef = useRef(false);
-  const runningJobRef = useRef<{ token: string; unlisten: (() => void) | null } | null>(
-    null,
-  );
+  // Paper size / duplex / orientation reach the printer through CUPS `lp` on
+  // macOS; the Windows Ghostscript path doesn't consume them yet, so the
+  // controls only appear where they actually take effect.
+  const supportsOptions = runtimePlatform() === "macos";
 
   useEffect(() => {
-    disposedRef.current = false;
+    let disposed = false;
 
     void Promise.all([printStatus(), listPrinters()])
       .then(([status, printerList]) => {
-        if (disposedRef.current) {
+        if (disposed) {
           return;
         }
         if (!status.available) {
@@ -84,28 +150,19 @@ export function PrintDialog({
         setPhase("ready");
       })
       .catch((error: unknown) => {
-        if (disposedRef.current) {
+        if (disposed) {
           return;
         }
-        setUnavailableReason(
-          pathOpErrorMessage(error, "Printers could not be listed."),
-        );
+        setUnavailableReason(pathOpErrorMessage(error, "Printers could not be listed."));
         setPhase("unavailable");
       });
 
     return () => {
-      disposedRef.current = true;
-      // Closing the dialog mid-job cancels it — no orphaned print jobs.
-      const running = runningJobRef.current;
-      if (running) {
-        running.unlisten?.();
-        void cancelPrint(running.token).catch(() => undefined);
-        runningJobRef.current = null;
-      }
+      disposed = true;
     };
   }, []);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => {
     const selection = parsePrintSelection(pagesInput, pageCount);
     if (!selection.ok) {
       setMessage(selection.error);
@@ -121,76 +178,33 @@ export function PrintDialog({
       return;
     }
 
-    setMessage(null);
-    setProgressText("Starting print job...");
-    setPhase("printing");
-
-    const token = newPrintJobToken();
-    let unlisten: (() => void) | null = null;
-    runningJobRef.current = { token, unlisten: null };
-    try {
-      unlisten = await listenPrintProgress(token, (event) => {
-        if (!disposedRef.current) {
-          setProgressText(describePrintProgress(event));
-          setProgressEvent(event);
+    const options: PrintOptions = supportsOptions
+      ? {
+          ...(paperSize ? { media: paperSize } : {}),
+          ...(duplex ? { sides: duplex } : {}),
+          ...(orientation ? { orientation } : {}),
         }
-      });
-      if (disposedRef.current || runningJobRef.current?.token !== token) {
-        unlisten();
-        unlisten = null;
-        return;
-      }
-      runningJobRef.current.unlisten = unlisten;
+      : {};
 
-      const printResult = await printPdf(
-        grant,
-        token,
-        printerName,
-        selection.pageIndexes,
-        copies,
-      );
-      if (disposedRef.current) {
-        return;
-      }
-      setResult(printResult);
-      setPhase("done");
-    } catch (error) {
-      if (disposedRef.current) {
-        return;
-      }
-      if (error instanceof PathOpsError && error.code === "PRINT_CANCELLED") {
-        setMessage("Printing was cancelled.");
-      } else if (
-        error instanceof PathOpsError &&
-        (error.code === "PRINT_NOT_SUPPORTED" ||
-          error.code === "PRINT_FALLBACK_SELF_HANDLER")
-      ) {
-        setMessage(error.message);
-      } else {
-        setMessage(
-          pathOpErrorMessage(error, "The document could not be printed."),
-        );
-      }
-      setPhase("ready");
-    } finally {
-      unlisten?.();
-      if (runningJobRef.current?.token === token) {
-        runningJobRef.current = null;
-      }
-      if (!disposedRef.current) {
-        setProgressText(null);
-        setProgressEvent(null);
-      }
-    }
-  }, [copiesInput, grant, pageCount, pagesInput, printerName]);
-
-  const cancelRunning = useCallback(() => {
-    const running = runningJobRef.current;
-    if (running) {
-      setProgressText("Cancelling after the current part...");
-      void cancelPrint(running.token).catch(() => undefined);
-    }
-  }, []);
+    onStartPrint({
+      printer: printerName,
+      pageIndexes: selection.pageIndexes,
+      copies,
+      options,
+    });
+    onClose();
+  }, [
+    copiesInput,
+    duplex,
+    onClose,
+    onStartPrint,
+    orientation,
+    pageCount,
+    pagesInput,
+    paperSize,
+    printerName,
+    supportsOptions,
+  ]);
 
   return (
     <FloatingDialog title="Print" eyebrow={fileName ?? undefined} onClose={onClose}>
@@ -225,23 +239,31 @@ export function PrintDialog({
           </>
         ) : null}
 
-        {phase === "ready" || phase === "printing" ? (
+        {phase === "ready" ? (
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              void submit();
+              submit();
             }}
           >
-            <p className="tool-panel__note">
-              Prints directly from disk — the whole document is available, no
-              matter its size.
-            </p>
+            <div className="print-dialog__preview">
+              <PdfMiniThumb
+                bytes={null}
+                pdfDocument={pdfDocument}
+                label="Preview of the first page"
+                targetWidth={92}
+                targetHeight={119}
+              />
+              <p className="tool-panel__note print-dialog__preview-note">
+                Prints directly from disk — the whole document is available, no
+                matter its size.
+              </p>
+            </div>
             <div className="tool-panel__field">
               <label htmlFor="print-dialog-printer">Printer</label>
               <select
                 id="print-dialog-printer"
                 value={printerName}
-                disabled={phase === "printing"}
                 onChange={(event) => setPrinterName(event.target.value)}
               >
                 {printers.map((printer) => (
@@ -260,7 +282,6 @@ export function PrintDialog({
                 inputMode="numeric"
                 placeholder="All pages"
                 value={pagesInput}
-                disabled={phase === "printing"}
                 onChange={(event) => setPagesInput(event.target.value)}
               />
             </div>
@@ -270,81 +291,52 @@ export function PrintDialog({
                 id="print-dialog-copies"
                 inputMode="numeric"
                 value={copiesInput}
-                disabled={phase === "printing"}
                 onChange={(event) => setCopiesInput(event.target.value)}
               />
             </div>
+            {supportsOptions ? (
+              <>
+                <OptionSelect
+                  id="print-dialog-paper"
+                  label="Paper size"
+                  value={paperSize}
+                  choices={PAPER_SIZES}
+                  onChange={setPaperSize}
+                />
+                <OptionSelect
+                  id="print-dialog-duplex"
+                  label="Sides"
+                  value={duplex}
+                  choices={DUPLEX}
+                  onChange={setDuplex}
+                />
+                <OptionSelect
+                  id="print-dialog-orientation"
+                  label="Orientation"
+                  value={orientation}
+                  choices={ORIENTATIONS}
+                  onChange={setOrientation}
+                />
+              </>
+            ) : null}
             {message ? (
               <p className="tool-panel__status-line" role="status">
                 {message}
               </p>
             ) : null}
-            {phase === "printing" ? (
-              <LongProcessLoader
-                phaseLabel="Printing"
-                message={progressText ?? "Printing..."}
-                progress={printProgressCount(progressEvent)}
-                hideProgressText={Boolean(progressEvent)}
-                cancelMode="cancel"
-                cancelLabel="Cancel Printing"
-                cancelMessage="Stops after the current part."
-                onCancel={cancelRunning}
-              />
-            ) : (
-              <>
-                <button type="submit" className="tool-panel__primary-button">
-                  Print
-                </button>
-                <button
-                  type="button"
-                  className="tool-panel__secondary-button"
-                  onClick={onClose}
-                >
-                  Cancel
-                </button>
-              </>
-            )}
-          </form>
-        ) : null}
-
-        {phase === "done" && result ? (
-          <>
-            <p className="tool-panel__status-line" role="status">
-              {result.method === "ghostscript"
-                ? `Sent to ${printerName}.`
-                : `Sent to ${printerName} in ${result.fallbackParts} part${
-                    result.fallbackParts === 1 ? "" : "s"
-                  } via the system print pipeline.`}
-            </p>
-            {result.inputChanged ? (
-              <p className="tool-panel__note">
-                Heads up: the file changed on disk while printing ran — the
-                printed pages may mix revisions. Reopen the file to see its
-                current state.
-              </p>
-            ) : null}
+            <button type="submit" className="tool-panel__primary-button">
+              Print
+            </button>
             <button
               type="button"
-              className="tool-panel__primary-button"
+              className="tool-panel__secondary-button"
               onClick={onClose}
             >
-              Close
+              Cancel
             </button>
-          </>
+          </form>
         ) : null}
       </div>
     </FloatingDialog>
   );
-}
-
-function printProgressCount(event: PrintProgressEvent | null): LongProcessProgress | null {
-  if (!event) {
-    return null;
-  }
-
-  return {
-    current: event.current,
-    total: event.total,
-    unit: event.phase === "gs-segment" ? "segment" : "part",
-  };
 }

@@ -121,6 +121,15 @@ describe("describePrintProgress", () => {
       }),
     ).toBe("Preparing part 1 of 3 (page 1)...");
   });
+
+  it("describes CUPS queued and printing phases without page numbers", () => {
+    expect(describePrintProgress({ ...base, phase: "cups-queued" })).toBe(
+      "Sending to the printer...",
+    );
+    expect(describePrintProgress({ ...base, phase: "cups-printing" })).toBe(
+      "Printing...",
+    );
+  });
 });
 
 describe("newPrintJobToken", () => {

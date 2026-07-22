@@ -41,6 +41,16 @@ export interface EngineOpRouteInputs {
    * safe to treat as a grant.
    */
   memoryFilePath: string | null;
+  /**
+   * `document.tempBackingGrant`: a temp file on disk holding the current bytes
+   * of an in-memory / derived document (extracted range, exhibit binder, OCR
+   * output, Word import, …). Distinct from `memoryFilePath` (the user's real
+   * saved file) — it gives a derived doc a path-ops grant so it prints/OCRs in
+   * full, while the document stays logically unsaved. Null when there is no
+   * backing (web build, staging failed, or an opened-from-disk doc that already
+   * carries a real grant).
+   */
+  memoryBackingGrant: FileGrant | null;
   /** `document.dirty`: an in-place mutation is pending (not yet on disk). */
   dirty: boolean;
   /** `editing.hasUnsavedEdits`: overlay annotations/form edits not yet applied. */
@@ -63,11 +73,12 @@ export function resolveEngineOpRoute(input: EngineOpRouteInputs): EngineOpRoute 
     return { via: "path-ops", grant: input.streamedGrant };
   }
 
-  const memoryGrant =
-    input.isTauriRuntime &&
-    input.sourceKind === "memory" &&
-    input.memoryFilePath !== null
-      ? (input.memoryFilePath as FileGrant)
+  // A memory-mode doc reaches path_ops through the user's real file grant
+  // (`memoryFilePath`, opened-from-disk) OR, for a derived/in-memory doc, its
+  // temp backing (`memoryBackingGrant`). The real file wins when both exist.
+  const memoryGrant: FileGrant | null =
+    input.isTauriRuntime && input.sourceKind === "memory"
+      ? ((input.memoryFilePath as FileGrant | null) ?? input.memoryBackingGrant)
       : null;
 
   if (!memoryGrant) {

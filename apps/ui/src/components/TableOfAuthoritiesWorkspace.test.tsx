@@ -333,6 +333,7 @@ function memoryDocument(overrides: Partial<DocumentState> = {}): DocumentState {
     protectionSource: null,
     protectionFacts: null,
     protectedSourceGrant: null,
+    tempBackingGrant: null,
     error: null,
     ...overrides,
   };

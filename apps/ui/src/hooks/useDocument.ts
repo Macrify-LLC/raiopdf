@@ -88,6 +88,16 @@ export interface DocumentState {
   protectionFacts: PdfProtectionFacts | null;
   /** Original protected file identity, retained only for same-file refusal. */
   protectedSourceGrant: FileGrant | null;
+  /**
+   * A temp file on disk holding the CURRENT bytes of a memory-mode
+   * derived/imported document (extracted range, exhibit binder, OCR output,
+   * Word import, …). Gives such a doc a path-ops grant so it prints/OCRs in
+   * full, while `filePath` stays null (it was never saved to a real user
+   * file). Distinct from `filePath` — every save/identity reader must keep
+   * using `filePath`; only the engine-op/print routing reads this. Released
+   * (deleted) on mutation, replace, close, and Save As.
+   */
+  tempBackingGrant: FileGrant | null;
   error: string | null;
 }
 
@@ -130,12 +140,14 @@ const INITIAL_DOCUMENT: DocumentState = {
   protectionSource: null,
   protectionFacts: null,
   protectedSourceGrant: null,
+  tempBackingGrant: null,
   error: null,
 };
 
 function releaseDocumentGrants(
   source: DocumentSource | null | undefined,
   protectedSourceGrant: FileGrant | null | undefined,
+  tempBackingGrant: FileGrant | null | undefined,
   preservedGrants: readonly FileGrant[] = [],
 ): Promise<void> {
   const preserved = new Set(preservedGrants);
@@ -145,6 +157,9 @@ function releaseDocumentGrants(
   }
   if (protectedSourceGrant) {
     grants.add(protectedSourceGrant);
+  }
+  if (tempBackingGrant) {
+    grants.add(tempBackingGrant);
   }
 
   return Promise.all(
@@ -218,6 +233,14 @@ export interface OpenFileOptions {
   protectionSource?: ProtectedPdfSource;
   protectionFacts?: PdfProtectionFacts | null;
   protectedSourceGrant?: FileGrant | null;
+  /**
+   * A temp file on disk holding this document's bytes, for a derived/imported
+   * doc that has no real saved file. Gives it a path-ops grant so it prints/
+   * OCRs in full while staying logically unsaved. MUTUALLY EXCLUSIVE with
+   * `markDirty`: pass this (and leave the doc clean) when staging succeeded, or
+   * `markDirty` (no backing) when it didn't — either way Close prompts to save.
+   */
+  tempBackingGrant?: FileGrant | null;
 }
 
 export interface OpenStreamedFileOptions {
@@ -373,6 +396,16 @@ export function useDocument(options: UseDocumentOptions = {}) {
     fileName: null,
     filePath: null,
   });
+  // Mirrors `document.tempBackingGrant` so a mutation/save can release the
+  // now-stale temp file outside the reducer (side-effect-free updaters).
+  const tempBackingGrantRef = useRef<FileGrant | null>(null);
+  const releaseTempBacking = useCallback(() => {
+    const grant = tempBackingGrantRef.current;
+    tempBackingGrantRef.current = null;
+    if (grant) {
+      void pathOpReleaseOutput(grant).catch(() => undefined);
+    }
+  }, []);
 
   const setTabsState = useCallback((update: (current: StoredDocumentTab[]) => StoredDocumentTab[]) => {
     setTabs((current) => {
@@ -715,6 +748,9 @@ export function useDocument(options: UseDocumentOptions = {}) {
         if (tab.document.protectedSourceGrant) {
           grants.add(tab.document.protectedSourceGrant);
         }
+        if (tab.document.tempBackingGrant) {
+          grants.add(tab.document.tempBackingGrant);
+        }
       }
       void Promise.all([...grants].map((grant) => pathOpReleaseOutput(grant).catch(() => undefined)));
     };
@@ -757,10 +793,15 @@ export function useDocument(options: UseDocumentOptions = {}) {
           ? options.filePath
           : fileIdentityRef.current.filePath,
       };
+      // The committed bytes differ from the pre-mutation temp backing on disk,
+      // so that temp is now stale — release it and drop the grant. A mutated
+      // doc is `dirty`, which already gates print (save-first) and Close.
+      releaseTempBacking();
       setDocument((current) => ({
         ...current,
         bytes,
         source: { kind: "memory", bytes },
+        tempBackingGrant: null,
         generation,
         engineHandle,
         pageCount,
@@ -795,7 +836,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
 
       return true;
     },
-    [closeHandle, engine, nextGeneration, requestPageScroll],
+    [closeHandle, engine, nextGeneration, releaseTempBacking, requestPageScroll],
   );
 
   const currentOperation = useCallback((): OperationContext | null => {
@@ -958,6 +999,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       const { id, token, previousHandle } = target;
       const previousSource = target.newTab ? null : document.source;
       const previousProtectedSourceGrant = target.newTab ? null : document.protectedSourceGrant;
+      const previousTempBackingGrant = target.newTab ? null : document.tempBackingGrant;
       let prepared: PreparedDocument | null = null;
 
       try {
@@ -1010,12 +1052,17 @@ export function useDocument(options: UseDocumentOptions = {}) {
           protectionSource: unlockedProtectedSource,
           protectionFacts,
           protectedSourceGrant,
+          // A derived/imported doc carries a temp backing (staged bytes) so it
+          // prints/OCRs in full; an opened-from-disk doc leaves this null and
+          // uses its real file grant. `markDirty` and this are exclusive.
+          tempBackingGrant: options.tempBackingGrant ?? null,
           error: null,
         };
         fileIdentityRef.current = {
           fileName: nextDocument.fileName,
           filePath: nextDocument.filePath,
         };
+        tempBackingGrantRef.current = nextDocument.tempBackingGrant;
         setDocument(nextDocument);
         const storedTab = createStoredTab(id, nextDocument, {
           engineHandle,
@@ -1032,6 +1079,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         void releaseDocumentGrants(
           previousSource,
           previousProtectedSourceGrant,
+          previousTempBackingGrant,
           protectedSourceGrant ? [protectedSourceGrant] : [],
         );
         requestPageScroll(1);
@@ -1071,7 +1119,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
             busyCountRef.current = 0;
             setPageScrollIntent(null);
             setDocument(INITIAL_DOCUMENT);
-            void releaseDocumentGrants(previousSource, previousProtectedSourceGrant);
+            void releaseDocumentGrants(previousSource, previousProtectedSourceGrant, previousTempBackingGrant);
           } else {
             restoreAfterFailedNewTabOpen(target);
           }
@@ -1103,12 +1151,12 @@ export function useDocument(options: UseDocumentOptions = {}) {
             ...INITIAL_DOCUMENT,
             error: message,
           });
-          void releaseDocumentGrants(previousSource, previousProtectedSourceGrant);
+          void releaseDocumentGrants(previousSource, previousProtectedSourceGrant, previousTempBackingGrant);
         }
         return { status: "failed", error: message };
       }
     },
-    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
+    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, document.tempBackingGrant, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
   );
 
   /**
@@ -1129,6 +1177,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       const { id, token, previousHandle } = target;
       const previousSource = target.newTab ? null : document.source;
       const previousProtectedSourceGrant = target.newTab ? null : document.protectedSourceGrant;
+      const previousTempBackingGrant = target.newTab ? null : document.tempBackingGrant;
 
       activeHandleRef.current = null;
       activeBytesRef.current = null;
@@ -1167,6 +1216,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         protectedSourceGrant: options.protectedSourceGrant ?? null,
       };
       fileIdentityRef.current = { fileName: input.name, filePath: input.path };
+      tempBackingGrantRef.current = null;
       setDocument(nextDocument);
       const storedTab = createStoredTab(id, nextDocument, {
         openToken: token,
@@ -1180,6 +1230,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       void releaseDocumentGrants(
         previousSource,
         previousProtectedSourceGrant,
+        previousTempBackingGrant,
         [
           ...(input.source.kind === "rangeGrant" ? [input.source.grant] : []),
           ...(nextDocument.protectedSourceGrant ? [nextDocument.protectedSourceGrant] : []),
@@ -1188,7 +1239,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       requestPageScroll(1);
       return { status: "opened" };
     },
-    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
+    [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, document.tempBackingGrant, nextGeneration, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setTabsState],
   );
 
   /**
@@ -2190,11 +2241,15 @@ export function useDocument(options: UseDocumentOptions = {}) {
     options: { clearProtection?: boolean } = {},
   ) => {
     fileIdentityRef.current = { fileName: saved.fileName, filePath: saved.filePath };
+    // The bytes now live in the user's real file (`filePath`), so any temp
+    // backing is redundant — release it and drop the grant.
+    releaseTempBacking();
     setDocument((current) => ({
       ...current,
       dirty: false,
       fileName: saved.fileName,
       filePath: saved.filePath,
+      tempBackingGrant: null,
       ...(options.clearProtection
         ? {
             protectionSource: null,
@@ -2204,7 +2259,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         : {}),
       error: null,
     }));
-  }, []);
+  }, [releaseTempBacking]);
 
   const markDirty = useCallback(() => {
     setDocument((current) => (current.dirty ? current : { ...current, dirty: true }));
@@ -2276,6 +2331,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
     await releaseDocumentGrants(
       tab.document.source,
       tab.document.protectedSourceGrant,
+      tab.document.tempBackingGrant,
     );
 
     if (isActive) {

@@ -118,7 +118,14 @@ import {
   type PdfSecurityProgress,
   type PrepareProtectedCopyResult,
 } from "./components/PdfSecurityPanel";
-import { PrintDialog } from "./components/PrintDialog";
+import { PrintDialog, type StartPrintParams } from "./components/PrintDialog";
+import {
+  cancelPrint,
+  describePrintProgress,
+  listenPrintProgress,
+  newPrintJobToken,
+  printPdf,
+} from "./lib/printPipeline";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import { DockedProcessLoader } from "./components/DockedProcessLoader";
 import type { DockedProcessLoaderProps } from "./components/DockedProcessLoader";
@@ -132,6 +139,7 @@ import {
   useDocument,
   type BinderExhibitInput,
   type DocumentState,
+  type OpenFileOptions,
   type OpenFileResult,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
@@ -397,6 +405,16 @@ interface BinderProgressState {
 interface ActiveLongProcess {
   label: string;
   loader: DockedProcessLoaderProps;
+}
+
+/** A native print job in flight. It drives the docked loader (bottom of the
+ * app) without setting `longProcessRunning`, so the user keeps working while a
+ * document prints — and can cancel it from the dock. */
+interface PrintJobState {
+  token: string;
+  printer: string;
+  message: string;
+  requested: boolean;
 }
 
 type CancellablePathProcess = "ocr" | "prepare-filing";
@@ -726,6 +744,7 @@ export function App() {
       sourceKind: document.source?.kind ?? null,
       streamedGrant: pathOpsGrant,
       memoryFilePath: document.filePath,
+      memoryBackingGrant: document.tempBackingGrant,
       dirty: document.dirty,
       hasUnsavedEdits: editing.hasUnsavedEdits,
     });
@@ -899,6 +918,130 @@ export function App() {
   } | null>(null);
   /** Native print dialog for streamed docs (whole-doc print, un-gated). */
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
+  /** A native print job running in the background (drives the docked loader). */
+  const [printJob, setPrintJob] = useState<PrintJobState | null>(null);
+  /** Mirrors `printJob` for a synchronous "is a print already running?" check —
+   * state is async, and startPrint must reject a second submission before it
+   * would replace (and orphan) the job already printing. */
+  const printJobRef = useRef<PrintJobState | null>(null);
+
+  /** Apply an update to the running print job, but only when `token` still
+   * matches the current job — a stale event from a finished or cancelled job
+   * is ignored. Returning the same reference lets React skip the re-render. */
+  const updatePrintJob = useCallback(
+    (token: string, next: (job: PrintJobState) => PrintJobState | null) => {
+      setPrintJob((prev) => (prev && prev.token === token ? next(prev) : prev));
+    },
+    [],
+  );
+
+  /** Cancel the running print job for real — on macOS the shell cancels the
+   * CUPS job, on Windows it stops between Ghostscript segments/parts. */
+  const requestPrintCancel = useCallback(
+    (token: string) => {
+      updatePrintJob(token, (job) => ({ ...job, requested: true }));
+      void cancelPrint(token).catch(() => undefined);
+    },
+    [updatePrintJob],
+  );
+
+  /** Hand off a committed print to the docked loader: the setup dialog has
+   * already closed, so printing runs in the background and the app stays
+   * usable. Progress events update the dock; the promise resolves when the
+   * document has actually printed (or failed), not the instant it is queued. */
+  const startPrint = useCallback(
+    (params: StartPrintParams) => {
+      const grant = engineDelegatedGrant;
+      if (!grant) {
+        setError("Open a PDF before printing.");
+        return;
+      }
+      // Only one background print at a time — a second would replace the sole
+      // printJob and orphan the first (still printing, but invisible and no
+      // longer cancellable from the dock).
+      if (printJobRef.current) {
+        setError(
+          "A print job is already running — wait for it to finish or cancel it from the bar at the bottom of the window.",
+        );
+        return;
+      }
+
+      // Remember which document started this print. A warning or failure that
+      // resolves after the user switches tabs must not be shown against an
+      // unrelated document — setError is scoped to the visible one.
+      const sourceGeneration = documentGenerationRef.current;
+
+      const token = newPrintJobToken();
+      const job: PrintJobState = {
+        token,
+        printer: params.printer,
+        message: "Sending to the printer...",
+        requested: false,
+      };
+      printJobRef.current = job;
+      setPrintJob(job);
+
+      let unlisten: (() => void) | null = null;
+      let settled = false;
+      void listenPrintProgress(token, (event) => {
+        const message = describePrintProgress(event);
+        updatePrintJob(token, (job) =>
+          job.message === message ? job : { ...job, message },
+        );
+      }).then((stop) => {
+        // The job can finish before listener setup resolves (e.g. an immediate
+        // native error). If it already has, tear the listener down now —
+        // otherwise it would leak for the lifetime of the app.
+        if (settled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      });
+
+      void printPdf(
+        grant,
+        token,
+        params.printer,
+        params.pageIndexes,
+        params.copies,
+        params.options,
+      )
+        .then((result) => {
+          // The source changed on disk mid-print, so the printed pages may mix
+          // revisions. The setup dialog that used to show this warning has
+          // already closed and the dock is about to clear — surface it here so
+          // the heads-up isn't lost.
+          if (
+            result.inputChanged &&
+            documentGenerationRef.current === sourceGeneration
+          ) {
+            setError(
+              "The file changed on disk while printing — the printed pages may mix revisions. Reopen the file to see its current state.",
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          // Cancellation is a user action, not an error to surface.
+          if (error instanceof PathOpsError && error.code === "PRINT_CANCELLED") {
+            return;
+          }
+          // Only surface against the document that started the print.
+          if (documentGenerationRef.current === sourceGeneration) {
+            setError(pathOpErrorMessage(error, "The document could not be printed."));
+          }
+        })
+        .finally(() => {
+          settled = true;
+          unlisten?.();
+          updatePrintJob(token, () => null);
+          if (printJobRef.current?.token === token) {
+            printJobRef.current = null;
+          }
+        });
+    },
+    [engineDelegatedGrant, setError, updatePrintJob],
+  );
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingReportError, setFilingReportError] = useState<string | null>(null);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
@@ -1955,7 +2098,12 @@ export function App() {
             path: null,
           },
           {
-            ...(options.markDirty ? { markDirty: true } : {}),
+            // KEEP the op's output file as the doc's temp backing (it already
+            // holds exactly these bytes) so it prints/OCRs in full via the
+            // native path. It stays clean (no `markDirty`) but temp-backed-
+            // unsaved, so Close still prompts to save. Released on
+            // close/replace/mutation/Save As.
+            tempBackingGrant: output.outputGrant,
             ...(protectionSource ? { protectionSource } : {}),
             ...(protectionFacts ? { protectionFacts } : {}),
             ...(protectedSourceGrant ? { protectedSourceGrant } : {}),
@@ -1964,11 +2112,8 @@ export function App() {
 
         if (result.status === "opened") {
           setSelectedPageIndexes(new Set([0]));
-          // The bytes live in memory now and the document deliberately has
-          // no on-disk identity (filePath null, clean, Save As flow) — the
-          // temp output file has no further use. Best-effort: the startup
-          // sweep covers anything this misses.
-          await pathOpReleaseOutput(output.outputGrant).catch(() => undefined);
+          // The output file is now the document's temp backing — do NOT release
+          // it here; the document owns it and releases it on close.
           return result;
         }
 
@@ -3348,7 +3493,7 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
-    (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
+    (file: OpenedFile, options: { openInNewTab?: boolean; stageTempBacking?: boolean } = {}) => {
       const opensNewTab = Boolean(options.openInNewTab && document.source);
       if (opensNewTab && longProcessRunning) {
         // Opening into a new tab implicitly switches tabs, which would
@@ -3366,9 +3511,32 @@ export function App() {
       resetLegalState();
       setSelectedPageIndexes(new Set());
       setPasswordPrompt(null);
-      void openDocumentFile(file, {
+      void (async () => {
+      const openOptions: OpenFileOptions = {
         openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
-      }).then((result) => {
+      };
+      // A derived/imported in-memory doc (extracted range, exhibit binder, Word
+      // import, …) has no file on disk. Stage its bytes to a temp file so it
+      // prints/OCRs in full via the native path while staying unsaved. If
+      // staging can't run (web build) or fails, mark it dirty so Close still
+      // prompts to save — just without the native full-document print.
+      if (options.stageTempBacking && file.path === null && file.bytes) {
+        const staged = await materializePdfBytesGrant(file.bytes, file.name).catch(
+          () => null,
+        );
+        const backing: FileGrant | null =
+          staged?.kind === "memory"
+            ? (staged.path as FileGrant | null)
+            : staged?.kind === "rangeGrant"
+              ? staged.grant
+              : null;
+        if (backing) {
+          openOptions.tempBackingGrant = backing;
+        } else {
+          openOptions.markDirty = true;
+        }
+      }
+      await openDocumentFile(file, openOptions).then((result) => {
         if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
@@ -3397,6 +3565,7 @@ export function App() {
           setActiveOrganizeTool("repair");
         }
       });
+      })();
     },
     [document.source, longProcessRunning, openDocumentFile, resetLegalState, setError, stashVisibleDocumentEditingState],
   );
@@ -3671,6 +3840,8 @@ export function App() {
         activeTabHasPendingEdits: editing.hasUnsavedEdits,
         activeTabPendingRedactionCount: pendingRedactions.length,
         tabHasStashedWork: tabEditingSnapshotsRef.current.has(tab.document.generation),
+        tabTempBackedUnsaved:
+          tab.document.tempBackingGrant !== null && tab.document.filePath === null,
       });
       if (needsConfirm) {
         const fileName = tab.document.fileName ?? "this document";
@@ -4562,8 +4733,50 @@ export function App() {
       return;
     }
 
+    // A normal-size document. On the desktop, print the file itself through the
+    // native pipeline (CUPS `lp` on macOS, Ghostscript on Windows) — full
+    // fidelity at any length. window.print() only captured the handful of pages
+    // the virtualized viewer keeps mounted, and is a silent no-op in the macOS
+    // WKWebView, so it stays a web / in-memory fallback. resolveEngineOpRoute
+    // yields the on-disk grant for a clean opened-or-saved file too (its
+    // `document.filePath` is the shell grant), not just streamed docs — and
+    // gates on unsaved edits, since the on-disk file would be the pre-edit copy.
+    const route = resolveEngineOpRoute({
+      isTauriRuntime: isPathOpsRuntime(),
+      sourceKind: document.source?.kind ?? null,
+      streamedGrant: pathOpsGrant,
+      memoryFilePath: document.filePath,
+      memoryBackingGrant: document.tempBackingGrant,
+      dirty: document.dirty,
+      hasUnsavedEdits: editing.hasUnsavedEdits,
+    });
+    if (route.via === "path-ops") {
+      setPrintDialogOpen(true);
+      return;
+    }
+    if (route.via === "save-first") {
+      setError("Save your changes before printing — printing sends the saved file.");
+      return;
+    }
+
+    // `loopback`: an in-memory doc with no on-disk file (browser open, or a
+    // derived-in-app doc). The browser can print it; the macOS WKWebView cannot
+    // (window.print() is a no-op there), so ask to save first instead.
+    if (runtimePlatform() === "macos") {
+      setError("Save this document before printing.");
+      return;
+    }
     window.print();
-  }, [document.bytes, editing.hasUnsavedEdits, pathOpsGrant, setError, streamedDocument]);
+  }, [
+    document.bytes,
+    document.dirty,
+    document.filePath,
+    document.source,
+    editing.hasUnsavedEdits,
+    pathOpsGrant,
+    setError,
+    streamedDocument,
+  ]);
 
   const buildBinder = useCallback(
     async (
@@ -4767,7 +4980,10 @@ export function App() {
         // regular Print button (window.print on the rendered pages) now
         // applies to exactly those pages. The temp output on disk was
         // already deleted; these bytes live only in memory.
-        openOpenedFile({ bytes: result.extraction.bytes, name: result.extraction.name, path: null });
+        openOpenedFile(
+          { bytes: result.extraction.bytes, name: result.extraction.name, path: null },
+          { stageTempBacking: true },
+        );
       });
   }, [document.fileName, document.generation, document.pageCount, getOpenToken, isCurrentDocument, openOpenedFile, pathOpsGrant]);
 
@@ -8186,6 +8402,11 @@ export function App() {
   useEffect(() => {
     const unsaved = hasUnsavedWork({
       tabDirtyFlags: documentTabs.map((tab) => tab.document.dirty),
+      // A derived/imported doc staged to a temp file is clean but was never
+      // saved to a real file — losing it on close still needs a prompt.
+      tabTempBackedUnsavedFlags: documentTabs.map(
+        (tab) => tab.document.tempBackingGrant !== null && tab.document.filePath === null,
+      ),
       activeTabHasPendingEdits: editing.hasUnsavedEdits,
       activeTabPendingRedactionCount: pendingRedactions.length,
       stashedBackgroundTabCount: tabEditingSnapshotsRef.current.size,
@@ -8405,6 +8626,24 @@ export function App() {
     : filingPacketProgress.running
       ? "Paused while Filing Packet runs"
     : null;
+
+  /** Docked-loader props for a background print job. Rendered in the same dock
+   * slot as the blocking long-processes but only as a fallback, so printing
+   * shows its status and Cancel at the bottom without locking the app. */
+  const printDockLoader = useMemo<DockedProcessLoaderProps | null>(() => {
+    if (!printJob) {
+      return null;
+    }
+    return {
+      phaseLabel: "Printing",
+      message: printJob.message,
+      detail: `To ${printJob.printer}`,
+      cancelLabel: "Cancel",
+      cancelMessage: "Cancels the print job.",
+      cancelRequested: printJob.requested,
+      onCancel: () => requestPrintCancel(printJob.token),
+    };
+  }, [printJob, requestPrintCancel]);
   const extractOpenDocumentPageTextByPage = useCallback(
     (bytes: Uint8Array) => extractUiPageTextByPage(bytes, pdfDocument),
     [pdfDocument],
@@ -8796,10 +9035,22 @@ export function App() {
         workspace={workspace}
         overlay={overlay}
         processLoader={
-          activeLongProcess ? (
-            <DockedProcessLoader {...activeLongProcess.loader} />
+          // A background print doesn't lock the app, so a blocking op (OCR,
+          // filing) can run alongside it. Show both so the print keeps its
+          // status and Cancel control instead of being hidden behind the
+          // blocking op's loader.
+          activeLongProcess || printDockLoader ? (
+            <div className="docked-process-stack">
+              {activeLongProcess ? (
+                <DockedProcessLoader {...activeLongProcess.loader} />
+              ) : null}
+              {printDockLoader ? (
+                <DockedProcessLoader {...printDockLoader} />
+              ) : null}
+            </div>
           ) : null
         }
+        processLoaderCount={(activeLongProcess ? 1 : 0) + (printDockLoader ? 1 : 0)}
         longProcessLockoutLabel={longProcessLockoutLabel}
         updateSlot={
           <UpdatePill
@@ -8895,11 +9146,12 @@ export function App() {
           onCancel={cancelPasswordPrompt}
         />
       ) : null}
-      {printDialogOpen && pathOpsGrant ? (
+      {printDialogOpen && engineDelegatedGrant ? (
         <PrintDialog
-          grant={pathOpsGrant}
           pageCount={document.pageCount}
           fileName={document.fileName}
+          pdfDocument={pdfDocument}
+          onStartPrint={startPrint}
           onClose={() => setPrintDialogOpen(false)}
           onUseRangeFallback={() => {
             setPrintDialogOpen(false);

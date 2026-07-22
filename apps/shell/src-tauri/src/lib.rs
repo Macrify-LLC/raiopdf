@@ -3101,8 +3101,12 @@ mod tests {
         let token = uploads
             .begin_upload(root.path(), bytes.len() as u64, "derived.pdf")
             .expect("begin");
-        uploads.append_upload(&token, &bytes[..8]).expect("append a");
-        uploads.append_upload(&token, &bytes[8..]).expect("append b");
+        uploads
+            .append_upload(&token, &bytes[..8])
+            .expect("append a");
+        uploads
+            .append_upload(&token, &bytes[8..])
+            .expect("append b");
         let opened = uploads
             .finish_upload(&token, root.path(), &grants)
             .expect("finish");

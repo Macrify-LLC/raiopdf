@@ -10,8 +10,11 @@ use std::{path::Path, time::Duration};
 use std::{
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicBool;
 
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Mutex;
@@ -265,7 +268,7 @@ pub fn convert_docx_to_pdf_with_toolchain(
             input,
             output,
             markup,
-            MACOS_WORD_CONVERSION_TIMEOUT,
+            DEFAULT_WORD_CONVERSION_TIMEOUT,
         )
     }
     #[cfg(target_os = "macos")]
@@ -275,7 +278,7 @@ pub fn convert_docx_to_pdf_with_toolchain(
             input,
             output,
             markup,
-            DEFAULT_WORD_CONVERSION_TIMEOUT,
+            MACOS_WORD_CONVERSION_TIMEOUT,
         )
     }
     #[cfg(not(any(windows, target_os = "macos")))]

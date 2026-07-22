@@ -3887,17 +3887,8 @@ export function App() {
       });
       if (needsConfirm) {
         const fileName = tab.document.fileName ?? "this document";
-        if (closesVisibleDocument && activeTextEdit) {
-          textEdit.cancelReview();
-          setActiveTextEdit(false);
-        }
         setTabClosePrompt({ tabId, fileName, closesVisibleDocument, nextVisibleState });
         return;
-      }
-
-      if (closesVisibleDocument && activeTextEdit) {
-        textEdit.cancelReview();
-        setActiveTextEdit(false);
       }
 
       const closed = await closeDocumentTab(tabId);
@@ -3908,7 +3899,7 @@ export function App() {
         resetVisibleDocumentAppState(nextVisibleState);
       }
     })();
-  }, [activeTabId, activeTextEdit, closeDocumentTab, documentTabs, editing.hasUnsavedEdits, pendingRedactions.length, resetVisibleDocumentAppState, textEdit.cancelReview]);
+  }, [activeTabId, closeDocumentTab, documentTabs, editing.hasUnsavedEdits, pendingRedactions.length, resetVisibleDocumentAppState]);
 
   const openFile = useCallback(() => {
     void filePort

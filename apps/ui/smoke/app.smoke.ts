@@ -924,6 +924,46 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
 });
 
+test("canceling a dirty-tab close preserves the staged text-edit review", async ({ page }) => {
+  const sourcePdf = await createTextPdf("Plaintiff files the motion.");
+  const editedPdf = await createTextPdf("Petitioner files the motion.");
+  await installTextEditBridgeMock(page, editedPdf);
+  await page.goto("/");
+  await openPdf(page, "edit-text-close-cancel.pdf", sourcePdf);
+
+  // Save a pending annotation into the working document so closing the tab
+  // must ask for confirmation after the text replacement is staged.
+  await openEditToolPanel(page);
+  await selectMarkupTool(page, "Text box");
+  await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
+  await page.getByLabel("Text box content").fill("Pending note");
+  await page.getByLabel("Text box content").press("Enter");
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("dialog", { name: "Pending annotations" })
+    .getByRole("button", { name: "Save annotations" })
+    .click();
+
+  await page.getByLabel("Find text").fill("Plaintiff");
+  await page.getByLabel("Replace with").fill("Petitioner");
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" })
+    .getByRole("button", { name: "Review (1)" })
+    .click();
+
+  const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
+  await expect(reviewDialog).toBeVisible();
+  await page.getByRole("button", { name: "Close edit-text-close-cancel.pdf" }).click();
+  await expect(page.getByRole("dialog", { name: "Unsaved changes" })).toBeVisible();
+  await page.getByRole("dialog", { name: "Unsaved changes" })
+    .getByRole("button", { name: "Cancel" })
+    .click();
+
+  await expect(reviewDialog).toBeVisible();
+  const replacementReport = reviewDialog.getByLabel("Replacement report");
+  await expect(replacementReport.getByText("Plaintiff")).toBeVisible();
+  await expect(replacementReport.getByText("Petitioner")).toBeVisible();
+});
+
 test("edit document text prompts for pending annotations and gates scanned documents", async ({ page }) => {
   await installTextEditBridgeMock(page, await createTextPdf("Prompt fixture."));
   await page.goto("/");

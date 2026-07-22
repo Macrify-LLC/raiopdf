@@ -2,11 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildDocxMarkupGate,
+  docxConversionProgressMessage,
   mergeConvertedDocxPicks,
   pickFileForAdd,
   pickPdfsForAdd,
   readFileForAdd,
   tooLargeToAddMessage,
+  wordDocxAddErrorMessage,
 } from "./readFileForAdd";
 import { getLargeDocThresholdBytes, setLargeDocThresholdBytes } from "./largeDocThreshold";
 
@@ -262,6 +264,15 @@ describe("pickPdfsForAdd", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("convert_docx_for_add", expect.anything());
   });
 
+  it("returns the shared macOS Automation guidance for a batch conversion error", () => {
+    expect(wordDocxAddErrorMessage([{
+      grant: "docx-1",
+      name: "motion.docx",
+      code: "WORD_AUTOMATION_DENIED",
+      message: "Application isn't allowed to send Apple events to Microsoft Word. (-1743)",
+    }])).toContain("Retrying before you allow it will not show the macOS permission prompt again");
+  });
+
   it("treats a null pick result as a cancel (empty array)", async () => {
     (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockResolvedValue(null);
@@ -355,6 +366,18 @@ describe("tooLargeToAddMessage", () => {
 });
 
 describe("DOCX add gate helpers", () => {
+  it("uses neutral preparation copy instead of claiming it starts Word", () => {
+    expect(docxConversionProgressMessage("preparing", 1, 2)).toBe(
+      "Preparing 1 of 2 for conversion in Microsoft Word...",
+    );
+    // Older shells can still emit this phase while the UI and shell are
+    // upgraded together. It must remain truthful for a reused Word instance.
+    expect(docxConversionProgressMessage("startingWord", 1, 2)).toBe(
+      "Preparing 1 of 2 for conversion in Microsoft Word...",
+    );
+    expect(docxConversionProgressMessage("converting", 2, 2)).toBe("Converting 2 of 2...");
+  });
+
   it("does not gate clean DOCX batches", () => {
     expect(buildDocxMarkupGate([
       { grant: "g", name: "clean.docx", sizeBytes: 1, source: "docx", markupScan: "clean" },

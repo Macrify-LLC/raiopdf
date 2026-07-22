@@ -10,6 +10,7 @@ import {
   type WordReflowOutput,
 } from "./wordReflow";
 import { shouldRefuseWord, type WordCapability } from "./wordCapability";
+import { PathOpsError } from "./pathOps";
 
 const grant = (value: string) => value as FileGrant;
 
@@ -140,5 +141,33 @@ describe("word reflow decisions", () => {
     expect(probeGrant).toHaveBeenCalledWith("pdf-grant");
     expect(testDeps.promptScannedPdf).toHaveBeenCalledTimes(1);
     expect(testDeps.reflowPdfToDocx).toHaveBeenCalledWith("pdf-grant", true);
+  });
+
+  it("shows macOS Automation recovery guidance when conversion permission was denied", async () => {
+    const testDeps = deps({
+      reflowPdfToDocx: vi.fn(async () => {
+        throw new PathOpsError({
+          code: "WORD_AUTOMATION_DENIED",
+          message: "Application isn't allowed to send Apple events to Microsoft Word. (-1743)",
+        });
+      }),
+    });
+
+    const result = await runPdfToWordReflow(
+      {
+        getInput: async () => ({ grant: grant("pdf-grant"), name: "case.pdf" }),
+        getTextLayer: async () => true,
+      },
+      testDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("System Settings, go to Privacy & Security > Automation"),
+    });
+    if (result.status !== "failed") {
+      throw new Error("expected the denied Automation conversion to fail");
+    }
+    expect(result.message).toContain("Retrying before you allow it will not show the macOS permission prompt again");
   });
 });

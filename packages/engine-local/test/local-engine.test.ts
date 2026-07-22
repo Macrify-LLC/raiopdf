@@ -120,6 +120,7 @@ describe("LocalPdfEngine", () => {
           start: 0,
           end: 9,
           expectedText: "Plaintiff",
+          expectedVisibleText: "Plaintiff",
           sourceDocumentFingerprint: "document-test",
           sourceFingerprint: "test",
           firstElementIndex: 0,

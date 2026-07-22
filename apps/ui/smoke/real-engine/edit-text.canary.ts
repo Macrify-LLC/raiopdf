@@ -50,8 +50,8 @@ test("Edit Text: real engine replaces born-digital text and preserves restored b
   await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
 
   const reviewDialog = await expectTextEditReviewReady(page);
   // The review dialog is where the estimate surfaces ("N estimated
@@ -90,8 +90,8 @@ test("Edit Text: image-bearing mixed document stays within the Phase 0 size enve
   await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Acme");
   await page.getByLabel("Replace with").fill("Raio");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
   await expectTextEditReviewReady(page);
   await page.getByRole("button", { name: "Apply" }).click();
 
@@ -149,7 +149,10 @@ test("Edit Text: right-click selected replacement changes only the chosen occurr
   await replaceItem.click();
 
   await expect(page.getByText("Selected text: Smith")).toBeVisible();
-  await page.getByLabel("Replace selected text with").fill("Jones");
+  // Deliberately shorter than the selected word: legal corrections commonly
+  // change length, and the text-editor round-trip must not only work when the
+  // replacement happens to have the same number of characters.
+  await page.getByLabel("Replace selected text with").fill("Lee");
   await page.getByRole("button", { name: "Review replacement" }).click();
 
   // This action is direct: it resolves the target and opens review without
@@ -163,10 +166,10 @@ test("Edit Text: right-click selected replacement changes only the chosen occurr
 
   const saved = await savePdf(page);
   saveCanaryArtifact("edit text", "edit-text-selected-output.pdf", saved,
-    "real replaceSelectedText output; confirm ONLY the second Smith became Jones");
+    "real replaceSelectedText output; confirm ONLY the second Smith became Lee");
 
   await openPdf(page, "edit-text-selected-output.pdf", saved);
-  expect(await searchHitCount(page, "Jones")).toBe(1);
+  expect(await searchHitCount(page, "Lee")).toBe(1);
   expect(await searchHitCount(page, "Smith")).toBe(1);
   logs.assertClean(BENIGN_LOG);
 });

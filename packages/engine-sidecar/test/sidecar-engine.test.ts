@@ -544,6 +544,7 @@ describe("SidecarPdfEngine", () => {
           start: 0,
           end: 10,
           expectedText: "John Smith",
+          expectedVisibleText: "John Smith",
           sourceDocumentFingerprint: "stale-document",
           sourceFingerprint: "stale-page",
           firstElementIndex: 0,
@@ -763,6 +764,49 @@ describe("SidecarPdfEngine", () => {
     const postedJson = await expectJsonFormFile(calls[1]);
     expect(pageTextElements(postedJson, 0)).toEqual(["", "", "", " filed"]);
     expect(result.warnings.map((warning) => warning.code)).toContain("SELECTED_TEXT_LAYOUT_RISK");
+  });
+
+  it("replaces a selected visible word span whose space is inferred between text-editor runs", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = {
+      pages: [{ textElements: [
+        { height: 12, textMatrix: [12, 0, 0, 12, 72, 700], text: "John", width: 28 },
+        { height: 12, textMatrix: [12, 0, 0, 12, 108, 700], text: "Smith", width: 35 },
+      ] }],
+    };
+    const serverBytes = await createBasicPdf();
+    const { calls, fetchImpl } = createFetch(
+      jsonResponse(sourceJson),
+      jsonResponse(sourceJson),
+      pdfBytesResponse(serverBytes),
+    );
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const inspected = await engine.inspectTextMap(document);
+    const page = inspected.pages[0]!;
+
+    await engine.replaceSelectedText(document, {
+      replacement: "Jane Doe",
+      target: { ...targetForRange(inspected.sourceFingerprint, page, 0, 9), expectedVisibleText: "John Smith" },
+    });
+
+    const postedJson = await expectJsonFormFile(calls[2]);
+    expect(pageTextElements(postedJson, 0)).toEqual(["Jane Doe", ""]);
+  });
+
+  it("rejects a selected target when its visible-text mapping is stale", async () => {
+    const sourceBytes = await createBasicPdf();
+    const sourceJson = textEditorJson(["John Smith"]);
+    const { calls, fetchImpl } = createFetch(jsonResponse(sourceJson));
+    const engine = new SidecarPdfEngine({ baseUrl: "http://127.0.0.1:8080", fetch: fetchImpl });
+    const document = await engine.open(sourceBytes);
+    const page = textMapPageFromJson(sourceJson, 0);
+
+    await expect(engine.replaceSelectedText(document, {
+      replacement: "Jane Doe",
+      target: { ...targetForRange(testDocumentFingerprint(sourceJson), page, 0, 10), expectedVisibleText: "John  Smith" },
+    })).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+    expect(calls).toHaveLength(1);
   });
 
   it("preserves same-element prefix and suffix for selected middle text", async () => {
@@ -1827,6 +1871,7 @@ function textMapPageFromJson(document: { pages: Array<{ textElements: unknown[] 
         w: element.width,
         h: element.height,
       },
+      direction: { x: 1, y: 0 },
     };
   });
 
@@ -1856,6 +1901,7 @@ function targetForRange(
     start,
     end,
     expectedText: page.text.slice(start, end),
+    expectedVisibleText: page.text.slice(start, end),
     sourceDocumentFingerprint,
     sourceFingerprint: page.sourceFingerprint,
     firstElementIndex: first.elementIndex,

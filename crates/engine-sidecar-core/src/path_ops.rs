@@ -1281,6 +1281,10 @@ pub struct DocumentFacts {
     /// Whether catalog XMP contains a PDF/A identification (`pdfaid:part`).
     pub pdfa_claimed: bool,
     pub signature_detection: SignatureDetectionFacts,
+    pub has_acro_form: bool,
+    pub has_tagged_structure: bool,
+    pub has_embedded_files: bool,
+    pub has_annotations: bool,
     pub pages: Vec<PageFacts>,
 }
 
@@ -1384,6 +1388,12 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let signature_detection = read_signature_detection_facts(objects);
+    let has_acro_form = object_table_contains_key(objects, "/AcroForm");
+    let has_tagged_structure = object_table_contains_key(objects, "/StructTreeRoot")
+        || object_table_contains_key(objects, "/MarkInfo");
+    let has_embedded_files = object_table_contains_key(objects, "/EmbeddedFiles")
+        || object_table_contains_key(objects, "/AF");
+    let has_annotations = object_table_contains_key(objects, "/Annots");
 
     let mut page_facts = Vec::with_capacity(pages.len());
     for (index, page) in pages.iter().enumerate() {
@@ -1432,8 +1442,33 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         encrypted,
         pdfa_claimed: false,
         signature_detection,
+        has_acro_form,
+        has_tagged_structure,
+        has_embedded_files,
+        has_annotations,
         pages: page_facts,
     })
+}
+
+fn object_table_contains_key(objects: &JsonObjectMap, key: &str) -> bool {
+    objects
+        .values()
+        .any(|object| json_value_contains_key(object, key))
+}
+
+fn json_value_contains_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key)
+                || map
+                    .values()
+                    .any(|child| json_value_contains_key(child, key))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|child| json_value_contains_key(child, key)),
+        _ => false,
+    }
 }
 
 fn catalog_metadata_object_selector(json: &[u8]) -> Option<String> {
@@ -2231,6 +2266,56 @@ pub fn insert_pages(
     arguments.push(path_arg(output_path));
     run_qpdf(toolchain, arguments)?;
     require_output("qpdf insert", output_path)?;
+    Ok(())
+}
+
+/// Recompose `input` with exactly one replacement page. The original document
+/// stays the primary qpdf input so its catalog-level structures have the best
+/// available preservation chance; only the selected page is sourced from
+/// `replacement`.
+pub fn replace_page(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    replacement: &Path,
+    page_index: u32,
+    output_path: &Path,
+) -> OpResult<()> {
+    require_input_file(input)?;
+    require_input_file(replacement)?;
+    let total = page_count(toolchain, input)?;
+    if page_index >= total {
+        return Err(PathOpError::invalid(format!(
+            "page index {page_index} out of range (document has {total} pages)"
+        )));
+    }
+    if page_count(toolchain, replacement)? != 1 {
+        return Err(PathOpError::invalid(
+            "replacement PDF must contain exactly one page",
+        ));
+    }
+
+    // Source-primary invocation: do not start from `--empty`, which would
+    // discard the original catalog before qpdf can retain what it supports.
+    let mut arguments = args(&["--warning-exit-0"]);
+    arguments.push(path_arg(input));
+    arguments.push(OsString::from("--pages"));
+    if page_index > 0 {
+        arguments.push(path_arg(input));
+        arguments.push(OsString::from(format!("1-{page_index}")));
+    }
+    arguments.push(path_arg(replacement));
+    arguments.push(OsString::from("1"));
+    if page_index + 1 < total {
+        arguments.push(path_arg(input));
+        arguments.push(OsString::from(format!("{}-z", page_index + 2)));
+    }
+    arguments.push(OsString::from("--"));
+    arguments.push(path_arg(output_path));
+    run_qpdf(toolchain, arguments)?;
+    require_output("qpdf replace page", output_path)?;
+    let mut check = args(&["--check"]);
+    check.push(path_arg(output_path));
+    run_qpdf(toolchain, check)?;
     Ok(())
 }
 
@@ -4457,6 +4542,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_page_replacement_structure_facts_from_qpdf_objects() {
+        let json = br#"{
+          "pages": [{ "object": "5 0 R" }],
+          "encrypt": { "encrypted": false },
+          "qpdf": [
+            {},
+            {
+              "obj:1 0 R": { "value": { "/Type": "/Catalog", "/AcroForm": "8 0 R", "/StructTreeRoot": "9 0 R", "/Names": { "/EmbeddedFiles": "10 0 R" } } },
+              "obj:2 0 R": { "value": { "/Type": "/Pages", "/MediaBox": [0, 0, 612, 792], "/Kids": ["5 0 R"] } },
+              "obj:5 0 R": { "value": { "/Type": "/Page", "/Parent": "2 0 R", "/Annots": ["11 0 R"] } }
+            }
+          ]
+        }"#;
+
+        let facts = parse_document_facts(json, 1234).unwrap();
+        assert!(facts.has_acro_form);
+        assert!(facts.has_tagged_structure);
+        assert!(facts.has_embedded_files);
+        assert!(facts.has_annotations);
+    }
+
+    #[test]
     fn document_facts_rejects_missing_media_box() {
         let json = br#"{
           "pages": [ { "object": "5 0 R" } ],
@@ -5921,6 +6028,67 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, ERR_INVALID_INPUT);
+    }
+
+    #[test]
+    fn replace_page_composes_at_first_middle_and_last() {
+        let Some(toolchain) = test_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("replace-page");
+        let target = write_fixture(
+            dir.path(),
+            "target.pdf",
+            &(0..3)
+                .map(|i| letter_page(Some(&format!("target {i}"))))
+                .collect::<Vec<_>>(),
+        );
+        for (page_index, expected) in [
+            (0u32, vec!["edited 0", "target 1", "target 2"]),
+            (1u32, vec!["target 0", "edited 1", "target 2"]),
+            (2u32, vec!["target 0", "target 1", "edited 2"]),
+        ] {
+            let replacement = write_fixture(
+                dir.path(),
+                &format!("replacement-{page_index}.pdf"),
+                &[letter_page(Some(&format!("edited {page_index}")))],
+            );
+            let output = dir.path().join(format!("replaced-{page_index}.pdf"));
+            replace_page(&toolchain, &target, &replacement, page_index, &output).unwrap();
+            assert_eq!(page_count(&toolchain, &output).unwrap(), 3);
+            let text = extract_all_text(&toolchain, &output, dir.path());
+            let positions = expected
+                .iter()
+                .map(|marker| text.find(marker).unwrap())
+                .collect::<Vec<_>>();
+            let mut sorted = positions.clone();
+            sorted.sort_unstable();
+            assert_eq!(positions, sorted, "page order wrong for page {page_index}");
+        }
+
+        // The source is qpdf's primary input, so catalog metadata survives
+        // page selection. PDF/A remains blocked by the shell edit lane, but
+        // its XMP marker is a compact fixture for this preservation contract.
+        let metadata_source = write_pdfa_fixture(dir.path(), "metadata-source.pdf");
+        let metadata_replacement = write_fixture(
+            dir.path(),
+            "metadata-replacement.pdf",
+            &[letter_page(Some("edited metadata page"))],
+        );
+        let metadata_output = dir.path().join("metadata-output.pdf");
+        replace_page(
+            &toolchain,
+            &metadata_source,
+            &metadata_replacement,
+            0,
+            &metadata_output,
+        )
+        .unwrap();
+        assert!(
+            document_facts(&toolchain, &metadata_output)
+                .unwrap()
+                .pdfa_claimed
+        );
     }
 
     #[test]

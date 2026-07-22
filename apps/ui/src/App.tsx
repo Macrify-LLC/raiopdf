@@ -141,6 +141,7 @@ import {
   type DocumentState,
   type OpenFileOptions,
   type OpenFileResult,
+  type ReplaceBytesResult,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
@@ -154,7 +155,6 @@ import { runtimePlatform } from "./lib/runtimePlatform";
 import {
   hasUnsavedWork,
   tabCloseNeedsConfirm,
-  WINDOW_CLOSE_CONFIRM_MESSAGE,
 } from "./lib/unsavedWork";
 import {
   checkForSignedUpdate,
@@ -201,6 +201,7 @@ import {
 import {
   pickFileForAdd,
   tooLargeToAddMessage,
+  wordDocxAddErrorMessage,
   type FileAddResult,
   type PickPdfsForAddOptions,
 } from "./lib/readFileForAdd";
@@ -221,6 +222,7 @@ import {
   pathOpDecrypt,
   pathOpDocumentFacts,
   pathOpExtractPages,
+  type PathOpOutput,
   pathOpInsertPages,
   pathOpMerge,
   pathOpOcr,
@@ -532,6 +534,13 @@ interface TabEditingSnapshot {
   overlayDirty: { generation: number; marked: boolean } | null;
 }
 
+interface TabClosePromptState {
+  tabId: string;
+  fileName: string;
+  closesVisibleDocument: boolean;
+  nextVisibleState: "document" | "empty";
+}
+
 interface FilingFactsCache {
   byBytes: WeakMap<Uint8Array, Map<string, Promise<DocumentFacts>>>;
 }
@@ -552,6 +561,10 @@ interface DocumentIdentityGuard {
 
 export function App() {
   const engineBridge = useEngineBridge();
+  const [textEditPdfAPrompt, setTextEditPdfAPrompt] = useState<{
+    resolve: (confirmed: boolean) => void;
+  } | null>(null);
+  const [tabClosePrompt, setTabClosePrompt] = useState<TabClosePromptState | null>(null);
   const [signatureUnlockPrompt, setSignatureUnlockPrompt] = useState<
     (SignatureUnlockPrompt & { resolve: (confirmed: boolean) => void }) | null
   >(null);
@@ -785,18 +798,30 @@ export function App() {
     return confirmed ? notice : null;
   }, [confirmSignatureInvalidation, document.bytes, document.fileName, document.filePath]);
   const confirmTextEditPdfAIdentificationRemoval = useCallback(
-    () => confirmWithUser(
-      "Editing will drop this file's PDF/A (archival) format — you can convert it back afterward.",
-    ),
+    () => new Promise<boolean>((resolve) => {
+      setTextEditPdfAPrompt((current) => {
+        current?.resolve(false);
+        return { resolve };
+      });
+    }),
     [],
   );
+  const answerTextEditPdfAPrompt = useCallback((confirmed: boolean) => {
+    setTextEditPdfAPrompt((current) => {
+      current?.resolve(confirmed);
+      return null;
+    });
+  }, []);
   const textEditSource = useMemo(
     () => ({
       bytes: document.bytes,
       proxy: pdfDocument,
+      rangeGrant: document.source?.kind === "rangeGrant" ? document.source.grant : null,
+      rangeFile: document.source?.kind === "rangeFile",
     }),
-    [document.bytes, pdfDocument],
+    [document.bytes, document.source, pdfDocument],
   );
+  const textEditPathOutputRef = useRef<null | ((output: PathOpOutput, expected: { expectedOpenToken: number; expectedGeneration: number }) => Promise<ReplaceBytesResult>)>(null);
   const textEdit = useTextEdit({
     source: textEditSource,
     documentGeneration: document.generation,
@@ -805,6 +830,9 @@ export function App() {
     textLayerCoverage: document.textLayerCoverage,
     engineBridge,
     replaceBytes,
+    replacePathOutput: async (output, expected) => textEditPathOutputRef.current
+      ? textEditPathOutputRef.current(output, expected)
+      : "failed",
     fileName: document.fileName,
     confirmSignatureInvalidation: confirmTextEditSignatureInvalidation,
     confirmPdfAIdentificationRemoval: confirmTextEditPdfAIdentificationRemoval,
@@ -1176,7 +1204,7 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
-  // Whether Microsoft Word was detected on this PC. Used to proactively gate the
+  // Whether Microsoft Word was detected on this computer. Used to proactively gate the
   // Word-only menu items (PDF -> editable Word export) so they gray out with a
   // reason when Word isn't installed, instead of only failing after a click.
   // Defaults `true` so nothing grays before the probe (or on non-desktop / probe
@@ -2158,6 +2186,14 @@ export function App() {
       resetLegalState,
     ],
   );
+
+  textEditPathOutputRef.current = async (output, expected) => {
+    const result = await openPathOpOutput(output, {
+      openToken: expected.expectedOpenToken,
+      generation: expected.expectedGeneration,
+    });
+    return result.status === "opened" ? "replaced" : "failed";
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -3889,12 +3925,8 @@ export function App() {
       });
       if (needsConfirm) {
         const fileName = tab.document.fileName ?? "this document";
-        const confirmed = await confirmWithUser(
-          `Close ${fileName} and discard unsaved changes?`,
-        );
-        if (!confirmed) {
-          return;
-        }
+        setTabClosePrompt({ tabId, fileName, closesVisibleDocument, nextVisibleState });
+        return;
       }
 
       const closed = await closeDocumentTab(tabId);
@@ -3989,7 +4021,7 @@ export function App() {
       onWordUnavailable: (message) => {
         setProgress({
           running: false,
-          message: message || `Word integration not available. Word documents were not added to the ${noun}.`,
+          message: message || `Microsoft Word isn't available. Word documents were not added to the ${noun}.`,
           result: null,
         });
       },
@@ -3997,11 +4029,12 @@ export function App() {
         if (errors.length === 0) {
           return;
         }
+        const wordGuidance = wordDocxAddErrorMessage(errors);
         setProgress({
           running: false,
-          message: errors.length === 1 && errors[0]
+          message: wordGuidance ?? (errors.length === 1 && errors[0]
             ? `"${errors[0].name}" could not be converted from Word.`
-            : `${errors.length} Word documents could not be converted.`,
+            : `${errors.length} Word documents could not be converted.`),
           result: null,
         });
       },
@@ -4650,6 +4683,39 @@ export function App() {
   const saveAs = useCallback(() => {
     void saveToFile(true);
   }, [saveToFile]);
+
+  const answerTabClosePrompt = useCallback(async (action: "save" | "discard" | "cancel") => {
+    const prompt = tabClosePrompt;
+    if (!prompt) {
+      return;
+    }
+    if (action === "cancel") {
+      setTabClosePrompt(null);
+      return;
+    }
+    if (action === "save") {
+      // A background tab cannot be safely saved through the active document
+      // state. Its prompt offers Discard/Cancel; selecting it first exposes
+      // the full Save/Discard/Cancel decision.
+      if (!prompt.closesVisibleDocument) {
+        return;
+      }
+      const saved = await saveToFile(false);
+      if (!saved) {
+        return;
+      }
+    }
+
+    setTabClosePrompt(null);
+    const tab = documentTabs.find((candidate) => candidate.id === prompt.tabId);
+    const closed = await closeDocumentTab(prompt.tabId);
+    if (closed && tab) {
+      tabEditingSnapshotsRef.current.delete(tab.document.generation);
+    }
+    if (closed && prompt.closesVisibleDocument) {
+      resetVisibleDocumentAppState(prompt.nextVisibleState);
+    }
+  }, [closeDocumentTab, documentTabs, resetVisibleDocumentAppState, saveToFile, tabClosePrompt]);
 
   const moveActiveTabToNewWindow = useCallback(
     async (tabId: string, fileGrant: FileGrant, dirty: boolean) => {
@@ -8435,17 +8501,15 @@ export function App() {
   }, [document.source, editing.pendingEdits.length, wordAvailable]);
 
   /**
-   * The window-close dirty aggregate: the close guard below reads it from a
-   * ref (its listener registers once), and the shell mirrors it via
-   * `set_unsaved_state` so the native quit path (macOS Cmd+Q / Quit
-   * RaioPDF) can confirm before exiting. The snapshot count comes from a
+   * The window-close dirty aggregate is mirrored to the native shell via
+   * `set_unsaved_state`, so close and quit can confirm without waiting on a
+   * potentially unhealthy webview. The snapshot count comes from a
    * ref, but the dependency list still covers it: every mutation of
    * `tabEditingSnapshotsRef` (stash on switch-away, restore on switch-back,
    * delete on tab close) happens inside a flow that also changes
    * `documentTabs`, `editing.hasUnsavedEdits`, or the pending-redaction
    * count, so no snapshot transition can be missed.
    */
-  const unsavedWorkPresentRef = useRef(false);
   const lastReportedUnsavedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const unsaved = hasUnsavedWork({
@@ -8459,8 +8523,6 @@ export function App() {
       activeTabPendingRedactionCount: pendingRedactions.length,
       stashedBackgroundTabCount: tabEditingSnapshotsRef.current.size,
     });
-    unsavedWorkPresentRef.current = unsaved;
-
     if (!isTauriRuntime() || lastReportedUnsavedRef.current === unsaved) {
       return;
     }
@@ -8470,71 +8532,6 @@ export function App() {
       .then(({ invoke }) => invoke("set_unsaved_state", { unsaved }))
       .catch(() => undefined);
   }, [documentTabs, editing.hasUnsavedEdits, pendingRedactions.length]);
-
-  useEffect(() => {
-    // Windows only (the tri-state platform maps every non-mac Tauri runtime
-    // here, so this also covers a Linux dev shell; "web" has no Tauri
-    // window). On macOS the shell hides the window on close and the guard
-    // lives on the quit path instead — and merely REGISTERING a JS
-    // close-requested listener would take over close handling from the
-    // shell's hide-on-close hook and destroy the window.
-    if (runtimePlatform() !== "windows") {
-      return;
-    }
-
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    let confirmInFlight = false;
-
-    void import("@tauri-apps/api/window")
-      .then(async ({ getCurrentWindow }) => {
-        if (disposed) {
-          return;
-        }
-
-        const currentWindow = getCurrentWindow();
-        // Covers every window-close path: the title-bar close button and
-        // MenuBar Exit (both call `window.close()`, which fires a
-        // close-requested event exactly like a user-initiated close),
-        // Alt+F4, and the taskbar close.
-        const nextUnlisten = await currentWindow.onCloseRequested(async (event) => {
-          if (!unsavedWorkPresentRef.current) {
-            return;
-          }
-
-          // preventDefault-first: if the confirm dialog hangs or fails, the
-          // window stays open instead of closing over unsaved work.
-          event.preventDefault();
-          if (confirmInFlight) {
-            return;
-          }
-
-          confirmInFlight = true;
-          try {
-            if (!(await confirmWithUser(WINDOW_CLOSE_CONFIRM_MESSAGE))) {
-              return;
-            }
-          } finally {
-            confirmInFlight = false;
-          }
-
-          // The user chose to discard: destroy() behaves like close() but
-          // skips the close-requested event, so the guard cannot re-prompt.
-          await currentWindow.destroy().catch(() => undefined);
-        });
-        if (disposed) {
-          nextUnlisten();
-        } else {
-          unlisten = nextUnlisten;
-        }
-      })
-      .catch(() => undefined);
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
 
   const redactionPanel: RedactionPanelState = {
     phase: redactionPhase,
@@ -8647,21 +8644,6 @@ export function App() {
       };
     }
 
-    if (textEdit.phase === "staging" || textEdit.phase === "applying") {
-      return {
-        label: "Edit Text",
-        loader: {
-          phaseLabel: textEdit.phase === "staging" ? "Staging replacement" : "Applying replacement",
-          message: textEdit.phase === "staging"
-            ? "Preparing a preview of your changes."
-            : "Opening the edited PDF as a Save As copy.",
-          detail: textEdit.phase === "staging"
-            ? "Image-heavy documents can take a few minutes."
-            : "Save will prompt for a destination.",
-        },
-      };
-    }
-
     return null;
   }, [
     binderProgress,
@@ -8673,7 +8655,6 @@ export function App() {
     ocrState.phase,
     ocrState.progress,
     pathOpCancelState,
-    textEdit.phase,
   ]);
   const longProcessLockoutLabel = activeLongProcess
     ? `Paused while ${activeLongProcess.label} runs`
@@ -8778,6 +8759,34 @@ export function App() {
   const overlay = getFloatingDialog();
 
   function getFloatingDialog() {
+    if (tabClosePrompt) {
+      return (
+        <FloatingDialog
+          title="Unsaved changes"
+          eyebrow="Close document"
+          width="sm"
+          onClose={() => void answerTabClosePrompt("cancel")}
+        >
+          <p className="tool-panel__description">
+            {tabClosePrompt.fileName} has unsaved changes. Save them before closing?
+          </p>
+          <div className="tool-panel__actions">
+            {tabClosePrompt.closesVisibleDocument ? (
+              <button type="button" className="tool-panel__primary-button" onClick={() => void answerTabClosePrompt("save")}>
+                Save and close
+              </button>
+            ) : null}
+            <button type="button" className="tool-panel__danger-button" onClick={() => void answerTabClosePrompt("discard")}>
+              Discard and close
+            </button>
+            <button type="button" className="tool-panel__secondary-button" onClick={() => void answerTabClosePrompt("cancel")}>
+              Cancel
+            </button>
+          </div>
+        </FloatingDialog>
+      );
+    }
+
     if (activeTextEdit) {
       return <EditTextReviewDialog textEdit={textEdit} />;
     }
@@ -9284,6 +9293,40 @@ export function App() {
         onCancel={() => answerSignatureUnlockPrompt(false)}
         onContinue={() => answerSignatureUnlockPrompt(true)}
       />
+      {textEditPdfAPrompt ? (
+        <FloatingDialog
+          title="Edit a PDF/A working copy?"
+          eyebrow="Edit Text"
+          width="sm"
+          onClose={() => answerTextEditPdfAPrompt(false)}
+        >
+          <div className="tool-panel__inline-card">
+            <p className="tool-panel__card-copy">
+              This file is marked PDF/A, an archival format designed not to change. RaioPDF can
+              make an editable working copy while leaving the original file untouched.
+            </p>
+            <p className="tool-panel__note">
+              The working copy will be a standard PDF. You can export it as PDF/A again after editing.
+            </p>
+            <div className="tool-panel__button-row">
+              <button
+                type="button"
+                className="tool-panel__primary-button"
+                onClick={() => answerTextEditPdfAPrompt(true)}
+              >
+                Edit working copy
+              </button>
+              <button
+                type="button"
+                className="tool-panel__secondary-button"
+                onClick={() => answerTextEditPdfAPrompt(false)}
+              >
+                Keep PDF/A
+              </button>
+            </div>
+          </div>
+        </FloatingDialog>
+      ) : null}
       {textEditAnnotationPrompt ? (
         <FloatingDialog
           title="Pending annotations"

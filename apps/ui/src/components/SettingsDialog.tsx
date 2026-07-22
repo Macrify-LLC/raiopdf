@@ -7,7 +7,11 @@ import { OpenRaioToAiSection } from "./OpenRaioToAiSection";
 import { Switch } from "./Switch";
 import { useSectionFocus } from "../hooks/useSectionFocus";
 import type { AppUpdateStatus } from "../lib/appUpdates";
-import { getWordCapability, type WordCapability } from "../lib/wordCapability";
+import {
+  getWordCapability,
+  wordUnavailableMessage,
+  type WordCapability,
+} from "../lib/wordCapability";
 import "./SettingsDialog.css";
 
 export type SettingsFocusSection = "open-raio-to-ai" | "about-macrify" | "experimental-features";
@@ -412,15 +416,13 @@ function formatWordCapabilityLabel(capability: WordCapability): string {
 function formatWordCapabilityDetail(capability: WordCapability): string {
   switch (capability.state) {
     case "available":
-      return "Microsoft Word started successfully.";
+      return "Microsoft Word was found. RaioPDF checks permissions when you start a conversion.";
     case "detected":
       return "Microsoft Word is registered. Test to confirm it can start.";
     case "unavailable":
-      return capability.reason ?? "Microsoft Word is registered but could not start.";
     case "notDetected":
-      return "Microsoft Word was not found.";
     case "notApplicable":
-      return "Word integration is only available on Windows.";
+      return wordUnavailableMessage(capability);
   }
 }
 

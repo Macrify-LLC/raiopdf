@@ -5,7 +5,6 @@ import {
 } from "../lib/textEdit";
 import { HelpIcon } from "../icons";
 import { IconButton } from "./IconButton";
-import { InlineMessage } from "./ToolPanel";
 
 export function EditTextStatusPanel({
   textEdit,
@@ -14,10 +13,7 @@ export function EditTextStatusPanel({
   textEdit: TextEditState;
   onHelp: () => void;
 }) {
-  const hasSelectedOperation = textEdit.pendingOps.some((operation) => operation.target);
-  if (textEdit.gate.blocked && textEdit.gate.message) {
-    return <InlineMessage tone="neutral" message={textEdit.gate.message} />;
-  }
+  const activeGate = textEdit.isSelectedReplacementMode ? textEdit.selectedGate : textEdit.gate;
 
   return (
     <div className="tool-panel__inline-card">
@@ -35,7 +31,7 @@ export function EditTextStatusPanel({
       {textEdit.positionalSpaceRisk ? (
         <p className="tool-panel__field-error" role="status">{TEXT_EDIT_MULTI_WORD_CAUTION}</p>
       ) : null}
-      {textEdit.gate.notes.map((note) => (
+      {activeGate.notes.map((note) => (
         <p key={note} className="tool-panel__note">{note}</p>
       ))}
       {textEdit.pendingOps.length > 0 ? (
@@ -68,28 +64,10 @@ export function EditTextStatusPanel({
             ))}
           </div>
         </>
-      ) : (
+      ) : !textEdit.isSelectedReplacementMode ? (
         <p className="tool-panel__note">Use the canvas bar to queue selected or bulk replacements.</p>
-      )}
-      {textEdit.message ? (
-        <p
-          className={textEdit.phase === "error" ? "tool-panel__field-error" : "tool-panel__status-line"}
-          role="status"
-        >
-          {textEdit.message}
-        </p>
       ) : null}
       <div className="tool-panel__button-row">
-        <button
-          type="button"
-          className="tool-panel__primary-button"
-          disabled={textEdit.pendingOps.length === 0 || hasSelectedOperation || textEdit.phase === "staging" || textEdit.phase === "applying" || textEdit.phase === "review"}
-          onClick={() => {
-            void textEdit.review();
-          }}
-        >
-          Review
-        </button>
         <button
           type="button"
           className="tool-panel__secondary-button"

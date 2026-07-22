@@ -16,7 +16,7 @@
     "build:mcp-runtime:windows-x64": "pnpm --filter @raiopdf/mcp build && node installer/build-mcp-runtime.mjs --platform windows-x64",
     "build:mcp-runtime:macos-arm64": "pnpm --filter @raiopdf/mcp build && node installer/build-mcp-runtime.mjs --platform macos-arm64",
     "build:external-bins": "cargo build --release -p raiopdf-engine-host -p raiopdf-mcp-launcher && node installer/prepare-external-bins.mjs",
-    "test:platforms": "node --test installer/platforms.test.mjs installer/payload-manifest.test.mjs installer/tauri-platform-config.test.mjs scripts/generate-legal-notices.test.mjs scripts/assert-e2e-webdriver-not-in-release.test.mjs",
+    "test:platforms": "node --test installer/platforms.test.mjs installer/payload-manifest.test.mjs installer/tauri-platform-config.test.mjs scripts/sign-macos-app-binaries.test.mjs scripts/macos-word-automation-harness.test.mjs scripts/generate-legal-notices.test.mjs scripts/assert-e2e-webdriver-not-in-release.test.mjs",
     "assert:no-e2e-in-release": "node scripts/assert-e2e-webdriver-not-in-release.mjs",
     "prepare:shell-bundle": "pnpm prepare:shell-bundle:windows-x64",
     "prepare:shell-bundle:windows-x64": "pnpm --filter @raiopdf/mcp build && node installer/run-payload-assembler.mjs --platform windows-x64 && pnpm build:external-bins",

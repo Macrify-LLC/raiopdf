@@ -32,6 +32,10 @@ use std::os::windows::process::CommandExt;
 
 pub const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+/// The bundled engine is a helper, not the whole desktop application. Keep a
+/// malformed or image-heavy PDF from expanding until Windows starts paging or
+/// kills the WebView that owns the request.
+pub const ENGINE_MAX_HEAP_MB: u32 = 2048;
 /// Ceiling for the post-start probe that confirms the auth proxy actually serves a
 /// request before the engine is reported ready. Reached only if the proxy never
 /// answers; the probe normally succeeds within a poll interval or two.
@@ -984,6 +988,8 @@ pub fn engine_spawn_spec(config: &SidecarConfig, port: u16) -> std::io::Result<E
     Ok(EngineSpawnSpec {
         program: config.java_path.clone(),
         args: vec![
+            OsString::from("-Xms128m"),
+            OsString::from(format!("-Xmx{ENGINE_MAX_HEAP_MB}m")),
             OsString::from("-jar"),
             jar_path.as_os_str().to_os_string(),
             OsString::from("--server.address=127.0.0.1"),
@@ -4123,6 +4129,8 @@ mod tests {
         assert_eq!(
             spec.args,
             vec![
+                OsString::from("-Xms128m"),
+                OsString::from(format!("-Xmx{ENGINE_MAX_HEAP_MB}m")),
                 OsString::from("-jar"),
                 payload
                     .join("engine")

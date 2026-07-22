@@ -13,6 +13,8 @@ export interface PendingTextReplacement {
   wholeWord: boolean;
   pageIndexes: readonly number[] | "all";
   target?: PdfSelectedTextTarget;
+  /** Target in the one-page editor PDF; `target` remains in original-page coordinates for UI/review. */
+  engineTarget?: PdfSelectedTextTarget;
   selectedArea?: PdfRedactionArea;
 }
 
@@ -72,6 +74,10 @@ export const TEXT_EDIT_SELECTED_ZERO_CHANGE_MESSAGE =
   "The selected text was not replaced — the document was not modified.";
 export const TEXT_EDIT_STREAMED_GATE_MESSAGE =
   "This document is too large for in-app text editing. Save a smaller copy or split the file first.";
+export const TEXT_EDIT_RESOURCE_GATE_MESSAGE =
+  "This document is too large for safe text editing in this alpha build. Extract the page you need or split the PDF first, edit the smaller file, then insert the page back.";
+export const TEXT_EDIT_MAX_SAFE_PAGES = 250;
+export const TEXT_EDIT_MAX_SAFE_BYTES = 64 * 1024 * 1024;
 export const TEXT_EDIT_SCANNED_GATE_MESSAGE =
   "Text editing isn't available for scanned documents.";
 export const TEXT_EDIT_IMAGE_PAGE_NOTE =
@@ -161,12 +167,16 @@ export function deriveTextEditGate({
   textLayerCoverage,
   engineAvailable,
   permissionProtected = false,
+  pageCount = 0,
+  fileSizeBytes = 0,
 }: {
   hasDocument: boolean;
   streamed: boolean;
   textLayerCoverage: TextLayerCoverage | null;
   engineAvailable: boolean;
   permissionProtected?: boolean;
+  pageCount?: number;
+  fileSizeBytes?: number;
 }): TextEditGate {
   if (!hasDocument) {
     return { blocked: true, message: "Open a PDF before editing document text.", notes: [] };
@@ -178,6 +188,13 @@ export function deriveTextEditGate({
 
   if (streamed) {
     return { blocked: true, message: TEXT_EDIT_STREAMED_GATE_MESSAGE, notes: [] };
+  }
+
+  // The current text engine rebuilds the complete PDF even for one selected
+  // word. Keep known-dangerous inputs out of that lane until editing becomes
+  // page-local; this is a safety boundary, not an estimate of editability.
+  if (pageCount > TEXT_EDIT_MAX_SAFE_PAGES || fileSizeBytes > TEXT_EDIT_MAX_SAFE_BYTES) {
+    return { blocked: true, message: TEXT_EDIT_RESOURCE_GATE_MESSAGE, notes: [] };
   }
 
   if (permissionProtected) {
@@ -233,7 +250,12 @@ export function buildTextEditReviewReport({
     candidatePages
       .filter((candidate) => {
         const original = originalPages.find((page) => page.pageIndex === candidate.pageIndex);
-        return original ? original.text !== candidate.text : candidate.text.trim().length > 0;
+        if (!original) {
+          return extractedTextModel(candidate).trim().length > 0;
+        }
+        return selectedOperation
+          ? extractedTextModel(original) !== extractedTextModel(candidate)
+          : original.text !== candidate.text;
       })
       .map((page) => page.pageIndex),
   );
@@ -406,7 +428,7 @@ function verifySelectedReplacement(
     excerpt: {
       pageIndex: target.pageIndex,
       before: originalText.slice(Math.max(0, target.start - 72), target.start),
-      selected: target.expectedText,
+      selected: target.expectedVisibleText,
       replacement: operation.replace,
       after: originalText.slice(target.end, target.end + 72),
     },

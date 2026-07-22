@@ -16,8 +16,21 @@ export function EditTextModeBar({
   const busy = textEdit.phase === "staging" || textEdit.phase === "applying" || textEdit.selectionResolving;
   const hasSelectedOperation = textEdit.pendingOps.some((operation) => operation.target);
   const canQueue = Boolean(textEdit.find.trim()) && !busy && !textEdit.gate.blocked && !hasSelectedOperation;
-  const canQueueSelection = !busy && !textEdit.gate.blocked && textEdit.pendingOps.length === 0;
+  const canReview = textEdit.pendingOps.length > 0 && !busy && textEdit.phase !== "review" && !hasSelectedOperation;
+  const canQueueSelection = !busy && !textEdit.selectedGate.blocked && textEdit.pendingOps.length === 0;
+  const feedback = textEdit.message ?? (
+    textEdit.isSelectedReplacementMode ? textEdit.selectedGate.message : textEdit.gate.message
+  );
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const feedbackElement = feedback ? (
+    <p
+      className="edit-text-mode-bar__feedback"
+      data-tone={textEdit.phase === "error" ? "error" : "status"}
+      role={textEdit.phase === "error" ? "alert" : "status"}
+    >
+      {feedback}
+    </p>
+  ) : null;
 
   // Focus the Replace-with field on every stored capture — keyed on the
   // monotonic prime count (not the text) so capturing identical text twice,
@@ -96,6 +109,7 @@ export function EditTextModeBar({
             Exit
           </button>
         </div>
+        {feedbackElement}
       </form>
     );
   }
@@ -176,13 +190,24 @@ export function EditTextModeBar({
         </button>
       </div>
       <div className="edit-text-mode-bar__actions">
-        <button type="submit" className="legal-mode-bar__danger-button" disabled={!canQueue}>
-          Replace all
+        <button type="submit" className="legal-mode-bar__button" disabled={!canQueue}>
+          Add replacement
+        </button>
+        <button
+          type="button"
+          className="legal-mode-bar__danger-button"
+          disabled={!canReview}
+          onClick={() => {
+            void textEdit.review();
+          }}
+        >
+          Review {textEdit.pendingOps.length > 0 ? `(${textEdit.pendingOps.length})` : ""}
         </button>
         <button type="button" className="legal-mode-bar__button" onClick={onExit}>
           Exit
         </button>
       </div>
+      {feedbackElement}
     </form>
   );
 }

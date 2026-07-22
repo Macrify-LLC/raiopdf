@@ -6,8 +6,9 @@
 //                     the payload manifest generated over the signed bytes
 //                     (RAIOPDF_MACOS_SIGN_PAYLOAD=1 hook in the assembler)
 //   2. build          version stamped, sidecars compiled, Tauri builds + signs
-//                     the .app (hardened runtime, entitlements overlay)
-//   3. verify-app     strict recursive codesign verification
+//                     the .app, then per-binary signing gives Apple Events
+//                     only to the main executable (not externalBin sidecars)
+//   3. verify-app     strict recursive codesign + entitlement-boundary check
 //   4. notarize-app   notarytool submit --wait, log fetched on failure
 //   5. staple-app     staple + validate + Gatekeeper assessment
 //   6. updater        .app.tar.gz built FROM THE STAPLED APP, Tauri-minisigned,
@@ -39,6 +40,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { canonicalArtifactNames, platformPath } from "../installer/platforms.mjs";
 import { verifyTauriUpdaterSignature } from "./minisign.mjs";
+import { makeBundledPythonTreeReplaceable } from "./sign-macos-app-binaries.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PLATFORM_ID = "macos-arm64";
@@ -209,18 +211,36 @@ const stepImplementations = {
   build(context) {
     run("node", ["scripts/stamp-shell-version.mjs", context.version]);
     run("pnpm", ["build:external-bins"]);
+    // A prior verified bundle deliberately has a read-only embedded Python
+    // directory tree. Restore owner write permission only on that generated
+    // tree so Tauri can replace the old bundle; the new bundle is hardened
+    // again before its final signature below.
+    makeBundledPythonTreeReplaceable(path.join(BUNDLE_MACOS_DIR, APP_NAME));
     run("pnpm", ["--filter", "@raiopdf/shell", "tauri", "build", "--config", SIGNING_CONFIG], {
       env: { APPLE_SIGNING_IDENTITY: context.identity },
     });
-    requireApp();
+    const app = requireApp();
+    // Tauri's entitlements setting is applied during its automatic signing.
+    // Re-sign each externalBin without entitlements before the outer app, then
+    // sign the bundle with app.entitlements so Automation belongs only to the
+    // UI host process that invokes Microsoft Word.
+    run("node", ["scripts/sign-macos-app-binaries.mjs", "--app", app], {
+      env: { RAIOPDF_MAC_SIGN_IDENTITY: context.identity },
+    });
   },
 
   "verify-app"() {
     const app = requireApp();
+    run("node", ["scripts/sign-macos-app-binaries.mjs", "--app", app, "--verify"]);
     run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
-    // Informational: show the outer app's entitlements so a review can confirm
-    // the main executable carries none of the payload-only exceptions.
-    run("codesign", ["--display", "--entitlements", "-", app]);
+    // Informational: show the main executable's entitlements. The verification
+    // script above also fails closed if they appear on either externalBin.
+    run("codesign", [
+      "--display",
+      "--entitlements",
+      ":-",
+      path.join(app, "Contents", "MacOS", "raiopdf-shell"),
+    ]);
   },
 
   "notarize-app"() {

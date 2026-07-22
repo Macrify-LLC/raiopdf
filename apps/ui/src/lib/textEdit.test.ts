@@ -4,6 +4,7 @@ import type { TextLayerCoverage } from "@raiopdf/rules";
 import {
   TEXT_EDIT_ADVISORY,
   TEXT_EDIT_IMAGE_PAGE_NOTE,
+  TEXT_EDIT_RESOURCE_GATE_MESSAGE,
   TEXT_EDIT_SCANNED_GATE_MESSAGE,
   TEXT_EDIT_STREAMED_GATE_MESSAGE,
   buildEngineParityPattern,
@@ -71,6 +72,26 @@ describe("textEdit", () => {
     expect(mixed.notes.join(" ")).toContain("garbled");
   });
 
+  it("blocks document-wide rewrites before oversized inputs reach the engine", () => {
+    expect(deriveTextEditGate({
+      hasDocument: true,
+      streamed: false,
+      textLayerCoverage: cleanCoverage(),
+      engineAvailable: true,
+      pageCount: 251,
+      fileSizeBytes: 1024,
+    })).toMatchObject({ blocked: true, message: TEXT_EDIT_RESOURCE_GATE_MESSAGE });
+
+    expect(deriveTextEditGate({
+      hasDocument: true,
+      streamed: false,
+      textLayerCoverage: cleanCoverage(),
+      engineAvailable: true,
+      pageCount: 1,
+      fileSizeBytes: 64 * 1024 * 1024 + 1,
+    })).toMatchObject({ blocked: true, message: TEXT_EDIT_RESOURCE_GATE_MESSAGE });
+  });
+
   it("builds per-operation review reporting from original and candidate text", () => {
     const report = buildTextEditReviewReport({
       operations: [
@@ -135,6 +156,7 @@ describe("textEdit", () => {
           target: {
             ...selectedTarget(start, start + 5),
             expectedText: "Smith",
+            expectedVisibleText: "Smith",
           },
         }),
       ],
@@ -217,6 +239,7 @@ describe("textEdit", () => {
           target: {
             ...selectedTarget(0, 10),
             expectedText: "John Smith",
+            expectedVisibleText: "John Smith",
             lastElementOffset: 10,
           },
         }),
@@ -393,6 +416,7 @@ function selectedTarget(start: number, end: number): PdfSelectedTextTarget {
     start,
     end,
     expectedText: "John",
+    expectedVisibleText: "John",
     sourceDocumentFingerprint: "document",
     sourceFingerprint: "page",
     firstElementIndex: 0,

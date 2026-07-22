@@ -44,6 +44,7 @@ export type PathOpErrorCode =
   | "SIGNED_DOCUMENT"
   | "PASSWORD_REQUIRED"
   | "PASSWORD_INVALID"
+  | "WORD_AUTOMATION_DENIED"
   | "PATH_OP_CANCELLED"
   // Native print pipeline (print.rs shares the PathOpError wire shape).
   | "PRINT_NOT_SUPPORTED"
@@ -173,6 +174,10 @@ export interface PathOpsDocumentFacts {
   encrypted: boolean;
   pdfaClaimed: boolean;
   signatureDetection: SignatureDetectionFacts;
+  hasAcroForm: boolean;
+  hasTaggedStructure: boolean;
+  hasEmbeddedFiles: boolean;
+  hasAnnotations: boolean;
   pages: PathOpsPageFacts[];
 }
 
@@ -500,6 +505,15 @@ export function pathOpInsertPages(
   atIndex: number,
 ): Promise<PathOpOutput> {
   return invokePathOp("path_op_insert_pages", { grant, insertGrant, atIndex });
+}
+
+/** Replace one zero-based page using a one-page edited grant, file-to-file. */
+export function pathOpReplacePage(
+  grant: PathOpsFileGrant,
+  replacementGrant: PathOpsFileGrant,
+  pageIndex: number,
+): Promise<PathOpOutput> {
+  return invokePathOp("path_op_replace_page", { grant, replacementGrant, pageIndex });
 }
 
 interface PathOpBuildBinderExhibitBase {

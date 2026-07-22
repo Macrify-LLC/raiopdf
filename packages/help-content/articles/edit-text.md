@@ -32,9 +32,10 @@ selectable text. It is **not** for scanned documents (see *What to know*).
 3. Type the text to **Find** and the text to **Replace** it with. Turn on
    **Whole word** if you only want to match the word on its own (so "art"
    doesn't also change "start").
-4. Click **Replace all**. This *queues* the change — nothing happens to the
-   document yet. Queue as many find/replace pairs as you need.
-5. Click **Review**. RaioPDF reads the document and shows you what it found:
+4. Click **Add replacement** in the canvas bar. This *queues* the change —
+   nothing happens to the document yet. Queue as many find/replace pairs as
+   you need.
+5. Click **Review** in the same canvas bar. RaioPDF reads the document and shows you what it found:
    which pages change, before-and-after previews, and any warnings.
 6. If it looks right, click **Apply**. If nothing matched, Apply stays off and
    RaioPDF tells you the document wasn't changed.
@@ -52,15 +53,18 @@ document:
    cursor in the **Replace with** box.
 3. Type the replacement and click **Review replacement**. RaioPDF immediately
    stages that exact occurrence and opens a focused review — there is no
-   sidebar step and no **Replace all** action in this flow.
+   sidebar step and no **Add replacement** action in this flow.
 4. Confirm the selected page and before-and-after text, then click **Apply**.
    Only the exact text you selected changes — other occurrences of the same
    words are left alone.
 
 Selection replacement works on **one page and one line at a time**. If the
 right-click option is grayed out, the page has no reliable text layer (a scan),
-another replacement is still queued or being prepared, or the document is too
-large for in-app editing.
+or another replacement is still queued or being prepared.
+
+While RaioPDF is reading the selection or building the review, it shows a
+progress dialog with a **Cancel** button. Cancel stops the local PDF engine and
+leaves the document unchanged.
 
 ## What to know
 
@@ -75,13 +79,23 @@ large for in-app editing.
   and the find is literal text, not a search pattern.
 - **Single distinctive words match best.** A multi-word phrase can be missed
   when the words are spaced apart on the page (common in justified text). If a
-  phrase doesn't take, search for one unusual word from it instead.
+  phrase doesn't take, search for one unusual word from it instead. If RaioPDF
+  says the words are separately positioned fragments, that means the text looks
+  continuous on screen but is stored as independent pieces in the PDF. Nothing
+  was changed.
+- **Selected edits stay page-local on large PDFs.** In the installed app,
+  RaioPDF extracts only the selected page, builds the review from that page,
+  and splices the edited page back into a fresh copy of the original. Bulk
+  find-and-replace still processes the whole document and remains limited on
+  very large files.
 - **Selection replacement is one page, one line.** A selection that spans pages
   or wraps across lines can't be replaced in one go — replace it line by line,
   or use find & replace. Right-to-left text isn't supported for selection
   replacement.
-- **The whole document is rewritten when you apply.** Even a one-word change
-  re-saves the entire file. Pages you didn't preview may shift very slightly.
+- **Selected and bulk edits use different paths.** A selected edit rebuilds only
+  that page; bulk find-and-replace rebuilds the whole document. RaioPDF refuses
+  the page-local path for forms, tagged PDFs, attachments, and annotations when
+  it cannot verify that those structures will survive unchanged.
 - **A substitute font may fill in.** If the document's font can't produce a
   character in your replacement, RaioPDF falls back to a built-in font, so a few
   characters can look a little different from the surrounding text.
@@ -91,9 +105,9 @@ large for in-app editing.
 - **It can invalidate a digital signature.** If the document is digitally
   signed, changing its text breaks that signature. RaioPDF warns you and only
   proceeds if you confirm.
-- **It removes a PDF/A marking.** If the file is marked as PDF/A (an archival
-  format), editing the text removes that marking. You can convert it to PDF/A
-  again afterward.
+- **PDF/A gets a working-copy choice.** PDF/A is an archival format designed not
+  to change. RaioPDF asks before making a standard-PDF working copy, keeps the
+  original file untouched, and lets you export the result as PDF/A again later.
 - **Your original is protected for you.** Applying changes only the document
   open in RaioPDF; the file on your disk isn't touched until you save, and even
   then RaioPDF steers you to a new file rather than over the original.

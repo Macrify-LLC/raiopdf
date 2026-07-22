@@ -62,7 +62,7 @@ export interface MenuBarProps {
    */
   canUndo: boolean;
   /**
-   * Whether Microsoft Word was detected on this PC. The Word-dependent items
+   * Whether Microsoft Word was detected on this computer. The Word-dependent items
    * (PDF -> editable Word export) drive an installed copy of Word, so they are
    * disabled when it is absent. Defaults `true` so non-desktop / not-yet-probed
    * callers don't gray them prematurely -- App passes the real probe result.
@@ -76,8 +76,8 @@ export interface MenuBarProps {
 
 export function MenuBar({ hasDocument, canUndo, wordAvailable = true, onCommand, onExit }: MenuBarProps) {
   const desktopRuntime = isTauriRuntime();
-  // "Export to editable Word" runs an installed copy of Microsoft Word (COM
-  // automation) -- it can't work without it. When Word is absent we disable the
+  // "Export to editable Word" runs an installed copy of Microsoft Word through
+  // desktop automation -- it can't work without it. When Word is absent we disable the
   // item and say why *in the label*, because disabled menu items don't surface
   // a hover tooltip. When Word is present it stays gated on an open document,
   // and carries an "experimental" note (Word's PDF reflow is approximate).

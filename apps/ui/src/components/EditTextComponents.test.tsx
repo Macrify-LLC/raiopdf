@@ -29,8 +29,9 @@ describe("EditText components", () => {
     container = null;
   });
 
-  it("queues bulk replacement from its mode bar and navigates with Enter/Shift+Enter", () => {
+  it("queues and reviews bulk replacements from its mode bar and navigates with Enter/Shift+Enter", () => {
     const queueReplaceAll = vi.fn();
+    const review = vi.fn(async () => undefined);
     const captureSelectedText = vi.fn();
     const goToNext = vi.fn();
     const goToPrevious = vi.fn();
@@ -39,6 +40,7 @@ describe("EditText components", () => {
         textEdit={state({
           find: "John",
           queueReplaceAll,
+          review,
           captureSelectedText,
           goToNext,
           goToPrevious,
@@ -59,7 +61,7 @@ describe("EditText components", () => {
     expect(goToPrevious).toHaveBeenCalled();
 
     act(() => {
-      getButton("Replace all").click();
+      getButton("Add replacement").click();
     });
     expect(queueReplaceAll).toHaveBeenCalled();
 
@@ -67,6 +69,17 @@ describe("EditText components", () => {
       getInput("Replace with").dispatchEvent(new Event("pointerdown", { bubbles: true }));
     });
     expect(captureSelectedText).toHaveBeenCalled();
+
+    render(
+      <EditTextModeBar
+        textEdit={state({ find: "John", pendingOps: [op()], review })}
+        onExit={() => undefined}
+      />,
+    );
+    act(() => {
+      getButton("Review (1)").click();
+    });
+    expect(review).toHaveBeenCalledTimes(1);
   });
 
   it("focuses the Replace-with field on every prime, including repeats of identical text", () => {
@@ -114,7 +127,7 @@ describe("EditText components", () => {
     expect(document.body.textContent).toContain("Selected text: the deadlines");
     expect(document.querySelector('input[aria-label="Find text"]')).toBeNull();
     expect(document.querySelector('input[aria-label="Replace selected text with"]')).toBeInstanceOf(HTMLInputElement);
-    expect(Array.from(document.querySelectorAll("button")).map((button) => button.textContent)).not.toContain("Replace all");
+    expect(Array.from(document.querySelectorAll("button")).map((button) => button.textContent)).not.toContain("Add replacement");
 
     act(() => {
       getButton("Review replacement").click();
@@ -122,13 +135,48 @@ describe("EditText components", () => {
     expect(reviewReplacement).toHaveBeenCalledTimes(1);
   });
 
-  it("renders gate, advisory, and positional-space caution in the status panel", () => {
+  it("keeps selected review enabled when only the whole-document gate is blocked", () => {
+    const reviewReplacement = vi.fn(async () => undefined);
+    const bulkOnlyMessage = "This document is too large for whole-document text editing.";
+    render(
+      <EditTextModeBar
+        textEdit={state({
+          gate: { blocked: true, message: bulkOnlyMessage, notes: [] },
+          selectedGate: { blocked: false, message: null, notes: [] },
+          isSelectedReplacementMode: true,
+          selectedReplacementText: "Looseleaf Supplement",
+          queueSelectedReplacement: reviewReplacement,
+        })}
+        onExit={() => undefined}
+      />,
+    );
+
+    expect(getButton("Review replacement").disabled).toBe(false);
+    expect(document.body.textContent).not.toContain(bulkOnlyMessage);
+    act(() => getButton("Review replacement").click());
+    expect(reviewReplacement).toHaveBeenCalledTimes(1);
+
     render(
       <EditTextStatusPanel
         textEdit={state({
-          gate: { blocked: true, message: TEXT_EDIT_STREAMED_GATE_MESSAGE, notes: [] },
+          gate: { blocked: true, message: bulkOnlyMessage, notes: [] },
+          selectedGate: { blocked: false, message: null, notes: [] },
+          isSelectedReplacementMode: true,
+          selectedReplacementText: "Looseleaf Supplement",
         })}
         onHelp={() => undefined}
+      />,
+    );
+    expect(document.body.textContent).not.toContain("Editing controls are disabled");
+  });
+
+  it("renders gate, advisory, and positional-space caution in the status panel", () => {
+    render(
+      <EditTextModeBar
+        textEdit={state({
+          gate: { blocked: true, message: TEXT_EDIT_STREAMED_GATE_MESSAGE, notes: [] },
+        })}
+        onExit={() => undefined}
       />,
     );
     expect(document.body.textContent).toContain(TEXT_EDIT_STREAMED_GATE_MESSAGE);
@@ -156,7 +204,7 @@ describe("EditText components", () => {
       />,
     );
 
-    expect(getButton("Replace all").disabled).toBe(true);
+    expect(getButton("Add replacement").disabled).toBe(true);
   });
 
   it("shows captured selection status separately from bulk queued replacements", () => {
@@ -172,6 +220,33 @@ describe("EditText components", () => {
 
     expect(document.body.textContent).toContain("Selected for replacement: John Smith");
     expect(document.body.textContent).toContain("1 queued replacement");
+  });
+
+  it("keeps review and edit feedback in the canvas bar instead of the sidebar", () => {
+    render(
+      <EditTextModeBar
+        textEdit={state({
+          find: "John",
+          pendingOps: [op()],
+          phase: "error",
+          message: "Nothing changed.",
+        })}
+        onExit={() => undefined}
+      />,
+    );
+
+    expect(getButton("Review (1)")).toBeDefined();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Nothing changed.");
+
+    render(
+      <EditTextStatusPanel
+        textEdit={state({ pendingOps: [op()], phase: "error", message: "Nothing changed." })}
+        onHelp={() => undefined}
+      />,
+    );
+
+    expect(Array.from(document.querySelectorAll("button")).map((button) => button.textContent)).not.toContain("Review");
+    expect(document.body.textContent).not.toContain("Nothing changed.");
   });
 
   it("renders whole-document disclosure and disables Apply for zero-change review", () => {
@@ -237,7 +312,9 @@ function state(overrides: Partial<TextEditState> = {}): TextEditState {
     matchLabel: "",
     pendingOps: [],
     phase: "idle",
+    activity: null,
     gate: { blocked: false, message: null, notes: [] },
+    selectedGate: { blocked: false, message: null, notes: [] },
     message: null,
     staged: null,
     positionalSpaceRisk: false,

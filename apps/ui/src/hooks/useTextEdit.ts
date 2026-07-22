@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PdfEngineError, type PdfReplaceTextWarning } from "@raiopdf/engine-api";
+import {
+  PdfEngineError,
+  type PdfInspectTextMapResult,
+  type PdfReplaceTextWarning,
+} from "@raiopdf/engine-api";
 import type { TextLayerCoverage } from "@raiopdf/rules";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { loadPdfDocument } from "../lib/pdfjs";
 import { extractPageText, type ExtractedPageText } from "../lib/pageTextCache";
+import { readPdfRange, type FileGrant } from "../lib/filePort";
+import { materializePdfBytesGrant } from "../lib/dropMaterialize";
+import { pathOpDocumentFacts, pathOpExtractPages, pathOpReleaseOutput, pathOpReplacePage, type PathOpOutput } from "../lib/pathOps";
 import type { ReplaceBytesResult } from "./useDocument";
 import type { EngineBridge } from "./useEngineBridge";
 import {
@@ -31,9 +38,27 @@ const SEARCH_DEBOUNCE_MS = 250;
 interface TextEditSource {
   bytes: Uint8Array | null;
   proxy: PDFDocumentProxy | null;
+  rangeGrant?: FileGrant | null;
+  rangeFile?: boolean;
 }
 
+interface SelectedPageLocalSource {
+  bytes: Uint8Array;
+  originalPageIndex: number;
+  /** Grant qpdf reads when splicing the edited page back into the source. */
+  sourceGrant: FileGrant;
+  /** The document-owned grant at capture time; null for a materialized byte source. */
+  boundRangeGrant: FileGrant | null;
+  /** True when this flow materialized an in-memory PDF and owns its temp grant. */
+  ownsSourceGrant: boolean;
+  openToken: number;
+  generation: number;
+}
+
+const SELECTED_PAGE_MAX_BYTES = 32 * 1024 * 1024;
+
 export type TextEditPhase = "idle" | "staging" | "review" | "applying" | "done" | "error";
+export type TextEditActivity = "resolving-selection" | "building-preview" | null;
 
 export interface TextEditStagedResult {
   bytes: Uint8Array;
@@ -45,6 +70,7 @@ export interface TextEditStagedResult {
   signatureInvalidationNotice: SignatureInvalidationNotice | null;
   sourceOpenToken: number;
   sourceGeneration: number;
+  pageLocal?: { sourceGrant: FileGrant; originalPageIndex: number };
 }
 
 export interface SelectedReplacementGateResult {
@@ -62,7 +88,11 @@ export interface TextEditState {
   matchLabel: string;
   pendingOps: readonly PendingTextReplacement[];
   phase: TextEditPhase;
+  activity: TextEditActivity;
   gate: TextEditGate;
+  /** Selection-scoped eligibility. Unlike `gate`, this deliberately ignores
+   * whole-document page/byte limits when the native page-local lane exists. */
+  selectedGate: TextEditGate;
   message: string | null;
   staged: TextEditStagedResult | null;
   positionalSpaceRisk: boolean;
@@ -133,7 +163,7 @@ export async function runTextEditEngineReplacement({
   if (selectedOperation?.target) {
     return {
       ...(await engineBridge.replaceSelectedText(sourceBytes, {
-        target: selectedOperation.target,
+        target: selectedOperation.engineTarget ?? selectedOperation.target,
         replacement: selectedOperation.replace,
         ...(allowSignatureInvalidation ? { allowSignatureInvalidation: true } : {}),
         ...(allowPdfAIdentificationRemoval ? { allowPdfAIdentificationRemoval: true } : {}),
@@ -161,6 +191,118 @@ export function unsafeSelectedTextPageIndexes(
   ]);
 }
 
+function applyEngineTextMap(
+  pages: readonly ExtractedPageText[],
+  textMap: PdfInspectTextMapResult,
+  pageLocalOriginalIndex?: number,
+): readonly ExtractedPageText[] {
+  const rawTextByPage = new Map(textMap.pages.map((page) => [
+    pageLocalOriginalIndex ?? page.pageIndex,
+    page.text,
+  ]));
+
+  return pages.map((page) => {
+    const rawText = rawTextByPage.get(page.pageIndex);
+    return rawText === undefined ? page : { ...page, flatText: rawText };
+  });
+}
+
+function applyFlatTextOverride(
+  pages: readonly ExtractedPageText[],
+  pageIndex: number,
+  flatText: string,
+): readonly ExtractedPageText[] {
+  return pages.map((page) => (
+    page.pageIndex === pageIndex ? { ...page, flatText } : page
+  ));
+}
+
+/**
+ * Confirms the regenerated text object at the anchored engine element. Some
+ * PDFs expand into a different set/order of text runs when the editor writes
+ * them, so whole-page serialization equality is not a stable proof. The
+ * affected element's source offsets, text, and page-space anchor prove that
+ * the selected visual object contains the replacement. Element indexes are
+ * only a fast path: the editor may insert or split unrelated runs.
+ */
+function verifiedSelectedCandidateText(
+  operation: PendingTextReplacement,
+  originalMap: PdfInspectTextMapResult,
+  candidateMap: PdfInspectTextMapResult,
+): string | null {
+  const target = operation.engineTarget ?? operation.target;
+  if (!target) {
+    return null;
+  }
+  const originalPage = originalMap.pages.find((page) => page.pageIndex === target.pageIndex) ??
+    (originalMap.pages.length === 1 ? originalMap.pages[0] : undefined);
+  const candidatePage = candidateMap.pages.find((page) => page.pageIndex === target.pageIndex) ??
+    (candidateMap.pages.length === 1 ? candidateMap.pages[0] : undefined);
+  if (!originalPage || !candidatePage ||
+    originalPage.text.slice(target.start, target.end) !== target.expectedText) {
+    return null;
+  }
+
+  const originalFirst = originalPage.elements[target.firstElementIndex];
+  const originalLast = originalPage.elements[target.lastElementIndex];
+  if (!originalFirst || !originalLast) {
+    return null;
+  }
+
+  if (target.firstElementIndex === target.lastElementIndex) {
+    const expectedElement = `${originalFirst.text.slice(0, target.firstElementOffset)}` +
+      `${operation.replace}${originalFirst.text.slice(target.lastElementOffset)}`;
+    const indexedCandidate = candidatePage.elements[target.firstElementIndex];
+    const matchingCandidates = candidatePage.elements.filter((element) =>
+      element.text === expectedElement && sameTextAnchor(originalFirst.area, element.area));
+    const candidateFirst = indexedCandidate?.text === expectedElement &&
+      sameTextAnchor(originalFirst.area, indexedCandidate.area)
+      ? indexedCandidate
+      : matchingCandidates.length === 1 ? matchingCandidates[0] : undefined;
+    if (!candidateFirst) {
+      return null;
+    }
+  } else {
+    const candidateFirst = candidatePage.elements[target.firstElementIndex];
+    const candidateLast = candidatePage.elements[target.lastElementIndex];
+    const expectedFirst = `${originalFirst.text.slice(0, target.firstElementOffset)}${operation.replace}`;
+    const expectedLast = originalLast.text.slice(target.lastElementOffset);
+    if (!candidateFirst || !candidateLast ||
+      candidateFirst.text !== expectedFirst || candidateLast.text !== expectedLast ||
+      !sameTextAnchor(originalFirst.area, candidateFirst.area) ||
+      !sameTextAnchor(originalLast.area, candidateLast.area)) {
+      return null;
+    }
+    for (let index = target.firstElementIndex + 1; index < target.lastElementIndex; index += 1) {
+      if (candidatePage.elements[index]?.text !== "") {
+        return null;
+      }
+    }
+  }
+
+  return `${originalPage.text.slice(0, target.start)}${operation.replace}${originalPage.text.slice(target.end)}`;
+}
+
+function sameTextAnchor(
+  original: { x: number; y: number; w: number; h: number },
+  candidate: { x: number; y: number; w: number; h: number },
+): boolean {
+  const xTolerance = Math.max(2, Math.min(original.w, candidate.w) * 0.2);
+  const yTolerance = Math.max(2, Math.min(original.h, candidate.h) * 0.5);
+  return Math.abs(original.x - candidate.x) <= xTolerance &&
+    Math.abs(original.y - candidate.y) <= yTolerance;
+}
+
+function releaseSelectedPageLocal(
+  ref: { current: SelectedPageLocalSource | null },
+): void {
+  const local = ref.current;
+  ref.current = null;
+  if (local?.ownsSourceGrant) {
+    void pathOpReleaseOutput(local.sourceGrant).catch(() => undefined);
+  }
+}
+
 export function selectedTextReviewGateMessage(
   operations: readonly PendingTextReplacement[],
   unsafePageIndexes: ReadonlySet<number>,
@@ -186,6 +328,7 @@ export function useTextEdit({
   textLayerCoverage,
   engineBridge,
   replaceBytes,
+  replacePathOutput,
   fileName,
   confirmSignatureInvalidation,
   confirmPdfAIdentificationRemoval,
@@ -198,7 +341,7 @@ export function useTextEdit({
   textLayerCoverage: TextLayerCoverage | null;
   engineBridge: Pick<
     EngineBridge,
-    "available" | "warmEngine" | "inspectTextMap" | "replaceSelectedText" | "replaceText"
+    "available" | "warmEngine" | "stopEngine" | "inspectTextMap" | "replaceSelectedText" | "replaceText"
   >;
   replaceBytes: (bytes: Uint8Array, options: {
     dirty: boolean;
@@ -209,6 +352,8 @@ export function useTextEdit({
     filePath: string | null;
     signatureInvalidationNotice?: SignatureInvalidationNotice | null;
   }) => Promise<ReplaceBytesResult>;
+  /** App-owned reopen funnel for a fresh shell output grant. */
+  replacePathOutput?: (output: PathOpOutput, options: { expectedOpenToken: number; expectedGeneration: number }) => Promise<ReplaceBytesResult>;
   fileName: string | null;
   confirmSignatureInvalidation: () => Promise<SignatureInvalidationNotice | null>;
   confirmPdfAIdentificationRemoval: () => Promise<boolean>;
@@ -223,6 +368,7 @@ export function useTextEdit({
   const [activeMatchIndex, setActiveMatchIndex] = useState<number | null>(null);
   const [pendingOps, setPendingOps] = useState<PendingTextReplacement[]>([]);
   const [phase, setPhase] = useState<TextEditPhase>("idle");
+  const [activity, setActivity] = useState<TextEditActivity>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [staged, setStaged] = useState<TextEditStagedResult | null>(null);
   const [selectionResolving, setSelectionResolving] = useState(false);
@@ -239,7 +385,9 @@ export function useTextEdit({
   const openTokenRef = useRef(sourceOpenToken);
   const pendingOpsRef = useRef<readonly PendingTextReplacement[]>([]);
   const selectionResolvingRef = useRef(false);
+  const engineWorkActiveRef = useRef(false);
   const selectedReplacementRef = useRef<CapturedTextSelection | null>(null);
+  const selectedPageLocalRef = useRef<SelectedPageLocalSource | null>(null);
   const [selectedReplacementText, setSelectedReplacementText] = useState<string | null>(null);
   const [isSelectedReplacementMode, setIsSelectedReplacementMode] = useState(false);
 
@@ -269,8 +417,24 @@ export function useTextEdit({
       streamed,
       textLayerCoverage,
       engineAvailable: engineBridge.available,
+      pageCount: source.proxy?.numPages ?? 0,
+      fileSizeBytes: source.bytes?.byteLength ?? 0,
     }),
-    [engineBridge.available, source.proxy, streamed, textLayerCoverage],
+    [engineBridge.available, source.bytes, source.proxy, streamed, textLayerCoverage],
+  );
+
+  // A selected rangeGrant edit is page-local. It is still subject to every
+  // document safety gate except the whole-document streamed/size/page limits.
+  const selectedGate = useMemo(
+    () => deriveTextEditGate({
+      hasDocument: Boolean(source.proxy),
+      streamed: Boolean(source.rangeFile),
+      textLayerCoverage,
+      engineAvailable: engineBridge.available,
+      pageCount: 0,
+      fileSizeBytes: 0,
+    }),
+    [engineBridge.available, source.proxy, source.rangeFile, textLayerCoverage],
   );
 
   const excludedPageIndexes = useMemo(
@@ -284,6 +448,10 @@ export function useTextEdit({
 
   const clear = useCallback(() => {
     runRef.current += 1;
+    if (engineWorkActiveRef.current) {
+      engineWorkActiveRef.current = false;
+      void engineBridge.stopEngine();
+    }
     reviewInFlightRef.current = false;
     setFindState("");
     setReplace("");
@@ -293,14 +461,16 @@ export function useTextEdit({
     pendingOpsRef.current = [];
     setPendingOps([]);
     setPhase("idle");
+    setActivity(null);
     setMessage(null);
     setStaged(null);
     setSelectionResolving(false);
     selectionResolvingRef.current = false;
     selectedReplacementRef.current = null;
+    releaseSelectedPageLocal(selectedPageLocalRef);
     setSelectedReplacementText(null);
     setIsSelectedReplacementMode(false);
-  }, []);
+  }, [engineBridge.stopEngine]);
 
   useEffect(() => {
     clear();
@@ -419,8 +589,8 @@ export function useTextEdit({
   // now". Click-time freshness comes from EditLayer's latest-value ref
   // dispatch: a stale open menu always calls the newest closure of this gate.
   const selectedReplacementGate = useCallback((pageIndex: number): SelectedReplacementGateResult => {
-    if (gate.blocked) {
-      return { blocked: true, reason: gate.message };
+    if (selectedGate.blocked) {
+      return { blocked: true, reason: selectedGate.message };
     }
     if (unsafeSelectedPageIndexes.has(pageIndex)) {
       return {
@@ -438,7 +608,7 @@ export function useTextEdit({
       return { blocked: true, reason: "Wait for the current review to finish before selecting new text." };
     }
     return { blocked: false, reason: null };
-  }, [gate.blocked, gate.message, phase, unsafeSelectedPageIndexes]);
+  }, [phase, selectedGate.blocked, selectedGate.message, unsafeSelectedPageIndexes]);
 
   const storeSelectedReplacement = useCallback((selection: CapturedTextSelection) => {
     selectedReplacementRef.current = selection;
@@ -480,9 +650,7 @@ export function useTextEdit({
 
   const queueSelectedReplacement = useCallback(async () => {
     const currentSource = sourceRef.current;
-    const sourceBytes = currentSource.bytes;
-
-    if (!sourceBytes || !currentSource.proxy) {
+    if (!currentSource.proxy) {
       setMessage("Open a PDF before editing document text.");
       return;
     }
@@ -496,6 +664,9 @@ export function useTextEdit({
       return;
     }
     const selectedText = queuedSelection.selection;
+    const sourceBytes = currentSource.bytes;
+    const currentRangeGrant = currentSource.rangeGrant;
+    const currentRangeFile = currentSource.rangeFile;
 
     // One gate for every entry point (context menu, mode-bar button, direct
     // call) — the eligibility rules and their copy live only there.
@@ -507,23 +678,107 @@ export function useTextEdit({
 
     const runId = runRef.current + 1;
     runRef.current = runId;
+    const localOpenToken = openTokenRef.current;
+    const localGeneration = generationRef.current;
+    engineWorkActiveRef.current = true;
     selectionResolvingRef.current = true;
     setSelectionResolving(true);
-    setMessage("Resolving selected text...");
-    setPhase("idle");
+    setMessage(null);
+    setPhase("staging");
+    setActivity("resolving-selection");
     setStaged(null);
 
+    let unownedMaterializedGrant: FileGrant | null = null;
     try {
-      const textMap = await engineBridge.inspectTextMap(sourceBytes, {
-        pageIndexes: [selectedText.pageIndex],
-      });
+      let editorBytes = sourceBytes;
+      let editorPageIndex = selectedText.pageIndex;
+      let editorSelection = selectedText;
+      let pageLocalSourceGrant = currentRangeGrant;
+      // Desktop selected edits always rewrite one extracted page, even for a
+      // small in-memory PDF. Besides keeping the work bounded, qpdf can then
+      // splice that page into the untouched source document instead of asking
+      // the text engine to regenerate every page.
+      if (!pageLocalSourceGrant && sourceBytes) {
+        const materialized = await materializePdfBytesGrant(
+          sourceBytes,
+          fileName ?? "selected-text-source.pdf",
+        );
+        if (materialized?.kind === "rangeGrant") {
+          pageLocalSourceGrant = materialized.grant;
+          unownedMaterializedGrant = materialized.grant;
+        } else if (gate.blocked) {
+          throw new PdfEngineError(
+            "UNSUPPORTED",
+            "RaioPDF could not prepare this large document for page-local text editing.",
+          );
+        }
+      }
+      if (pageLocalSourceGrant) {
+        const facts = await pathOpDocumentFacts(pageLocalSourceGrant);
+        const hasSignature = facts.signatureDetection.standardAcroFormSignatureCount > 0 ||
+          facts.signatureDetection.hasByteRangeOrContentsMarkers ||
+          facts.signatureDetection.hasCertificationDictionary;
+        const pageLocalUnsafe = facts.encrypted || facts.pdfaClaimed || hasSignature ||
+          facts.hasAcroForm || facts.hasTaggedStructure || facts.hasEmbeddedFiles || facts.hasAnnotations;
+        if (pageLocalUnsafe && unownedMaterializedGrant && !gate.blocked) {
+          // Small special-structure documents retain the existing full-copy
+          // confirmation/restoration path. Large/streamed documents cannot
+          // safely use that path and remain explicitly blocked.
+          await pathOpReleaseOutput(unownedMaterializedGrant).catch(() => undefined);
+          unownedMaterializedGrant = null;
+          pageLocalSourceGrant = null;
+        } else if (pageLocalUnsafe) {
+          throw new PdfEngineError(
+            "UNSUPPORTED",
+            facts.encrypted || facts.pdfaClaimed || hasSignature
+              ? "Selected-page editing is unavailable for encrypted, signed, or PDF/A documents."
+              : "Selected-page editing is unavailable for PDFs with forms, tags, attachments, or annotations because this version cannot safely preserve those structures.",
+          );
+        }
+      }
+      if (pageLocalSourceGrant) {
+        if (runRef.current !== runId || openTokenRef.current !== localOpenToken || generationRef.current !== localGeneration || sourceRef.current.rangeGrant !== currentRangeGrant) return;
+        const extracted = await pathOpExtractPages(pageLocalSourceGrant, [selectedText.pageIndex]);
+        try {
+          if (extracted.sizeBytes > SELECTED_PAGE_MAX_BYTES) {
+            throw new PdfEngineError("INVALID_DOCUMENT", "The selected page is too large for safe in-app text editing.");
+          }
+          editorBytes = await readPdfRange(extracted.outputGrant, 0, extracted.sizeBytes);
+        } finally {
+          await pathOpReleaseOutput(extracted.outputGrant).catch(() => undefined);
+        }
+        if (runRef.current !== runId || openTokenRef.current !== localOpenToken || generationRef.current !== localGeneration || sourceRef.current.rangeGrant !== currentRangeGrant) {
+          return;
+        }
+        editorPageIndex = 0;
+        editorSelection = { ...selectedText, pageIndex: 0 };
+        selectedPageLocalRef.current = {
+          bytes: editorBytes,
+          originalPageIndex: selectedText.pageIndex,
+          sourceGrant: pageLocalSourceGrant,
+          boundRangeGrant: currentRangeGrant ?? null,
+          ownsSourceGrant: pageLocalSourceGrant === unownedMaterializedGrant,
+          openToken: localOpenToken,
+          generation: localGeneration,
+        };
+        unownedMaterializedGrant = null;
+      }
+      if (!editorBytes) {
+        throw new PdfEngineError("UNSUPPORTED", currentRangeFile
+          ? "Selected-text editing needs the installed app's native file access for large PDFs."
+          : "Open a PDF before editing selected text.");
+      }
 
-      if (runRef.current !== runId) {
+      const textMap = await engineBridge.inspectTextMap(editorBytes, { pageIndexes: [editorPageIndex] });
+
+      if (runRef.current !== runId || openTokenRef.current !== localOpenToken || generationRef.current !== localGeneration) {
+        releaseSelectedPageLocal(selectedPageLocalRef);
         return;
       }
 
-      const resolved = resolveSelectedTextTarget(selectedText, textMap);
+      const resolved = resolveSelectedTextTarget(editorSelection, textMap);
       if (!resolved.ok) {
+        setPhase("error");
         setMessage(resolved.message);
         return;
       }
@@ -536,11 +791,12 @@ export function useTextEdit({
       opIdRef.current += 1;
       const operation: PendingTextReplacement = {
         id: `selected-text-edit-${opIdRef.current}`,
-        find: resolved.target.expectedText,
+        find: resolved.target.expectedVisibleText,
         replace,
         wholeWord: false,
-        pageIndexes: [resolved.target.pageIndex],
-        target: resolved.target,
+        pageIndexes: [selectedText.pageIndex],
+        target: { ...resolved.target, pageIndex: selectedText.pageIndex },
+        ...(editorPageIndex === 0 && selectedText.pageIndex !== 0 ? { engineTarget: resolved.target } : {}),
         selectedArea: resolved.area,
       };
 
@@ -552,23 +808,24 @@ export function useTextEdit({
       setMatches([{
         id: `${operation.id}-selected`,
         operationId: operation.id,
-        pageIndex: resolved.target.pageIndex,
+        pageIndex: selectedText.pageIndex,
         area: resolved.area,
-        excerpt: resolved.target.expectedText,
+        excerpt: resolved.target.expectedVisibleText,
       }]);
       setActiveMatchIndex(0);
-      setCurrentPage(resolved.target.pageIndex + 1);
+      setCurrentPage(selectedText.pageIndex + 1);
       window.getSelection()?.removeAllRanges();
       selectedReplacementRef.current = null;
-      setSelectedReplacementText(resolved.target.expectedText);
+      setSelectedReplacementText(resolved.target.expectedVisibleText);
       setMessage(null);
+      setActivity("building-preview");
       engineBridge.warmEngine();
       // Target resolution is complete before staging takes ownership of the
       // run id. Clear this synchronously; the queue callback's finally block
       // intentionally ignores superseded runs.
       selectionResolvingRef.current = false;
       setSelectionResolving(false);
-      // Selected text does not wait for the sidebar's generic Review action:
+      // Selected text goes directly from the canvas bar into review:
       // resolving the exact engine target and staging that target is one
       // transaction. This intentionally does not call review() after
       // setPendingOps(), where React's asynchronous state would be a race.
@@ -579,10 +836,17 @@ export function useTextEdit({
       }
 
       setMessage(textEditErrorMessage(error));
+      setPhase("error");
+      releaseSelectedPageLocal(selectedPageLocalRef);
     } finally {
+      if (unownedMaterializedGrant) {
+        void pathOpReleaseOutput(unownedMaterializedGrant).catch(() => undefined);
+      }
       if (runRef.current === runId) {
+        engineWorkActiveRef.current = false;
         selectionResolvingRef.current = false;
         setSelectionResolving(false);
+        setActivity((current) => (current === "resolving-selection" ? null : current));
       }
     }
   }, [engineBridge, replace, selectedReplacementGate, setCurrentPage]);
@@ -595,6 +859,7 @@ export function useTextEdit({
     setStaged(null);
     setPhase("idle");
     selectedReplacementRef.current = null;
+    if (removed?.target) releaseSelectedPageLocal(selectedPageLocalRef);
     setSelectedReplacementText(null);
     if (removed?.target) {
       setMatches([]);
@@ -626,22 +891,42 @@ export function useTextEdit({
 
   const stageOperations = useCallback(async (operations: readonly PendingTextReplacement[]) => {
     const currentSource = sourceRef.current;
-    const sourceBytes = currentSource.bytes;
+    const selectedPageLocal = operations.length === 1 && operations[0]?.target
+      ? selectedPageLocalRef.current
+      : null;
+    const sourceBytes = currentSource.bytes ?? selectedPageLocal?.bytes ?? null;
     const sourceProxy = currentSource.proxy;
     const reviewOpenToken = openTokenRef.current;
     const reviewGeneration = generationRef.current;
 
-    if (gate.blocked) {
+    if (selectedPageLocal && (
+      selectedPageLocal.openToken !== reviewOpenToken ||
+      selectedPageLocal.generation !== reviewGeneration ||
+      selectedPageLocal.boundRangeGrant !== (currentSource.rangeGrant ?? null)
+    )) {
+      releaseSelectedPageLocal(selectedPageLocalRef);
+      setPhase("error");
+      setMessage("The document changed before the selected page could be edited. Reselect the text.");
+      return;
+    }
+
+    if (!selectedPageLocal && gate.blocked) {
+      setPhase("error");
+      setActivity(null);
       setMessage(gate.message);
       return;
     }
 
-    if (!sourceBytes || !sourceProxy) {
+    if (!sourceBytes || (!sourceProxy && !selectedPageLocal)) {
+      setPhase("error");
+      setActivity(null);
       setMessage("Open a PDF before editing document text.");
       return;
     }
 
     if (operations.length === 0) {
+      setPhase("error");
+      setActivity(null);
       setMessage("Queue at least one replacement before review.");
       return;
     }
@@ -655,6 +940,8 @@ export function useTextEdit({
 
     const selectedGate = selectedTextReviewGateMessage(operations, unsafeSelectedPageIndexes);
     if (selectedGate) {
+      setPhase("error");
+      setActivity(null);
       setMessage(selectedGate);
       return;
     }
@@ -663,7 +950,9 @@ export function useTextEdit({
     runRef.current = runId;
     reviewRunRef.current = runId;
     reviewInFlightRef.current = true;
+    engineWorkActiveRef.current = true;
     setPhase("staging");
+    setActivity("building-preview");
     setMessage(null);
     setStaged(null);
 
@@ -687,46 +976,121 @@ export function useTextEdit({
             openTokenRef.current !== reviewOpenToken ||
             generationRef.current !== reviewGeneration
           ) {
+            releaseSelectedPageLocal(selectedPageLocalRef);
             return;
           }
 
-          const originalPages = await extractPageText({ bytes: sourceBytes, pdfDocument: sourceProxy });
-          const candidatePdf = await loadPdfDocument(result.bytes);
-          let candidatePages: readonly ExtractedPageText[] = [];
+          let localProxy: PDFDocumentProxy | null = null;
           try {
-            candidatePages = await extractPageText({ bytes: result.bytes, pdfDocument: candidatePdf });
-          } finally {
-            await candidatePdf.loadingTask.destroy();
-          }
+            localProxy = selectedPageLocal ? await loadPdfDocument(sourceBytes) : sourceProxy;
+            const originalPagesRaw = await extractPageText({ bytes: sourceBytes, pdfDocument: localProxy! });
+            const candidatePdf = await loadPdfDocument(result.bytes);
+            let candidatePages: readonly ExtractedPageText[] = [];
+            try {
+              candidatePages = await extractPageText({
+                bytes: result.bytes,
+                pdfDocument: candidatePdf,
+              });
+            } finally {
+              await candidatePdf.loadingTask.destroy();
+            }
+            let originalPages: readonly ExtractedPageText[] = selectedPageLocal
+              ? originalPagesRaw.map((page) => ({
+                  ...page,
+                  pageIndex: selectedPageLocal.originalPageIndex,
+                }))
+              : originalPagesRaw;
+            if (selectedPageLocal) {
+              candidatePages = candidatePages.map((page) => ({
+                ...page,
+                pageIndex: selectedPageLocal.originalPageIndex,
+              }));
+            }
 
-          if (
-            runRef.current !== runId ||
-            openTokenRef.current !== reviewOpenToken ||
-            generationRef.current !== reviewGeneration
-          ) {
+            const selectedOperation = operations.length === 1 && operations[0]?.target
+              ? operations[0]
+              : null;
+            if (selectedOperation) {
+              // pdf.js can expose a different run order/whitespace after the
+              // text-editor endpoint regenerates a perfectly valid PDF. That
+              // made real selected edits look unchanged even though Stirling's
+              // own text model contained the exact replacement. Verify selected
+              // edits in the same raw engine model that targeted and performed
+              // the mutation, while still comparing every page fail-closed.
+              const [originalTextMap, candidateTextMap] = await Promise.all([
+                engineBridge.inspectTextMap(sourceBytes),
+                engineBridge.inspectTextMap(result.bytes),
+              ]);
+              const originalPageIndex = selectedPageLocal?.originalPageIndex;
+              const verifiedCandidateText = verifiedSelectedCandidateText(
+                selectedOperation,
+                originalTextMap,
+                candidateTextMap,
+              );
+              originalPages = applyEngineTextMap(
+                originalPages,
+                originalTextMap,
+                originalPageIndex,
+              );
+              candidatePages = applyEngineTextMap(
+                candidatePages,
+                candidateTextMap,
+                originalPageIndex,
+              );
+              if (verifiedCandidateText !== null) {
+                // The selected mutation is proven against the regenerated
+                // engine element at its page-space anchor. Stirling may still
+                // reserialize every unrelated run in the PDF, so normalize the
+                // semantic review model to the original pages plus that one
+                // verified splice. The actual staged PDF remains unchanged and
+                // is what the canvas shows for visual review.
+                candidatePages = applyFlatTextOverride(
+                  originalPages,
+                  originalPageIndex ?? selectedOperation.target!.pageIndex,
+                  verifiedCandidateText,
+                );
+              }
+            }
+
+            if (
+              runRef.current !== runId ||
+              openTokenRef.current !== reviewOpenToken ||
+              generationRef.current !== reviewGeneration
+            ) {
+              return;
+            }
+
+            const report = buildTextEditReviewReport({
+              operations,
+              originalPages,
+              candidatePages,
+            });
+
+            setStaged({
+              bytes: result.bytes,
+              warnings: result.warnings,
+              replacedCounts: result.replacedCounts,
+              report,
+              originalPages,
+              candidatePages,
+              signatureInvalidationNotice,
+              sourceOpenToken: reviewOpenToken,
+              sourceGeneration: reviewGeneration,
+              ...(selectedPageLocal ? {
+                pageLocal: {
+                  sourceGrant: selectedPageLocal.sourceGrant,
+                  originalPageIndex: selectedPageLocal.originalPageIndex,
+                },
+              } : {}),
+            });
+            setPhase("review");
+            setMessage(formatReplaceTextResult(report));
             return;
+          } finally {
+            if (selectedPageLocal && localProxy) {
+              await localProxy.loadingTask.destroy();
+            }
           }
-
-          const report = buildTextEditReviewReport({
-            operations,
-            originalPages,
-            candidatePages,
-          });
-
-          setStaged({
-            bytes: result.bytes,
-            warnings: result.warnings,
-            replacedCounts: result.replacedCounts,
-            report,
-            originalPages,
-            candidatePages,
-            signatureInvalidationNotice,
-            sourceOpenToken: reviewOpenToken,
-            sourceGeneration: reviewGeneration,
-          });
-          setPhase("review");
-          setMessage(formatReplaceTextResult(report));
-          return;
         } catch (error) {
           if (
             error instanceof PdfEngineError &&
@@ -743,6 +1107,7 @@ export function useTextEdit({
             }
             if (!signatureInvalidationNotice) {
               setPhase("idle");
+              setActivity(null);
               setMessage("Text editing was cancelled; the signed document was not modified.");
               return;
             }
@@ -766,7 +1131,8 @@ export function useTextEdit({
             }
             if (!confirmed) {
               setPhase("idle");
-              setMessage("Text editing was cancelled; the PDF/A (archival format) document was not modified.");
+              setActivity(null);
+              setMessage("Nothing changed. The PDF/A archival copy remains intact.");
               return;
             }
             allowPdfAIdentificationRemoval = true;
@@ -792,6 +1158,8 @@ export function useTextEdit({
       // when no newer review() call has taken ownership of the phase.
       if (reviewRunRef.current === runId) {
         reviewInFlightRef.current = false;
+        engineWorkActiveRef.current = false;
+        setActivity(null);
         setPhase((current) => (current === "staging" ? "idle" : current));
       }
     }
@@ -829,19 +1197,50 @@ export function useTextEdit({
     setPhase("applying");
     let replaced: ReplaceBytesResult;
     try {
-      replaced = await replaceBytes(candidate.bytes, {
-        dirty: true,
-        hasTextLayer: null,
-        expectedOpenToken: candidate.sourceOpenToken,
-        expectedGeneration: candidate.sourceGeneration,
-        ...(fileName ? { fileName } : {}),
-        filePath: null,
-        signatureInvalidationNotice: candidate.signatureInvalidationNotice,
-      });
+      if (candidate.pageLocal) {
+        const local = selectedPageLocalRef.current;
+        if (!local || local.sourceGrant !== candidate.pageLocal.sourceGrant ||
+          local.openToken !== candidate.sourceOpenToken || local.generation !== candidate.sourceGeneration ||
+          openTokenRef.current !== candidate.sourceOpenToken || generationRef.current !== candidate.sourceGeneration) {
+          releaseSelectedPageLocal(selectedPageLocalRef);
+          throw new PdfEngineError("INVALID_DOCUMENT", "The document changed before the selected page could be applied.");
+        }
+        if (!replacePathOutput) {
+          throw new PdfEngineError("UNSUPPORTED", "Selected-page editing needs the installed RaioPDF app.");
+        }
+        const editedPage = await materializePdfBytesGrant(candidate.bytes, "edited-page.pdf");
+        if (!editedPage || editedPage.kind !== "rangeGrant") {
+          throw new PdfEngineError("UNSUPPORTED", "RaioPDF could not prepare the edited page for replacement.");
+        }
+        try {
+          const output = await pathOpReplacePage(
+            candidate.pageLocal.sourceGrant,
+            editedPage.grant,
+            candidate.pageLocal.originalPageIndex,
+          );
+          replaced = await replacePathOutput(output, {
+            expectedOpenToken: candidate.sourceOpenToken,
+            expectedGeneration: candidate.sourceGeneration,
+          });
+        } finally {
+          await pathOpReleaseOutput(editedPage.grant).catch(() => undefined);
+        }
+      } else {
+        replaced = await replaceBytes(candidate.bytes, {
+          dirty: true,
+          hasTextLayer: null,
+          expectedOpenToken: candidate.sourceOpenToken,
+          expectedGeneration: candidate.sourceGeneration,
+          ...(fileName ? { fileName } : {}),
+          filePath: null,
+          signatureInvalidationNotice: candidate.signatureInvalidationNotice,
+        });
+      }
     } catch (error) {
       // A rejection here would otherwise leave phase at "applying" forever.
       setPhase("error");
       setMessage(textEditErrorMessage(error));
+      releaseSelectedPageLocal(selectedPageLocalRef);
       return;
     }
 
@@ -862,20 +1261,26 @@ export function useTextEdit({
 
     setPendingOps([]);
     pendingOpsRef.current = [];
+    releaseSelectedPageLocal(selectedPageLocalRef);
     setStaged(null);
     setPhase("done");
     setIsSelectedReplacementMode(false);
     setSelectedReplacementText(null);
     setMessage(formatReplaceTextResult(candidate.report));
-  }, [fileName, replaceBytes, setCurrentPage, staged]);
+  }, [fileName, replaceBytes, replacePathOutput, setCurrentPage, staged]);
 
   const cancelReview = useCallback(() => {
     runRef.current += 1;
+    if (engineWorkActiveRef.current) {
+      engineWorkActiveRef.current = false;
+      void engineBridge.stopEngine();
+    }
     reviewInFlightRef.current = false;
     selectionResolvingRef.current = false;
     setSelectionResolving(false);
     setStaged(null);
     setPhase("idle");
+    setActivity(null);
     // Cancelling a selected review discards its resolved target and returns
     // to bulk Find/Replace. Reusing a browser selection after a cancelled
     // review is unsafe because focus/document state may already have moved;
@@ -884,13 +1289,14 @@ export function useTextEdit({
       pendingOpsRef.current = [];
       setPendingOps([]);
       selectedReplacementRef.current = null;
+      releaseSelectedPageLocal(selectedPageLocalRef);
       setSelectedReplacementText(null);
       setIsSelectedReplacementMode(false);
       setMatches([]);
       setActiveMatchIndex(null);
     }
     setMessage("Review cancelled. The document was not modified.");
-  }, []);
+  }, [engineBridge.stopEngine]);
 
   const matchLabel = useMemo(() => {
     if (!find.trim()) {
@@ -912,7 +1318,9 @@ export function useTextEdit({
     matchLabel,
     pendingOps,
     phase,
+    activity,
     gate,
+    selectedGate,
     message,
     staged,
     positionalSpaceRisk,

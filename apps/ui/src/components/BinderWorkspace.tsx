@@ -8,6 +8,7 @@ import {
   pickPdfsForAdd,
   readFileForAdd,
   tooLargeToAddMessage,
+  wordDocxAddErrorMessage,
   type DocxConversionProgressRow,
   type FileAddInput,
   type PickPdfsForAddOptions,
@@ -610,9 +611,12 @@ function docxAddOptions(
 ): PickPdfsForAddOptions {
   return {
     onDocxRowsChange: setRows,
-    onWordUnavailable: (message) => setStatus(message || "Word integration not available. Word documents were not added."),
+    onWordUnavailable: (message) => setStatus(message || "Microsoft Word isn't available. Word documents were not added."),
     onDocxErrors: (errors) => {
-      if (errors.length === 1 && errors[0]) {
+      const wordGuidance = wordDocxAddErrorMessage(errors);
+      if (wordGuidance) {
+        setStatus(wordGuidance);
+      } else if (errors.length === 1 && errors[0]) {
         setStatus(`"${errors[0].name}" could not be converted from Word.`);
       } else if (errors.length > 1) {
         setStatus(`${errors.length} Word documents could not be converted.`);

@@ -25,6 +25,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Never re-sign vendored third-party payload binaries (the bundled Ghostscript,
+# Tesseract, and OCR toolchain under bundle.resources). Tauri hands this command every
+# PE it bundles, including those resources, but re-signing them with our certificate
+# would (1) make the license notices' "unmodified upstream" claim false, and (2) break
+# the release gate that requires ocr/gs/bin/gs.exe to stay a byte-identical alias of
+# gswin64c.exe (independent signatures diverge the two). We only sign RaioPDF's own
+# artifacts — the app .exe, the Rust sidecars, and the installer — so decline anything
+# living under a payload/ directory and leave it exactly as upstream shipped it.
+if ($File -match '[\\/]payload[\\/]') {
+  Write-Host "Skipping (vendored payload binary, left as upstream — not re-signed): $File"
+  exit 0
+}
+
 $thumbprint = $env:RAIOPDF_SIGN_THUMBPRINT
 if ([string]::IsNullOrWhiteSpace($thumbprint)) {
   Write-Error @'

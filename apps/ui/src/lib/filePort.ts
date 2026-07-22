@@ -104,6 +104,7 @@ import {
   getLargeDocThresholdBytes,
   setLargeDocThresholdBytes,
 } from "./largeDocThreshold";
+import { getTauriInvoke } from "./tauriInvoke";
 
 export type FileRangeErrorCode =
   | "FILE_CHANGED"
@@ -179,7 +180,7 @@ export async function readPdfRange(
   offset: number,
   length: number,
 ): Promise<Uint8Array> {
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
 
   try {
     const bytes = await invoke<BinaryInvokeResponse>("read_pdf_range", {
@@ -204,7 +205,7 @@ export async function pickPdfsForAdd(): Promise<PickedPdfsForAdd | null> {
     throw new Error("pickPdfsForAdd is desktop-only; browser add flows use DOM file inputs.");
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   return invoke<PickedPdfsForAdd | null>("pick_pdfs_for_add");
 }
 
@@ -213,7 +214,7 @@ export async function pickPdfForWord(): Promise<PickedPdfForWord | null> {
     throw new Error("pickPdfForWord is desktop-only.");
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   const selected = await invoke<PickedPdfForWord | null>("pick_pdf_for_word");
   return selected
     ? {
@@ -229,7 +230,7 @@ export async function pickDocxForImport(): Promise<PickedDocxForImport | null> {
     throw new Error("pickDocxForImport is desktop-only.");
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   const selected = await invoke<PickedDocxForImport | null>("pick_docx_for_import");
   return selected
     ? {
@@ -249,7 +250,7 @@ export async function saveDocxGrant(
     throw new Error("saveDocxGrant is desktop-only.");
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   const saved = await invoke<TauriSavedDocx | null>("save_docx_dialog", {
     sourceGrant,
     suggestedName,
@@ -303,7 +304,7 @@ export async function saveStreamedCopy(
   excludedSourceGrants: readonly FileGrant[] = [],
 ): Promise<SavedFile | null> {
   if (source.kind === "rangeGrant") {
-    const { invoke } = await import("@tauri-apps/api/core");
+    const invoke = await getTauriInvoke();
     const saved = await invoke<TauriSavedPdf | null>("save_pdf_copy_dialog", {
       sourceGrant: source.grant,
       suggestedName,
@@ -331,7 +332,7 @@ export async function saveStreamedCopyIntoDirectory(
   directory: PickedDirectory,
 ): Promise<SavedFile> {
   if (source.kind === "rangeGrant") {
-    const { invoke } = await import("@tauri-apps/api/core");
+    const invoke = await getTauriInvoke();
     const saved = await invoke<TauriSavedPdf>("save_pdf_copy_into_dir", {
       sourceGrant: source.grant,
       directoryGrant: directory.grant,
@@ -399,7 +400,7 @@ function createBrowserFilePort(): FilePort {
 function createTauriFilePort(): FilePort {
   return {
     async openFile() {
-      const { invoke } = await import("@tauri-apps/api/core");
+      const invoke = await getTauriInvoke();
       const selected = await invoke<TauriOpenedPdf | null>("open_pdf_dialog");
 
       if (!selected) {
@@ -409,7 +410,7 @@ function createTauriFilePort(): FilePort {
       return openedPdfFromTauri(selected);
     },
     async pickDirectory() {
-      const { invoke } = await import("@tauri-apps/api/core");
+      const invoke = await getTauriInvoke();
       const selected = await invoke<TauriPickedDirectory | null>("pick_output_directory");
 
       return selected
@@ -420,7 +421,7 @@ function createTauriFilePort(): FilePort {
         : null;
     },
     async saveFile(bytes, suggestedName, currentPath, excludedSourceGrants = []) {
-      const { invoke } = await import("@tauri-apps/api/core");
+      const invoke = await getTauriInvoke();
 
       if (currentPath) {
         const saved = await invoke<TauriSavedPdf>("save_pdf_to_path", bytes, {
@@ -446,7 +447,7 @@ function createTauriFilePort(): FilePort {
       return saved ? savedFromTauri(saved) : null;
     },
     async saveFileIntoDirectory(bytes, suggestedName, directory) {
-      const { invoke } = await import("@tauri-apps/api/core");
+      const invoke = await getTauriInvoke();
       const saved = await invoke<TauriSavedPdf>("save_pdf_into_dir", bytes, {
         headers: {
           [HEADER_DIRECTORY_GRANT]: encodeURIComponent(directory.grant),
@@ -463,7 +464,7 @@ export async function takeStartupFile(): Promise<OpenedFileSource | null> {
     return null;
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   const selected = await invoke<TauriOpenedPdf | null>("take_startup_pdf");
   return selected ? openedPdfFromTauri(selected) : null;
 }
@@ -473,7 +474,7 @@ export async function openFileInNewWindow(): Promise<boolean> {
     return false;
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   return invoke<boolean>("open_pdf_in_new_window_dialog");
 }
 
@@ -482,7 +483,7 @@ export async function openGrantInNewWindow(fileGrant: FileGrant): Promise<void> 
     throw new Error("Open in New Window only works in the installed RaioPDF app.");
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   await invoke("open_in_new_window", { fileGrant });
 }
 
@@ -527,7 +528,7 @@ export async function openedPdfFromTauri(selected: TauriOpenedPdf): Promise<Open
     };
   }
 
-  const { invoke } = await import("@tauri-apps/api/core");
+  const invoke = await getTauriInvoke();
   const bytes = await invoke<BinaryInvokeResponse>(
     "read_opened_pdf_bytes",
     {

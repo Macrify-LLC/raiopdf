@@ -19,12 +19,24 @@ if (!root) {
 
 installLocalErrorLogging();
 
-createRoot(root).render(
-  <StrictMode>
-    <RpIconSprite />
-    <App />
-  </StrictMode>,
-);
+void mountApp();
+
+// e2e-webdriver builds (Vite `--mode e2e`) load the WebDriver test bridge so
+// @wdio/tauri-service can drive the app. `import.meta.env.MODE` is inlined at
+// build time, so this branch — and the `@wdio/tauri-plugin` import with it — is
+// stripped from every shipped build by dead-code elimination.
+async function mountApp(): Promise<void> {
+  if (import.meta.env.MODE === "e2e") {
+    await import("@wdio/tauri-plugin");
+  }
+
+  createRoot(root!).render(
+    <StrictMode>
+      <RpIconSprite />
+      <App />
+    </StrictMode>,
+  );
+}
 
 function installLocalErrorLogging(): void {
   if (!isTauriRuntime()) {

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "withGlobalTauri": true
+  },
+  "build": {
+    "beforeBuildCommand": "pnpm --dir ../ui build:e2e"
+  }
+}

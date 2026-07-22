@@ -1,0 +1,4 @@
+# WebdriverIO / harness output
+.wdio-tmp/
+logs/
+*.log

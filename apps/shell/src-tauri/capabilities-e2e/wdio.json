@@ -1,0 +1,9 @@
+{
+  "identifier": "wdio-e2e",
+  "description": "Permissions for tauri-plugin-wdio. Added at runtime via Manager::add_capability ONLY under the e2e-webdriver feature; this file lives outside the auto-discovered capabilities/ dir, so release builds never reference wdio:* permissions.",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:default",
+    "wdio:default"
+  ]
+}

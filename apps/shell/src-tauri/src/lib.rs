@@ -1,4 +1,6 @@
 mod diagnostics;
+#[cfg(feature = "e2e-webdriver")]
+mod e2e_dialog;
 mod instance;
 mod mcp;
 mod path_ops;
@@ -704,6 +706,31 @@ fn opened_pdf_for_temp_upload(
     })
 }
 
+// E2E native-dialog overrides (real-app WebDriver canary).
+//
+// In every normal build the `e2e-webdriver` feature is OFF and these return
+// `None`, so the real native OS picker runs. Under the feature (test builds only,
+// never a release — see `[features]` in Cargo.toml) they consult a control file
+// so the packaged app can be driven without a native picker while the real
+// command bodies (grant creation, file writes, validation) still execute.
+#[cfg(feature = "e2e-webdriver")]
+fn e2e_dialog_override(slot: &str) -> Option<tauri_plugin_dialog::FilePath> {
+    e2e_dialog::path_for(slot)
+}
+#[cfg(not(feature = "e2e-webdriver"))]
+fn e2e_dialog_override(_slot: &str) -> Option<tauri_plugin_dialog::FilePath> {
+    None
+}
+
+#[cfg(feature = "e2e-webdriver")]
+fn e2e_dialog_override_many(slot: &str) -> Option<Vec<tauri_plugin_dialog::FilePath>> {
+    e2e_dialog::paths_for(slot)
+}
+#[cfg(not(feature = "e2e-webdriver"))]
+fn e2e_dialog_override_many(_slot: &str) -> Option<Vec<tauri_plugin_dialog::FilePath>> {
+    None
+}
+
 // Dialog commands are `async` on purpose: Tauri runs synchronous commands on the
 // main thread, and `blocking_pick_*` schedules the native panel onto the main
 // thread and blocks the caller until it answers. Called from the main thread that
@@ -715,12 +742,15 @@ async fn open_pdf_dialog(
     pending_pdf_bytes: tauri::State<'_, PendingPdfBytes>,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<OpenedPdf>, String> {
-    let Some(path) = app
-        .dialog()
-        .file()
-        .add_filter("PDF", &["pdf"])
-        .blocking_pick_file()
-    else {
+    let picked = match e2e_dialog_override("open_pdf_dialog") {
+        Some(path) => Some(path),
+        None => app
+            .dialog()
+            .file()
+            .add_filter("PDF", &["pdf"])
+            .blocking_pick_file(),
+    };
+    let Some(path) = picked else {
         return Ok(None);
     };
 
@@ -774,12 +804,15 @@ async fn pick_pdfs_for_add(
     app: tauri::AppHandle,
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<Option<PickedPdfs>, String> {
-    let Some(paths) = app
-        .dialog()
-        .file()
-        .add_filter("PDF or Word", &["pdf", "docx"])
-        .blocking_pick_files()
-    else {
+    let picked = match e2e_dialog_override_many("pick_pdfs_for_add") {
+        Some(paths) => Some(paths),
+        None => app
+            .dialog()
+            .file()
+            .add_filter("PDF or Word", &["pdf", "docx"])
+            .blocking_pick_files(),
+    };
+    let Some(paths) = picked else {
         return Ok(None);
     };
 
@@ -1070,7 +1103,11 @@ async fn pick_output_directory(
     app: tauri::AppHandle,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<Option<PickedDirectory>, String> {
-    let Some(path) = app.dialog().file().blocking_pick_folder() else {
+    let picked = match e2e_dialog_override("pick_output_directory") {
+        Some(path) => Some(path),
+        None => app.dialog().file().blocking_pick_folder(),
+    };
+    let Some(path) = picked else {
         return Ok(None);
     };
 
@@ -1238,13 +1275,16 @@ async fn save_pdf_dialog(
     let suggested_name = ensure_pdf_extension(&suggested_name);
     let bytes = raw_pdf_bytes(&request)?.into_owned();
     let path = on_command_blocking_pool(move || {
-        let Some(path) = app
-            .dialog()
-            .file()
-            .add_filter("PDF", &["pdf"])
-            .set_file_name(suggested_name)
-            .blocking_save_file()
-        else {
+        let picked = match e2e_dialog_override("save_pdf_dialog") {
+            Some(path) => Some(path),
+            None => app
+                .dialog()
+                .file()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name(suggested_name)
+                .blocking_save_file(),
+        };
+        let Some(path) = picked else {
             return Ok(None);
         };
 
@@ -2138,6 +2178,18 @@ pub fn run() {
         .manage(NativeMenuStateStore::default())
         .manage(UnsavedWorkState::default())
         .setup(|app| {
+            // The WebDriver dialog canary drives the app through
+            // @wdio/tauri-service, which requires the companion `tauri-plugin-wdio`
+            // (execute/mock/log-forwarding + window-state commands). Register it and
+            // grant its capability ONLY under the e2e-webdriver feature: the plugin
+            // is never compiled into a release build, and the capability lives
+            // outside the auto-discovered `capabilities/` dir (embedded here via
+            // include_str!) so release builds never reference `wdio:*` permissions.
+            #[cfg(feature = "e2e-webdriver")]
+            {
+                app.handle().plugin(tauri_plugin_wdio::init())?;
+                app.add_capability(include_str!("../capabilities-e2e/wdio.json"))?;
+            }
             app.set_menu(build_native_menu(app.handle())?)?;
             let app_data_dir = app.path().app_data_dir()?;
             let resource_dir = app.path().resource_dir().ok();

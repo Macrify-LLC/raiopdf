@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SidecarPdfEngine } from "@raiopdf/engine-sidecar";
+import { getTauriInvoke, hasTestInvoke } from "../lib/tauriInvoke";
 import type {
   PdfAFlavor,
   PdfCompressOptions,
@@ -105,11 +106,8 @@ export interface EngineBridge {
   repair: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
-type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-
 declare global {
   interface Window {
-    __RAIOPDF_TEST_TAURI_INVOKE__?: TauriInvoke;
     __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
   }
 }
@@ -588,20 +586,6 @@ async function closeHandle(
   }
 }
 
-async function getTauriInvoke(): Promise<TauriInvoke> {
-  if (window.__RAIOPDF_TEST_TAURI_INVOKE__) {
-    return window.__RAIOPDF_TEST_TAURI_INVOKE__;
-  }
-
-  const { invoke } = await import("@tauri-apps/api/core");
-
-  return invoke;
-}
-
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
-}
-
-function hasTestInvoke(): boolean {
-  return typeof window.__RAIOPDF_TEST_TAURI_INVOKE__ === "function";
 }

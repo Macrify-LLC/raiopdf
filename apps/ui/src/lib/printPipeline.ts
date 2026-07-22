@@ -32,7 +32,28 @@ export interface PrintStatus {
   available: boolean;
 }
 
-export type PrintProgressPhase = "gs-segment" | "fallback-split" | "fallback-part";
+export type PrintProgressPhase =
+  | "gs-segment"
+  | "fallback-split"
+  | "fallback-part"
+  // macOS/Linux CUPS phases: the job was accepted into the queue, then is
+  // actively printing. No per-page numbers — CUPS spools the whole document.
+  | "cups-queued"
+  | "cups-printing";
+
+/**
+ * Paper size / duplex / orientation for the CUPS (`lp`) print path. Each field
+ * is optional — omit to keep the printer default. Values come from fixed
+ * dropdowns and are re-validated in the shell against an allowlist.
+ */
+export interface PrintOptions {
+  /** CUPS `media` name: "Letter" | "Legal" | "A4". */
+  media?: string;
+  /** CUPS `sides`: "one-sided" | "two-sided-long-edge" | "two-sided-short-edge". */
+  sides?: string;
+  /** Semantic orientation: "portrait" | "landscape". */
+  orientation?: string;
+}
 
 export interface PrintProgressEvent {
   jobToken: string;
@@ -76,6 +97,7 @@ export function printPdf(
   printer: string,
   pageIndexes: readonly number[] | null,
   copies: number,
+  options: PrintOptions = {},
 ): Promise<PrintResult> {
   return invokePathOp("print_pdf", {
     grant,
@@ -83,6 +105,7 @@ export function printPdf(
     printer,
     pageIndexes: pageIndexes === null ? null : [...pageIndexes],
     copies,
+    options,
   });
 }
 
@@ -176,5 +199,9 @@ export function describePrintProgress(event: PrintProgressEvent): string {
       return `Preparing part ${event.current} of ${event.total} (${pages})...`;
     case "fallback-part":
       return `Printing part ${event.current} of ${event.total} (${pages})...`;
+    case "cups-queued":
+      return "Sending to the printer...";
+    case "cups-printing":
+      return "Printing...";
   }
 }

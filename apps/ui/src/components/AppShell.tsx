@@ -85,6 +85,7 @@ export interface AppShellProps {
   workspace: ReactNode;
   overlay: ReactNode;
   processLoader?: ReactNode;
+  processLoaderCount?: number;
   longProcessLockoutLabel?: string | null | undefined;
   /** Update indicator (UpdatePill) rendered in the title bar's meta area. */
   updateSlot?: ReactNode;
@@ -170,6 +171,7 @@ export function AppShell({
   workspace,
   overlay,
   processLoader,
+  processLoaderCount = 1,
   longProcessLockoutLabel = null,
   updateSlot,
   activeLegalTool,
@@ -326,6 +328,7 @@ export function AppShell({
           workspace={workspace}
           overlay={overlay}
           processLoader={processLoader}
+          processLoaderCount={processLoaderCount}
           onOpenRequested={requestOpen}
           onHelpRequested={onHelpRequested}
           onFileDropped={onFileDropped}

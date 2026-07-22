@@ -118,7 +118,14 @@ import {
   type PdfSecurityProgress,
   type PrepareProtectedCopyResult,
 } from "./components/PdfSecurityPanel";
-import { PrintDialog } from "./components/PrintDialog";
+import { PrintDialog, type StartPrintParams } from "./components/PrintDialog";
+import {
+  cancelPrint,
+  describePrintProgress,
+  listenPrintProgress,
+  newPrintJobToken,
+  printPdf,
+} from "./lib/printPipeline";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import { DockedProcessLoader } from "./components/DockedProcessLoader";
 import type { DockedProcessLoaderProps } from "./components/DockedProcessLoader";
@@ -397,6 +404,16 @@ interface BinderProgressState {
 interface ActiveLongProcess {
   label: string;
   loader: DockedProcessLoaderProps;
+}
+
+/** A native print job in flight. It drives the docked loader (bottom of the
+ * app) without setting `longProcessRunning`, so the user keeps working while a
+ * document prints — and can cancel it from the dock. */
+interface PrintJobState {
+  token: string;
+  printer: string;
+  message: string;
+  requested: boolean;
 }
 
 type CancellablePathProcess = "ocr" | "prepare-filing";
@@ -899,6 +916,130 @@ export function App() {
   } | null>(null);
   /** Native print dialog for streamed docs (whole-doc print, un-gated). */
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
+  /** A native print job running in the background (drives the docked loader). */
+  const [printJob, setPrintJob] = useState<PrintJobState | null>(null);
+  /** Mirrors `printJob` for a synchronous "is a print already running?" check —
+   * state is async, and startPrint must reject a second submission before it
+   * would replace (and orphan) the job already printing. */
+  const printJobRef = useRef<PrintJobState | null>(null);
+
+  /** Apply an update to the running print job, but only when `token` still
+   * matches the current job — a stale event from a finished or cancelled job
+   * is ignored. Returning the same reference lets React skip the re-render. */
+  const updatePrintJob = useCallback(
+    (token: string, next: (job: PrintJobState) => PrintJobState | null) => {
+      setPrintJob((prev) => (prev && prev.token === token ? next(prev) : prev));
+    },
+    [],
+  );
+
+  /** Cancel the running print job for real — on macOS the shell cancels the
+   * CUPS job, on Windows it stops between Ghostscript segments/parts. */
+  const requestPrintCancel = useCallback(
+    (token: string) => {
+      updatePrintJob(token, (job) => ({ ...job, requested: true }));
+      void cancelPrint(token).catch(() => undefined);
+    },
+    [updatePrintJob],
+  );
+
+  /** Hand off a committed print to the docked loader: the setup dialog has
+   * already closed, so printing runs in the background and the app stays
+   * usable. Progress events update the dock; the promise resolves when the
+   * document has actually printed (or failed), not the instant it is queued. */
+  const startPrint = useCallback(
+    (params: StartPrintParams) => {
+      const grant = engineDelegatedGrant;
+      if (!grant) {
+        setError("Open a PDF before printing.");
+        return;
+      }
+      // Only one background print at a time — a second would replace the sole
+      // printJob and orphan the first (still printing, but invisible and no
+      // longer cancellable from the dock).
+      if (printJobRef.current) {
+        setError(
+          "A print job is already running — wait for it to finish or cancel it from the bar at the bottom of the window.",
+        );
+        return;
+      }
+
+      // Remember which document started this print. A warning or failure that
+      // resolves after the user switches tabs must not be shown against an
+      // unrelated document — setError is scoped to the visible one.
+      const sourceGeneration = documentGenerationRef.current;
+
+      const token = newPrintJobToken();
+      const job: PrintJobState = {
+        token,
+        printer: params.printer,
+        message: "Sending to the printer...",
+        requested: false,
+      };
+      printJobRef.current = job;
+      setPrintJob(job);
+
+      let unlisten: (() => void) | null = null;
+      let settled = false;
+      void listenPrintProgress(token, (event) => {
+        const message = describePrintProgress(event);
+        updatePrintJob(token, (job) =>
+          job.message === message ? job : { ...job, message },
+        );
+      }).then((stop) => {
+        // The job can finish before listener setup resolves (e.g. an immediate
+        // native error). If it already has, tear the listener down now —
+        // otherwise it would leak for the lifetime of the app.
+        if (settled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      });
+
+      void printPdf(
+        grant,
+        token,
+        params.printer,
+        params.pageIndexes,
+        params.copies,
+        params.options,
+      )
+        .then((result) => {
+          // The source changed on disk mid-print, so the printed pages may mix
+          // revisions. The setup dialog that used to show this warning has
+          // already closed and the dock is about to clear — surface it here so
+          // the heads-up isn't lost.
+          if (
+            result.inputChanged &&
+            documentGenerationRef.current === sourceGeneration
+          ) {
+            setError(
+              "The file changed on disk while printing — the printed pages may mix revisions. Reopen the file to see its current state.",
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          // Cancellation is a user action, not an error to surface.
+          if (error instanceof PathOpsError && error.code === "PRINT_CANCELLED") {
+            return;
+          }
+          // Only surface against the document that started the print.
+          if (documentGenerationRef.current === sourceGeneration) {
+            setError(pathOpErrorMessage(error, "The document could not be printed."));
+          }
+        })
+        .finally(() => {
+          settled = true;
+          unlisten?.();
+          updatePrintJob(token, () => null);
+          if (printJobRef.current?.token === token) {
+            printJobRef.current = null;
+          }
+        });
+    },
+    [engineDelegatedGrant, setError, updatePrintJob],
+  );
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingReportError, setFilingReportError] = useState<string | null>(null);
   const [filingProgress, setFilingProgress] = useState<FilingProgressState>({
@@ -8442,6 +8583,24 @@ export function App() {
     : filingPacketProgress.running
       ? "Paused while Filing Packet runs"
     : null;
+
+  /** Docked-loader props for a background print job. Rendered in the same dock
+   * slot as the blocking long-processes but only as a fallback, so printing
+   * shows its status and Cancel at the bottom without locking the app. */
+  const printDockLoader = useMemo<DockedProcessLoaderProps | null>(() => {
+    if (!printJob) {
+      return null;
+    }
+    return {
+      phaseLabel: "Printing",
+      message: printJob.message,
+      detail: `To ${printJob.printer}`,
+      cancelLabel: "Cancel",
+      cancelMessage: "Cancels the print job.",
+      cancelRequested: printJob.requested,
+      onCancel: () => requestPrintCancel(printJob.token),
+    };
+  }, [printJob, requestPrintCancel]);
   const extractOpenDocumentPageTextByPage = useCallback(
     (bytes: Uint8Array) => extractUiPageTextByPage(bytes, pdfDocument),
     [pdfDocument],
@@ -8833,10 +8992,22 @@ export function App() {
         workspace={workspace}
         overlay={overlay}
         processLoader={
-          activeLongProcess ? (
-            <DockedProcessLoader {...activeLongProcess.loader} />
+          // A background print doesn't lock the app, so a blocking op (OCR,
+          // filing) can run alongside it. Show both so the print keeps its
+          // status and Cancel control instead of being hidden behind the
+          // blocking op's loader.
+          activeLongProcess || printDockLoader ? (
+            <div className="docked-process-stack">
+              {activeLongProcess ? (
+                <DockedProcessLoader {...activeLongProcess.loader} />
+              ) : null}
+              {printDockLoader ? (
+                <DockedProcessLoader {...printDockLoader} />
+              ) : null}
+            </div>
           ) : null
         }
+        processLoaderCount={(activeLongProcess ? 1 : 0) + (printDockLoader ? 1 : 0)}
         longProcessLockoutLabel={longProcessLockoutLabel}
         updateSlot={
           <UpdatePill
@@ -8934,9 +9105,10 @@ export function App() {
       ) : null}
       {printDialogOpen && engineDelegatedGrant ? (
         <PrintDialog
-          grant={engineDelegatedGrant}
           pageCount={document.pageCount}
           fileName={document.fileName}
+          pdfDocument={pdfDocument}
+          onStartPrint={startPrint}
           onClose={() => setPrintDialogOpen(false)}
           onUseRangeFallback={() => {
             setPrintDialogOpen(false);

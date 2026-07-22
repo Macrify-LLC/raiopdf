@@ -233,7 +233,7 @@
 }
 
 .canvas-well:has(.canvas-well__process-loader-slot) .canvas-well__message--floating {
-  bottom: 88px;
+  bottom: var(--process-loader-inset, 88px);
 }
 
 /*

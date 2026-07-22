@@ -15,7 +15,7 @@
 //! all exercised with injected runners. Only the thin `#[cfg(windows)]`
 //! shims actually talk to PowerShell / the spooler.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -37,6 +37,10 @@ pub const ERR_PRINT_CANCELLED: &str = "PRINT_CANCELLED";
 /// The divide-and-queue fallback would recurse into RaioPDF itself (RaioPDF
 /// is the registered `printto` handler for .pdf) — refused, never recursed.
 pub const ERR_PRINT_SELF_HANDLER: &str = "PRINT_FALLBACK_SELF_HANDLER";
+/// A CUPS print job left the queue with its printer stopped (macOS): the queue
+/// halted mid-job, so the document did not print completely. Reported instead
+/// of a false "sent" once completion polling can see the failure.
+pub const ERR_PRINT_FAILED: &str = "PRINT_FAILED";
 
 fn cancelled_error() -> PathOpError {
     PathOpError {
@@ -166,14 +170,73 @@ pub fn cups_page_ranges(segments: &[PageSegmentRange]) -> String {
         .join(",")
 }
 
+/// Media (paper size) values the picker offers. Fixed allowlist — the values
+/// are spliced into a `-o media=` option, so anything outside this set is
+/// rejected rather than passed to `lp`.
+pub const ALLOWED_MEDIA: &[&str] = &["Letter", "Legal", "A4"];
+/// Duplex values, as CUPS `sides` keywords.
+pub const ALLOWED_SIDES: &[&str] = &["one-sided", "two-sided-long-edge", "two-sided-short-edge"];
+/// Orientation choices, as semantic keywords mapped to `orientation-requested`.
+pub const ALLOWED_ORIENTATION: &[&str] = &["portrait", "landscape"];
+
+/// User-selected print options for the CUPS (`lp`) path: paper size, duplex,
+/// and orientation. Each is optional — `None` leaves the printer/PPD default
+/// in place. Values are validated against the allowlists above before they
+/// reach `lp`, so a caller can't inject arbitrary `-o` options.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PrintOptions {
+    /// CUPS `media` name (`Letter` / `Legal` / `A4`).
+    pub media: Option<String>,
+    /// CUPS `sides` keyword (`one-sided` / `two-sided-long-edge` / …).
+    pub sides: Option<String>,
+    /// Semantic orientation (`portrait` / `landscape`).
+    pub orientation: Option<String>,
+}
+
+/// Reject any option value outside its allowlist. The UI only ever sends fixed
+/// dropdown values; this is defense-in-depth against a malformed request
+/// smuggling an extra `-o` payload through the option string.
+pub fn validate_print_options(options: &PrintOptions) -> OpResult<()> {
+    fn check(value: &Option<String>, allowed: &[&str], field: &str) -> OpResult<()> {
+        if let Some(value) = value {
+            if !allowed.contains(&value.as_str()) {
+                return Err(PathOpError {
+                    code: ERR_INVALID_INPUT,
+                    message: format!("unsupported {field} option: {value}"),
+                });
+            }
+        }
+        Ok(())
+    }
+    check(&options.media, ALLOWED_MEDIA, "paper size")?;
+    check(&options.sides, ALLOWED_SIDES, "duplex")?;
+    check(&options.orientation, ALLOWED_ORIENTATION, "orientation")?;
+    Ok(())
+}
+
+/// Map a validated semantic orientation to its IPP `orientation-requested`
+/// value (`3` portrait, `4` landscape). Portrait is emitted explicitly rather
+/// than omitted so a landscape default gets overridden.
+pub fn orientation_requested(orientation: Option<&str>) -> Option<&'static str> {
+    match orientation {
+        Some("portrait") => Some("3"),
+        Some("landscape") => Some("4"),
+        _ => None,
+    }
+}
+
 /// Build the `lp` argument vector: `-d <printer> [-n <copies>]
-/// [-o page-ranges=…] <input>`. A single copy omits `-n`; a whole-document
-/// selection omits the page-ranges option. Grant-resolved input paths are
-/// absolute, so no `--` option terminator is needed.
+/// [-o media=…] [-o sides=…] [-o orientation-requested=…]
+/// [-o page-ranges=…] <input>`. A single copy omits `-n`; unset options and a
+/// whole-document selection omit their `-o` flags. Grant-resolved input paths
+/// are absolute, so no `--` option terminator is needed. Callers must
+/// `validate_print_options` first — arg-building assumes clean values.
 pub fn lp_print_args(
     printer: &str,
     selection: &PrintSelection,
     copies: u32,
+    options: &PrintOptions,
     input: &Path,
 ) -> Vec<OsString> {
     let mut arguments = args(&["-d", printer]);
@@ -181,14 +244,53 @@ pub fn lp_print_args(
         arguments.push(OsString::from("-n"));
         arguments.push(OsString::from(copies.to_string()));
     }
-    if let PrintSelection::Segments(segments) = selection {
+    let mut push_option = |key: &str, value: &str| {
         arguments.push(OsString::from("-o"));
-        let mut option = OsString::from("page-ranges=");
-        option.push(cups_page_ranges(segments));
-        arguments.push(option);
+        arguments.push(OsString::from(format!("{key}={value}")));
+    };
+    if let Some(media) = &options.media {
+        push_option("media", media);
+    }
+    if let Some(sides) = &options.sides {
+        push_option("sides", sides);
+    }
+    if let Some(orientation) = orientation_requested(options.orientation.as_deref()) {
+        push_option("orientation-requested", orientation);
+    }
+    if let PrintSelection::Segments(segments) = selection {
+        push_option("page-ranges", &cups_page_ranges(segments));
     }
     arguments.push(input.as_os_str().to_os_string());
     arguments
+}
+
+/// Parse the CUPS job id from `lp` stdout, which is exactly
+/// `request id is <printer>-<n> (N file(s))`. The id is what `lpstat` and
+/// `cancel` take — completion polling and real cancellation both need it.
+/// `None` when the line shape is unexpected (the job still queued; we just
+/// can't track it).
+pub fn parse_lp_job_id(stdout: &str) -> Option<String> {
+    const MARKER: &str = "request id is ";
+    let start = stdout.find(MARKER)? + MARKER.len();
+    let id = stdout[start..].split_whitespace().next()?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// Whether `lpstat -o` output still lists `job_id` (job id is the first
+/// whitespace token on each job line). Used to poll a job's liveness.
+pub fn lpstat_lists_job(output: &str, job_id: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some(job_id))
+}
+
+/// Whether `lpstat -p <printer>` reports the queue stopped/disabled — the
+/// signal that a job left the queue because the printer halted (a failure)
+/// rather than because it finished. CUPS phrases this as
+/// "printer X disabled since …".
+pub fn printer_is_stopped(lpstat_p_output: &str) -> bool {
+    let text = lpstat_p_output.to_ascii_lowercase();
+    text.contains("disabled") || text.contains("stopped")
 }
 
 /// Run a CUPS binary and capture stdout, delegating spawn-flag handling and
@@ -213,22 +315,51 @@ pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
     ))
 }
 
-/// Spool one print job to CUPS via `lp` — the whole document or a page range,
-/// any size, in a single pass (CUPS renders the PDF; no Ghostscript needed).
+/// Spool one print job to CUPS via `lp` and return its job id (parsed from
+/// `lp` stdout) for completion polling and cancellation. A `None` id means the
+/// job queued but `lp` printed an unexpected line — printing proceeds, just
+/// untracked. Callers must `validate_print_options(options)` first.
 #[cfg(unix)]
 pub fn lp_print(
     input: &Path,
     printer: &str,
     selection: &PrintSelection,
     copies: u32,
-) -> OpResult<()> {
+    options: &PrintOptions,
+) -> OpResult<Option<String>> {
     let output = path_ops::run_command(
         Path::new("lp"),
-        &lp_print_args(printer, selection, copies, input),
+        &lp_print_args(printer, selection, copies, options, input),
         None,
         &[],
     )?;
-    path_ops::expect_success("lp", &output)
+    path_ops::expect_success("lp", &output)?;
+    Ok(parse_lp_job_id(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Whether a CUPS job is still in the active queue (`lpstat -o`). A job that
+/// has left the queue either finished or was stopped — the caller checks the
+/// printer state to tell those apart.
+#[cfg(unix)]
+pub fn cups_job_active(job_id: &str) -> OpResult<bool> {
+    let output = run_capture("lpstat", &["-o"])?;
+    Ok(lpstat_lists_job(&output, job_id))
+}
+
+/// Whether the destination queue is stopped/disabled (`lpstat -p <printer>`) —
+/// the failure signal when a tracked job leaves the queue.
+#[cfg(unix)]
+pub fn cups_printer_stopped(printer: &str) -> OpResult<bool> {
+    let output = run_capture("lpstat", &["-p", printer])?;
+    Ok(printer_is_stopped(&output))
+}
+
+/// Cancel a queued/printing CUPS job by id (`cancel <job_id>`). Best-effort —
+/// cancelling a job that already left the queue is a harmless no-op.
+#[cfg(unix)]
+pub fn cancel_cups_job(job_id: &str) -> OpResult<()> {
+    let output = path_ops::run_command(Path::new("cancel"), &args(&[job_id]), None, &[])?;
+    path_ops::expect_success("cancel", &output)
 }
 
 /// Targets that are neither Windows nor Unix have no native print pipeline.
@@ -1257,6 +1388,7 @@ mod tests {
                 "Office_HP",
                 &PrintSelection::WholeDocument,
                 1,
+                &PrintOptions::default(),
                 Path::new("/tmp/a b.pdf"),
             ),
             os(&["-d", "Office_HP", "/tmp/a b.pdf"])
@@ -1270,7 +1402,13 @@ mod tests {
             PageSegmentRange { first: 9, last: 9 },
         ]);
         assert_eq!(
-            lp_print_args("PDF", &selection, 3, Path::new("/docs/f.pdf")),
+            lp_print_args(
+                "PDF",
+                &selection,
+                3,
+                &PrintOptions::default(),
+                Path::new("/docs/f.pdf"),
+            ),
             os(&[
                 "-d",
                 "PDF",
@@ -1281,6 +1419,101 @@ mod tests {
                 "/docs/f.pdf",
             ])
         );
+    }
+
+    #[test]
+    fn lp_args_render_media_sides_and_orientation_before_pages() {
+        let options = PrintOptions {
+            media: Some("Legal".to_string()),
+            sides: Some("two-sided-long-edge".to_string()),
+            orientation: Some("landscape".to_string()),
+        };
+        let selection = PrintSelection::Segments(vec![PageSegmentRange { first: 1, last: 2 }]);
+        assert_eq!(
+            lp_print_args("HP", &selection, 1, &options, Path::new("/d/f.pdf")),
+            os(&[
+                "-d",
+                "HP",
+                "-o",
+                "media=Legal",
+                "-o",
+                "sides=two-sided-long-edge",
+                "-o",
+                "orientation-requested=4",
+                "-o",
+                "page-ranges=1-2",
+                "/d/f.pdf",
+            ])
+        );
+    }
+
+    #[test]
+    fn portrait_orientation_is_emitted_explicitly_and_defaults_omit() {
+        assert_eq!(orientation_requested(Some("portrait")), Some("3"));
+        assert_eq!(orientation_requested(Some("landscape")), Some("4"));
+        assert_eq!(orientation_requested(None), None);
+        assert_eq!(orientation_requested(Some("sideways")), None);
+    }
+
+    #[test]
+    fn print_options_validate_against_allowlists() {
+        assert!(validate_print_options(&PrintOptions::default()).is_ok());
+        assert!(validate_print_options(&PrintOptions {
+            media: Some("Letter".to_string()),
+            sides: Some("one-sided".to_string()),
+            orientation: Some("portrait".to_string()),
+        })
+        .is_ok());
+        assert_eq!(
+            validate_print_options(&PrintOptions {
+                media: Some("Letter media=evil".to_string()),
+                ..PrintOptions::default()
+            })
+            .unwrap_err()
+            .code,
+            ERR_INVALID_INPUT
+        );
+        assert!(validate_print_options(&PrintOptions {
+            sides: Some("three-sided".to_string()),
+            ..PrintOptions::default()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn parse_lp_job_id_reads_the_request_line() {
+        assert_eq!(
+            parse_lp_job_id("request id is Canon_G3070_series-4 (1 file(s))").as_deref(),
+            Some("Canon_G3070_series-4")
+        );
+        assert_eq!(
+            parse_lp_job_id("noise\nrequest id is Office_HP-12 (1 file(s))\n").as_deref(),
+            Some("Office_HP-12")
+        );
+        assert_eq!(parse_lp_job_id("no id here"), None);
+        assert_eq!(parse_lp_job_id("request id is "), None);
+    }
+
+    #[test]
+    fn lpstat_lists_job_matches_the_first_token() {
+        let output = "Canon_G3070_series-4    jacobschumer   4405248   Tue Jul 21 22:34:21 2026\n\
+                      Office_HP-5             jacobschumer   1000      Tue Jul 21 22:35:00 2026\n";
+        assert!(lpstat_lists_job(output, "Canon_G3070_series-4"));
+        assert!(lpstat_lists_job(output, "Office_HP-5"));
+        assert!(!lpstat_lists_job(output, "Canon_G3070_series-3"));
+        assert!(!lpstat_lists_job("", "Canon_G3070_series-4"));
+    }
+
+    #[test]
+    fn printer_stopped_detects_disabled_or_stopped() {
+        assert!(printer_is_stopped(
+            "printer Canon_G3070_series disabled since Tue Jul 21 22:40:00 2026 -"
+        ));
+        assert!(printer_is_stopped("printer HP is stopped"));
+        assert!(!printer_is_stopped(
+            "printer Canon_G3070_series now printing Canon_G3070_series-4."
+        ));
+        assert!(!printer_is_stopped("printer HP is idle."));
     }
 
     #[test]

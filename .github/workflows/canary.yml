@@ -405,3 +405,48 @@ jobs:
           path: ${{ runner.temp }}/raiopdf-appdata
           if-no-files-found: ignore
           retention-days: 7
+
+  print-canary-macos:
+    name: Print-to-PDF canary (macOS arm64)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-canary')
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: . -> target
+
+      # macOS ships no print-to-file backend, so a built-in `ippeveprinter` (an
+      # IPP Everywhere test printer, registered over the runner's mDNSResponder)
+      # captures the PDF the real `lp` pipeline emits — exercising the exact
+      # CUPS path the packaged app uses on macOS.
+      - name: Set up an ippeveprinter virtual PDF printer
+        run: |
+          brew install qpdf
+          mkdir -p /tmp/rp-cups-out
+          printf '#!/bin/sh\nlast=""\nfor a in "$@"; do last="$a"; done\ndest="/tmp/rp-cups-out/captured-$$.pdf"\nif [ -f "$last" ]; then cp "$last" "$dest"; else cat > "$dest"; fi\n' > /tmp/rp-capture.sh
+          chmod +x /tmp/rp-capture.sh
+          /usr/bin/ippeveprinter -f application/pdf -c /tmp/rp-capture.sh -p 8631 rp_canary >/tmp/ippeve.log 2>&1 &
+          sleep 5
+          sudo lpadmin -p rp_canary_q -E -v ipp://localhost:8631/ipp/print -m everywhere
+          sleep 2
+          lpstat -e
+
+      - name: Print-to-PDF canary
+        env:
+          RAIOPDF_CUPS_CANARY: "1"
+          RAIOPDF_CUPS_PRINTER: rp_canary_q
+          RAIOPDF_CUPS_OUTDIR: /tmp/rp-cups-out
+        run: cargo test -p engine-sidecar-core --test print_to_pdf -- --nocapture --test-threads=1
+
+      - name: ippeveprinter log on failure
+        if: failure()
+        run: cat /tmp/ippeve.log || true

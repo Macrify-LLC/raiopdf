@@ -162,3 +162,44 @@ jobs:
 
       - name: Compile Tauri shell without distributable bundle
         run: pnpm --filter @raiopdf/shell tauri build --no-bundle --config src-tauri/tauri.macos.conf.json
+
+  print-canary:
+    name: Print-to-PDF canary (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: . -> target
+
+      # A cups-pdf virtual printer turns the real `lp` pipeline into a file we
+      # can inspect — no hardware, no interactive panel.
+      - name: Set up a cups-pdf virtual printer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cups cups-pdf cups-client qpdf ghostscript
+          sudo mkdir -p /tmp/rp-cups-out
+          sudo chmod 777 /tmp/rp-cups-out
+          sudo sed -i 's#^Out .*#Out /tmp/rp-cups-out#' /etc/cups/cups-pdf.conf
+          sudo systemctl restart cups
+          sleep 3
+          ppd="$(find /usr/share/ppd/cups-pdf -iname '*CUPS-PDF*.ppd' | head -1)"
+          sudo lpadmin -p Virtual_PDF_Printer -E -v cups-pdf:/ -P "$ppd"
+          sudo cupsenable Virtual_PDF_Printer
+          sudo cupsaccept Virtual_PDF_Printer
+          lpstat -e
+
+      - name: Print-to-PDF canary
+        env:
+          RAIOPDF_CUPS_CANARY: "1"
+          RAIOPDF_CUPS_PRINTER: Virtual_PDF_Printer
+          RAIOPDF_CUPS_OUTDIR: /tmp/rp-cups-out
+        run: cargo test -p engine-sidecar-core --test print_to_pdf -- --nocapture --test-threads=1

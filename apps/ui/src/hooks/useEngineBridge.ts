@@ -68,6 +68,11 @@ export interface EngineBridge {
    * real operation, when the user commits to it, has less to wait on.
    */
   warmEngine: () => void;
+  /**
+   * Stops the current helper process and invalidates any in-flight request.
+   * Used when the engine endpoint has no finer-grained cancellation protocol.
+   */
+  stopEngine: () => Promise<void>;
   runOcr: (bytes: Uint8Array, options?: RunOcrOptions) => Promise<RunOcrResult>;
   cancelLocalJob: (jobToken: string) => Promise<boolean>;
   redactAreas: (bytes: Uint8Array, areas: readonly PdfRedactionArea[]) => Promise<Uint8Array>;
@@ -147,6 +152,10 @@ export function useEngineBridge(): EngineBridge {
   // Cleared on settle (success or failure) so a failed start never poisons
   // later attempts.
   const inFlightStartRef = useRef<Promise<SidecarPdfEngine> | null>(null);
+  // A shell stop is process-global. A new operation must wait for an older
+  // cancellation's IPC call to settle, otherwise that old stop can tear down
+  // the newly-started helper.
+  const inFlightStopRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -233,23 +242,26 @@ export function useEngineBridge(): EngineBridge {
     }
   }, [isCurrentEngineGeneration, setMissingOcrToolchain]);
 
-  const invalidateEngine = useCallback((engine: SidecarPdfEngine): void => {
+  const invalidateEngine = useCallback((engine: SidecarPdfEngine): boolean => {
     if (engineRef.current !== engine) {
-      return;
+      return false;
     }
 
     engineGenerationRef.current += 1;
     engineRef.current = null;
+    return true;
   }, []);
 
-  const ensureEngine = useCallback((): Promise<SidecarPdfEngine> => {
+  const ensureEngine = useCallback(async (): Promise<SidecarPdfEngine> => {
     if (!runtimeAvailable || disabled) {
-      return Promise.reject(new EngineBridgeUnavailableError());
+      throw new EngineBridgeUnavailableError();
     }
+
+    await inFlightStopRef.current;
 
     const existingEngine = engineRef.current;
     if (existingEngine) {
-      return Promise.resolve(existingEngine);
+      return existingEngine;
     }
 
     const inFlight = inFlightStartRef.current;
@@ -258,15 +270,12 @@ export function useEngineBridge(): EngineBridge {
     }
 
     const startPromise: Promise<SidecarPdfEngine> = startEngine().finally(() => {
-      // Only this call's own promise clears the ref -- a generation-safe
-      // no-op if something else already replaced it.
       if (inFlightStartRef.current === startPromise) {
         inFlightStartRef.current = null;
       }
     });
 
     inFlightStartRef.current = startPromise;
-
     return startPromise;
   }, [disabled, runtimeAvailable, startEngine]);
 
@@ -276,6 +285,34 @@ export function useEngineBridge(): EngineBridge {
       // error when it actually needs the engine.
     });
   }, [ensureEngine]);
+
+  const stopEngine = useCallback(async (): Promise<void> => {
+    // Invalidate first. If stopping the helper rejects an in-flight fetch,
+    // withEngineRetry sees that this generation was deliberately retired and
+    // does not start the cancelled work again on a fresh process.
+    engineGenerationRef.current += 1;
+    engineRef.current = null;
+    inFlightStartRef.current = null;
+    setStarting(false);
+
+    if (!runtimeAvailable) {
+      return;
+    }
+
+    const previousStop = inFlightStopRef.current ?? Promise.resolve();
+    const stopPromise = previousStop.then(async () => {
+      try {
+        const invoke = await getTauriInvoke();
+        await invoke("engine_stop");
+      } catch {
+        // Cancellation is best-effort. The UI has already invalidated the
+        // request; normal shell shutdown remains the final cleanup boundary.
+      }
+    });
+    inFlightStopRef.current = stopPromise;
+    await stopPromise;
+    if (inFlightStopRef.current === stopPromise) inFlightStopRef.current = null;
+  }, [runtimeAvailable]);
 
   const runOcr = useCallback(
     (bytes: Uint8Array, options: RunOcrOptions = {}) =>
@@ -499,6 +536,7 @@ export function useEngineBridge(): EngineBridge {
     starting,
     error,
     warmEngine,
+    stopEngine,
     runOcr,
     cancelLocalJob,
     redactAreas,
@@ -527,7 +565,7 @@ export function useEngineBridge(): EngineBridge {
 async function withEngineRetry<T>(
   ensureEngine: () => Promise<SidecarPdfEngine>,
   run: (engine: SidecarPdfEngine) => Promise<T>,
-  invalidateEngine: (engine: SidecarPdfEngine) => void,
+  invalidateEngine: (engine: SidecarPdfEngine) => boolean,
 ): Promise<T> {
   const engine = await ensureEngine();
 
@@ -538,7 +576,9 @@ async function withEngineRetry<T>(
       throw error;
     }
 
-    invalidateEngine(engine);
+    if (!invalidateEngine(engine)) {
+      throw error;
+    }
 
     const freshEngine = await ensureEngine();
 

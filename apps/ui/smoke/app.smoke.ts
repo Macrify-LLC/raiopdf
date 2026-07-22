@@ -828,7 +828,7 @@ test("switching from Select to a markup tool converts the selection; other tools
 test("right-click selected replacement stages directly through the scoped engine path", async ({ page }) => {
   const sourcePdf = await createTextPdf("Smith Smith");
   const editedPdf = await createTextPdf("Smith Jones");
-  await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith");
+  await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith", "Smith Jones");
   await page.goto("/");
   await openPdf(page, "edit-selected-text.pdf", sourcePdf);
 
@@ -886,8 +886,8 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
 
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
 
   const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
   await expect(reviewDialog.getByText("The whole document is rewritten by this operation. Pages not shown here may shift slightly.")).toBeVisible();
@@ -911,8 +911,8 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
   await page.getByRole("button", { name: "Edit Text", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
-  await page.getByRole("button", { name: "Replace all" }).click();
-  await page.getByRole("button", { name: "Review" }).click();
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" }).getByRole("button", { name: "Review (1)" }).click();
 
   const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
   await expect(reviewDialog.getByText("Nothing was replaced — the document was not modified.")).toBeVisible();
@@ -922,6 +922,46 @@ test("edit document text cancel and zero-change review leave bytes untouched", a
 
   const saved = await savePdf(page);
   expect(Buffer.from(saved).equals(Buffer.from(sourcePdf))).toBe(true);
+});
+
+test("canceling a dirty-tab close preserves the staged text-edit review", async ({ page }) => {
+  const sourcePdf = await createTextPdf("Plaintiff files the motion.");
+  const editedPdf = await createTextPdf("Petitioner files the motion.");
+  await installTextEditBridgeMock(page, editedPdf);
+  await page.goto("/");
+  await openPdf(page, "edit-text-close-cancel.pdf", sourcePdf);
+
+  // Save a pending annotation into the working document so closing the tab
+  // must ask for confirmation after the text replacement is staged.
+  await openEditToolPanel(page);
+  await selectMarkupTool(page, "Text box");
+  await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
+  await page.getByLabel("Text box content").fill("Pending note");
+  await page.getByLabel("Text box content").press("Enter");
+  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("dialog", { name: "Pending annotations" })
+    .getByRole("button", { name: "Save annotations" })
+    .click();
+
+  await page.getByLabel("Find text").fill("Plaintiff");
+  await page.getByLabel("Replace with").fill("Petitioner");
+  await page.getByRole("button", { name: "Add replacement" }).click();
+  await page.getByRole("toolbar", { name: "Edit document text" })
+    .getByRole("button", { name: "Review (1)" })
+    .click();
+
+  const reviewDialog = page.getByRole("dialog", { name: "Review text replacements" });
+  await expect(reviewDialog).toBeVisible();
+  await page.getByRole("button", { name: "Close edit-text-close-cancel.pdf" }).click();
+  await expect(page.getByRole("dialog", { name: "Unsaved changes" })).toBeVisible();
+  await page.getByRole("dialog", { name: "Unsaved changes" })
+    .getByRole("button", { name: "Cancel" })
+    .click();
+
+  await expect(reviewDialog).toBeVisible();
+  const replacementReport = reviewDialog.getByLabel("Replacement report");
+  await expect(replacementReport.getByText("Plaintiff")).toBeVisible();
+  await expect(replacementReport.getByText("Petitioner")).toBeVisible();
 });
 
 test("edit document text prompts for pending annotations and gates scanned documents", async ({ page }) => {
@@ -1970,8 +2010,9 @@ async function installSelectedTextEditBridgeMock(
   page: Page,
   editedBytes: Uint8Array,
   sourceText: string,
+  editedText: string,
 ): Promise<void> {
-  await page.addInitScript(({ editedContents, text }) => {
+  await page.addInitScript(({ editedContents, sourceMapText, editedMapText }) => {
     const testWindow = window as typeof window & {
       __RAIOPDF_TEST_ENGINE_FETCH__?: typeof fetch;
       __RAIOPDF_TEST_TAURI_INVOKE__?: <T>(command: string) => Promise<T>;
@@ -1989,7 +2030,7 @@ async function installSelectedTextEditBridgeMock(
       return { port: 39393, token: "smoke-token" } as T;
     };
 
-    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input) => {
+    testWindow.__RAIOPDF_TEST_ENGINE_FETCH__ = async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const pathname = new URL(url).pathname;
 
@@ -2001,12 +2042,24 @@ async function installSelectedTextEditBridgeMock(
       }
 
       if (pathname === "/api/v1/convert/pdf/text-editor") {
+        const file = init?.body instanceof FormData ? init.body.get("fileInput") : null;
+        const inputBytes = file instanceof Blob
+          ? new Uint8Array(await file.arrayBuffer())
+          : null;
+        const usesEditedPdf = inputBytes?.length === editedContents.length &&
+          inputBytes.every((value, index) => value === editedContents[index]);
         return new Response(JSON.stringify({
           pages: [{
             pageNumber: 1,
             width: 200,
             height: 300,
-            textElements: [{ text, x: 24, y: 240, width: 120, height: 12 }],
+            textElements: [{
+              text: usesEditedPdf ? editedMapText : sourceMapText,
+              x: 24,
+              y: 240,
+              width: 120,
+              height: 12,
+            }],
           }],
         }), {
           status: 200,
@@ -2033,7 +2086,8 @@ async function installSelectedTextEditBridgeMock(
     };
   }, {
     editedContents: [...editedBytes],
-    text: sourceText,
+    sourceMapText: sourceText,
+    editedMapText: editedText,
   });
 }
 

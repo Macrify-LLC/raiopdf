@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PdfInspectTextMapResult, PdfTextMapPage } from "@raiopdf/engine-api";
 import {
   captureCurrentTextSelection,
+  registerTextLayerViewport,
   resolveSelectedTextTarget,
   selectionForReplacement,
   type CapturedTextSelection,
@@ -124,7 +125,7 @@ describe("selectedTextEdit", () => {
     });
   });
 
-  it("refuses selected text when browser and engine page text differ", () => {
+  it("refuses repeated text when browser and engine page text differ and no spatial selection is available", () => {
     const textMap = map(["John Smith", " v. ", "John Smith"]);
     const resolved = resolveSelectedTextTarget(selection({
       pageText: "John Smith v. John  Smith",
@@ -135,11 +136,11 @@ describe("selectedTextEdit", () => {
 
     expect(resolved).toMatchObject({
       ok: false,
-      message: expect.stringContaining("inferred spacing"),
+      message: expect.stringContaining("found the text more than once"),
     });
   });
 
-  it("refuses a mismatched page even when the selected string exists exactly once elsewhere", () => {
+  it("resolves one exact editable occurrence when OCR and browser page text differ", () => {
     const textMap = map(["John", "Smith", " v. ", "John Smith"]);
     const resolved = resolveSelectedTextTarget(selection({
       pageText: "John Smith v. John Smith",
@@ -149,13 +150,103 @@ describe("selectedTextEdit", () => {
     }), textMap);
 
     expect(resolved).toMatchObject({
-      ok: false,
-      message: expect.stringContaining("inferred spacing"),
+      ok: true,
+      target: {
+        expectedText: "John Smith",
+        expectedVisibleText: "John Smith",
+        firstElementIndex: 3,
+        lastElementIndex: 3,
+      },
     });
   });
 
-  it("refuses selections with inferred spaces absent from the engine text map", () => {
-    const textMap = map(["John", "Smith"]);
+  it("resolves the highlighted occurrence when repeated OCR text has mismatched page offsets", () => {
+    const textMap = map(["Settlement", " / ", "Settlement"]);
+    const resolved = resolveSelectedTextTarget(selection({
+      pageText: "OCR header\nSettlement Settlement",
+      start: 22,
+      end: 32,
+      text: "Settlement",
+      area: { pageIndex: 0, x: 55, y: 699, w: 60, h: 13 },
+    }), textMap);
+
+    expect(resolved).toMatchObject({
+      ok: true,
+      target: {
+        expectedText: "Settlement",
+        firstElementIndex: 2,
+        lastElementIndex: 2,
+      },
+      area: { x: 40 },
+    });
+  });
+
+  it("refuses repeated text when spatial candidates occupy the same visual location", () => {
+    const textMap = mapWithAreas([
+      { text: "Settlement", x: 72, y: 700, w: 60, h: 12 },
+      { text: " / ", x: 140, y: 700, w: 10, h: 12 },
+      { text: "Settlement", x: 72, y: 700, w: 60, h: 12 },
+    ]);
+    const resolved = resolveSelectedTextTarget(selection({
+      pageText: "different OCR order Settlement",
+      text: "Settlement",
+      area: { pageIndex: 0, x: 72, y: 700, w: 60, h: 12 },
+    }), textMap);
+
+    expect(resolved).toMatchObject({ ok: false, message: expect.stringContaining("could not safely identify") });
+  });
+
+  it("captures the selected occurrence area in PDF page coordinates", () => {
+    const layer = textLayer(0, ["Settlement"]);
+    document.body.append(layer);
+    Object.defineProperty(layer, "getBoundingClientRect", {
+      value: () => rect(100, 50, 600, 800),
+    });
+    selectText(layer.firstChild!.firstChild!, 0, layer.firstChild!.firstChild!, 10);
+    const range = window.getSelection()!.getRangeAt(0);
+    Object.defineProperty(range, "getClientRects", {
+      value: () => [rect(160, 150, 120, 20)],
+    });
+    const unregister = registerTextLayerViewport(layer, {
+      convertToPdfPoint: (x: number, y: number) => [x, 800 - y],
+    } as never);
+
+    const captured = captureCurrentTextSelection();
+    unregister();
+
+    expect(captured).toMatchObject({
+      ok: true,
+      selection: {
+        area: { pageIndex: 0, x: 60, y: 680, w: 120, h: 20 },
+      },
+    });
+  });
+
+  it("resolves a unique OCR word without trusting mismatched whole-page offsets", () => {
+    const textMap = map(["CONFIDENTIAL ", "Settlement", " Agreement"]);
+    const resolved = resolveSelectedTextTarget(selection({
+      pageText: "Header text in a different OCR reading order\nSettlement",
+      start: 45,
+      end: 55,
+      text: "Settlement",
+    }), textMap);
+
+    expect(resolved).toMatchObject({
+      ok: true,
+      target: {
+        expectedText: "Settlement",
+        expectedVisibleText: "Settlement",
+        firstElementIndex: 1,
+        lastElementIndex: 1,
+      },
+    });
+  });
+
+  it("resolves a safe inferred word space across contiguous same-line PDF runs", () => {
+    const textMap = mapWithAreas([
+      { text: "John", x: 72, y: 700, w: 28, h: 12 },
+      { text: "Smith", x: 108, y: 700, w: 35, h: 12 },
+    ]);
     const resolved = resolveSelectedTextTarget(selection({
       pageText: "John Smith",
       start: 0,
@@ -164,9 +255,37 @@ describe("selectedTextEdit", () => {
     }), textMap);
 
     expect(resolved).toMatchObject({
-      ok: false,
-      message: expect.stringContaining("inferred spacing"),
+      ok: true,
+      target: {
+        expectedText: "JohnSmith",
+        expectedVisibleText: "John Smith",
+        start: 0,
+        end: 9,
+        firstElementIndex: 0,
+        lastElementIndex: 1,
+      },
     });
+  });
+
+  it.each([
+    ["a column-sized gap", [{ text: "John", x: 72, y: 700, w: 28, h: 12 }, { text: "Smith", x: 220, y: 700, w: 35, h: 12 }]],
+    ["a different baseline", [{ text: "John", x: 72, y: 700, w: 28, h: 12 }, { text: "Smith", x: 108, y: 690, w: 35, h: 12 }]],
+    ["an incompatible height", [{ text: "John", x: 72, y: 700, w: 28, h: 12 }, { text: "Smith", x: 108, y: 700, w: 35, h: 20 }]],
+  ])("refuses inferred spacing across %s", (_label, elements) => {
+    const resolved = resolveSelectedTextTarget(selection({ pageText: "John Smith", end: 10 }), mapWithAreas(elements));
+    expect(resolved).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    ["a rotated run", { x: 0.999, y: 0.045 }],
+    ["RTL text", { x: -1, y: 0 }],
+    ["vertical text", { x: 0, y: 1 }],
+  ])("refuses inferred spacing for %s", (_label, direction) => {
+    const source = mapWithAreas([
+      { text: "John", x: 72, y: 700, w: 28, h: 12, direction },
+      { text: "Smith", x: 108, y: 700, w: 35, h: 12, direction },
+    ]);
+    expect(resolveSelectedTextTarget(selection({ pageText: "John Smith", end: 10 }), source)).toMatchObject({ ok: false });
   });
 
   it("refuses multi-run selections that do not share a baseline", () => {
@@ -216,6 +335,20 @@ function selectText(
   currentSelection?.addRange(range);
 }
 
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
 function selection(overrides: Partial<CapturedTextSelection>): CapturedTextSelection {
   return {
     pageIndex: 0,
@@ -236,6 +369,7 @@ function map(texts: readonly string[]): PdfInspectTextMapResult {
 }
 
 function mapWithAreas(elements: Array<{
+  direction?: { x: number; y: number };
   h: number;
   text: string;
   w: number;
@@ -264,6 +398,7 @@ function mapWithAreas(elements: Array<{
             w: element.w,
             h: element.h,
           },
+          direction: element.direction ?? { x: 1, y: 0 },
         };
       }),
     }],

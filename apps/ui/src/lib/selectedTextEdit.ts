@@ -5,6 +5,11 @@ import type {
   PdfTextMapElement,
   PdfTextMapPage,
 } from "@raiopdf/engine-api";
+import { buildPdfVisualTextMap } from "@raiopdf/engine-api";
+import {
+  viewportRectToPdfRect,
+  type PageViewport,
+} from "./viewportGeometry";
 
 export interface CapturedTextSelection {
   pageIndex: number;
@@ -12,6 +17,8 @@ export interface CapturedTextSelection {
   pageText: string;
   start: number;
   end: number;
+  /** The browser-highlighted occurrence in PDF page coordinates. */
+  area?: PdfRedactionArea;
 }
 
 export type TextSelectionCaptureResult =
@@ -22,7 +29,30 @@ export type TextSelectionResolveResult =
   | { ok: true; area: PdfRedactionArea; target: PdfSelectedTextTarget }
   | { ok: false; message: string };
 
+type VisualTargetMatchResult =
+  | { status: "unique"; area: PdfRedactionArea; target: PdfSelectedTextTarget }
+  | { status: "ambiguous" | "missing" };
+
+const textLayerViewports = new WeakMap<HTMLElement, PageViewport>();
+
 export const TEXT_LAYER_SELECTOR = ".page-view__text-layer[data-page-index]";
+
+/**
+ * Associates a rendered pdf.js text layer with its rotation/zoom-aware page
+ * viewport. Selection capture can then retain the mouse-highlighted rectangle
+ * in PDF coordinates, even when focus moves into the canvas edit bar.
+ */
+export function registerTextLayerViewport(
+  layer: HTMLElement,
+  viewport: PageViewport,
+): () => void {
+  textLayerViewports.set(layer, viewport);
+  return () => {
+    if (textLayerViewports.get(layer) === viewport) {
+      textLayerViewports.delete(layer);
+    }
+  };
+}
 
 export function captureCurrentTextSelection(
   selection: Selection | null = window.getSelection(),
@@ -77,6 +107,7 @@ export function captureCurrentTextSelection(
     };
   }
 
+  const area = selectionArea(range, startLayer, pageIndex);
   return {
     ok: true,
     selection: {
@@ -85,6 +116,7 @@ export function captureCurrentTextSelection(
       pageText,
       start,
       end,
+      ...(area ? { area } : {}),
     },
   };
 }
@@ -117,8 +149,15 @@ export function resolveSelectedTextTarget(
     };
   }
 
-  if (selection.pageText === page.text) {
-    const target = targetForRange(textMap.sourceFingerprint, page, selection.start, selection.end);
+  const visualText = buildPdfVisualTextMap(page);
+  if (selection.pageText === visualText.text) {
+    const target = targetForVisualRange(
+      textMap.sourceFingerprint,
+      page,
+      visualText,
+      selection.start,
+      selection.end,
+    );
 
     if (!target) {
       return {
@@ -138,10 +177,120 @@ export function resolveSelectedTextTarget(
     return { ok: true, area, target };
   }
 
+  // OCR and pdf.js may expose different whole-page whitespace or reading
+  // order even when selected text maps cleanly to the editable PDF. In that
+  // case DOM offsets are not trustworthy, so match every safe exact occurrence
+  // and use the browser-highlighted PDF rectangle to identify which one the
+  // user selected. The engine still revalidates raw/visible text, element and
+  // document fingerprints before mutation.
+  const fallback = targetForVisualTextAtArea(
+    textMap.sourceFingerprint,
+    page,
+    visualText,
+    selection.text,
+    selection.area,
+  );
+  if (fallback.status === "unique") {
+    return { ok: true, area: fallback.area, target: fallback.target };
+  }
+  if (fallback.status === "ambiguous") {
+    return {
+      ok: false,
+      message: "Nothing changed. RaioPDF found the text more than once but could not safely identify the highlighted occurrence in the PDF text map.",
+    };
+  }
+
   return {
     ok: false,
-    message: "The selected text does not match the editable PDF text map. PDFs with inferred spacing are refused for selected-text edits.",
+    message: "Nothing changed. The highlighted text and its position do not line up with a safe editable PDF text map.",
   };
+}
+
+function targetForVisualTextAtArea(
+  sourceDocumentFingerprint: string,
+  page: PdfTextMapPage,
+  visualMap: ReturnType<typeof buildPdfVisualTextMap>,
+  selectedText: string,
+  selectedArea: PdfRedactionArea | undefined,
+): VisualTargetMatchResult {
+  if (!selectedText || selectedText !== selectedText.trim()) {
+    return { status: "missing" };
+  }
+
+  const matches: Array<{ area: PdfRedactionArea; target: PdfSelectedTextTarget }> = [];
+  let fromIndex = 0;
+  while (fromIndex <= visualMap.text.length - selectedText.length) {
+    const start = visualMap.text.indexOf(selectedText, fromIndex);
+    if (start < 0) {
+      break;
+    }
+    const target = targetForVisualRange(
+      sourceDocumentFingerprint,
+      page,
+      visualMap,
+      start,
+      start + selectedText.length,
+    );
+    const area = target ? areaForTarget(page, target) : null;
+    if (target && area) {
+      matches.push({ area, target });
+    }
+    fromIndex = start + Math.max(1, selectedText.length);
+  }
+
+  if (matches.length === 0) {
+    return { status: "missing" };
+  }
+  if (matches.length === 1) {
+    return { status: "unique", ...matches[0]! };
+  }
+  if (!selectedArea) {
+    return { status: "ambiguous" };
+  }
+
+  const ranked = matches
+    .map((match) => ({ match, score: spatialMatchScore(selectedArea, match.area) }))
+    .sort((left, right) => right.score - left.score);
+  const best = ranked[0]!;
+  const runnerUp = ranked[1]!;
+
+  // A positive score requires either meaningful box overlap or a close center
+  // match. The margin prevents overlapping/duplicate PDF text objects from
+  // being guessed at when they occupy effectively the same visual location.
+  if (best.score < 0 || best.score - runnerUp.score < 0.35) {
+    return { status: "ambiguous" };
+  }
+
+  return { status: "unique", ...best.match };
+}
+
+function spatialMatchScore(selected: PdfRedactionArea, candidate: PdfRedactionArea): number {
+  const intersectionWidth = Math.max(
+    0,
+    Math.min(selected.x + selected.w, candidate.x + candidate.w) - Math.max(selected.x, candidate.x),
+  );
+  const intersectionHeight = Math.max(
+    0,
+    Math.min(selected.y + selected.h, candidate.y + candidate.h) - Math.max(selected.y, candidate.y),
+  );
+  const intersection = intersectionWidth * intersectionHeight;
+  const smallerArea = Math.max(1, Math.min(selected.w * selected.h, candidate.w * candidate.h));
+  const overlap = intersection / smallerArea;
+  const selectedCenterX = selected.x + selected.w / 2;
+  const selectedCenterY = selected.y + selected.h / 2;
+  const candidateCenterX = candidate.x + candidate.w / 2;
+  const candidateCenterY = candidate.y + candidate.h / 2;
+  const xScale = Math.max(4, selected.w, candidate.w);
+  const yScale = Math.max(4, selected.h, candidate.h);
+  const distance = Math.hypot(
+    (selectedCenterX - candidateCenterX) / xScale,
+    (selectedCenterY - candidateCenterY) / yScale,
+  );
+
+  if (overlap < 0.2 && distance > 1.25) {
+    return -1;
+  }
+  return overlap * 4 - distance;
 }
 
 function areaForTarget(
@@ -158,11 +307,6 @@ function areaForTarget(
   }
 
   const areas = targetElements.map((element) => clipElementArea(element, target));
-
-  if (areas.length === 0) {
-    return null;
-  }
-
   return areas.reduce(unionAreas);
 }
 
@@ -217,14 +361,40 @@ function unionAreas(left: PdfRedactionArea, right: PdfRedactionArea): PdfRedacti
   };
 }
 
-function targetForRange(
+function targetForVisualRange(
   sourceDocumentFingerprint: string,
   page: PdfTextMapPage,
-  start: number,
-  end: number,
+  visualMap: ReturnType<typeof buildPdfVisualTextMap>,
+  visibleStart: number,
+  visibleEnd: number,
 ): PdfSelectedTextTarget | null {
-  if (start < 0 || end <= start || page.text.slice(start, end).length !== end - start) {
+  if (
+    visibleStart < 0 ||
+    visibleEnd <= visibleStart ||
+    visibleEnd > visualMap.rawOffsets.length ||
+    visualMap.text.length !== visualMap.rawOffsets.length
+  ) {
     return null;
+  }
+
+  const selectedOffsets = visualMap.rawOffsets.slice(visibleStart, visibleEnd);
+  const rawOffsets = selectedOffsets.filter(
+    (offset): offset is number => offset !== null,
+  );
+  if (rawOffsets.length === 0 || selectedOffsets[0] === null || selectedOffsets.at(-1) === null) {
+    return null;
+  }
+
+  const start = rawOffsets[0]!;
+  const end = rawOffsets.at(-1)! + 1;
+  let expectedRawOffset = start;
+  for (const rawOffset of selectedOffsets) {
+    if (rawOffset !== null) {
+      if (rawOffset !== expectedRawOffset) {
+        return null;
+      }
+      expectedRawOffset += 1;
+    }
   }
 
   const first = page.elements.find((element) => start >= element.start && start < element.end);
@@ -241,6 +411,7 @@ function targetForRange(
     start,
     end,
     expectedText: page.text.slice(start, end),
+    expectedVisibleText: visualMap.text.slice(visibleStart, visibleEnd),
     sourceDocumentFingerprint,
     sourceFingerprint: page.sourceFingerprint,
     firstElementIndex: first.elementIndex,
@@ -290,4 +461,44 @@ function textOffsetBefore(root: HTMLElement, container: Node, offset: number): n
   const text = range.toString();
   range.detach();
   return text.length;
+}
+
+function selectionArea(
+  range: Range,
+  layer: HTMLElement,
+  pageIndex: number,
+): PdfRedactionArea | undefined {
+  const viewport = textLayerViewports.get(layer);
+  if (!viewport || typeof range.getClientRects !== "function") {
+    return undefined;
+  }
+
+  const bounds = layer.getBoundingClientRect();
+  const rects = Array.from(range.getClientRects()).filter((rect) => (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.right > bounds.left &&
+    rect.left < bounds.right &&
+    rect.bottom > bounds.top &&
+    rect.top < bounds.bottom
+  ));
+  if (rects.length === 0 || bounds.width <= 0 || bounds.height <= 0) {
+    return undefined;
+  }
+
+  const left = Math.max(0, Math.min(...rects.map((rect) => rect.left)) - bounds.left);
+  const top = Math.max(0, Math.min(...rects.map((rect) => rect.top)) - bounds.top);
+  const right = Math.min(bounds.width, Math.max(...rects.map((rect) => rect.right)) - bounds.left);
+  const bottom = Math.min(bounds.height, Math.max(...rects.map((rect) => rect.bottom)) - bounds.top);
+  if (right <= left || bottom <= top) {
+    return undefined;
+  }
+
+  return {
+    pageIndex,
+    ...viewportRectToPdfRect(
+      { left, top, width: right - left, height: bottom - top },
+      viewport,
+    ),
+  };
 }

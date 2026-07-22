@@ -101,6 +101,12 @@ export type PdfTextMapElement = {
   text: string;
   /** Best-effort page-space area for selection matching. */
   area: PdfRedactionArea;
+  /**
+   * Unit vector along the text baseline when the backing engine exposes its
+   * text matrix. It lets consumers distinguish ordinary same-line runs from
+   * rotated or otherwise incompatible fragments.
+   */
+  direction?: { x: number; y: number };
 };
 
 export type PdfTextMapPage = {
@@ -111,6 +117,84 @@ export type PdfTextMapPage = {
   sourceFingerprint: string;
   elements: readonly PdfTextMapElement[];
 };
+
+/** Display text derived from a raw PDF text map without changing its elements. */
+export type PdfVisualTextMap = {
+  text: string;
+  /** Per-visible-character raw offsets; inferred spaces deliberately map to null. */
+  rawOffsets: readonly (number | null)[];
+};
+
+/**
+ * Builds the conservative browser-facing text model used for selected editing.
+ * A separator is virtual only when adjacent runs are contiguous, horizontal,
+ * same-line, similarly sized, and separated by an ordinary word-sized gap.
+ */
+export function buildPdfVisualTextMap(page: PdfTextMapPage): PdfVisualTextMap {
+  let text = "";
+  const rawOffsets: Array<number | null> = [];
+  for (let index = 0; index < page.elements.length; index += 1) {
+    const element = page.elements[index]!;
+    const previous = page.elements[index - 1];
+    if (previous && shouldInferPdfWordSpace(previous, element)) {
+      text += " ";
+      rawOffsets.push(null);
+    }
+    text += element.text;
+    for (let offset = 0; offset < element.text.length; offset += 1) {
+      rawOffsets.push(element.start + offset);
+    }
+  }
+  return { text, rawOffsets };
+}
+
+/** Returns the visible representation of one contiguous raw text range. */
+export function visiblePdfTextForRawRange(page: PdfTextMapPage, start: number, end: number): string | null {
+  const visual = buildPdfVisualTextMap(page);
+  const first = visual.rawOffsets.indexOf(start);
+  const last = visual.rawOffsets.lastIndexOf(end - 1);
+  return first < 0 || last < first ? null : visual.text.slice(first, last + 1);
+}
+
+function shouldInferPdfWordSpace(previous: PdfTextMapElement, next: PdfTextMapElement): boolean {
+  if (
+    previous.elementIndex + 1 !== next.elementIndex ||
+    !previous.text ||
+    !next.text ||
+    /\s$/.test(previous.text) ||
+    /^\s/.test(next.text) ||
+    !compatiblePdfTextRuns(previous, next)
+  ) {
+    return false;
+  }
+  const gap = next.area.x - (previous.area.x + previous.area.w);
+  const averageGlyphWidth = (previous.area.w / previous.text.length + next.area.w / next.text.length) / 2;
+  const minGap = Math.max(0.5, Math.min(previous.area.h * 0.18, averageGlyphWidth * 0.18));
+  const maxGap = Math.min(previous.area.h * 2, Math.max(averageGlyphWidth * 2.2, previous.area.h * 0.65));
+  return gap >= minGap && gap <= maxGap;
+}
+
+function compatiblePdfTextRuns(first: PdfTextMapElement, second: PdfTextMapElement): boolean {
+  // Positional word gaps are only meaningful for ordinary horizontal LTR
+  // writing. Even a small rotation changes the interpretation of x/y gaps;
+  // reject rather than guessing at an angled, RTL, or vertical text run.
+  const horizontalEpsilon = 0.001;
+  if (
+    !first.direction ||
+    !second.direction ||
+    first.direction.x < 1 - horizontalEpsilon ||
+    second.direction.x < 1 - horizontalEpsilon ||
+    Math.abs(first.direction.y) > horizontalEpsilon ||
+    Math.abs(second.direction.y) > horizontalEpsilon
+  ) {
+    return false;
+  }
+  const dot = first.direction.x * second.direction.x + first.direction.y * second.direction.y;
+  const baselineTolerance = Math.max(1, Math.min(first.area.h, second.area.h) * 0.2);
+  const heightTolerance = Math.max(1, Math.max(first.area.h, second.area.h) * 0.2);
+  return dot >= 0.995 && Math.abs(first.area.y - second.area.y) <= baselineTolerance &&
+    Math.abs(first.area.h - second.area.h) <= heightTolerance;
+}
 
 export type PdfInspectTextMapOptions = {
   /** Zero-based pages to inspect, or "all" (default). */
@@ -128,6 +212,11 @@ export type PdfSelectedTextTarget = {
   start: number;
   end: number;
   expectedText: string;
+  /**
+   * Text as it was visibly selected. Unlike `expectedText`, this may include
+   * a space inferred between compatible, separately-positioned PDF runs.
+   */
+  expectedVisibleText: string;
   /** Fingerprint over the full engine text-editor document. */
   sourceDocumentFingerprint: string;
   /** Fingerprint over the selected page's engine text elements. */

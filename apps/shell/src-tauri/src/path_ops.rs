@@ -2357,6 +2357,103 @@ pub async fn path_op_insert_pages(
     })
 }
 
+/// Replaces one page while keeping the original granted PDF on disk. This is
+/// the page-local selected-text apply primitive: only `replacement_grant`
+/// (which must be one page) has crossed into the WebView.
+#[tauri::command]
+pub async fn path_op_replace_page(
+    app: tauri::AppHandle,
+    grants: tauri::State<'_, FileGrants>,
+    grant: String,
+    replacement_grant: String,
+    page_index: u32,
+) -> Result<PathOpOutput, PathOpError> {
+    let input = resolve_grant(&grants, &grant)?;
+    let replacement = resolve_grant(&grants, &replacement_grant)?;
+    let toolchain = discover_toolchain(&app);
+    let work_dir = OpWorkDir::create(&app)?;
+    let name = output_name(&input, "page-replaced");
+    let output_path = work_dir.path().join(&name);
+    let input_before = snapshot(&input)?;
+    let replacement_before = snapshot(&replacement)?;
+    ensure_grant_snapshot_unchanged(&grants, &grant, &input_before)?;
+    ensure_grant_snapshot_unchanged(&grants, &replacement_grant, &replacement_before)?;
+    let input_size = input_before.len + replacement_before.len;
+    let started = Instant::now();
+
+    let (page_count, output_size) = {
+        let input = input.clone();
+        let replacement = replacement.clone();
+        let output_path = output_path.clone();
+        let toolchain = toolchain.clone();
+        on_blocking_pool(move || {
+            let invalid = |message: &str| PathOpError { code: core_ops::ERR_INVALID_INPUT, message: message.to_string() };
+            let failed = |message: &str| PathOpError { code: core_ops::ERR_OP_FAILED, message: message.to_string() };
+            let source_facts = core_ops::document_facts(&toolchain, &input)?;
+            if source_facts.encrypted {
+                return Err(invalid("Selected-page editing is unavailable for encrypted PDFs."));
+            }
+            if source_facts.pdfa_claimed {
+                return Err(invalid("Selected-page editing is unavailable for PDF/A files because the page replacement cannot preserve the archival claim."));
+            }
+            let signatures = &source_facts.signature_detection;
+            if signatures.standard_acro_form_signature_count > 0 || signatures.has_byte_range_or_contents_markers || signatures.has_certification_dictionary {
+                return Err(invalid("Selected-page editing is unavailable for signed PDFs."));
+            }
+            let unsupported_structure = if source_facts.has_acro_form {
+                Some("forms")
+            } else if source_facts.has_tagged_structure {
+                Some("tagged document structure")
+            } else if source_facts.has_embedded_files {
+                Some("embedded attachments")
+            } else if source_facts.has_annotations {
+                Some("page annotations")
+            } else {
+                None
+            };
+            if let Some(label) = unsupported_structure {
+                return Err(invalid(&format!("Selected-page editing is unavailable for PDFs with {label}; this version cannot verify their preservation.")));
+            }
+            let source_page = source_facts.pages.get(page_index as usize).ok_or_else(|| invalid("selected page is outside the document"))?;
+            let replacement_facts = core_ops::document_facts(&toolchain, &replacement)?;
+            let replacement_page = replacement_facts.pages.first().ok_or_else(|| invalid("replacement PDF has no page"))?;
+            if replacement_facts.page_count != 1 || replacement_page.media_box != source_page.media_box || replacement_page.rotate != source_page.rotate {
+                return Err(invalid("The edited page no longer matches the source page geometry."));
+            }
+            core_ops::replace_page(&toolchain, &input, &replacement, page_index, &output_path)?;
+            ensure_unchanged(&input, input_before)?;
+            ensure_unchanged(&replacement, replacement_before)?;
+            let output_facts = core_ops::document_facts(&toolchain, &output_path)?;
+            if output_facts.page_count != source_facts.page_count {
+                return Err(failed("The completed PDF has an unexpected page count."));
+            }
+            let output_page = output_facts.pages.get(page_index as usize).ok_or_else(|| failed("The completed PDF is missing the edited page."))?;
+            if output_page.media_box != source_page.media_box || output_page.rotate != source_page.rotate {
+                return Err(failed("The completed PDF changed the edited page geometry."));
+            }
+            let output_size = file_size(&output_path)?;
+            Ok((output_facts.page_count, output_size))
+        }).await?
+    };
+
+    let output_grant = issue_grant(&grants, &output_path)?;
+    work_dir.keep();
+    Ok(PathOpOutput {
+        output_grant,
+        name,
+        size_bytes: output_size,
+        page_count,
+        op_report: OpReport {
+            op: "replace_page",
+            tool: "qpdf",
+            duration_ms: started.elapsed().as_millis() as u64,
+            input_size_bytes: input_size,
+            output_size_bytes: output_size,
+            notes: Vec::new(),
+        },
+    })
+}
+
 // ---------------------------------------------------------------------------
 // build_binder — Node one-shot lane
 // ---------------------------------------------------------------------------

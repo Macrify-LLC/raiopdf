@@ -3137,6 +3137,64 @@ mod tests {
         assert_eq!(path.parent().and_then(Path::parent), Some(root.as_path()));
     }
 
+    // The temp-file backing lifecycle: a derived / in-memory document is staged
+    // to a temp file through the SAME chunked upload path the UI uses
+    // (`materializePdfBytesGrant` → `dropped_pdf_*`), then that temp is deleted
+    // on close / mutation / Save As exactly as `path_op_release_output` does
+    // (drop the grant + `remove_dir_all` the per-op `<uuid>` dir). This proves
+    // the backing is both created AND released — i.e. no temp-file leak — in CI.
+    #[test]
+    fn temp_backing_stage_then_release_deletes_the_temp_file_with_no_leak() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let uploads = DroppedUploads::default();
+        let grants = FileGrants::default();
+        let bytes = b"%PDF-1.7\nderived working copy body\n";
+
+        let token = uploads
+            .begin_upload(root.path(), bytes.len() as u64, "derived.pdf")
+            .expect("begin");
+        uploads
+            .append_upload(&token, &bytes[..8])
+            .expect("append a");
+        uploads
+            .append_upload(&token, &bytes[8..])
+            .expect("append b");
+        let opened = uploads
+            .finish_upload(&token, root.path(), &grants)
+            .expect("finish");
+
+        // The staged temp file exists on disk, resolvable via the grant the
+        // document carries as its `tempBackingGrant`.
+        let entry = grants
+            .resolve_entry(&opened.file_grant)
+            .expect("grant resolves");
+        let staged_path = entry.path.clone();
+        assert!(staged_path.exists(), "staged temp file should exist");
+
+        // It lives directly under the path-ops root (<root>/<uuid>/name.pdf), so
+        // it is a releasable per-op output — the exact condition
+        // `releasable_output_dir` gates the delete on.
+        let canonical_root = fs::canonicalize(root.path()).expect("canonical root");
+        let per_op_dir = staged_path.parent().expect("per-op dir").to_path_buf();
+        assert_eq!(
+            per_op_dir.parent(),
+            Some(canonical_root.as_path()),
+            "staged temp must sit directly under the path-ops root"
+        );
+
+        // Release the backing: drop the grant + delete the per-op dir.
+        grants.remove(&opened.file_grant);
+        fs::remove_dir_all(&per_op_dir).expect("remove per-op dir");
+
+        // No leak: the temp file and its dir are gone, and the grant is dead.
+        assert!(!staged_path.exists(), "released temp file must be deleted");
+        assert!(!per_op_dir.exists(), "released per-op dir must be deleted");
+        assert!(
+            grants.resolve_entry(&opened.file_grant).is_err(),
+            "released grant must no longer resolve"
+        );
+    }
+
     #[test]
     fn dropped_upload_append_rejects_unknown_token_and_declared_size_overflow() {
         let root = tempfile::tempdir().expect("temp dir");

@@ -319,6 +319,7 @@ const mockDocument: DocumentState = {
   protectionSource: null,
   protectionFacts: null,
   protectedSourceGrant: null,
+  tempBackingGrant: null,
   error: null,
 };
 

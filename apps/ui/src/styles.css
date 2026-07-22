@@ -103,10 +103,14 @@ body {
    Print isolation — browser-print (`window.print()`) fallback only.
 
    The native, file-based print path (Ghostscript on Windows, CUPS `lp` on
-   macOS) is the full-fidelity route and prints the file, not the DOM. This
-   block governs only the browser-print fallback — the web build, or an unsaved
-   in-memory document on the desktop — so that even then the printout is the
-   document, never the app's toolbars, panels, and banners.
+   macOS) is the full-fidelity route and prints the file at any length. On the
+   desktop it is the route for EVERY document — opened files and derived /
+   in-memory docs alike (the latter via their temp-file backing) — so
+   `window.print()` is not reached there. This block governs only the remaining
+   `window.print()` fallback: the non-shipped web / dev build, which has no
+   shell to print through. Its job is narrow — keep that fallback from printing
+   the app's toolbars and panels. It prints the visible pages only, since in
+   that build the browser has no more than the mounted pages to give.
    --------------------------------------------------------------------------- */
 @media print {
   html,

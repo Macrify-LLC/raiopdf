@@ -14,6 +14,7 @@ import {
   PDFStream,
   StandardFonts,
 } from "pdf-lib";
+import { enableExperimentalFeatures } from "./preferences";
 
 test("disables doc-dependent chrome and hover echoes for reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -146,6 +147,44 @@ test("settings offers every jurisdiction pack in an enabled default-jurisdiction
   await expect(jurisdictionSelect).toBeEnabled();
   await expect(jurisdictionSelect.locator("option")).toHaveCount(5);
   await expect(jurisdictionSelect).toHaveValue("florida");
+});
+
+test("opting out immediately closes active experimental workflows", async ({ page }) => {
+  await enableExperimentalFeatures(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const editText = page.getByRole("button", { name: "Edit Text Experimental", exact: true });
+  await editText.click();
+  await expect(editText).toHaveAttribute("aria-current", "true");
+
+  await page.getByRole("menuitem", { name: "File" }).click();
+  await page.getByRole("menuitem", { name: "Settings..." }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  const experimentalSwitch = settingsDialog.getByRole("switch", {
+    name: "Enable experimental features",
+  });
+  await experimentalSwitch.click();
+  await expect(experimentalSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(editText).not.toHaveAttribute("aria-current", "true");
+
+  await experimentalSwitch.click();
+  await settingsDialog.getByRole("button", { name: "Close settings" }).click();
+  await page.getByRole("button", { name: "Legal", exact: true }).click();
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Case Caption... Experimental", exact: true })
+    .click();
+  const captionWorkspace = page.getByLabel("Case Caption workspace");
+  await expect(captionWorkspace).toBeVisible();
+
+  await page.getByRole("menuitem", { name: "File" }).click();
+  await page.getByRole("menuitem", { name: "Settings..." }).click();
+  await page
+    .getByRole("dialog", { name: "Settings" })
+    .getByRole("switch", { name: "Enable experimental features" })
+    .click();
+  await expect(captionWorkspace).toBeHidden();
 });
 
 test("package-root inputs pair a Browse button, gated outside the desktop app", async ({ page }) => {
@@ -829,6 +868,7 @@ test("right-click selected replacement stages directly through the scoped engine
   const sourcePdf = await createTextPdf("Smith Smith");
   const editedPdf = await createTextPdf("Smith Jones");
   await installSelectedTextEditBridgeMock(page, editedPdf, "Smith Smith", "Smith Jones");
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-selected-text.pdf", sourcePdf);
 
@@ -876,11 +916,12 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
   await installTextEditBridgeMock(page, editedPdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByText("Replacements never reflow the page", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Search document")).toBeDisabled();
 
@@ -904,11 +945,12 @@ test("edit document text stages, reviews, applies, and saves as a changed copy",
 test("edit document text cancel and zero-change review leave bytes untouched", async ({ page }) => {
   const sourcePdf = await createTextPdf("No replacement happens.");
   await installTextEditBridgeMock(page, sourcePdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-zero.pdf", sourcePdf);
 
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Missing");
   await page.getByLabel("Replace with").fill("Present");
   await page.getByRole("button", { name: "Add replacement" }).click();
@@ -928,6 +970,7 @@ test("canceling a dirty-tab close preserves the staged text-edit review", async 
   const sourcePdf = await createTextPdf("Plaintiff files the motion.");
   const editedPdf = await createTextPdf("Petitioner files the motion.");
   await installTextEditBridgeMock(page, editedPdf);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-close-cancel.pdf", sourcePdf);
 
@@ -938,7 +981,7 @@ test("canceling a dirty-tab close preserves the staged text-edit review", async 
   await clickCanvasAt(page, mainCanvas(page), 0.3, 0.4);
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByRole("dialog", { name: "Pending annotations" })
     .getByRole("button", { name: "Save annotations" })
     .click();
@@ -966,6 +1009,7 @@ test("canceling a dirty-tab close preserves the staged text-edit review", async 
 
 test("edit document text prompts for pending annotations and gates scanned documents", async ({ page }) => {
   await installTextEditBridgeMock(page, await createTextPdf("Prompt fixture."));
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "edit-text-prompt.pdf", await createTextPdf("Prompt fixture."));
 
@@ -975,13 +1019,13 @@ test("edit document text prompts for pending annotations and gates scanned docum
   await page.getByLabel("Text box content").fill("Pending note");
   await page.getByLabel("Text box content").press("Enter");
   await expect(page.locator(".edit-layer__text-box")).toHaveCount(1);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Pending annotations" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await openPdf(page, "image-only.pdf", await createPdf([200]));
   await openEditToolPanel(page);
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await expect(page.getByText("Text editing isn't available for scanned documents.")).toBeVisible();
 });
 

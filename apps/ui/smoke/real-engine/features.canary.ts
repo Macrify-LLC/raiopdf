@@ -19,6 +19,7 @@ import {
   findMetadataMarkers,
 } from "./synthetic-fixtures";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { enableExperimentalFeatures } from "../preferences";
 
 const BENIGN_LOG = [/Setting up fake worker/i, /Warning: /i, /fontkit/i];
 
@@ -106,9 +107,10 @@ test("Scrub Metadata: the in-app scrub removes planted Info and XMP metadata fro
 
 test("Case caption: saves valid caption pages in multiple local styles", async ({ page }) => {
   const logs = captureLogs(page);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Case Caption (experimental)...", exact: true }).click();
+  await page.getByRole("button", { name: "Case Caption... Experimental", exact: true }).click();
   await page.getByLabel("Court name").fill("Circuit Court");
   await page.getByLabel("Document title").fill("Notice of Filing");
   await page.getByLabel("Name 1").first().fill("Jane Smith");
@@ -133,10 +135,11 @@ test("Case caption: saves valid caption pages in multiple local styles", async (
 
 test("Table of Authorities: saves grouped authority output from reviewed citations", async ({ page }) => {
   const logs = captureLogs(page);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
   await openPdf(page, "toa-brief.pdf", await createAuthorityBriefPdf());
 
-  await page.getByRole("button", { name: "Table of Authorities (experimental)...", exact: true }).click();
+  await page.getByRole("button", { name: "Table of Authorities... Experimental", exact: true }).click();
   // Detected citations render as editable "Citation" textboxes. Assert the two
   // seeded authorities were detected by reading the inputs' live values.
   // (getByDisplayValue is a Testing-Library API, not Playwright — this check

@@ -227,6 +227,8 @@ export interface ToolPanelProps {
   onFlattenMarkupAnnotations: () => void;
   markupAnnotationMessage: string | null;
   longProcessLockoutLabel?: string | null | undefined;
+  experimentalFeaturesEnabled?: boolean;
+  onExperimentalFeatureRequested?: (() => void) | undefined;
 }
 
 export function ToolPanel({
@@ -268,6 +270,8 @@ export function ToolPanel({
   onFlattenMarkupAnnotations,
   markupAnnotationMessage,
   longProcessLockoutLabel = null,
+  experimentalFeaturesEnabled = false,
+  onExperimentalFeatureRequested,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const pendingComments = pendingEdits.filter(
@@ -300,7 +304,9 @@ export function ToolPanel({
           description={EDIT_TEXT_TOOL.description}
           selected={activeTextEdit}
           disabled={longProcessLocked}
-          onSelect={() => onTextEditSelected?.()}
+          experimental
+          locked={!experimentalFeaturesEnabled}
+          onSelect={() => experimentalFeaturesEnabled ? onTextEditSelected?.() : onExperimentalFeatureRequested?.()}
         />
         {activeTextEdit && textEdit ? (
           <EditTextStatusPanel
@@ -473,7 +479,9 @@ export function ToolPanel({
                   longProcessLocked &&
                   (tool.id === "prepare-for-filing" || tool.id === "combine-exhibits")
                 }
-                onSelect={() => onLegalToolSelected(tool.id)}
+                experimental={"maturity" in tool && tool.maturity === "experimental"}
+                locked={"maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled}
+                onSelect={() => "maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled ? onExperimentalFeatureRequested?.() : onLegalToolSelected(tool.id)}
               />
               {tool.id === "redact" && selected ? (
                 <RedactionStatusPanel

@@ -9,12 +9,13 @@ export interface ToolRegistryEntry {
   helpArticleId: string;
   tooltip?: string;
   description?: string;
+  maturity?: "stable" | "experimental";
 }
 
 export const LEGAL_TOOLS = [
   { id: "prepare-for-filing", label: "Prepare for Filing", group: "legal", helpArticleId: "prepare-for-filing", description: "Check filing limits, normalize pages, split if needed, and verify the output." },
-  { id: "case-caption", label: "Case Caption (experimental)...", group: "legal", helpArticleId: "case-caption", description: "Experimental — fill a matter caption once, preview court caption styles, and save or prepend a caption page." },
-  { id: "table-of-authorities", label: "Table of Authorities (experimental)...", group: "legal", helpArticleId: "table-of-authorities", description: "Experimental — detect cited authorities, review them, and build a grouped, alphabetized table." },
+  { id: "case-caption", label: "Case Caption...", group: "legal", helpArticleId: "case-caption", description: "Fill a matter caption once, preview court caption styles, and save or prepend a caption page.", maturity: "experimental" },
+  { id: "table-of-authorities", label: "Table of Authorities...", group: "legal", helpArticleId: "table-of-authorities", description: "Detect cited authorities, review them, and build a grouped, alphabetized table.", maturity: "experimental" },
   { id: "batch-cleanup", label: "Batch Cleanup", group: "legal", helpArticleId: "batch-cleanup", description: "Run OCR, cleanup, metadata removal, and filing splits across local PDFs." },
   { id: "production-set", label: "Production Set", group: "legal", helpArticleId: "production-set", description: "Build a Bates-numbered production package with index files and optional volumes." },
   { id: "combine-exhibits", label: "Combine with Exhibits", group: "legal", helpArticleId: "combine-exhibits", description: "Append exhibits, stamp exhibit labels, add bookmarks, and optionally add an index." },
@@ -43,7 +44,7 @@ export const ORGANIZE_TOOLS = [
 // (engine round-trips with review/commit), as opposed to the annotation
 // overlays in TOOL_PANEL_ANNOTATE_TOOLS.
 export const TOOL_PANEL_EDIT_TOOLS = [
-  { id: "edit-text", label: "Edit Text", group: "edit", helpArticleId: "edit-text", description: "Find & replace across the document, or replace exactly the text you select — with a staged review." },
+  { id: "edit-text", label: "Edit Text", group: "edit", helpArticleId: "edit-text", description: "Find & replace across the document, or replace exactly the text you select — with a staged review.", maturity: "experimental" },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 // Annotation & markup overlays — pending edits layered over the page and

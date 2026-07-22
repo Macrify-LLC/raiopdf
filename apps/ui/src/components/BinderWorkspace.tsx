@@ -28,6 +28,7 @@ import {
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import { IconButton } from "./IconButton";
 import { CoverStylePicker } from "./CoverStylePicker";
+import { ExperimentalFeatureLock } from "./ExperimentalFeatureLock";
 import { LongProcessLoader } from "./LongProcessLoader";
 import "./BinderWorkspace.css";
 
@@ -82,6 +83,7 @@ export interface BinderWorkspaceProps {
   onHelpRequested?: (() => void) | undefined;
   defaultCoverStyle?: PdfCoverStyle | undefined;
   onCaptionRequested?: (() => void) | undefined;
+  experimentalFeaturesEnabled?: boolean;
 }
 
 export function BinderWorkspace({
@@ -93,6 +95,7 @@ export function BinderWorkspace({
   onHelpRequested,
   defaultCoverStyle,
   onCaptionRequested,
+  experimentalFeaturesEnabled = false,
 }: BinderWorkspaceProps) {
   const addInputRef = useRef<HTMLInputElement>(null);
   const [exhibits, setExhibits] = useState<ExhibitFile[]>([]);
@@ -449,16 +452,26 @@ export function BinderWorkspace({
             Add exhibits...
           </button>
           {onCaptionRequested ? (
-            <button
-              type="button"
-              className="binder-workspace__secondary binder-workspace__add"
-              onClick={onCaptionRequested}
-              disabled={building}
-              title="Create a caption or cover page before assembling the binder."
-            >
-              <SlipSheetIcon size={15} />
-              Add caption / cover page
-            </button>
+            <div className="experimental-feature-lock">
+              <button
+                type="button"
+                className={`binder-workspace__secondary binder-workspace__add${experimentalFeaturesEnabled ? "" : " binder-workspace__experimental-locked"}`}
+                onClick={onCaptionRequested}
+                disabled={building}
+                title={experimentalFeaturesEnabled ? "Create a caption or cover page before assembling the binder." : undefined}
+                aria-describedby={experimentalFeaturesEnabled ? undefined : "binder-caption-experimental-description"}
+                aria-disabled={!experimentalFeaturesEnabled || undefined}
+              >
+                <SlipSheetIcon size={15} />
+                Add caption / cover page
+                <span className="binder-workspace__experimental-badge">Experimental</span>
+              </button>
+              {!experimentalFeaturesEnabled ? (
+                <ExperimentalFeatureLock
+                  descriptionId="binder-caption-experimental-description"
+                />
+              ) : null}
+            </div>
           ) : null}
           <DocxConversionRows rows={docxRows} />
         </section>

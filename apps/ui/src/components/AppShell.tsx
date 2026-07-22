@@ -130,6 +130,8 @@ export interface AppShellProps {
   onPrintMarkupAnnotationsChange: (next: boolean) => void;
   onFlattenMarkupAnnotations: () => void;
   markupAnnotationMessage: string | null;
+  experimentalFeaturesEnabled?: boolean;
+  onExperimentalFeatureRequested?: (() => void) | undefined;
 }
 
 export function AppShell({
@@ -214,6 +216,8 @@ export function AppShell({
   onPrintMarkupAnnotationsChange,
   onFlattenMarkupAnnotations,
   markupAnnotationMessage,
+  experimentalFeaturesEnabled = false,
+  onExperimentalFeatureRequested,
 }: AppShellProps) {
   const platform = runtimePlatform();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -400,6 +404,8 @@ export function AppShell({
           onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
           markupAnnotationMessage={markupAnnotationMessage}
           longProcessLockoutLabel={longProcessLockoutLabel}
+          experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+          onExperimentalFeatureRequested={onExperimentalFeatureRequested}
         />
       </div>
       <StatusBar

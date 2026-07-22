@@ -9,6 +9,10 @@
   color: var(--body);
 }
 
+.binder-workspace__experimental-locked { color: var(--muted); opacity: 0.78; }
+.binder-workspace__experimental-badge { margin-left: 4px; padding: 2px 4px; border: 1px solid var(--border-soft); border-radius: 3px; font-size: 10px; }
+.binder-workspace__sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+
 .binder-workspace__header,
 .binder-workspace__footer {
   display: flex;

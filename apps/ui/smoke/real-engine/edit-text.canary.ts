@@ -22,6 +22,7 @@ import {
   savePdf,
   searchHitCount,
 } from "./helpers";
+import { enableExperimentalFeatures } from "../preferences";
 
 const endpoint = readEngineEndpoint();
 const REVIEW_TIMEOUT_MS = 240_000;
@@ -39,13 +40,14 @@ test.describe.configure({ timeout: TEST_TIMEOUT_MS });
 test("Edit Text: real engine replaces born-digital text and preserves restored bookmarks", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
 
   const source = await createBookmarkedTextPdf("Plaintiff files the motion.");
   await openPdf(page, "edit-text-bookmarked.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Plaintiff");
   await page.getByLabel("Replace with").fill("Petitioner");
   await page.getByRole("button", { name: "Add replacement" }).click();
@@ -78,13 +80,14 @@ test("Edit Text: real engine replaces born-digital text and preserves restored b
 test("Edit Text: image-bearing mixed document stays within the Phase 0 size envelope", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
 
   const source = await createImageBearingTextPdf("Acme appears beside the logo.");
   await openPdf(page, "edit-text-image-bearing.pdf", source);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Edit Text", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
   await page.getByLabel("Find text").fill("Acme");
   await page.getByLabel("Replace with").fill("Raio");
   await page.getByRole("button", { name: "Add replacement" }).click();
@@ -107,6 +110,7 @@ test("Edit Text: image-bearing mixed document stays within the Phase 0 size enve
 test("Edit Text: right-click selected replacement changes only the chosen occurrence", async ({ page }) => {
   const logs = captureLogs(page);
   await installRealEngineBridge(page, endpoint);
+  await enableExperimentalFeatures(page);
   await page.goto("/");
 
   // Two occurrences of the same word on separate lines; the test replaces

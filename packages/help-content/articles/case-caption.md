@@ -8,6 +8,8 @@ order: 18
 
 # Case Caption
 
+**Experimental feature:** Enable Experimental features in Settings before using Case Caption.
+
 Make a caption page for a filing or cover sheet without leaving RaioPDF. Type
 the court, parties, case number, title, and signature lines; pick the layout that
 matches the matter; then save the caption as a PDF or put it at the front of the

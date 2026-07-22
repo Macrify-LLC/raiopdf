@@ -8,6 +8,9 @@
   color: var(--body);
 }
 
+.filing-card__experimental-locked { color: var(--muted); opacity: 0.78; }
+.filing-workspace__sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+
 .filing-card {
   display: grid;
   gap: var(--space-4);

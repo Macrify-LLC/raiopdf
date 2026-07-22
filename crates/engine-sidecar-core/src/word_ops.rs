@@ -6,12 +6,18 @@
 use serde::{Deserialize, Serialize};
 use std::{path::Path, time::Duration};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicBool;
+
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::Mutex;
 
 use crate::path_ops::{self, OpResult, PathOpError, PathOpsToolchain};
 
@@ -23,6 +29,17 @@ pub enum WordCapabilityState {
     Detected,
     Available,
     Unavailable,
+}
+
+/// Current macOS Automation consent for RaioPDF -> Microsoft Word. The shell
+/// obtains this natively from the RaioPDF process; core keeps it in the IPC
+/// wire shape so the UI can distinguish a first-use prompt from a denial.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WordAutomationAuthorization {
+    Authorized,
+    Denied,
+    Undetermined,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -52,20 +69,46 @@ pub const ERR_WORD_ENTERPRISE_BLOCKED: &str = "WORD_ENTERPRISE_BLOCKED";
 pub const ERR_WORD_FILE_LOCKED: &str = "WORD_FILE_LOCKED";
 pub const ERR_WORD_EXPORT_FAILED: &str = "WORD_EXPORT_FAILED";
 pub const ERR_WORD_SAVE_FAILED: &str = "WORD_SAVE_FAILED";
+/// macOS Word cannot silently read the private conversion copy. This is
+/// distinct from a user-selected source file permission: RaioPDF never hands
+/// the original to Word, so asking the user to locate a private temp file is
+/// neither safe nor actionable.
+pub const ERR_WORD_STAGING_UNAVAILABLE: &str = "WORD_STAGING_UNAVAILABLE";
+/// macOS denied this app permission to send Apple Events to Microsoft Word.
+/// Retrying does not re-prompt; the user must change the Automation setting.
+pub const ERR_WORD_AUTOMATION_DENIED: &str = "WORD_AUTOMATION_DENIED";
 
 pub const DEFAULT_WORD_CONVERSION_TIMEOUT: Duration = Duration::from_secs(120);
+/// Consent time is excluded before this timer starts. A representative
+/// 120-page legal-code PDF completes with more than a 3x margin on maintainer
+/// hardware; keep the blueprint's explicit two-minute conversion deadline.
+#[cfg(target_os = "macos")]
+pub const MACOS_WORD_CONVERSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PID_PREFIX: &str = "@@RAIOPDF_WORD_PID@@";
 const RESULT_PREFIX: &str = "@@RAIOPDF_WORD_RESULT@@";
-#[cfg(windows)]
+#[cfg(target_os = "macos")]
+const MACOS_LAUNCHED_PREFIX: &str = "@@RAIOPDF_WORD_LAUNCHED@@";
+#[cfg(any(windows, target_os = "macos"))]
 static WORD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
-#[cfg(windows)]
-static WORD_AUTOMATION_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(any(windows, target_os = "macos"))]
+static WORD_AUTOMATION_MUTEX: Mutex<()> = Mutex::new(());
+#[cfg(target_os = "macos")]
+static MACOS_WORD_AUTOMATION_UNCERTAIN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+const MACOS_WORD_BUNDLE_ID: &str = "com.microsoft.Word";
+#[cfg(target_os = "macos")]
+const MACOS_WORD_APP_PATH: &str = "/Applications/Microsoft Word.app";
+#[cfg(target_os = "macos")]
+const MACOS_WORD_UNCERTAIN_MARKER: &str = ".raiopdf-word-automation-uncertain";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WordCapability {
     pub state: WordCapabilityState,
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automation_authorization: Option<WordAutomationAuthorization>,
 }
 
 impl WordCapability {
@@ -73,14 +116,24 @@ impl WordCapability {
         Self {
             state,
             reason: None,
+            automation_authorization: None,
         }
     }
 
-    fn unavailable(reason: impl AsRef<str>) -> Self {
+    pub fn unavailable(reason: impl AsRef<str>) -> Self {
         Self {
             state: WordCapabilityState::Unavailable,
             reason: short_reason(reason.as_ref()),
+            automation_authorization: None,
         }
+    }
+
+    pub fn with_automation_authorization(
+        mut self,
+        authorization: WordAutomationAuthorization,
+    ) -> Self {
+        self.automation_authorization = Some(authorization);
+        self
     }
 }
 
@@ -92,7 +145,7 @@ struct WordAutomationProbeWire {
 }
 
 pub const fn platform_supported() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "macos"))
 }
 
 pub fn parse_word_type_probe_output(stdout: &str) -> OpResult<bool> {
@@ -145,7 +198,35 @@ pub fn word_capability(force: bool) -> OpResult<WordCapability> {
     parse_word_automation_probe_output(&String::from_utf8_lossy(&automation_output.stdout))
 }
 
-#[cfg(not(windows))]
+/// Check the selected Word bundle without launching it. This deliberately does
+/// not send an Apple Event: the first conversion, rather than a settings probe,
+/// owns the one-time Automation consent prompt.
+#[cfg(target_os = "macos")]
+pub fn word_capability(_force: bool) -> OpResult<WordCapability> {
+    let target = match resolve_macos_word_target() {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(WordCapability::new(WordCapabilityState::NotDetected)),
+        Err(error) => return Ok(WordCapability::unavailable(error.message)),
+    };
+
+    match read_macos_word_version(&target.bundle_path) {
+        Ok(version) if macos_word_version_supported(&version) => {
+            // "available" means a conversion may be attempted. TCC and license
+            // are intentionally checked by that conversion, without cold-launching
+            // Word merely to populate this status.
+            Ok(WordCapability::new(WordCapabilityState::Available))
+        }
+        Ok(version) => Ok(WordCapability::unavailable(format!(
+            "Microsoft Word {version} is too old for this integration."
+        ))),
+        Err(error) => Ok(WordCapability::unavailable(format!(
+            "Microsoft Word was found, but its version could not be read: {}",
+            error.message
+        ))),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn word_capability(_force: bool) -> OpResult<WordCapability> {
     Ok(WordCapability::new(WordCapabilityState::NotApplicable))
 }
@@ -160,7 +241,11 @@ pub fn convert_pdf_to_docx(input: &Path, output: &Path) -> OpResult<()> {
     {
         convert_pdf_to_docx_windows(input, output, DEFAULT_WORD_CONVERSION_TIMEOUT)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        convert_pdf_to_docx_macos(input, output, MACOS_WORD_CONVERSION_TIMEOUT)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (input, output);
         Err(word_error(
@@ -186,7 +271,17 @@ pub fn convert_docx_to_pdf_with_toolchain(
             DEFAULT_WORD_CONVERSION_TIMEOUT,
         )
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        convert_docx_to_pdf_macos(
+            toolchain,
+            input,
+            output,
+            markup,
+            MACOS_WORD_CONVERSION_TIMEOUT,
+        )
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (toolchain, input, output, markup);
         Err(word_error(
@@ -219,6 +314,70 @@ pub fn build_word_conversion_input_json(
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
 
+/// Batch conversion tells the JXA helper to leave Word running between private
+/// document conversions. The enclosing `MacosWordConversionSession` owns the
+/// one final quit decision.
+#[cfg(target_os = "macos")]
+fn build_macos_batch_word_conversion_input_json(
+    input: &Path,
+    output: &Path,
+    markup: MarkupMode,
+    word_bundle: &Path,
+) -> OpResult<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InputWire<'a> {
+        input_path: &'a str,
+        output_path: &'a str,
+        markup: &'a str,
+        keep_word_running: bool,
+        word_bundle_path: &'a str,
+    }
+
+    let input_path = path_to_utf8(input, "input")?;
+    let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
+    serde_json::to_string(&InputWire {
+        input_path,
+        output_path,
+        markup: markup.as_script_value(),
+        keep_word_running: true,
+        word_bundle_path,
+    })
+    .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
+}
+
+/// macOS-only request data. JXA still addresses Word by bundle id because
+/// path-addressed JXA stalls in Word 16.111, but receives the selected bundle
+/// path and refuses if a different installation owns the running target.
+#[cfg(target_os = "macos")]
+fn build_macos_word_conversion_input_json(
+    input: &Path,
+    output: &Path,
+    markup: MarkupMode,
+    word_bundle: &Path,
+) -> OpResult<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InputWire<'a> {
+        input_path: &'a str,
+        output_path: &'a str,
+        markup: &'a str,
+        word_bundle_path: &'a str,
+    }
+
+    let input_path = path_to_utf8(input, "input")?;
+    let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
+    serde_json::to_string(&InputWire {
+        input_path,
+        output_path,
+        markup: markup.as_script_value(),
+        word_bundle_path,
+    })
+    .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
+}
+
 pub fn build_word_reflow_input_json(input: &Path, output: &Path) -> OpResult<String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -232,6 +391,31 @@ pub fn build_word_reflow_input_json(input: &Path, output: &Path) -> OpResult<Str
     serde_json::to_string(&InputWire {
         input_path,
         output_path,
+    })
+    .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
+}
+
+#[cfg(target_os = "macos")]
+fn build_macos_word_reflow_input_json(
+    input: &Path,
+    output: &Path,
+    word_bundle: &Path,
+) -> OpResult<String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InputWire<'a> {
+        input_path: &'a str,
+        output_path: &'a str,
+        word_bundle_path: &'a str,
+    }
+
+    let input_path = path_to_utf8(input, "input")?;
+    let output_path = path_to_utf8(output, "output")?;
+    let word_bundle_path = path_to_utf8(word_bundle, "bundle")?;
+    serde_json::to_string(&InputWire {
+        input_path,
+        output_path,
+        word_bundle_path,
     })
     .map_err(|error| word_error(path_ops::ERR_OP_FAILED, format!("Word input JSON: {error}")))
 }
@@ -419,11 +603,765 @@ pub fn parse_word_script_stdout(stdout: &str) -> OpResult<WordScriptOutcome> {
 }
 
 pub fn build_word_conversion_script() -> &'static str {
-    WORD_CONVERSION_SCRIPT
+    #[cfg(target_os = "macos")]
+    {
+        MACOS_WORD_CONVERSION_SCRIPT
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        WORD_CONVERSION_SCRIPT
+    }
 }
 
 pub fn build_word_reflow_script() -> &'static str {
-    WORD_REFLOW_SCRIPT
+    #[cfg(target_os = "macos")]
+    {
+        MACOS_WORD_REFLOW_SCRIPT
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        WORD_REFLOW_SCRIPT
+    }
+}
+
+/// argv for JXA. User-controlled paths stay in an input JSON file and are never
+/// interpolated into the script source or shell command line.
+#[cfg(target_os = "macos")]
+pub fn word_osascript_args(script_path: &Path, input_json_path: &Path) -> Vec<std::ffi::OsString> {
+    [
+        std::ffi::OsString::from("-l"),
+        std::ffi::OsString::from("JavaScript"),
+        script_path.as_os_str().to_os_string(),
+        input_json_path.as_os_str().to_os_string(),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_word_version(bundle: &Path) -> OpResult<String> {
+    use std::process::{Command, Stdio};
+
+    let info_plist = bundle.join("Contents/Info.plist");
+    let output = Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
+        .arg(&info_plist)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            word_error(
+                path_ops::ERR_IO,
+                format!("read Word bundle version: {error}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(word_error(
+            path_ops::ERR_OP_FAILED,
+            "could not read Microsoft Word bundle version",
+        ));
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        return Err(word_error(
+            path_ops::ERR_OP_FAILED,
+            "Microsoft Word bundle has no version",
+        ));
+    }
+    Ok(version)
+}
+
+/// The exact Word installation selected for this operation.
+///
+/// A running Word instance is authoritative because bundle-id Apple Events
+/// attach to it. Otherwise LaunchServices' registered default is authoritative;
+/// the conventional `/Applications` location is only a compatibility fallback.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MacosWordTarget {
+    bundle_path: PathBuf,
+    staging_root: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_word_target() -> OpResult<Option<MacosWordTarget>> {
+    let bundle_path = macos_selected_word_bundle();
+    let Some(bundle_path) = bundle_path else {
+        return Ok(None);
+    };
+    if !bundle_path.is_dir() {
+        return Ok(None);
+    }
+    let staging_root = macos_word_staging_root_for_bundle(&bundle_path)?;
+    Ok(Some(MacosWordTarget {
+        bundle_path,
+        staging_root,
+    }))
+}
+
+/// Return the exact LaunchServices-selected Word bundle without launching it.
+/// Shell-level TCC preflight uses this only after a user starts conversion, to
+/// bring a cold Word target online before asking the native Apple Events API.
+#[cfg(target_os = "macos")]
+pub fn macos_selected_word_bundle() -> Option<PathBuf> {
+    select_macos_word_bundle(
+        macos_word_bundle_from_running_application(),
+        macos_word_bundle_from_launch_services(),
+    )
+}
+
+/// Prefer the oldest running Word instance, matching bundle-id Apple Event
+/// attachment. If Word is cold, use LaunchServices' registered default. The
+/// explicit ordering makes multiple-install behavior deterministic.
+#[cfg(target_os = "macos")]
+fn select_macos_word_bundle(
+    running_word: Option<PathBuf>,
+    launch_services_default: Option<PathBuf>,
+) -> Option<PathBuf> {
+    running_word
+        .filter(|path| path.is_dir())
+        .or_else(|| launch_services_default.filter(|path| path.is_dir()))
+        .filter(|path| path.is_dir())
+        .or_else(|| {
+            let fallback = PathBuf::from(MACOS_WORD_APP_PATH);
+            fallback.is_dir().then_some(fallback)
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_word_bundle_from_running_application() -> Option<PathBuf> {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::NSRunningApplication;
+    use objc2_foundation::NSString;
+
+    autoreleasepool(|_| {
+        let bundle_id = NSString::from_str(MACOS_WORD_BUNDLE_ID);
+        let applications =
+            NSRunningApplication::runningApplicationsWithBundleIdentifier(&bundle_id);
+        (0..applications.count())
+            .filter_map(|index| {
+                let application = applications.objectAtIndex(index);
+                let path = application.bundleURL()?.to_file_path()?;
+                Some((application.processIdentifier(), path))
+            })
+            .min_by_key(|(pid, _)| *pid)
+            .map(|(_, path)| path)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_word_bundle_from_launch_services() -> Option<PathBuf> {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSString;
+
+    // NSWorkspace is the public LaunchServices façade. It does not launch the
+    // app and merely returns the registered default URL for the bundle id.
+    autoreleasepool(|_| {
+        let bundle_id = NSString::from_str(MACOS_WORD_BUNDLE_ID);
+        let url =
+            NSWorkspace::sharedWorkspace().URLForApplicationWithBundleIdentifier(&bundle_id)?;
+        url.to_file_path()
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn require_macos_word_target() -> OpResult<MacosWordTarget> {
+    resolve_macos_word_target()?.ok_or_else(|| {
+        word_error(
+            ERR_WORD_NOT_SUPPORTED,
+            "Microsoft Word was not found through LaunchServices or /Applications.",
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosUncertainRecovery {
+    Proceed,
+    ClearAndProceed,
+    RefuseWhileWordRuns,
+}
+
+#[cfg(target_os = "macos")]
+fn plan_macos_uncertain_recovery(uncertain: bool, word_running: bool) -> MacosUncertainRecovery {
+    match (uncertain, word_running) {
+        (false, _) => MacosUncertainRecovery::Proceed,
+        (true, false) => MacosUncertainRecovery::ClearAndProceed,
+        (true, true) => MacosUncertainRecovery::RefuseWhileWordRuns,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_uncertain_recovery(
+    marker: &Path,
+    uncertain: bool,
+    word_running: bool,
+) -> OpResult<MacosUncertainRecovery> {
+    let recovery = plan_macos_uncertain_recovery(uncertain, word_running);
+    match recovery {
+        MacosUncertainRecovery::Proceed => Ok(recovery),
+        MacosUncertainRecovery::ClearAndProceed => {
+            if marker.is_file() {
+                fs::remove_file(marker).map_err(|error| {
+                    word_error(
+                        path_ops::ERR_IO,
+                        format!("clear stale Word automation state: {error}"),
+                    )
+                })?;
+            }
+            Ok(recovery)
+        }
+        MacosUncertainRecovery::RefuseWhileWordRuns => Err(word_error(
+            ERR_WORD_TIMEOUT,
+            "Microsoft Word may still be finishing a previous timed-out conversion. Review any Word dialogs or documents, then quit Word yourself before retrying; RaioPDF will never close a shared Word process.",
+        )),
+    }
+}
+
+/// A timed-out Apple Event may still be executing inside Word after the sender
+/// has returned. Persist that uncertainty so neither another request nor an app
+/// restart can overlap the late conversion. The user remains in control of the
+/// shared Word process; observing that Word has exited is the only automatic
+/// recovery signal.
+#[cfg(target_os = "macos")]
+fn ensure_macos_word_automation_settled(word_target: &MacosWordTarget) -> OpResult<()> {
+    let marker = word_target.staging_root.join(MACOS_WORD_UNCERTAIN_MARKER);
+    let uncertain = MACOS_WORD_AUTOMATION_UNCERTAIN.load(Ordering::Acquire) || marker.is_file();
+    let word_running = macos_word_bundle_from_running_application().is_some();
+    match apply_macos_uncertain_recovery(&marker, uncertain, word_running)? {
+        MacosUncertainRecovery::Proceed | MacosUncertainRecovery::RefuseWhileWordRuns => Ok(()),
+        MacosUncertainRecovery::ClearAndProceed => {
+            MACOS_WORD_AUTOMATION_UNCERTAIN.store(false, Ordering::Release);
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mark_macos_word_automation_uncertain(word_target: &MacosWordTarget) {
+    MACOS_WORD_AUTOMATION_UNCERTAIN.store(true, Ordering::Release);
+    let marker = word_target.staging_root.join(MACOS_WORD_UNCERTAIN_MARKER);
+    let _ = fs::write(
+        marker,
+        b"A Word Apple Event timed out; do not overlap conversions.\n",
+    );
+}
+
+/// The feasibility spike still owns the final version/license matrix. Keep the
+/// gate deliberately permissive for a current installed Word, while rejecting
+/// malformed metadata and obviously obsolete major versions.
+#[cfg(target_os = "macos")]
+pub fn macos_word_version_supported(version: &str) -> bool {
+    version
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 16)
+}
+
+/// Cleanup is intentionally document-scoped: macOS Word is a shared, visible
+/// process, so a timeout must never kill it. We quit only a process our script
+/// launched, and otherwise close just the temp document without saving.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MacosTimeoutCleanupPlan {
+    pub close_temp_document: bool,
+    pub quit_word: bool,
+}
+
+#[cfg(target_os = "macos")]
+pub fn plan_macos_timeout_cleanup(word_was_launched: bool) -> MacosTimeoutCleanupPlan {
+    MacosTimeoutCleanupPlan {
+        close_temp_document: true,
+        quit_word: word_was_launched,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn convert_docx_to_pdf_macos(
+    toolchain: &PathOpsToolchain,
+    input: &Path,
+    output: &Path,
+    markup: MarkupMode,
+    timeout: Duration,
+) -> OpResult<()> {
+    require_docx_input(input)?;
+    let word_target = require_macos_word_target()?;
+    let temp_dir = WordTempDir::create_macos("raiopdf-word-convert", &word_target)?;
+    let copied_input = temp_dir.path().join("input.docx");
+    let staged_output = temp_dir.path().join("output.pdf");
+    fs::copy(input, &copied_input)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("copy DOCX input: {error}")))?;
+
+    run_macos_word_conversion(
+        build_word_conversion_script(),
+        &word_target,
+        &copied_input,
+        &staged_output,
+        Some(markup),
+        timeout,
+    )?;
+    require_nonempty_pdf(&staged_output)?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| word_error(path_ops::ERR_IO, format!("create output dir: {error}")))?;
+    }
+    let scrubbed = temp_dir.path().join("scrubbed.pdf");
+    scrub_word_pdf(toolchain, &staged_output, &scrubbed)?;
+    require_nonempty_pdf(&scrubbed)?;
+    move_staged_output(&scrubbed, output)?;
+    Ok(())
+}
+
+/// A single-flight macOS Word session for a DOCX import batch.
+///
+/// Word for Mac exposes one shared visible application instance. Holding the
+/// automation lock across the batch prevents another RaioPDF conversion from
+/// joining halfway through, while each document still gets its own private
+/// copy, output validation, and error result. The session never kills Word;
+/// it only asks Word to quit at the end when the first batch conversion launched
+/// it.
+#[cfg(target_os = "macos")]
+pub struct MacosWordConversionSession {
+    _automation_guard: std::sync::MutexGuard<'static, ()>,
+    word_target: MacosWordTarget,
+    launched_by_raio: bool,
+    finished: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosWordConversionSession {
+    pub fn begin() -> OpResult<Self> {
+        let automation_guard = WORD_AUTOMATION_MUTEX
+            .lock()
+            .map_err(|_| word_error(path_ops::ERR_IO, "Word automation mutex poisoned"))?;
+        let word_target = require_macos_word_target()?;
+        ensure_macos_word_automation_settled(&word_target)?;
+        Ok(Self {
+            _automation_guard: automation_guard,
+            word_target,
+            launched_by_raio: false,
+            finished: false,
+        })
+    }
+
+    /// Convert one DOCX while retaining the session's Word instance for the
+    /// next item in the batch. A failed item leaves the session usable so the
+    /// caller can report that item and continue with later files.
+    pub fn convert_docx_to_pdf_with_toolchain(
+        &mut self,
+        toolchain: &PathOpsToolchain,
+        input: &Path,
+        output: &Path,
+        markup: MarkupMode,
+    ) -> OpResult<()> {
+        require_docx_input(input)?;
+        let temp_dir = WordTempDir::create_macos("raiopdf-word-convert", &self.word_target)?;
+        let copied_input = temp_dir.path().join("input.docx");
+        let staged_output = temp_dir.path().join("output.pdf");
+        fs::copy(input, &copied_input)
+            .map_err(|error| word_error(path_ops::ERR_IO, format!("copy DOCX input: {error}")))?;
+
+        run_macos_word_conversion_unlocked(MacosWordConversionRun {
+            script: build_word_conversion_script(),
+            word_target: &self.word_target,
+            input: &copied_input,
+            output: &staged_output,
+            markup: Some(markup),
+            timeout: MACOS_WORD_CONVERSION_TIMEOUT,
+            keep_word_running: true,
+            quit_on_timeout: false,
+            launched_by_raio: Some(&mut self.launched_by_raio),
+        })?;
+
+        require_nonempty_pdf(&staged_output)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                word_error(path_ops::ERR_IO, format!("create output dir: {error}"))
+            })?;
+        }
+        let scrubbed = temp_dir.path().join("scrubbed.pdf");
+        scrub_word_pdf(toolchain, &staged_output, &scrubbed)?;
+        require_nonempty_pdf(&scrubbed)?;
+        move_staged_output(&scrubbed, output)
+    }
+
+    /// End the batch. This is deliberately best-effort: output results have
+    /// already been recorded per file, so a cleanup failure cannot rewrite a
+    /// successful per-file result.
+    pub fn finish(mut self) {
+        self.finish_best_effort();
+    }
+
+    fn finish_best_effort(&mut self) {
+        if self.finished {
+            return;
+        }
+        if !self.launched_by_raio || request_macos_word_quit().is_ok() {
+            self.finished = true;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosWordConversionSession {
+    fn drop(&mut self) {
+        self.finish_best_effort();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn convert_pdf_to_docx_macos(input: &Path, output: &Path, timeout: Duration) -> OpResult<()> {
+    require_pdf_input(input)?;
+    require_docx_output(output)?;
+    let word_target = require_macos_word_target()?;
+    let temp_dir = WordTempDir::create_macos("raiopdf-word-reflow", &word_target)?;
+    let copied_input = temp_dir.path().join("input.pdf");
+    let staged_output = temp_dir.path().join("output.docx");
+    fs::copy(input, &copied_input)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("copy PDF input: {error}")))?;
+
+    run_macos_word_conversion(
+        build_word_reflow_script(),
+        &word_target,
+        &copied_input,
+        &staged_output,
+        None,
+        timeout,
+    )?;
+    require_nonempty_docx(&staged_output)?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| word_error(path_ops::ERR_IO, format!("create output dir: {error}")))?;
+    }
+    move_staged_output(&staged_output, output)
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_word_conversion(
+    script: &str,
+    word_target: &MacosWordTarget,
+    input: &Path,
+    output: &Path,
+    markup: Option<MarkupMode>,
+    timeout: Duration,
+) -> OpResult<()> {
+    let _automation_guard = WORD_AUTOMATION_MUTEX
+        .lock()
+        .map_err(|_| word_error(path_ops::ERR_IO, "Word automation mutex poisoned"))?;
+    run_macos_word_conversion_unlocked(MacosWordConversionRun {
+        script,
+        word_target,
+        input,
+        output,
+        markup,
+        timeout,
+        keep_word_running: false,
+        quit_on_timeout: true,
+        launched_by_raio: None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+/// Execute one JXA conversion while the caller owns WORD_AUTOMATION_MUTEX.
+/// `keep_word_running` is only used by the batch session; ordinary conversion
+/// retains its existing launch-and-quit behavior.
+struct MacosWordConversionRun<'a> {
+    script: &'a str,
+    word_target: &'a MacosWordTarget,
+    input: &'a Path,
+    output: &'a Path,
+    markup: Option<MarkupMode>,
+    timeout: Duration,
+    keep_word_running: bool,
+    quit_on_timeout: bool,
+    launched_by_raio: Option<&'a mut bool>,
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_word_conversion_unlocked(run_options: MacosWordConversionRun<'_>) -> OpResult<()> {
+    let MacosWordConversionRun {
+        script,
+        word_target,
+        input,
+        output,
+        markup,
+        timeout,
+        keep_word_running,
+        quit_on_timeout,
+        launched_by_raio,
+    } = run_options;
+    ensure_macos_word_automation_settled(word_target)?;
+    let work_dir = WordTempDir::create_macos("raiopdf-word-script", word_target)?;
+    let script_path = work_dir.path().join("word-convert.js");
+    let input_json_path = work_dir.path().join("input.json");
+    fs::write(&script_path, script)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word script: {error}")))?;
+    let input_json = match markup {
+        Some(markup) if keep_word_running => build_macos_batch_word_conversion_input_json(
+            input,
+            output,
+            markup,
+            &word_target.bundle_path,
+        )?,
+        Some(markup) => {
+            build_macos_word_conversion_input_json(input, output, markup, &word_target.bundle_path)?
+        }
+        None => build_macos_word_reflow_input_json(input, output, &word_target.bundle_path)?,
+    };
+    fs::write(&input_json_path, input_json)
+        .map_err(|error| word_error(path_ops::ERR_IO, format!("write Word input JSON: {error}")))?;
+
+    let args = word_osascript_args(&script_path, &input_json_path);
+    let run = run_word_osascript(&args, timeout, quit_on_timeout)?;
+    if let Some(launched_by_raio) = launched_by_raio {
+        *launched_by_raio |= parse_macos_word_launched(&run.stdout);
+    }
+    if run.timed_out {
+        mark_macos_word_automation_uncertain(word_target);
+        let _ = fs::remove_file(output);
+        return Err(word_error(
+            ERR_WORD_TIMEOUT,
+            format!(
+                "Word conversion timed out after {} seconds.",
+                timeout.as_secs()
+            ),
+        ));
+    }
+    if !run.status_success {
+        let _ = fs::remove_file(output);
+        let message = if run.stderr.trim().is_empty() {
+            "osascript exited unsuccessfully".to_string()
+        } else {
+            run.stderr.trim().to_string()
+        };
+        return Err(word_error(macos_word_error_code(&message), message));
+    }
+    let outcome = parse_word_script_stdout(&run.stdout)?;
+    if let WordScriptResult::Err { code, message } = outcome.result {
+        if macos_word_error_code(&code) == ERR_WORD_TIMEOUT {
+            mark_macos_word_automation_uncertain(word_target);
+        }
+        let _ = fs::remove_file(output);
+        return Err(word_error(macos_word_error_code(&code), message));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct MacosWordRunOutput {
+    status_success: bool,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn run_word_osascript(
+    args: &[std::ffi::OsString],
+    timeout: Duration,
+    quit_on_timeout: bool,
+) -> OpResult<MacosWordRunOutput> {
+    use std::{
+        process::{Command, Stdio},
+        sync::Arc,
+        thread,
+        time::Instant,
+    };
+
+    let mut child = Command::new("/usr/bin/osascript")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            word_error(path_ops::ERR_OP_FAILED, format!("osascript spawn: {error}"))
+        })?;
+    let stdout = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stderr = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stdout_thread = child
+        .stdout
+        .take()
+        .map(|reader| drain_child_output(reader, Arc::clone(&stdout)));
+    let stderr_thread = child
+        .stderr
+        .take()
+        .map(|reader| drain_child_output(reader, Arc::clone(&stderr)));
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            word_error(path_ops::ERR_OP_FAILED, format!("osascript wait: {error}"))
+        })? {
+            join_word_output_threads(stdout_thread, stderr_thread);
+            return Ok(MacosWordRunOutput {
+                status_success: status.success(),
+                stdout: locked_output_string(&stdout),
+                stderr: locked_output_string(&stderr),
+                timed_out: false,
+            });
+        }
+        if started.elapsed() >= timeout {
+            // This terminates only the helper. It intentionally never kills the
+            // shared Microsoft Word process; the JXA finally block handles the
+            // normal close/quit policy before this runner deadline.
+            let _ = child.kill();
+            let _ = child.wait();
+            join_word_output_threads(stdout_thread, stderr_thread);
+            let stdout = locked_output_string(&stdout);
+            let launched_by_us = parse_macos_word_launched(&stdout);
+            let _ = run_macos_timeout_cleanup(
+                args.last().map(Path::new),
+                launched_by_us && quit_on_timeout,
+            );
+            return Ok(MacosWordRunOutput {
+                status_success: false,
+                stdout,
+                stderr: locked_output_string(&stderr),
+                timed_out: true,
+            });
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn join_word_output_threads(
+    stdout_thread: Option<std::thread::JoinHandle<()>>,
+    stderr_thread: Option<std::thread::JoinHandle<()>>,
+) {
+    if let Some(thread) = stdout_thread {
+        let _ = thread.join();
+    }
+    if let Some(thread) = stderr_thread {
+        let _ = thread.join();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_word_launched(stdout: &str) -> bool {
+    stdout.lines().any(|line| {
+        line.trim()
+            .strip_prefix(MACOS_LAUNCHED_PREFIX)
+            .is_some_and(|value| value.trim() == "true")
+    })
+}
+
+/// Best-effort cleanup after the helper was stopped. It only addresses the
+/// private copied document, and it never sends a process kill to Word.
+#[cfg(target_os = "macos")]
+fn run_macos_timeout_cleanup(input_json_path: Option<&Path>, launched_by_us: bool) -> OpResult<()> {
+    use std::{
+        process::{Command, Stdio},
+        thread,
+        time::Instant,
+    };
+
+    let Some(input_json_path) = input_json_path else {
+        return Ok(());
+    };
+    let mut child = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", MACOS_WORD_TIMEOUT_CLEANUP_SCRIPT])
+        .arg(input_json_path)
+        .arg(if launched_by_us { "true" } else { "false" })
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            word_error(
+                path_ops::ERR_OP_FAILED,
+                format!("osascript cleanup spawn: {error}"),
+            )
+        })?;
+    let started = Instant::now();
+    while child
+        .try_wait()
+        .map_err(|error| {
+            word_error(
+                path_ops::ERR_OP_FAILED,
+                format!("osascript cleanup wait: {error}"),
+            )
+        })?
+        .is_none()
+    {
+        if started.elapsed() >= Duration::from_secs(5) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// Best-effort session cleanup. This sends Word a normal quit Apple Event; it
+/// never terminates the Word process. Callers only reach this when the batch's
+/// first conversion established that RaioPDF launched Word.
+#[cfg(target_os = "macos")]
+fn request_macos_word_quit() -> OpResult<()> {
+    use std::{
+        process::{Command, Stdio},
+        thread,
+        time::Instant,
+    };
+
+    let mut child = Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", MACOS_WORD_QUIT_SCRIPT])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            word_error(
+                path_ops::ERR_OP_FAILED,
+                format!("osascript Word quit spawn: {error}"),
+            )
+        })?;
+    let started = Instant::now();
+    while child
+        .try_wait()
+        .map_err(|error| {
+            word_error(
+                path_ops::ERR_OP_FAILED,
+                format!("osascript Word quit wait: {error}"),
+            )
+        })?
+        .is_none()
+    {
+        if started.elapsed() >= Duration::from_secs(5) {
+            // The helper is disposable. Do not send a signal to Word itself.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn move_staged_output(source: &Path, destination: &Path) -> OpResult<()> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            fs::copy(source, destination).map_err(|copy_error| {
+                word_error(
+                    path_ops::ERR_IO,
+                    format!(
+                        "move Word staged output ({rename_error}); copy fallback: {copy_error}"
+                    ),
+                )
+            })?;
+            fs::remove_file(source).map_err(|error| {
+                word_error(
+                    path_ops::ERR_IO,
+                    format!("remove moved staged output: {error}"),
+                )
+            })
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -633,6 +1571,56 @@ fn word_error(code: &'static str, message: impl Into<String>) -> PathOpError {
     }
 }
 
+/// Classify the stable Apple Event error numbers before matching the more
+/// variable localized text emitted by Word/JXA. `-1712` is an Apple Event
+/// reply timeout (inside the script), whereas a runner deadline uses the same
+/// public timeout code with its own explicit message.
+#[cfg(target_os = "macos")]
+pub fn macos_word_error_code(message: &str) -> &'static str {
+    match message {
+        ERR_WORD_AUTOMATION_DENIED => return ERR_WORD_AUTOMATION_DENIED,
+        ERR_WORD_TIMEOUT => return ERR_WORD_TIMEOUT,
+        ERR_WORD_PASSWORD_PROTECTED => return ERR_WORD_PASSWORD_PROTECTED,
+        ERR_WORD_REPAIR_REQUIRED => return ERR_WORD_REPAIR_REQUIRED,
+        ERR_WORD_FILE_LOCKED => return ERR_WORD_FILE_LOCKED,
+        ERR_WORD_SAVE_FAILED => return ERR_WORD_SAVE_FAILED,
+        ERR_WORD_AUTOMATION_FAILED => return ERR_WORD_AUTOMATION_FAILED,
+        _ => {}
+    }
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("-1743") || lower.contains("not authorized to send apple events") {
+        return ERR_WORD_AUTOMATION_DENIED;
+    }
+    if lower.contains("-1712") || lower.contains("apple event timed out") {
+        return ERR_WORD_TIMEOUT;
+    }
+    if lower.contains("password") || lower.contains("encrypted") {
+        return ERR_WORD_PASSWORD_PROTECTED;
+    }
+    if lower.contains("repair") || lower.contains("corrupt") || lower.contains("damaged") {
+        return ERR_WORD_REPAIR_REQUIRED;
+    }
+    if lower.contains("license")
+        || lower.contains("activation")
+        || lower.contains("subscription")
+        || lower.contains("read-only")
+    {
+        return ERR_WORD_SAVE_FAILED;
+    }
+    if lower.contains("sandbox")
+        || lower.contains("not permitted")
+        || lower.contains("permission denied")
+        || lower.contains("operation not permitted")
+        || lower.contains("file is locked")
+    {
+        return ERR_WORD_FILE_LOCKED;
+    }
+    if lower.contains("save") || lower.contains("export") || lower.contains("write") {
+        return ERR_WORD_SAVE_FAILED;
+    }
+    ERR_WORD_AUTOMATION_FAILED
+}
+
 #[cfg(windows)]
 fn word_error_code(code: &str) -> &'static str {
     match code {
@@ -644,13 +1632,14 @@ fn word_error_code(code: &str) -> &'static str {
         ERR_WORD_FILE_LOCKED => ERR_WORD_FILE_LOCKED,
         ERR_WORD_EXPORT_FAILED => ERR_WORD_EXPORT_FAILED,
         ERR_WORD_SAVE_FAILED => ERR_WORD_SAVE_FAILED,
+        ERR_WORD_AUTOMATION_DENIED => ERR_WORD_AUTOMATION_DENIED,
         ERR_WORD_AUTOMATION_FAILED => ERR_WORD_AUTOMATION_FAILED,
         ERR_WORD_TIMEOUT => ERR_WORD_TIMEOUT,
         _ => ERR_WORD_AUTOMATION_FAILED,
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn require_docx_input(input: &Path) -> OpResult<()> {
     let metadata = fs::metadata(input)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("stat DOCX input: {error}")))?;
@@ -674,7 +1663,7 @@ fn require_docx_input(input: &Path) -> OpResult<()> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn require_pdf_input(input: &Path) -> OpResult<()> {
     let metadata = fs::metadata(input)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("stat PDF input: {error}")))?;
@@ -698,7 +1687,7 @@ fn require_pdf_input(input: &Path) -> OpResult<()> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn require_docx_output(output: &Path) -> OpResult<()> {
     if output
         .extension()
@@ -714,12 +1703,12 @@ fn require_docx_output(output: &Path) -> OpResult<()> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn scrub_word_pdf(toolchain: &PathOpsToolchain, input: &Path, output: &Path) -> OpResult<()> {
     path_ops::scrub_metadata(toolchain, input, output)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn require_nonempty_pdf(path: &Path) -> OpResult<()> {
     let bytes = fs::read(path)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("read converted PDF: {error}")))?;
@@ -732,7 +1721,7 @@ fn require_nonempty_pdf(path: &Path) -> OpResult<()> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn require_nonempty_docx(path: &Path) -> OpResult<()> {
     let metadata = fs::metadata(path)
         .map_err(|error| word_error(path_ops::ERR_IO, format!("stat converted DOCX: {error}")))?;
@@ -846,7 +1835,7 @@ fn run_word_powershell(args: &[std::ffi::OsString], timeout: Duration) -> OpResu
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn drain_child_output<R: std::io::Read + Send + 'static>(
     mut reader: R,
     sink: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -866,7 +1855,7 @@ fn drain_child_output<R: std::io::Read + Send + 'static>(
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn locked_output_string(output: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
     output
         .lock()
@@ -912,18 +1901,35 @@ fn kill_pid(pid: u32) {
     let _ = command.status();
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 struct WordTempDir {
     path: PathBuf,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl WordTempDir {
+    #[cfg(windows)]
     fn create(prefix: &str) -> OpResult<Self> {
         let sequence = WORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("{prefix}-{}-{sequence}", std::process::id()));
+        let base = std::env::temp_dir();
+        let path = base.join(format!("{prefix}-{}-{sequence}", std::process::id()));
         fs::create_dir_all(&path)
             .map_err(|error| word_error(path_ops::ERR_IO, format!("create temp dir: {error}")))?;
+        Ok(Self { path })
+    }
+
+    /// Create a conversion-private directory in the silently writable root
+    /// selected for this exact Word bundle. App Store Word uses its Office
+    /// application group; non-sandboxed direct-download Word uses a private
+    /// ordinary temp root. Sandboxed builds without the group are rejected
+    /// rather than causing a picker for an invisible private source file.
+    #[cfg(target_os = "macos")]
+    fn create_macos(prefix: &str, word_target: &MacosWordTarget) -> OpResult<Self> {
+        let sequence = WORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = word_target
+            .staging_root
+            .join(format!("{prefix}-{}-{sequence}", std::process::id()));
+        path_ops::create_private_dir(&path)?;
         Ok(Self { path })
     }
 
@@ -932,13 +1938,392 @@ impl WordTempDir {
     }
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "macos")]
+fn macos_word_staging_root_for_bundle(bundle: &Path) -> OpResult<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        word_error(
+            path_ops::ERR_IO,
+            "cannot locate the user home directory for Microsoft Word staging",
+        )
+    })?;
+    let office_container = PathBuf::from(home).join("Library/Group Containers/UBF8T346G9.Office");
+    let sandboxed = macos_word_bundle_is_sandboxed(bundle)?;
+    match select_macos_word_staging_kind(sandboxed, office_container.is_dir()) {
+        MacosWordStagingKind::OfficeGroup => {
+            // The Mac App Store edition of Word is sandboxed. Files in the normal
+            // process temp directory trigger an interactive file-access picker,
+            // which cannot be completed for an intentionally private temp path.
+            // Word's signed application-group entitlement grants it silent access
+            // to this Microsoft Office container; RaioPDF itself is not sandboxed.
+            let raio_root = office_container.join("RaioPDF");
+            path_ops::ensure_private_dir(&raio_root)?;
+            let root = raio_root.join("Word Automation");
+            path_ops::ensure_private_dir(&root)?;
+            Ok(root)
+        }
+        MacosWordStagingKind::PrivateTemp => {
+            let root = std::env::temp_dir().join("RaioPDF Word Automation");
+            path_ops::ensure_private_dir(&root)?;
+            Ok(root)
+        }
+        MacosWordStagingKind::Unavailable => Err(word_error(
+            ERR_WORD_STAGING_UNAVAILABLE,
+            "Microsoft Word is sandboxed but its Office group container is unavailable. Reinstall or launch Word once, then retry; RaioPDF will not expose your original document to a file-access prompt.",
+        )),
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosWordStagingKind {
+    OfficeGroup,
+    PrivateTemp,
+    Unavailable,
+}
+
+#[cfg(target_os = "macos")]
+fn select_macos_word_staging_kind(
+    sandboxed: bool,
+    office_container_exists: bool,
+) -> MacosWordStagingKind {
+    match (sandboxed, office_container_exists) {
+        (true, true) => MacosWordStagingKind::OfficeGroup,
+        (true, false) => MacosWordStagingKind::Unavailable,
+        (false, _) => MacosWordStagingKind::PrivateTemp,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_word_bundle_is_sandboxed(bundle: &Path) -> OpResult<bool> {
+    use std::process::{Command, Stdio};
+
+    let output = Command::new("/usr/bin/codesign")
+        .args(["-d", "--entitlements", ":-"])
+        .arg(bundle)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            word_error(
+                ERR_WORD_STAGING_UNAVAILABLE,
+                format!("inspect Microsoft Word sandbox entitlements: {error}"),
+            )
+        })?;
+    // codesign has historically emitted the entitlement plist on either
+    // stdout or stderr depending on the OS release. Combine both streams.
+    let mut entitlement_text = String::from_utf8_lossy(&output.stdout).into_owned();
+    entitlement_text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() && entitlement_text.trim().is_empty() {
+        return Err(word_error(
+            ERR_WORD_STAGING_UNAVAILABLE,
+            "could not inspect Microsoft Word sandbox entitlements",
+        ));
+    }
+    let sandbox_key = "<key>com.apple.security.app-sandbox</key>";
+    let Some(index) = entitlement_text.find(sandbox_key) else {
+        return Ok(false);
+    };
+    Ok(entitlement_text[index + sandbox_key.len()..]
+        .trim_start()
+        .starts_with("<true/>"))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 impl Drop for WordTempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
 
+// JXA is used instead of interpolated AppleScript so JSON and POSIX paths stay
+// data all the way into Word. Protocol markers use an explicit stdout file
+// handle; JXA `console.log` and AppleScript `log` both write to stderr.
+//
+// The exact PDF-open/reflow behavior is intentionally validated by the Track A
+// spike before this code is enabled in a release. Word enum arguments use the
+// literal names published by its installed scripting dictionary; unlike some
+// JXA applications, Word does not expose them through `word.constants`.
+#[cfg(target_os = "macos")]
+const MACOS_WORD_CONVERSION_SCRIPT: &str = r#"
+ObjC.import('Foundation');
+ObjC.import('AppKit');
+const RESULT_PREFIX = '@@RAIOPDF_WORD_RESULT@@ ';
+const LAUNCHED_PREFIX = '@@RAIOPDF_WORD_LAUNCHED@@ ';
+const APP_ID = 'com.microsoft.Word';
+
+function input() {
+  const path = ObjC.unwrap($.NSProcessInfo.processInfo.arguments.lastObject);
+  const data = $.NSData.dataWithContentsOfFile($(path));
+  return JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)));
+}
+// `console.log` is written to stderr by osascript's JXA runtime. The Rust
+// runner reserves stdout for these protocol markers, so write it explicitly.
+function stdout(line) {
+  const data = $(String(line) + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
+}
+function emit(value) { stdout(RESULT_PREFIX + JSON.stringify(value)); }
+function runningWordBundlePaths() {
+  const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier($(APP_ID));
+  const paths = [];
+  for (let index = 0; index < apps.count; index += 1) {
+    const url = apps.objectAtIndex(index).bundleURL;
+    if (url) paths.push(ObjC.unwrap(url.path));
+  }
+  return paths;
+}
+function requireSelectedWord(request) {
+  const running = runningWordBundlePaths();
+  if (running.length > 1) {
+    throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+  }
+  if (running.length > 0 && running.indexOf(request.wordBundlePath) === -1) {
+    throw new Error('Selected Word installation does not match the running Apple Events target; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+  }
+}
+function waitForSelectedWord(request) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const running = runningWordBundlePaths();
+    if (running.length === 1 && running[0] === request.wordBundlePath) return;
+    if (running.length > 1) {
+      throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+    }
+    if (running.length > 0) {
+      throw new Error('Launched Word installation does not match selection; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Selected Word installation did not become the Apple Events target: ' + request.wordBundlePath);
+}
+function documentAtPath(word, path) {
+  let seen = [];
+  // PDF reflow can return from `open` while Word is still constructing a
+  // 100+ page document. The Rust runner owns the two-minute wall clock; keep
+  // polling here so a legitimate asynchronous open is not misreported after
+  // five seconds.
+  for (let attempt = 0; attempt < 2400; attempt += 1) {
+    seen = [];
+    for (let index = 0; index < word.documents.length; index += 1) {
+      const candidate = word.documents[index];
+      try {
+        const candidatePath = String(candidate.posixFullName());
+        seen.push(candidatePath);
+        if (candidatePath === path) return candidate;
+      } catch (_) {}
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Word opened the file but did not expose its document object; requested=' + path + '; seen=' + seen.join(','));
+}
+function errorCode(error) {
+  const message = String(error);
+  if (message.indexOf('-1743') !== -1) return 'WORD_AUTOMATION_DENIED';
+  if (message.indexOf('-1712') !== -1) return 'WORD_TIMEOUT';
+  if (/password|encrypt/i.test(message)) return 'WORD_PASSWORD_PROTECTED';
+  if (/repair|corrupt|damaged/i.test(message)) return 'WORD_REPAIR_REQUIRED';
+  if (/license|activation|subscription|read-only/i.test(message)) return 'WORD_SAVE_FAILED';
+  if (/sandbox|not permitted|permission denied|locked/i.test(message)) return 'WORD_FILE_LOCKED';
+  if (/save|export|write/i.test(message)) return 'WORD_SAVE_FAILED';
+  return 'WORD_AUTOMATION_FAILED';
+}
+
+let word = null;
+let document = null;
+let launchedByUs = false;
+let keepWordRunning = false;
+let stage = 'initializing';
+try {
+  const request = input();
+  requireSelectedWord(request);
+  keepWordRunning = request.keepWordRunning === true;
+  // Passing an app-bundle path here stalls Word 16.111's JXA bridge. Address
+  // by bundle id, but fail closed above if its running target is not the exact
+  // bundle Rust selected for version and staging checks.
+  word = Application(APP_ID);
+  word.includeStandardAdditions = true;
+  launchedByUs = !word.running();
+  if (launchedByUs) word.launch();
+  waitForSelectedWord(request);
+  stdout(LAUNCHED_PREFIX + launchedByUs);
+  stage = 'suppressing Word alerts';
+  word.displayAlerts = 'alerts none';
+  // Word for Mac has a shared visible instance. Opening the private copy is
+  // deliberate; never pass a user-selected source path to Word.
+  stage = 'opening the private DOCX copy';
+  word.open(Path(request.inputPath), {
+    confirmConversions: false,
+    readOnly: true,
+    addToRecentFiles: false
+  });
+  // Word 16.111 opens the file successfully but returns `undefined` from its
+  // JXA `open` command despite declaring a document result in the sdef.
+  // Resolve the exact private copy from the indexed collection instead.
+  stage = 'resolving the opened DOCX';
+  document = documentAtPath(word, request.inputPath);
+  stage = 'applying revision display mode';
+  if (request.markup === 'showMarkup') {
+    try { document.showRevisions = true; } catch (_) {}
+  } else {
+    try { document.showRevisions = false; } catch (_) {}
+  }
+  // The sdef names this `format PDF`; this spelling is verified by the Track A
+  // spike against the installed Word dictionary before release enablement.
+  stage = 'saving the PDF';
+  word.saveAs(document, { fileName: request.outputPath, fileFormat: 'format PDF' });
+  emit({ ok: true, launchedByUs: launchedByUs });
+} catch (error) {
+  emit({ ok: false, code: errorCode(error), message: stage + ': ' + String(error), launchedByUs: launchedByUs });
+} finally {
+  if (document) { try { document.close({ saving: 'no' }); } catch (_) {} }
+  if (word && launchedByUs && !keepWordRunning) { try { word.quit(); } catch (_) {} }
+}
+"#;
+
+#[cfg(target_os = "macos")]
+const MACOS_WORD_REFLOW_SCRIPT: &str = r#"
+ObjC.import('Foundation');
+ObjC.import('AppKit');
+const RESULT_PREFIX = '@@RAIOPDF_WORD_RESULT@@ ';
+const LAUNCHED_PREFIX = '@@RAIOPDF_WORD_LAUNCHED@@ ';
+const APP_ID = 'com.microsoft.Word';
+
+function input() {
+  const path = ObjC.unwrap($.NSProcessInfo.processInfo.arguments.lastObject);
+  const data = $.NSData.dataWithContentsOfFile($(path));
+  return JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)));
+}
+// `console.log` is written to stderr by osascript's JXA runtime. The Rust
+// runner reserves stdout for these protocol markers, so write it explicitly.
+function stdout(line) {
+  const data = $(String(line) + '\n').dataUsingEncoding($.NSUTF8StringEncoding);
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
+}
+function emit(value) { stdout(RESULT_PREFIX + JSON.stringify(value)); }
+function runningWordBundlePaths() {
+  const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier($(APP_ID));
+  const paths = [];
+  for (let index = 0; index < apps.count; index += 1) {
+    const url = apps.objectAtIndex(index).bundleURL;
+    if (url) paths.push(ObjC.unwrap(url.path));
+  }
+  return paths;
+}
+function requireSelectedWord(request) {
+  const running = runningWordBundlePaths();
+  if (running.length > 1) {
+    throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+  }
+  if (running.length > 0 && running.indexOf(request.wordBundlePath) === -1) {
+    throw new Error('Selected Word installation does not match the running Apple Events target; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+  }
+}
+function waitForSelectedWord(request) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const running = runningWordBundlePaths();
+    if (running.length === 1 && running[0] === request.wordBundlePath) return;
+    if (running.length > 1) {
+      throw new Error('Multiple Microsoft Word instances are running; close the extra Word instance and retry; running=' + running.join(','));
+    }
+    if (running.length > 0) {
+      throw new Error('Launched Word installation does not match selection; selected=' + request.wordBundlePath + '; running=' + running.join(','));
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Selected Word installation did not become the Apple Events target: ' + request.wordBundlePath);
+}
+function documentAtPath(word, path) {
+  let seen = [];
+  // Large PDF reflow is asynchronous on Word 16.111: `open` may return before
+  // the document enters the collection. The outer Rust runner remains the
+  // authoritative two-minute bound.
+  for (let attempt = 0; attempt < 2400; attempt += 1) {
+    seen = [];
+    for (let index = 0; index < word.documents.length; index += 1) {
+      const candidate = word.documents[index];
+      try {
+        const candidatePath = String(candidate.posixFullName());
+        seen.push(candidatePath);
+        if (candidatePath === path) return candidate;
+      } catch (_) {}
+    }
+    $.NSThread.sleepForTimeInterval(0.05);
+  }
+  throw new Error('Word opened the file but did not expose its document object; requested=' + path + '; seen=' + seen.join(','));
+}
+function errorCode(error) {
+  const message = String(error);
+  if (message.indexOf('-1743') !== -1) return 'WORD_AUTOMATION_DENIED';
+  if (message.indexOf('-1712') !== -1) return 'WORD_TIMEOUT';
+  if (/password|encrypt/i.test(message)) return 'WORD_PASSWORD_PROTECTED';
+  if (/repair|corrupt|damaged/i.test(message)) return 'WORD_REPAIR_REQUIRED';
+  if (/license|activation|subscription|read-only/i.test(message)) return 'WORD_SAVE_FAILED';
+  if (/sandbox|not permitted|permission denied|locked/i.test(message)) return 'WORD_FILE_LOCKED';
+  if (/save|export|write/i.test(message)) return 'WORD_SAVE_FAILED';
+  return 'WORD_AUTOMATION_FAILED';
+}
+
+let word = null;
+let document = null;
+let launchedByUs = false;
+let stage = 'initializing';
+try {
+  const request = input();
+  requireSelectedWord(request);
+  word = Application(APP_ID);
+  word.includeStandardAdditions = true;
+  launchedByUs = !word.running();
+  if (launchedByUs) word.launch();
+  waitForSelectedWord(request);
+  stdout(LAUNCHED_PREFIX + launchedByUs);
+  stage = 'suppressing Word alerts';
+  word.displayAlerts = 'alerts none';
+  stage = 'opening the private PDF copy';
+  word.open(Path(request.inputPath), {
+    confirmConversions: false,
+    readOnly: true,
+    addToRecentFiles: false
+  });
+  stage = 'resolving the opened PDF';
+  document = documentAtPath(word, request.inputPath);
+  // The dictionary's `format document` is a DOCX save target. PDF opening and
+  // this save path are the feasibility gate; do not claim support until Track A.
+  stage = 'saving the DOCX';
+  word.saveAs(document, { fileName: request.outputPath, fileFormat: 'format document' });
+  emit({ ok: true, launchedByUs: launchedByUs });
+} catch (error) {
+  emit({ ok: false, code: errorCode(error), message: stage + ': ' + String(error), launchedByUs: launchedByUs });
+} finally {
+  if (document) { try { document.close({ saving: 'no' }); } catch (_) {} }
+  if (word && launchedByUs) { try { word.quit(); } catch (_) {} }
+}
+"#;
+
+#[cfg(target_os = "macos")]
+const MACOS_WORD_TIMEOUT_CLEANUP_SCRIPT: &str = r#"
+ObjC.import('Foundation');
+const args = $.NSProcessInfo.processInfo.arguments;
+const launchedByUs = ObjC.unwrap(args.lastObject) === 'true';
+const jsonPath = ObjC.unwrap(args.objectAtIndex(args.count - 2));
+const data = $.NSData.dataWithContentsOfFile($(jsonPath));
+const request = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)));
+const word = Application('com.microsoft.Word');
+if (word.running()) {
+  for (let index = 0; index < word.documents.length; index += 1) {
+    const document = word.documents[index];
+    try {
+      if (String(document.posixFullName()) === request.inputPath) document.close({ saving: 'no' });
+    } catch (_) {}
+  }
+  if (launchedByUs) { try { word.quit(); } catch (_) {} }
+}
+"#;
+
+#[cfg(target_os = "macos")]
+const MACOS_WORD_QUIT_SCRIPT: &str = r#"
+const word = Application('com.microsoft.Word');
+if (word.running()) word.quit();
+"#;
+
+#[cfg(not(target_os = "macos"))]
 const WORD_CONVERSION_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -1028,6 +2413,7 @@ try {
 }
 "#;
 
+#[cfg(not(target_os = "macos"))]
 const WORD_REFLOW_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -1338,6 +2724,7 @@ mod tests {
         assert!(parse_tasklist_verbose_csv("").is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn conversion_script_contains_required_safety_contract() {
         let script = build_word_conversion_script();
@@ -1350,6 +2737,7 @@ mod tests {
         assert!(script.contains("@@RAIOPDF_WORD_RESULT@@"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn reflow_script_contains_required_safety_contract() {
         let script = build_word_reflow_script();
@@ -1366,7 +2754,7 @@ mod tests {
         assert!(script.contains("@@RAIOPDF_WORD_RESULT@@"));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
     fn non_windows_probe_is_not_applicable() {
         assert!(!platform_supported());
@@ -1380,7 +2768,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
     fn non_windows_conversion_is_unsupported() {
         let error = convert_docx_to_pdf(
@@ -1396,7 +2784,251 @@ mod tests {
         assert_eq!(error.code, ERR_WORD_NOT_SUPPORTED);
     }
 
-    #[cfg(windows)]
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_word_version_gate_accepts_current_word_and_rejects_old_or_malformed_versions() {
+        assert!(macos_word_version_supported("16.111.1"));
+        assert!(macos_word_version_supported("16"));
+        assert!(!macos_word_version_supported("15.99"));
+        assert!(!macos_word_version_supported("Word 16"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_word_bundle_selection_prefers_running_then_launch_services_then_fallback() {
+        let temp = std::env::temp_dir().join(format!(
+            "raiopdf-word-selection-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir(&temp).unwrap();
+        let launch_services = temp.join("Microsoft Word Preview.app");
+        let running = temp.join("Microsoft Word Running.app");
+        fs::create_dir(&launch_services).unwrap();
+        fs::create_dir(&running).unwrap();
+        assert_eq!(
+            select_macos_word_bundle(Some(running.clone()), Some(launch_services.clone())),
+            Some(running)
+        );
+        assert_eq!(
+            select_macos_word_bundle(None, Some(launch_services.clone())),
+            Some(launch_services)
+        );
+
+        // A missing registration must not be used merely because it is named
+        // like Word. The standard /Applications fallback remains the only
+        // deterministic alternative (and is absent in an isolated CI root).
+        assert_eq!(
+            select_macos_word_bundle(
+                Some(temp.join("missing-running.app")),
+                Some(temp.join("missing-registered.app")),
+            ),
+            Path::new(MACOS_WORD_APP_PATH)
+                .is_dir()
+                .then(|| PathBuf::from(MACOS_WORD_APP_PATH))
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_osascript_args_keep_script_and_json_as_argv() {
+        let args = word_osascript_args(
+            Path::new("/tmp/word conversion.js"),
+            Path::new("/tmp/input with spaces.json"),
+        );
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "-l",
+                "JavaScript",
+                "/tmp/word conversion.js",
+                "/tmp/input with spaces.json",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_error_mapping_preserves_apple_event_and_word_failures() {
+        assert_eq!(
+            macos_word_error_code("Application isn't allowed to send Apple events. (-1743)"),
+            ERR_WORD_AUTOMATION_DENIED
+        );
+        assert_eq!(
+            macos_word_error_code("Apple event timed out. (-1712)"),
+            ERR_WORD_TIMEOUT
+        );
+        assert_eq!(
+            macos_word_error_code("sandbox: operation not permitted"),
+            ERR_WORD_FILE_LOCKED
+        );
+        assert_eq!(
+            macos_word_error_code("A Microsoft 365 subscription is required"),
+            ERR_WORD_SAVE_FAILED
+        );
+        assert_eq!(
+            macos_word_error_code("This document is password protected"),
+            ERR_WORD_PASSWORD_PROTECTED
+        );
+        assert_eq!(
+            macos_word_error_code(ERR_WORD_AUTOMATION_DENIED),
+            ERR_WORD_AUTOMATION_DENIED
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_timeout_cleanup_never_kills_shared_word() {
+        assert_eq!(
+            plan_macos_timeout_cleanup(false),
+            MacosTimeoutCleanupPlan {
+                close_temp_document: true,
+                quit_word: false,
+            }
+        );
+        assert_eq!(
+            plan_macos_timeout_cleanup(true),
+            MacosTimeoutCleanupPlan {
+                close_temp_document: true,
+                quit_word: true,
+            }
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uncertain_conversion_blocks_overlap_until_word_exits() {
+        assert_eq!(
+            plan_macos_uncertain_recovery(false, true),
+            MacosUncertainRecovery::Proceed
+        );
+        assert_eq!(
+            plan_macos_uncertain_recovery(true, true),
+            MacosUncertainRecovery::RefuseWhileWordRuns
+        );
+        assert_eq!(
+            plan_macos_uncertain_recovery(true, false),
+            MacosUncertainRecovery::ClearAndProceed
+        );
+    }
+
+    /// CI-safe integration canary for the incident where Word continued a late
+    /// PDF reflow after `osascript` timed out. This exercises the persistent
+    /// marker on disk without launching or scripting Word.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_word_timeout_overlap_marker_canary() {
+        let root = std::env::temp_dir().join(format!(
+            "raiopdf-word-overlap-canary-{}-{}",
+            std::process::id(),
+            WORD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).expect("create overlap canary root");
+        let marker = root.join(MACOS_WORD_UNCERTAIN_MARKER);
+        fs::write(&marker, b"timed out\n").expect("write overlap marker");
+
+        let error = apply_macos_uncertain_recovery(&marker, true, true)
+            .expect_err("a running Word instance must keep the guard closed");
+        assert_eq!(error.code, ERR_WORD_TIMEOUT);
+        assert!(marker.is_file(), "refusal must persist across app restarts");
+
+        assert_eq!(
+            apply_macos_uncertain_recovery(&marker, true, false)
+                .expect("Word exit should clear uncertainty"),
+            MacosUncertainRecovery::ClearAndProceed
+        );
+        assert!(
+            !marker.exists(),
+            "Word exit must clear the persistent guard"
+        );
+        fs::remove_dir_all(root).expect("remove overlap canary root");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_jxa_scripts_keep_the_safety_contract_and_stdout_result_marker() {
+        for script in [build_word_conversion_script(), build_word_reflow_script()] {
+            assert!(script.contains("const APP_ID = 'com.microsoft.Word'"));
+            assert!(script.contains("confirmConversions: false"));
+            assert!(script.contains("readOnly: true"));
+            assert!(script.contains("document.close({ saving: 'no' })"));
+            assert!(script.contains("NSFileHandle.fileHandleWithStandardOutput.writeData(data)"));
+            assert!(script.contains("stdout(RESULT_PREFIX + JSON.stringify(value))"));
+            assert!(script.contains("stdout(LAUNCHED_PREFIX + launchedByUs)"));
+            assert!(!script.contains("console.log("));
+            assert!(script.contains("arguments.lastObject"));
+            assert!(!script.contains("doShellScript"));
+        }
+        assert!(build_word_conversion_script().contains("let keepWordRunning = false"));
+        assert!(build_word_conversion_script()
+            .contains("if (word && launchedByUs && !keepWordRunning) { try { word.quit(); }"));
+        assert!(
+            build_word_reflow_script().contains("if (word && launchedByUs) { try { word.quit(); }")
+        );
+        assert!(build_word_conversion_script().contains("fileFormat: 'format PDF'"));
+        assert!(build_word_reflow_script().contains("fileFormat: 'format document'"));
+        assert!(!build_word_conversion_script().contains("word.constants"));
+        assert!(!build_word_reflow_script().contains("word.constants"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_timeout_launch_marker_is_parsed_without_word() {
+        assert!(parse_macos_word_launched(
+            "noise\n@@RAIOPDF_WORD_LAUNCHED@@ true\n"
+        ));
+        assert!(!parse_macos_word_launched(
+            "@@RAIOPDF_WORD_LAUNCHED@@ false\n"
+        ));
+        assert!(!parse_macos_word_launched(""));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_batch_input_requests_one_word_session_without_shell_quoting() {
+        let json = build_macos_batch_word_conversion_input_json(
+            Path::new("/tmp/input doc.docx"),
+            Path::new("/tmp/output doc.pdf"),
+            MarkupMode::ShowMarkup,
+            Path::new("/Applications/Microsoft Word.app"),
+        )
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"inputPath":"/tmp/input doc.docx","outputPath":"/tmp/output doc.pdf","markup":"showMarkup","keepWordRunning":true,"wordBundlePath":"/Applications/Microsoft Word.app"}"#
+        );
+        assert!(build_word_conversion_script().contains("request.keepWordRunning === true"));
+        assert!(build_word_conversion_script().contains("request.wordBundlePath"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_staging_follows_selected_bundle_sandbox_state() {
+        assert_eq!(
+            select_macos_word_staging_kind(true, true),
+            MacosWordStagingKind::OfficeGroup
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(true, false),
+            MacosWordStagingKind::Unavailable
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(false, true),
+            MacosWordStagingKind::PrivateTemp
+        );
+        assert_eq!(
+            select_macos_word_staging_kind(false, false),
+            MacosWordStagingKind::PrivateTemp
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn word_conversion_canary_self_gates_on_word_capability() {
         use std::fs;
@@ -1443,7 +3075,7 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn word_pdf_reflow_canary_self_gates_on_word_capability() {
         let capability = word_capability(true).expect("Word capability probe should run");
@@ -1474,12 +3106,47 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
+    /// Maintainer-hardware timing gate for the representative 100+ page legal
+    /// PDF. Kept ignored because CI has neither licensed Word nor this external
+    /// non-confidential fixture. Run with `RAIOPDF_WORD_LARGE_PDF=/path/file.pdf`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires licensed Word and RAIOPDF_WORD_LARGE_PDF"]
+    fn macos_word_large_pdf_timing_canary() {
+        use std::time::Instant;
+
+        let input = std::env::var_os("RAIOPDF_WORD_LARGE_PDF")
+            .map(PathBuf::from)
+            .expect("RAIOPDF_WORD_LARGE_PDF must point to the representative legal PDF");
+        let toolchain = PathOpsToolchain::discover(None);
+        let pages = path_ops::page_count(&toolchain, &input).expect("count large-PDF pages");
+        assert!(pages >= 100, "timing fixture must have at least 100 pages");
+
+        let temp = std::env::temp_dir().join(format!(
+            "raiopdf-word-large-reflow-canary-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).expect("large reflow canary temp dir");
+        let output = temp.join("large-reflow.docx");
+        let started = Instant::now();
+        convert_pdf_to_docx(&input, &output).expect("100+ page PDF reflows to DOCX");
+        let elapsed = started.elapsed();
+        let bytes = fs::metadata(&output).expect("stat large DOCX").len();
+        assert!(bytes > 0, "large reflow DOCX must not be empty");
+        eprintln!(
+            "RAIOPDF_WORD_LARGE_CANARY pages={pages} input_bytes={} output_bytes={bytes} elapsed_ms={}",
+            fs::metadata(&input).expect("stat large PDF").len(),
+            elapsed.as_millis()
+        );
+        let _ = fs::remove_dir_all(temp);
+    }
+
     /// End-to-end round-trip of both Word features a user can invoke: import a
     /// `.docx` (DOCX -> PDF, the Import Word Document path) and then export it
     /// back to editable Word (PDF -> DOCX, the reflow path). Self-gates on Word
     /// like the other canaries, so it runs locally where Word is installed and
     /// skips cleanly where it isn't (e.g. CI).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn word_export_import_roundtrip_canary_self_gates_on_word_capability() {
         let capability = word_capability(true).expect("Word capability probe should run");
@@ -1517,6 +3184,55 @@ mod tests {
             .by_name("word/document.xml")
             .expect("round-trip output contains word/document.xml");
 
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    /// Exercises the macOS batch contract with two documents under one held
+    /// automation session. This is intentionally a maintainer-hardware canary:
+    /// CI cannot grant Word Automation consent or provide a licensed Word app.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_word_batch_canary_self_gates_on_word_capability() {
+        let capability = word_capability(true).expect("Word capability probe should run");
+        if capability.state != WordCapabilityState::Available {
+            eprintln!(
+                "skipping macOS Word batch canary: {:?} {:?}",
+                capability.state, capability.reason
+            );
+            return;
+        }
+
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        let temp =
+            std::env::temp_dir().join(format!("raiopdf-word-batch-canary-{}", std::process::id()));
+        fs::create_dir_all(&temp).expect("batch canary temp dir");
+        let toolchain = PathOpsToolchain::discover(None);
+        let mut session = MacosWordConversionSession::begin().expect("begin Word batch session");
+
+        for (input_name, output_name, markup) in [
+            ("clean.docx", "clean.pdf", MarkupMode::Final),
+            (
+                "tracked-changes.docx",
+                "tracked-markup.pdf",
+                MarkupMode::ShowMarkup,
+            ),
+        ] {
+            let output = temp.join(output_name);
+            session
+                .convert_docx_to_pdf_with_toolchain(
+                    &toolchain,
+                    &fixtures.join(input_name),
+                    &output,
+                    markup,
+                )
+                .expect("batch item converts");
+            let bytes = fs::read(&output).expect("read batch PDF");
+            assert!(bytes.starts_with(b"%PDF"));
+        }
+
+        session.finish();
         let _ = fs::remove_dir_all(temp);
     }
 }

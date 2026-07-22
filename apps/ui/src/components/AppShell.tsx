@@ -78,7 +78,7 @@ export interface AppShellProps {
   onBookmarkNavigate: (pageIndex: number) => void;
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
   ocrState: OcrUiState;
-  /** Whether Microsoft Word was detected on this PC (gates the Word-dependent menu items). */
+  /** Whether Microsoft Word was detected on this computer (gates the Word-dependent menu items). */
   wordAvailable: boolean;
   ocrStarting: boolean;
   documentBanner: ReactNode;

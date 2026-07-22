@@ -20,6 +20,12 @@ scanner/Bates/packaging fixes and a round of UI polish.
 
 ### Added
 
+- **Word ↔ PDF on macOS.** Import Word documents, add them alongside PDFs where
+  supported, or export a PDF to editable Word using your installed Microsoft
+  Word. The first use can request macOS Automation access; if it is denied,
+  RaioPDF points to **System Settings > Privacy & Security > Automation** because
+  retrying does not show the macOS prompt again. Word availability messages now
+  also explain unsupported versions and inactive licenses.
 - **Printing on macOS.** The Mac build can now print through the system print pipeline,
   with paper size, sides, and orientation options, a first-page preview, live completion
   status, and real cancellation. (Windows already printed.)

@@ -44,6 +44,7 @@ export type PathOpErrorCode =
   | "SIGNED_DOCUMENT"
   | "PASSWORD_REQUIRED"
   | "PASSWORD_INVALID"
+  | "WORD_AUTOMATION_DENIED"
   | "PATH_OP_CANCELLED"
   // Native print pipeline (print.rs shares the PathOpError wire shape).
   | "PRINT_NOT_SUPPORTED"

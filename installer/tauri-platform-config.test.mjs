@@ -31,12 +31,33 @@ test("macOS overlay is Apple Silicon-only by command contract and contains no Wi
   assert.deepEqual(macos.bundle.targets, ["app", "dmg"]);
   assert.deepEqual(macos.bundle.resources, { "payload/macos-arm64": "payload" });
   assert.equal(macos.bundle.macOS.minimumSystemVersion, "14.0");
+  assert.equal(macos.bundle.macOS.infoPlist, "Info.plist");
   assert.equal(macos.app.windows[0].decorations, true);
   assert.equal(macos.app.windows[0].titleBarStyle, "Overlay");
   assert.equal(macos.app.windows[0].hiddenTitle, true);
   assert.deepEqual(macos.app.windows[0].trafficLightPosition, { x: 14, y: 16 });
   assert.equal(macos.bundle.windows, undefined);
   assert.equal(JSON.stringify(macos).includes("universal"), false);
+});
+
+test("macOS signed bundle grants Apple Events only through the app entitlement and usage plist", () => {
+  const signed = config("tauri.macos.signing.conf.json");
+  const infoPlist = readFileSync(path.join(repoRoot, "apps/shell/src-tauri/Info.plist"), "utf8");
+  const entitlements = readFileSync(
+    path.join(repoRoot, "apps/shell/src-tauri/entitlements/app.entitlements"),
+    "utf8",
+  );
+
+  assert.equal(signed.bundle.macOS.infoPlist, "Info.plist");
+  assert.equal(signed.bundle.macOS.entitlements, "entitlements/app.entitlements");
+  assert.match(
+    infoPlist,
+    /<key>NSAppleEventsUsageDescription<\/key>\s*<string>[^<]+Microsoft Word[^<]*<\/string>/u,
+  );
+  assert.match(
+    entitlements,
+    /<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/u,
+  );
 });
 
 test("signed Windows overlay preserves the Windows boundary", () => {

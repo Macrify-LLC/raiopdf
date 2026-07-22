@@ -39,6 +39,7 @@ pub struct WordCapabilityCache {
 }
 
 impl WordCapabilityCache {
+    #[allow(dead_code)] // macOS always re-queries TCC so System Settings re-grants are immediate.
     fn get_unless_forced(&self, force: bool) -> Result<Option<WordCapability>, PathOpError> {
         if force {
             return Ok(None);
@@ -82,17 +83,56 @@ pub async fn word_capability(
     force: Option<bool>,
 ) -> Result<WordCapability, PathOpError> {
     let force = force.unwrap_or(false);
+    #[cfg(not(target_os = "macos"))]
     if let Some(cached) = cache.get_unless_forced(force)? {
         return Ok(cached);
     }
 
+    // TCC can be re-granted from System Settings while the app is open. Do
+    // not return a stale cached denial on macOS; the native query is prompt-
+    // free and never launches Word.
+    #[cfg(target_os = "macos")]
+    let _ = (&cache, force);
+
     let capability = on_blocking_pool(move || core_word::word_capability(force)).await?;
+    #[cfg(target_os = "macos")]
+    let capability = decorate_macos_automation_authorization(capability)?;
 
     if force {
         cache.set(capability.clone())?;
     }
 
     Ok(capability)
+}
+
+#[cfg(target_os = "macos")]
+fn decorate_macos_automation_authorization(
+    capability: WordCapability,
+) -> Result<WordCapability, PathOpError> {
+    use core_word::{WordAutomationAuthorization, WordCapabilityState};
+
+    if matches!(
+        capability.state,
+        WordCapabilityState::NotDetected | WordCapabilityState::Unavailable
+    ) {
+        return Ok(capability);
+    }
+    let authorization = crate::macos_word_automation::current_authorization()?;
+    if authorization == WordAutomationAuthorization::Denied {
+        return Ok(WordCapability::unavailable(
+            "RaioPDF is not allowed to control Microsoft Word. Open System Settings > Privacy & Security > Automation, then allow RaioPDF to control Microsoft Word and retry.",
+        )
+        .with_automation_authorization(authorization));
+    }
+    Ok(capability.with_automation_authorization(authorization))
+}
+
+/// Prompt is deliberately at the command boundary, before a blocking worker
+/// starts the two-minute macOS conversion deadline. The user can take as long as
+/// necessary to choose Allow without consuming conversion time.
+#[cfg(target_os = "macos")]
+pub(crate) fn require_macos_word_automation_before_conversion() -> Result<(), PathOpError> {
+    crate::macos_word_automation::require_authorization_for_user_conversion()
 }
 
 #[tauri::command]
@@ -118,6 +158,9 @@ pub async fn word_convert_docx(
     grant: String,
     markup: Option<MarkupMode>,
 ) -> Result<PathOpOutput, PathOpError> {
+    #[cfg(target_os = "macos")]
+    require_macos_word_automation_before_conversion()?;
+
     let input = grants.resolve(&grant).map_err(|message| PathOpError {
         code: "INVALID_INPUT",
         message,
@@ -190,6 +233,9 @@ pub async fn word_reflow_pdf_to_docx(
     grant: String,
     ocr_first: Option<bool>,
 ) -> Result<WordReflowOutput, PathOpError> {
+    #[cfg(target_os = "macos")]
+    require_macos_word_automation_before_conversion()?;
+
     let input = grants.resolve(&grant).map_err(|message| PathOpError {
         code: "INVALID_INPUT",
         message,
@@ -359,6 +405,7 @@ Word conversion timed out after 120 seconds.",
         let cached = WordCapability {
             state: WordCapabilityState::Unavailable,
             reason: Some("transient failure".to_string()),
+            automation_authorization: None,
         };
         cache.set(cached.clone()).expect("cache stores result");
 

@@ -1,6 +1,7 @@
 import {
   getWordCapability,
   shouldRefuseWord,
+  wordOperationGuidance,
   wordUnavailableMessage,
   type WordCapability,
 } from "./wordCapability";
@@ -148,7 +149,8 @@ export async function runPdfToWordReflow(
     });
     return { status: "saved", saved, output, ocrFirst };
   } catch (error: unknown) {
-    const message = pathOpErrorMessage(error, "This PDF could not be converted to editable Word.");
+    const message = wordOperationGuidance(error)
+      ?? pathOpErrorMessage(error, "This PDF could not be converted to editable Word.");
     setStatus({
       running: false,
       tone: "danger",

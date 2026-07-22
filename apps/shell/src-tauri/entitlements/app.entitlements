@@ -2,21 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <!--
-  Entitlements for the RaioPDF app binary and the Rust externalBin sidecars
-  (raiopdf-engine-host, raiopdf-mcp-launcher), signed by Tauri with the
-  hardened runtime enabled.
+  Entitlements for the RaioPDF app binary only. The Rust externalBin sidecars
+  (raiopdf-engine-host and raiopdf-mcp) are explicitly re-signed without
+  entitlements by scripts/sign-macos-app-binaries.mjs after Tauri bundles the
+  app.
 
-  Intentionally empty: the app itself needs nothing beyond hardened-runtime
-  defaults. WKWebView's JavaScript JIT runs in Apple's out-of-process
+  Apple Events is deliberately limited to the app process, which invokes
+  Microsoft Word. Do not add it to a sidecar: granting it to the main app
+  preserves the smallest practical Automation permission boundary.
+
+  WKWebView's JavaScript JIT runs in Apple's out-of-process
   com.apple.WebKit.WebContent XPC service, which carries its own system
-  entitlements - the host app does not need allow-jit for it. The Rust
-  sidecars are plain native binaries with no JIT, no plugin loading, and no
-  library injection.
+  entitlements - the host app does not need allow-jit. The Rust sidecars are
+  plain native binaries with no JIT, no plugin loading, and no library
+  injection.
 
   Runtime entitlements for the bundled payload interpreters live next to this
   file: jvm.entitlements (Temurin JRE) and node.entitlements (MCP Node
   runtime). Grant new entitlements here only with a proven necessity,
   documented in a comment.
 -->
-<dict/>
+<dict>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
 </plist>

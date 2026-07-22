@@ -428,7 +428,11 @@ if [ -z "${TMPDIR:-}" ] || [ "${TMPDIR%/}" = "/tmp" ]; then
   _raio_tmp="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
   [ -n "$_raio_tmp" ] && export TMPDIR="$_raio_tmp"
 fi
-exec "$DIR/python/bin/python3" -m ocrmypdf "$@"
+# `-B` is intentionally redundant with PYTHONDONTWRITEBYTECODE. A signed app
+# must never gain `__pycache__` files under Contents/Resources at runtime:
+# doing so invalidates the outer code signature. The interpreter flag is the
+# strongest guarantee even if a child process sanitizes inherited variables.
+exec "$DIR/python/bin/python3" -B -m ocrmypdf "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/ocrmypdf"
 
@@ -446,7 +450,7 @@ if [ -z "${TMPDIR:-}" ] || [ "${TMPDIR%/}" = "/tmp" ]; then
   _raio_tmp="$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
   [ -n "$_raio_tmp" ] && export TMPDIR="$_raio_tmp"
 fi
-exec "$DIR/python/bin/python3" "$DIR/raiopdf_ocr_progress.py" "$@"
+exec "$DIR/python/bin/python3" -B "$DIR/raiopdf_ocr_progress.py" "$@"
 EOF
   chmod +x "$PAYLOAD_DIR/ocr/raiopdf-ocr-progress"
 

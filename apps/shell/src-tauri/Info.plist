@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  This is merged into Tauri's generated app Info.plist for every macOS
+	  bundle. macOS requires the usage description before it will prompt for
+	  Apple Events access to Microsoft Word.
+	-->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>RaioPDF needs permission to control Microsoft Word to convert PDFs and Word documents on your Mac.</string>
+</dict>
+</plist>

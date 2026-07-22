@@ -1,0 +1,11 @@
+.print-dialog__preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.print-dialog__preview-note {
+  flex: 1;
+  margin: 0;
+}

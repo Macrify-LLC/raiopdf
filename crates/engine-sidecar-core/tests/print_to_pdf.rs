@@ -25,7 +25,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use engine_sidecar_core::print_ops::{
-    contiguous_segments, list_printers, lp_print, PrintSelection,
+    contiguous_segments, list_printers, lp_print, PrintOptions, PrintSelection,
 };
 
 /// A "very long" document, to prove the whole thing prints rather than a
@@ -237,8 +237,14 @@ fn prints_whole_long_document_and_page_range() {
         // Linux / cups-pdf: verify the produced PDF actually has every page.
         Some(dir) => {
             remove_pdfs(dir);
-            lp_print(&input, &config.printer, &PrintSelection::WholeDocument, 1)
-                .expect("lp whole document");
+            lp_print(
+                &input,
+                &config.printer,
+                &PrintSelection::WholeDocument,
+                1,
+                &PrintOptions::default(),
+            )
+            .expect("lp whole document");
             let whole = await_output_pdf(dir);
             assert_eq!(
                 pdf_page_count(&whole),
@@ -247,7 +253,8 @@ fn prints_whole_long_document_and_page_range() {
             );
 
             remove_pdfs(dir);
-            lp_print(&input, &config.printer, &range, 1).expect("lp page range");
+            lp_print(&input, &config.printer, &range, 1, &PrintOptions::default())
+                .expect("lp page range");
             let ranged = await_output_pdf(dir);
             assert_eq!(
                 pdf_page_count(&ranged),
@@ -258,9 +265,15 @@ fn prints_whole_long_document_and_page_range() {
         // macOS: no print-to-file backend. Verify the macOS-specific surface —
         // `lp` accepts the whole-doc and range jobs against a real CUPS queue.
         None => {
-            lp_print(&input, &config.printer, &PrintSelection::WholeDocument, 1)
-                .expect("lp must accept the whole-document job");
-            lp_print(&input, &config.printer, &range, 1)
+            lp_print(
+                &input,
+                &config.printer,
+                &PrintSelection::WholeDocument,
+                1,
+                &PrintOptions::default(),
+            )
+            .expect("lp must accept the whole-document job");
+            lp_print(&input, &config.printer, &range, 1, &PrintOptions::default())
                 .expect("lp must accept the page-range job");
         }
     }

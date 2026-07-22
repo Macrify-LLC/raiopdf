@@ -366,6 +366,12 @@ describe("useTextEdit selected-replacement priming", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
 
+  type EngineResult = {
+    bytes: Uint8Array;
+    replacedCounts: readonly number[] | null;
+    warnings: readonly never[];
+  };
+
   afterEach(() => {
     if (root) {
       act(() => {
@@ -380,23 +386,33 @@ describe("useTextEdit selected-replacement priming", () => {
 
   function renderTextEdit(overrides: {
     inspectTextMap?: (...args: never[]) => Promise<PdfInspectTextMapResult>;
+    replaceSelectedText?: (...args: never[]) => Promise<EngineResult>;
     textLayerCoverage?: TextLayerCoverage | null;
   } = {}) {
     const sourceBytes = new Uint8Array([1]);
-    vi.mocked(extractPageText).mockResolvedValue([page("Plaintiff files.")]);
+    const sourceProxy = { numPages: 1 } as never;
+    vi.mocked(extractPageText).mockImplementation(async (input) => (
+      "bytes" in input && input.bytes === sourceBytes
+        ? [page("Plaintiff files.")]
+        : [page("Petitioner files.")]
+    ));
 
     const engineBridge = {
       available: true,
       warmEngine: vi.fn(),
       inspectTextMap: overrides.inspectTextMap ?? vi.fn(async () => textMapFixture()),
-      replaceSelectedText: vi.fn(),
+      replaceSelectedText: overrides.replaceSelectedText ?? vi.fn(async () => ({
+        bytes: new Uint8Array([2]),
+        replacedCounts: null,
+        warnings: [],
+      })),
       replaceText: vi.fn(),
     };
 
     let latest: TextEditState | null = null;
     function Probe() {
       latest = useTextEdit({
-        source: { bytes: sourceBytes, proxy: { numPages: 1 } as never },
+        source: { bytes: sourceBytes, proxy: sourceProxy },
         documentGeneration: 1,
         sourceOpenToken: 1,
         streamed: false,
@@ -425,6 +441,7 @@ describe("useTextEdit selected-replacement priming", () => {
         }
         return latest;
       },
+      engineBridge,
     };
   }
 
@@ -512,7 +529,133 @@ describe("useTextEdit selected-replacement priming", () => {
 
     expect(state().pendingOps).toHaveLength(1);
     expect(state().pendingOps[0]?.target?.expectedText).toBe("Plaintiff");
-    expect(state().selectedReplacementText).toBeNull();
+    expect(state().selectedReplacementText).toBe("Plaintiff");
+  });
+
+  it("stages one resolved selected target through the scoped engine path exactly once", async () => {
+    const { state, engineBridge } = renderTextEdit();
+
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      state().setReplace("Petitioner");
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await state().queueSelectedReplacement();
+    });
+
+    expect(state().pendingOps).toHaveLength(1);
+    expect(state().pendingOps[0]?.target).toMatchObject({
+      pageIndex: 0,
+      expectedText: "Plaintiff",
+    });
+    expect(engineBridge.inspectTextMap).toHaveBeenCalledTimes(1);
+
+    expect(engineBridge.replaceSelectedText).toHaveBeenCalledTimes(1);
+    expect(engineBridge.replaceSelectedText).toHaveBeenCalledWith(
+      new Uint8Array([1]),
+      expect.objectContaining({ replacement: "Petitioner", target: expect.objectContaining({ expectedText: "Plaintiff" }) }),
+    );
+    expect(engineBridge.replaceText).not.toHaveBeenCalled();
+    expect(state().phase).toBe("review");
+    expect(state().staged?.report.operations).toHaveLength(1);
+    expect(state().staged?.report.operations[0]).toMatchObject({
+      selected: true,
+      status: "changed",
+      replacedEstimate: 1,
+    });
+  });
+
+  it("does not queue twice when selected replacement is activated twice before resolution completes", async () => {
+    const inspection = createDeferred<PdfInspectTextMapResult>();
+    const { state, engineBridge } = renderTextEdit({
+      inspectTextMap: vi.fn(() => inspection.promise),
+    });
+
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      await Promise.resolve();
+    });
+    let first: Promise<void> = Promise.resolve();
+    let second: Promise<void> = Promise.resolve();
+    await act(async () => {
+      first = state().queueSelectedReplacement();
+      second = state().queueSelectedReplacement();
+      await Promise.resolve();
+    });
+
+    expect(engineBridge.inspectTextMap).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      inspection.resolve(textMapFixture());
+      await Promise.all([first, second]);
+    });
+
+    expect(state().pendingOps).toHaveLength(1);
+    expect(state().pendingOps[0]?.target).toBeDefined();
+  });
+
+  it("clears a selected replacement before target resolution can stage it", async () => {
+    const inspection = createDeferred<PdfInspectTextMapResult>();
+    const { state, engineBridge } = renderTextEdit({
+      inspectTextMap: vi.fn(() => inspection.promise),
+    });
+
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      await Promise.resolve();
+    });
+    let queued: Promise<void> = Promise.resolve();
+    await act(async () => {
+      queued = state().queueSelectedReplacement();
+      await Promise.resolve();
+    });
+    expect(engineBridge.inspectTextMap).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      state().clear();
+      inspection.resolve(textMapFixture());
+      await queued;
+    });
+
+    expect(engineBridge.replaceSelectedText).not.toHaveBeenCalled();
+    expect(state().pendingOps).toHaveLength(0);
+    expect(state().phase).toBe("idle");
+    expect(state().staged).toBeNull();
+  });
+
+  it("cancels a selected review so late scoped engine work cannot open a dialog", async () => {
+    const inspection = createDeferred<PdfInspectTextMapResult>();
+    const replacement = createDeferred<EngineResult>();
+    const { state, engineBridge } = renderTextEdit({
+      inspectTextMap: vi.fn(() => inspection.promise),
+      replaceSelectedText: vi.fn(() => replacement.promise),
+    });
+
+    await act(async () => {
+      state().primeSelectedReplacement(capturedSelection());
+      await Promise.resolve();
+    });
+    let queued: Promise<void> = Promise.resolve();
+    await act(async () => {
+      queued = state().queueSelectedReplacement();
+      await Promise.resolve();
+    });
+    expect(engineBridge.inspectTextMap).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      inspection.resolve(textMapFixture());
+      await Promise.resolve();
+    });
+    expect(state().phase).toBe("staging");
+    expect(engineBridge.replaceSelectedText).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      state().cancelReview();
+      replacement.resolve({ bytes: new Uint8Array([2]), replacedCounts: null, warnings: [] });
+      await queued;
+    });
+
+    expect(state().phase).toBe("idle");
+    expect(state().staged).toBeNull();
   });
 
   function capturedSelection(): CapturedTextSelection {

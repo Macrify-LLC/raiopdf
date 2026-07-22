@@ -68,6 +68,9 @@ export interface TextEditState {
   positionalSpaceRisk: boolean;
   selectionResolving: boolean;
   selectedReplacementText: string | null;
+  /** True from selection capture through its review. This is deliberately a
+   * separate interaction, never a variant of Find/Replace All. */
+  isSelectedReplacementMode: boolean;
   /** Bumped on every stored selection capture — the mode bar keys its
    * focus-the-replace-field effect on this so consecutive captures of
    * identical text still focus. */
@@ -226,6 +229,10 @@ export function useTextEdit({
   const [selectionPrimeCount, setSelectionPrimeCount] = useState(0);
   const runRef = useRef(0);
   const reviewRunRef = useRef(0);
+  const reviewInFlightRef = useRef(false);
+  const stageOperationsRef = useRef<(operations: readonly PendingTextReplacement[]) => Promise<void>>(
+    async () => undefined,
+  );
   const opIdRef = useRef(0);
   const sourceRef = useRef(source);
   const generationRef = useRef(documentGeneration);
@@ -234,6 +241,14 @@ export function useTextEdit({
   const selectionResolvingRef = useRef(false);
   const selectedReplacementRef = useRef<CapturedTextSelection | null>(null);
   const [selectedReplacementText, setSelectedReplacementText] = useState<string | null>(null);
+  const [isSelectedReplacementMode, setIsSelectedReplacementMode] = useState(false);
+
+  // Keep invalidation identities current during render, rather than waiting
+  // for an effect. A document switch that lands while inspect/staging is
+  // resolving must make that completion stale in the same commit.
+  sourceRef.current = source;
+  generationRef.current = documentGeneration;
+  openTokenRef.current = sourceOpenToken;
 
   useEffect(() => {
     sourceRef.current = source;
@@ -269,11 +284,13 @@ export function useTextEdit({
 
   const clear = useCallback(() => {
     runRef.current += 1;
+    reviewInFlightRef.current = false;
     setFindState("");
     setReplace("");
     setDebouncedFind("");
     setMatches([]);
     setActiveMatchIndex(null);
+    pendingOpsRef.current = [];
     setPendingOps([]);
     setPhase("idle");
     setMessage(null);
@@ -282,6 +299,7 @@ export function useTextEdit({
     selectionResolvingRef.current = false;
     selectedReplacementRef.current = null;
     setSelectedReplacementText(null);
+    setIsSelectedReplacementMode(false);
   }, []);
 
   useEffect(() => {
@@ -387,8 +405,10 @@ export function useTextEdit({
     };
 
     setPendingOps((current) => [...current, operation]);
+    pendingOpsRef.current = [...pendingOpsRef.current, operation];
     selectedReplacementRef.current = null;
     setSelectedReplacementText(null);
+    setIsSelectedReplacementMode(false);
     setPhase("idle");
     setMessage(null);
     setStaged(null);
@@ -423,6 +443,7 @@ export function useTextEdit({
   const storeSelectedReplacement = useCallback((selection: CapturedTextSelection) => {
     selectedReplacementRef.current = selection;
     setSelectedReplacementText(selection.text);
+    setIsSelectedReplacementMode(true);
     setSelectionPrimeCount((count) => count + 1);
     setMessage(`Selected "${selection.text}" for replacement.`);
   }, []);
@@ -433,8 +454,16 @@ export function useTextEdit({
       return;
     }
 
+    const entryGate = selectedReplacementGate(captured.selection.pageIndex);
+    if (entryGate.blocked) {
+      if (entryGate.reason) {
+        setMessage(entryGate.reason);
+      }
+      return;
+    }
+
     storeSelectedReplacement(captured.selection);
-  }, [storeSelectedReplacement]);
+  }, [selectedReplacementGate, storeSelectedReplacement]);
 
   const primeSelectedReplacement = useCallback((selection: CapturedTextSelection) => {
     const entryGate = selectedReplacementGate(selection.pageIndex);
@@ -515,6 +544,10 @@ export function useTextEdit({
         selectedArea: resolved.area,
       };
 
+      // Lock the exact resolved operation before scheduling React state. A
+      // second click in this same event turn must not be able to race a
+      // duplicate selected edit into the engine.
+      pendingOpsRef.current = [operation];
       setPendingOps([operation]);
       setMatches([{
         id: `${operation.id}-selected`,
@@ -527,9 +560,19 @@ export function useTextEdit({
       setCurrentPage(resolved.target.pageIndex + 1);
       window.getSelection()?.removeAllRanges();
       selectedReplacementRef.current = null;
-      setSelectedReplacementText(null);
+      setSelectedReplacementText(resolved.target.expectedText);
       setMessage(null);
       engineBridge.warmEngine();
+      // Target resolution is complete before staging takes ownership of the
+      // run id. Clear this synchronously; the queue callback's finally block
+      // intentionally ignores superseded runs.
+      selectionResolvingRef.current = false;
+      setSelectionResolving(false);
+      // Selected text does not wait for the sidebar's generic Review action:
+      // resolving the exact engine target and staging that target is one
+      // transaction. This intentionally does not call review() after
+      // setPendingOps(), where React's asynchronous state would be a race.
+      await stageOperationsRef.current([operation]);
     } catch (error) {
       if (runRef.current !== runId) {
         return;
@@ -546,7 +589,9 @@ export function useTextEdit({
 
   const removePendingOp = useCallback((id: string) => {
     const removed = pendingOpsRef.current.find((operation) => operation.id === id);
-    setPendingOps((current) => current.filter((operation) => operation.id !== id));
+    const nextOperations = pendingOpsRef.current.filter((operation) => operation.id !== id);
+    pendingOpsRef.current = nextOperations;
+    setPendingOps(nextOperations);
     setStaged(null);
     setPhase("idle");
     selectedReplacementRef.current = null;
@@ -554,6 +599,7 @@ export function useTextEdit({
     if (removed?.target) {
       setMatches([]);
       setActiveMatchIndex(null);
+      setIsSelectedReplacementMode(false);
     }
   }, []);
 
@@ -578,11 +624,10 @@ export function useTextEdit({
     goToResult(activeMatchIndex === null ? matches.length - 1 : activeMatchIndex - 1);
   }, [activeMatchIndex, goToResult, matches.length]);
 
-  const review = useCallback(async () => {
+  const stageOperations = useCallback(async (operations: readonly PendingTextReplacement[]) => {
     const currentSource = sourceRef.current;
     const sourceBytes = currentSource.bytes;
     const sourceProxy = currentSource.proxy;
-    const operations = pendingOps;
     const reviewOpenToken = openTokenRef.current;
     const reviewGeneration = generationRef.current;
 
@@ -601,6 +646,13 @@ export function useTextEdit({
       return;
     }
 
+    // This ref is set synchronously, before the first await. It coalesces
+    // double activation from keyboard/pointer events and protects selected
+    // replacement from being staged twice before React has rendered phase.
+    if (reviewInFlightRef.current) {
+      return;
+    }
+
     const selectedGate = selectedTextReviewGateMessage(operations, unsafeSelectedPageIndexes);
     if (selectedGate) {
       setMessage(selectedGate);
@@ -610,6 +662,7 @@ export function useTextEdit({
     const runId = runRef.current + 1;
     runRef.current = runId;
     reviewRunRef.current = runId;
+    reviewInFlightRef.current = true;
     setPhase("staging");
     setMessage(null);
     setStaged(null);
@@ -681,6 +734,13 @@ export function useTextEdit({
             !allowSignatureInvalidation
           ) {
             signatureInvalidationNotice = await confirmSignatureInvalidation();
+            if (
+              runRef.current !== runId ||
+              openTokenRef.current !== reviewOpenToken ||
+              generationRef.current !== reviewGeneration
+            ) {
+              return;
+            }
             if (!signatureInvalidationNotice) {
               setPhase("idle");
               setMessage("Text editing was cancelled; the signed document was not modified.");
@@ -697,6 +757,13 @@ export function useTextEdit({
             !allowPdfAIdentificationRemoval
           ) {
             const confirmed = await confirmPdfAIdentificationRemoval();
+            if (
+              runRef.current !== runId ||
+              openTokenRef.current !== reviewOpenToken ||
+              generationRef.current !== reviewGeneration
+            ) {
+              return;
+            }
             if (!confirmed) {
               setPhase("idle");
               setMessage("Text editing was cancelled; the PDF/A (archival format) document was not modified.");
@@ -724,6 +791,7 @@ export function useTextEdit({
       // demotion only fires for a superseded run's stale bail-outs, and only
       // when no newer review() call has taken ownership of the phase.
       if (reviewRunRef.current === runId) {
+        reviewInFlightRef.current = false;
         setPhase((current) => (current === "staging" ? "idle" : current));
       }
     }
@@ -733,9 +801,17 @@ export function useTextEdit({
     engineBridge,
     gate.blocked,
     gate.message,
-    pendingOps,
     unsafeSelectedPageIndexes,
   ]);
+
+  // The selected path is created above this callback. Updating this ref on
+  // every render gives it the current gate/source closures without routing it
+  // through the public bulk review action.
+  stageOperationsRef.current = stageOperations;
+
+  const review = useCallback(async () => {
+    await stageOperations(pendingOpsRef.current);
+  }, [stageOperations]);
 
   const apply = useCallback(async () => {
     const candidate = staged;
@@ -785,15 +861,34 @@ export function useTextEdit({
     }
 
     setPendingOps([]);
+    pendingOpsRef.current = [];
     setStaged(null);
     setPhase("done");
+    setIsSelectedReplacementMode(false);
+    setSelectedReplacementText(null);
     setMessage(formatReplaceTextResult(candidate.report));
   }, [fileName, replaceBytes, setCurrentPage, staged]);
 
   const cancelReview = useCallback(() => {
     runRef.current += 1;
+    reviewInFlightRef.current = false;
+    selectionResolvingRef.current = false;
+    setSelectionResolving(false);
     setStaged(null);
     setPhase("idle");
+    // Cancelling a selected review discards its resolved target and returns
+    // to bulk Find/Replace. Reusing a browser selection after a cancelled
+    // review is unsafe because focus/document state may already have moved;
+    // the user deliberately selects it again to start a new transaction.
+    if (pendingOpsRef.current.some((operation) => operation.target)) {
+      pendingOpsRef.current = [];
+      setPendingOps([]);
+      selectedReplacementRef.current = null;
+      setSelectedReplacementText(null);
+      setIsSelectedReplacementMode(false);
+      setMatches([]);
+      setActiveMatchIndex(null);
+    }
     setMessage("Review cancelled. The document was not modified.");
   }, []);
 
@@ -823,6 +918,7 @@ export function useTextEdit({
     positionalSpaceRisk,
     selectionResolving,
     selectedReplacementText,
+    isSelectedReplacementMode,
     selectionPrimeCount,
     setFind,
     setReplace,

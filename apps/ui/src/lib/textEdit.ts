@@ -46,6 +46,20 @@ export interface TextEditReviewReport {
   changedPageIndexes: readonly number[];
   zeroChange: boolean;
   advisory: string | null;
+  /**
+   * Selected edits are verified against the engine text-map offsets, not a
+   * document-wide search. Keeping this excerpt in the report lets the review
+   * show the exact anchored location without pretending it is a page preview.
+   */
+  selectedExcerpt: SelectedTextReviewExcerpt | null;
+}
+
+export interface SelectedTextReviewExcerpt {
+  pageIndex: number;
+  before: string;
+  selected: string;
+  replacement: string;
+  after: string;
 }
 
 export const TEXT_EDIT_ADVISORY =
@@ -54,6 +68,8 @@ export const TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE =
   "The whole document is rewritten by this operation. Pages not shown here may shift slightly.";
 export const TEXT_EDIT_ZERO_CHANGE_MESSAGE =
   "Nothing was replaced — the document was not modified.";
+export const TEXT_EDIT_SELECTED_ZERO_CHANGE_MESSAGE =
+  "The selected text was not replaced — the document was not modified.";
 export const TEXT_EDIT_STREAMED_GATE_MESSAGE =
   "This document is too large for in-app text editing. Save a smaller copy or split the file first.";
 export const TEXT_EDIT_SCANNED_GATE_MESSAGE =
@@ -207,6 +223,12 @@ export function buildTextEditReviewReport({
   originalPages: readonly ExtractedPageText[];
   candidatePages: readonly ExtractedPageText[];
 }): TextEditReviewReport {
+  const selectedOperation = operations.length === 1 && operations[0]?.target
+    ? operations[0]
+    : null;
+  const selectedVerification = selectedOperation
+    ? verifySelectedReplacement(selectedOperation, originalPages, candidatePages)
+    : null;
   const changedPageIndexes = uniqueSorted(
     candidatePages
       .filter((candidate) => {
@@ -242,7 +264,8 @@ export function buildTextEditReviewReport({
         : null;
       const selectedChanged = changedPages.has(pageIndex) &&
         originalStillMatches &&
-        candidateText === expectedCandidateText;
+        candidateText === expectedCandidateText &&
+        selectedVerification?.ok === true;
 
       return {
         operationId: operation.id,
@@ -283,6 +306,7 @@ export function buildTextEditReviewReport({
     changedPageIndexes,
     zeroChange: changedPageIndexes.length === 0,
     advisory: lengthDeltaAdvisory(operations),
+    selectedExcerpt: selectedVerification?.excerpt ?? null,
   };
 }
 
@@ -308,6 +332,18 @@ export function warningCopy(warning: PdfReplaceTextWarning): string {
 }
 
 export function formatReplaceTextResult(report: TextEditReviewReport): string {
+  const selectedOperation = report.operations.length === 1 && report.operations[0]?.selected
+    ? report.operations[0]
+    : null;
+  if (selectedOperation) {
+    if (report.zeroChange) {
+      return TEXT_EDIT_SELECTED_ZERO_CHANGE_MESSAGE;
+    }
+    return selectedOperation.status === "changed"
+      ? `This replacement is scoped to the selected occurrence on page ${selectedOperation.foundBefore[0] !== undefined ? selectedOperation.foundBefore[0] + 1 : "the selected page"} and was verified.`
+      : "Selected replacement was not staged.";
+  }
+
   if (report.zeroChange) {
     return TEXT_EDIT_ZERO_CHANGE_MESSAGE;
   }
@@ -320,6 +356,65 @@ export function formatReplaceTextResult(report: TextEditReviewReport): string {
 export function canApplyTextEditReview(report: TextEditReviewReport): boolean {
   return !report.zeroChange &&
     report.operations.every((operation) => !operation.selected || operation.status === "changed");
+}
+
+/**
+ * A selected edit is intentionally stricter than bulk replacement: the
+ * candidate's extracted text must be exactly the original text with this one
+ * offset range replaced. Any unrelated extracted-text change (including on a
+ * different page) fails the review closed instead of being omitted from a
+ * short page list.
+ */
+function verifySelectedReplacement(
+  operation: PendingTextReplacement,
+  originalPages: readonly ExtractedPageText[],
+  candidatePages: readonly ExtractedPageText[],
+): { ok: boolean; excerpt: SelectedTextReviewExcerpt | null } {
+  const target = operation.target;
+  if (!target) {
+    return { ok: false, excerpt: null };
+  }
+
+  const originalByPage = new Map(originalPages.map((page) => [page.pageIndex, page]));
+  const candidateByPage = new Map(candidatePages.map((page) => [page.pageIndex, page]));
+  const pageIndexes = new Set([...originalByPage.keys(), ...candidateByPage.keys()]);
+  const originalTarget = originalByPage.get(target.pageIndex);
+  if (!originalTarget || !candidateByPage.has(target.pageIndex)) {
+    return { ok: false, excerpt: null };
+  }
+
+  const originalText = extractedTextModel(originalTarget);
+  if (originalText.slice(target.start, target.end) !== target.expectedText) {
+    return { ok: false, excerpt: null };
+  }
+
+  const expectedTargetText = `${originalText.slice(0, target.start)}${operation.replace}${originalText.slice(target.end)}`;
+  for (const pageIndex of pageIndexes) {
+    const original = originalByPage.get(pageIndex);
+    const candidate = candidateByPage.get(pageIndex);
+    if (!original || !candidate) {
+      return { ok: false, excerpt: null };
+    }
+    const expected = pageIndex === target.pageIndex ? expectedTargetText : extractedTextModel(original);
+    if (extractedTextModel(candidate) !== expected) {
+      return { ok: false, excerpt: null };
+    }
+  }
+
+  return {
+    ok: true,
+    excerpt: {
+      pageIndex: target.pageIndex,
+      before: originalText.slice(Math.max(0, target.start - 72), target.start),
+      selected: target.expectedText,
+      replacement: operation.replace,
+      after: originalText.slice(target.end, target.end + 72),
+    },
+  };
+}
+
+function extractedTextModel(page: ExtractedPageText): string {
+  return page.flatText ?? page.text;
 }
 
 function lengthDeltaAdvisory(operations: readonly PendingTextReplacement[]): string | null {

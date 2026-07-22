@@ -809,6 +809,12 @@ export function App() {
     confirmPdfAIdentificationRemoval: confirmTextEditPdfAIdentificationRemoval,
     setCurrentPage,
   });
+  const exitTextEditMode = useCallback(() => {
+    // clear() synchronously invalidates any in-flight selected-target lookup
+    // before hiding the workflow, so its continuation cannot stage stale work.
+    textEdit.clear();
+    setActiveTextEdit(false);
+  }, [textEdit.clear]);
   const [selectedPageIndexes, setSelectedPageIndexes] = useState<Set<number>>(
     () => new Set(),
   );
@@ -1801,7 +1807,7 @@ export function App() {
   const resetLegalState = useCallback(() => {
     preserveFilingProgressForGenerationRef.current = null;
     setPendingRedactions([]);
-    setActiveTextEdit(false);
+    exitTextEditMode();
     setTextEditAnnotationPrompt(null);
     setRedactionPhase("idle");
     setRedactionMessage(null);
@@ -1831,7 +1837,7 @@ export function App() {
       beforeBytes: null,
       afterBytes: null,
     });
-  }, []);
+  }, [exitTextEditMode]);
 
   const clearDocumentBoundLegalState = useCallback((previousGeneration: number) => {
     const preserveFilingProgress =
@@ -1853,7 +1859,7 @@ export function App() {
       setOcrState({ phase: "idle", message: null });
     }
     setPendingRedactions([]);
-    setActiveTextEdit(false);
+    exitTextEditMode();
     setTextEditAnnotationPrompt(null);
     setScannerState({ scanning: false, message: null, hits: [], noReadableText: false, markedHitIds: [] });
     setFilingReport(null);
@@ -1871,7 +1877,7 @@ export function App() {
     if (!preserveFilingProgress) {
       setFilingProgress({ phase: "idle", message: null });
     }
-  }, []);
+  }, [exitTextEditMode]);
 
   const resetVisibleDocumentAppState = useCallback((next: "document" | "empty") => {
     ocrRunRef.current += 1;
@@ -2470,7 +2476,7 @@ export function App() {
       }
 
       if (toolId !== "select") {
-        setActiveTextEdit(false);
+        exitTextEditMode();
       }
 
       setActiveEditDialogTool(null);
@@ -2481,6 +2487,7 @@ export function App() {
       activeTextEdit,
       document.fileSizeBytes,
       editing,
+      exitTextEditMode,
       pathOpsGeneralStatus,
       pathOpsGrant,
       setError,
@@ -2503,7 +2510,7 @@ export function App() {
     }
 
     if (activeTextEdit) {
-      setActiveTextEdit(false);
+      exitTextEditMode();
       return;
     }
 
@@ -2518,7 +2525,7 @@ export function App() {
     }
 
     enterTextEditMode();
-  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, longProcessRunning, setError, streamedDocument, textEdit.gate.message]);
+  }, [activeTextEdit, editing.hasUnsavedEdits, enterTextEditMode, exitTextEditMode, longProcessRunning, setError, streamedDocument, textEdit.gate.message]);
 
   // When the right-click "Replace text..." entry defers to the
   // pending-annotations prompt, the selection is NOT carried across (saving
@@ -2531,7 +2538,7 @@ export function App() {
       return;
     }
 
-    textEdit.showMessage("Reselect the text you want to replace, then use Replace selection.");
+    textEdit.showMessage("Reselect the text you want to replace, then choose Replace text… again.");
   }, [textEdit, textEditAnnotationPrompt]);
 
   const saveAnnotationsAndEnterTextEdit = useCallback(async () => {
@@ -2606,14 +2613,14 @@ export function App() {
       }
 
       if (activeTextEdit) {
-        setActiveTextEdit(false);
+        exitTextEditMode();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTextEdit, editing]);
+  }, [activeTextEdit, editing, exitTextEditMode]);
 
   useEffect(() => {
     let disposed = false;
@@ -5034,7 +5041,7 @@ export function App() {
       }
 
       setActiveLegalTool(toolId);
-      setActiveTextEdit(false);
+      exitTextEditMode();
       setActiveEditDialogTool(null);
 
       if (toolId === "redact" && editing.tool !== "select") {
@@ -5043,7 +5050,7 @@ export function App() {
 
       setActiveOrganizeTool(null);
     },
-    [document.fileSizeBytes, editing, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, showPasswordProtection, streamedDocument],
+    [document.fileSizeBytes, editing, exitTextEditMode, longProcessRunning, pathOpsGeneralStatus, pathOpsGrant, setError, showPasswordProtection, streamedDocument],
   );
 
   const selectOrganizeTool = useCallback((toolId: OrganizeToolId) => {
@@ -5076,16 +5083,16 @@ export function App() {
     if (toolId === "rotate" || toolId === "compress") {
       setActiveOrganizeTool((current) => (current === toolId ? null : toolId));
       setActiveLegalTool(null);
-      setActiveTextEdit(false);
+      exitTextEditMode();
       setActiveEditDialogTool(null);
       return;
     }
 
     setActiveOrganizeTool(toolId);
     setActiveLegalTool(null);
-    setActiveTextEdit(false);
+    exitTextEditMode();
     setActiveEditDialogTool(null);
-  }, [pathOpsGrant, setError, streamedDocument]);
+  }, [exitTextEditMode, pathOpsGrant, setError, streamedDocument]);
 
   const selectEditDialogTool = useCallback((toolId: EditDialogToolId) => {
     // Streamed mode: both entries (Page Numbers, Watermark) run file-to-file
@@ -5101,17 +5108,17 @@ export function App() {
     // above.
     setActiveEditDialogTool((current) => (current === toolId ? null : toolId));
     setActiveLegalTool(null);
-    setActiveTextEdit(false);
+    exitTextEditMode();
     setActiveOrganizeTool(null);
     editing.setTool("select");
-  }, [editing, pathOpsGrant, setError, streamedDocument]);
+  }, [editing, exitTextEditMode, pathOpsGrant, setError, streamedDocument]);
 
   const closeWorkspace = useCallback(() => {
     setActiveOrganizeTool(null);
     setActiveLegalTool(null);
-    setActiveTextEdit(false);
+    exitTextEditMode();
     setActiveEditDialogTool(null);
-  }, []);
+  }, [exitTextEditMode]);
 
   /**
    * Delegated merge for a streamed current document [item 4]: the current
@@ -8508,7 +8515,13 @@ export function App() {
   const modeBar = activeTextEdit ? (
     <EditTextModeBar
       textEdit={textEdit}
-      onExit={() => setActiveTextEdit(false)}
+      onExit={() => {
+        // Exit is a cancellation boundary for both bulk and selected text
+        // edits. clear() invalidates any async inspect/stage completion
+        // before the bar disappears, so an old document cannot reopen a
+        // review dialog after the user has left this workflow.
+        exitTextEditMode();
+      }}
     />
   ) : activeLegalTool === "redact" ? (
     <RedactionModeBar
@@ -8724,9 +8737,7 @@ export function App() {
 
   function getFloatingDialog() {
     if (activeTextEdit) {
-      return textEdit.phase === "staging" || textEdit.phase === "applying"
-        ? null
-        : <EditTextReviewDialog textEdit={textEdit} />;
+      return <EditTextReviewDialog textEdit={textEdit} />;
     }
 
     if (activeLegalTool === "prepare-for-filing") {

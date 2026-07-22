@@ -14,6 +14,7 @@ export function EditTextStatusPanel({
   textEdit: TextEditState;
   onHelp: () => void;
 }) {
+  const hasSelectedOperation = textEdit.pendingOps.some((operation) => operation.target);
   if (textEdit.gate.blocked && textEdit.gate.message) {
     return <InlineMessage tone="neutral" message={textEdit.gate.message} />;
   }
@@ -82,7 +83,7 @@ export function EditTextStatusPanel({
         <button
           type="button"
           className="tool-panel__primary-button"
-          disabled={textEdit.pendingOps.length === 0 || textEdit.phase === "staging" || textEdit.phase === "applying"}
+          disabled={textEdit.pendingOps.length === 0 || hasSelectedOperation || textEdit.phase === "staging" || textEdit.phase === "applying" || textEdit.phase === "review"}
           onClick={() => {
             void textEdit.review();
           }}
@@ -92,7 +93,7 @@ export function EditTextStatusPanel({
         <button
           type="button"
           className="tool-panel__secondary-button"
-          disabled={textEdit.phase === "staging" || textEdit.phase === "applying"}
+          disabled={textEdit.phase === "staging" || textEdit.phase === "applying" || textEdit.phase === "review"}
           onClick={textEdit.clear}
         >
           Clear

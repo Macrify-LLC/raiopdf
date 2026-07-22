@@ -298,3 +298,37 @@
   gap: var(--space-2);
   flex: 0 0 auto;
 }
+
+/* Selected replacement is purposefully a different bar, not a bulk
+   Find/Replace bar with controls hidden. The selected source stays legible
+   while the only editable value is its replacement. */
+.edit-text-mode-bar--selection {
+  width: min(100%, 660px);
+}
+
+.edit-text-mode-bar__selected-label {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.edit-text-mode-bar__selected-label span {
+  color: var(--ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.edit-text-mode-bar__selection-field {
+  flex: 1 1 180px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  box-shadow: var(--shadow-control);
+}
+
+.edit-text-mode-bar__selection-field:first-child {
+  border-right: 1px solid var(--border);
+}

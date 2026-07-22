@@ -144,21 +144,17 @@ test("Edit Text: right-click selected replacement changes only the chosen occurr
   await expect(replaceItem).toBeEnabled();
   await replaceItem.click();
 
-  await expect(page.getByText("Selection captured")).toBeVisible();
-  await page.getByLabel("Replace with").fill("Jones");
-  await page.getByRole("button", { name: "Replace selection" }).click();
-  // Selection resolution runs against the real engine's text map; the queued
-  // chip flips once the exact span is resolved.
-  await expect(page.getByText("1 queued")).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+  await expect(page.getByText("Selected text: Smith")).toBeVisible();
+  await page.getByLabel("Replace selected text with").fill("Jones");
+  await page.getByRole("button", { name: "Review replacement" }).click();
 
-  // Review lives in the sidebar status panel under the Edit Text row — the
-  // right-click entry never opened the accordion, so open it now.
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Review" }).click();
-  const reviewDialog = await expectTextEditReviewReady(page);
-  await expect(
-    reviewDialog.getByText(/1 selected replacement staged on page 1/),
-  ).toBeVisible();
+  // This action is direct: it resolves the target and opens review without
+  // requiring the hidden Edit sidebar's generic Review button. The dialog is
+  // explicitly scoped and verified, never described as a bulk estimate.
+  const reviewDialog = await expectTextEditReviewReady(page, { selected: true });
+  await expect(reviewDialog.getByText(/scoped to the selected occurrence/i)).toBeVisible();
+  await expect(reviewDialog.getByText(REVIEW_DISCLOSURE)).toHaveCount(0);
+  await expect(reviewDialog.getByText(/estimated replacement/i)).toHaveCount(0);
   await page.getByRole("button", { name: "Apply" }).click();
 
   const saved = await savePdf(page);
@@ -171,8 +167,13 @@ test("Edit Text: right-click selected replacement changes only the chosen occurr
   logs.assertClean(BENIGN_LOG);
 });
 
-async function expectTextEditReviewReady(page: Page): Promise<ReturnType<Page["getByRole"]>> {
-  const dialog = page.getByRole("dialog", { name: "Review text replacements" });
+async function expectTextEditReviewReady(
+  page: Page,
+  options: { selected?: boolean } = {},
+): Promise<ReturnType<Page["getByRole"]>> {
+  const dialog = page.getByRole("dialog", {
+    name: options.selected ? "Review selected replacement" : "Review text replacements",
+  });
   // The review dialog mounts only after the real engine finishes staging (a docked
   // loader covers that window, PR #202), which can run for minutes on image-heavy
   // documents — so wait the full review budget, not the default 20s expect timeout.
@@ -181,7 +182,11 @@ async function expectTextEditReviewReady(page: Page): Promise<ReturnType<Page["g
   });
 
   try {
-    await expect(dialog.getByText(REVIEW_DISCLOSURE)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+    if (options.selected) {
+      await expect(dialog.getByText(/scoped to the selected occurrence/i)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+    } else {
+      await expect(dialog.getByText(REVIEW_DISCLOSURE)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS });
+    }
   } catch (error) {
     const [dialogText, statusText] = await Promise.all([
       dialog.textContent().catch(() => null),

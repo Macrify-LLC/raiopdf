@@ -19,7 +19,7 @@ export function EditTextReviewDialog({
   if (textEdit.phase === "staging") {
     return (
       <FloatingDialog
-        title="Review text replacements"
+        title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
         eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
@@ -36,10 +36,11 @@ export function EditTextReviewDialog({
   if (textEdit.phase === "applying") {
     return (
       <FloatingDialog
-        title="Review text replacements"
+        title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
         eyebrow="Edit Text"
         width="lg"
         onClose={textEdit.cancelReview}
+        dismissible={false}
       >
         <LongProcessLoader
           phaseLabel="Applying replacement"
@@ -56,7 +57,7 @@ export function EditTextReviewDialog({
 
   return (
     <FloatingDialog
-      title="Review text replacements"
+      title={textEdit.isSelectedReplacementMode ? "Review selected replacement" : "Review text replacements"}
       eyebrow="Edit Text"
       width="lg"
       onClose={textEdit.cancelReview}
@@ -79,6 +80,7 @@ function ReviewBody({
   onCancel: () => void;
 }) {
   const report = staged.report;
+  const selectedReview = report.operations.length === 1 && report.operations[0]?.selected;
   const canApply = canApplyTextEditReview(report);
   const warnings = [...new Set(staged.warnings.map(warningCopy))];
   const changedPages = report.changedPageIndexes.slice(0, 6);
@@ -89,12 +91,21 @@ function ReviewBody({
 
   return (
     <div className="edit-text-review">
-      <p className="edit-text-review__disclosure">{TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE}</p>
+      {!selectedReview ? <p className="edit-text-review__disclosure">{TEXT_EDIT_WHOLE_DOCUMENT_DISCLOSURE}</p> : null}
       {report.zeroChange ? (
-        <p className="tool-panel__field-error" role="status">{TEXT_EDIT_ZERO_CHANGE_MESSAGE}</p>
+        <p className="tool-panel__field-error" role="status">
+          {selectedReview ? formatReplaceTextResult(report) : TEXT_EDIT_ZERO_CHANGE_MESSAGE}
+        </p>
       ) : (
-        <p className="edit-text-review__summary" role="status">{formatReplaceTextResult(report)}</p>
+        <p className="edit-text-review__summary" role="status">
+          {formatReplaceTextResult(report)}
+        </p>
       )}
+      {selectedReview && !canApply ? (
+        <p className="tool-panel__field-error" role="alert">
+          The selected replacement could not be verified exactly. The staged PDF will not be applied.
+        </p>
+      ) : null}
       {report.advisory ? <p className="edit-text-review__advisory">{report.advisory}</p> : null}
       {warnings.length > 0 ? (
         <div className="edit-text-review__warnings">
@@ -123,7 +134,9 @@ function ReviewBody({
           </div>
         ))}
       </div>
-      {changedPages.length > 0 ? (
+      {selectedReview && report.selectedExcerpt ? (
+        <SelectedTextExcerpt excerpt={report.selectedExcerpt} />
+      ) : !selectedReview && changedPages.length > 0 ? (
         <div className="edit-text-review__pages" aria-label="Before and after page previews">
           {changedPages.map((pageIndex) => (
             <div key={pageIndex} className="edit-text-review__page">
@@ -151,6 +164,32 @@ function ReviewBody({
         <button type="button" className="tool-panel__secondary-button" onClick={onCancel}>
           Cancel
         </button>
+      </div>
+    </div>
+  );
+}
+
+function SelectedTextExcerpt({
+  excerpt,
+}: {
+  excerpt: NonNullable<TextEditStagedResult["report"]["selectedExcerpt"]>;
+}) {
+  return (
+    <div className="edit-text-review__selected-excerpt" aria-label={`Exact selected text excerpt on page ${excerpt.pageIndex + 1}`}>
+      <p className="edit-text-review__page-title">Exact selected text on page {excerpt.pageIndex + 1}</p>
+      <div className="edit-text-review__page-grid">
+        <div className="edit-text-review__snippet" data-variant="before">
+          <p className="edit-text-review__snippet-label">Before</p>
+          <p className="edit-text-review__snippet-text">
+            {excerpt.before}<mark className="edit-text-review__mark">{excerpt.selected}</mark>{excerpt.after}
+          </p>
+        </div>
+        <div className="edit-text-review__snippet" data-variant="after">
+          <p className="edit-text-review__snippet-label">After</p>
+          <p className="edit-text-review__snippet-text">
+            {excerpt.before}<mark className="edit-text-review__mark">{excerpt.replacement}</mark>{excerpt.after}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -223,7 +262,7 @@ function escapeForRegExp(value: string): string {
 function operationStatusCopy(operation: TextEditOperationReport): string {
   if (operation.selected) {
     if (operation.status === "changed") {
-      return `1 selected replacement staged on page ${formatPages(operation.foundBefore)}.`;
+      return `The selected occurrence was replaced and verified on page ${formatPages(operation.foundBefore)}.`;
     }
 
     return `Selected text was found on page ${formatPages(operation.foundBefore)}, but the staged PDF text did not change.`;

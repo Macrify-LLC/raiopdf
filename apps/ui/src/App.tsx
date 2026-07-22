@@ -2510,6 +2510,20 @@ export function App() {
     setSettingsOpen(true);
   }, []);
 
+  const handleToggleExperimentalFeatures = useCallback((next: boolean) => {
+    setExperimentalFeaturesEnabled(next);
+    setExperimentalFeaturesStatus(
+      writeUiPreferences({ experimentalFeaturesEnabled: next })
+        ? null
+        : "Preference could not be saved; it will reset when RaioPDF closes.",
+    );
+
+    if (!next) {
+      exitTextEditMode();
+      setActiveLegalTool((current) => isExperimentalLegalTool(current) ? null : current);
+    }
+  }, [exitTextEditMode]);
+
   const requestTextEditMode = useCallback(() => {
     if (longProcessRunning) {
       return;
@@ -5034,7 +5048,7 @@ export function App() {
 
   const selectLegalTool = useCallback(
     (toolId: LegalToolId) => {
-      if (!experimentalFeaturesEnabled && (toolId === "case-caption" || toolId === "table-of-authorities")) {
+      if (!experimentalFeaturesEnabled && isExperimentalLegalTool(toolId)) {
         openExperimentalFeaturesSettings();
         return;
       }
@@ -9228,14 +9242,7 @@ export function App() {
           onToggleMcpEnabled={handleToggleMcpEnabled}
           experimentalFeaturesEnabled={experimentalFeaturesEnabled}
           experimentalFeaturesStatus={experimentalFeaturesStatus}
-          onToggleExperimentalFeatures={(next) => {
-            setExperimentalFeaturesEnabled(next);
-            setExperimentalFeaturesStatus(
-              writeUiPreferences({ experimentalFeaturesEnabled: next })
-                ? null
-                : "Preference could not be saved; it will reset when RaioPDF closes.",
-            );
-          }}
+          onToggleExperimentalFeatures={handleToggleExperimentalFeatures}
           mcpPath={mcpPath}
           focusSection={settingsFocusSection}
           onFocusSectionHandled={() => setSettingsFocusSection(null)}
@@ -9425,6 +9432,12 @@ function batchCleanupCompletionMessage(files: readonly {
  * and Bates Numbering run file-to-file).
  */
 const STREAMED_LEGAL_TOOLS_ALWAYS: readonly LegalToolId[] = ["case-caption", "scanner-2425", "passwords"];
+const EXPERIMENTAL_LEGAL_TOOLS: readonly LegalToolId[] = ["case-caption", "table-of-authorities"];
+
+function isExperimentalLegalTool(toolId: LegalToolId | null): boolean {
+  return toolId !== null && EXPERIMENTAL_LEGAL_TOOLS.includes(toolId);
+}
+
 const STREAMED_LEGAL_TOOLS_DELEGATED: readonly LegalToolId[] = [
   "prepare-for-filing",
   "batch-cleanup",

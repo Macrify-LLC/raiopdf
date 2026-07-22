@@ -149,6 +149,44 @@ test("settings offers every jurisdiction pack in an enabled default-jurisdiction
   await expect(jurisdictionSelect).toHaveValue("florida");
 });
 
+test("opting out immediately closes active experimental workflows", async ({ page }) => {
+  await enableExperimentalFeatures(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const editText = page.getByRole("button", { name: "Edit Text Experimental", exact: true });
+  await editText.click();
+  await expect(editText).toHaveAttribute("aria-current", "true");
+
+  await page.getByRole("menuitem", { name: "File" }).click();
+  await page.getByRole("menuitem", { name: "Settings..." }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  const experimentalSwitch = settingsDialog.getByRole("switch", {
+    name: "Enable experimental features",
+  });
+  await experimentalSwitch.click();
+  await expect(experimentalSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(editText).not.toHaveAttribute("aria-current", "true");
+
+  await experimentalSwitch.click();
+  await settingsDialog.getByRole("button", { name: "Close settings" }).click();
+  await page.getByRole("button", { name: "Legal", exact: true }).click();
+  await page
+    .locator(".tool-panel")
+    .getByRole("button", { name: "Case Caption... Experimental", exact: true })
+    .click();
+  const captionWorkspace = page.getByLabel("Case Caption workspace");
+  await expect(captionWorkspace).toBeVisible();
+
+  await page.getByRole("menuitem", { name: "File" }).click();
+  await page.getByRole("menuitem", { name: "Settings..." }).click();
+  await page
+    .getByRole("dialog", { name: "Settings" })
+    .getByRole("switch", { name: "Enable experimental features" })
+    .click();
+  await expect(captionWorkspace).toBeHidden();
+});
+
 test("package-root inputs pair a Browse button, gated outside the desktop app", async ({ page }) => {
   await page.goto("/");
 

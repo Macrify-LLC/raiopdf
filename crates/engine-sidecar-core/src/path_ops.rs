@@ -609,12 +609,26 @@ pub(crate) fn run_command(
     current_dir: Option<&Path>,
     prepend_path: &[PathBuf],
 ) -> OpResult<Output> {
+    run_command_with_env(program, args, current_dir, prepend_path, &[])
+}
+
+/// Run a command with a small, explicit set of environment overrides. Most
+/// callers should use [`run_command`]; this exists for tools whose machine
+/// readable output depends on their locale.
+pub(crate) fn run_command_with_env(
+    program: &Path,
+    args: &[OsString],
+    current_dir: Option<&Path>,
+    prepend_path: &[PathBuf],
+    environment: &[(&str, &str)],
+) -> OpResult<Output> {
     let mut command = Command::new(program);
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    command.envs(environment.iter().copied());
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }

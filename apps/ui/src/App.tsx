@@ -945,8 +945,8 @@ export function App() {
 
   /** Hand off a committed print to the docked loader: the setup dialog has
    * already closed, so printing runs in the background and the app stays
-   * usable. Progress events update the dock; the promise resolves when the
-   * document has actually printed (or failed), not the instant it is queued. */
+   * usable. Progress events update the dock; the promise remains pending
+   * through the native backend's handoff and queue tracking. */
   const startPrint = useCallback(
     (params: StartPrintParams) => {
       const grant = engineDelegatedGrant;

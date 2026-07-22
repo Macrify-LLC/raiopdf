@@ -42,6 +42,24 @@ pub const ERR_PRINT_SELF_HANDLER: &str = "PRINT_FALLBACK_SELF_HANDLER";
 /// of a false "sent" once completion polling can see the failure.
 pub const ERR_PRINT_FAILED: &str = "PRINT_FAILED";
 
+/// CUPS localizes both `lp` acknowledgements and `lpstat` status lines; all
+/// output parsed below must therefore use its documented C-locale wording.
+#[cfg(unix)]
+const CUPS_C_LOCALE: [(&str, &str); 1] = [("LC_ALL", "C")];
+
+/// Reject an invalid copy count before it reaches a platform print backend.
+/// Keeping this at the core boundary makes the command contract consistent
+/// even when callers bypass the UI.
+pub fn validate_copies(copies: u32) -> OpResult<()> {
+    if !(1..=99).contains(&copies) {
+        return Err(PathOpError {
+            code: ERR_INVALID_INPUT,
+            message: "copies must be between 1 and 99".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn cancelled_error() -> PathOpError {
     PathOpError {
         code: ERR_PRINT_CANCELLED,
@@ -267,13 +285,14 @@ pub fn lp_print_args(
 /// Parse the CUPS job id from `lp` stdout, which is exactly
 /// `request id is <printer>-<n> (N file(s))`. The id is what `lpstat` and
 /// `cancel` take — completion polling and real cancellation both need it.
-/// `None` when the line shape is unexpected (the job still queued; we just
-/// can't track it).
+/// `None` when the line shape is unexpected.
 pub fn parse_lp_job_id(stdout: &str) -> Option<String> {
     const MARKER: &str = "request id is ";
     let start = stdout.find(MARKER)? + MARKER.len();
     let id = stdout[start..].split_whitespace().next()?;
-    (!id.is_empty()).then(|| id.to_string())
+    let (_, sequence) = id.rsplit_once('-')?;
+    sequence.parse::<u64>().ok()?;
+    Some(id.to_string())
 }
 
 /// Whether `lpstat -o` output still lists `job_id` (job id is the first
@@ -293,11 +312,17 @@ pub fn printer_is_stopped(lpstat_p_output: &str) -> bool {
     text.contains("disabled") || text.contains("stopped")
 }
 
-/// Run a CUPS binary and capture stdout, delegating spawn-flag handling and
-/// error shaping to the shared `path_ops` runner.
+/// Run a CUPS binary in the C locale and capture stdout, delegating spawn-flag
+/// handling and error shaping to the shared `path_ops` runner.
 #[cfg(unix)]
 fn run_capture(program: &str, arguments: &[&str]) -> OpResult<String> {
-    let output = path_ops::run_command(Path::new(program), &args(arguments), None, &[])?;
+    let output = path_ops::run_command_with_env(
+        Path::new(program),
+        &args(arguments),
+        None,
+        &[],
+        &CUPS_C_LOCALE,
+    )?;
     path_ops::expect_success(program, &output)?;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -315,10 +340,11 @@ pub fn list_printers() -> OpResult<Vec<PrinterInfo>> {
     ))
 }
 
-/// Spool one print job to CUPS via `lp` and return its job id (parsed from
-/// `lp` stdout) for completion polling and cancellation. A `None` id means the
-/// job queued but `lp` printed an unexpected line — printing proceeds, just
-/// untracked. Callers must `validate_print_options(options)` first.
+/// Spool one print job to CUPS via `lp` and return its job id for completion
+/// polling and cancellation. CUPS output is forced to the C locale before
+/// parsing its documented English response. If it still cannot provide a
+/// trackable id, fail rather than falsely report completion. Callers must
+/// `validate_print_options(options)` first.
 #[cfg(unix)]
 pub fn lp_print(
     input: &Path,
@@ -326,15 +352,20 @@ pub fn lp_print(
     selection: &PrintSelection,
     copies: u32,
     options: &PrintOptions,
-) -> OpResult<Option<String>> {
-    let output = path_ops::run_command(
+) -> OpResult<String> {
+    validate_copies(copies)?;
+    let output = path_ops::run_command_with_env(
         Path::new("lp"),
         &lp_print_args(printer, selection, copies, options, input),
         None,
         &[],
+        &CUPS_C_LOCALE,
     )?;
     path_ops::expect_success("lp", &output)?;
-    Ok(parse_lp_job_id(&String::from_utf8_lossy(&output.stdout)))
+    parse_lp_job_id(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| PathOpError {
+        code: ERR_PRINT_FAILED,
+        message: "CUPS accepted the print job but did not return a trackable job id; the job may still print.".to_string(),
+    })
 }
 
 /// Whether a CUPS job is still in the active queue (`lpstat -o`). A job that
@@ -715,12 +746,7 @@ pub fn execute_print_plan(
     copies: u32,
     runners: &mut PrintRunners<'_>,
 ) -> OpResult<PrintOutcome> {
-    if copies == 0 || copies > 99 {
-        return Err(PathOpError {
-            code: ERR_INVALID_INPUT,
-            message: "copies must be between 1 and 99".to_string(),
-        });
-    }
+    validate_copies(copies)?;
     let segments: Vec<Option<PageSegmentRange>> = match selection {
         PrintSelection::WholeDocument => vec![None],
         PrintSelection::Segments(segments) => {
@@ -1367,6 +1393,15 @@ mod tests {
     }
 
     #[test]
+    fn copies_must_be_between_one_and_ninety_nine() {
+        assert!(validate_copies(1).is_ok());
+        assert!(validate_copies(99).is_ok());
+        for copies in [0, 100] {
+            assert_eq!(validate_copies(copies).unwrap_err().code, ERR_INVALID_INPUT);
+        }
+    }
+
+    #[test]
     fn cups_page_ranges_render_segments_and_single_pages() {
         assert_eq!(
             cups_page_ranges(&[
@@ -1492,6 +1527,10 @@ mod tests {
         );
         assert_eq!(parse_lp_job_id("no id here"), None);
         assert_eq!(parse_lp_job_id("request id is "), None);
+        assert_eq!(
+            parse_lp_job_id("request id is Office_HP-next (1 file(s))"),
+            None
+        );
     }
 
     #[test]

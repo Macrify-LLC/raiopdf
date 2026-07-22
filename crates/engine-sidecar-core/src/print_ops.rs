@@ -290,7 +290,10 @@ pub fn parse_lp_job_id(stdout: &str) -> Option<String> {
     const MARKER: &str = "request id is ";
     let start = stdout.find(MARKER)? + MARKER.len();
     let id = stdout[start..].split_whitespace().next()?;
-    let (_, sequence) = id.rsplit_once('-')?;
+    let (destination, sequence) = id.rsplit_once('-')?;
+    if destination.is_empty() {
+        return None;
+    }
     sequence.parse::<u64>().ok()?;
     Some(id.to_string())
 }
@@ -1527,6 +1530,7 @@ mod tests {
         );
         assert_eq!(parse_lp_job_id("no id here"), None);
         assert_eq!(parse_lp_job_id("request id is "), None);
+        assert_eq!(parse_lp_job_id("request id is -12 (1 file(s))"), None);
         assert_eq!(
             parse_lp_job_id("request id is Office_HP-next (1 file(s))"),
             None

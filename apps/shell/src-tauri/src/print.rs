@@ -216,7 +216,7 @@ pub async fn print_pdf(
         });
     }
     core_print::validate_printer_name(&printer)?;
-    let copies = copies.unwrap_or(1);
+    let copies = normalize_copies(copies)?;
     let options = options.unwrap_or_default();
     core_print::validate_print_options(&options)?;
 
@@ -242,6 +242,14 @@ pub async fn print_pdf(
     jobs.remove(&job_token);
 
     result.map(JobOutcome::into_response)
+}
+
+/// Apply the command default and enforce the print contract before any
+/// platform-specific work starts.
+fn normalize_copies(copies: Option<u32>) -> OpResult<u32> {
+    let copies = copies.unwrap_or(1);
+    core_print::validate_copies(copies)?;
+    Ok(copies)
 }
 
 /// Windows: drive the printer through Ghostscript segment-by-segment, with the
@@ -356,18 +364,19 @@ fn should_keep_print_work_dir(result: &OpResult<JobOutcome>, fallback_part_queue
         )
 }
 
-/// macOS / Linux: snapshot the input, spool it via CUPS `lp`, then poll the
-/// job to real completion — so the caller resolves when the document has
-/// actually printed (or failed), not the instant CUPS accepts the spool.
+/// macOS / Linux: snapshot the input, spool it via CUPS `lp`, then poll until
+/// CUPS no longer reports the job active. This keeps the caller attached to
+/// the queue instead of resolving as soon as CUPS accepts the spool.
 ///
 /// While polling: emit progress phases so the docked loader can show a live
 /// "printing" status without the print dialog staying open, and honor
 /// cancellation by cancelling the CUPS job for real (the old fire-and-forget
 /// `lp` spool had no cancel and no failure signal on macOS).
 ///
-/// Completion vs. failure: CUPS' CLI can't cleanly distinguish a clean finish
-/// from a silent abort, so a job that leaves the queue is treated as done
-/// unless its printer went stopped/disabled, which is reported as a failure.
+/// Completion vs. failure: CUPS' CLI cannot distinguish every clean finish
+/// from every silent abort, so a job that leaves the active queue is treated
+/// as done unless its printer went stopped/disabled, which is reported as a
+/// failure.
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn run_cups_print_job(
@@ -401,53 +410,51 @@ fn run_cups_print_job(
     let job_id = core_print::lp_print(input, printer, selection, copies, options)?;
     emit_cups_phase(app, job_token, PHASE_CUPS_QUEUED);
 
-    if let Some(job_id) = job_id {
-        // The "printing" phase is emitted once, on the queued→printing edge —
-        // the payload never changes after that, so re-emitting every tick would
-        // just churn a re-render on the JS side for no visible change.
-        let mut printing_emitted = false;
-        let mut completed = false;
-        for _ in 0..MAX_POLLS {
-            if cancel_flag.load(Ordering::Relaxed) {
-                let _ = core_print::cancel_cups_job(&job_id);
-                return Err(PathOpError {
-                    code: core_print::ERR_PRINT_CANCELLED,
-                    message: "Printing was cancelled.".to_string(),
-                });
-            }
-            if !core_print::cups_job_active(&job_id)? {
-                if core_print::cups_printer_stopped(printer).unwrap_or(false) {
-                    return Err(PathOpError {
-                        code: core_print::ERR_PRINT_FAILED,
-                        message: format!(
-                            "The print job stopped before finishing — {printer} halted. \
-                             Check the printer and print again."
-                        ),
-                    });
-                }
-                completed = true;
-                break;
-            }
-            if !printing_emitted {
-                emit_cups_phase(app, job_token, PHASE_CUPS_PRINTING);
-                printing_emitted = true;
-            }
-            sleep(POLL_INTERVAL);
-        }
-
-        if !completed {
-            // The job outlived the poll cap (a job printing for hours, or a
-            // wedged queue). Leave it in the queue rather than cancel it — it
-            // may yet finish — but report a failure so the UI never claims a
-            // print completed that we simply stopped tracking.
+    // The "printing" phase is emitted once, on the queued→printing edge —
+    // the payload never changes after that, so re-emitting every tick would
+    // just churn a re-render on the JS side for no visible change.
+    let mut printing_emitted = false;
+    let mut completed = false;
+    for _ in 0..MAX_POLLS {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = core_print::cancel_cups_job(&job_id);
             return Err(PathOpError {
-                code: core_print::ERR_PRINT_FAILED,
-                message: format!(
-                    "Printing is still going after a long wait — RaioPDF stopped tracking \
-                     the job on {printer}. Check the printer; it may still finish."
-                ),
+                code: core_print::ERR_PRINT_CANCELLED,
+                message: "Printing was cancelled.".to_string(),
             });
         }
+        if !core_print::cups_job_active(&job_id)? {
+            if core_print::cups_printer_stopped(printer).unwrap_or(false) {
+                return Err(PathOpError {
+                    code: core_print::ERR_PRINT_FAILED,
+                    message: format!(
+                        "The print job stopped before finishing — {printer} halted. \
+                         Check the printer and print again."
+                    ),
+                });
+            }
+            completed = true;
+            break;
+        }
+        if !printing_emitted {
+            emit_cups_phase(app, job_token, PHASE_CUPS_PRINTING);
+            printing_emitted = true;
+        }
+        sleep(POLL_INTERVAL);
+    }
+
+    if !completed {
+        // The job outlived the poll cap (a job printing for hours, or a
+        // wedged queue). Leave it in the queue rather than cancel it — it
+        // may yet finish — but report a failure so the UI never claims a
+        // print completed that we simply stopped tracking.
+        return Err(PathOpError {
+            code: core_print::ERR_PRINT_FAILED,
+            message: format!(
+                "Printing is still going after a long wait — RaioPDF stopped tracking \
+                 the job on {printer}. Check the printer; it may still finish."
+            ),
+        });
     }
 
     let input_changed = ensure_unchanged(input, before).is_err();
@@ -579,6 +586,19 @@ mod tests {
         // The parked intent is one-shot — an unrelated token is unaffected.
         let fresh = jobs.register("job-fresh").expect("register");
         assert!(!fresh.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn normalize_copies_enforces_the_command_contract() {
+        assert_eq!(normalize_copies(None).unwrap(), 1);
+        assert_eq!(normalize_copies(Some(1)).unwrap(), 1);
+        assert_eq!(normalize_copies(Some(99)).unwrap(), 99);
+        for copies in [0, 100] {
+            assert_eq!(
+                normalize_copies(Some(copies)).unwrap_err().code,
+                "INVALID_INPUT"
+            );
+        }
     }
 
     #[cfg(windows)]

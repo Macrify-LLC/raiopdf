@@ -2,6 +2,8 @@ mod diagnostics;
 #[cfg(feature = "e2e-webdriver")]
 mod e2e_dialog;
 mod instance;
+#[cfg(target_os = "macos")]
+mod macos_termination;
 mod mcp;
 mod path_ops;
 mod print;
@@ -68,6 +70,12 @@ struct UnsavedWorkState {
     /// Guards against stacking confirm dialogs when quit is requested again
     /// while a confirm is already on screen (e.g. mashing Cmd+Q).
     quit_prompt_active: AtomicBool,
+    /// AppKit is waiting for `replyToApplicationShouldTerminate:`. This can
+    /// become true after a Dock Quit arrives while the custom menu's prompt is
+    /// already open, so that prompt must reply to AppKit instead of calling
+    /// `app.exit()` directly.
+    #[cfg(target_os = "macos")]
+    macos_termination_pending: AtomicBool,
 }
 #[cfg(target_os = "macos")]
 const OPENED_PDF_EVENT: &str = "raiopdf-opened-pdf";
@@ -2178,6 +2186,9 @@ pub fn run() {
         .manage(NativeMenuStateStore::default())
         .manage(UnsavedWorkState::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos_termination::install(app.handle()).map_err(io::Error::other)?;
+
             // The WebDriver dialog canary drives the app through
             // @wdio/tauri-service, which requires the companion `tauri-plugin-wdio`
             // (execute/mock/log-forwarding + window-state commands). Register it and
@@ -2505,8 +2516,8 @@ fn set_unsaved_state(state: tauri::State<'_, UnsavedWorkState>, unsaved: bool) {
 /// On Windows/Linux the window-close guard in the UI is the primary gate
 /// (the rendered menu bar's Exit closes the window, which fires a
 /// close-requested event); this path additionally covers the native menu's
-/// Exit item. Not covered anywhere: macOS Dock "Quit" and OS logout send
-/// `terminate:` directly to the process, which bypasses the run loop.
+/// Exit item. macOS Dock Quit and OS logout are intercepted by the AppKit
+/// `applicationShouldTerminate:` hook in `macos_termination`.
 fn request_app_exit(app: &tauri::AppHandle) {
     let unsaved_state = app.state::<UnsavedWorkState>();
     if !unsaved_state.unsaved.load(Ordering::SeqCst) {
@@ -2520,6 +2531,59 @@ fn request_app_exit(app: &tauri::AppHandle) {
         return;
     }
 
+    show_unsaved_exit_confirmation(app, |app, confirmed| {
+        complete_unsaved_exit_decision(app, confirmed);
+    });
+}
+
+/// Starts the same unsaved-work confirmation for AppKit's Dock Quit and OS
+/// logout request. `true` tells the delegate to return `NSTerminateLater` and
+/// wait for the dialog callback to reply to AppKit.
+#[cfg(target_os = "macos")]
+fn request_macos_termination(app: &tauri::AppHandle) -> bool {
+    let unsaved_state = app.state::<UnsavedWorkState>();
+    if !unsaved_state.unsaved.load(Ordering::SeqCst) {
+        return false;
+    }
+    let prompt_was_active = unsaved_state
+        .quit_prompt_active
+        .swap(true, Ordering::SeqCst);
+    // If the menu prompt came first, its callback becomes responsible for
+    // replying to this deferred AppKit request. A second Dock/logout request
+    // remains coalesced with the same pending reply and cannot stack dialogs.
+    let termination_was_pending = unsaved_state
+        .macos_termination_pending
+        .swap(true, Ordering::SeqCst);
+    if prompt_was_active || termination_was_pending {
+        return true;
+    }
+
+    show_unsaved_exit_confirmation(app, |app, confirmed| {
+        complete_unsaved_exit_decision(app, confirmed);
+    });
+    true
+}
+
+fn complete_unsaved_exit_decision(app: &tauri::AppHandle, confirmed: bool) {
+    #[cfg(target_os = "macos")]
+    if app
+        .state::<UnsavedWorkState>()
+        .macos_termination_pending
+        .swap(false, Ordering::SeqCst)
+    {
+        macos_termination::reply_to_termination(app, confirmed);
+        return;
+    }
+
+    if confirmed {
+        perform_app_exit(app);
+    }
+}
+
+fn show_unsaved_exit_confirmation<F>(app: &tauri::AppHandle, on_decision: F)
+where
+    F: FnOnce(&tauri::AppHandle, bool) + Send + 'static,
+{
     // The window may be hidden (macOS close-to-Dock keeps the app running);
     // surface it so the confirm has visible context.
     if let Some(window) = app.get_webview_window("main") {
@@ -2541,9 +2605,7 @@ fn request_app_exit(app: &tauri::AppHandle) {
                 .state::<UnsavedWorkState>()
                 .quit_prompt_active
                 .store(false, Ordering::SeqCst);
-            if confirmed {
-                perform_app_exit(&app_handle);
-            }
+            on_decision(&app_handle, confirmed);
         });
 }
 

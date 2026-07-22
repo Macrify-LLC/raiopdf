@@ -132,6 +132,7 @@ import {
   useDocument,
   type BinderExhibitInput,
   type DocumentState,
+  type OpenFileOptions,
   type OpenFileResult,
   type SignatureUnlockPrompt,
 } from "./hooks/useDocument";
@@ -3347,7 +3348,7 @@ export function App() {
   }, [runOcrWorkflow]);
 
   const openOpenedFile = useCallback(
-    (file: OpenedFile, options: { openInNewTab?: boolean } = {}) => {
+    (file: OpenedFile, options: { openInNewTab?: boolean; stageTempBacking?: boolean } = {}) => {
       const opensNewTab = Boolean(options.openInNewTab && document.source);
       if (opensNewTab && longProcessRunning) {
         // Opening into a new tab implicitly switches tabs, which would
@@ -3365,9 +3366,32 @@ export function App() {
       resetLegalState();
       setSelectedPageIndexes(new Set());
       setPasswordPrompt(null);
-      void openDocumentFile(file, {
+      void (async () => {
+      const openOptions: OpenFileOptions = {
         openMode: options.openInNewTab && document.source ? "new-tab" : "replace-active",
-      }).then((result) => {
+      };
+      // A derived/imported in-memory doc (extracted range, exhibit binder, Word
+      // import, …) has no file on disk. Stage its bytes to a temp file so it
+      // prints/OCRs in full via the native path while staying unsaved. If
+      // staging can't run (web build) or fails, mark it dirty so Close still
+      // prompts to save — just without the native full-document print.
+      if (options.stageTempBacking && file.path === null && file.bytes) {
+        const staged = await materializePdfBytesGrant(file.bytes, file.name).catch(
+          () => null,
+        );
+        const backing: FileGrant | null =
+          staged?.kind === "memory"
+            ? (staged.path as FileGrant | null)
+            : staged?.kind === "rangeGrant"
+              ? staged.grant
+              : null;
+        if (backing) {
+          openOptions.tempBackingGrant = backing;
+        } else {
+          openOptions.markDirty = true;
+        }
+      }
+      await openDocumentFile(file, openOptions).then((result) => {
         if (result.status === "opened") {
           setRepairCandidate(null);
           setSelectedPageIndexes(new Set([0]));
@@ -3396,6 +3420,7 @@ export function App() {
           setActiveOrganizeTool("repair");
         }
       });
+      })();
     },
     [document.source, longProcessRunning, openDocumentFile, resetLegalState, setError, stashVisibleDocumentEditingState],
   );
@@ -4810,7 +4835,10 @@ export function App() {
         // regular Print button (window.print on the rendered pages) now
         // applies to exactly those pages. The temp output on disk was
         // already deleted; these bytes live only in memory.
-        openOpenedFile({ bytes: result.extraction.bytes, name: result.extraction.name, path: null });
+        openOpenedFile(
+          { bytes: result.extraction.bytes, name: result.extraction.name, path: null },
+          { stageTempBacking: true },
+        );
       });
   }, [document.fileName, document.generation, document.pageCount, getOpenToken, isCurrentDocument, openOpenedFile, pathOpsGrant]);
 

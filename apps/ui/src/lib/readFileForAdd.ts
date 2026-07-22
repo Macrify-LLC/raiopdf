@@ -41,6 +41,7 @@ import {
 import {
   getWordCapability,
   shouldRefuseWord,
+  wordOperationGuidance,
   wordUnavailableMessage as wordUnavailableSummary,
   type WordCapability,
 } from "./wordCapability";
@@ -302,7 +303,10 @@ interface DocxProgressEvent {
   index: number;
   total: number;
   file: string;
-  phase?: "startingWord" | "converting" | string;
+  // `preparing` deliberately avoids claiming that this batch launched Word.
+  // macOS reuses one Word process for the whole batch and the process may
+  // already have been open before RaioPDF started the conversion.
+  phase?: "preparing" | "converting" | string;
   status?: "ok" | "error" | string;
   name?: string | null;
   pageCount?: number | null;
@@ -331,9 +335,22 @@ function applyDocxProgress(rows: DocxConversionProgressRow[], event: DocxProgres
   }
 
   row.status = "running";
-  row.message = event.phase === "startingWord"
-    ? "Starting Word..."
-    : `Converting ${event.index} of ${event.total}...`;
+  row.message = docxConversionProgressMessage(event.phase, event.index, event.total);
+}
+
+/**
+ * Batch conversion state is intentionally neutral until the shell is actually
+ * converting. In particular, do not say that RaioPDF is starting Word: Word
+ * can already be running and macOS batches deliberately reuse that session.
+ */
+export function docxConversionProgressMessage(
+  phase: string | undefined,
+  index: number,
+  total: number,
+): string {
+  return phase === "converting"
+    ? `Converting ${index} of ${total}...`
+    : `Preparing ${index} of ${total} for conversion in Microsoft Word...`;
 }
 
 interface DocxAddBatchResult {
@@ -341,11 +358,22 @@ interface DocxAddBatchResult {
   errors: DocxAddError[];
 }
 
-interface DocxAddError {
+export interface DocxAddError {
   grant: string;
   name: string;
   code: string;
   message: string;
+}
+
+/** The first actionable Word failure for batch-add callers, if any. */
+export function wordDocxAddErrorMessage(errors: readonly DocxAddError[]): string | null {
+  for (const error of errors) {
+    const guidance = wordOperationGuidance(error);
+    if (guidance) {
+      return guidance;
+    }
+  }
+  return null;
 }
 
 async function convertDocxForAdd(

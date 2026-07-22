@@ -4,6 +4,8 @@ mod e2e_dialog;
 mod instance;
 #[cfg(target_os = "macos")]
 mod macos_termination;
+#[cfg(target_os = "macos")]
+mod macos_word_automation;
 mod mcp;
 mod path_ops;
 mod print;
@@ -277,6 +279,9 @@ struct DocxConvertDonePayload {
 
 const DOCX_CONVERT_PROGRESS_EVENT: &str = "docx-convert:progress";
 const DOCX_CONVERT_FILE_DONE_EVENT: &str = "docx-convert:file-done";
+// This phase is intentionally neutral: the conversion may reuse a user-open
+// Word instance, so reporting "startingWord" would be false.
+const DOCX_CONVERT_PREPARING_PHASE: &str = "preparing";
 
 impl PendingPdfBytes {
     fn insert(&self, bytes: Vec<u8>) -> Result<String, String> {
@@ -911,13 +916,144 @@ async fn pick_docx_for_import(
 #[tauri::command]
 async fn convert_docx_for_add(
     app: tauri::AppHandle,
-    file_grants: tauri::State<'_, FileGrants>,
+    _file_grants: tauri::State<'_, FileGrants>,
+    files: Vec<DocxAddInput>,
+    markup: core_word::MarkupMode,
+) -> Result<DocxAddBatchResult, engine_sidecar_core::path_ops::PathOpError> {
+    #[cfg(target_os = "macos")]
+    {
+        // This runs in the signed RaioPDF process before the batch worker
+        // owns its conversion deadline. A first-use TCC prompt can therefore
+        // wait for an explicit user response without looking like a Word
+        // conversion timeout.
+        word::require_macos_word_automation_before_conversion()?;
+        // Keep the entire import in one blocking job: the core session holds
+        // Word's single-flight lock and reuses its one Word launch for every
+        // file, while events remain per-file just as they are on Windows.
+        let app = app.clone();
+        on_command_blocking_pool(move || {
+            convert_docx_for_add_macos_batch(app, files, markup).map_err(|error| error.message)
+        })
+        .await
+        .map_err(|message| engine_sidecar_core::path_ops::PathOpError {
+            code: engine_sidecar_core::path_ops::ERR_OP_FAILED,
+            message,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let total = files.len();
+        let mut converted = Vec::with_capacity(total);
+        let mut errors = Vec::new();
+
+        for (zero_index, file) in files.into_iter().enumerate() {
+            let index = zero_index + 1;
+            let _ = app.emit(
+                DOCX_CONVERT_PROGRESS_EVENT,
+                DocxConvertProgressPayload {
+                    index,
+                    total,
+                    file: file.name.clone(),
+                    // Do not promise a fresh Word launch. A Word instance can
+                    // already be open, and macOS batches deliberately reuse
+                    // one RaioPDF session for all of their files.
+                    phase: DOCX_CONVERT_PREPARING_PHASE.to_string(),
+                },
+            );
+
+            let input = match _file_grants.resolve(&file.grant) {
+                Ok(input) => input,
+                Err(message) => {
+                    let error = DocxAddError {
+                        grant: file.grant,
+                        name: file.name,
+                        code: "INVALID_INPUT".to_string(),
+                        message,
+                    };
+                    emit_docx_done_error(&app, index, total, &error);
+                    errors.push(error);
+                    continue;
+                }
+            };
+
+            let _ = app.emit(
+                DOCX_CONVERT_PROGRESS_EVENT,
+                DocxConvertProgressPayload {
+                    index,
+                    total,
+                    file: file.name.clone(),
+                    phase: "converting".to_string(),
+                },
+            );
+
+            match convert_one_docx_for_add(&app, _file_grants.inner(), &input, &file.name, markup)
+                .await
+            {
+                Ok(output) => {
+                    let _ = app.emit(
+                        DOCX_CONVERT_FILE_DONE_EVENT,
+                        DocxConvertDonePayload {
+                            index,
+                            total,
+                            file: file.name,
+                            status: "ok".to_string(),
+                            grant: Some(output.grant.clone()),
+                            name: Some(output.name.clone()),
+                            page_count: Some(output.page_count),
+                            error: None,
+                        },
+                    );
+                    converted.push(PickedPdf {
+                        grant: output.grant,
+                        name: output.name,
+                        size_bytes: output.size_bytes,
+                        source: PickedAddSource::Pdf,
+                        markup_scan: None,
+                        converted_from_grant: Some(file.grant),
+                    });
+                }
+                Err(error) => {
+                    let error = DocxAddError {
+                        grant: file.grant,
+                        name: file.name,
+                        code: error.code.to_string(),
+                        message: error.message,
+                    };
+                    emit_docx_done_error(&app, index, total, &error);
+                    errors.push(error);
+                }
+            }
+        }
+
+        Ok(DocxAddBatchResult {
+            files: converted,
+            errors,
+        })
+    }
+}
+
+/// macOS Word uses one shared visible process. Keep its core session alive for
+/// the full import, but deliberately retain the normal per-file progress,
+/// grant validation, output grants, and error reporting contract.
+#[cfg(target_os = "macos")]
+fn convert_docx_for_add_macos_batch(
+    app: tauri::AppHandle,
     files: Vec<DocxAddInput>,
     markup: core_word::MarkupMode,
 ) -> Result<DocxAddBatchResult, engine_sidecar_core::path_ops::PathOpError> {
     let total = files.len();
+    let toolchain = path_ops::discover_toolchain(&app);
+    let file_grants = app.state::<FileGrants>();
+    let (mut session, session_start_error) = match core_word::MacosWordConversionSession::begin() {
+        Ok(session) => (Some(session), None),
+        Err(error) => (None, Some(error)),
+    };
     let mut converted = Vec::with_capacity(total);
     let mut errors = Vec::new();
+
+    // A poisoned automation lock is still reported for every selected file
+    // instead of collapsing the whole batch into one IPC-level error.
 
     for (zero_index, file) in files.into_iter().enumerate() {
         let index = zero_index + 1;
@@ -927,7 +1063,9 @@ async fn convert_docx_for_add(
                 index,
                 total,
                 file: file.name.clone(),
-                phase: "startingWord".to_string(),
+                // The UI must not claim Word is starting here. The macOS
+                // session may be reusing an already-running Word process.
+                phase: DOCX_CONVERT_PREPARING_PHASE.to_string(),
             },
         );
 
@@ -956,8 +1094,20 @@ async fn convert_docx_for_add(
             },
         );
 
-        match convert_one_docx_for_add(&app, file_grants.inner(), &input, &file.name, markup).await
-        {
+        let result = match session.as_mut() {
+            Some(session) => convert_one_docx_for_add_with_macos_session(
+                &app,
+                file_grants.inner(),
+                &toolchain,
+                session,
+                &input,
+                &file.name,
+                markup,
+            ),
+            None => Err(session_start_error.clone().expect("session start error")),
+        };
+
+        match result {
             Ok(output) => {
                 let _ = app.emit(
                     DOCX_CONVERT_FILE_DONE_EVENT,
@@ -992,6 +1142,10 @@ async fn convert_docx_for_add(
                 errors.push(error);
             }
         }
+    }
+
+    if let Some(session) = session {
+        session.finish();
     }
 
     Ok(DocxAddBatchResult {
@@ -1922,6 +2076,46 @@ struct ConvertedDocxForAdd {
     page_count: u32,
 }
 
+#[cfg(target_os = "macos")]
+fn convert_one_docx_for_add_with_macos_session(
+    app: &tauri::AppHandle,
+    file_grants: &FileGrants,
+    toolchain: &engine_sidecar_core::path_ops::PathOpsToolchain,
+    session: &mut core_word::MacosWordConversionSession,
+    input: &Path,
+    source_name: &str,
+    markup: core_word::MarkupMode,
+) -> Result<ConvertedDocxForAdd, engine_sidecar_core::path_ops::PathOpError> {
+    let work_dir = path_ops::OpWorkDir::create(app)?;
+    let output_name = converted_pdf_name_for_word_input(input, source_name);
+    let output_path = work_dir.path().join(&output_name);
+
+    session.convert_docx_to_pdf_with_toolchain(toolchain, input, &output_path, markup)?;
+    let page_count = engine_sidecar_core::path_ops::page_count(toolchain, &output_path)?;
+    let size_bytes = fs::metadata(&output_path)
+        .map(|metadata| metadata.len())
+        .map_err(|error| engine_sidecar_core::path_ops::PathOpError {
+            code: "IO_ERROR",
+            message: format!("cannot stat converted PDF: {error}"),
+        })?;
+
+    let grant = file_grants.grant(output_path).map_err(|message| {
+        engine_sidecar_core::path_ops::PathOpError {
+            code: "IO_ERROR",
+            message,
+        }
+    })?;
+    work_dir.keep();
+
+    Ok(ConvertedDocxForAdd {
+        grant,
+        name: output_name,
+        size_bytes,
+        page_count,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
 async fn convert_one_docx_for_add(
     app: &tauri::AppHandle,
     file_grants: &FileGrants,
@@ -2902,6 +3096,20 @@ const fn native_menu_policy(platform: NativeMenuPlatform) -> NativeMenuPolicy {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn docx_batch_preparation_progress_is_neutral_about_word_launch() {
+        let payload = DocxConvertProgressPayload {
+            index: 1,
+            total: 2,
+            file: "example.docx".to_string(),
+            phase: DOCX_CONVERT_PREPARING_PHASE.to_string(),
+        };
+
+        let value = serde_json::to_value(payload).expect("serialize progress event");
+        assert_eq!(value["phase"], "preparing");
+        assert_ne!(value["phase"], "startingWord");
+    }
 
     #[test]
     fn file_grants_resolve_only_shell_owned_paths() {

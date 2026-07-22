@@ -201,6 +201,7 @@ import {
 import {
   pickFileForAdd,
   tooLargeToAddMessage,
+  wordDocxAddErrorMessage,
   type FileAddResult,
   type PickPdfsForAddOptions,
 } from "./lib/readFileForAdd";
@@ -1169,7 +1170,7 @@ export function App() {
   const [mcpPath, setMcpPath] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<string | null>(null);
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(null);
-  // Whether Microsoft Word was detected on this PC. Used to proactively gate the
+  // Whether Microsoft Word was detected on this computer. Used to proactively gate the
   // Word-only menu items (PDF -> editable Word export) so they gray out with a
   // reason when Word isn't installed, instead of only failing after a click.
   // Defaults `true` so nothing grays before the probe (or on non-desktop / probe
@@ -3945,7 +3946,7 @@ export function App() {
       onWordUnavailable: (message) => {
         setProgress({
           running: false,
-          message: message || `Word integration not available. Word documents were not added to the ${noun}.`,
+          message: message || `Microsoft Word isn't available. Word documents were not added to the ${noun}.`,
           result: null,
         });
       },
@@ -3953,11 +3954,12 @@ export function App() {
         if (errors.length === 0) {
           return;
         }
+        const wordGuidance = wordDocxAddErrorMessage(errors);
         setProgress({
           running: false,
-          message: errors.length === 1 && errors[0]
+          message: wordGuidance ?? (errors.length === 1 && errors[0]
             ? `"${errors[0].name}" could not be converted from Word.`
-            : `${errors.length} Word documents could not be converted.`,
+            : `${errors.length} Word documents could not be converted.`),
           result: null,
         });
       },

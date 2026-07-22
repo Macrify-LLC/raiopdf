@@ -20,6 +20,7 @@ import {
   pickPdfsForAdd,
   readFileForAdd,
   tooLargeToAddMessage,
+  wordDocxAddErrorMessage,
   type DocxConversionProgressRow,
   type FileAddInput,
   type PickPdfsForAddOptions,
@@ -74,7 +75,7 @@ interface GrantEntry {
 const DELEGATED_BROWSER_FILE_MESSAGE =
   "Files dropped from the browser can't be added to a very large document — choose them with the file picker instead.";
 const ADD_FILE_ACCEPT = "application/pdf,.pdf";
-const WORD_UNAVAILABLE_MESSAGE = "Word integration not available. Word documents were not added.";
+const WORD_UNAVAILABLE_MESSAGE = "Microsoft Word isn't available. Word documents were not added.";
 
 async function resolveSlipSheetPageSize(
   pdfDocument: PDFDocumentProxy | null,
@@ -1323,7 +1324,10 @@ function docxAddOptions(
     onDocxRowsChange: setRows,
     onWordUnavailable: (message) => setStatus(message || WORD_UNAVAILABLE_MESSAGE),
     onDocxErrors: (errors) => {
-      if (errors.length === 1 && errors[0]) {
+      const wordGuidance = wordDocxAddErrorMessage(errors);
+      if (wordGuidance) {
+        setStatus(wordGuidance);
+      } else if (errors.length === 1 && errors[0]) {
         setStatus(`"${errors[0].name}" could not be converted from Word.`);
       } else if (errors.length > 1) {
         setStatus(`${errors.length} Word documents could not be converted.`);

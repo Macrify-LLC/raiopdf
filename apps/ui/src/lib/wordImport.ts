@@ -1,6 +1,7 @@
 import {
   getWordCapability,
   shouldRefuseWord,
+  wordOperationGuidance,
   wordUnavailableMessage,
   type WordCapability,
 } from "./wordCapability";
@@ -88,7 +89,8 @@ export async function runWordDocumentImport(
     });
     return { status: "converted", output, sourceName: picked.name };
   } catch (error: unknown) {
-    const message = pathOpErrorMessage(error, "This Word document could not be imported.");
+    const message = wordOperationGuidance(error)
+      ?? pathOpErrorMessage(error, "This Word document could not be imported.");
     setStatus({ running: false, tone: "danger", message: `${message} ${WORD_REFLOW_EXPERIMENTAL_LABEL}` });
     return { status: "failed", message };
   }

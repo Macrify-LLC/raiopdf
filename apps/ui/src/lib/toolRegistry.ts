@@ -93,6 +93,7 @@ export const COMMAND_BAR_EDIT_TOOLS = [
 
 export const HELP_ONLY_TOOL_ENTRIES = [
   { id: "make-searchable", label: "Make Searchable (OCR)", group: "comment-ocr", helpArticleId: "make-searchable", description: "Make a scanned PDF searchable, and confirm the text came through." },
+  { id: "import-word", label: "Import Word Document", group: "organize", helpArticleId: "import-word", description: "Convert a Word document to a PDF on your computer." },
 ] as const satisfies readonly ToolRegistryEntry[];
 
 export const TOOL_REGISTRY = [

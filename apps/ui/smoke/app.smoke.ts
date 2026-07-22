@@ -33,6 +33,43 @@ test("disables doc-dependent chrome and hover echoes for reduced motion", async 
   }).toBe("none");
 });
 
+test("browser-print fallback isolates the document and hides the app UI", async ({ page }) => {
+  await page.goto("/");
+  await openPdf(
+    page,
+    "print-isolation.pdf",
+    await createMultiPageTextPdf(["Alpha", "Bravo", "Charlie"]),
+  );
+  await expect(mainCanvas(page)).toBeVisible();
+
+  await page.emulateMedia({ media: "print" });
+
+  // The app chrome must not print — only the document page column survives.
+  for (const chrome of [
+    ".command-bar",
+    ".tool-panel",
+    ".document-nav-panel",
+    ".app-shell__accent-bar",
+  ]) {
+    const prints = await page.locator(chrome).first().evaluate((element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden";
+    });
+    expect(prints, `${chrome} must be excluded from print`).toBe(false);
+  }
+
+  const documentPrints = await page
+    .locator(".page-list")
+    .evaluate((element) => getComputedStyle(element).visibility === "visible");
+  expect(documentPrints, "the document page column must stay in print").toBe(true);
+
+  // And the print output itself is a real PDF carrying the document, not a
+  // blank sheet — the isolation must not black out the pages along with the UI.
+  const printed = await page.pdf({ printBackground: true });
+  const printedPageCount = (await PDFDocument.load(printed)).getPageCount();
+  expect(printedPageCount).toBeGreaterThanOrEqual(1);
+});
+
 test("keeps command-bar icons inside explicitly sized buttons", async ({ page }) => {
   await page.goto("/");
 

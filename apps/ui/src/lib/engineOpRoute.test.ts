@@ -10,6 +10,7 @@ const base: EngineOpRouteInputs = {
   sourceKind: "memory",
   streamedGrant: null,
   memoryFilePath: "grant-abc",
+  memoryBackingGrant: null,
   dirty: false,
   hasUnsavedEdits: false,
 };
@@ -78,5 +79,45 @@ describe("resolveEngineOpRoute", () => {
     // must NOT resolve to path-ops with the current grant.
     const route = resolveEngineOpRoute({ ...base, dirty: true });
     expect(route.via).not.toBe("path-ops");
+  });
+
+  it("routes a derived doc (no file path) through its temp backing grant", () => {
+    expect(
+      resolveEngineOpRoute({
+        ...base,
+        memoryFilePath: null,
+        memoryBackingGrant: grant("temp-grant"),
+      }),
+    ).toEqual({ via: "path-ops", grant: grant("temp-grant") });
+  });
+
+  it("does not route a dirty temp-backed doc through its (stale) backing", () => {
+    const route = resolveEngineOpRoute({
+      ...base,
+      memoryFilePath: null,
+      memoryBackingGrant: grant("temp-grant"),
+      dirty: true,
+    });
+    expect(route.via).not.toBe("path-ops");
+  });
+
+  it("prefers the real file grant over a temp backing when both exist", () => {
+    expect(
+      resolveEngineOpRoute({
+        ...base,
+        memoryFilePath: "grant-real",
+        memoryBackingGrant: grant("temp-grant"),
+      }),
+    ).toEqual({ via: "path-ops", grant: grant("grant-real") });
+  });
+
+  it("stays loopback when neither a file path nor a temp backing exists", () => {
+    expect(
+      resolveEngineOpRoute({
+        ...base,
+        memoryFilePath: null,
+        memoryBackingGrant: null,
+      }),
+    ).toEqual({ via: "loopback" });
   });
 });

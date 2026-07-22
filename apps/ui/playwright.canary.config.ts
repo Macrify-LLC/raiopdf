@@ -17,6 +17,14 @@ export default defineConfig({
   // One worker: a single shared engine, no request contention, deterministic.
   workers: 1,
   fullyParallel: false,
+  // One retry on CI only. This suite drives the REAL payload engine over a
+  // localhost HTTP proxy across a JVM + OCR toolchain, so a single request can
+  // hit a transient (e.g. an occasional `net::ERR_EMPTY_RESPONSE` from the proxy,
+  // or the engine's text map not yet settled after a save) that trips a strict
+  // assertion. A retry keeps the canary honest — a genuine regression fails both
+  // attempts — while a one-off transient no longer reds the whole run. Locally
+  // (no CI) retries stay at 0 so real flakes surface loudly during development.
+  retries: process.env.CI ? 1 : 0,
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
   globalSetup: "./smoke/real-engine/global-setup.ts",

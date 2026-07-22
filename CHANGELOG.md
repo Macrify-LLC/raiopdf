@@ -11,6 +11,48 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
+## [0.1.5] - 2026-07-22
+
+Sixth public alpha. Highlights: **printing on the Mac**, printing that always covers the
+**whole document** (not just the pages on screen), a **jurisdiction setting that actually
+switches rule packs**, and stronger guards against losing unsaved work — plus
+scanner/Bates/packaging fixes and a round of UI polish.
+
+### Added
+
+- **Printing on macOS.** The Mac build can now print through the system print pipeline,
+  with paper size, sides, and orientation options, a first-page preview, live completion
+  status, and real cancellation. (Windows already printed.)
+- **Edit Text: "Replace text…" on right-click.** Right-click selected text to replace it
+  in place. The old "Find & Replace" entry is renamed to match how it's actually used.
+
+### Changed
+
+- **The jurisdiction setting is wired for real.** Choosing your jurisdiction now switches
+  the e-filing rule pack RaioPDF checks against — Florida, Federal CM/ECF, Georgia, or
+  Indiana — instead of always assuming Florida.
+- **The sidebar is split into Edit and Annotate groups,** so substantive document tools
+  and markup tools are easier to tell apart.
+- **Command-bar, tool, and empty-state polish** across the app for a cleaner first-run and
+  everyday feel.
+
+### Fixed
+
+- **Printing a derived document now prints all of it.** A document created inside RaioPDF —
+  an extracted page range, an OCR/compress/repair result, an imported Word file — used to
+  print only the handful of pages visible on screen. It now prints in full, and still
+  prompts you to save so the working copy is never lost silently.
+- **Scanner, Bates, and packaging rough edges** — a set of trust-critical fixes to the
+  sensitive-info scanner, Bates numbering, and the batch/packaging flow.
+- **Closing or quitting can no longer silently drop unsaved work** — window close and app
+  quit now guard against losing edits you haven't saved.
+- **Make Searchable no longer cuts long jobs short** — an OCR session limit that could
+  truncate large jobs is fixed.
+- **Find & Replace no longer leaves a stranded spinner,** and native confirm dialogs that
+  were being denied now appear as expected.
+- **Scanned PDFs preview correctly on macOS** — a content-security-policy fix that had
+  been blocking the preview.
+
 ## [0.1.4] - 2026-07-18
 
 Fifth public alpha. Headline: **RaioPDF comes to the Mac** — the first Developer
@@ -191,7 +233,8 @@ own machine. Windows only for now (macOS later).
 - An off-by-default MCP connector so RaioPDF can talk to your own AI agents; no AI runs
   inside the app itself.
 
-[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.1...v0.1.2

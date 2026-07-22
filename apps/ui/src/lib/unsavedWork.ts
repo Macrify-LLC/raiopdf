@@ -20,6 +20,14 @@
 export interface UnsavedWorkInput {
   /** `document.dirty` per open tab — every tab, not just the active one. */
   tabDirtyFlags: readonly boolean[];
+  /**
+   * Per tab: the document is backed only by a temp file (a derived/imported
+   * doc staged to disk so it can print/OCR in full) and was never saved to a
+   * real user file — closing loses it, even when it is otherwise clean. Per
+   * tab, since a background tab holding such a doc must still block window
+   * close.
+   */
+  tabTempBackedUnsavedFlags: readonly boolean[];
   /** Active tab's pending annotation/form edits (`useEditing.hasUnsavedEdits`). */
   activeTabHasPendingEdits: boolean;
   /** Active tab's drawn-but-unapplied redaction marks. */
@@ -35,6 +43,7 @@ export interface UnsavedWorkInput {
 export function hasUnsavedWork(input: UnsavedWorkInput): boolean {
   return (
     input.tabDirtyFlags.some(Boolean) ||
+    input.tabTempBackedUnsavedFlags.some(Boolean) ||
     input.activeTabHasPendingEdits ||
     input.activeTabPendingRedactionCount > 0 ||
     input.stashedBackgroundTabCount > 0
@@ -52,11 +61,16 @@ export interface TabCloseConfirmInput {
   activeTabPendingRedactionCount: number;
   /** Whether a switch-away snapshot holds this tab's pending work (background tabs). */
   tabHasStashedWork: boolean;
+  /**
+   * The closing tab is backed only by a temp file and was never saved to a real
+   * user file — closing loses it even when it is otherwise clean.
+   */
+  tabTempBackedUnsaved: boolean;
 }
 
 /** Whether closing one tab needs a discard confirmation first. */
 export function tabCloseNeedsConfirm(input: TabCloseConfirmInput): boolean {
-  if (input.tabDirty || input.tabHasStashedWork) {
+  if (input.tabDirty || input.tabHasStashedWork || input.tabTempBackedUnsaved) {
     return true;
   }
 

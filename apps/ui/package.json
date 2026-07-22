@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm sync:pdfjs-assets && vite",
     "build": "pnpm sync:pdfjs-assets && tsc -p tsconfig.json && vite build",
+    "build:e2e": "pnpm sync:pdfjs-assets && tsc -p tsconfig.json && vite build --mode e2e",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:smoke": "playwright test",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@wdio/tauri-plugin": "^1.2.0",
     "jsdom": "^29.1.1",
     "pdf-lib": "^1.17.1"
   }

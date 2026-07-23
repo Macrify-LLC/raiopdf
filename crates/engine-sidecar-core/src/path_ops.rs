@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt, fs, io,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -1103,6 +1103,10 @@ pub(crate) fn args(parts: &[&str]) -> Vec<OsString> {
 
 fn run_qpdf(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<Output> {
     let qpdf = toolchain.require_qpdf()?;
+    let arguments = arguments
+        .iter()
+        .map(|argument| qpdf_compatible_arg(argument))
+        .collect::<Vec<_>>();
     let output = run_tool_with_toolchain_timeout(toolchain, qpdf, &arguments)?;
     expect_success("qpdf", &output)?;
     Ok(output)
@@ -1189,26 +1193,26 @@ fn require_output(tool: &str, output_path: &Path) -> OpResult<u64> {
     Ok(metadata.len())
 }
 
-/// Return a filesystem operand in the form qpdf accepts on this platform.
+pub(crate) fn path_arg(path: &Path) -> OsString {
+    path.as_os_str().to_os_string()
+}
+
+/// Return a command-line argument in the form qpdf accepts on this platform.
 ///
 /// `std::fs::canonicalize` produces verbatim (`\\?\`) paths on Windows. The
 /// bundled qpdf 12.3.2 build does not accept those paths: it parses
 /// `\\?\D:\folder\file.pdf` as a malformed UNC operand and reports only the
-/// final path segment. Keep canonical paths in RaioPDF's grant registry, but
-/// remove the verbatim marker at the qpdf process boundary. Verbatim UNC paths
-/// need the corresponding `\\server\share` spelling rather than merely losing
-/// their first four characters.
-pub(crate) fn path_arg(path: &Path) -> OsString {
-    qpdf_compatible_path(path)
-}
-
+/// final path segment. Normalize only at the qpdf process boundary so tools
+/// such as Ghostscript keep the same spelling used by their file-access grants.
+/// Verbatim UNC paths need the corresponding `\\server\share` spelling rather
+/// than merely losing their first four characters.
 #[cfg(not(windows))]
-fn qpdf_compatible_path(path: &Path) -> OsString {
-    path.as_os_str().to_os_string()
+fn qpdf_compatible_arg(argument: &OsStr) -> OsString {
+    argument.to_os_string()
 }
 
 #[cfg(windows)]
-fn qpdf_compatible_path(path: &Path) -> OsString {
+fn qpdf_compatible_arg(argument: &OsStr) -> OsString {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     const VERBATIM_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
@@ -1223,7 +1227,7 @@ fn qpdf_compatible_path(path: &Path) -> OsString {
         b'\\' as u16,
     ];
 
-    let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let encoded = argument.encode_wide().collect::<Vec<_>>();
     if let Some(remainder) = encoded.strip_prefix(VERBATIM_UNC_PREFIX) {
         let mut normalized = vec![b'\\' as u16, b'\\' as u16];
         normalized.extend_from_slice(remainder);
@@ -1242,7 +1246,7 @@ fn qpdf_compatible_path(path: &Path) -> OsString {
         }
     }
 
-    path.as_os_str().to_os_string()
+    argument.to_os_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -2163,7 +2167,7 @@ fn response_file(lines: &[String]) -> OpResult<Vec<u8>> {
 }
 
 fn response_path(path: &Path, label: &str) -> OpResult<String> {
-    let path = qpdf_compatible_path(path);
+    let path = qpdf_compatible_arg(path.as_os_str());
     let value = path
         .to_str()
         .ok_or_else(|| PathOpError::invalid(format!("{label} path is not valid UTF-8")))?;
@@ -4354,18 +4358,22 @@ mod tests {
     #[test]
     fn qpdf_paths_remove_windows_verbatim_markers() {
         assert_eq!(
-            path_arg(Path::new(
+            qpdf_compatible_arg(OsStr::new(
                 r"\\?\D:\Downloads\252364075 Motion For Reconsideration.pdf"
             )),
             OsString::from(r"D:\Downloads\252364075 Motion For Reconsideration.pdf")
         );
         assert_eq!(
-            path_arg(Path::new(r"\\?\UNC\server\share\brief.pdf")),
+            qpdf_compatible_arg(OsStr::new(r"\\?\UNC\server\share\brief.pdf")),
             OsString::from(r"\\server\share\brief.pdf")
         );
         assert_eq!(
-            path_arg(Path::new(r"D:\Downloads\ordinary.pdf")),
+            qpdf_compatible_arg(OsStr::new(r"D:\Downloads\ordinary.pdf")),
             OsString::from(r"D:\Downloads\ordinary.pdf")
+        );
+        assert_eq!(
+            path_arg(Path::new(r"\\?\D:\Downloads\ordinary.pdf")),
+            OsString::from(r"\\?\D:\Downloads\ordinary.pdf")
         );
         assert_eq!(
             response_path(

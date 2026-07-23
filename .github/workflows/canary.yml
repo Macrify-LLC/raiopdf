@@ -74,7 +74,7 @@ jobs:
           workspaces: . -> target
 
       - name: Set up JDK
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: 21
@@ -187,7 +187,7 @@ jobs:
           workspaces: . -> target
 
       - name: Set up JDK
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           # Stirling's classfiles are Java 25 (docs/ENGINE-VENDORING.md); Gradle
@@ -314,7 +314,7 @@ jobs:
           workspaces: . -> target
 
       - name: Set up JDK
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: 25
@@ -501,7 +501,7 @@ jobs:
       # (The hosted Windows canary uses 21 because its payload cache is warm; this
       # tier's runner starts cold.)
       - name: Set up JDK
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: 25

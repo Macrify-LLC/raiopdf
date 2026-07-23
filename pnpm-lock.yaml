@@ -115,8 +115,8 @@ importers:
         specifier: ^9.20.0
         version: 9.29.1(@wdio/globals@9.29.1)(webdriverio@9.29.1)
       '@wdio/mocha-framework':
-        specifier: ^9.20.0
-        version: 9.29.1
+        specifier: ^9.30.0
+        version: 9.30.0
       '@wdio/spec-reporter':
         specifier: ^9.20.0
         version: 9.29.1
@@ -1320,8 +1320,8 @@ packages:
     resolution: {integrity: sha512-0ZAEIo6PNyMIJPlOGkIgyOJUjcd0pC8/QHlVAAe1c91/IcjZ1X+k0yidXHaboJdN7dq1XPUacmhRdtua0U5EZg==}
     engines: {node: '>=18.20.0'}
 
-  '@wdio/mocha-framework@9.29.1':
-    resolution: {integrity: sha512-GG3z0OtD2eu15ql3vnI6VcLJ3INUfSrqbuop/tCAbCjkkKgpjq1JOno0lrDNKRt5Ndq4a4/c9Wu5uxfL+CItYw==}
+  '@wdio/mocha-framework@9.30.0':
+    resolution: {integrity: sha512-NhxHeIFd0iHpb8sud3ahOilE/bgm5MBBzSq+xSKW+hTUYdmeyy4w+KX5p/+AQ0dsUEIToaA4xjZRUTCwY+65Wg==}
     engines: {node: '>=18.20.0'}
 
   '@wdio/native-core@1.0.0':
@@ -1401,12 +1401,16 @@ packages:
     resolution: {integrity: sha512-jyt6b6FfdYwVbMISVhuyGC1xQGZj6xM03KhTHozH7a9/zu9b++94KRdT9HRbwX8zefjW0YeIC5+qWSIf7WWHZg==}
     engines: {node: '>=18.20.0'}
 
+  '@wdio/utils@9.30.0':
+    resolution: {integrity: sha512-MhTx8jKOtspogeMUmASFsmL6vRetwCpvfcAFHauYZ62UzPjFwHThIXorzoG90mrcS9Yl+c8Sj9BfX+bdxwXfsg==}
+    engines: {node: '>=18.20.0'}
+
   '@wdio/xvfb@9.29.1':
     resolution: {integrity: sha512-suC0EJcPVldpIyJA/UB9cV11PkW4sGgNmLHPhWU7NiASnbiFeHjK3EbevjzlwwBNYXx1KHO4jMY4Rep2wwVNuw==}
     engines: {node: '>=18'}
 
-  '@zip.js/zip.js@2.8.31':
-    resolution: {integrity: sha512-2NLmow9ax/5IdBbJKxNQp3Ur9mNxmgLfN2Yp/FKNh1ZIGs3OYkiC3AIUfIZouTPSgeW5+F1bzTAZAyD2Y4ZfFA==}
+  '@zip.js/zip.js@2.8.34':
+    resolution: {integrity: sha512-+6a3lyqq69rpseLbvDPiVIWsZ/HdTGAAD6afFtug6ECPDGttb2dHnPC6cJgdPofYkzL9OvXizegq+DQVfL2rnA==}
     engines: {bun: '>=0.7.0', deno: '>=1.0.0', node: '>=18.0.0'}
 
   abort-controller@3.0.0:
@@ -2949,8 +2953,8 @@ packages:
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
 
-  react-is@19.2.7:
-    resolution: {integrity: sha512-kZFnouyVv7eP/Phmrlo9FK+zcAdriZJvzxXHF1Sl1P377WSGe2G/JxVolhTrB/jeV47lKImhNUsijjHAAbcl/A==}
+  react-is@19.2.8:
+    resolution: {integrity: sha512-s5un28nYxKJw5gvUHyW5PCC28CvBqLu9r3cWgzHT4Vo/5fqqkFcdRYsGcKf50WMPpjjFZS5d76fn3YCo2njKwQ==}
 
   react@19.2.7:
     resolution: {integrity: sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ==}
@@ -4546,13 +4550,13 @@ snapshots:
       safe-regex2: 5.1.1
       strip-ansi: 7.2.0
 
-  '@wdio/mocha-framework@9.29.1':
+  '@wdio/mocha-framework@9.30.0':
     dependencies:
       '@types/mocha': 10.0.10
       '@types/node': 20.19.43
       '@wdio/logger': 9.29.1
       '@wdio/types': 9.29.1
-      '@wdio/utils': 9.29.1
+      '@wdio/utils': 9.30.0
       mocha: 10.8.2
     transitivePeerDependencies:
       - bare-abort-controller
@@ -4710,11 +4714,33 @@ snapshots:
       - react-native-b4a
       - supports-color
 
+  '@wdio/utils@9.30.0':
+    dependencies:
+      '@puppeteer/browsers': 2.13.2
+      '@wdio/logger': 9.29.1
+      '@wdio/types': 9.29.1
+      decamelize: 6.0.1
+      deepmerge-ts: 7.1.5
+      edgedriver: 6.3.0
+      geckodriver: 6.1.1
+      get-port: 7.2.0
+      import-meta-resolve: 4.2.0
+      locate-app: 2.5.0
+      mitt: 3.0.1
+      safaridriver: 1.0.1
+      split2: 4.2.0
+      wait-port: 1.1.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+      - supports-color
+
   '@wdio/xvfb@9.29.1':
     dependencies:
       '@wdio/logger': 9.29.1
 
-  '@zip.js/zip.js@2.8.31': {}
+  '@zip.js/zip.js@2.8.34': {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -5161,7 +5187,7 @@ snapshots:
   edgedriver@6.3.0:
     dependencies:
       '@wdio/logger': 9.29.1
-      '@zip.js/zip.js': 2.8.31
+      '@zip.js/zip.js': 2.8.34
       decamelize: 6.0.1
       edge-paths: 3.0.5
       fast-xml-parser: 5.10.1
@@ -5539,7 +5565,7 @@ snapshots:
   geckodriver@6.1.1:
     dependencies:
       '@wdio/logger': 9.29.1
-      '@zip.js/zip.js': 2.8.31
+      '@zip.js/zip.js': 2.8.34
       decamelize: 6.0.1
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
@@ -6238,7 +6264,7 @@ snapshots:
       '@jest/schemas': 30.4.1
       ansi-styles: 5.2.0
       react-is-18: react-is@18.3.1
-      react-is-19: react-is@19.2.7
+      react-is-19: react-is@19.2.8
 
   pretty-ms@9.3.0:
     dependencies:
@@ -6304,7 +6330,7 @@ snapshots:
 
   react-is@18.3.1: {}
 
-  react-is@19.2.7: {}
+  react-is@19.2.8: {}
 
   react@19.2.7: {}
 

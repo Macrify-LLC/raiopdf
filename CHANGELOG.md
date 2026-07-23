@@ -56,6 +56,9 @@ polish.
 
 ### Fixed
 
+- **Selected-text edits now open PDFs chosen from Windows normally.** Windows'
+  canonical path spelling was reaching qpdf in a form it could not open, which
+  made spot editing fail with a misleading “No such file or directory” error.
 - **Printing a derived document now prints all of it.** A document created inside RaioPDF —
   an extracted page range, an OCR/compress/repair result, an imported Word file — used to
   print only the handful of pages visible on screen. It now prints in full, and still

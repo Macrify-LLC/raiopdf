@@ -68,6 +68,14 @@ leaves the document unchanged.
 
 ## What to know
 
+- **A selected edit can take a while to prepare.** RaioPDF extracts, rebuilds,
+  and verifies the affected page before it shows the review. That can take a
+  while even though only one selection is changing; the progress dialog means
+  the edit is still being prepared.
+- **The selection highlight is approximate during review.** It can look wider,
+  narrower, or slightly offset from the characters you selected because PDF
+  text geometry does not always map cleanly to the visible words. Check the
+  before-and-after text and inspect the result before saving.
 - **Typed PDFs only — not scans.** A scanned document is a picture of a page,
   so there's no text to edit. RaioPDF turns the tool off for scanned documents
   rather than editing the hidden text layer and leaving the visible scan wrong.

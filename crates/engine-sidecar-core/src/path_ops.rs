@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt, fs, io,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -1103,6 +1103,10 @@ pub(crate) fn args(parts: &[&str]) -> Vec<OsString> {
 
 fn run_qpdf(toolchain: &PathOpsToolchain, arguments: Vec<OsString>) -> OpResult<Output> {
     let qpdf = toolchain.require_qpdf()?;
+    let arguments = arguments
+        .iter()
+        .map(|argument| qpdf_compatible_arg(argument))
+        .collect::<Vec<_>>();
     let output = run_tool_with_toolchain_timeout(toolchain, qpdf, &arguments)?;
     expect_success("qpdf", &output)?;
     Ok(output)
@@ -1191,6 +1195,58 @@ fn require_output(tool: &str, output_path: &Path) -> OpResult<u64> {
 
 pub(crate) fn path_arg(path: &Path) -> OsString {
     path.as_os_str().to_os_string()
+}
+
+/// Return a command-line argument in the form qpdf accepts on this platform.
+///
+/// `std::fs::canonicalize` produces verbatim (`\\?\`) paths on Windows. The
+/// bundled qpdf 12.3.2 build does not accept those paths: it parses
+/// `\\?\D:\folder\file.pdf` as a malformed UNC operand and reports only the
+/// final path segment. Normalize only at the qpdf process boundary so tools
+/// such as Ghostscript keep the same spelling used by their file-access grants.
+/// Verbatim UNC paths need the corresponding `\\server\share` spelling rather
+/// than merely losing their first four characters.
+#[cfg(not(windows))]
+fn qpdf_compatible_arg(argument: &OsStr) -> OsString {
+    argument.to_os_string()
+}
+
+#[cfg(windows)]
+fn qpdf_compatible_arg(argument: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const VERBATIM_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const VERBATIM_UNC_PREFIX: &[u16] = &[
+        b'\\' as u16,
+        b'\\' as u16,
+        b'?' as u16,
+        b'\\' as u16,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        b'\\' as u16,
+    ];
+
+    let encoded = argument.encode_wide().collect::<Vec<_>>();
+    if let Some(remainder) = encoded.strip_prefix(VERBATIM_UNC_PREFIX) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(remainder);
+        return OsString::from_wide(&normalized);
+    }
+    if let Some(remainder) = encoded.strip_prefix(VERBATIM_PREFIX) {
+        // Only a verbatim drive path has a normal Win32 equivalent after the
+        // marker is removed. Preserve volume-GUID and device paths unchanged.
+        if matches!(remainder, [drive, colon, slash, ..]
+            if (*drive >= b'A' as u16 && *drive <= b'Z' as u16
+                || *drive >= b'a' as u16 && *drive <= b'z' as u16)
+                && *colon == b':' as u16
+                && (*slash == b'\\' as u16 || *slash == b'/' as u16))
+        {
+            return OsString::from_wide(remainder);
+        }
+    }
+
+    argument.to_os_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -2111,6 +2167,7 @@ fn response_file(lines: &[String]) -> OpResult<Vec<u8>> {
 }
 
 fn response_path(path: &Path, label: &str) -> OpResult<String> {
+    let path = qpdf_compatible_arg(path.as_os_str());
     let value = path
         .to_str()
         .ok_or_else(|| PathOpError::invalid(format!("{label} path is not valid UTF-8")))?;
@@ -4297,6 +4354,37 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn qpdf_paths_remove_windows_verbatim_markers() {
+        assert_eq!(
+            qpdf_compatible_arg(OsStr::new(
+                r"\\?\D:\Downloads\252364075 Motion For Reconsideration.pdf"
+            )),
+            OsString::from(r"D:\Downloads\252364075 Motion For Reconsideration.pdf")
+        );
+        assert_eq!(
+            qpdf_compatible_arg(OsStr::new(r"\\?\UNC\server\share\brief.pdf")),
+            OsString::from(r"\\server\share\brief.pdf")
+        );
+        assert_eq!(
+            qpdf_compatible_arg(OsStr::new(r"D:\Downloads\ordinary.pdf")),
+            OsString::from(r"D:\Downloads\ordinary.pdf")
+        );
+        assert_eq!(
+            path_arg(Path::new(r"\\?\D:\Downloads\ordinary.pdf")),
+            OsString::from(r"\\?\D:\Downloads\ordinary.pdf")
+        );
+        assert_eq!(
+            response_path(
+                Path::new(r"\\?\D:\Downloads\password protected.pdf"),
+                "input"
+            )
+            .unwrap(),
+            r"D:\Downloads\password protected.pdf"
+        );
+    }
+
     #[test]
     fn finds_catalog_metadata_and_pdfa_identification() {
         let json = br#"{
@@ -4828,6 +4916,32 @@ mod tests {
         let dir = TestDir::new("pdfa-facts");
         let fixture = write_pdfa_fixture(dir.path(), "claimed.pdf");
         assert!(document_facts(&toolchain, &fixture).unwrap().pdfa_claimed);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn qpdf_opens_a_canonicalized_windows_path() {
+        let Some(toolchain) = test_qpdf_toolchain() else {
+            return;
+        };
+        let dir = TestDir::new("windows-verbatim-qpdf");
+        let fixture = write_fixture(
+            dir.path(),
+            "252364075 Motion For Reconsideration.pdf",
+            &[letter_page(Some("page one"))],
+        );
+        let canonical = fs::canonicalize(&fixture).unwrap();
+        assert!(
+            canonical.to_string_lossy().starts_with(r"\\?\"),
+            "Windows canonicalization should produce a verbatim path: {}",
+            canonical.display()
+        );
+
+        assert_eq!(page_count(&toolchain, &canonical).unwrap(), 1);
+        assert_eq!(
+            document_facts(&toolchain, &canonical).unwrap().page_count,
+            1
+        );
     }
 
     #[test]

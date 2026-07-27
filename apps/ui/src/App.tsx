@@ -315,7 +315,6 @@ import {
   resolveWordReflowTextLayerSignal,
   runPdfToWordReflow,
   type WordReflowStatus,
-  wordResultDiagnosticId,
 } from "./lib/wordReflow";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
@@ -7679,7 +7678,7 @@ export function App() {
       }
 
       if (result.status === "failed" || result.status === "refused") {
-        setError(result.message, wordResultDiagnosticId(result, "word.reflow-failed"));
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
       }
     });
   }, [
@@ -7711,7 +7710,7 @@ export function App() {
       onStatus: setWordReflowStatus,
     }).then((result) => {
       if (result.status === "failed" || result.status === "refused") {
-        setError(result.message, wordResultDiagnosticId(result, "word.reflow-failed"));
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
       }
     });
   }, [setError]);
@@ -7719,7 +7718,7 @@ export function App() {
   const importWordDocument = useCallback(() => {
     void runWordDocumentImport({ onStatus: setWordReflowStatus }).then(async (result) => {
       if (result.status === "unavailable" || result.status === "failed") {
-        setError(result.message, wordResultDiagnosticId(result, "word.import-failed"));
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
         return;
       }
       if (result.status !== "converted") {

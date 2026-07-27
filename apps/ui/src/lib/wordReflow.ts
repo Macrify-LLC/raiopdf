@@ -17,7 +17,7 @@ import {
   pathOpErrorMessage,
   type PathOpReport,
 } from "./pathOps";
-import { recordDiagnosticEvent } from "./diagnostics";
+import { logWorkflowFailure } from "./diagnostics";
 
 export const WORD_REFLOW_EXPERIMENTAL_LABEL =
   "Experimental — formatting may be approximate.";
@@ -48,26 +48,16 @@ export type WordReflowResult =
   | { status: "saved"; saved: SavedFile; output: WordReflowOutput; ocrFirst: boolean }
   | { status: "cancelled" }
   | { status: "refused"; reason: "word-unavailable"; message: string; capability: WordCapability }
-  | { status: "failed"; message: string };
-
-/**
- * Record a Word result's failure and return its correlation id, or null when the
- * result is not a fault.
- *
- * Both Word unions (`WordReflowResult` and `WordImportResult`) distinguish a real
- * `failed` from a capability gate -- `refused` / `unavailable`, which means Word
- * simply isn't installed. Only the fault is recorded, so a gate correctly offers
- * no report. Shared by all three Word handlers so they can't drift: one of them
- * previously recorded nothing at all, leaving import failures invisible in the log.
- */
-export function wordResultDiagnosticId(
-  result: { status: string; message?: string | undefined },
-  kind: string,
-): string | null {
-  return result.status === "failed"
-    ? recordDiagnosticEvent(kind, result.message ?? "Word operation failed")
-    : null;
-}
+  | {
+      status: "failed";
+      message: string;
+      /**
+       * Correlation id of the diagnostic recorded in the catch block that
+       * produced this result -- recorded there because `message` is already
+       * friendly copy and no longer carries the exception's code, cause, or stack.
+       */
+      diagnosticId: string;
+    };
 
 export interface RunWordReflowOptions {
   getInput: () => Promise<WordReflowInput | null>;
@@ -176,7 +166,9 @@ export async function runPdfToWordReflow(
       tone: "danger",
       message: `${message} ${WORD_REFLOW_EXPERIMENTAL_LABEL}`,
     });
-    return { status: "failed", message };
+    // Record the RAW error here: `message` above has already been mapped to
+    // friendly copy, so this is the last frame that knows what actually broke.
+    return { status: "failed", message, diagnosticId: logWorkflowFailure("word.reflow-failed", error) };
   }
 }
 

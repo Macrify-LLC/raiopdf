@@ -7988,6 +7988,10 @@ export function App() {
         message: error instanceof PathOpsError && error.code === "INVALID_INPUT"
           ? error.message
           : pathOpErrorMessage(error, "RaioPDF could not prepare that output location."),
+        // Recorded here, where the raw error still exists — the mapped message above
+        // no longer carries the OS/engine cause a report needs. The gates that also
+        // return `status: "error"` deliberately record nothing.
+        diagnosticId: logWorkflowFailure("pdf-security.prepare-output-failed", error),
       };
     } finally {
       if (targetToken) {
@@ -8192,6 +8196,9 @@ export function App() {
           error,
           "RaioPDF could not create and verify the protected copy. No unverified output was kept.",
         ),
+        // Same reasoning as the prepare path: record where the raw error still
+        // exists, since the mapped message no longer names the cause.
+        diagnosticId: logWorkflowFailure("pdf-security.protect-failed", error),
       };
     } finally {
       stopProgressListener?.();

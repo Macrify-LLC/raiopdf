@@ -744,3 +744,24 @@ describe("PdfSecurityPanel", () => {
     });
   }
 });
+
+describe("PdfSecurityPanel report affordance", () => {
+  it("only treats a result carrying a diagnosticId as reportable", () => {
+    // `status: "error"` covers both an expected gate ("this PDF is signed") and a
+    // real fault (the OS refused the output location). Only the fault carries an
+    // id, so only the fault offers a report — reading "the newest diagnostic"
+    // instead would report an unrelated earlier failure.
+    const gate: PrepareProtectedCopyResult = {
+      status: "error",
+      message: "This PDF contains a digital signature. Protect it before signing.",
+    };
+    const fault: PrepareProtectedCopyResult = {
+      status: "error",
+      message: "RaioPDF could not prepare that output location.",
+      diagnosticId: "d-1a2b3c4d",
+    };
+
+    expect(gate.status === "error" ? (gate.diagnosticId ?? null) : null).toBeNull();
+    expect(fault.status === "error" ? (fault.diagnosticId ?? null) : null).toBe("d-1a2b3c4d");
+  });
+});

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ErrorActions } from "./ErrorActions";
-import { logWorkflowFailure, recordDiagnosticEvent } from "../lib/diagnostics";
+import { logWorkflowFailure } from "../lib/diagnostics";
 import type { FileGrant } from "../lib/filePort";
 import { LoadingSun } from "./LoadingSun";
 import "./PdfSecurityPanel.css";
@@ -45,7 +45,19 @@ export interface CreateProtectedCopyRequest {
 export type PrepareProtectedCopyResult =
   | { status: "ready"; displayName: string }
   | { status: "cancelled" }
-  | { status: "error"; message: string };
+  | {
+      status: "error";
+      message: string;
+      /**
+       * Correlation id when this was a real fault, null when it was a gate.
+       *
+       * `status: "error"` carries both — "this PDF is signed" and "the OS refused
+       * the output location" arrive the same way. Only the caught-exception paths
+       * record, and they record the raw error, because `message` here has already
+       * been mapped to friendly copy and no longer names the cause.
+       */
+      diagnosticId?: string | null;
+    };
 
 export type PdfPasswordValidation =
   | { valid: true; error: null }
@@ -94,7 +106,12 @@ export type CreateProtectedCopyResult =
       allowCopying: boolean;
     }
   | { status: "cancelled" }
-  | { status: "error"; message: string };
+  | {
+      status: "error";
+      message: string;
+      /** See `PrepareProtectedCopyResult` — null for a gate, set for a real fault. */
+      diagnosticId?: string | null;
+    };
 
 export interface PdfSecurityPanelProps {
   documentKey: string | null;
@@ -254,10 +271,9 @@ export function PdfSecurityPanel({
         setPreparedOutputName(result.displayName);
       } else if (result.status === "error") {
         setPreparedOutputName(null);
-        showOperationFailure(
-          result.message,
-          recordDiagnosticEvent("pdf-security.prepare-output-failed", result.message),
-        );
+        // The id comes from the result: App records it where the raw exception is
+        // still in hand, and leaves it null for the gates that share this status.
+        showOperationFailure(result.message, result.diagnosticId ?? null);
       } else {
         setPreparedOutputName(null);
       }
@@ -339,10 +355,7 @@ export function PdfSecurityPanel({
         setPasswordsVisible(false);
         setPreparedOutputName(null);
       } else {
-        showOperationFailure(
-          result.message,
-          recordDiagnosticEvent("pdf-security.protect-failed", result.message),
-        );
+        showOperationFailure(result.message, result.diagnosticId ?? null);
         setPassword("");
         setConfirmation("");
         setPasswordsVisible(false);

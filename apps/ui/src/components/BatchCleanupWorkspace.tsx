@@ -5,6 +5,7 @@ import { formatBatchFailureReason } from "../lib/userMessages";
 import { CheckIcon, HelpIcon, PlusIcon } from "../icons";
 import { IconButton } from "./IconButton";
 import { PackageRootPathField } from "./PackageRootPathField";
+import { ErrorActions } from "./ErrorActions";
 import "./BatchCleanupWorkspace.css";
 
 export type BatchCleanupStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -60,6 +61,11 @@ export interface BatchCleanupProgress {
   running: boolean;
   message: string | null;
   result: BatchCleanupRunResult | null;
+  /**
+   * Correlation id of the failure shown here; null for a gate or nudge, which
+   * record nothing and so offer no report. See `DiagnosticEntry.id`.
+   */
+  diagnosticId?: string | null;
 }
 
 /**
@@ -336,6 +342,11 @@ export function BatchCleanupWorkspace({
       {localMessage || progress.message ? (
         <p className="batch-workspace__status" role="status">{localMessage ?? progress.message}</p>
       ) : null}
+      {/* localMessage is local validation the user can fix by editing the queue, so
+          it never carries a diagnostic — only a run-level failure does. */}
+      {localMessage ? null : (
+        <ErrorActions className="batch-workspace__report" diagnosticId={progress.diagnosticId} />
+      )}
       {progress.result ? (
         <section className="batch-workspace__result" aria-label="Batch cleanup result">
           <div className="batch-workspace__result-header">

@@ -348,9 +348,16 @@ fn collect_log(app_data_dir: &Path, name: &str) -> DiagnosticsLog {
     let mut sections: Vec<String> = Vec::new();
     let mut present = false;
 
-    // Newest first: a reader looking for a specific failure starts at the end of
-    // the live log, and the rotations are progressively less likely to matter.
-    for generation in 0..=LOG_GENERATIONS {
+    // Chronological: oldest rotation first, live log last.
+    //
+    // This ordering is what makes the cap correct. "Newest" is the END of any one
+    // file but the FIRST file across rotations, so neither a plain head nor a plain
+    // tail of a newest-first join keeps the right lines -- a tail kept the oldest
+    // rotation and dropped the current failure; a head kept the live log's oldest
+    // lines and dropped its newest. Laid out chronologically, "keep the newest"
+    // is simply "keep the tail", on both axes at once. It also matches how a
+    // person reads a log.
+    for generation in (0..=LOG_GENERATIONS).rev() {
         let path = if generation == 0 {
             live.clone()
         } else {
@@ -366,17 +373,23 @@ fn collect_log(app_data_dir: &Path, name: &str) -> DiagnosticsLog {
         sections.push(text);
     }
 
-    // Cap the JOINED text, not each file: the ceiling above is per log, and
-    // applying it per generation would return up to (generations + 1) times the
-    // documented bound.
+    // Cap the JOINED text, not each file: the ceiling is per log, and applying it
+    // per generation returned up to (generations + 1) times the documented bound.
     let joined = sections.join("\n");
     let tail = if joined.len() as u64 > PAYLOAD_LOG_TAIL_MAX_BYTES {
-        let start = joined.len() - PAYLOAD_LOG_TAIL_MAX_BYTES as usize;
-        let boundary = joined[start..]
+        let mut start = joined.len() - PAYLOAD_LOG_TAIL_MAX_BYTES as usize;
+        // A byte offset can land inside a multibyte character, and slicing off a
+        // char boundary panics -- which would take the whole tool down instead of
+        // returning a payload. Non-ASCII is ordinary in names and messages.
+        while start < joined.len() && !joined.is_char_boundary(start) {
+            start += 1;
+        }
+        // Prefer a line boundary so the first retained line isn't half a line.
+        let cut = joined[start..]
             .find('\n')
             .map(|index| start + index + 1)
             .unwrap_or(start);
-        format!("{TRUNCATION_MARKER_LINE}{}", &joined[boundary..])
+        format!("{TRUNCATION_MARKER}\n{}", &joined[cut..])
     } else {
         joined
     };
@@ -514,6 +527,65 @@ mod payload_tests {
     }
 
     #[test]
+    fn the_cap_keeps_the_live_log_and_drops_the_oldest_rotation() {
+        // Regression: the cap sliced the END of a newest-first join, so it retained
+        // the oldest rotation and threw away the live log -- the current failure.
+        let dir = temp_dir("cap-keeps-newest");
+        let filler = "unix:1770000000 ui filler padding to exceed the per-log ceiling\n";
+        fs::write(
+            dir.join(APP_LOG_FILE_NAME),
+            format!(
+                "{}unix:1770000009 ui LIVE_MARKER the current failure\n",
+                filler.repeat(2000)
+            ),
+        )
+        .expect("write live");
+        fs::write(
+            dir.join(format!("{APP_LOG_FILE_NAME}.1")),
+            format!(
+                "{}unix:1770000001 ui OLDEST_MARKER ancient\n",
+                filler.repeat(2000)
+            ),
+        )
+        .expect("write rotation");
+
+        let payload = collect_diagnostics_payload(&dir, "0.1.5", None, &LOGS);
+        let tail = &payload
+            .logs
+            .iter()
+            .find(|log| log.name == APP_LOG_FILE_NAME)
+            .expect("app.log")
+            .tail;
+
+        assert!(tail.contains("LIVE_MARKER"), "live log was dropped");
+        assert!(
+            !tail.contains("OLDEST_MARKER"),
+            "oldest rotation was retained"
+        );
+        assert!(tail.contains(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn a_multibyte_character_at_the_cap_boundary_does_not_panic() {
+        // Slicing off a UTF-8 boundary panics, which would take the whole tool down
+        // rather than return a payload. Accented client names make this ordinary.
+        let dir = temp_dir("multibyte-cap");
+        // "é" is two bytes, so the cap offset lands mid-character for some lengths.
+        let line = format!("unix:1770000000 ui opened {}\n", "é".repeat(40));
+        fs::write(dir.join(APP_LOG_FILE_NAME), line.repeat(3000)).expect("write log");
+
+        let payload = collect_diagnostics_payload(&dir, "0.1.5", None, &LOGS);
+        let app_log = payload
+            .logs
+            .iter()
+            .find(|log| log.name == APP_LOG_FILE_NAME)
+            .expect("app.log");
+
+        assert!(app_log.present);
+        assert!(app_log.tail.len() as u64 <= PAYLOAD_LOG_TAIL_MAX_BYTES + 64);
+    }
+
+    #[test]
     fn a_single_line_longer_than_the_window_is_kept_not_discarded() {
         // Regression: with no newline in the window the whole tail was replaced by
         // the marker, so the payload reported `present: true` with no content --
@@ -550,7 +622,7 @@ mod payload_tests {
     }
 
     #[test]
-    fn includes_rotated_generations_newest_first() {
+    fn includes_rotated_generations_in_chronological_order() {
         let dir = temp_dir("rotations");
         fs::write(dir.join("app.log"), "live line\n").expect("write live");
         fs::write(dir.join("app.log.1"), "rotated one\n").expect("write rot1");
@@ -565,7 +637,11 @@ mod payload_tests {
 
         let live_at = tail.find("live line").expect("live present");
         let rotated_at = tail.find("rotated one").expect("rotation present");
-        assert!(live_at < rotated_at, "live log must come first: {tail}");
+        // Oldest first, live log last -- so "keep the newest" is "keep the tail".
+        assert!(
+            rotated_at < live_at,
+            "rotation must come before the live log: {tail}"
+        );
         assert!(tail.contains("rotated generation 1"));
     }
 

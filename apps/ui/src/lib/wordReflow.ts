@@ -17,6 +17,7 @@ import {
   pathOpErrorMessage,
   type PathOpReport,
 } from "./pathOps";
+import { recordDiagnosticEvent } from "./diagnostics";
 
 export const WORD_REFLOW_EXPERIMENTAL_LABEL =
   "Experimental — formatting may be approximate.";
@@ -48,6 +49,25 @@ export type WordReflowResult =
   | { status: "cancelled" }
   | { status: "refused"; reason: "word-unavailable"; message: string; capability: WordCapability }
   | { status: "failed"; message: string };
+
+/**
+ * Record a Word result's failure and return its correlation id, or null when the
+ * result is not a fault.
+ *
+ * Both Word unions (`WordReflowResult` and `WordImportResult`) distinguish a real
+ * `failed` from a capability gate -- `refused` / `unavailable`, which means Word
+ * simply isn't installed. Only the fault is recorded, so a gate correctly offers
+ * no report. Shared by all three Word handlers so they can't drift: one of them
+ * previously recorded nothing at all, leaving import failures invisible in the log.
+ */
+export function wordResultDiagnosticId(
+  result: { status: string; message?: string | undefined },
+  kind: string,
+): string | null {
+  return result.status === "failed"
+    ? recordDiagnosticEvent(kind, result.message ?? "Word operation failed")
+    : null;
+}
 
 export interface RunWordReflowOptions {
   getInput: () => Promise<WordReflowInput | null>;

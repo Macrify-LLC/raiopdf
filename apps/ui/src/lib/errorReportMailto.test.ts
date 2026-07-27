@@ -13,6 +13,7 @@ function decodeBody(mailto: string): string {
 }
 
 const diagnostic: DiagnosticEntry = {
+  id: "d-1a2b3c4d",
   kind: "redaction.failed",
   message: "Error: Redaction could not finish. <- TypeError: Failed to fetch",
   details: null,
@@ -82,6 +83,12 @@ describe("buildErrorReportMailto", () => {
     });
     expect(mailto.length).toBeLessThanOrEqual(ERROR_REPORT_MAILTO_MAX_LENGTH);
     expect(decodeBody(mailto)).toContain("trimmed");
+  });
+
+  it("carries the correlation id so the email ties back to the log line", () => {
+    const body = decodeBody(buildErrorReportMailto({ diagnostic, appVersion: "0.1.4", userAgent: "ua" }));
+
+    expect(body).toContain("Ref: d-1a2b3c4d");
   });
 });
 

@@ -29,6 +29,7 @@ import {
 } from "../lib/protectedPdfResolver";
 import type { FileGrant } from "../lib/filePort";
 import { pathOpReleaseOutput } from "../lib/pathOps";
+import { logWorkflowFailure, type DisplayedFailure } from "../lib/diagnostics";
 
 export interface PageSizeInches {
   width: number;
@@ -98,7 +99,11 @@ export interface DocumentState {
    * (deleted) on mutation, replace, close, and Save As.
    */
   tempBackingGrant: FileGrant | null;
-  error: string | null;
+  /**
+   * The failure currently shown for this document, message and correlation id
+   * together. See {@link DisplayedFailure} for why they're one value.
+   */
+  error: DisplayedFailure | null;
 }
 
 export interface SignatureInvalidationNotice {
@@ -143,6 +148,12 @@ const INITIAL_DOCUMENT: DocumentState = {
   tempBackingGrant: null,
   error: null,
 };
+
+/** Lower-cased file extension only -- never the name, which can be a matter name. */
+function extensionOf(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0 ? fileName.slice(dot).toLowerCase() : "(none)";
+}
 
 function releaseDocumentGrants(
   source: DocumentSource | null | undefined,
@@ -215,7 +226,30 @@ export type OpenFileResult =
     }
   /** User declined the signature-invalidation confirmation; not an error. */
   | { status: "cancelled" }
-  | { status: "failed"; error: string };
+  | {
+      status: "failed";
+      error: string;
+      /**
+       * Correlation id of the diagnostic recorded for this failure, when one was
+       * recorded. Callers that surface `error` somewhere other than the document
+       * chip should pass this along so the report they offer describes *this*
+       * failure. Null for failures that are gates rather than faults (tab limit,
+       * a replaced open), which deliberately record nothing.
+       */
+      diagnosticId?: string | null;
+    };
+
+/**
+ * The diagnostic id of a failed reopen, or null for any other outcome.
+ *
+ * Reopen-failure handlers all render the result's `error` into their own surface,
+ * so they all need the same narrowing to reach `diagnosticId`. Doing it here keeps
+ * the three call sites from drifting -- two of them previously left the id
+ * undefined, which silently suppressed the report affordance on those surfaces.
+ */
+export function reopenFailureDiagnosticId(result: OpenFileResult): string | null {
+  return result.status === "failed" ? result.diagnosticId ?? null : null;
+}
 
 export interface OpenFileOptions {
   /**
@@ -587,7 +621,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
       prepareOpenErrorRef.current = MAX_DOCUMENT_TABS_MESSAGE;
       setDocument((current) => ({
         ...current,
-        error: MAX_DOCUMENT_TABS_MESSAGE,
+        // A gate, not a fault -- nothing to diagnose, so no report is offered.
+        error: { message: MAX_DOCUMENT_TABS_MESSAGE, diagnosticId: null },
       }));
       return null;
     }
@@ -596,7 +631,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
       prepareOpenErrorRef.current = NEW_TAB_BUSY_MESSAGE;
       setDocument((current) => ({
         ...current,
-        error: NEW_TAB_BUSY_MESSAGE,
+        // A gate, not a fault -- nothing to diagnose, so no report is offered.
+        error: { message: NEW_TAB_BUSY_MESSAGE, diagnosticId: null },
       }));
       return null;
     }
@@ -643,7 +679,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
     };
   }, [createTabId, document.source, setDocument, setPageScrollIntent, setTabsState, snapshotActiveTab]);
 
-  const restoreAfterFailedNewTabOpen = useCallback((target: OpenTarget, error?: string) => {
+  const restoreAfterFailedNewTabOpen = useCallback((
+    target: OpenTarget,
+    error?: string,
+    diagnosticId?: string | null,
+  ) => {
     if (!target.newTab) {
       return;
     }
@@ -654,7 +694,10 @@ export function useDocument(options: UseDocumentOptions = {}) {
     if (previousTab) {
       restoreTab(previousTab);
       if (error) {
-        setDocument((current) => ({ ...current, error }));
+        setDocument((current) => ({
+          ...current,
+          error: { message: error, diagnosticId: diagnosticId ?? null },
+        }));
       }
       return;
     }
@@ -669,11 +712,27 @@ export function useDocument(options: UseDocumentOptions = {}) {
     mutationQueueRef.current = Promise.resolve();
     busyCountRef.current = 0;
     setPageScrollIntent(null);
-    setDocumentState(error ? { ...INITIAL_DOCUMENT, error } : INITIAL_DOCUMENT);
+    setDocumentState(
+      error
+        ? { ...INITIAL_DOCUMENT, error: { message: error, diagnosticId: diagnosticId ?? null } }
+        : INITIAL_DOCUMENT,
+    );
   }, [restoreTab, setDocument, setPageScrollIntent]);
 
-  const setError = useCallback((error: string | null) => {
-    setDocument((current) => ({ ...current, error }));
+  /**
+   * Set (or clear) the document-level error message.
+   *
+   * `diagnosticId` defaults to null, which means a caller that doesn't pass one
+   * *clears* any previous id rather than leaving it attached to a new message.
+   * That default is deliberate: most of the ~70 callers set a gate or a nudge, so
+   * the safe outcome for anything unlabelled is "no report offered" rather than
+   * "a report about some earlier, unrelated failure."
+   */
+  const setError = useCallback((error: string | null, diagnosticId: string | null = null) => {
+    setDocument((current) => ({
+      ...current,
+      error: error === null ? null : { message: error, diagnosticId },
+    }));
   }, [setDocument]);
 
   const setProtectionFacts = useCallback((
@@ -900,7 +959,14 @@ export function useDocument(options: UseDocumentOptions = {}) {
               openTokenRef.current === context.token &&
               activeHandleRef.current === context.handle
             ) {
-              setError(getActionErrorMessage(operationName, error));
+              // Every in-memory engine mutation funnels through here, so one
+              // recording covers all of them -- and `getActionErrorMessage` maps
+              // the raw error away, so this frame is the last one that can log
+              // the real cause.
+              setError(
+                getActionErrorMessage(operationName, error),
+                logWorkflowFailure(`${operationName}.failed`, error),
+              );
             }
 
             return false;
@@ -1132,15 +1198,28 @@ export function useDocument(options: UseDocumentOptions = {}) {
         }
 
         const message = getEngineErrorMessage(error);
+        // Recorded here rather than at the caller: this is the only frame that
+        // still holds the raw error. `getEngineErrorMessage` deliberately maps it
+        // to friendly copy, so a caller that only sees `message` cannot log the
+        // real cause.
+        // Deliberately NOT the file name. `app.log` is scrubbed on export but
+        // written raw, so a name like "Smith v Jones - PRIVILEGED.pdf" would sit
+        // in plaintext in the app-data dir. The shape below answers every question
+        // a maintainer actually asks of an open failure -- was it a PDF, how big,
+        // which source kind -- and identifies nobody.
+        const diagnosticId = logWorkflowFailure("document.open-failed", error, [
+          `ext=${extensionOf(file.name)}`,
+          `bytes=${file.bytes?.byteLength ?? "unknown"}`,
+        ]);
         if (previousHandle || target.newTab) {
           // A failed replacement open keeps the current document on screen --
           // and USABLE: the refs must keep pointing at the still-open
           // previous handle or save/rotate/delete on the visible document
           // would find no engine handle (Codex Cloud P1 on #115).
           if (target.newTab) {
-            restoreAfterFailedNewTabOpen(target, message);
+            restoreAfterFailedNewTabOpen(target, message, diagnosticId);
           } else {
-            setDocument((current) => ({ ...current, error: message }));
+            setDocument((current) => ({ ...current, error: { message, diagnosticId } }));
           }
         } else {
           activeHandleRef.current = null;
@@ -1149,11 +1228,11 @@ export function useDocument(options: UseDocumentOptions = {}) {
           fileIdentityRef.current = { fileName: null, filePath: null };
           setDocument({
             ...INITIAL_DOCUMENT,
-            error: message,
+            error: { message, diagnosticId },
           });
           void releaseDocumentGrants(previousSource, previousProtectedSourceGrant, previousTempBackingGrant);
         }
-        return { status: "failed", error: message };
+        return { status: "failed", error: message, diagnosticId };
       }
     },
     [closeHandle, createStoredTab, document.protectedSourceGrant, document.source, document.tempBackingGrant, engine, nextGeneration, openPreparedDocument, prepareOpenTarget, requestPageScroll, restoreAfterFailedNewTabOpen, setDocument, setPageScrollIntent, setTabsState],
@@ -1639,7 +1718,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
         return results;
       } catch (error) {
         if (activeHandleRef.current === handle && openTokenRef.current === token) {
-          setError(getActionErrorMessage("split", error));
+          setError(getActionErrorMessage("split", error), logWorkflowFailure("split.failed", error));
         }
 
         return null;
@@ -2229,7 +2308,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
       };
     } catch (error) {
       if (activeHandleRef.current === engineHandle && openTokenRef.current === token) {
-        setError(getActionErrorMessage("save", error));
+        setError(getActionErrorMessage("save", error), logWorkflowFailure("save.failed", error));
       }
 
       return null;

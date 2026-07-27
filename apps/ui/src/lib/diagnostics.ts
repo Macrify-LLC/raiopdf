@@ -12,19 +12,43 @@
 import { getTauriInvoke } from "./tauriInvoke";
 
 /**
- * A diagnostic event, retained in memory so the user can attach the most recent
- * one to an email report ("Email a report" button on the error surfaces). This
- * is the same data already sent to the Tauri log -- kept here only so the report
- * builder can read the last failure without threading error objects through
- * every workflow's React state.
+ * A diagnostic event, retained in memory so a report surface can attach the
+ * failure it is displaying. This is the same data already sent to the Tauri log
+ * -- kept here only so a report builder can read a failure back by id without
+ * threading error objects through every workflow's React state.
  */
 export interface DiagnosticEntry {
+  /**
+   * Short correlation id, minted when the event is recorded and echoed into the
+   * `app.log` line as `id=<id>`.
+   *
+   * This is what makes a report about *this* failure rather than "whatever
+   * happened most recently." A failure surface stores the id its own catch block
+   * produced, so the report it offers can never pick up an unrelated error --
+   * and because the id is in the log, it survives the process boundary and a
+   * later reader can grep the durable log for the same failure.
+   */
+  id: string;
   kind: string;
   /** Raw error chain (from `describeErrorChain`) or the raw message the caller logged. */
   message: string;
   details: string | null;
   /** Epoch milliseconds when the event was recorded. */
   at: number;
+}
+
+/**
+ * A failure as displayed to the user: the message on screen, paired with the
+ * correlation id of the diagnostic behind it (null when the message is a gate or
+ * a nudge, which record nothing).
+ *
+ * Kept as ONE value rather than two parallel fields so the pair cannot drift.
+ * With two fields, every path that clears the message has to remember to clear
+ * the id too, and a missed one leaves a stale id attached to the next message.
+ */
+export interface DisplayedFailure {
+  message: string;
+  diagnosticId: string | null;
 }
 
 // Small ring buffer of the most recent diagnostic events. Errors are the only
@@ -38,38 +62,88 @@ export function getRecentDiagnostics(): readonly DiagnosticEntry[] {
   return recentDiagnostics.slice();
 }
 
-/** The most recently recorded diagnostic event, or null if none this session. */
-export function getLastDiagnostic(): DiagnosticEntry | null {
-  return recentDiagnostics.at(-1) ?? null;
+
+/**
+ * Look a retained diagnostic back up by the id its recording returned. Null once
+ * the entry has aged out of the ring buffer (or in a later process -- the log is
+ * the durable copy).
+ */
+export function getDiagnosticById(id: string): DiagnosticEntry | null {
+  return recentDiagnostics.find((entry) => entry.id === id) ?? null;
 }
 
-export async function recordDiagnosticEvent(
+/** Drop all retained diagnostics. Tests only -- the ring is module state. */
+export function resetDiagnosticsForTests(): void {
+  recentDiagnostics.length = 0;
+}
+
+/**
+ * Mint a correlation id. Short and log-token-safe (the shell's `log_token`
+ * keeps only `[A-Za-z0-9_.-]`) so it stays greppable in `app.log` and readable
+ * when a human or an assistant has to quote it back.
+ */
+export function newDiagnosticId(): string {
+  const bytes = new Uint8Array(4);
+  const webCrypto = globalThis.crypto;
+
+  if (webCrypto && typeof webCrypto.getRandomValues === "function") {
+    webCrypto.getRandomValues(bytes);
+  } else {
+    // Non-Tauri/older test environments. Uniqueness only has to hold within one
+    // log tail, so Math.random is sufficient here.
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  const suffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `d-${suffix}`;
+}
+
+/**
+ * Record a diagnostic event and return its correlation id.
+ *
+ * Synchronous by design: the caller is usually a catch block that has to put the
+ * id straight into React state alongside the user-facing message, which it can't
+ * do if the id is only available a microtask later. The Tauri log write is fired
+ * as a floating promise -- no caller has ever awaited this for ordering.
+ */
+export function recordDiagnosticEvent(
   kind: string,
   message: string,
   details: ReadonlyArray<string | null | undefined> = [],
-): Promise<void> {
+): string {
   const joinedDetails =
     details.filter((detail): detail is string => Boolean(detail)).join(" | ") || null;
+  const id = newDiagnosticId();
 
-  // Retain in memory first, unconditionally: the report builder must still see
-  // the last error even when the Tauri log write is unavailable (browser/tests)
-  // or fails. Capturing here also covers every caller (logWorkflowFailure and
-  // the window-level handlers) with no per-site change.
-  recentDiagnostics.push({ kind, message, details: joinedDetails, at: Date.now() });
+  // Retain in memory first, unconditionally: a report surface must still resolve
+  // its id even when the Tauri log write is unavailable (browser/tests) or fails.
+  // Capturing here also covers every caller (logWorkflowFailure and the
+  // window-level handlers) with no per-site change.
+  recentDiagnostics.push({ id, kind, message, details: joinedDetails, at: Date.now() });
   if (recentDiagnostics.length > RECENT_DIAGNOSTICS_LIMIT) {
     recentDiagnostics.shift();
   }
 
+  void writeDiagnosticToLog({ id, kind, message, details: joinedDetails });
+
+  return id;
+}
+
+/**
+ * Hand one diagnostic to the shell's log. Fire-and-forget by design: a failed log
+ * write must never surface as a second failure to the user.
+ */
+async function writeDiagnosticToLog(event: {
+  id: string;
+  kind: string;
+  message: string;
+  details: string | null;
+}): Promise<void> {
   try {
     const invoke = await getTauriInvoke();
-    await invoke("diagnostics_record_event", {
-      event: {
-        source: "ui",
-        kind,
-        message,
-        details: joinedDetails,
-      },
-    });
+    await invoke("diagnostics_record_event", { event: { source: "ui", ...event } });
   } catch {
     // Diagnostics must never create a second user-facing failure.
   }
@@ -113,14 +187,18 @@ export function describeErrorChain(error: unknown): string {
  * Record a workflow failure to the diagnostics log with the RAW error chain
  * (not the user-facing message), so the true cause behind a mapped message like
  * "could not find one of the selected files" is recoverable from app.log and
- * the diagnostics export. Fire-and-forget; never throws.
+ * the diagnostics export. Never throws.
+ *
+ * Returns the correlation id. Store it next to the user-facing message you set
+ * in the same catch block -- that pairing is what lets the failure's own report
+ * surface offer a report about this failure and nothing else.
  */
 export function logWorkflowFailure(
   kind: string,
   error: unknown,
   details: ReadonlyArray<string | null | undefined> = [],
-): void {
-  void recordDiagnosticEvent(kind, describeErrorChain(error), [
+): string {
+  return recordDiagnosticEvent(kind, describeErrorChain(error), [
     ...details,
     error instanceof Error && error.stack ? error.stack : null,
   ]);

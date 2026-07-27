@@ -57,6 +57,9 @@ pub struct AppDiagnostics {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticEvent {
     source: String,
+    /// UI-minted correlation id. Optional so a caller without one still logs.
+    #[serde(default)]
+    id: Option<String>,
     kind: String,
     message: String,
     details: Option<String>,
@@ -342,22 +345,31 @@ impl AppDiagnostics {
     }
 
     pub fn record_shell_event(&self, kind: &str, message: &str) -> Result<(), String> {
-        self.record_line("shell", kind, message, None)
+        self.record_line("shell", kind, None, message, None)
     }
 
     fn record_event(&self, event: DiagnosticEvent) -> Result<(), String> {
         self.record_line(
             &event.source,
             &event.kind,
+            event.id.as_deref(),
             &event.message,
             event.details.as_deref(),
         )
     }
 
+    /// Append one diagnostic line.
+    ///
+    /// `id` is the UI's correlation id, emitted as an `id=<id>` token between the
+    /// kind and the message so a specific failure stays findable in the durable
+    /// log (`grep id=d-1a2b3c4d app.log`) long after the in-memory ring that
+    /// produced it is gone. Omitted for shell-originated events, which have no
+    /// UI-side failure to correlate with.
     fn record_line(
         &self,
         source: &str,
         kind: &str,
+        id: Option<&str>,
         message: &str,
         details: Option<&str>,
     ) -> Result<(), String> {
@@ -365,13 +377,15 @@ impl AppDiagnostics {
             .log_lock
             .lock()
             .map_err(|_| "diagnostic log lock poisoned".to_string())?;
-        let mut line = format!(
-            "{} {} {} {}",
-            timestamp(),
-            log_token(source),
-            log_token(kind),
-            compact_log_field(message)
-        );
+        let mut line = format!("{} {} {}", timestamp(), log_token(source), log_token(kind));
+
+        if let Some(id) = id.map(log_token).filter(|id| !id.is_empty()) {
+            line.push_str(" id=");
+            line.push_str(&id);
+        }
+
+        line.push(' ');
+        line.push_str(&compact_log_field(message));
 
         if let Some(details) = details {
             line.push_str(" | ");
@@ -1050,6 +1064,78 @@ mod tests {
         assert!(scrubbed.contains("[email]"));
         assert!(scrubbed.contains("[number]"));
         assert!(scrubbed.contains("\"[text]\""));
+    }
+
+    #[test]
+    fn recorded_ui_event_carries_its_correlation_id_into_the_log_line() {
+        let root = temp_root("correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
+
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: Some("d-1a2b3c4d".to_string()),
+                kind: "ocr.failed".to_string(),
+                message: "OCR could not finish".to_string(),
+                details: None,
+            })
+            .expect("record event");
+
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        // `id=<id>` is the grep handle a later reader (or the diagnostics tool)
+        // uses to find this specific failure in the durable log.
+        assert!(logged.contains("id=d-1a2b3c4d"), "log line was: {logged}");
+        assert!(logged.contains("ocr.failed"));
+        assert!(logged.contains("OCR could not finish"));
+    }
+
+    #[test]
+    fn shell_events_and_id_less_ui_events_log_without_an_id_token() {
+        let root = temp_root("no-correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
+
+        diagnostics
+            .record_shell_event("engine_start", "engine ready")
+            .expect("record shell event");
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: None,
+                kind: "window.error".to_string(),
+                message: "Uncaught UI error".to_string(),
+                details: None,
+            })
+            .expect("record event");
+
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        assert!(!logged.contains("id="), "log line was: {logged}");
+        assert!(logged.contains("engine ready"));
+        assert!(logged.contains("Uncaught UI error"));
+    }
+
+    #[test]
+    fn a_hostile_correlation_id_is_reduced_to_a_log_safe_token() {
+        let root = temp_root("hostile-correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
+
+        // The id reaches the shell over IPC, so treat it as untrusted: a newline
+        // would otherwise forge an extra log line.
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: Some("d-1\nunix:0 ui forged".to_string()),
+                kind: "save.failed".to_string(),
+                message: "real message".to_string(),
+                details: None,
+            })
+            .expect("record event");
+
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        assert!(!logged.contains("forged\n"), "log was: {logged}");
+        assert_eq!(logged.lines().count(), 1, "log was: {logged}");
     }
 
     #[test]

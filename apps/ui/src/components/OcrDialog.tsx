@@ -12,6 +12,9 @@ export interface OcrDialogProps {
   pageCount: number;
   progress?: OcrProgressEvent | null;
   errorMessage?: string | null;
+  /** Correlation id of the recorded OCR failure. Null for a capability gap (a
+   * missing toolchain), which reaches the error phase without recording. */
+  diagnosticId?: string | null | undefined;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,6 +29,7 @@ export function OcrDialog({
   phase,
   pageCount,
   errorMessage = null,
+  diagnosticId = null,
   onConfirm,
   onCancel,
 }: OcrDialogProps) {
@@ -51,7 +55,7 @@ export function OcrDialog({
               <p className="ocr-dialog__error" role="alert">
                 {errorMessage ?? "OCR could not finish. Check the document and try again."}
               </p>
-              <ErrorReportButton className="ocr-dialog__report" />
+              <ErrorReportButton className="ocr-dialog__report" diagnosticId={diagnosticId} />
             </>
           ) : null}
           {/*

@@ -67,7 +67,9 @@ export interface AppShellProps {
   onZoomIn: () => void;
   onFitZoomResolved: (zoom: number) => void;
   onPageSizeChange: (size: { width: number; height: number }) => void;
-  onRenderError: (message: string) => void;
+  /** Second arg is the failure's correlation id — forward BOTH, or a report
+   * loses its link to the failure it describes. */
+  onRenderError: (message: string, diagnosticId?: string | null) => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
   onRotateLeft: () => void;

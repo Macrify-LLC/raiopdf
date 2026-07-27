@@ -185,7 +185,9 @@ describe("useDocument openFile", () => {
     });
 
     expect(result?.status).toBe("failed");
-    expect(getHook().document.error).toContain("could not be opened");
+    expect(getHook().document.error?.message).toContain("could not be opened");
+    // A genuine open failure records a diagnostic, so the chip can offer a report.
+    expect(getHook().document.error?.diagnosticId).toMatch(/^d-[0-9a-f]{8}$/);
   });
 
   it("opens decrypted bytes dirty and under the original file name via markDirty", async () => {

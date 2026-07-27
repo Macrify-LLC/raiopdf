@@ -11,6 +11,7 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
+import { describeErrorChain, recordDiagnosticEvent } from "../lib/diagnostics";
 import {
   closestTextLayer,
   registerTextLayerViewport,
@@ -35,6 +36,42 @@ import { LoadingSun } from "./LoadingSun";
 export interface PendingRedactionOverlay {
   id: string;
   area: PdfRedactionArea;
+}
+
+/**
+ * Pages mount and unmount as the user scrolls, and re-render on every zoom step,
+ * so a document whose pages all fail would otherwise record one diagnostic per
+ * page per pass. That is actively harmful, not merely wasteful: each recording is
+ * a synchronous shell-side log write, a 1,000-page pass can push a whole
+ * rotation's worth of bytes through `app.log` and age out the root-cause line,
+ * and each push evicts an entry from the 10-slot ring -- including the failure the
+ * user is currently reading.
+ *
+ * A repeated page failure across one document is one fact. Record the first of
+ * each kind per document and suppress the rest. Keyed weakly so the guard is
+ * collected with the document, and reset naturally when a new document opens.
+ */
+const reportedPageFailureKinds = new WeakMap<PDFDocumentProxy, Set<string>>();
+
+function recordFirstPageFailure(
+  pdfDocument: PDFDocumentProxy,
+  kind: string,
+  error: unknown,
+  details: readonly string[] = [],
+): string | null {
+  let kinds = reportedPageFailureKinds.get(pdfDocument);
+  if (!kinds) {
+    kinds = new Set();
+    reportedPageFailureKinds.set(pdfDocument, kinds);
+  }
+  if (kinds.has(kind)) {
+    return null;
+  }
+  kinds.add(kind);
+
+  // Deliberately no stack: a pdf.js render stack is noise, and it is the largest
+  // payload on the highest-frequency call site in the app.
+  return recordDiagnosticEvent(kind, describeErrorChain(error), details);
 }
 
 export interface PageViewProps {
@@ -63,7 +100,12 @@ export interface PageViewProps {
   replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
-  onRenderError?: ((message: string) => void) | undefined;
+  /**
+   * Surface a page-render failure. The second argument is the correlation id of
+   * the diagnostic recorded here -- this component holds the only reference to
+   * the raw pdf.js error, so it has to do the recording.
+   */
+  onRenderError?: ((message: string, diagnosticId?: string | null) => void) | undefined;
   /**
    * Reports this page's base (scale-1, rotation-aware) dimensions once the
    * page proxy loads. Streamed mode uses this to refine the first-page size
@@ -168,7 +210,12 @@ export function PageView({
       .catch((pageError: unknown) => {
         if (!cancelled && !isCancelledRenderError(pageError)) {
           setPagePending(false);
-          onRenderError?.("This page could not be displayed.");
+          onRenderError?.(
+            "This page could not be displayed.",
+            recordFirstPageFailure(pdfDocument, "page.load-failed", pageError, [
+              `pageIndex=${pageIndex}`,
+            ]),
+          );
         }
       });
 
@@ -208,7 +255,10 @@ export function PageView({
         return renderTask.promise.catch((renderError: unknown) => {
           if (!cancelled && !isCancelledRenderError(renderError)) {
             console.error(renderError);
-            onRenderError?.("This page could not be displayed.");
+            onRenderError?.(
+              "This page could not be displayed.",
+              recordFirstPageFailure(pdfDocument, "page.render-failed", renderError),
+            );
           }
         });
       })

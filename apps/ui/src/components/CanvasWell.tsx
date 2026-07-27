@@ -5,6 +5,7 @@ import type { PageScrollIntent } from "../hooks/useDocument";
 import { OpenIcon, SunMarkIcon } from "../icons";
 import type { EditingState } from "../hooks/useEditing";
 import type { CapturedTextSelection } from "../lib/selectedTextEdit";
+import type { DisplayedFailure } from "../lib/diagnostics";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { ErrorReportButton } from "./ErrorReportButton";
 import { FloatingDialog } from "./FloatingDialog";
@@ -36,12 +37,19 @@ export interface CanvasWellProps {
   fitWidth?: boolean;
   scrollIntent?: PageScrollIntent | null;
   onVisiblePageChange?: ((page: number) => void) | undefined;
-  error?: string | null;
+  /**
+   * The failure to show in the chip: message plus the correlation id of the
+   * diagnostic behind it. A gate or nudge carries a null id and so offers no
+   * report.
+   */
+  error?: DisplayedFailure | null | undefined;
   onZoomIn?: (() => void) | undefined;
   onZoomOut?: (() => void) | undefined;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
-  onRenderError?: ((message: string) => void) | undefined;
+  /** Second arg is the failure's correlation id — forward BOTH, or a report
+   * loses its link to the failure it describes. */
+  onRenderError?: ((message: string, diagnosticId?: string | null) => void) | undefined;
   workspace?: ReactNode;
   overlay?: ReactNode;
   processLoader?: ReactNode;
@@ -246,8 +254,8 @@ export function CanvasWell({
           />
           {error ? (
             <div className="canvas-well__message canvas-well__message--floating" role="alert">
-              <p className="canvas-well__message-text">{error}</p>
-              <ErrorReportButton requireDiagnostic />
+              <p className="canvas-well__message-text">{error.message}</p>
+              <ErrorReportButton diagnosticId={error.diagnosticId} />
             </div>
           ) : null}
         </>
@@ -277,8 +285,8 @@ export function CanvasWell({
           </button>
           {error ? (
             <div className="canvas-well__message" role="alert">
-              <p className="canvas-well__message-text">{error}</p>
-              <ErrorReportButton requireDiagnostic />
+              <p className="canvas-well__message-text">{error.message}</p>
+              <ErrorReportButton diagnosticId={error.diagnosticId} />
             </div>
           ) : null}
         </div>

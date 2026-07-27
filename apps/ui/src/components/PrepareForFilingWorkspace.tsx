@@ -22,7 +22,7 @@ import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { LoadingSun } from "./LoadingSun";
 import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
 import { PackageRootPathField } from "./PackageRootPathField";
@@ -719,7 +719,7 @@ export const PrepareForFilingWorkspace = forwardRef<
             <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
             <p>{progress.message}</p>
             {progress.phase === "error" ? (
-              <ErrorReportButton className="filing-progress__report" diagnosticId={progress.diagnosticId} />
+              <ErrorActions className="filing-progress__report" diagnosticId={progress.diagnosticId} />
             ) : null}
           </div>
         ) : null}

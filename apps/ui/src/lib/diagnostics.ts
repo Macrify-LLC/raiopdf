@@ -10,6 +10,9 @@
  */
 
 import { getTauriInvoke } from "./tauriInvoke";
+// Value import is safe: errorReportMailto only imports a TYPE from here, which is
+// erased, so there is no runtime cycle.
+import { scrubFilePaths } from "./errorReportMailto";
 
 /**
  * A diagnostic event, retained in memory so a report surface can attach the
@@ -146,6 +149,32 @@ async function writeDiagnosticToLog(event: {
     await invoke("diagnostics_record_event", { event: { source: "ui", ...event } });
   } catch {
     // Diagnostics must never create a second user-facing failure.
+  }
+}
+
+/**
+ * Run text through the shell's canonical redaction policy.
+ *
+ * This is the ONE policy: the same Rust scrubber the diagnostics export, the crash
+ * payload, and the MCP diagnostics tool all use. It removes file paths (Windows,
+ * UNC/network-share and POSIX), file names, email addresses, SSN- and phone-shaped
+ * digits, long digit runs and long quoted strings, while deliberately preserving
+ * `unix:<seconds>` timestamps so events stay orderable.
+ *
+ * Falls back to the renderer's path-only {@link scrubFilePaths} when the shell
+ * isn't reachable (a browser dev server, a unit test). That fallback is defence in
+ * depth, NOT the guarantee — which is why anything user-facing that describes what
+ * gets removed must describe the packaged app's behaviour, i.e. the Rust policy.
+ */
+export async function scrubDiagnosticText(text: string): Promise<string> {
+  if (!text) {
+    return text;
+  }
+  try {
+    const invoke = await getTauriInvoke();
+    return await invoke<string>("diagnostics_scrub_text", { text });
+  } catch {
+    return scrubFilePaths(text);
   }
 }
 

@@ -247,6 +247,19 @@
   color: var(--success, #278a45);
 }
 
+/* Applies to any secondary button carrying copy state — the diagnose-prompt button
+   as well as the email-copy one. Scoping every rule to the email button left the
+   newer one styling nothing at all. */
+.crash-report-dialog__secondary-button[data-copy-state="copied"] {
+  border-color: var(--primary);
+  color: var(--primary-deep);
+}
+
+.crash-report-dialog__secondary-button[data-copy-state="failed"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .crash-report-dialog__secondary-button.crash-report-dialog__copy-email-button[data-copy-state="failed"] {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   color: var(--danger);
@@ -264,4 +277,19 @@
 .crash-report-dialog__tertiary-button:hover {
   color: var(--ink);
   text-decoration: underline;
+}
+
+.crash-report-dialog__prompt-status:empty {
+  display: none;
+}
+
+.crash-report-dialog__prompt-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.crash-report-dialog__prompt-status[data-tone="danger"] {
+  color: var(--danger);
 }

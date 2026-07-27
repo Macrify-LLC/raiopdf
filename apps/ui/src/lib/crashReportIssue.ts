@@ -1,5 +1,9 @@
 import type { CrashReportPayload } from "../components/CrashReportDialog";
 
+/** Where a user files a RaioPDF issue. One constant — the crash dialog and the
+ *  diagnose prompt both point here. */
+export const GITHUB_NEW_ISSUE_URL = "https://github.com/Macrify-LLC/raiopdf/issues/new";
+
 export const CRASH_REPORT_ISSUE_URL_MAX_LENGTH = 6500;
 export const CRASH_REPORT_ISSUE_TRUNCATION_NOTE =
   "\n[Truncated to fit a shareable link — open File → Export Diagnostics in RaioPDF for the complete report.]";
@@ -41,7 +45,7 @@ export function buildCrashReportIssueUrl(payload: CrashReportPayload): string {
     labels: "crash",
   });
 
-  return `https://github.com/Macrify-LLC/raiopdf/issues/new?${params.toString()}`;
+  return `${GITHUB_NEW_ISSUE_URL}?${params.toString()}`;
 }
 
 function trimCrashReportBodyToLineBoundary(body: string, maxChars: number): string {

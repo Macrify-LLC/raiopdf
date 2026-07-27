@@ -455,6 +455,17 @@ impl AppDiagnostics {
     }
 }
 
+/// Run text through the canonical redaction policy.
+///
+/// Exists so the UI can put ONE policy's output on the clipboard. The renderer has
+/// its own path-only scrubber for defence in depth, but it is deliberately not the
+/// guarantee: two implementations of a confidentiality rule means the weaker one
+/// silently becomes the guarantee, which is exactly what this avoids.
+#[tauri::command]
+pub fn diagnostics_scrub_text(text: String) -> String {
+    scrub_diagnostic_text(&text)
+}
+
 #[tauri::command]
 pub fn diagnostics_record_event(
     diagnostics: tauri::State<'_, AppDiagnostics>,

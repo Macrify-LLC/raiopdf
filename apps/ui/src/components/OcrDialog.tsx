@@ -1,4 +1,4 @@
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
 import type { LongProcessProgress } from "./LongProcessLoader";
 import { describeOcrProgress, type OcrProgressEvent } from "../lib/ocrProgress";
@@ -55,7 +55,7 @@ export function OcrDialog({
               <p className="ocr-dialog__error" role="alert">
                 {errorMessage ?? "OCR could not finish. Check the document and try again."}
               </p>
-              <ErrorReportButton className="ocr-dialog__report" diagnosticId={diagnosticId} />
+              <ErrorActions className="ocr-dialog__report" diagnosticId={diagnosticId} compact />
             </>
           ) : null}
           {/*

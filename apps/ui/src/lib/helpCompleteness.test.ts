@@ -14,6 +14,7 @@ const KNOWN_GROUPS = new Set([
 const KNOWN_HELP_ONLY_ARTICLE_IDS = new Set([
   "getting-started",
   "data-stays-local",
+  "report-a-problem",
 ]);
 
 describe("help content completeness", () => {

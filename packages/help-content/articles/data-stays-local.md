@@ -33,6 +33,18 @@ or save a report file and send it yourself. The prompt can be turned off in
 Settings, and diagnostics files are saved to your computer unless you choose
 to share them.
 
+When something goes wrong, an error message may also offer **Help diagnose
+this**. That copies a written description of the problem to your clipboard so
+you can paste it into whichever AI assistant you already use. RaioPDF has no
+AI of its own and doesn't send the text anywhere — putting it on the clipboard
+is all it does, and whether it goes any further is up to you. Before it lands
+on the clipboard, RaioPDF removes file paths — including network-share paths —
+along with file names, email addresses, and number patterns that look like
+Social Security, phone, or account numbers. That removal recognises patterns
+rather than reading meaning, so a client or matter name written as ordinary words
+can still slip through — read the text before you paste it anywhere. See
+[Report a problem](tool:report-a-problem).
+
 ## "Open Raio to AI" is off unless you turn it on
 
 RaioPDF has no AI of its own. There is an optional setting that lets *your* own
@@ -46,7 +58,9 @@ Your documents never leave your machine. By default, the only reason RaioPDF
 connects to the internet at all is to check whether a newer version of the app
 has been released, from its official releases — and that's only ever about the
 app itself. Nothing about your files, or how you use them, is sent anywhere
-unless you specifically ask it to (see error reports above).
+unless you specifically ask it to (see error reports above). The optional AI
+connector and **Help diagnose this** are both in that category: they act only
+when you choose, and neither sends anything on its own.
 
 ## Related
 

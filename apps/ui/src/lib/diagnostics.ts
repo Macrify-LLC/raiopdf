@@ -161,19 +161,39 @@ async function writeDiagnosticToLog(event: {
  * digits, long digit runs and long quoted strings, while deliberately preserving
  * `unix:<seconds>` timestamps so events stay orderable.
  *
- * Falls back to the renderer's path-only {@link scrubFilePaths} when the shell
- * isn't reachable (a browser dev server, a unit test). That fallback is defence in
- * depth, NOT the guarantee — which is why anything user-facing that describes what
- * gets removed must describe the packaged app's behaviour, i.e. the Rust policy.
+ * FAILS CLOSED in the packaged app. If the shell is present but the call fails,
+ * this throws rather than quietly downgrading to the renderer's path-only
+ * {@link scrubFilePaths} — because the copy the user is about to make asserts the
+ * text was already scrubbed, and the weaker path leaves email addresses,
+ * SSN/phone-shaped digits and quoted names in place. A shell that can't answer is
+ * also entirely plausible here: it may be the very failure being diagnosed.
+ *
+ * Outside a Tauri runtime (a browser dev server, a unit test) there is no shell to
+ * ask, and the path-only scrubber is used as defence in depth. That is why anything
+ * user-facing describing what gets removed must describe the PACKAGED app's
+ * behaviour, i.e. the Rust policy.
  */
+export class RedactionUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("RaioPDF could not redact the diagnostic text.", { cause });
+    this.name = "RedactionUnavailableError";
+  }
+}
+
 export async function scrubDiagnosticText(text: string): Promise<string> {
   if (!text) {
     return text;
   }
+
+  const inShell = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
   try {
     const invoke = await getTauriInvoke();
     return await invoke<string>("diagnostics_scrub_text", { text });
-  } catch {
+  } catch (error: unknown) {
+    if (inShell) {
+      throw new RedactionUnavailableError(error);
+    }
     return scrubFilePaths(text);
   }
 }

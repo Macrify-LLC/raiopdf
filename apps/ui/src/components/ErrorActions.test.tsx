@@ -157,6 +157,54 @@ describe("ErrorActions", () => {
     expect(fallback?.querySelector("summary")?.textContent).toContain("characters");
   });
 
+  it("copies nothing when canonical redaction is unavailable", async () => {
+    // Fails closed on purpose: the prompt tells the reader the text was already
+    // scrubbed, so handing over path-only-scrubbed text would make that a lie —
+    // and a shell that can't answer may be the very failure being diagnosed.
+    const diagnosticId = recordDiagnosticEvent("ocr.failed", "nope");
+    const onCopyPrompt = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const originalInternals = "__TAURI_INTERNALS__" in window;
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+
+    try {
+      render(<ErrorActions diagnosticId={diagnosticId} onCopyPrompt={onCopyPrompt} />);
+      await clickButton("Help diagnose this");
+
+      expect(onCopyPrompt).not.toHaveBeenCalled();
+      expect(statusText()).toContain("couldn’t prepare a safe copy");
+      expect(container?.querySelector("details.error-actions__fallback")).toBeNull();
+    } finally {
+      if (!originalInternals) {
+        delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      }
+    }
+  });
+
+  it("does not let one action's stale outcome mask the other's", async () => {
+    // With both flags set the precedence hid the newer failure behind the older
+    // one, and a later successful copy was masked by a stale mail failure.
+    const diagnosticId = recordDiagnosticEvent("ocr.failed", "nope");
+    const onCopyPrompt = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const onOpenMailDraft = vi
+      .fn<(mailto: string) => Promise<void>>()
+      .mockRejectedValue(new Error("no handler"));
+
+    render(
+      <ErrorActions
+        diagnosticId={diagnosticId}
+        onCopyPrompt={onCopyPrompt}
+        onOpenMailDraft={onOpenMailDraft}
+      />,
+    );
+    await clickButton("Email a report");
+    expect(statusText()).toContain("crash-reports@macrify.me");
+
+    await clickButton("Help diagnose this");
+
+    expect(statusText()).toContain("Paste it into your own AI assistant");
+    expect(statusText()).not.toContain("crash-reports@macrify.me");
+  });
+
   it("reports a mail client that could not be opened, with the address", async () => {
     const diagnosticId = recordDiagnosticEvent("ocr.failed", "nope");
     const onOpenMailDraft = vi

@@ -128,7 +128,10 @@ export function CrashReportDialog({
       try {
         const text = await buildDiagnosePrompt({
           diagnostic: crashPayloadAsDiagnostic(payload),
-          appVersion: null,
+          // The version that CRASHED, read from the payload — not the version
+          // running now, which may differ if the app updated in between, and not
+          // "unknown", which loses the main fact tying a crash to a release.
+          appVersion: crashedAppVersion(payload),
           userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
         });
         if (!navigator.clipboard?.writeText) {
@@ -369,4 +372,15 @@ function crashPayloadAsDiagnostic(payload: CrashReportPayload): DiagnosticEntry 
       .join("\n"),
     at: Date.now(),
   };
+}
+
+/**
+ * The app version recorded in the crash payload.
+ *
+ * `build_crash_report_payload` writes it into the body as `App version: x.y.z`;
+ * there is no structured field for it. Parsing the body is the cheap read — the
+ * alternative is widening the IPC payload type for one string.
+ */
+function crashedAppVersion(payload: CrashReportPayload): string | null {
+  return /^App version:\s*(.+)$/mu.exec(payload.body)?.[1]?.trim() ?? null;
 }

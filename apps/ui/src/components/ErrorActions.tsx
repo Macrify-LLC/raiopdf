@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { MailIcon, PlugIcon } from "../icons";
-import { getDiagnosticById } from "../lib/diagnostics";
+import { getDiagnosticById, RedactionUnavailableError } from "../lib/diagnostics";
 import { buildDiagnosePrompt } from "../lib/diagnosePrompt";
 import { buildErrorReportMailto, ERROR_REPORT_EMAIL } from "../lib/errorReportMailto";
 import "./ErrorActions.css";
@@ -55,6 +55,7 @@ export function ErrorActions({
 }: ErrorActionsProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [redactionFailed, setRedactionFailed] = useState(false);
   const [mailFailed, setMailFailed] = useState(false);
   const [promptFallback, setPromptFallback] = useState<string | null>(null);
   const diagnostic = diagnosticId ? getDiagnosticById(diagnosticId) : null;
@@ -78,9 +79,21 @@ export function ErrorActions({
     return () => window.clearTimeout(timeout);
   }, [copyFailed, promptFallback]);
 
+  useEffect(() => {
+    if (!redactionFailed) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setRedactionFailed(false), COPY_FAILED_LABEL_MS);
+    return () => window.clearTimeout(timeout);
+  }, [redactionFailed]);
+
   const handleDiagnose = useCallback(() => {
     void (async () => {
+      // Clear the other action's outcome: with both set, the precedence below would
+      // hide the newer failure behind the older one.
       setCopyFailed(false);
+      setRedactionFailed(false);
+      setMailFailed(false);
       let text = "";
 
       // Building is inside the try as well: it awaits the shell's scrubber, and a
@@ -95,7 +108,14 @@ export function ErrorActions({
         await (onCopyPrompt ?? copyToClipboard)(text);
         setCopied(true);
         setPromptFallback(null);
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof RedactionUnavailableError) {
+          // Nothing was copied, deliberately. Offering unredacted text would break
+          // the promise the prompt itself makes about having been scrubbed.
+          setRedactionFailed(true);
+          setPromptFallback(null);
+          return;
+        }
         setCopyFailed(true);
         // Keep the text on screen until a later copy succeeds: it is far too long
         // to retype, and the transient "couldn't copy" label clears in seconds.
@@ -107,7 +127,10 @@ export function ErrorActions({
 
   const handleEmail = useCallback(() => {
     void (async () => {
+      // Same reason as the copy path: don't let a stale outcome mask this one.
       setMailFailed(false);
+      setCopyFailed(false);
+      setRedactionFailed(false);
       const mailto = buildErrorReportMailto({
         diagnostic,
         appVersion: await readAppVersion(),
@@ -159,18 +182,20 @@ export function ErrorActions({
 
       {/* One live region for both actions, so a screen reader hears the outcome
           without the buttons themselves changing accessible name unpredictably. */}
-      {copyFailed || mailFailed || copied ? (
+      {copyFailed || redactionFailed || mailFailed || copied ? (
         <p
           className="error-actions__status"
           role="status"
           aria-live="polite"
-          data-tone={copyFailed || mailFailed ? "danger" : undefined}
+          data-tone={copyFailed || redactionFailed || mailFailed ? "danger" : undefined}
         >
-          {copyFailed
-            ? "Couldn’t reach the clipboard. The text is below — select and copy it."
-            : mailFailed
-              ? `Couldn’t open your email app. Write to ${ERROR_REPORT_EMAIL}.`
-              : "Prompt copied. Paste it into your own AI assistant."}
+          {redactionFailed
+            ? "RaioPDF couldn’t prepare a safe copy of the details, so nothing was copied. Use “Email a report” instead."
+            : copyFailed
+              ? "Couldn’t reach the clipboard. The text is below — select and copy it."
+              : mailFailed
+                ? `Couldn’t open your email app. Write to ${ERROR_REPORT_EMAIL}.`
+                : "Prompt copied. Paste it into your own AI assistant."}
         </p>
       ) : null}
 

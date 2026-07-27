@@ -138,6 +138,7 @@ const DEV_ENGINE_TOOLCHAIN_ENV: Record<string, string> = isWindows
 // is the drift guard for it (and for the README / landing-page counts). Adding a tool
 // means updating this list AND docs/MCP.md together.
 const EXPECTED_TOOLS = [
+  "raiopdf_diagnostics",
   "raiopdf_health",
   "pdf_page_count",
   "ocr_pdf",
@@ -562,10 +563,10 @@ describe("MCP end-to-end canary (real connector + real engine)", () => {
     }
   });
 
-  it("advertises exactly the 27 documented tools", async () => {
+  it("advertises exactly the 28 documented tools", async () => {
     const listed = (await enabled.listTools()).tools.map((tool) => tool.name).sort();
     expect(listed).toEqual(EXPECTED_TOOLS);
-    expect(listed).toHaveLength(27);
+    expect(listed).toHaveLength(28);
   });
 
   it("raiopdf_health: the connector's own engine host is reachable", async () => {

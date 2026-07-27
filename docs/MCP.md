@@ -91,13 +91,14 @@ Claude app and Claude Code.)
 
 ## Tools
 
-**27 tools as of 2026-07-10** (the Bates row below covers two). This table is
+**28 tools as of 2026-07-26** (the Bates row below covers two). This table is
 the canonical list — the README, the landing page, and the macrify.me product
 card all quote the count from here; update them when it changes.
 
 | Tool | What it does |
 |------|--------------|
 | `raiopdf_health` | Check the engine is reachable. |
+| `raiopdf_diagnostics` | Read RaioPDF's own recent diagnostics — app/engine log tails, version, platform — scrubbed of file paths, names and email addresses. Read-only; takes no path. |
 | `pdf_page_count` | Count pages in a PDF. |
 | `ocr_pdf` | Make a scanned PDF searchable (on-device OCR). |
 | `merge_pdfs` | Concatenate PDFs in order. |
@@ -128,6 +129,41 @@ card all quote the count from here; update them when it changes.
 regular files; outputs are never overwritten (a name collision is an error); each
 output is written to a temp file and atomically renamed into place, and removed
 if the operation fails.
+
+## Reading diagnostics (`raiopdf_diagnostics`)
+
+When something in RaioPDF fails, error surfaces show a short correlation id like
+`d-1a2b3c4d`. Pass it as `reference` and the tool returns RaioPDF's recent
+diagnostics so you can find that specific failure — the same id appears in the log
+tail as `id=d-1a2b3c4d`.
+
+**Prefer this over reading the log files yourself.** RaioPDF's logs are scrubbed
+when you *export* them, but written raw. This tool applies the same redaction the
+desktop app's export path uses before anything leaves the process. Removed:
+Windows, UNC/network-share and POSIX file paths; file names; email addresses;
+SSN- and phone-shaped digits; long digit runs; long quoted strings. Log
+timestamps are kept on purpose, so events can still be ordered. On a machine
+where a folder name is a client name and a file name is a matter name, that
+difference is the whole point.
+
+Read-only. It takes **no path parameter**: the only readable location is
+RaioPDF's own app-data directory, resolved internally, so it cannot be pointed at
+an arbitrary file.
+
+Honest limits, worth knowing before you rely on it:
+
+- **Redaction is best-effort, not a guarantee.** It recognises *shapes*, so a
+  client or matter name that appears without a path or a file extension — a bare
+  case caption in an error string, a matter number shorter than eight digits — is
+  indistinguishable from any other text and can survive. The payload says so in
+  `residualRiskNote`. Treat it as something to read before forwarding, not as
+  certified-safe.
+- **The connector is off by default.** If a user hasn't enabled
+  Settings → "Open Raio to AI", this tool isn't available at the moment they hit
+  an error. The "works even when the app won't start" property only holds if the
+  connector was configured beforehand.
+- Log text is capped per log (plus two rotated generations), so a very old
+  failure may already have rotated out.
 
 ## Annotation workflow
 

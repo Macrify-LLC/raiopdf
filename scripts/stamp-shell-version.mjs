@@ -78,7 +78,22 @@ replaceRequired(
   "apps/shell/src-tauri Cargo package version",
 );
 
+// The engine-host reports this version in the diagnostics payload it serves to
+// the MCP connector, so it has to be stamped too. Left unstamped it reported the
+// crate's own 0.1.0 forever, which would point a reader at the wrong release
+// notes -- the exact failure this script's header warns about.
+const engineHostCargoPath = fileURLToPath(
+  new URL("../apps/engine-host/Cargo.toml", import.meta.url),
+);
+replaceRequired(
+  engineHostCargoPath,
+  /^version = "[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?"$/m,
+  `version = "${version}"`,
+  "apps/engine-host Cargo package version",
+);
+
 const cargoLockPath = fileURLToPath(new URL("../Cargo.lock", import.meta.url));
 stampCargoLockPackage(cargoLockPath, "raiopdf-shell", version);
+stampCargoLockPackage(cargoLockPath, "raiopdf-engine-host", version);
 
 console.log(`stamp-shell-version: shell version = ${version}`);

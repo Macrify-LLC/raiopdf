@@ -4,6 +4,7 @@ members = [
   "apps/engine-host",
   "apps/mcp-launcher",
   "apps/shell/src-tauri",
+  "crates/diagnostics-core",
   "crates/engine-sidecar-core",
 ]
 

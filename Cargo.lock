@@ -745,6 +745,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "diagnostics-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2811,6 +2819,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 name = "raiopdf-engine-host"
 version = "0.1.0"
 dependencies = [
+ "diagnostics-core",
  "engine-sidecar-core",
  "serde_json",
 ]
@@ -2823,11 +2832,11 @@ version = "0.1.0"
 name = "raiopdf-shell"
 version = "0.1.0"
 dependencies = [
+ "diagnostics-core",
  "engine-sidecar-core",
  "fs2",
  "objc2",
  "objc2-app-kit",
- "regex",
  "serde",
  "serde_json",
  "sha2 0.11.0",

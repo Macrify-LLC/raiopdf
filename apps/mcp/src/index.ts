@@ -21,6 +21,11 @@ import {
   healthOutputSchema,
 } from "./tools/health.js";
 import {
+  diagnosticsInputSchema,
+  diagnosticsOutputSchema,
+  handleDiagnostics,
+} from "./tools/diagnostics.js";
+import {
   handlePageCount,
   pageCountInputSchema,
   pageCountOutputSchema,
@@ -177,6 +182,24 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
       },
     },
     withGate(dependencies, async () => await handleHealth(dependencies.engineHandle)),
+  );
+
+  server.registerTool(
+    "raiopdf_diagnostics",
+    {
+      title: "RaioPDF diagnostics",
+      description:
+        "Reads RaioPDF's own recent diagnostics — app, desktop-engine and MCP-engine-host log tails, version and platform — already scrubbed of file paths, file names and email addresses. Use this instead of reading RaioPDF's log files directly: the raw logs are not scrubbed. Pass the correlation id from an error message (e.g. d-1a2b3c4d) to locate a specific failure.",
+      inputSchema: diagnosticsInputSchema,
+      outputSchema: diagnosticsOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    withGate(dependencies, async ({ reference }) => await handleDiagnostics(reference)),
   );
 
   server.registerTool(

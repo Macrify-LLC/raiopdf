@@ -148,7 +148,7 @@ async function startEngineHost(): Promise<StartedEngine> {
   }
 }
 
-function resolveEngineHostBinary(): string {
+export function resolveEngineHostBinary(): string {
   const envPath = process.env[ENGINE_HOST_BIN_ENV];
 
   if (envPath) {

@@ -9,4 +9,5 @@ path = "src/main.rs"
 
 [dependencies]
 engine-sidecar-core = { path = "../../crates/engine-sidecar-core" }
+diagnostics-core = { path = "../../crates/diagnostics-core" }
 serde_json = "1"

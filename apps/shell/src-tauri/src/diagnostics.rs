@@ -1,6 +1,6 @@
 use crate::sidecar::SidecarManager;
+use diagnostics_core::{read_tail, rotated_log_path, scrub_diagnostic_text, LOG_GENERATIONS};
 use engine_sidecar_core::{ENGINE_LOG_FILE_NAME, ENGINE_LOG_GENERATIONS};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -10,15 +10,14 @@ use std::{
     io::{self, Write},
     panic::PanicHookInfo,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-const APP_LOG_FILE_NAME: &str = "app.log";
+use diagnostics_core::APP_LOG_FILE_NAME;
 const APP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
-const APP_LOG_GENERATIONS: usize = 2;
 const LOG_EXPORT_MAX_BYTES: u64 = 96 * 1024;
 /// Legacy single-slot session marker (pre-multi-instance versions). Read and
 /// removed once by the startup scan; never written anymore.
@@ -131,7 +130,7 @@ impl AppDiagnostics {
             let _ = append_diagnostic_line(
                 &app_log_path,
                 APP_LOG_MAX_BYTES,
-                APP_LOG_GENERATIONS,
+                LOG_GENERATIONS,
                 &format!("{} shell panic {}", timestamp(), panic_summary(info)),
             );
             default_hook(info);
@@ -395,7 +394,7 @@ impl AppDiagnostics {
         append_diagnostic_line(
             &self.app_log_path,
             APP_LOG_MAX_BYTES,
-            APP_LOG_GENERATIONS,
+            LOG_GENERATIONS,
             &line,
         )
         .map_err(|error| format!("failed to write diagnostic log: {error}"))
@@ -441,12 +440,12 @@ impl AppDiagnostics {
         append_log_section(
             &mut report,
             "Application log",
-            &collect_log_paths(&self.app_log_path, APP_LOG_GENERATIONS),
+            &log_generation_paths(&self.app_log_path, LOG_GENERATIONS),
         )?;
         append_log_section(
             &mut report,
             "Engine log",
-            &collect_log_paths(
+            &log_generation_paths(
                 &self.app_data_dir.join(ENGINE_LOG_FILE_NAME),
                 ENGINE_LOG_GENERATIONS,
             ),
@@ -605,7 +604,8 @@ fn append_log_section(report: &mut String, title: &str, paths: &[PathBuf]) -> Re
     Ok(())
 }
 
-fn collect_log_paths(path: &Path, generations: usize) -> Vec<PathBuf> {
+/// A live log path followed by its rotated generations, oldest last.
+fn log_generation_paths(path: &Path, generations: usize) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(generations + 1);
     paths.push(path.to_path_buf());
     for generation in 1..=generations {
@@ -656,31 +656,6 @@ fn rotate_log(path: &Path, generations: usize) -> io::Result<()> {
     }
 
     Ok(())
-}
-
-fn rotated_log_path(path: &Path, generation: usize) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(APP_LOG_FILE_NAME);
-
-    path.with_file_name(format!("{file_name}.{generation}"))
-}
-
-fn read_tail(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    let start = bytes.len().saturating_sub(max_bytes as usize);
-    let mut text = String::from_utf8_lossy(&bytes[start..]).into_owned();
-
-    if start > 0 {
-        if let Some(index) = text.find('\n') {
-            text.replace_range(..=index, "[truncated]\n");
-        } else {
-            text = "[truncated]\n".to_string();
-        }
-    }
-
-    Ok(text)
 }
 
 fn session_marker_path(sessions_dir: &Path, instance_id: &str) -> PathBuf {
@@ -825,47 +800,6 @@ fn build_crash_report_envelope(payload: &CrashReportPayload) -> String {
     report.push_str(log_tail);
     report.push('\n');
     report
-}
-
-fn scrub_diagnostic_text(text: &str) -> String {
-    static WINDOWS_PATH: OnceLock<Regex> = OnceLock::new();
-    static UNIX_PATH: OnceLock<Regex> = OnceLock::new();
-    static EMAIL: OnceLock<Regex> = OnceLock::new();
-    static FILE_NAME: OnceLock<Regex> = OnceLock::new();
-    static LONG_NUMBER: OnceLock<Regex> = OnceLock::new();
-    static LONG_QUOTED: OnceLock<Regex> = OnceLock::new();
-
-    let text = WINDOWS_PATH
-        .get_or_init(|| {
-            Regex::new(r#"(?i)\b[a-z]:[\\/](?:[^\\/\r\n"<>|]+[\\/])*[^\\/\r\n"<>|]*?(?:\.(?:pdf|png|jpe?g|tiff?|txt|hocr|log|tmp|exe|jar|cmd|ya?ml)\b|\s|$)"#)
-                .expect("valid regex")
-        })
-        .replace_all(text, "[path]");
-    let text = UNIX_PATH
-        .get_or_init(|| {
-            Regex::new(r#"(?i)(?:/Users|/home|/tmp|/var/folders|/private/var|/mnt/[a-z]|/Volumes)/(?:[^/\r\n"<>|]+/)*[^/\r\n"<>|]*?(?:\.(?:pdf|png|jpe?g|tiff?|txt|hocr|log|tmp|exe|jar|cmd|ya?ml)\b|\s|$)"#)
-                .expect("valid regex")
-        })
-        .replace_all(&text, "[path]");
-    let text = EMAIL
-        .get_or_init(|| {
-            Regex::new(r#"(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}"#).expect("valid regex")
-        })
-        .replace_all(&text, "[email]");
-    let text = FILE_NAME
-        .get_or_init(|| {
-            Regex::new(r#"(?i)\b[^\s"'<>|\\/]+(?:\s+[^\s"'<>|\\/]+){0,8}\.(?:pdf|png|jpe?g|tiff?|txt|hocr|log|tmp)\b"#)
-                .expect("valid regex")
-        })
-        .replace_all(&text, "[file]");
-    let text = LONG_NUMBER
-        .get_or_init(|| Regex::new(r#"\b\d{8,}\b"#).expect("valid regex"))
-        .replace_all(&text, "[number]");
-    let text = LONG_QUOTED
-        .get_or_init(|| Regex::new(r#""[^"\r\n]{80,}""#).expect("valid regex"))
-        .replace_all(&text, "\"[text]\"");
-
-    text.into_owned()
 }
 
 fn compact_log_field(value: &str) -> String {
@@ -1051,19 +985,75 @@ mod tests {
     }
 
     #[test]
-    fn exported_logs_scrub_paths_file_names_email_and_long_values() {
-        let raw = r#"OCRmyPDF C:\Users\Jacob Schumer\AppData\Local\Temp\Smith v Jones Motion.pdf /tmp/raio/out.hocr jane@example.com 123456789012 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa""#;
+    fn recorded_ui_event_carries_its_correlation_id_into_the_log_line() {
+        let root = temp_root("correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
 
-        let scrubbed = scrub_diagnostic_text(raw);
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: Some("d-1a2b3c4d".to_string()),
+                kind: "ocr.failed".to_string(),
+                message: "OCR could not finish".to_string(),
+                details: None,
+            })
+            .expect("record event");
 
-        assert!(!scrubbed.contains("Jacob"));
-        assert!(!scrubbed.contains("Smith v Jones"));
-        assert!(!scrubbed.contains("jane@example.com"));
-        assert!(!scrubbed.contains("123456789012"));
-        assert!(scrubbed.contains("[path]"));
-        assert!(scrubbed.contains("[email]"));
-        assert!(scrubbed.contains("[number]"));
-        assert!(scrubbed.contains("\"[text]\""));
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        // `id=<id>` is the grep handle a later reader (or the diagnostics tool)
+        // uses to find this specific failure in the durable log.
+        assert!(logged.contains("id=d-1a2b3c4d"), "log line was: {logged}");
+        assert!(logged.contains("ocr.failed"));
+        assert!(logged.contains("OCR could not finish"));
+    }
+
+    #[test]
+    fn shell_events_and_id_less_ui_events_log_without_an_id_token() {
+        let root = temp_root("no-correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
+
+        diagnostics
+            .record_shell_event("engine_start", "engine ready")
+            .expect("record shell event");
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: None,
+                kind: "window.error".to_string(),
+                message: "Uncaught UI error".to_string(),
+                details: None,
+            })
+            .expect("record event");
+
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        assert!(!logged.contains("id="), "log line was: {logged}");
+        assert!(logged.contains("engine ready"));
+        assert!(logged.contains("Uncaught UI error"));
+    }
+
+    #[test]
+    fn a_hostile_correlation_id_is_reduced_to_a_log_safe_token() {
+        let root = temp_root("hostile-correlation-id");
+        let diagnostics = diagnostics_for(&root, "instance-a");
+
+        // The id reaches the shell over IPC, so treat it as untrusted: a newline
+        // would otherwise forge an extra log line.
+        diagnostics
+            .record_event(DiagnosticEvent {
+                source: "ui".to_string(),
+                id: Some("d-1\nunix:0 ui forged".to_string()),
+                kind: "save.failed".to_string(),
+                message: "real message".to_string(),
+                details: None,
+            })
+            .expect("record event");
+
+        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
+
+        assert!(!logged.contains("forged\n"), "log was: {logged}");
+        assert_eq!(logged.lines().count(), 1, "log was: {logged}");
     }
 
     #[test]
@@ -1329,7 +1319,14 @@ mod tests {
             std::env::consts::ARCH,
         );
         assert!(report.starts_with(&expected_headers));
-        assert!(report.contains("Backtrace:\n[file]\nframe two"));
+        // The path is redacted but the surrounding frame text survives. This used to
+        // collapse to a bare "[file]" because the file-name rule swallowed the whole
+        // line; the path rules now cover a name-with-spaces directly, which keeps the
+        // frame readable while still removing the path.
+        assert!(
+            report.contains("Backtrace:\nframe one [path]\nframe two"),
+            "backtrace section was: {report}"
+        );
         assert!(report.contains("Log-Tail:\n[file] for [email]\n"));
         assert!(!report.contains("jane@example.com"));
         assert!(!report.contains("Secret Motion.pdf"));

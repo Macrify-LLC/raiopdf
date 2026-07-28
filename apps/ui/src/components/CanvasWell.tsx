@@ -7,7 +7,7 @@ import type { EditingState } from "../hooks/useEditing";
 import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import type { DisplayedFailure } from "../lib/diagnostics";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
@@ -255,7 +255,7 @@ export function CanvasWell({
           {error ? (
             <div className="canvas-well__message canvas-well__message--floating" role="alert">
               <p className="canvas-well__message-text">{error.message}</p>
-              <ErrorReportButton diagnosticId={error.diagnosticId} />
+              <ErrorActions diagnosticId={error.diagnosticId} />
             </div>
           ) : null}
         </>
@@ -286,7 +286,7 @@ export function CanvasWell({
           {error ? (
             <div className="canvas-well__message" role="alert">
               <p className="canvas-well__message-text">{error.message}</p>
-              <ErrorReportButton diagnosticId={error.diagnosticId} />
+              <ErrorActions diagnosticId={error.diagnosticId} />
             </div>
           ) : null}
         </div>

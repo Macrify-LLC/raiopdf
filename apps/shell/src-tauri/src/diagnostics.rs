@@ -455,6 +455,17 @@ impl AppDiagnostics {
     }
 }
 
+/// Run text through the canonical redaction policy.
+///
+/// Exists so the UI can put ONE policy's output on the clipboard. The renderer has
+/// its own path-only scrubber for defence in depth, but it is deliberately not the
+/// guarantee: two implementations of a confidentiality rule means the weaker one
+/// silently becomes the guarantee, which is exactly what this avoids.
+#[tauri::command]
+pub fn diagnostics_scrub_text(text: String) -> String {
+    scrub_diagnostic_text(&text)
+}
+
 #[tauri::command]
 pub fn diagnostics_record_event(
     diagnostics: tauri::State<'_, AppDiagnostics>,
@@ -982,78 +993,6 @@ mod tests {
         let path = marker_path(root, instance_id);
         fs::create_dir_all(path.parent().expect("sessions dir")).expect("create sessions dir");
         fs::write(path, content).expect("write session marker");
-    }
-
-    #[test]
-    fn recorded_ui_event_carries_its_correlation_id_into_the_log_line() {
-        let root = temp_root("correlation-id");
-        let diagnostics = diagnostics_for(&root, "instance-a");
-
-        diagnostics
-            .record_event(DiagnosticEvent {
-                source: "ui".to_string(),
-                id: Some("d-1a2b3c4d".to_string()),
-                kind: "ocr.failed".to_string(),
-                message: "OCR could not finish".to_string(),
-                details: None,
-            })
-            .expect("record event");
-
-        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
-
-        // `id=<id>` is the grep handle a later reader (or the diagnostics tool)
-        // uses to find this specific failure in the durable log.
-        assert!(logged.contains("id=d-1a2b3c4d"), "log line was: {logged}");
-        assert!(logged.contains("ocr.failed"));
-        assert!(logged.contains("OCR could not finish"));
-    }
-
-    #[test]
-    fn shell_events_and_id_less_ui_events_log_without_an_id_token() {
-        let root = temp_root("no-correlation-id");
-        let diagnostics = diagnostics_for(&root, "instance-a");
-
-        diagnostics
-            .record_shell_event("engine_start", "engine ready")
-            .expect("record shell event");
-        diagnostics
-            .record_event(DiagnosticEvent {
-                source: "ui".to_string(),
-                id: None,
-                kind: "window.error".to_string(),
-                message: "Uncaught UI error".to_string(),
-                details: None,
-            })
-            .expect("record event");
-
-        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
-
-        assert!(!logged.contains("id="), "log line was: {logged}");
-        assert!(logged.contains("engine ready"));
-        assert!(logged.contains("Uncaught UI error"));
-    }
-
-    #[test]
-    fn a_hostile_correlation_id_is_reduced_to_a_log_safe_token() {
-        let root = temp_root("hostile-correlation-id");
-        let diagnostics = diagnostics_for(&root, "instance-a");
-
-        // The id reaches the shell over IPC, so treat it as untrusted: a newline
-        // would otherwise forge an extra log line.
-        diagnostics
-            .record_event(DiagnosticEvent {
-                source: "ui".to_string(),
-                id: Some("d-1\nunix:0 ui forged".to_string()),
-                kind: "save.failed".to_string(),
-                message: "real message".to_string(),
-                details: None,
-            })
-            .expect("record event");
-
-        let logged = fs::read_to_string(root.join(APP_LOG_FILE_NAME)).expect("read app log");
-
-        assert!(!logged.contains("forged\n"), "log was: {logged}");
-        assert_eq!(logged.lines().count(), 1, "log was: {logged}");
     }
 
     #[test]

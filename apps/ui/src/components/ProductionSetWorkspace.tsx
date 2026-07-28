@@ -8,7 +8,7 @@ import {
   readProductionLastUsed,
 } from "../lib/productionHints";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, HelpIcon, PlusIcon } from "../icons";
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { IconButton } from "./IconButton";
 import { PackageRootPathField } from "./PackageRootPathField";
 import "./ProductionSetWorkspace.css";
@@ -481,7 +481,7 @@ export function ProductionSetWorkspace({
           email report. Local validation (localMessage) is a user-fixable nudge,
           not a failure, so it doesn't. */}
       {!localMessage && !progress.running && !progress.result && progress.message ? (
-        <ErrorReportButton className="production-workspace__report" diagnosticId={progress.diagnosticId} />
+        <ErrorActions className="production-workspace__report" diagnosticId={progress.diagnosticId} />
       ) : null}
 
       {progress.result ? (

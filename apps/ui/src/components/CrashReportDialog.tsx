@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, ShieldCheckIcon } from "../icons";
 import { FloatingDialog } from "./FloatingDialog";
+import { buildDiagnosePrompt } from "../lib/diagnosePrompt";
+import type { DiagnosticEntry } from "../lib/diagnostics";
 import "./CrashReportDialog.css";
 
 const SUPPORT_EMAIL = "crash-reports@macrify.me";
@@ -89,6 +91,60 @@ export function CrashReportDialog({
     })();
   }, [isSaving, onSaveReport]);
 
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [promptCopyFailed, setPromptCopyFailed] = useState(false);
+
+  useEffect(() => {
+    if (!copiedPrompt) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setCopiedPrompt(false), COPIED_LABEL_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [copiedPrompt]);
+
+  useEffect(() => {
+    if (!promptCopyFailed) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setPromptCopyFailed(false), COPY_FAILED_LABEL_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [promptCopyFailed]);
+
+  /**
+   * Put a diagnose prompt for THIS crash on the clipboard.
+   *
+   * Built from the crash payload rather than the in-memory diagnostics ring: the
+   * payload is richer (panic signature, location, backtrace, log tail) and was
+   * already scrubbed on the Rust side, and the crash happened in a previous
+   * process so the ring is empty anyway.
+   */
+  const copyDiagnosePrompt = useCallback(() => {
+    if (!payload) {
+      return;
+    }
+    setPromptCopyFailed(false);
+
+    void (async () => {
+      try {
+        const text = await buildDiagnosePrompt({
+          diagnostic: crashPayloadAsDiagnostic(payload),
+          // The version that CRASHED, read from the payload — not the version
+          // running now, which may differ if the app updated in between, and not
+          // "unknown", which loses the main fact tying a crash to a release.
+          appVersion: crashedAppVersion(payload),
+          userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+        });
+        if (!navigator.clipboard?.writeText) {
+          throw new Error("clipboard unavailable");
+        }
+        await navigator.clipboard.writeText(text);
+        setCopiedPrompt(true);
+      } catch {
+        setPromptCopyFailed(true);
+      }
+    })();
+  }, [payload]);
+
   const copySupportEmail = useCallback(() => {
     setCopyFailed(false);
 
@@ -133,7 +189,8 @@ export function CrashReportDialog({
         </p>
         <p className="crash-report-dialog__copy">
           The easiest way: save a report and email it to us — no GitHub account
-          needed. You can also open it as a GitHub issue you submit yourself.
+          needed. You can also open it as a GitHub issue you submit yourself, or
+          hand the details to your own AI assistant to diagnose.
         </p>
         <div className="crash-report-dialog__included" aria-label="Report includes">
           <span>App version</span>
@@ -232,7 +289,32 @@ export function CrashReportDialog({
                 Not now
               </button>
             </div>
+            {/* Conditionally rendered, matching every other live region in this app —
+                an always-present empty one shows up in queries for [role="status"]. */}
+            {promptCopyFailed || copiedPrompt ? (
+              <p
+                className="crash-report-dialog__prompt-status"
+                role="status"
+                aria-live="polite"
+                data-tone={promptCopyFailed ? "danger" : undefined}
+              >
+                {promptCopyFailed
+                  ? "Couldn’t reach the clipboard — use “Save report to email” instead."
+                  : "Prompt copied. Paste it into your own AI assistant."}
+              </p>
+            ) : null}
             <div className="crash-report-dialog__send-row">
+              <button
+                type="button"
+                className="crash-report-dialog__secondary-button"
+                onClick={copyDiagnosePrompt}
+                data-copy-state={copiedPrompt ? "copied" : promptCopyFailed ? "failed" : undefined}
+                aria-label="Help diagnose this"
+              >
+                <span aria-hidden="true">
+                  {copiedPrompt ? "Copied — paste into your AI" : "Help diagnose this"}
+                </span>
+              </button>
               <button
                 type="button"
                 className="crash-report-dialog__secondary-button"
@@ -268,4 +350,37 @@ export function formatCrashReportPreview(payload: CrashReportPayload): string {
     "GitHub issue body",
     payload.body,
   ].join("\n");
+}
+
+/**
+ * Present a crash payload as a diagnostic entry so it can reuse the diagnose
+ * prompt builder. `id` is the envelope marker rather than a ring correlation id —
+ * the crash happened in a previous process, so there is no ring entry to point at,
+ * and the assistant is told to work from the pasted text.
+ */
+function crashPayloadAsDiagnostic(payload: CrashReportPayload): DiagnosticEntry {
+  return {
+    id: "previous-session-crash",
+    kind: "shell.crash",
+    message: payload.signature,
+    details: [
+      payload.panicLocation ? `panicLocation=${payload.panicLocation}` : null,
+      payload.backtrace,
+      payload.logTail,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    at: Date.now(),
+  };
+}
+
+/**
+ * The app version recorded in the crash payload.
+ *
+ * `build_crash_report_payload` writes it into the body as `App version: x.y.z`;
+ * there is no structured field for it. Parsing the body is the cheap read — the
+ * alternative is widening the IPC payload type for one string.
+ */
+function crashedAppVersion(payload: CrashReportPayload): string | null {
+  return /^App version:\s*(.+)$/mu.exec(payload.body)?.[1]?.trim() ?? null;
 }

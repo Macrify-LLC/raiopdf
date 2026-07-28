@@ -72,7 +72,7 @@ import { useBatesPrefix } from "../hooks/useBatesPrefix";
 import type { TextEditState } from "../hooks/useTextEdit";
 import { AccordionGroup } from "./AccordionGroup";
 import { EditTextStatusPanel } from "./EditTextStatusPanel";
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { IconButton } from "./IconButton";
 import { LoadingSun } from "./LoadingSun";
 import { Switch } from "./Switch";
@@ -643,7 +643,7 @@ function RedactionStatusPanel({
           message={state.message}
         />
         {state.phase === "error" ? (
-          <ErrorReportButton className="tool-panel__report" diagnosticId={state.diagnosticId} />
+          <ErrorActions className="tool-panel__report" diagnosticId={state.diagnosticId} compact />
         ) : null}
       </>
     );

@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { RpIconSprite } from "./icons/RpIcon";
 import { recordDiagnosticEvent } from "./lib/diagnostics";
 import "./styles.css";
@@ -33,7 +34,11 @@ async function mountApp(): Promise<void> {
   createRoot(root!).render(
     <StrictMode>
       <RpIconSprite />
-      <App />
+      {/* Outside App on purpose: a boundary cannot catch a throw from its own
+          subtree's parent, and App is where the render work happens. */}
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </StrictMode>,
   );
 }

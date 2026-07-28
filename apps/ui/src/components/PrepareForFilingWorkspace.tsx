@@ -22,7 +22,7 @@ import type { CourtProfile } from "../lib/filingPreferences";
 import type { PdfAConversionImpact } from "@raiopdf/engine-pdf-lib";
 import type { DocumentState } from "../hooks/useDocument";
 import { ArrowDownIcon, ArrowUpIcon, BoltIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "../icons";
-import { ErrorReportButton } from "./ErrorReportButton";
+import { ErrorActions } from "./ErrorActions";
 import { LoadingSun } from "./LoadingSun";
 import { LongProcessLoader, type LongProcessProgress, type LongProcessStep } from "./LongProcessLoader";
 import { PackageRootPathField } from "./PackageRootPathField";
@@ -94,6 +94,11 @@ export interface FilingPacketBuildInput {
 export interface FilingPacketProgress {
   running: boolean;
   message: string | null;
+  /**
+   * Correlation id of the failure shown here; null for a gate or nudge, which
+   * record nothing and so offer no report. See `DiagnosticEntry.id`.
+   */
+  diagnosticId?: string | null;
   result: {
     packageRoot: string;
     manifestPdf: string;
@@ -719,7 +724,7 @@ export const PrepareForFilingWorkspace = forwardRef<
             <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
             <p>{progress.message}</p>
             {progress.phase === "error" ? (
-              <ErrorReportButton className="filing-progress__report" diagnosticId={progress.diagnosticId} />
+              <ErrorActions className="filing-progress__report" diagnosticId={progress.diagnosticId} />
             ) : null}
           </div>
         ) : null}
@@ -985,6 +990,10 @@ function PacketBuilderPanel({
       ) : localMessage || progress.message ? (
         <p className="filing-card__status" role="status">{localMessage ?? progress.message}</p>
       ) : null}
+      {/* localMessage is user-fixable validation, so it carries no diagnostic. */}
+      {progress.running || localMessage ? null : (
+        <ErrorActions className="filing-progress__report" diagnosticId={progress.diagnosticId} />
+      )}
       {progress.result ? (
         <section className="filing-result" aria-label="Filing packet result">
           <div className="filing-result__header">

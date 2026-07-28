@@ -76,19 +76,35 @@ it may ask once whether you want to report the crash. Nothing is sent
 automatically: you can review a pre-filled GitHub issue before submitting it,
 or save a report file and send it yourself. The prompt can be turned off in
 Settings, and diagnostics files are saved to your computer unless you choose
-to share them.</p><h2 id="open-raio-to-ai-is-off-unless-you-turn-it-on">"Open Raio to AI" is off unless you turn it on</h2><p>RaioPDF has no AI of its own. There is an optional setting that lets <em>your</em> own
+to share them.</p><p>When something goes wrong, an error message may also offer <strong>Help diagnose
+this</strong>. That copies a written description of the problem to your clipboard so
+you can paste it into whichever AI assistant you already use. RaioPDF has no
+AI of its own and doesn't send the text anywhere — putting it on the clipboard
+is all it does, and whether it goes any further is up to you. Before it lands
+on the clipboard, RaioPDF removes file paths — including network-share paths —
+along with file names, email addresses, and number patterns that look like
+Social Security, phone, or account numbers. That removal recognises patterns
+rather than reading meaning, so a client or matter name written as ordinary words
+can still slip through — read the text before you paste it anywhere. See
+<a href="/help/report-a-problem.html">Report a problem</a>.</p><h2 id="open-raio-to-ai-is-off-unless-you-turn-it-on">"Open Raio to AI" is off unless you turn it on</h2><p>RaioPDF has no AI of its own. There is an optional setting that lets <em>your</em> own
 AI assistant use RaioPDF's tools. It's <strong>off</strong> by default, and even when you
 turn it on, it talks only to the AI program you connected — over a direct
 on-device channel, not the internet.</p><h2 id="the-one-thing-that-reaches-out">The one thing that reaches out</h2><p>Your documents never leave your machine. By default, the only reason RaioPDF
 connects to the internet at all is to check whether a newer version of the app
 has been released, from its official releases — and that's only ever about the
 app itself. Nothing about your files, or how you use them, is sent anywhere
-unless you specifically ask it to (see error reports above).</p></div>
+unless you specifically ask it to (see error reports above). The optional AI
+connector and <strong>Help diagnose this</strong> are both in that category: they act only
+when you choose, and neither sends anything on its own.</p></div>
         <div class="help-related" id="related"><h2>Related</h2><ul><li><a href="/help/getting-started.html">Getting started</a></li><li><a href="/help/make-searchable.html">Make Searchable (OCR)</a> — offline text recognition</li></ul></div>
         <nav class="help-pager" aria-label="More in this category">
           <a class="help-pager__link help-pager__link--prev" href="/help/getting-started.html">
             <span class="help-pager__eyebrow">← Previous</span>
             <span class="help-pager__title">Getting started</span>
+          </a>
+          <a class="help-pager__link help-pager__link--next" href="/help/report-a-problem.html">
+            <span class="help-pager__eyebrow">Next →</span>
+            <span class="help-pager__title">Report a problem</span>
           </a>
         </nav>
         </article>

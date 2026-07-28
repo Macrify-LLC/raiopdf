@@ -2564,6 +2564,7 @@ pub fn run() {
             sidecar::engine_status,
             sidecar::engine_stop,
             diagnostics::diagnostics_record_event,
+            diagnostics::diagnostics_scrub_text,
             diagnostics::diagnostics_export_dialog,
             diagnostics::crash_report_take_pending,
             diagnostics::crash_report_save_dialog,

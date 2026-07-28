@@ -1,0 +1,78 @@
+.app-error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-5);
+  /* --chrome is the app's page ground; a white panel on white would leave the
+     card separated only by a 1px border. */
+  background: var(--chrome);
+}
+
+.app-error-boundary__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 46ch;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--panel);
+  text-align: center;
+}
+
+.app-error-boundary__heading {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.app-error-boundary__heading:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.app-error-boundary__body {
+  margin: 0;
+  color: var(--body);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.app-error-boundary__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.app-error-boundary__reload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-control);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1;
+  cursor: default;
+}
+
+.app-error-boundary__reload:hover {
+  background: var(--primary-deep);
+}
+
+.app-error-boundary__reload:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

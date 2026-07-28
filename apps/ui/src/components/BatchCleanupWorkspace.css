@@ -389,3 +389,8 @@ label.batch-workspace__checkbox-row {
     align-items: flex-start;
   }
 }
+
+.batch-workspace__report {
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}

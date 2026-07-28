@@ -596,3 +596,8 @@
     stroke-dashoffset: 0;
   }
 }
+
+.pdf-security-panel__report {
+  align-items: flex-start;
+  margin-top: var(--space-1);
+}

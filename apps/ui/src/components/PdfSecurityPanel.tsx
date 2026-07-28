@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { ErrorActions } from "./ErrorActions";
+import { logWorkflowFailure } from "../lib/diagnostics";
 import type { FileGrant } from "../lib/filePort";
 import { LoadingSun } from "./LoadingSun";
 import "./PdfSecurityPanel.css";
@@ -43,7 +45,19 @@ export interface CreateProtectedCopyRequest {
 export type PrepareProtectedCopyResult =
   | { status: "ready"; displayName: string }
   | { status: "cancelled" }
-  | { status: "error"; message: string };
+  | {
+      status: "error";
+      message: string;
+      /**
+       * Correlation id when this was a real fault, null when it was a gate.
+       *
+       * `status: "error"` carries both — "this PDF is signed" and "the OS refused
+       * the output location" arrive the same way. Only the caught-exception paths
+       * record, and they record the raw error, because `message` here has already
+       * been mapped to friendly copy and no longer names the cause.
+       */
+      diagnosticId?: string | null;
+    };
 
 export type PdfPasswordValidation =
   | { valid: true; error: null }
@@ -92,7 +106,12 @@ export type CreateProtectedCopyResult =
       allowCopying: boolean;
     }
   | { status: "cancelled" }
-  | { status: "error"; message: string };
+  | {
+      status: "error";
+      message: string;
+      /** See `PrepareProtectedCopyResult` — null for a gate, set for a real fault. */
+      diagnosticId?: string | null;
+    };
 
 export interface PdfSecurityPanelProps {
   documentKey: string | null;
@@ -132,6 +151,25 @@ export function PdfSecurityPanel({
   const [preparingOutput, setPreparingOutput] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
+  /** Correlation id for `operationError`, when it came from a real failure rather
+   *  than a validation gate. Cleared together with the message. */
+  const [operationErrorDiagnosticId, setOperationErrorDiagnosticId] = useState<string | null>(null);
+  /**
+   * Show an operation failure, message and correlation id together.
+   *
+   * `diagnosticId` defaults to null so a path that hasn't been considered offers no
+   * report rather than inheriting a stale id from an earlier failure.
+   */
+  /** Clear both halves together — a message without its id, or vice versa, is the
+   *  drift this pairing exists to prevent. */
+  const clearOperationFailure = useCallback(() => {
+    setOperationError(null);
+    setOperationErrorDiagnosticId(null);
+  }, []);
+  const showOperationFailure = useCallback((message: string, diagnosticId: string | null = null) => {
+    setOperationError(message);
+    setOperationErrorDiagnosticId(diagnosticId);
+  }, []);
   const [success, setSuccess] = useState<Extract<CreateProtectedCopyResult, { status: "success" }> | null>(null);
   const successTitleRef = useRef<HTMLHeadingElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
@@ -150,7 +188,7 @@ export function PdfSecurityPanel({
     setPreparedOutputName(null);
     setPreparingOutput(false);
     setSubmitting(false);
-    setOperationError(null);
+    clearOperationFailure();
     setSuccess(null);
   }, [documentKey]);
 
@@ -166,7 +204,7 @@ export function PdfSecurityPanel({
       setPreparedOutputName(null);
       setPreparingOutput(false);
       setSubmitting(false);
-      setOperationError(null);
+      clearOperationFailure();
       operationRunIdRef.current += 1;
     }
 
@@ -214,7 +252,7 @@ export function PdfSecurityPanel({
     }
 
     setPreparingOutput(true);
-    setOperationError(null);
+    clearOperationFailure();
     const runDocumentKey = documentKey;
     const runId = operationRunIdRef.current + 1;
     operationRunIdRef.current = runId;
@@ -233,17 +271,22 @@ export function PdfSecurityPanel({
         setPreparedOutputName(result.displayName);
       } else if (result.status === "error") {
         setPreparedOutputName(null);
-        setOperationError(result.message);
+        // The id comes from the result: App records it where the raw exception is
+        // still in hand, and leaves it null for the gates that share this status.
+        showOperationFailure(result.message, result.diagnosticId ?? null);
       } else {
         setPreparedOutputName(null);
       }
-    } catch {
+    } catch (error: unknown) {
       if (
         runDocumentKey === currentDocumentKeyRef.current
         && runId === operationRunIdRef.current
       ) {
         setPreparedOutputName(null);
-        setOperationError("RaioPDF could not choose an output location.");
+        showOperationFailure(
+          "RaioPDF could not choose an output location.",
+          logWorkflowFailure("pdf-security.choose-output-failed", error),
+        );
       }
     } finally {
       if (runId === operationRunIdRef.current) {
@@ -259,7 +302,7 @@ export function PdfSecurityPanel({
     setPassword("");
     setConfirmation("");
     setPasswordsVisible(false);
-    setOperationError(null);
+    clearOperationFailure();
     setPreparingOutput(false);
     setSubmitting(false);
   }
@@ -285,7 +328,7 @@ export function PdfSecurityPanel({
     }
 
     setSubmitting(true);
-    setOperationError(null);
+    clearOperationFailure();
     const runDocumentKey = documentKey;
     const runId = operationRunIdRef.current + 1;
     operationRunIdRef.current = runId;
@@ -312,13 +355,13 @@ export function PdfSecurityPanel({
         setPasswordsVisible(false);
         setPreparedOutputName(null);
       } else {
-        setOperationError(result.message);
+        showOperationFailure(result.message, result.diagnosticId ?? null);
         setPassword("");
         setConfirmation("");
         setPasswordsVisible(false);
         setPreparedOutputName(null);
       }
-    } catch {
+    } catch (error: unknown) {
       if (
         runDocumentKey === currentDocumentKeyRef.current
         && runId === operationRunIdRef.current
@@ -327,7 +370,10 @@ export function PdfSecurityPanel({
         setConfirmation("");
         setPasswordsVisible(false);
         setPreparedOutputName(null);
-        setOperationError("RaioPDF could not create the protected copy.");
+        showOperationFailure(
+          "RaioPDF could not create the protected copy.",
+          logWorkflowFailure("pdf-security.protect-failed", error),
+        );
       }
     } finally {
       if (runId === operationRunIdRef.current) {
@@ -464,9 +510,16 @@ export function PdfSecurityPanel({
                     <p>No password is requested until the save location is ready.</p>
                   </div>
                   {operationError ? (
-                    <p className="pdf-security-panel__operation-error" role="alert">
-                      {operationError}
-                    </p>
+                    <>
+                      <p className="pdf-security-panel__operation-error" role="alert">
+                        {operationError}
+                      </p>
+                      <ErrorActions
+                        className="pdf-security-panel__report"
+                        diagnosticId={operationErrorDiagnosticId}
+                        compact
+                      />
+                    </>
                   ) : null}
                   <div className="pdf-security-panel__actions">
                     <button
@@ -556,9 +609,16 @@ export function PdfSecurityPanel({
                   ) : null}
                 </div>
                 {operationError ? (
-                  <p className="pdf-security-panel__operation-error" role="alert">
-                    {operationError}
-                  </p>
+                  <>
+                    <p className="pdf-security-panel__operation-error" role="alert">
+                      {operationError}
+                    </p>
+                    <ErrorActions
+                      className="pdf-security-panel__report"
+                      diagnosticId={operationErrorDiagnosticId}
+                      compact
+                    />
+                  </>
                 ) : null}
                 <fieldset className="pdf-security-panel__permissions">
                   <legend>Permissions</legend>

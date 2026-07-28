@@ -12,6 +12,8 @@ import {
 } from "../lib/printPipeline";
 import { runtimePlatform } from "../lib/runtimePlatform";
 import { FloatingDialog } from "./FloatingDialog";
+import { ErrorActions } from "./ErrorActions";
+import { logWorkflowFailure } from "../lib/diagnostics";
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import "./PrintDialog.css";
 
@@ -108,6 +110,7 @@ export function PrintDialog({
 }) {
   const [phase, setPhase] = useState<"probing" | "unavailable" | "ready">("probing");
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
+  const [unavailableDiagnosticId, setUnavailableDiagnosticId] = useState<string | null>(null);
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printerName, setPrinterName] = useState("");
   const [pagesInput, setPagesInput] = useState("");
@@ -154,6 +157,10 @@ export function PrintDialog({
           return;
         }
         setUnavailableReason(pathOpErrorMessage(error, "Printers could not be listed."));
+        // Failing to enumerate printers is an OS/driver integration problem, which
+        // is exactly the class worth a report — unlike the page-range validation
+        // messages elsewhere in this dialog.
+        setUnavailableDiagnosticId(logWorkflowFailure("print.list-printers-failed", error));
         setPhase("unavailable");
       });
 
@@ -217,11 +224,16 @@ export function PrintDialog({
 
         {phase === "unavailable" ? (
           <>
-            <p className="tool-panel__note">{unavailableReason}</p>
+            <p className="tool-panel__note" role="alert">{unavailableReason}</p>
             <p className="tool-panel__note">
               A page range can still be extracted and printed as a small
               document instead.
             </p>
+            <ErrorActions
+              className="print-dialog__report"
+              diagnosticId={unavailableDiagnosticId}
+              compact
+            />
             <button
               type="button"
               className="tool-panel__primary-button"

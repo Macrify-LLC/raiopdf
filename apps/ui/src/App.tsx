@@ -1768,24 +1768,27 @@ export function App() {
       // at all -- so a partial failure left no trace in the log. The id isn't
       // threaded into state: this surface has no report action to consume it yet.
       const failedFiles = result.files.filter((file) => file.status === "failed");
-      if (failedFiles.length > 0) {
-        recordDiagnosticEvent(
-          "batch.files-failed",
-          `${failedFiles.length} of ${result.files.length} file(s) failed during batch cleanup`,
-          failedFiles.slice(0, 5).map((file) => file.reason),
-        );
-      }
       setBatchCleanupProgress({
         running: false,
         message: batchCleanupCompletionMessage(result.files),
         result,
+        // A resolved run can still contain failed files; that is reportable even
+        // though the run itself didn't throw.
+        diagnosticId: failedFiles.length > 0
+          ? recordDiagnosticEvent(
+              "batch.files-failed",
+              `${failedFiles.length} of ${result.files.length} file(s) failed during batch cleanup`,
+              failedFiles.slice(0, 5).map((file) => file.reason),
+            )
+          : null,
       });
     } catch (error) {
-      logWorkflowFailure("batch.failed", error);
+      const diagnosticId = logWorkflowFailure("batch.failed", error);
       const message = formatWorkflowError(error, "Batch cleanup could not be completed.");
       setBatchCleanupProgress({
         running: false,
         message,
+        diagnosticId,
         result: null,
       });
     }
@@ -1841,15 +1844,11 @@ export function App() {
       const message = error instanceof Error
         ? error.message
         : "Filing packet could not be built.";
-      // Its sibling `filing.failed` has always recorded; this path never did, so
-      // a packet build could fail leaving nothing in the log. The id isn't
-      // threaded into FilingPacketProgress yet -- that happens when this surface
-      // gains a report action.
-      logWorkflowFailure("packet.failed", error);
       setFilingPacketProgress({
         running: false,
         message,
         result: null,
+        diagnosticId: logWorkflowFailure("packet.failed", error),
       });
     }
   }, [filingPack.id, filingPack.maxEnvelopeBytes, filingPack.maxFileBytes]);
@@ -7989,6 +7988,10 @@ export function App() {
         message: error instanceof PathOpsError && error.code === "INVALID_INPUT"
           ? error.message
           : pathOpErrorMessage(error, "RaioPDF could not prepare that output location."),
+        // Recorded here, where the raw error still exists — the mapped message above
+        // no longer carries the OS/engine cause a report needs. The gates that also
+        // return `status: "error"` deliberately record nothing.
+        diagnosticId: logWorkflowFailure("pdf-security.prepare-output-failed", error),
       };
     } finally {
       if (targetToken) {
@@ -8193,6 +8196,9 @@ export function App() {
           error,
           "RaioPDF could not create and verify the protected copy. No unverified output was kept.",
         ),
+        // Same reasoning as the prepare path: record where the raw error still
+        // exists, since the mapped message no longer names the cause.
+        diagnosticId: logWorkflowFailure("pdf-security.protect-failed", error),
       };
     } finally {
       stopProgressListener?.();

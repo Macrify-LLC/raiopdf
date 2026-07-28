@@ -9,3 +9,8 @@
   flex: 1;
   margin: 0;
 }
+
+.print-dialog__report {
+  align-items: flex-start;
+  margin-top: var(--space-1);
+}

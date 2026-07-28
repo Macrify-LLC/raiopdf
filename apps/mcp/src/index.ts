@@ -189,7 +189,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     {
       title: "RaioPDF diagnostics",
       description:
-        "Reads RaioPDF's own recent diagnostics — app and engine log tails, version and platform — already scrubbed of file paths, file names and email addresses. Use this instead of reading RaioPDF's log files directly: the raw logs are not scrubbed. Pass the correlation id from an error message (e.g. d-1a2b3c4d) to locate a specific failure.",
+        "Reads RaioPDF's own recent diagnostics — app, desktop-engine and MCP-engine-host log tails, version and platform — already scrubbed of file paths, file names and email addresses. Use this instead of reading RaioPDF's log files directly: the raw logs are not scrubbed. Pass the correlation id from an error message (e.g. d-1a2b3c4d) to locate a specific failure.",
       inputSchema: diagnosticsInputSchema,
       outputSchema: diagnosticsOutputSchema,
       annotations: {

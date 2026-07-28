@@ -18,6 +18,7 @@ const ENGINE_HOST_DATA_DIR_NAME: &str = "engine-host";
 const APP_DATA_DIR_ENV: &str = "RAIOPDF_APP_DATA_DIR";
 const LEGACY_APP_DATA_DIR_ENV: &str = "RAIOPDF_ENGINE_HOST_APP_DATA_DIR";
 const RESOURCE_DIR_ENV: &str = "RAIOPDF_ENGINE_RESOURCE_DIR";
+const ENGINE_HOST_LOG_LABEL: &str = "engine-host/engine.log";
 
 static SHUTDOWN_SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
 
@@ -95,13 +96,11 @@ fn print_diagnostics(args: &[String]) -> Result<(), String> {
         .and_then(|index| args.get(index + 1))
         .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "));
 
-    let payload = diagnostics_core::collect_diagnostics_payload(
+    let payload = collect_engine_host_diagnostics(
         &shell_app_data_dir(),
+        &app_data_dir(),
         env!("CARGO_PKG_VERSION"),
         reference,
-        // Names come from the crates that WRITE these files, so a rename can't
-        // leave the reader silently reporting "no log found".
-        &[diagnostics_core::APP_LOG_FILE_NAME, ENGINE_LOG_FILE_NAME],
     );
     let line = serde_json::to_string(&payload)
         .map_err(|error| format!("failed to encode diagnostics payload: {error}"))?;
@@ -109,6 +108,43 @@ fn print_diagnostics(args: &[String]) -> Result<(), String> {
     io::stdout()
         .flush()
         .map_err(|error| format!("failed to flush diagnostics payload: {error}"))
+}
+
+/// Collect both desktop-shell diagnostics and this host's separate engine log.
+///
+/// The default host directory is nested below the shell directory. Reading only
+/// the shell directory finds the desktop engine log but misses the MCP startup
+/// failure that prompted the diagnostics request.
+fn collect_engine_host_diagnostics(
+    shell_app_data_dir: &Path,
+    engine_host_app_data_dir: &Path,
+    app_version: &str,
+    reference: Option<String>,
+) -> diagnostics_core::DiagnosticsPayload {
+    let mut payload = diagnostics_core::collect_diagnostics_payload(
+        shell_app_data_dir,
+        app_version,
+        reference,
+        // Names come from the crates that WRITE these files, so a rename can't
+        // leave the reader silently reporting "no log found".
+        &[diagnostics_core::APP_LOG_FILE_NAME, ENGINE_LOG_FILE_NAME],
+    );
+
+    // An override may intentionally place the host and shell logs together. In
+    // that case engine.log is already present and adding it again would only
+    // duplicate the same scrubbed content under a different label.
+    if engine_host_app_data_dir != shell_app_data_dir {
+        let mut host_log = diagnostics_core::collect_diagnostics_log(
+            engine_host_app_data_dir,
+            ENGINE_LOG_FILE_NAME,
+        );
+        // A stable logical label distinguishes the two engine logs without
+        // exposing either machine-specific directory.
+        host_log.name = ENGINE_HOST_LOG_LABEL.to_string();
+        payload.logs.push(host_log);
+    }
+
+    payload
 }
 
 /// The directory the DESKTOP SHELL writes its logs to.
@@ -295,6 +331,16 @@ fn install_signal_handlers() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("raiopdf-engine-host-{name}-{unique}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
     /// The walk-up is the one piece of this that is easy to get silently wrong: a
     /// diagnostics reader pointed at its own directory returns an empty payload and
     /// says nothing about why. It had no test in either language.
@@ -325,5 +371,81 @@ mod tests {
         let root = PathBuf::from("/tmp/raiopdf-test-root").join(APP_DATA_DIR_NAME);
 
         assert_eq!(shell_dir_for_override(&root), root);
+    }
+
+    #[test]
+    fn diagnostics_include_the_nested_engine_host_log() {
+        let shell_dir = temp_dir("nested-diagnostics");
+        let host_dir = shell_dir.join(ENGINE_HOST_DATA_DIR_NAME);
+        std::fs::create_dir_all(&host_dir).expect("create host dir");
+        std::fs::write(
+            shell_dir.join(diagnostics_core::APP_LOG_FILE_NAME),
+            "unix:1770000000 ui shell event\n",
+        )
+        .expect("write app log");
+        std::fs::write(
+            shell_dir.join(ENGINE_LOG_FILE_NAME),
+            "unix:1770000001 engine desktop engine event\n",
+        )
+        .expect("write desktop engine log");
+        std::fs::write(
+            host_dir.join(ENGINE_LOG_FILE_NAME),
+            "unix:1770000002 engine MCP_STARTUP_FAILURE\n",
+        )
+        .expect("write host engine log");
+
+        let payload = collect_engine_host_diagnostics(
+            &shell_dir,
+            &host_dir,
+            "0.1.5",
+            Some("d-1a2b3c4d".to_string()),
+        );
+
+        assert_eq!(
+            payload
+                .logs
+                .iter()
+                .map(|log| log.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                diagnostics_core::APP_LOG_FILE_NAME,
+                ENGINE_LOG_FILE_NAME,
+                ENGINE_HOST_LOG_LABEL,
+            ]
+        );
+        let host_log = payload
+            .logs
+            .iter()
+            .find(|log| log.name == ENGINE_HOST_LOG_LABEL)
+            .expect("engine-host log");
+        assert!(host_log.present);
+        assert!(host_log.tail.contains("MCP_STARTUP_FAILURE"));
+        assert_eq!(payload.reference.as_deref(), Some("d-1a2b3c4d"));
+
+        std::fs::remove_dir_all(shell_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn diagnostics_do_not_duplicate_a_shared_engine_log_directory() {
+        let shared_dir = temp_dir("shared-diagnostics");
+        std::fs::write(
+            shared_dir.join(ENGINE_LOG_FILE_NAME),
+            "unix:1770000002 engine shared event\n",
+        )
+        .expect("write shared engine log");
+
+        let payload = collect_engine_host_diagnostics(&shared_dir, &shared_dir, "0.1.5", None);
+
+        assert_eq!(payload.logs.len(), 2);
+        assert_eq!(
+            payload
+                .logs
+                .iter()
+                .filter(|log| log.name == ENGINE_LOG_FILE_NAME)
+                .count(),
+            1
+        );
+
+        std::fs::remove_dir_all(shared_dir).expect("remove temp dir");
     }
 }

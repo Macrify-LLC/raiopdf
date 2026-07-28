@@ -216,7 +216,9 @@ describe("useDocument streamed mode", () => {
     });
 
     expect(rotated).toBe(false);
-    expect(getHook().document.error).toBe(STREAMED_DOCUMENT_GATE_MESSAGE);
+    expect(getHook().document.error?.message).toBe(STREAMED_DOCUMENT_GATE_MESSAGE);
+      // A gate, not a fault: no diagnostic, so no report affordance.
+      expect(getHook().document.error?.diagnosticId).toBeNull();
   });
 
   it("memory-mode commits bump generation, and replaceBytes goes stale on a generation mismatch", async () => {

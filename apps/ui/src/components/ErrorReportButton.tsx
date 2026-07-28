@@ -1,14 +1,8 @@
 import { useCallback, useState } from "react";
 import { MailIcon } from "../icons";
-import { getLastDiagnostic } from "../lib/diagnostics";
+import { getDiagnosticById } from "../lib/diagnostics";
 import { buildErrorReportMailto, ERROR_REPORT_EMAIL } from "../lib/errorReportMailto";
 import "./ErrorReportButton.css";
-
-// How recent a captured diagnostic must be for `requireDiagnostic` to show the
-// button. Long enough to cover a user reading an error and deciding to report
-// it; short enough that a much-earlier failure doesn't attach to an unrelated
-// message shown later on the same shared surface.
-const DEFAULT_DIAGNOSTIC_MAX_AGE_MS = 5 * 60 * 1000;
 
 interface ErrorReportButtonProps {
   /** Extra class for context-specific placement (e.g. inside a dialog footer). */
@@ -22,35 +16,46 @@ interface ErrorReportButtonProps {
    */
   showHint?: boolean;
   /**
-   * Only render when a recent diagnostic exists. Use on shared surfaces that
-   * also show non-failure messages (e.g. the canvas error chip, which validation
-   * nudges reuse) so the report button appears for real failures only -- those
-   * are the ones that recorded a diagnostic. Off by default: dedicated failure
-   * surfaces (a failure-only dialog) always want the button.
+   * Correlation id of the failure being displayed, from the state that owns the
+   * message on screen.
+   *
+   * The button renders only when this resolves to a retained diagnostic, which
+   * is what makes the affordance correct on two fronts. A surface showing a gate
+   * or a nudge passes null and gets no button. A surface showing a real failure
+   * passes its own id and reports *that* failure.
+   *
+   * This replaced an earlier "use whatever diagnostic was recorded most
+   * recently" behaviour, which could attach an unrelated error -- e.g. the OCR
+   * dialog's missing-toolchain gate deliberately records nothing, so the report
+   * it offered described some earlier, different failure.
    */
-  requireDiagnostic?: boolean;
+  diagnosticId?: string | null | undefined;
 }
 
 /**
- * A small, self-contained "Email a report" action for the error surfaces. On
- * click it drafts a `mailto:` to the crash-reports alias, prefilled with the
- * most recent captured error plus app version and system info, and opens the
- * user's own mail client. Nothing is sent automatically -- the user reviews and
- * sends the draft themselves, so no data leaves the machine on its own.
+ * A small "Email a report" action for the error surfaces. On click it drafts a
+ * `mailto:` to the crash-reports alias, prefilled with the diagnostic named by
+ * `diagnosticId` plus app version and system info, and opens the user's own mail
+ * client. Nothing is sent automatically -- the user reviews and sends the draft
+ * themselves, so no data leaves the machine on its own.
+ *
+ * Renders nothing unless `diagnosticId` resolves, so a surface that shows both
+ * failures and gates gets the button only for the failures.
  */
 export function ErrorReportButton({
   className,
   label = "Email a report",
   showHint = true,
-  requireDiagnostic = false,
+  diagnosticId = null,
 }: ErrorReportButtonProps) {
   const [failed, setFailed] = useState(false);
+  const diagnostic = diagnosticId ? getDiagnosticById(diagnosticId) : null;
 
   const handleClick = useCallback(() => {
     void (async () => {
       setFailed(false);
       const mailto = buildErrorReportMailto({
-        diagnostic: getLastDiagnostic(),
+        diagnostic,
         appVersion: await readAppVersion(),
         userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
       });
@@ -61,13 +66,12 @@ export function ErrorReportButton({
         setFailed(true);
       }
     })();
-  }, []);
+  }, [diagnostic]);
 
-  if (requireDiagnostic) {
-    const last = getLastDiagnostic();
-    if (!last || Date.now() - last.at > DEFAULT_DIAGNOSTIC_MAX_AGE_MS) {
-      return null;
-    }
+  // No resolvable diagnostic means there is nothing to report: either this
+  // message is a gate, or the entry has aged out of the ring buffer.
+  if (!diagnostic) {
+    return null;
   }
 
   return (

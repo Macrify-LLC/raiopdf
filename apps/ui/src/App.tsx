@@ -143,6 +143,7 @@ import {
   type OpenFileResult,
   type ReplaceBytesResult,
   type SignatureUnlockPrompt,
+  reopenFailureDiagnosticId,
 } from "./hooks/useDocument";
 import { useDocumentSearch } from "./hooks/useDocumentSearch";
 import { useTextEdit } from "./hooks/useTextEdit";
@@ -270,6 +271,7 @@ import {
 } from "./lib/protectedPdfResolver";
 import { formatWorkflowError } from "./lib/userMessages";
 import { logWorkflowFailure, recordDiagnosticEvent } from "./lib/diagnostics";
+import { batchCleanupCompletionMessage } from "./lib/batchCleanupSummary";
 import {
   aggregateOutputReports,
   runFilingOutputPreflights,
@@ -389,6 +391,11 @@ export type OcrPhase =
 export interface OcrUiState {
   phase: OcrPhase;
   message: string | null;
+  /**
+   * Correlation id of the failure shown here; null for a gate or nudge, which
+   * record nothing and so offer no report. See `DiagnosticEntry.id`.
+   */
+  diagnosticId?: string | null;
   progress?: OcrProgressEvent | null;
   /**
    * Severity of a terminal "done" result. A clean rebuild is "ok" (success);
@@ -692,6 +699,35 @@ export function App() {
     markDirty,
     markClean,
   } = useDocument({ protectedPdf });
+  /**
+   * Show a document-level failure AND record its raw cause in one call.
+   *
+   * Most failure paths here map the raw error to friendly copy
+   * (`pathOpErrorMessage`, `getPdfLoadErrorMessage`) before showing it, which
+   * throws away the only text that explains what actually broke. Going through
+   * this helper means the mapped message and the recorded cause are always
+   * produced together, so a report surface can describe the failure the user is
+   * looking at rather than whichever failure happened most recently.
+   *
+   * Use plain `setError` for gates and nudges ("Open a PDF first") -- those have
+   * no cause worth recording, and leaving them unlabelled is what correctly
+   * suppresses a report affordance.
+   */
+  const setErrorWithDiagnostic = useCallback((
+    kind: string,
+    error: unknown,
+    message: string,
+  ) => {
+    setError(message, logWorkflowFailure(kind, error));
+  }, [setError]);
+  /**
+   * `setErrorWithDiagnostic` for the dominant case: a path-ops failure whose
+   * message comes from `pathOpErrorMessage`. Saves passing `error` twice at every
+   * call site.
+   */
+  const setPathOpError = useCallback((kind: string, error: unknown, fallback: string) => {
+    setErrorWithDiagnostic(kind, error, pathOpErrorMessage(error, fallback));
+  }, [setErrorWithDiagnostic]);
   const answerSignatureUnlockPrompt = useCallback((confirmed: boolean) => {
     setSignatureUnlockPrompt((current) => {
       current?.resolve(confirmed);
@@ -917,6 +953,27 @@ export function App() {
   const [redactionPhase, setRedactionPhase] =
     useState<RedactionPanelState["phase"]>("idle");
   const [redactionMessage, setRedactionMessage] = useState<string | null>(null);
+  /**
+   * The correlation id for the redaction panel's current failure.
+   *
+   * Only ever written by {@link setRedactionFailure}, which is the sole entry into
+   * the error phase, and cleared on every other phase transition below -- so it
+   * can never outlive the message it belongs to.
+   */
+  const [redactionDiagnosticId, setRedactionDiagnosticId] = useState<string | null>(null);
+  /**
+   * Enter the redaction error phase, setting the message and its correlation id
+   * in one call.
+   *
+   * `diagnosticId` defaults to null so the many gate paths here ("Open a PDF
+   * first", "mark an area first", desktop-only) cannot inherit a stale id from an
+   * earlier real failure -- they simply offer no report.
+   */
+  const setRedactionFailure = useCallback((message: string, diagnosticId: string | null = null) => {
+    setRedactionPhase("error");
+    setRedactionMessage(message);
+    setRedactionDiagnosticId(diagnosticId);
+  }, []);
   const [redactionSearchOpen, setRedactionSearchOpen] = useState(false);
   const [redactionSearchText, setRedactionSearchText] = useState("");
   // Redaction mode bar's Draw box / Select text sub-mode toggle. "draw" is
@@ -1065,7 +1122,7 @@ export function App() {
           }
           // Only surface against the document that started the print.
           if (documentGenerationRef.current === sourceGeneration) {
-            setError(pathOpErrorMessage(error, "The document could not be printed."));
+            setPathOpError("print.failed", error, "The document could not be printed.");
           }
         })
         .finally(() => {
@@ -1664,12 +1721,13 @@ export function App() {
         result,
       });
     } catch (error) {
-      logWorkflowFailure("production.failed", error);
+      const diagnosticId = logWorkflowFailure("production.failed", error);
       const message = formatWorkflowError(error, "Production package could not be built.");
       setProductionProgress({
         running: false,
         message,
         result: null,
+        diagnosticId,
       });
     }
   }, []);
@@ -1706,6 +1764,17 @@ export function App() {
         operations: input.operations,
       });
 
+      // A resolved run can still contain failed files, and that recorded nothing
+      // at all -- so a partial failure left no trace in the log. The id isn't
+      // threaded into state: this surface has no report action to consume it yet.
+      const failedFiles = result.files.filter((file) => file.status === "failed");
+      if (failedFiles.length > 0) {
+        recordDiagnosticEvent(
+          "batch.files-failed",
+          `${failedFiles.length} of ${result.files.length} file(s) failed during batch cleanup`,
+          failedFiles.slice(0, 5).map((file) => file.reason),
+        );
+      }
       setBatchCleanupProgress({
         running: false,
         message: batchCleanupCompletionMessage(result.files),
@@ -1772,6 +1841,11 @@ export function App() {
       const message = error instanceof Error
         ? error.message
         : "Filing packet could not be built.";
+      // Its sibling `filing.failed` has always recorded; this path never did, so
+      // a packet build could fail leaving nothing in the log. The id isn't
+      // threaded into FilingPacketProgress yet -- that happens when this surface
+      // gains a report action.
+      logWorkflowFailure("packet.failed", error);
       setFilingPacketProgress({
         running: false,
         message,
@@ -1839,6 +1913,7 @@ export function App() {
     exitTextEditMode();
     setTextEditAnnotationPrompt(null);
     setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(null);
     setRedactionSearchOpen(false);
     setRedactionSearchText("");
@@ -2084,7 +2159,7 @@ export function App() {
         protectedSourceGrant?: FileGrant | null;
         inheritProtection?: boolean;
       } = {},
-    ) => {
+    ): Promise<OpenFileResult> => {
       const inheritProtection = options.inheritProtection ?? !options.openInNewTab;
       const protectionSource = options.protectionSource ?? (
         inheritProtection ? document.protectionSource ?? undefined : undefined
@@ -2248,7 +2323,7 @@ export function App() {
             return;
           }
 
-          setError(getPdfLoadErrorMessage(error));
+          setErrorWithDiagnostic("pdf.load-failed", error, getPdfLoadErrorMessage(error));
         });
     } else {
       // Streamed open [R1-4]: pdf.js reads the file through a range
@@ -2808,6 +2883,7 @@ export function App() {
         setFilingProgress({
           phase: "error",
           message: "RaioPDF could not prepare this dropped PDF for filing.",
+          diagnosticId: logWorkflowFailure("filing.dropped-prepare-failed", error),
         });
       })
       .finally(() => {
@@ -3177,6 +3253,7 @@ export function App() {
             setOcrState({
               phase: "error",
               message: verification.message,
+              diagnosticId: recordDiagnosticEvent("ocr.verification-failed", verification.message),
             });
             return;
           }
@@ -3205,6 +3282,7 @@ export function App() {
                 message: reopened.status === "failed"
                   ? reopened.error
                   : "OCR finished, but the result could not be reopened. The document was left unchanged.",
+                diagnosticId: reopenFailureDiagnosticId(reopened),
               });
             } else {
               resetOcrUiForStaleRun();
@@ -3239,6 +3317,7 @@ export function App() {
           setOcrState({
             phase: "error",
             message: pathOpErrorMessage(error, "OCR could not finish. The document was left unchanged."),
+            diagnosticId: logWorkflowFailure("ocr.failed", error),
           });
         } finally {
           unlisten?.();
@@ -3373,6 +3452,10 @@ export function App() {
           setOcrState({
             phase: "error",
             message: workflowResult.verification.message,
+            diagnosticId: recordDiagnosticEvent(
+              "ocr.verification-failed",
+              workflowResult.verification.message,
+            ),
           });
           return;
         }
@@ -3454,9 +3537,8 @@ export function App() {
         setOcrState({
           phase: "error",
           message,
+          diagnosticId: logWorkflowFailure("ocr.failed", error),
         });
-
-        logWorkflowFailure("ocr.failed", error);
       })
       .finally(() => {
         clearBusyGuard();
@@ -3769,11 +3851,13 @@ export function App() {
             }
 
             setPasswordPrompt(null);
-            setError(pathOpErrorMessage(error, "This PDF could not be unlocked. Try again in a moment."));
-            void recordDiagnosticEvent(
-              "password.unlock-failed",
-              "Removing PDF encryption by grant failed",
-              [error instanceof Error ? error.message : String(error)],
+            setError(
+              pathOpErrorMessage(error, "This PDF could not be unlocked. Try again in a moment."),
+              recordDiagnosticEvent(
+                "password.unlock-failed",
+                "Removing PDF encryption by grant failed",
+                [error instanceof Error ? error.message : String(error)],
+              ),
             );
           });
         return;
@@ -3849,11 +3933,11 @@ export function App() {
           setPasswordPrompt(null);
           setError(
             "The password was accepted, but RaioPDF could not finish opening this PDF. It may use an unusual encryption scheme.",
-          );
-          void recordDiagnosticEvent(
-            "password.unlock-reopen-failed",
-            "Decrypted PDF bytes failed to reopen",
-            [result.status === "failed" ? result.error : null],
+            recordDiagnosticEvent(
+              "password.unlock-reopen-failed",
+              "Decrypted PDF bytes failed to reopen",
+              [result.status === "failed" ? result.error : null],
+            ),
           );
         })
         .catch((error: unknown) => {
@@ -3871,18 +3955,23 @@ export function App() {
           }
 
           setPasswordPrompt(null);
+          // An engine-bridge capability gap is a gate, not a fault: it records
+          // nothing and so must not offer a report.
+          const unlockDiagnosticId = isEngineBridgeUnavailableError(error)
+            ? null
+            : recordDiagnosticEvent(
+                "password.unlock-failed",
+                "Removing PDF encryption failed",
+                [
+                  error instanceof Error ? error.message : String(error),
+                  error instanceof Error && error.stack ? error.stack : null,
+                ],
+              );
           setError(
             isEngineBridgeUnavailableError(error)
               ? error.message
               : "This PDF could not be unlocked. Try again in a moment.",
-          );
-          void recordDiagnosticEvent(
-            "password.unlock-failed",
-            "Removing PDF encryption failed",
-            [
-              error instanceof Error ? error.message : String(error),
-              error instanceof Error && error.stack ? error.stack : null,
-            ],
+            unlockDiagnosticId,
           );
         });
     },
@@ -3947,10 +4036,14 @@ export function App() {
           openFileSource(source);
         }
       })
-      .catch(() => {
-        setError("This PDF could not be opened. The file may be corrupt or unsupported.");
+      .catch((error: unknown) => {
+        setErrorWithDiagnostic(
+          "file.open-failed",
+          error,
+          "This PDF could not be opened. The file may be corrupt or unsupported.",
+        );
       });
-  }, [openFileSource, setError]);
+  }, [openFileSource, setErrorWithDiagnostic]);
 
   useEffect(() => {
     let disposed = false;
@@ -3966,8 +4059,12 @@ export function App() {
           }
           openFileSource(source);
         }
-      }).catch(() => {
-        setError("This startup PDF could not be opened. The file may be corrupt or unsupported.");
+      }).catch((error: unknown) => {
+        setErrorWithDiagnostic(
+          "file.startup-open-failed",
+          error,
+          "This startup PDF could not be opened. The file may be corrupt or unsupported.",
+        );
       });
     };
 
@@ -3995,13 +4092,13 @@ export function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [openFileSource, setError]);
+  }, [openFileSource, setErrorWithDiagnostic]);
 
   const openFileInSeparateWindow = useCallback(() => {
-    void openFileInNewWindow().catch(() => {
-      setError("This PDF could not be opened in a new window.");
+    void openFileInNewWindow().catch((error: unknown) => {
+      setErrorWithDiagnostic("window.open-failed", error, "This PDF could not be opened in a new window.");
     });
-  }, [setError]);
+  }, [setErrorWithDiagnostic]);
 
   function packageDocxAddOptions(
     setProgress: (progress: { running: boolean; message: string | null; result: null }) => void,
@@ -4044,11 +4141,12 @@ export function App() {
   const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
     try {
       return await pickFileForAdd(packageDocxAddOptions(setProductionProgress, "production set"));
-    } catch {
+    } catch (error: unknown) {
       setProductionProgress({
         running: false,
         message: "This PDF could not be added to the production set.",
         result: null,
+        diagnosticId: logWorkflowFailure("production.add-file-failed", error),
       });
       return null;
     }
@@ -4132,8 +4230,12 @@ export function App() {
       // superseding the interim "too large to open this way" gate.
       void readBrowserFileSource(file)
         .then(openFileSource)
-        .catch(() => {
-          setError("This PDF could not be opened. The file may be corrupt or unsupported.");
+        .catch((error: unknown) => {
+          setErrorWithDiagnostic(
+            "file.drop-open-failed",
+            error,
+            "This PDF could not be opened. The file may be corrupt or unsupported.",
+          );
         });
     },
     [openFileSource, setError],
@@ -4476,12 +4578,15 @@ export function App() {
           return null;
         } catch (error: unknown) {
           if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-            void recordDiagnosticEvent("save.failed", errorMessage(error), [
+            const saveDiagnosticId = recordDiagnosticEvent("save.failed", errorMessage(error), [
               `forceSaveAs=${forceSaveAs}`,
               `source=${source.kind}`,
               "op=apply_edits",
             ]);
-            setError(pathOpErrorMessage(error, "This PDF could not be saved. The document was left unchanged."));
+            setError(
+              pathOpErrorMessage(error, "This PDF could not be saved. The document was left unchanged."),
+              saveDiagnosticId,
+            );
             setSidecarStatus({
               running: false,
               message: "Edits could not be saved. The document was left unchanged.",
@@ -4522,14 +4627,14 @@ export function App() {
         }
         return written;
       } catch (error: unknown) {
-        void recordDiagnosticEvent("save.failed", errorMessage(error), [
-          `forceSaveAs=${forceSaveAs}`,
-          `source=${source.kind}`,
-        ]);
         setError(
           error instanceof Error && error.message.includes("changed on disk")
             ? "This file changed on disk — reopen it."
             : "This PDF could not be saved. Try reopening the document and saving again.",
+          recordDiagnosticEvent("save.failed", errorMessage(error), [
+            `forceSaveAs=${forceSaveAs}`,
+            `source=${source.kind}`,
+          ]),
         );
         return null;
       } finally {
@@ -4584,11 +4689,13 @@ export function App() {
       }
       return written;
     } catch (error: unknown) {
-      void recordDiagnosticEvent("save.failed", errorMessage(error), [
-        `forceSaveAs=${forceSaveAs}`,
-        `source=${document.source?.kind ?? "none"}`,
-      ]);
-      setError("This PDF could not be saved. Try reopening the document and saving again.");
+      setError(
+        "This PDF could not be saved. Try reopening the document and saving again.",
+        recordDiagnosticEvent("save.failed", errorMessage(error), [
+          `forceSaveAs=${forceSaveAs}`,
+          `source=${document.source?.kind ?? "none"}`,
+        ]),
+      );
       return null;
     } finally {
       savingRef.current = false;
@@ -5253,7 +5360,7 @@ export function App() {
         return reopened.status === "opened";
       } catch (error) {
         if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          setError(pathOpErrorMessage(error, "The PDFs could not be merged. Check the files and try again."));
+          setPathOpError("merge.failed", error, "The PDFs could not be merged. Check the files and try again.");
         }
 
         return false;
@@ -5288,7 +5395,7 @@ export function App() {
         return reopened.status === "opened";
       } catch (error) {
         if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          setError(pathOpErrorMessage(error, "The selected file could not be inserted. Check the file and try again."));
+          setPathOpError("insert.failed", error, "The selected file could not be inserted. Check the file and try again.");
         }
 
         return false;
@@ -5323,15 +5430,18 @@ export function App() {
         });
 
         if (reopened.status !== "opened" && isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          setError(reopened.status === "failed"
-            ? reopened.error
-            : "The selected pages were extracted, but the output could not be reopened.");
+          setError(
+            reopened.status === "failed"
+              ? reopened.error
+              : "The selected pages were extracted, but the output could not be reopened.",
+            reopenFailureDiagnosticId(reopened),
+          );
         }
 
         return reopened.status === "opened";
       } catch (error) {
         if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-          setError(pathOpErrorMessage(error, "The selected pages could not be extracted. Check the range and try again."));
+          setPathOpError("extract.failed", error, "The selected pages could not be extracted. Check the range and try again.");
         }
 
         return false;
@@ -5407,7 +5517,7 @@ export function App() {
           return saved.files.filter(isSavedFile);
         } catch (error) {
           if (isCurrentDocument(sourceOpenToken, sourceGeneration)) {
-            setError(pathOpErrorMessage(error, "The page ranges could not be split. Check the ranges and try again."));
+            setPathOpError("split.failed", error, "The page ranges could not be split. Check the ranges and try again.");
           }
 
           return null;
@@ -5453,12 +5563,16 @@ export function App() {
 
       try {
         return await cropResizePages(pageIndexes, options);
-      } catch {
-        setError("The pages could not be cropped. Check the range and try again.");
+      } catch (error: unknown) {
+        setErrorWithDiagnostic(
+          "crop.failed",
+          error,
+          "The pages could not be cropped. Check the range and try again.",
+        );
         return false;
       }
     },
-    [cropResizePages, document.bytes, setError],
+    [cropResizePages, document.bytes, setError, setErrorWithDiagnostic],
   );
 
   const addPendingRedaction = useCallback((area: PdfRedactionArea) => {
@@ -5471,6 +5585,7 @@ export function App() {
       },
     ]);
     setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(null);
   }, []);
 
@@ -5493,6 +5608,7 @@ export function App() {
       }),
     ]);
     setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(null);
   }, []);
 
@@ -5505,6 +5621,7 @@ export function App() {
     // or "verified" phase, which RedactionStatusPanel reads for the message
     // tone and the error-report button.
     setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(message);
   }, []);
 
@@ -5545,6 +5662,7 @@ export function App() {
 
       if (areas.length === 0) {
         setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
         setRedactionMessage("No matching text was found.");
         return;
       }
@@ -5560,6 +5678,7 @@ export function App() {
         }),
       ]);
       setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
       setRedactionMessage(`${areas.length} ${areas.length === 1 ? "area" : "areas"} marked from search.`);
     },
     [document.bytes, document.generation, getOpenToken, isCurrentDocument, pdfDocument, redactionSearchText, streamedDocument],
@@ -5570,32 +5689,30 @@ export function App() {
       // Streamed redaction runs file-to-file through the PathOpsEngine —
       // it needs a shell grant, not the sidecar bridge.
       if (!pathOpsGrant) {
-        setRedactionPhase("error");
-        setRedactionMessage("This tool only works in the installed RaioPDF app.");
+        setRedactionFailure("This tool only works in the installed RaioPDF app.");
         return;
       }
     } else if (!document.bytes) {
-      setRedactionPhase("error");
-      setRedactionMessage("Open a PDF before applying redactions.");
+      setRedactionFailure("Open a PDF before applying redactions.");
       return;
     } else if (!engineBridge.available) {
-      setRedactionPhase("error");
-      setRedactionMessage("This tool only works in the installed RaioPDF app.");
+      setRedactionFailure("This tool only works in the installed RaioPDF app.");
       return;
     }
 
     if (pendingRedactions.length === 0) {
-      setRedactionPhase("error");
-      setRedactionMessage("Mark at least one area before applying redactions.");
+      setRedactionFailure("Mark at least one area before applying redactions.");
       return;
     }
 
     setRedactionPhase("confirming");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(null);
   }, [document.bytes, engineBridge.available, pathOpsGrant, pendingRedactions.length, streamedDocument]);
 
   const cancelRedactions = useCallback(() => {
     setRedactionPhase("idle");
+    setRedactionDiagnosticId(null);
     setRedactionMessage(null);
   }, []);
 
@@ -5616,6 +5733,7 @@ export function App() {
       // to verify) rejects with VERIFICATION_FAILED and no output grant ever
       // exists, so an unverified result can never be committed.
       setRedactionPhase("applying");
+    setRedactionDiagnosticId(null);
       setRedactionMessage("Applying redactions and confirming the removed text is really gone...");
 
       try {
@@ -5636,17 +5754,18 @@ export function App() {
         }
 
         setRedactionPhase("verified");
+    setRedactionDiagnosticId(null);
         setRedactionMessage(formatStreamedRedactionSuccess(result.verification));
       } catch (error) {
         if (!isCurrentDocument(sourceOpenToken, sourceGeneration)) {
           return;
         }
 
-        setRedactionPhase("error");
-        setRedactionMessage(
+        setRedactionFailure(
           error instanceof PathOpsError && error.code === "VERIFICATION_FAILED"
             ? `${error.message} The document was NOT modified.`
             : pathOpErrorMessage(error, "Redaction could not finish. The document was left unchanged."),
+          logWorkflowFailure("redaction.failed", error),
         );
       }
 
@@ -5658,6 +5777,7 @@ export function App() {
     }
 
     setRedactionPhase("applying");
+    setRedactionDiagnosticId(null);
     setRedactionMessage("Applying redactions and double-checking the text, images, markup, and hidden info are all clean...");
 
     try {
@@ -5682,8 +5802,11 @@ export function App() {
       }
 
       if (!verified.ok) {
-        setRedactionPhase("error");
-        setRedactionMessage(`${formatRedactionVerificationFailure(verified)} The document was NOT modified.`);
+        const verificationMessage = `${formatRedactionVerificationFailure(verified)} The document was NOT modified.`;
+        setRedactionFailure(
+          verificationMessage,
+          recordDiagnosticEvent("redaction.verification-failed", verificationMessage),
+        );
         return;
       }
 
@@ -5697,16 +5820,21 @@ export function App() {
       });
 
       if (replaced !== "replaced") {
-        setRedactionPhase("error");
-        setRedactionMessage("The document changed before redaction finished. The result was not applied.");
+        // A mid-operation document change is a race, not a fault to report.
+        setRedactionFailure("The document changed before redaction finished. The result was not applied.");
         return;
       }
 
       setPendingRedactions([]);
       setRedactionPhase("verified");
+    setRedactionDiagnosticId(null);
       setRedactionMessage(formatRedactionVerificationSuccess(verified));
     } catch (error) {
-      logWorkflowFailure("redaction.failed", error);
+      // A capability gap (no desktop engine) is a gate, not a fault: it reports
+      // the bridge's own message and records nothing, so it offers no report.
+      const diagnosticId = isEngineBridgeUnavailableError(error)
+        ? null
+        : logWorkflowFailure("redaction.failed", error);
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
         : formatWorkflowError(error, "Redaction could not finish. The document was left unchanged.");
@@ -5715,8 +5843,7 @@ export function App() {
         return;
       }
 
-      setRedactionPhase("error");
-      setRedactionMessage(message);
+      setRedactionFailure(message, diagnosticId);
     }
   }, [
     document.bytes,
@@ -6534,12 +6661,12 @@ export function App() {
         anchor.click();
         URL.revokeObjectURL(url);
         return true;
-      } catch {
-        setError("The page image could not be exported.");
+      } catch (error: unknown) {
+        setErrorWithDiagnostic("page-image.export-failed", error, "The page image could not be exported.");
         return false;
       }
     },
-    [document.fileName, pdfDocument, setError],
+    [document.fileName, pdfDocument, setError, setErrorWithDiagnostic],
   );
 
   const runScanner = useCallback(() => {
@@ -6961,6 +7088,7 @@ export function App() {
         setFilingProgress({
           phase: "error",
           message: pathOpErrorMessage(error, "The filing copy could not be prepared."),
+          diagnosticId: logWorkflowFailure("filing.failed", error),
         });
       })
       .finally(() => {
@@ -7432,7 +7560,10 @@ export function App() {
         return;
       }
 
-      logWorkflowFailure("filing.failed", error);
+      // Same gate rule as redaction above: a capability gap records nothing.
+      const diagnosticId = isEngineBridgeUnavailableError(error)
+        ? null
+        : logWorkflowFailure("filing.failed", error);
       const message = isEngineBridgeUnavailableError(error)
         ? error.message
         : formatWorkflowError(error, "The filing copy could not be prepared.");
@@ -7440,6 +7571,7 @@ export function App() {
       setFilingProgress({
         phase: "error",
         message,
+        diagnosticId,
       });
     });
   }, [
@@ -7546,7 +7678,7 @@ export function App() {
       }
 
       if (result.status === "failed" || result.status === "refused") {
-        setError(result.message);
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
       }
     });
   }, [
@@ -7578,7 +7710,7 @@ export function App() {
       onStatus: setWordReflowStatus,
     }).then((result) => {
       if (result.status === "failed" || result.status === "refused") {
-        setError(result.message);
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
       }
     });
   }, [setError]);
@@ -7586,7 +7718,7 @@ export function App() {
   const importWordDocument = useCallback(() => {
     void runWordDocumentImport({ onStatus: setWordReflowStatus }).then(async (result) => {
       if (result.status === "unavailable" || result.status === "failed") {
-        setError(result.message);
+        setError(result.message, result.status === "failed" ? result.diagnosticId : null);
         return;
       }
       if (result.status !== "converted") {
@@ -7604,7 +7736,7 @@ export function App() {
       );
       if (reopened.status === "failed") {
         setWordReflowStatus({ running: false, tone: "danger", message: reopened.error });
-        setError(reopened.error);
+        setError(reopened.error, reopenFailureDiagnosticId(reopened));
         return;
       }
       setWordReflowStatus({
@@ -8097,10 +8229,14 @@ export function App() {
   const openProtectedCopy = useCallback(async (output: PdfSecurityOutputReference) => {
     try {
       await openGrantInNewWindow(output.grant);
-    } catch {
-      setError("The protected copy was created, but could not be opened in a new window.");
+    } catch (error: unknown) {
+      setErrorWithDiagnostic(
+        "protected-copy.open-window-failed",
+        error,
+        "The protected copy was created, but could not be opened in a new window.",
+      );
     }
-  }, [setError]);
+  }, [setErrorWithDiagnostic]);
 
   const saveUnlockedCopy = useCallback(async () => {
     const runId = pdfSecurityRunRef.current + 1;
@@ -8205,7 +8341,11 @@ export function App() {
       );
     } catch (error: unknown) {
       if (isCurrentRun() && !isPathOpCancelledError(error)) {
-        setError("RaioPDF could not save the unlocked copy. The open PDF was left unchanged.");
+        setErrorWithDiagnostic(
+          "unlocked-copy.save-failed",
+          error,
+          "RaioPDF could not save the unlocked copy. The open PDF was left unchanged.",
+        );
       }
     } finally {
       await Promise.all(
@@ -8235,19 +8375,27 @@ export function App() {
   const showProtectedCopyInFolder = useCallback(async (output: PdfSecurityOutputReference) => {
     try {
       await revealGrantInFolder(output.grant);
-    } catch {
-      setError("The protected copy was created, but its folder could not be opened.");
+    } catch (error: unknown) {
+      setErrorWithDiagnostic(
+        "protected-copy.reveal-failed",
+        error,
+        "The protected copy was created, but its folder could not be opened.",
+      );
     }
-  }, [setError]);
+  }, [setErrorWithDiagnostic]);
 
   // Same reveal pattern for the package workflows' completion cards
   // (Production Set, Batch Cleanup) — their outputs are path-addressed
   // package roots, not single-file grants.
   const openPackageRootFolder = useCallback((path: string) => {
-    void openPackageRoot(path).catch(() => {
-      setError("The package was built, but its folder could not be opened.");
+    void openPackageRoot(path).catch((error: unknown) => {
+      setErrorWithDiagnostic(
+        "package-root.reveal-failed",
+        error,
+        "The package was built, but its folder could not be opened.",
+      );
     });
-  }, [setError]);
+  }, [setErrorWithDiagnostic]);
 
   const fitToPageWidth = useCallback(() => {
     if (document.source === null) {
@@ -8538,6 +8686,7 @@ export function App() {
     message: redactionMessage,
     pendingCount: pendingRedactions.length,
     available: engineBridge.available,
+    diagnosticId: redactionDiagnosticId,
   };
   const scrubMetadataPanel: ScrubMetadataPanelState = {
     metadata: metadataSummary,
@@ -9183,6 +9332,7 @@ export function App() {
           pageCount={document.pageCount}
           progress={ocrState.progress ?? null}
           errorMessage={ocrState.message}
+          diagnosticId={ocrState.diagnosticId}
           onConfirm={confirmOcrDialog}
           onCancel={cancelOcrDialog}
         />
@@ -9452,18 +9602,6 @@ function RedactionModeBar({
       </button>
     </div>
   );
-}
-
-function batchCleanupCompletionMessage(files: readonly {
-  signatureInvalidated?: boolean | undefined;
-}[]): string {
-  const invalidatedCount = files.filter((file) => file.signatureInvalidated).length;
-
-  if (invalidatedCount === 0) {
-    return `Batch cleanup finished for ${files.length} file(s).`;
-  }
-
-  return `Batch cleanup finished for ${files.length} file(s). ${invalidatedCount} had digital signatures invalidated.`;
 }
 
 /**

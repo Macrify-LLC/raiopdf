@@ -50,6 +50,11 @@ export interface ProductionSetProgress {
   running: boolean;
   message: string | null;
   result: ProductionSetRunResult | null;
+  /**
+   * Correlation id of the failure shown here; null for a gate or nudge, which
+   * record nothing and so offer no report. See `DiagnosticEntry.id`.
+   */
+  diagnosticId?: string | null;
 }
 
 /**
@@ -476,7 +481,7 @@ export function ProductionSetWorkspace({
           email report. Local validation (localMessage) is a user-fixable nudge,
           not a failure, so it doesn't. */}
       {!localMessage && !progress.running && !progress.result && progress.message ? (
-        <ErrorReportButton className="production-workspace__report" />
+        <ErrorReportButton className="production-workspace__report" diagnosticId={progress.diagnosticId} />
       ) : null}
 
       {progress.result ? (

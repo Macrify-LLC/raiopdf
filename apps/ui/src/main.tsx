@@ -44,7 +44,7 @@ function installLocalErrorLogging(): void {
   }
 
   window.addEventListener("error", (event) => {
-    void recordDiagnosticEvent("window.error", event.message || "Uncaught UI error", [
+    recordDiagnosticEvent("window.error", event.message || "Uncaught UI error", [
       event.filename ? `file=${event.filename}` : null,
       Number.isFinite(event.lineno) ? `line=${event.lineno}` : null,
       Number.isFinite(event.colno) ? `column=${event.colno}` : null,
@@ -53,7 +53,7 @@ function installLocalErrorLogging(): void {
   });
 
   window.addEventListener("unhandledrejection", (event) => {
-    void recordDiagnosticEvent("window.unhandledrejection", reasonMessage(event.reason), [
+    recordDiagnosticEvent("window.unhandledrejection", reasonMessage(event.reason), [
       reasonStack(event.reason),
     ]);
   });

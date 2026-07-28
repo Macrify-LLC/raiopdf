@@ -67,7 +67,9 @@ export interface PageListProps {
   onZoomOut?: (() => void) | undefined;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
   onPageSizeChange?: ((size: { width: number; height: number }) => void) | undefined;
-  onRenderError?: ((message: string) => void) | undefined;
+  /** Second arg is the failure's correlation id — forward BOTH, or a report
+   * loses its link to the failure it describes. */
+  onRenderError?: ((message: string, diagnosticId?: string | null) => void) | undefined;
   redactionMode?: boolean;
   /** Redaction mode's "Select text" sub-mode -- see PageView's window-level capture. */
   redactionTextSelect?: boolean;

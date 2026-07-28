@@ -48,6 +48,11 @@ export interface FilingProgressState {
    * "page X of Y" and a moving bar instead of a frozen spinner.
    */
   progress?: LongProcessProgress | null;
+  /**
+   * Correlation id of the failure shown here; null for a gate or nudge, which
+   * record nothing and so offer no report. See `DiagnosticEntry.id`.
+   */
+  diagnosticId?: string | null;
 }
 
 export interface FilingOutputPart {
@@ -714,7 +719,7 @@ export const PrepareForFilingWorkspace = forwardRef<
             <p className="filing-progress__label">{formatProgressLabel(progress.phase)}</p>
             <p>{progress.message}</p>
             {progress.phase === "error" ? (
-              <ErrorReportButton className="filing-progress__report" />
+              <ErrorReportButton className="filing-progress__report" diagnosticId={progress.diagnosticId} />
             ) : null}
           </div>
         ) : null}

@@ -142,6 +142,9 @@ export interface RedactionPanelState {
   message: string | null;
   pendingCount: number;
   available: boolean;
+  /** Correlation id of the recorded redaction failure, when this phase is an
+   * actual failure rather than a capability gap. */
+  diagnosticId?: string | null | undefined;
 }
 
 export interface BatesPanelState {
@@ -640,7 +643,7 @@ function RedactionStatusPanel({
           message={state.message}
         />
         {state.phase === "error" ? (
-          <ErrorReportButton className="tool-panel__report" />
+          <ErrorReportButton className="tool-panel__report" diagnosticId={state.diagnosticId} />
         ) : null}
       </>
     );

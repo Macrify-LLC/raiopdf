@@ -20,7 +20,7 @@ const TECHNICAL_TRUNCATION_NOTE =
   " […trimmed — use File → Export Diagnostics for the full log]";
 
 export interface ErrorReportContext {
-  /** The most recent captured error, or null to draft a blank report. */
+  /** The failure being reported, or null to draft a blank report. */
   diagnostic: DiagnosticEntry | null;
   /** App version (best-effort; null when it can't be read). */
   appVersion: string | null;
@@ -88,6 +88,10 @@ function composeBody(context: ErrorReportContext, detailOverride: string | null)
   ];
 
   if (diagnostic) {
+    // The whole point of the correlation id: this is what lets a maintainer
+    // holding the email find the same failure's `id=` line in the user's
+    // app.log (or a diagnostics export) instead of guessing from a timestamp.
+    lines.push(`Ref: ${diagnostic.id}`);
     lines.push(`When: ${new Date(diagnostic.at).toISOString()}`);
     lines.push(`Where: ${diagnostic.kind}`);
     lines.push("");

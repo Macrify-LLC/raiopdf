@@ -13,6 +13,7 @@ import {
 } from "./readFileForAdd";
 import { invokePathOp, pathOpErrorMessage } from "./pathOps";
 import { WORD_REFLOW_EXPERIMENTAL_LABEL, type WordReflowStatus } from "./wordReflow";
+import { logWorkflowFailure } from "./diagnostics";
 
 /**
  * Import a Word (.docx) document as a PDF: convert it through the user's
@@ -32,7 +33,12 @@ export type WordImportResult =
   | { status: "converted"; output: WordImportOutput; sourceName: string }
   | { status: "cancelled" }
   | { status: "unavailable"; message: string; capability: WordCapability }
-  | { status: "failed"; message: string };
+  | {
+      status: "failed";
+      message: string;
+      /** See `WordReflowResult` — recorded where the raw error still exists. */
+      diagnosticId: string;
+    };
 
 export interface RunWordImportOptions {
   onStatus?: (status: WordReflowStatus) => void;
@@ -92,7 +98,7 @@ export async function runWordDocumentImport(
     const message = wordOperationGuidance(error)
       ?? pathOpErrorMessage(error, "This Word document could not be imported.");
     setStatus({ running: false, tone: "danger", message: `${message} ${WORD_REFLOW_EXPERIMENTAL_LABEL}` });
-    return { status: "failed", message };
+    return { status: "failed", message, diagnosticId: logWorkflowFailure("word.import-failed", error) };
   }
 }
 

@@ -17,6 +17,7 @@ import {
   pathOpErrorMessage,
   type PathOpReport,
 } from "./pathOps";
+import { logWorkflowFailure } from "./diagnostics";
 
 export const WORD_REFLOW_EXPERIMENTAL_LABEL =
   "Experimental — formatting may be approximate.";
@@ -47,7 +48,16 @@ export type WordReflowResult =
   | { status: "saved"; saved: SavedFile; output: WordReflowOutput; ocrFirst: boolean }
   | { status: "cancelled" }
   | { status: "refused"; reason: "word-unavailable"; message: string; capability: WordCapability }
-  | { status: "failed"; message: string };
+  | {
+      status: "failed";
+      message: string;
+      /**
+       * Correlation id of the diagnostic recorded in the catch block that
+       * produced this result -- recorded there because `message` is already
+       * friendly copy and no longer carries the exception's code, cause, or stack.
+       */
+      diagnosticId: string;
+    };
 
 export interface RunWordReflowOptions {
   getInput: () => Promise<WordReflowInput | null>;
@@ -156,7 +166,9 @@ export async function runPdfToWordReflow(
       tone: "danger",
       message: `${message} ${WORD_REFLOW_EXPERIMENTAL_LABEL}`,
     });
-    return { status: "failed", message };
+    // Record the RAW error here: `message` above has already been mapped to
+    // friendly copy, so this is the last frame that knows what actually broke.
+    return { status: "failed", message, diagnosticId: logWorkflowFailure("word.reflow-failed", error) };
   }
 }
 

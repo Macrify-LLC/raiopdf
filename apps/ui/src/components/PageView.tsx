@@ -11,6 +11,7 @@ import type { PdfRedactionArea } from "@raiopdf/engine-api";
 import type { DocumentSearchMatch } from "../hooks/useDocumentSearch";
 import type { EditingState } from "../hooks/useEditing";
 import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from "../lib/pdfjs";
+import { recordFirstPageFailure } from "../lib/pageFailureLog";
 import {
   closestTextLayer,
   registerTextLayerViewport,
@@ -63,7 +64,12 @@ export interface PageViewProps {
   replaceTextInSelectionBlocked?: ((pageIndex: number) => boolean) | undefined;
   searchResults?: readonly DocumentSearchMatch[];
   activeSearchResultId?: string | null;
-  onRenderError?: ((message: string) => void) | undefined;
+  /**
+   * Surface a page-render failure. The second argument is the correlation id of
+   * the diagnostic recorded here -- this component holds the only reference to
+   * the raw pdf.js error, so it has to do the recording.
+   */
+  onRenderError?: ((message: string, diagnosticId?: string | null) => void) | undefined;
   /**
    * Reports this page's base (scale-1, rotation-aware) dimensions once the
    * page proxy loads. Streamed mode uses this to refine the first-page size
@@ -168,7 +174,12 @@ export function PageView({
       .catch((pageError: unknown) => {
         if (!cancelled && !isCancelledRenderError(pageError)) {
           setPagePending(false);
-          onRenderError?.("This page could not be displayed.");
+          onRenderError?.(
+            "This page could not be displayed.",
+            recordFirstPageFailure(pdfDocument, "page.load-failed", pageError, [
+              `pageIndex=${pageIndex}`,
+            ]),
+          );
         }
       });
 
@@ -208,7 +219,10 @@ export function PageView({
         return renderTask.promise.catch((renderError: unknown) => {
           if (!cancelled && !isCancelledRenderError(renderError)) {
             console.error(renderError);
-            onRenderError?.("This page could not be displayed.");
+            onRenderError?.(
+              "This page could not be displayed.",
+              recordFirstPageFailure(pdfDocument, "page.render-failed", renderError),
+            );
           }
         });
       })

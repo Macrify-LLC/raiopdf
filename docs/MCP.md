@@ -98,7 +98,7 @@ card all quote the count from here; update them when it changes.
 | Tool | What it does |
 |------|--------------|
 | `raiopdf_health` | Check the engine is reachable. |
-| `raiopdf_diagnostics` | Read RaioPDF's own recent diagnostics — app/engine log tails, version, platform — scrubbed of file paths, names and email addresses. Read-only; takes no path. |
+| `raiopdf_diagnostics` | Read RaioPDF's own recent diagnostics — app, desktop-engine and MCP-engine-host log tails, version, platform — scrubbed of file paths, names and email addresses. Read-only; takes no path. |
 | `pdf_page_count` | Count pages in a PDF. |
 | `ocr_pdf` | Make a scanned PDF searchable (on-device OCR). |
 | `merge_pdfs` | Concatenate PDFs in order. |

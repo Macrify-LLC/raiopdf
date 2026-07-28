@@ -277,7 +277,8 @@ pub const PAYLOAD_LOG_TAIL_MAX_BYTES: u64 = 48 * 1024;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsLog {
-    /// File name only, never a full path -- the path itself is machine-identifying.
+    /// Stable logical label only, never a full path -- the path itself is
+    /// machine-identifying.
     pub name: String,
     pub present: bool,
     /// Scrubbed tail, oldest-truncation marked inline.
@@ -318,7 +319,7 @@ pub fn collect_diagnostics_payload(
 ) -> DiagnosticsPayload {
     let logs = log_file_names
         .iter()
-        .map(|name| collect_log(app_data_dir, name))
+        .map(|name| collect_diagnostics_log(app_data_dir, name))
         .collect();
 
     DiagnosticsPayload {
@@ -343,7 +344,12 @@ pub fn collect_diagnostics_payload(
     }
 }
 
-fn collect_log(app_data_dir: &Path, name: &str) -> DiagnosticsLog {
+/// Read and scrub one known diagnostics log plus its rotations.
+///
+/// Callers choose the directory and file name in code; no user-facing command
+/// accepts either value. Keeping this operation in the shared crate ensures a
+/// second RaioPDF-owned log directory receives the same cap and scrub policy.
+pub fn collect_diagnostics_log(app_data_dir: &Path, name: &str) -> DiagnosticsLog {
     let live = app_data_dir.join(name);
     let mut sections: Vec<String> = Vec::new();
     let mut present = false;

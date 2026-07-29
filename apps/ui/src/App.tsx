@@ -9237,6 +9237,7 @@ export function App() {
         onFitZoomResolved={setFitZoom}
         onPageSizeChange={setPageSizeInches}
         onRenderError={setError}
+        onDocumentErrorDismiss={() => setError(null)}
         onThumbnailClick={handleThumbnailClick}
         onRotateSelected={rotateSelected}
         onRotateLeft={rotateSelectedLeft}

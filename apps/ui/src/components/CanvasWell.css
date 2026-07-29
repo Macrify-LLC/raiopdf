@@ -190,6 +190,7 @@
 }
 
 .canvas-well__message {
+  position: relative;
   margin: 0;
   max-width: 420px;
   display: flex;
@@ -202,11 +203,41 @@
   color: var(--warn);
   font-size: var(--text-xs);
   line-height: 1.45;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) calc(26px + var(--space-2)) var(--space-2)
+    var(--space-3);
 }
 
 .canvas-well__message-text {
   margin: 0;
+}
+
+.canvas-well__message-close {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: currentColor;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+
+.canvas-well__message-close:hover {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.canvas-well__message-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Error chip floating over the continuous-scroll viewer. */

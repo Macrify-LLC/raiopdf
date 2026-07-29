@@ -70,6 +70,7 @@ export interface AppShellProps {
   /** Second arg is the failure's correlation id — forward BOTH, or a report
    * loses its link to the failure it describes. */
   onRenderError: (message: string, diagnosticId?: string | null) => void;
+  onDocumentErrorDismiss: () => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
   onRotateLeft: () => void;
@@ -159,6 +160,7 @@ export function AppShell({
   onFitZoomResolved,
   onPageSizeChange,
   onRenderError,
+  onDocumentErrorDismiss,
   onThumbnailClick,
   onRotateSelected,
   onRotateLeft,
@@ -345,6 +347,7 @@ export function AppShell({
           scrollIntent={pageScrollIntent}
           onVisiblePageChange={onVisiblePageChange}
           error={document.error}
+          onErrorDismiss={onDocumentErrorDismiss}
           onZoomOut={onZoomOut}
           onZoomIn={onZoomIn}
           onFitZoomResolved={onFitZoomResolved}

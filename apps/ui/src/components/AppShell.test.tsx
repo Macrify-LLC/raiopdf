@@ -55,6 +55,26 @@ describe("AppShell", () => {
     expect(html).not.toContain("canvas-well__engine-starting");
   });
 
+  it("offers a close control on a floating document message", () => {
+    const html = renderToStaticMarkup(
+      <AppShell
+        {...appShellProps({
+          document: {
+            ...openDocument,
+            error: {
+              message: "Some tools are turned off for this large document.",
+              diagnosticId: null,
+            },
+          },
+          pdfDocument: mockPdfDocument,
+        })}
+      />,
+    );
+
+    expect(html).toContain("canvas-well__message--floating");
+    expect(html).toContain('aria-label="Close message"');
+  });
+
   it("renders annotation actions in select mode when pending annotations exist", () => {
     const html = renderToStaticMarkup(
       <AppShell
@@ -236,6 +256,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     onFitZoomResolved: () => undefined,
     onPageSizeChange: () => undefined,
     onRenderError: () => undefined,
+    onDocumentErrorDismiss: () => undefined,
     onThumbnailClick: () => undefined,
     onRotateSelected: () => undefined,
     onDeleteSelected: () => undefined,

@@ -115,8 +115,8 @@ importers:
         specifier: ^9.20.0
         version: 9.29.1(@wdio/globals@9.29.1)(webdriverio@9.29.1)
       '@wdio/mocha-framework':
-        specifier: ^9.20.0
-        version: 9.29.1
+        specifier: ^9.30.0
+        version: 9.30.0
       '@wdio/spec-reporter':
         specifier: ^9.20.0
         version: 9.29.1
@@ -1324,8 +1324,8 @@ packages:
     resolution: {integrity: sha512-0ZAEIo6PNyMIJPlOGkIgyOJUjcd0pC8/QHlVAAe1c91/IcjZ1X+k0yidXHaboJdN7dq1XPUacmhRdtua0U5EZg==}
     engines: {node: '>=18.20.0'}
 
-  '@wdio/mocha-framework@9.29.1':
-    resolution: {integrity: sha512-GG3z0OtD2eu15ql3vnI6VcLJ3INUfSrqbuop/tCAbCjkkKgpjq1JOno0lrDNKRt5Ndq4a4/c9Wu5uxfL+CItYw==}
+  '@wdio/mocha-framework@9.30.0':
+    resolution: {integrity: sha512-NhxHeIFd0iHpb8sud3ahOilE/bgm5MBBzSq+xSKW+hTUYdmeyy4w+KX5p/+AQ0dsUEIToaA4xjZRUTCwY+65Wg==}
     engines: {node: '>=18.20.0'}
 
   '@wdio/native-core@1.0.0':
@@ -4594,13 +4594,13 @@ snapshots:
       safe-regex2: 5.1.1
       strip-ansi: 7.2.0
 
-  '@wdio/mocha-framework@9.29.1':
+  '@wdio/mocha-framework@9.30.0':
     dependencies:
       '@types/mocha': 10.0.10
       '@types/node': 20.19.43
       '@wdio/logger': 9.29.1
       '@wdio/types': 9.29.1
-      '@wdio/utils': 9.29.1
+      '@wdio/utils': 9.30.0
       mocha: 10.8.2
     transitivePeerDependencies:
       - bare-abort-controller

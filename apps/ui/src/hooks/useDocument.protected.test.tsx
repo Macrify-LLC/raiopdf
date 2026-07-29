@@ -134,6 +134,12 @@ describe("useDocument protected PDFs", () => {
       signature,
     });
 
+    act(() => harness.current.dismissSignatureInvalidationNotice());
+
+    expect(harness.current.document.signatureInvalidationNotice).toBeNull();
+    expect(harness.current.document.dirty).toBe(true);
+    expect(harness.current.document.protectedSourceGrant).toBe("C:\\cases\\signed.pdf");
+
     const saved = await act(async () => harness.current.save());
 
     expect(saved?.filePath).toBeNull();

@@ -80,6 +80,7 @@ export interface AppShellProps {
   onMoveSelectedDown: () => void;
   onBookmarkNavigate: (pageIndex: number) => void;
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
+  onOutlineStatusDismiss: () => void;
   ocrState: OcrUiState;
   /** Whether Microsoft Word was detected on this computer (gates the Word-dependent menu items). */
   wordAvailable: boolean;
@@ -170,6 +171,7 @@ export function AppShell({
   onMoveSelectedDown,
   onBookmarkNavigate,
   onOutlineChange,
+  onOutlineStatusDismiss,
   ocrState,
   wordAvailable,
   ocrStarting,
@@ -331,6 +333,7 @@ export function AppShell({
           onMoveSelectedDown={onMoveSelectedDown}
           onBookmarkNavigate={onBookmarkNavigate}
           onOutlineChange={onOutlineChange}
+          onOutlineStatusDismiss={onOutlineStatusDismiss}
         />
         <CanvasWell
           workspace={workspace}

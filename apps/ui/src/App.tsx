@@ -96,6 +96,7 @@ import {
 import { DeletePagesConfirmationDialog } from "./components/DeletePagesConfirmationDialog";
 import { RedactionConfirmationDialog } from "./components/RedactionConfirmationDialog";
 import { DocumentBanner } from "./components/DocumentBanner";
+import { PackIntegrityBanner } from "./components/PackIntegrityBanner";
 import { EditModeBar } from "./components/EditModeBar";
 import { EditTextModeBar } from "./components/EditTextModeBar";
 import { EditTextReviewDialog } from "./components/EditTextReviewDialog";
@@ -674,6 +675,8 @@ export function App() {
     setTextLayerCoverage,
     setPageSizeInches,
     setError,
+    dismissOutlineStatus,
+    dismissSignatureInvalidationNotice,
     setProtectionFacts,
     rotatePages,
     deletePages,
@@ -4505,7 +4508,14 @@ export function App() {
           return null;
         }
 
-        if (pendingApply.flatten || planHasFormEdits(pendingApply.plan.appendEdits)) {
+        if (pendingApply.flatten) {
+          setError(
+            "Making markup permanent isn't available for very large documents yet. Save it as PDF annotations instead.",
+          );
+          return null;
+        }
+
+        if (planHasFormEdits(pendingApply.plan.appendEdits)) {
           setError("Form filling and field authoring are not available for very large documents yet.");
           return null;
         }
@@ -9203,11 +9213,7 @@ export function App() {
 
   return (
     <>
-      {PACK_INTEGRITY_BANNER ? (
-        <div role="alert" className="pack-integrity-banner">
-          {PACK_INTEGRITY_BANNER}
-        </div>
-      ) : null}
+      <PackIntegrityBanner message={PACK_INTEGRITY_BANNER} />
       <AppShell
         document={document}
         tabs={documentTabs.map((tab) => ({
@@ -9247,10 +9253,16 @@ export function App() {
         onMoveSelectedDown={() => moveSelected(1)}
         onBookmarkNavigate={handleBookmarkNavigate}
         onOutlineChange={replaceOutline}
+        onOutlineStatusDismiss={dismissOutlineStatus}
         ocrState={ocrState}
         wordAvailable={wordAvailable}
         ocrStarting={forceOcrConfirmation ? false : engineBridge.starting}
-        documentBanner={<DocumentBanner notice={document.signatureInvalidationNotice} />}
+        documentBanner={(
+          <DocumentBanner
+            notice={document.signatureInvalidationNotice}
+            onDismiss={dismissSignatureInvalidationNotice}
+          />
+        )}
         workspace={workspace}
         overlay={overlay}
         processLoader={

@@ -22,6 +22,7 @@ export interface DocumentNavPanelProps {
   onMoveSelectedDown?: (() => void) | undefined;
   onBookmarkNavigate: (pageIndex: number) => void;
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
+  onOutlineStatusDismiss: () => void;
 }
 
 type DocumentNavTab = "pages" | "bookmarks";
@@ -42,6 +43,7 @@ export function DocumentNavPanel({
   onMoveSelectedDown,
   onBookmarkNavigate,
   onOutlineChange,
+  onOutlineStatusDismiss,
 }: DocumentNavPanelProps) {
   const [activeTab, setActiveTab] = useState<DocumentNavTab>("pages");
   const [collapsed, setCollapsed] = useState(false);
@@ -120,6 +122,7 @@ export function DocumentNavPanel({
             currentPage={currentPage}
             disabled={bookmarksDisabled}
             disabledReason={bookmarksDisabledReason}
+            onStatusDismiss={onOutlineStatusDismiss}
             onNavigate={onBookmarkNavigate}
             onChange={onOutlineChange}
           />

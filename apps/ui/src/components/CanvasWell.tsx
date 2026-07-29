@@ -7,6 +7,7 @@ import type { EditingState } from "../hooks/useEditing";
 import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import type { DisplayedFailure } from "../lib/diagnostics";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
+import { DismissButton } from "./DismissButton";
 import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
@@ -317,14 +318,11 @@ function DocumentMessage({
     >
       <p className="canvas-well__message-text">{error.message}</p>
       <ErrorActions diagnosticId={error.diagnosticId} />
-      <button
-        type="button"
+      <DismissButton
         className="canvas-well__message-close"
-        aria-label="Close message"
+        label="Close message"
         onClick={onDismiss}
-      >
-        ×
-      </button>
+      />
     </div>
   );
 }

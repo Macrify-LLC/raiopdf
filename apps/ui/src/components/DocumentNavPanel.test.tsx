@@ -46,7 +46,26 @@ describe("DocumentNavPanel", () => {
     expect(container.textContent).toContain("Existing bookmark");
   });
 
-  function renderPanel(): HTMLElement {
+  it("offers an accessible close action for bookmark warnings", async () => {
+    const onOutlineStatusDismiss = vi.fn();
+    const container = renderPanel({
+      outlineStatus: "Removed 1 bookmark whose target no longer exists.",
+      onOutlineStatusDismiss,
+    });
+
+    await click(getButton(container, "Bookmarks"));
+    await click(getButton(container, "Close bookmark warning"));
+
+    expect(onOutlineStatusDismiss).toHaveBeenCalledOnce();
+  });
+
+  function renderPanel({
+    outlineStatus = null,
+    onOutlineStatusDismiss = vi.fn(),
+  }: {
+    outlineStatus?: string | null;
+    onOutlineStatusDismiss?: () => void;
+  } = {}): HTMLElement {
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
@@ -59,9 +78,10 @@ describe("DocumentNavPanel", () => {
           currentPage={1}
           selectedPageIndexes={new Set()}
           outline={mockOutline}
-          outlineStatus={null}
+          outlineStatus={outlineStatus}
           onBookmarkNavigate={vi.fn()}
           onOutlineChange={() => Promise.resolve(true)}
+          onOutlineStatusDismiss={onOutlineStatusDismiss}
         />,
       );
     });

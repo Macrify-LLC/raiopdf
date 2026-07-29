@@ -264,6 +264,7 @@ function appShellProps(overrides: Partial<AppShellProps> = {}): AppShellProps {
     onMoveSelectedDown: () => undefined,
     onBookmarkNavigate: () => undefined,
     onOutlineChange: () => Promise.resolve(true),
+    onOutlineStatusDismiss: () => undefined,
     ocrState: { phase: "idle", message: null },
     wordAvailable: true,
     ocrStarting: false,

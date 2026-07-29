@@ -1,0 +1,11 @@
+.pack-integrity-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  background: var(--identity-amber-soft);
+  border-bottom: 1px solid var(--identity-amber);
+  color: var(--primary-deep);
+  font-size: var(--text-base);
+  padding: var(--space-2) var(--space-4);
+}

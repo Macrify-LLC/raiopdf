@@ -1221,6 +1221,236 @@ const rotatedFreeTextEdits: readonly PdfEdit[] = [
   },
 ];
 
+describe("ink, shape, and callout round-trip", () => {
+  const ROUND_TRIP_EDITS = [
+    {
+      type: "ink",
+      pageIndex: 0,
+      strokes: [
+        [{ x: 20, y: 20 }, { x: 40, y: 55 }, { x: 70, y: 30 }],
+        [{ x: 90, y: 25 }, { x: 110, y: 60 }],
+      ],
+      strokeWidthPt: 2.5,
+      color: { r: 0.9, g: 0.1, b: 0.1 },
+    },
+    {
+      type: "shape",
+      pageIndex: 0,
+      shape: "rect",
+      rect: { x: 20, y: 80, w: 60, h: 30 },
+      strokeWidthPt: 2,
+      strokeColor: { r: 0.1, g: 0.4, b: 0.8 },
+      fillColor: { r: 0.8, g: 0.9, b: 1 },
+    },
+    {
+      type: "shape",
+      pageIndex: 0,
+      shape: "ellipse",
+      rect: { x: 100, y: 80, w: 50, h: 40 },
+      strokeColor: { r: 0.2, g: 0.6, b: 0.2 },
+    },
+    {
+      type: "shape",
+      pageIndex: 0,
+      shape: "line",
+      from: { x: 20, y: 130 },
+      to: { x: 120, y: 150 },
+      strokeWidthPt: 1.5,
+    },
+    {
+      type: "shape",
+      pageIndex: 0,
+      shape: "arrow",
+      from: { x: 140, y: 130 },
+      to: { x: 220, y: 165 },
+      strokeColor: { r: 0.5, g: 0.1, b: 0.5 },
+    },
+    {
+      type: "callout",
+      pageIndex: 0,
+      rect: { x: 150, y: 40, w: 90, h: 34 },
+      tip: { x: 120, y: 20 },
+      text: "Callout text",
+      fontSizePt: 11,
+      align: "center",
+    },
+  ] satisfies PdfEdit[];
+
+  it("re-imports every ink, shape, and callout annotation as an editable object", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(document, ROUND_TRIP_EDITS, {
+      markupMode: "annotation",
+    });
+    const imports = await engine.readRaioPdfAnnotations(edited);
+
+    expect(imports.map((entry) => entry.edit.type)).toEqual([
+      "ink",
+      "shape",
+      "shape",
+      "shape",
+      "shape",
+      "callout",
+    ]);
+    expect(new Set(imports.map((entry) => entry.annotId)).size).toBe(ROUND_TRIP_EDITS.length);
+
+    for (const [index, entry] of imports.entries()) {
+      expect(entry.edit).toMatchObject(ROUND_TRIP_EDITS[index]!);
+    }
+  });
+
+  it("emits the PDF subtype each shape kind is supposed to use", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(document, ROUND_TRIP_EDITS, {
+      markupMode: "annotation",
+    });
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const subtypes = readPageAnnotations(editedPdf, 0).map((annotation) =>
+      readName(annotation, "Subtype"),
+    );
+
+    expect(subtypes).toEqual(["Ink", "Square", "Circle", "Line", "Line", "FreeText"]);
+  });
+
+  it("distinguishes a callout from a text box even though both are FreeText", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        {
+          type: "textBox",
+          pageIndex: 0,
+          rect: { x: 20, y: 160, w: 100, h: 30 },
+          text: "Plain box",
+        },
+        {
+          type: "callout",
+          pageIndex: 0,
+          rect: { x: 150, y: 40, w: 90, h: 34 },
+          tip: { x: 120, y: 20 },
+          text: "Pointed box",
+        },
+      ],
+      { markupMode: "annotation" },
+    );
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const imports = await engine.readRaioPdfAnnotations(edited);
+
+    // Both annotations carry Subtype FreeText, so the subtype alone cannot tell
+    // them apart — the stored SourceEdit is what recovers the distinction.
+    expect(
+      readPageAnnotations(editedPdf, 0).map((annotation) => readName(annotation, "Subtype")),
+    ).toEqual(["FreeText", "FreeText"]);
+    expect(imports.map((entry) => entry.edit.type)).toEqual(["textBox", "callout"]);
+    expect(imports[1]?.edit).toMatchObject({ type: "callout", tip: { x: 120, y: 20 } });
+  });
+
+  it("updates and deletes imported ink, shape, and callout annotations by id", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(document, ROUND_TRIP_EDITS, {
+      markupMode: "annotation",
+    });
+    const [inkImport, rectImport, , , , calloutImport] =
+      await engine.readRaioPdfAnnotations(edited);
+
+    if (!inkImport || !rectImport || !calloutImport) {
+      throw new Error("Expected imported ink, shape, and callout annotations.");
+    }
+
+    const withMovedInk = await engine.updateAnnotationById(edited, inkImport.annotId, {
+      type: "ink",
+      pageIndex: 0,
+      annotId: inkImport.annotId,
+      strokes: [[{ x: 30, y: 30 }, { x: 60, y: 70 }]],
+      strokeWidthPt: 4,
+    });
+    const withResizedRect = await engine.updateAnnotationById(
+      withMovedInk,
+      rectImport.annotId,
+      {
+        type: "shape",
+        pageIndex: 0,
+        annotId: rectImport.annotId,
+        shape: "rect",
+        rect: { x: 25, y: 85, w: 120, h: 45 },
+      },
+    );
+    const deleted = await engine.deleteAnnotationById(withResizedRect, calloutImport.annotId);
+    const imports = await engine.readRaioPdfAnnotations(deleted);
+
+    expect(imports).toHaveLength(ROUND_TRIP_EDITS.length - 1);
+    expect(imports.some((entry) => entry.annotId === calloutImport.annotId)).toBe(false);
+    expect(imports.find((entry) => entry.annotId === inkImport.annotId)?.edit).toMatchObject({
+      type: "ink",
+      strokes: [[{ x: 30, y: 30 }, { x: 60, y: 70 }]],
+      strokeWidthPt: 4,
+    });
+    expect(imports.find((entry) => entry.annotId === rectImport.annotId)?.edit).toMatchObject({
+      type: "shape",
+      shape: "rect",
+      rect: { x: 25, y: 85, w: 120, h: 45 },
+    });
+  });
+
+  it("survives a save-and-reopen cycle with a fresh engine", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(document, ROUND_TRIP_EDITS, {
+      markupMode: "annotation",
+    });
+    const savedBytes = await engine.saveToBytes(edited);
+
+    const reopenEngine = createLocalPdfEngine();
+    const reopened = await reopenEngine.open(savedBytes);
+    const imports = await reopenEngine.readRaioPdfAnnotations(reopened);
+
+    expect(imports.map((entry) => entry.edit.type)).toEqual([
+      "ink",
+      "shape",
+      "shape",
+      "shape",
+      "shape",
+      "callout",
+    ]);
+  });
+
+  it("ignores a stored edit whose geometry contradicts its declared shape", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[320, 220]]));
+    const edited = await engine.applyEdits(
+      document,
+      [ROUND_TRIP_EDITS[1]!, ROUND_TRIP_EDITS[3]!],
+      { markupMode: "annotation" },
+    );
+    const editedPdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const [squareAnnotation] = readPageAnnotations(editedPdf, 0);
+
+    if (!squareAnnotation) {
+      throw new Error("Expected a Square annotation.");
+    }
+
+    // A rect shape can only round-trip through a Square; rewriting the stored
+    // edit to claim "line" leaves it without the endpoints a line needs, and
+    // its subtype no longer matches, so import must drop it rather than throw.
+    const marker = squareAnnotation.lookup(PDFName.of("RaioPDF"), PDFDict);
+
+    marker.set(
+      PDFName.of("SourceEdit"),
+      PDFString.of(JSON.stringify({ type: "shape", pageIndex: 0, shape: "line" })),
+    );
+
+    const tamperedEngine = createLocalPdfEngine();
+    const tampered = await tamperedEngine.open(await editedPdf.save());
+    const imports = await tamperedEngine.readRaioPdfAnnotations(tampered);
+
+    expect(imports.map((entry) => entry.edit.type)).toEqual(["shape"]);
+    expect(imports[0]?.edit).toMatchObject({ shape: "line" });
+  });
+});
+
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
 

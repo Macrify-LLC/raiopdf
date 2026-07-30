@@ -6,6 +6,7 @@ import type {
   PdfRaioAnnotationEdit,
   PdfRaioAnnotationImport,
   PdfEditRect,
+  PdfShapeEdit,
   PdfShapeKind,
   PdfFormFieldValue,
   PdfTextBoxAlign,
@@ -277,6 +278,7 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
 
       return {
         type: "callout",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
         pageIndex: edit.pageIndex,
         rect: edit.rect,
         tip: edit.tip,
@@ -343,6 +345,7 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
     case "ink":
       return {
         type: "ink",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
         pageIndex: edit.pageIndex,
         strokes: edit.strokes,
         strokeWidthPt: edit.strokeWidthPt ?? INK_STROKE_WIDTH_PT,
@@ -352,6 +355,7 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
       const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_SHAPE_STROKE_WIDTH_PT;
       const common = {
         type: "shape" as const,
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
         pageIndex: edit.pageIndex,
         shape: edit.shape,
         ...(strokeWidthPt !== DEFAULT_SHAPE_STROKE_WIDTH_PT ? { strokeWidthPt } : {}),
@@ -490,6 +494,55 @@ function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): Pen
         ...(edit.italic !== undefined ? { italic: edit.italic } : {}),
         ...(edit.align ? { align: edit.align } : {}),
       };
+    case "callout":
+      return {
+        ...common,
+        kind: "callout",
+        rect: edit.rect,
+        tip: edit.tip,
+        text: edit.text,
+        fontSizePt: edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE,
+        ...(edit.color ? { color: edit.color } : {}),
+        ...(edit.fontFamily ? { fontFamily: edit.fontFamily } : {}),
+        ...(edit.bold !== undefined ? { bold: edit.bold } : {}),
+        ...(edit.italic !== undefined ? { italic: edit.italic } : {}),
+        ...(edit.align ? { align: edit.align } : {}),
+        ...(edit.strokeColor ? { strokeColor: edit.strokeColor } : {}),
+        ...(edit.strokeWidthPt !== undefined ? { strokeWidthPt: edit.strokeWidthPt } : {}),
+        ...(edit.arrowhead !== undefined ? { arrowhead: edit.arrowhead } : {}),
+        ...(edit.boxBorder !== undefined ? { boxBorder: edit.boxBorder } : {}),
+        ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
+      };
+    case "ink":
+      return {
+        ...common,
+        kind: "ink",
+        strokes: edit.strokes,
+        ...(edit.strokeWidthPt !== undefined ? { strokeWidthPt: edit.strokeWidthPt } : {}),
+        ...(edit.color ? { color: edit.color } : {}),
+      };
+    case "shape": {
+      const shapeCommon = {
+        ...common,
+        kind: "shape" as const,
+        ...(edit.strokeWidthPt !== undefined ? { strokeWidthPt: edit.strokeWidthPt } : {}),
+        ...(edit.strokeColor ? { strokeColor: edit.strokeColor } : {}),
+      };
+
+      return isLineShapeEdit(edit)
+        ? {
+            ...shapeCommon,
+            shape: edit.shape,
+            from: edit.from,
+            to: edit.to,
+          }
+        : {
+            ...shapeCommon,
+            shape: edit.shape,
+            rect: edit.rect,
+            ...(edit.fillColor ? { fillColor: edit.fillColor } : {}),
+          };
+    }
     case "comment":
       return {
         ...common,
@@ -505,6 +558,9 @@ function isRaioAnnotationPdfEdit(edit: PdfEdit): edit is PdfRaioAnnotationEdit {
     edit.type === "underline" ||
     edit.type === "strikethrough" ||
     edit.type === "textBox" ||
+    edit.type === "callout" ||
+    edit.type === "ink" ||
+    edit.type === "shape" ||
     edit.type === "comment";
 }
 
@@ -594,6 +650,13 @@ function shapeLabel(shape: PendingShapeKind): string {
 function isLineShape(
   edit: PendingShape,
 ): edit is Extract<PendingShape, { shape: "line" | "arrow" }> {
+  return edit.shape === "line" || edit.shape === "arrow";
+}
+
+/** `isLineShape` for the engine-side edit union, used on the import path. */
+function isLineShapeEdit(
+  edit: PdfShapeEdit,
+): edit is Extract<PdfShapeEdit, { shape: "line" | "arrow" }> {
   return edit.shape === "line" || edit.shape === "arrow";
 }
 

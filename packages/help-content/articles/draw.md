@@ -20,6 +20,9 @@ spot. When you save, the mark becomes a real PDF annotation.
 ## What to know
 
 - **It's held until you Save,** then saved as a PDF annotation.
+- **It's still yours after you reopen the file.** Saved ink comes back as
+  something you can select, restyle, move, or delete — not a mark frozen into
+  the page. Use **Flatten markup** when you do want it permanent.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   ink when printing, or turn it off before saving new ink.
 - **Flatten markup makes it permanent.** Use **Flatten markup** when you want

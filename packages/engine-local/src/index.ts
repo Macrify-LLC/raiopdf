@@ -46,6 +46,7 @@ import type {
   PdfInspectTextMapOptions,
   PdfInspectTextMapResult,
   PdfShapeEdit,
+  PdfShapeKind,
   PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
   PdfStampPlacement,
@@ -239,13 +240,44 @@ const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
   "StrikeOut",
   "Underline",
 ]);
+/**
+ * PDF subtype each round-trippable edit kind emits.
+ *
+ * `shape` is deliberately absent: one shape edit maps to three subtypes
+ * depending on `edit.shape`, so it resolves through
+ * `RAIO_ROUNDTRIP_SUBTYPE_BY_SHAPE`. Always go through
+ * `roundTripSubtypeForEdit` rather than indexing either map directly.
+ *
+ * The mapping is many-to-one in the other direction too — `textBox` and
+ * `callout` both emit `FreeText`, and `line`/`arrow` both emit `Line` — so the
+ * subtype alone never identifies the kind. Import reads the kind from the
+ * stored `SourceEdit` and uses the subtype only to confirm the two agree.
+ */
 const RAIO_ROUNDTRIP_SUBTYPE_BY_KIND = {
   highlight: "Highlight",
   underline: "Underline",
   strikethrough: "StrikeOut",
   textBox: "FreeText",
+  callout: "FreeText",
+  ink: "Ink",
   comment: "Text",
-} satisfies Record<PdfRaioAnnotationEdit["type"], string>;
+} satisfies Record<Exclude<PdfRaioAnnotationEdit["type"], "shape">, string>;
+const RAIO_ROUNDTRIP_SUBTYPE_BY_SHAPE = {
+  rect: "Square",
+  ellipse: "Circle",
+  line: "Line",
+  arrow: "Line",
+} satisfies Record<PdfShapeKind, string>;
+const RAIO_ROUNDTRIP_SUBTYPES = new Set<string>([
+  ...Object.values(RAIO_ROUNDTRIP_SUBTYPE_BY_KIND),
+  ...Object.values(RAIO_ROUNDTRIP_SUBTYPE_BY_SHAPE),
+]);
+
+function roundTripSubtypeForEdit(edit: PdfRaioAnnotationEdit): string {
+  return edit.type === "shape"
+    ? RAIO_ROUNDTRIP_SUBTYPE_BY_SHAPE[edit.shape]
+    : RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type];
+}
 const TEXT_BOX_STANDARD_FONTS: Record<TextBoxFontKey, StandardFonts> = {
   "helvetica:regular": StandardFonts.Helvetica,
   "helvetica:bold": StandardFonts.HelveticaBold,
@@ -1316,11 +1348,7 @@ function readRaioPdfAnnotationImport(
   const kind = readPdfTextObject(marker.get(PDFName.of("Kind")));
   const subtype = readAnnotationSubtype(annotation);
 
-  if (
-    kind !== "Markup" ||
-    !subtype ||
-    !Object.values(RAIO_ROUNDTRIP_SUBTYPE_BY_KIND).includes(subtype)
-  ) {
+  if (kind !== "Markup" || !subtype || !RAIO_ROUNDTRIP_SUBTYPES.has(subtype)) {
     return null;
   }
 
@@ -1335,7 +1363,7 @@ function readRaioPdfAnnotationImport(
 
   const edit = parseRaioPdfSourceEdit(sourceEditText);
 
-  if (!edit || RAIO_ROUNDTRIP_SUBTYPE_BY_KIND[edit.type] !== subtype) {
+  if (!edit || roundTripSubtypeForEdit(edit) !== subtype) {
     return null;
   }
 
@@ -1557,10 +1585,49 @@ function isRaioAnnotationEdit(value: unknown): value is PdfRaioAnnotationEdit {
       return typeof edit.pageIndex === "number" &&
         isEditRectLike(edit.rect) &&
         typeof edit.text === "string";
+    case "callout":
+      return typeof edit.pageIndex === "number" &&
+        isEditRectLike(edit.rect) &&
+        isEditPointLike(edit.tip) &&
+        typeof edit.text === "string";
+    case "ink":
+      return typeof edit.pageIndex === "number" && isInkStrokeListLike(edit.strokes);
+    case "shape":
+      return typeof edit.pageIndex === "number" && isShapeGeometryLike(edit);
     case "comment":
       return typeof edit.pageIndex === "number" &&
         isEditPointLike(edit.at) &&
         typeof edit.text === "string";
+    default:
+      return false;
+  }
+}
+
+/** Ink needs at least one stroke, and every stroke at least two points. */
+function isInkStrokeListLike(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (stroke) =>
+        Array.isArray(stroke) && stroke.length >= 2 && stroke.every(isEditPointLike),
+    )
+  );
+}
+
+/**
+ * Shape geometry is discriminated by `shape`: boxed shapes carry a rect,
+ * line-like shapes carry two endpoints. A stored edit claiming one shape while
+ * carrying the other's geometry is rejected rather than silently re-drawn.
+ */
+function isShapeGeometryLike(edit: Record<string, unknown>): boolean {
+  switch (edit.shape) {
+    case "rect":
+    case "ellipse":
+      return isEditRectLike(edit.rect);
+    case "line":
+    case "arrow":
+      return isEditPointLike(edit.from) && isEditPointLike(edit.to);
     default:
       return false;
   }
@@ -2223,6 +2290,20 @@ async function applyRaioAnnotationEditInPlace(
         markupAnnotationOptions,
       );
       return;
+    case "callout":
+      applyCalloutAnnotationEdit(
+        pdf,
+        edit,
+        await resolveTextBoxFont(edit),
+        markupAnnotationOptions,
+      );
+      return;
+    case "ink":
+      applyInkAnnotationEdit(pdf, edit, markupAnnotationOptions);
+      return;
+    case "shape":
+      applyShapeAnnotationEdit(pdf, edit, markupAnnotationOptions);
+      return;
     case "comment":
       applyCommentEdit(pdf, edit);
       return;
@@ -2617,7 +2698,7 @@ function applyInkAnnotationEdit(
     C: colorToPdfArray(edit.color),
     BS: { W: thickness, S: "S" },
     AP: { N: appearanceTarget.finish() },
-  });
+  }, edit);
 }
 
 function applyShapeAnnotationEdit(
@@ -2650,7 +2731,7 @@ function applyShapeAnnotationEdit(
         ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
         BS: { W: thickness, S: "S" },
         AP: { N: appearanceTarget.finish() },
-      });
+      }, edit);
       return;
     }
     case "ellipse": {
@@ -2672,7 +2753,7 @@ function applyShapeAnnotationEdit(
         ...(edit.fillColor ? { IC: colorToPdfArray(edit.fillColor) } : {}),
         BS: { W: thickness, S: "S" },
         AP: { N: appearanceTarget.finish() },
-      });
+      }, edit);
       return;
     }
     case "line":
@@ -2705,7 +2786,7 @@ function applyShapeAnnotationEdit(
         BS: { W: thickness, S: "S" },
         ...(edit.shape === "arrow" ? { LE: ["None", "ClosedArrow"] } : {}),
         AP: { N: appearanceTarget.finish() },
-      });
+      }, edit);
       return;
     }
   }
@@ -2875,7 +2956,7 @@ function applyCalloutAnnotationEdit(
     BS: { W: thickness, S: "S" },
     ...(edit.arrowhead ?? true ? { LE: PDFName.of("ClosedArrow") } : {}),
     AP: { N: appearanceTarget.finish() },
-  });
+  }, edit);
 }
 
 function textAlignToPdfQ(align: PdfTextBoxAlign | undefined): number {

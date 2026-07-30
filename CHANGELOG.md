@@ -34,6 +34,11 @@ polish.
   status, and real cancellation. (Windows already printed.)
 - **Edit Text: "Replace text…" on right-click.** Right-click selected text to replace it
   in place. The old "Find & Replace" entry is renamed to match how it's actually used.
+- **Drawings, shapes, and callouts stay editable after you reopen a file.** They already
+  came back looking right, but RaioPDF no longer recognized them as its own, so you
+  couldn't select, restyle, move, or delete them — only start over. Now they reopen as
+  live objects, the way highlights and text boxes already did. **Flatten markup** still
+  makes them permanent when that's what you want.
 
 ### Changed
 

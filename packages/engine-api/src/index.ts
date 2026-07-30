@@ -778,6 +778,8 @@ export type PdfTextBoxEdit = {
  */
 export type PdfCalloutEdit = {
   type: "callout";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the callout. */
   pageIndex: number;
   /** User-space bounding box of the text box. */
@@ -837,6 +839,8 @@ export type PdfImageEdit = {
  */
 export type PdfInkEdit = {
   type: "ink";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
   /** Zero-based page index receiving the strokes. */
   pageIndex: number;
   /** Polylines in PDF user-space points. Each stroke needs at least two points. */
@@ -860,6 +864,8 @@ export type PdfShapeKind = "rect" | "ellipse" | "line" | "arrow";
 export type PdfShapeEdit =
   | {
       type: "shape";
+      /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+      annotId?: string;
       /** Zero-based page index receiving the shape. */
       pageIndex: number;
       shape: "rect" | "ellipse";
@@ -874,6 +880,8 @@ export type PdfShapeEdit =
     }
   | {
       type: "shape";
+      /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+      annotId?: string;
       /** Zero-based page index receiving the shape. */
       pageIndex: number;
       shape: "line" | "arrow";
@@ -1038,6 +1046,9 @@ export type PdfRaioAnnotationEdit =
   | PdfHighlightEdit
   | PdfTextMarkupEdit
   | PdfTextBoxEdit
+  | PdfCalloutEdit
+  | PdfInkEdit
+  | PdfShapeEdit
   | PdfCommentEdit;
 
 export type PdfRaioAnnotationImport = {

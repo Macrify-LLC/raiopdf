@@ -747,6 +747,20 @@ export const productionSetInputSchema = {
   includeIndex: z.boolean().optional().describe("Write production-index.pdf and production-index.csv. Default true."),
   combinedPdf: z.boolean().optional().describe("Also write a single combined production PDF. Default false."),
   volumeSizeMb: z.number().positive().optional().describe("Optional volume folder cap in megabytes."),
+  continueFrom: z
+    .string()
+    .optional()
+    .describe(
+      "Absolute root of a prior production package to continue the same Bates series from. Verified " +
+        "against that package's manifest; absent continuationOverride, prefix/digits/start must match " +
+        "the prior package exactly (start = its next available number).",
+    ),
+  continuationOverride: z
+    .object({
+      reason: z.string().describe("Why start and/or digits differ from the prior production (required)."),
+    })
+    .optional()
+    .describe("Permits start/digits to differ from the prior production; prefix must still match exactly."),
 };
 export const productionSetOutputSchema = {
   ...baseOutputSchema,
@@ -756,6 +770,13 @@ export const productionSetOutputSchema = {
   indexPdf: z.string().nullable().optional(),
   indexCsv: z.string().nullable().optional(),
   combinedPdf: z.string().nullable().optional(),
+  continuation: z
+    .object({
+      mode: z.enum(["strict", "override"]),
+      priorLastBates: z.string(),
+    })
+    .nullable()
+    .optional(),
 };
 export interface ProductionSetInput {
   sources: { path: string; designation?: string | undefined }[];
@@ -767,6 +788,8 @@ export interface ProductionSetInput {
   includeIndex?: boolean | undefined;
   combinedPdf?: boolean | undefined;
   volumeSizeMb?: number | undefined;
+  continueFrom?: string | undefined;
+  continuationOverride?: { reason: string } | undefined;
 }
 export async function handleProductionSet(
   input: ProductionSetInput,
@@ -779,6 +802,9 @@ export async function handleProductionSet(
     })),
   );
   const output = await preparePackageOutputDir(input.outputDir);
+  const continueFrom = input.continueFrom === undefined
+    ? undefined
+    : (await preparePackageOutputDir(input.continueFrom)).outputPath;
   const result = await buildProductionSet({
     sources: resolvedSources,
     outputDir: output.outputPath,
@@ -791,6 +817,8 @@ export async function handleProductionSet(
     ...(input.includeIndex === undefined ? {} : { includeIndex: input.includeIndex }),
     ...(input.combinedPdf === undefined ? {} : { combinedPdf: input.combinedPdf }),
     ...(input.volumeSizeMb === undefined ? {} : { volumeSizeMb: input.volumeSizeMb }),
+    ...(continueFrom === undefined ? {} : { continueFrom }),
+    ...(input.continuationOverride === undefined ? {} : { continuationOverride: input.continuationOverride }),
   });
 
   return successResult(
@@ -802,6 +830,7 @@ export async function handleProductionSet(
       indexPdf: result.indexPdf,
       indexCsv: result.indexCsv,
       combinedPdf: result.combinedPdf,
+      continuation: result.continuation,
     },
   );
 }

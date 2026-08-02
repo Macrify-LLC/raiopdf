@@ -266,6 +266,38 @@ export async function claimFolderScan(
   return invoke<PickedPdfsForAdd>("claim_folder_scan", { token, includeSubfolders });
 }
 
+/** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
+export interface ProductionContinuationSummary {
+  prefix: string;
+  digits: number;
+  nextNumber: number;
+  lastBates: string;
+  createdAt: string;
+  fileCount: number;
+}
+
+/**
+ * Reads and verifies a prior production package's Bates continuation report
+ * for the "Continue from prior production…" prefill. Takes a DIRECTORY
+ * GRANT, never a raw path [R1-9] -- callers pick the folder via
+ * `filePort.pickDirectory()` and pass its `grant` straight through here
+ * (reused again as `continueFrom` when the build actually runs). Rejects
+ * with the shell's message on failure (not a RaioPDF package, a tampered or
+ * self-inconsistent Bates report) -- callers show that message as-is.
+ */
+export async function readProductionContinuation(
+  directoryGrant: FileGrant,
+): Promise<ProductionContinuationSummary> {
+  if (!isTauriRuntime()) {
+    throw new Error("readProductionContinuation is desktop-only.");
+  }
+
+  const invoke = await getTauriInvoke();
+  return invoke<ProductionContinuationSummary>("read_production_continuation", {
+    directoryGrant,
+  });
+}
+
 export async function pickPdfForWord(): Promise<PickedPdfForWord | null> {
   if (!isTauriRuntime()) {
     throw new Error("pickPdfForWord is desktop-only.");

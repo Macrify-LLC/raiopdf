@@ -42,10 +42,35 @@ reuse numbers.
 - **Combined production PDF** — also produce a single merged PDF of the whole set.
 - **Volume folders** — split the production into volumes under a size you set.
 
+## Continuing from a prior production
+
+Click **Continue from prior production…** and choose the folder of an earlier
+production package. RaioPDF reads that package's own record of what it produced
+— not a guess, a verified reading of the package itself — and fills in the
+Prefix, Start, and Digits for you, with a line like "Continuing SMITH from
+SMITH000123, produced Jul 14." Those fields lock while a continuation is
+active, so the new production can't accidentally reuse or skip numbers.
+
+- **What's verified:** the prior package's Bates report is checked against its
+  own manifest (so an edited or replaced report is caught), and its file
+  ranges are checked for gaps or overlaps. If anything doesn't check out,
+  RaioPDF tells you plainly instead of prefilling a number it can't stand
+  behind.
+- **Detach** (the **×**) to stop continuing and edit the fields freely again.
+- **Adjust start…** is for a deliberate gap or a change in digit width — a
+  reserved range, a supplemental production, digits changing between
+  matters. It asks for a one-line reason (required) before Start or Digits
+  become editable again; the Prefix always stays locked, since continuing a
+  different prefix isn't the same series. The reason is recorded on the new
+  package.
+
+This replaces the older, quieter "last used" hint — that still fills in a
+starting number automatically from your last run in this app, but only
+**Continue from prior production…** actually checks the earlier package
+before committing to a number.
+
 ## What to know
 
-- **It picks up where you left off.** For a given prefix, Production Set remembers
-  the last number used and starts the next run after it.
 - **Give yourself enough digits.** If the last page's number wouldn't fit the
   digits you chose, it stops and asks you to raise the digit width or lower the
   start number.

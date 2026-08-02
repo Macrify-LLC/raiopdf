@@ -544,4 +544,80 @@ describe("legal tools (local pdf-lib engine)", () => {
 
     await expect(fs.access(path.join(dir, "production-package"))).rejects.toBeTruthy();
   });
+
+  it("build_production_set continues Bates numbering from a prior production package", async () => {
+    const first = await makePdf("prior-a.pdf", 2);
+    const priorDir = path.join(dir, "prior-package");
+    const prior = await handleProductionSet(
+      { sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH", start: 1, digits: 6 },
+      engine,
+    );
+    expect(structured(prior).nextNumber).toBe(3);
+
+    const second = await makePdf("next-a.pdf", 1);
+    const nextDir = path.join(dir, "next-package");
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: second }],
+        outputDir: nextDir,
+        prefix: "SMITH",
+        start: 3,
+        digits: 6,
+        continueFrom: priorDir,
+      },
+      engine,
+    );
+
+    expect(structured(result)).toMatchObject({
+      ok: true,
+      nextNumber: 4,
+      continuation: { mode: "strict", priorLastBates: "SMITH000002" },
+    });
+  });
+
+  it("build_production_set rejects a Bates start mismatch against the prior production", async () => {
+    const first = await makePdf("prior-a.pdf", 1);
+    const priorDir = path.join(dir, "prior-package");
+    await handleProductionSet(
+      { sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" },
+      engine,
+    );
+
+    const second = await makePdf("next-a.pdf", 1);
+    const nextDir = path.join(dir, "next-package");
+    await expect(
+      handleProductionSet(
+        { sources: [{ path: second }], outputDir: nextDir, prefix: "SMITH", start: 1, continueFrom: priorDir },
+        engine,
+      ),
+    ).rejects.toThrow(/start mismatch/i);
+  });
+
+  it("build_production_set allows a continuation override with a reason", async () => {
+    const first = await makePdf("prior-a.pdf", 1);
+    const priorDir = path.join(dir, "prior-package");
+    await handleProductionSet(
+      { sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" },
+      engine,
+    );
+
+    const second = await makePdf("next-a.pdf", 1);
+    const nextDir = path.join(dir, "next-package");
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: second }],
+        outputDir: nextDir,
+        prefix: "SMITH",
+        start: 500,
+        continueFrom: priorDir,
+        continuationOverride: { reason: "Reserving a supplemental range." },
+      },
+      engine,
+    );
+
+    expect(structured(result)).toMatchObject({
+      ok: true,
+      continuation: { mode: "override", priorLastBates: "SMITH000001" },
+    });
+  });
 });

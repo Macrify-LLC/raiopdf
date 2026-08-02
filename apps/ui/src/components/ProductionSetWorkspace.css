@@ -277,6 +277,39 @@ label.production-workspace__checkbox-row {
   line-height: 1.35;
 }
 
+.production-workspace__continuation {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.production-workspace__continuation-active {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  padding: var(--space-2) var(--space-3);
+}
+
+.production-workspace__continuation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.production-workspace__continuation-reason {
+  flex: 1 1 220px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+}
+
 /* Result -- receipt style: check-marked header, dashed-hairline part rows,
    tabular figures. Mirrors Prepare for Filing's ResultCard so every legal
    workflow's "it's done" state reads the same way. */

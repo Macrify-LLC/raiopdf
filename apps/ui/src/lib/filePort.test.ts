@@ -35,6 +35,7 @@ import {
   readBrowserFileSource,
   readPdfRange,
   readPickedFileSource,
+  readProductionContinuation,
   saveStreamedCopy,
   saveStreamedCopyIntoDirectory,
   type FileGrant,
@@ -336,5 +337,44 @@ describe("directory saves", () => {
     ]);
     expect(invokeState.calls[1]!.args).toBe(bytes);
     expect(Array.isArray(invokeState.calls[1]!.args)).toBe(false);
+  });
+});
+
+describe("readProductionContinuation", () => {
+  it("is desktop-only", async () => {
+    await expect(readProductionContinuation("dir-grant" as FileGrant)).rejects.toThrow(
+      "readProductionContinuation is desktop-only.",
+    );
+  });
+
+  it("invokes read_production_continuation with the directory grant and returns the summary", async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const summary = {
+      prefix: "SMITH",
+      digits: 6,
+      nextNumber: 123,
+      lastBates: "SMITH000122",
+      createdAt: "2026-07-14T10:00:00.000Z",
+      fileCount: 4,
+    };
+    invokeState.handler = (command) => {
+      if (command === "read_production_continuation") {
+        return summary;
+      }
+
+      throw new Error(`Unexpected invoke: ${command}`);
+    };
+
+    const { readProductionContinuation: readContinuation } = await import("./filePort");
+    const result = await readContinuation("dir-grant" as FileGrant);
+
+    expect(result).toEqual(summary);
+    expect(invokeState.calls).toEqual([
+      { command: "read_production_continuation", args: { directoryGrant: "dir-grant" } },
+    ]);
   });
 });

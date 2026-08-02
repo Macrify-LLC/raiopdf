@@ -11,6 +11,7 @@ import {
   type ProductionSetProgress,
   type ProductionSetRunInput,
 } from "./ProductionSetWorkspace";
+import { writeProductionLastUsed } from "../lib/productionHints";
 
 const idleProgress: ProductionSetProgress = { running: false, message: null, result: null };
 
@@ -42,6 +43,7 @@ describe("ProductionSetWorkspace Bates continuation", () => {
     container?.remove();
     root = null;
     container = null;
+    window.localStorage.clear();
   });
 
   function render(options: {
@@ -152,6 +154,19 @@ describe("ProductionSetWorkspace Bates continuation", () => {
     expect(digitsInput().disabled).toBe(true);
     expect(statusLines().some((line) => line.includes("Continuing SMITH from SMITH000123"))).toBe(true);
     expect(statusLines().some((line) => line.includes("SMITH000122"))).toBe(true);
+  });
+
+  it("keeps the verified start when a stored last-used hint exists for the prior prefix", async () => {
+    // A stale local hint for SMITH must not overwrite the package-verified
+    // number after the continuation sets the prefix.
+    writeProductionLastUsed("SMITH", 400);
+    const onContinueFromPriorProduction = vi.fn(async () => PICKED);
+    render({ onContinueFromPriorProduction });
+
+    await click(buttonByText("Continue from prior production…"));
+
+    expect(startInput().value).toBe("123");
+    expect(startInput().disabled).toBe(true);
   });
 
   it("shows a plain error message on a failed pick without locking any fields", async () => {

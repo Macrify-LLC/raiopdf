@@ -204,11 +204,18 @@ export function ProductionSetWorkspace({
   }, []);
 
   useEffect(() => {
+    // The local last-used hint is a convenience for free-form entry only. While
+    // a continuation is active, the verified number from the prior package is
+    // authoritative — the hint must not overwrite it when the prefix changes.
+    if (continuationActive) {
+      return;
+    }
+
     const lastUsed = readProductionLastUsed(effectivePrefix);
     if (lastUsed !== null) {
       setStart(lastUsed + 1);
     }
-  }, [effectivePrefix]);
+  }, [effectivePrefix, continuationActive]);
 
   async function addFiles(pick: () => Promise<FileAddResult[] | null> = onAddFile) {
     if (addFilePendingRef.current) {

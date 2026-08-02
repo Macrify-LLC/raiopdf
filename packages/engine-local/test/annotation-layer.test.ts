@@ -1608,6 +1608,33 @@ describe("exhibit stamp round-trip", () => {
     expect(await reimportStampWithSourceEdit(STAMP_EDIT)).toHaveLength(1);
   });
 
+  it("keeps stamps visible in the display copy while hiding overlay-backed kinds", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        STAMP_EDIT,
+        { type: "highlight", pageIndex: 0, rects: [{ x: 20, y: 700, w: 80, h: 12 }], opacity: 0.4 },
+      ],
+      { markupMode: "annotation" },
+    );
+    const savedBytes = await engine.saveToBytes(edited);
+
+    const displayBytes = await hideRaioPdfImportedAnnotationsForDisplay(savedBytes, {
+      keepVisibleKinds: ["stamp"],
+    });
+    const display = await PDFDocument.load(displayBytes);
+    const HIDDEN = 2;
+    const flags = readPageAnnotations(display, 0).map(
+      (annotation) => annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0,
+    );
+
+    expect(flags).toHaveLength(2);
+    expect((flags[0] ?? 0) & HIDDEN).toBe(0);
+    expect((flags[1] ?? 0) & HIDDEN).toBe(HIDDEN);
+  });
+
   it.each(tamperedStampSourceEdits)(
     "drops rather than throws on a stored stamp edit with $name",
     async ({ sourceEdit }) => {
@@ -1632,6 +1659,14 @@ describe("exhibit stamp round-trip", () => {
     {
       name: "a negative sequence index",
       edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, index: -1 } },
+    },
+    {
+      name: "an unknown sequence schema version",
+      edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, schemaVersion: 2 } },
+    },
+    {
+      name: "an unknown sequence layout",
+      edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, layout: "diagonal" } },
     },
   ])(
     // Anything writable has to be re-importable, or a saved stamp would come

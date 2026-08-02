@@ -2289,7 +2289,9 @@ export function App() {
     if (source.kind === "memory") {
       const sourceBytes = source.bytes;
 
-      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes)
+      // Stamps have no overlay yet (see pendingEditFromRaioAnnotation), so
+      // they must keep their native appearance in the display copy.
+      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes, { keepVisibleKinds: ["stamp"] })
         .then((displayBytes) => loadPdfDocument(displayBytes))
         .then((loaded) => {
           loadedDocument = loaded;

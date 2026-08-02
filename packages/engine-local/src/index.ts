@@ -1327,14 +1327,25 @@ export function readRaioPdfMarkupAnnotations(
  */
 export async function hideRaioPdfImportedAnnotationsForDisplay(
   bytes: PdfBytes,
+  options?: {
+    /**
+     * Edit kinds to leave visible in the display copy. Hiding assumes the
+     * caller's overlay re-renders the annotation; a kind the overlay can't
+     * represent must keep its native appearance or it vanishes entirely.
+     */
+    keepVisibleKinds?: readonly PdfRaioAnnotationEdit["type"][];
+  },
 ): Promise<Uint8Array> {
   const normalizedBytes = normalizeBytes(bytes);
   const pdf = await loadPdf(normalizedBytes);
+  const keepVisible = new Set(options?.keepVisibleKinds ?? []);
   let changed = false;
 
   pdf.getPages().forEach((page, pageIndex) => {
     for (const entry of readAnnotationEntries(page)) {
-      if (!readRaioPdfAnnotationImport(entry.dict, pageIndex)) {
+      const imported = readRaioPdfAnnotationImport(entry.dict, pageIndex);
+
+      if (!imported || keepVisible.has(imported.edit.type)) {
         continue;
       }
 
@@ -3981,8 +3992,13 @@ function assertValidStampEdit(edit: PdfStampEdit): void {
     assertNonNegativeNumber(edit.templateRevision, "templateRevision");
   }
 
-  if (edit.sequence) {
-    assertNonNegativeInteger(edit.sequence.index, "sequence.index");
+  // Same shape check the importer applies: a sequence the engine writes must be
+  // one it can read back, or the stamp comes back inert.
+  if (!isStampSequenceLike(edit.sequence)) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Stamp sequence must carry schemaVersion 1, a known identifierStyle and layout, a string prefix, and a non-negative integer index.",
+    );
   }
 
   if (edit.fontSizePt !== undefined) {

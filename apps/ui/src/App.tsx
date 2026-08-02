@@ -1714,6 +1714,7 @@ export function App() {
           return {
             grant,
             designation: file.designation || undefined,
+            designationPages: file.designationPages || undefined,
           };
         }),
         outputDir: input.outputDir,
@@ -1724,6 +1725,9 @@ export function App() {
         includeFilenameInIndex: input.includeFilenameInIndex,
         combinedPdf: input.combinedPdf,
         volumeSizeMb: input.volumeSizeMb ?? undefined,
+        batesPlacement: input.batesPlacement,
+        designationPlacement: input.designationPlacement,
+        stampFontSizePt: input.stampFontSizePt,
         continueFrom: input.continueFrom,
         continuationOverrideReason: input.continuationOverrideReason,
       });

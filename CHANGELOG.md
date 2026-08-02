@@ -53,6 +53,19 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   package, not just a remembered number — the quieter "picks up where you left off"
   hint still exists as a fallback, but only this checks the earlier package before
   committing to a number.
+- **Production Set: choose where the Bates number and the designation land, and stamp
+  a designation on only part of a document.** Open **Stamp placement** to pick from six
+  positions (header or footer, crossed with left/center/right) for the Bates number and
+  the designation separately, and set a shared font size from 6 to 24pt — the previous
+  defaults (Bates in the footer at the right, the designation in the header, centered)
+  are unchanged unless you change them. Once a document has a designation, its new
+  **Pages** field restricts it to a range you type (e.g. `1-3,7`) instead of the whole
+  document; Bates numbers still cover every page. RaioPDF won't build a production where
+  the Bates number and the designation share a page edge, or where your chosen text and
+  font size wouldn't stay legible (at least 6pt once rendered) on the narrowest page in
+  the set — both are caught before anything is written, with a plain explanation of
+  what to change. The page range you used is recorded in the production's index and
+  manifest so it's visible later, not just in the moment.
 
 ### Changed
 

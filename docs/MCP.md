@@ -114,7 +114,7 @@ card all quote the count from here; update them when it changes.
 | `build_exhibit_binder` | Assemble a main document + ordered, labeled exhibits into one bookmarked binder. |
 | `build_cover_page` | Generate a court caption/cover page from case details you provide. |
 | `detect_authorities` | Read-only legal authority detector: cases, statutes, rules, and constitutional provisions cited in a PDF, with page hits. |
-| `build_production_set` | Build a Bates-numbered discovery production from a document set: confidentiality designations, index files, volume splits. Optionally continues the same Bates series from a prior production package (`continueFrom`, manifest-verified), with an explicit-reason override (`continuationOverride`) for a deliberate gap or digit-width change. |
+| `build_production_set` | Build a Bates-numbered discovery production from a document set: confidentiality designations (optionally restricted to a per-source page range via `designationPages`, e.g. `"1-3,7"`), configurable stamp placement and shared font size (`batesPlacement`/`designationPlacement`/`stampFontSizePt` — Bates and the designation can't share a page edge), index files, volume splits. Optionally continues the same Bates series from a prior production package (`continueFrom`, manifest-verified), with an explicit-reason override (`continuationOverride`) for a deliberate gap or digit-width change. |
 | `batch_cleanup` | Run OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs in one queue. |
 | `redact_terms` | Redact terms with verified removal (see above). |
 | `locate_text` | Read-only text locator: returns page indexes, snippets, and PDF point rectangles for matching text. |

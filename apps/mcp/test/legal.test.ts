@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { EngineHandle } from "../src/engine.js";
-import { extractPageText } from "../src/pdfjs-node.js";
+import { extractPageText, extractPageTextByPage } from "../src/pdfjs-node.js";
 import {
   handleApplyEditsOneShot,
   handleBates,
@@ -17,6 +18,7 @@ import {
   handlePageNumbers,
   handleProductionSet,
   handleSplit,
+  productionSetInputSchema,
 } from "../src/tools/legal.js";
 
 // The local (pdf-lib) tools ignore the engine handle; they use the in-process engine.
@@ -618,6 +620,107 @@ describe("legal tools (local pdf-lib engine)", () => {
     expect(structured(result)).toMatchObject({
       ok: true,
       continuation: { mode: "override", priorLastBates: "SMITH000001" },
+    });
+  });
+
+  it("build_production_set threads custom placement, font size, and per-source page ranges through to the engine", async () => {
+    const source = await makePdf("ranged.pdf", 3);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: source, designation: "Confidential", designationPages: "1-2" }],
+        outputDir,
+        prefix: "THREAD",
+        batesPlacement: { edge: "header", align: "left" },
+        designationPlacement: { edge: "footer", align: "center" },
+        stampFontSizePt: 12,
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.ok).toBe(true);
+    const outputPath = path.join(outputDir, (content.outputs as string[])[0]!);
+    const pages = await extractPageTextByPage(await fs.readFile(outputPath));
+    expect(pages[0]!.text).toContain("Confidential");
+    expect(pages[1]!.text).toContain("Confidential");
+    expect(pages[2]!.text).not.toContain("Confidential");
+  });
+
+  it("build_production_set rejects a designation page range with no designation set", async () => {
+    const source = await makePdf("nodesig.pdf", 2);
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        { sources: [{ path: source, designationPages: "1" }], outputDir, prefix: "NODESIG" },
+        engine,
+      ),
+    ).rejects.toThrow(/no confidentiality designation was chosen/);
+  });
+
+  it("build_production_set rejects Bates/designation placements sharing an edge", async () => {
+    const source = await makePdf("collide.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        {
+          sources: [{ path: source, designation: "Confidential" }],
+          outputDir,
+          prefix: "COL",
+          batesPlacement: { edge: "footer", align: "left" },
+          designationPlacement: { edge: "footer", align: "right" },
+        },
+        engine,
+      ),
+    ).rejects.toThrow(/can't both be placed in the footer/);
+  });
+
+  describe("productionSetInputSchema (round trip)", () => {
+    const schema = z.object(productionSetInputSchema);
+
+    it("accepts batesPlacement, designationPlacement, stampFontSizePt, and per-source designationPages", () => {
+      const parsed = schema.parse({
+        sources: [{ path: "/abs/a.pdf", designation: "Confidential", designationPages: "1-3,7" }],
+        outputDir: "/abs/out",
+        prefix: "SMITH",
+        batesPlacement: { edge: "header", align: "left" },
+        designationPlacement: { edge: "footer", align: "right" },
+        stampFontSizePt: 14,
+      });
+
+      expect(parsed.sources[0]).toMatchObject({ designationPages: "1-3,7" });
+      expect(parsed.batesPlacement).toEqual({ edge: "header", align: "left" });
+      expect(parsed.designationPlacement).toEqual({ edge: "footer", align: "right" });
+      expect(parsed.stampFontSizePt).toBe(14);
+    });
+
+    it("omits the new fields entirely without error (backward compatible)", () => {
+      const parsed = schema.parse({
+        sources: [{ path: "/abs/a.pdf" }],
+        outputDir: "/abs/out",
+        prefix: "SMITH",
+      });
+
+      expect(parsed.batesPlacement).toBeUndefined();
+      expect(parsed.designationPlacement).toBeUndefined();
+      expect(parsed.stampFontSizePt).toBeUndefined();
+      expect(parsed.sources[0]!.designationPages).toBeUndefined();
+    });
+
+    it("rejects a stampFontSizePt below 6 or above 24 at the schema layer", () => {
+      const base = { sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" };
+      expect(() => schema.parse({ ...base, stampFontSizePt: 5 })).toThrow();
+      expect(() => schema.parse({ ...base, stampFontSizePt: 25 })).toThrow();
+      expect(() => schema.parse({ ...base, stampFontSizePt: 10 })).not.toThrow();
+    });
+
+    it("rejects an invalid edge/align value at the schema layer", () => {
+      const base = { sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" };
+      expect(() => schema.parse({ ...base, batesPlacement: { edge: "middle", align: "right" } })).toThrow();
+      expect(() => schema.parse({ ...base, designationPlacement: { edge: "header", align: "up" } })).toThrow();
     });
   });
 });

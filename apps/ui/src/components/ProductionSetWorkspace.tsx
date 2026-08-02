@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PDFDocument } from "pdf-lib";
+import type { PdfStampPlacement } from "@raiopdf/engine-api";
+import { PageRangeError, parsePageRanges } from "@raiopdf/engine-api";
 import type { OpenedFile } from "../lib/filePort";
 import { useBatesPrefix } from "../hooks/useBatesPrefix";
 import {
@@ -31,6 +33,38 @@ export interface ProductionSetFile {
    */
   pages: number | null;
   designation: string;
+  /**
+   * 1-based page-range spec restricting the designation to part of THIS
+   * file (e.g. "1-3,7"). Empty string = every page (default, unchanged).
+   * Ignored while `designation` is empty.
+   */
+  designationPages: string;
+}
+
+/** The six placements a Bates number or designation can take: header/footer
+ * crossed with left/center/right. Shared by both "Stamp placement" selects. */
+export const STAMP_PLACEMENT_OPTIONS: readonly {
+  key: string;
+  label: string;
+  placement: PdfStampPlacement;
+}[] = [
+  { key: "header:left", label: "Header — Left", placement: { edge: "header", align: "left" } },
+  { key: "header:center", label: "Header — Center", placement: { edge: "header", align: "center" } },
+  { key: "header:right", label: "Header — Right", placement: { edge: "header", align: "right" } },
+  { key: "footer:left", label: "Footer — Left", placement: { edge: "footer", align: "left" } },
+  { key: "footer:center", label: "Footer — Center", placement: { edge: "footer", align: "center" } },
+  { key: "footer:right", label: "Footer — Right", placement: { edge: "footer", align: "right" } },
+];
+
+const DEFAULT_BATES_PLACEMENT_KEY = "footer:right";
+const DEFAULT_DESIGNATION_PLACEMENT_KEY = "header:center";
+const DEFAULT_STAMP_FONT_SIZE_PT = 10;
+
+function placementForKey(key: string): PdfStampPlacement {
+  return (
+    STAMP_PLACEMENT_OPTIONS.find((option) => option.key === key)?.placement ??
+    STAMP_PLACEMENT_OPTIONS[0]!.placement
+  );
 }
 
 export interface ProductionSetRunInput {
@@ -43,6 +77,9 @@ export interface ProductionSetRunInput {
   includeFilenameInIndex: boolean;
   combinedPdf: boolean;
   volumeSizeMb: number | null;
+  batesPlacement: PdfStampPlacement;
+  designationPlacement: PdfStampPlacement;
+  stampFontSizePt: number;
   /** Directory grant of a prior production package, from `onContinueFromPriorProduction`. */
   continueFrom?: string | undefined;
   /** Set only when the user used "Adjust start…" with a reason. */
@@ -178,6 +215,9 @@ export function ProductionSetWorkspace({
   const [continuationError, setContinuationError] = useState<string | null>(null);
   const [continuationAdjusting, setContinuationAdjusting] = useState(false);
   const [continuationReason, setContinuationReason] = useState("");
+  const [batesPlacementKey, setBatesPlacementKey] = useState(DEFAULT_BATES_PLACEMENT_KEY);
+  const [designationPlacementKey, setDesignationPlacementKey] = useState(DEFAULT_DESIGNATION_PLACEMENT_KEY);
+  const [stampFontSizePt, setStampFontSizePt] = useState(DEFAULT_STAMP_FONT_SIZE_PT);
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
@@ -189,12 +229,42 @@ export function ProductionSetWorkspace({
   const continuationActive = continuationPick !== null;
   const continuationReasonMissing = continuationAdjusting && continuationReason.trim().length === 0;
   const continuationStartDigitsLocked = continuationActive && !continuationAdjusting;
+  // Same-edge Bates/designation placements are pre-output-rejected by the
+  // package build too (`assertPlacementsDoNotShareEdge`); catching it here
+  // avoids a round trip to the build-time error for the common accidental
+  // case of picking the same edge for both.
+  const placementsCollide = batesPlacementKey.split(":")[0] === designationPlacementKey.split(":")[0];
+  const stampFontSizeOutOfRange = !Number.isFinite(stampFontSizePt) ||
+    stampFontSizePt < 6 ||
+    stampFontSizePt > 24;
+  // Derived, not stored -- recomputed from `files` on every render so it can
+  // never drift from what's actually about to be sent to the build. Empty
+  // spec, no designation, or an unknown page count (`pages === null`, an
+  // above-threshold add) all skip inline checking; an unknown page count is
+  // still checked authoritatively at build time, package-side.
+  const pageRangeErrors = useMemo(() => {
+    const errors = new Map<string, string>();
+    for (const file of files) {
+      if (file.designation === "" || file.designationPages.trim() === "" || file.pages === null) {
+        continue;
+      }
+      try {
+        parsePageRanges(file.designationPages, file.pages);
+      } catch (error) {
+        errors.set(file.id, error instanceof PageRangeError ? error.message : "Invalid page range.");
+      }
+    }
+    return errors;
+  }, [files]);
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
     !prefixMissing &&
     !overflows &&
     !addFileBusy &&
     !continuationReasonMissing &&
+    !placementsCollide &&
+    !stampFontSizeOutOfRange &&
+    pageRangeErrors.size === 0 &&
     !progress.running;
 
   useEffect(() => {
@@ -256,6 +326,7 @@ export function ProductionSetWorkspace({
             path: descriptor.grant,
             pages: descriptor.pageCount,
             designation: "",
+            designationPages: "",
           });
           if (descriptor.pageCount === null) {
             deferredCount += 1;
@@ -384,7 +455,13 @@ export function ProductionSetWorkspace({
         ? "Increase the digit width or lower the start number."
         : continuationReasonMissing
           ? "Add a reason for adjusting the Bates continuation start or digits."
-          : "Add files and choose an empty package root folder.");
+          : placementsCollide
+            ? "Bates numbers and the designation can't share a page edge -- choose header for one and footer for the other."
+            : stampFontSizeOutOfRange
+              ? "Stamp font size must be between 6 and 24 points."
+              : pageRangeErrors.size > 0
+                ? "Fix the page range shown under each file before building."
+                : "Add files and choose an empty package root folder.");
       return;
     }
 
@@ -398,6 +475,9 @@ export function ProductionSetWorkspace({
       includeFilenameInIndex,
       combinedPdf,
       volumeSizeMb: useVolumeCap ? volumeSizeMb : null,
+      batesPlacement: placementForKey(batesPlacementKey),
+      designationPlacement: placementForKey(designationPlacementKey),
+      stampFontSizePt,
       continueFrom: continuationPick?.grant,
       continuationOverrideReason: continuationAdjusting && continuationReason.trim().length > 0
         ? continuationReason.trim()
@@ -488,6 +568,38 @@ export function ProductionSetWorkspace({
                   ))}
                 </select>
               </label>
+              <label
+                className="production-workspace__pages"
+                title={
+                  file.designation === ""
+                    ? "Set a designation before restricting it to specific pages."
+                    : 'Which pages get the designation, e.g. "1-3,7". Leave blank for every page.'
+                }
+              >
+                <span>Pages</span>
+                <input
+                  type="text"
+                  placeholder="all"
+                  value={file.designationPages}
+                  disabled={file.designation === ""}
+                  aria-invalid={pageRangeErrors.has(file.id)}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setFiles((current) => current.map((item) => (
+                      item.id === file.id ? { ...item, designationPages: next } : item
+                    )));
+                  }}
+                />
+                {pageRangeErrors.has(file.id) ? (
+                  <span className="production-workspace__pages-note production-workspace__pages-note--error" role="alert">
+                    {pageRangeErrors.get(file.id)}
+                  </span>
+                ) : file.designation !== "" && file.designationPages.trim() !== "" && file.pages === null ? (
+                  <span className="production-workspace__pages-note">
+                    Page count isn't known yet -- checked when you build.
+                  </span>
+                ) : null}
+              </label>
               <div className="production-workspace__file-actions">
                 <button
                   type="button"
@@ -575,6 +687,62 @@ export function ProductionSetWorkspace({
         {prefixMissing ? (
           <p className="production-workspace__status">{gateMessage}</p>
         ) : null}
+        <details className="production-workspace__placement">
+          <summary className="production-workspace__placement-summary">
+            <span className="production-workspace__placement-chevron" aria-hidden="true">▸</span>
+            Stamp placement
+          </summary>
+          <div className="production-workspace__placement-body">
+            <div className="production-workspace__placement-grid">
+              <label title="Which page edge and alignment the Bates number stamps to.">
+                <span>Bates numbers</span>
+                <select
+                  value={batesPlacementKey}
+                  onChange={(event) => setBatesPlacementKey(event.target.value)}
+                >
+                  {STAMP_PLACEMENT_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label title="Which page edge and alignment the confidentiality designation stamps to.">
+                <span>Designation</span>
+                <select
+                  value={designationPlacementKey}
+                  onChange={(event) => setDesignationPlacementKey(event.target.value)}
+                >
+                  {STAMP_PLACEMENT_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label
+                className="production-workspace__number"
+                title="Font size, in points, shared by both stamps. Between 6 and 24."
+              >
+                <span>Font size (pt)</span>
+                <input
+                  type="number"
+                  min="6"
+                  max="24"
+                  value={stampFontSizePt}
+                  onChange={(event) => setStampFontSizePt(Number(event.target.value))}
+                />
+              </label>
+            </div>
+            {placementsCollide ? (
+              <p className="production-workspace__status" role="status">
+                Bates numbers and the designation can't share a page edge -- put one in the header and the
+                other in the footer.
+              </p>
+            ) : null}
+            {stampFontSizeOutOfRange ? (
+              <p className="production-workspace__status" role="status">
+                Font size must be between 6 and 24 points.
+              </p>
+            ) : null}
+          </div>
+        </details>
         <div className="production-workspace__continuation" aria-label="Bates continuation">
           {onContinueFromPriorProduction && !continuationActive ? (
             <button
@@ -778,6 +946,7 @@ function fromSourceFile(file: ProductionSetSourceFile, pages: number): Productio
     path: file.path,
     pages,
     designation: "",
+    designationPages: "",
   };
 }
 

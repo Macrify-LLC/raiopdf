@@ -32,6 +32,8 @@ pub struct ProductionSetSource {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     designation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    designation_pages: Option<String>,
 }
 
 /// What the renderer actually sends: an opaque grant, never a real path. The
@@ -43,12 +45,25 @@ pub struct ProductionSetSource {
 pub struct ProductionSetSourceGrant {
     grant: String,
     designation: Option<String>,
+    #[serde(default)]
+    designation_pages: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProductionSetContinuationOverride {
     reason: String,
+}
+
+/// Mirrors `packages/production-set`'s `PdfStampPlacement` (via
+/// `@raiopdf/engine-api`) over the Node one-shot JSON boundary. Same shape as
+/// `path_ops::BinderStampPlacement` -- kept as its own type rather than
+/// shared because the two one-shot input structs are otherwise unrelated.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionSetStampPlacement {
+    edge: String,
+    align: String,
 }
 
 #[derive(Serialize)]
@@ -66,6 +81,12 @@ struct ProductionSetOneShotInput {
     combined_pdf: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume_size_mb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bates_placement: Option<ProductionSetStampPlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    designation_placement: Option<ProductionSetStampPlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stamp_font_size_pt: Option<f64>,
     /// Absolute root of a prior production package to continue the same
     /// Bates series from -- resolved from a directory grant by
     /// `build_production_set` before this is constructed; see
@@ -666,6 +687,9 @@ pub async fn build_production_set(
     include_index: bool,
     combined_pdf: bool,
     volume_size_mb: Option<f64>,
+    bates_placement: Option<ProductionSetStampPlacement>,
+    designation_placement: Option<ProductionSetStampPlacement>,
+    stamp_font_size_pt: Option<f64>,
     // Directory grant for a prior production package to continue the same
     // Bates series from -- never a raw path from the renderer, same
     // discipline as every source grant here. Resolved to a path below,
@@ -682,6 +706,7 @@ pub async fn build_production_set(
             Ok(ProductionSetSource {
                 path: resolve_source_path(&file_grants, &source.grant)?,
                 designation: source.designation,
+                designation_pages: source.designation_pages,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -708,6 +733,9 @@ pub async fn build_production_set(
         include_index,
         combined_pdf,
         volume_size_mb,
+        bates_placement,
+        designation_placement,
+        stamp_font_size_pt,
         continue_from,
         continuation_override: continuation_override_reason
             .map(|reason| ProductionSetContinuationOverride { reason }),
@@ -1145,7 +1173,8 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 mod tests {
     use super::{
         one_shot_node_options, package_one_shot_timeout, read_production_continuation_sync,
-        resolve_output_dir, sanitize_one_shot_failure, sha256_hex, NODE_SECURITY_FLAG,
+        resolve_output_dir, sanitize_one_shot_failure, sha256_hex, ProductionSetSource,
+        ProductionSetSourceGrant, ProductionSetStampPlacement, NODE_SECURITY_FLAG,
     };
     use std::fs;
     use std::time::Duration;
@@ -1407,5 +1436,54 @@ mod tests {
             error.contains("not a folder") || error.contains("Failed"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn production_set_source_grant_deserializes_designation_pages() {
+        let json = r#"{"grant":"g1","designation":"Confidential","designationPages":"1-3,7"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.designation_pages.as_deref(), Some("1-3,7"));
+    }
+
+    #[test]
+    fn production_set_source_grant_defaults_designation_pages_to_none_when_absent() {
+        let json = r#"{"grant":"g1","designation":"Confidential"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.designation_pages, None);
+    }
+
+    #[test]
+    fn production_set_source_serializes_designation_pages_camel_case_and_omits_when_none() {
+        let with_range = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: Some("Confidential".to_string()),
+            designation_pages: Some("1-3,7".to_string()),
+        };
+        let json = serde_json::to_string(&with_range).expect("serialize");
+        assert!(json.contains(r#""designationPages":"1-3,7""#), "{json}");
+
+        let without_range = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: None,
+            designation_pages: None,
+        };
+        let json = serde_json::to_string(&without_range).expect("serialize");
+        assert!(!json.contains("designationPages"), "{json}");
+        assert!(!json.contains("designation"), "{json}");
+    }
+
+    #[test]
+    fn production_set_stamp_placement_round_trips_camel_case_edge_and_align() {
+        let placement = ProductionSetStampPlacement {
+            edge: "header".to_string(),
+            align: "left".to_string(),
+        };
+        let json = serde_json::to_string(&placement).expect("serialize");
+        assert_eq!(json, r#"{"edge":"header","align":"left"}"#);
+
+        let parsed: ProductionSetStampPlacement =
+            serde_json::from_str(r#"{"edge":"footer","align":"right"}"#).expect("deserialize");
+        assert_eq!(parsed.edge, "footer");
+        assert_eq!(parsed.align, "right");
     }
 }

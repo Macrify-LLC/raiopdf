@@ -24,7 +24,7 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
   });
 
   function render(
-    onAddFile: () => Promise<FileAddResult | null>,
+    onAddFile: () => Promise<FileAddResult[] | null>,
     currentFileNotice: string | null = null,
   ) {
     container = window.document.createElement("div");
@@ -53,14 +53,22 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
 
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
     });
   }
 
+  function fileNames(): string[] {
+    return Array.from(
+      window.document.querySelectorAll(".batch-workspace__file-name"),
+    ).map((element) => element.textContent ?? "");
+  }
+
   it("queues a bytes result by name and path", async () => {
-    render(async () => ({
+    render(async () => [{
       kind: "bytes",
       file: { bytes: new Uint8Array([1]), name: "small.pdf", path: "grant-small" },
-    }));
+    }]);
 
     await clickAddPdf();
 
@@ -68,10 +76,10 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
   });
 
   it("queues an above-threshold descriptor by grant — no empty-bytes bridge", async () => {
-    render(async () => ({
+    render(async () => [{
       kind: "descriptor",
       descriptor: { grant: "grant-big", name: "big.pdf", sizeBytes: 999_999_999, pageCount: null },
-    }));
+    }]);
 
     await clickAddPdf();
 
@@ -90,11 +98,39 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
   });
 
   it("surfaces the honest gate for a browser tooLarge result and queues nothing", async () => {
-    render(async () => ({ kind: "tooLarge", name: "nope.pdf", sizeBytes: 999_999_999 }));
+    render(async () => [{ kind: "tooLarge", name: "nope.pdf", sizeBytes: 999_999_999 }]);
 
     await clickAddPdf();
 
-    expect(container?.textContent).toContain('"nope.pdf" is too large to add here.');
+    expect(container?.textContent).toContain("nope.pdf");
+    expect(container?.textContent).toContain("too large to add here");
     expect(container?.textContent).toContain("Add PDFs to build the cleanup queue.");
+  });
+
+  it("queues every picked file in picker order", async () => {
+    render(async () => [
+      { kind: "bytes", file: { bytes: new Uint8Array([1]), name: "a-first.pdf", path: "grant-1" } },
+      { kind: "descriptor", descriptor: { grant: "grant-2", name: "b-second.pdf", sizeBytes: 999_999_999, pageCount: null } },
+      { kind: "bytes", file: { bytes: new Uint8Array([2]), name: "c-third.pdf", path: "grant-3" } },
+    ]);
+
+    await clickAddPdf();
+
+    expect(fileNames()).toEqual(["a-first.pdf", "b-second.pdf", "c-third.pdf"]);
+  });
+
+  it("reports a partial failure without dropping the files that succeeded", async () => {
+    render(async () => [
+      { kind: "bytes", file: { bytes: new Uint8Array([1]), name: "ok.pdf", path: "grant-ok" } },
+      { kind: "tooLarge", name: "huge.pdf", sizeBytes: 999_999_999 },
+      { kind: "error", name: "broken.pdf", message: "The PDF range could not be read." },
+    ]);
+
+    await clickAddPdf();
+
+    expect(fileNames()).toEqual(["ok.pdf"]);
+    expect(container?.textContent).toContain("1 of 3 added");
+    expect(container?.textContent).toContain("huge.pdf (too large to add here)");
+    expect(container?.textContent).toContain("broken.pdf (The PDF range could not be read.)");
   });
 });

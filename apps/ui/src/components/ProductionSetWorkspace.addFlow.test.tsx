@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { PDFDocument } from "pdf-lib";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FileAddResult } from "../lib/readFileForAdd";
 import { ProductionSetWorkspace } from "./ProductionSetWorkspace";
@@ -23,7 +24,7 @@ describe("ProductionSetWorkspace add flow", () => {
   });
 
   function render(
-    onAddFile: () => Promise<FileAddResult | null>,
+    onAddFile: () => Promise<FileAddResult[] | null>,
     currentFile: { name: string; path: string | null } | null = null,
     currentPageCount = 0,
     currentFileNotice: string | null = null,
@@ -54,7 +55,18 @@ describe("ProductionSetWorkspace add flow", () => {
 
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      // Flush the internal `Promise.all` page-count loop (and any subsequent
+      // microtasks it schedules) before the assertions below inspect the DOM.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
+  }
+
+  function fileNames(): string[] {
+    return Array.from(
+      window.document.querySelectorAll(".production-workspace__file-name"),
+    ).map((element) => element.textContent ?? "");
   }
 
   it("seeds the production order from a bytes-free current document (streamed doc)", () => {
@@ -83,10 +95,10 @@ describe("ProductionSetWorkspace add flow", () => {
   });
 
   it("adds a descriptor without bytes, deferring the page count when uncounted", async () => {
-    render(async () => ({
+    render(async () => [{
       kind: "descriptor",
       descriptor: { grant: "grant-big", name: "big.pdf", sizeBytes: 999_999_999, pageCount: null },
-    }));
+    }]);
 
     await clickAddPdf();
 
@@ -98,10 +110,10 @@ describe("ProductionSetWorkspace add flow", () => {
   });
 
   it("shows the descriptor page count when page_count(grant) supplied one", async () => {
-    render(async () => ({
+    render(async () => [{
       kind: "descriptor",
       descriptor: { grant: "grant-big", name: "counted.pdf", sizeBytes: 999_999_999, pageCount: 41 },
-    }));
+    }]);
 
     await clickAddPdf();
 
@@ -111,11 +123,66 @@ describe("ProductionSetWorkspace add flow", () => {
   });
 
   it("surfaces the honest gate for a tooLarge result and adds nothing", async () => {
-    render(async () => ({ kind: "tooLarge", name: "nope.pdf", sizeBytes: 999_999_999 }));
+    render(async () => [{ kind: "tooLarge", name: "nope.pdf", sizeBytes: 999_999_999 }]);
 
     await clickAddPdf();
 
-    expect(container?.textContent).toContain('"nope.pdf" is too large to add here.');
+    expect(container?.textContent).toContain("nope.pdf");
+    expect(container?.textContent).toContain("too large to add here");
     expect(container?.textContent).toContain("Add PDFs to build the production order.");
+  });
+
+  it("adds every picked file in picker order, mixing bytes and descriptor kinds", async () => {
+    render(async () => [
+      { kind: "descriptor", descriptor: { grant: "g-1", name: "a-first.pdf", sizeBytes: 999_999_999, pageCount: 3 } },
+      { kind: "bytes", file: { bytes: new Uint8Array([1]), name: "b-second.pdf", path: "grant-2" } },
+      { kind: "descriptor", descriptor: { grant: "g-3", name: "c-third.pdf", sizeBytes: 999_999_999, pageCount: 7 } },
+    ]);
+
+    await clickAddPdf();
+
+    // The middle pick's page count comes from a pdf-lib parse of one byte,
+    // which fails -- it is reported as an uncounted failure rather than
+    // silently reordering or dropping the entries around it.
+    expect(fileNames()).toEqual(["a-first.pdf", "c-third.pdf"]);
+    expect(container?.textContent).toContain("b-second.pdf");
+    expect(container?.textContent).toContain("its pages could not be counted");
+  });
+
+  it("adds multiple valid bytes-kind files together, preserving picker order", async () => {
+    const onePage = await PDFDocument.create();
+    onePage.addPage();
+    const onePageBytes = await onePage.save();
+
+    const twoPage = await PDFDocument.create();
+    twoPage.addPage();
+    twoPage.addPage();
+    const twoPageBytes = await twoPage.save();
+
+    render(async () => [
+      { kind: "bytes", file: { bytes: onePageBytes, name: "one.pdf", path: null } },
+      { kind: "bytes", file: { bytes: twoPageBytes, name: "two.pdf", path: null } },
+    ]);
+
+    await clickAddPdf();
+
+    expect(fileNames()).toEqual(["one.pdf", "two.pdf"]);
+    expect(container?.textContent).toContain("1 page");
+    expect(container?.textContent).toContain("2 pages");
+  });
+
+  it("reports a partial failure without dropping the files that succeeded", async () => {
+    render(async () => [
+      { kind: "descriptor", descriptor: { grant: "g-ok", name: "ok.pdf", sizeBytes: 999_999_999, pageCount: 5 } },
+      { kind: "tooLarge", name: "huge.pdf", sizeBytes: 999_999_999 },
+      { kind: "error", name: "broken.pdf", message: "The PDF range could not be read." },
+    ]);
+
+    await clickAddPdf();
+
+    expect(fileNames()).toEqual(["ok.pdf"]);
+    expect(container?.textContent).toContain("1 of 3 added");
+    expect(container?.textContent).toContain("huge.pdf (too large to add here)");
+    expect(container?.textContent).toContain("broken.pdf (The PDF range could not be read.)");
   });
 });

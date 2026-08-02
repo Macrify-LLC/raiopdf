@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PDFDocument } from "pdf-lib";
 import type { OpenedFile } from "../lib/filePort";
 import { useBatesPrefix } from "../hooks/useBatesPrefix";
-import { tooLargeToAddMessage, type FileAddResult } from "../lib/readFileForAdd";
+import {
+  fileAddBatchMessage,
+  summarizeFileAddResults,
+  type FileAddFailure,
+  type FileAddResult,
+  type FileAddSummary,
+} from "../lib/readFileForAdd";
 import {
   productionHintMessage,
   readProductionLastUsed,
@@ -78,7 +84,7 @@ export interface ProductionSetWorkspaceProps {
   currentFileNotice?: string | null | undefined;
   currentPageCount: number;
   progress: ProductionSetProgress;
-  onAddFile: () => Promise<FileAddResult | null>;
+  onAddFile: () => Promise<FileAddResult[] | null>;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -152,7 +158,7 @@ export function ProductionSetWorkspace({
     }
   }, [effectivePrefix]);
 
-  async function addFile() {
+  async function addFiles() {
     if (addFilePendingRef.current) {
       return;
     }
@@ -161,55 +167,82 @@ export function ProductionSetWorkspace({
     setAddingFile(true);
 
     try {
-      const result = await onAddFile();
-      if (!result || !mountedRef.current) {
+      const picked = await onAddFile();
+      if (!picked || picked.length === 0 || !mountedRef.current) {
         return;
       }
 
-      if (result.kind === "tooLarge") {
-        setLocalMessage(tooLargeToAddMessage(result.name));
+      // Build the new rows up front, in picker order, so the eventual
+      // `setFiles` append preserves that order even though the bytes-kind
+      // rows' page counts resolve concurrently and out of order below.
+      const summary = summarizeFileAddResults(picked);
+      const entries: (ProductionSetFile | null)[] = [];
+      let deferredCount = 0;
+      const uncountedNames: string[] = [];
+      const pageCountReads: { index: number; bytes: Uint8Array }[] = [];
+
+      for (const result of picked) {
+        if (result.kind === "tooLarge" || result.kind === "error") {
+          continue;
+        }
+
+        if (result.kind === "descriptor") {
+          // Above-threshold add: never load bytes. The page count comes from
+          // page_count(grant) when the shell op exists; otherwise it stays
+          // deferred (null) -- the path-based production build works either way.
+          const { descriptor } = result;
+          entries.push({
+            id: productionSetFileId(descriptor.name),
+            name: descriptor.name,
+            path: descriptor.grant,
+            pages: descriptor.pageCount,
+            designation: "",
+          });
+          if (descriptor.pageCount === null) {
+            deferredCount += 1;
+          }
+          continue;
+        }
+
+        const opened = result.file;
+        pageCountReads.push({ index: entries.length, bytes: opened.bytes });
+        entries.push(fromOpenedFile(opened, 0));
+      }
+
+      if (pageCountReads.length > 0) {
+        setPendingPageCountReads((current) => current + pageCountReads.length);
+        setLocalMessage(pageCountReads.length === 1
+          ? "Reading page count..."
+          : `Reading ${pageCountReads.length} page counts...`);
+
+        await Promise.all(pageCountReads.map(async ({ index, bytes }) => {
+          try {
+            const pages = await readProductionSetPageCount(bytes);
+            const entry = entries[index];
+            if (entry) {
+              entries[index] = { ...entry, pages };
+            }
+          } catch {
+            uncountedNames.push(entries[index]?.name ?? "PDF");
+            entries[index] = null;
+          } finally {
+            if (mountedRef.current) {
+              setPendingPageCountReads((current) => Math.max(0, current - 1));
+            }
+          }
+        }));
+      }
+
+      if (!mountedRef.current) {
         return;
       }
 
-      if (result.kind === "descriptor") {
-        // Above-threshold add: never load bytes. The page count comes from
-        // page_count(grant) when the shell op exists; otherwise it stays
-        // deferred (null) -- the path-based production build works either way.
-        const { descriptor } = result;
-        setFiles((current) => [...current, {
-          id: productionSetFileId(descriptor.name),
-          name: descriptor.name,
-          path: descriptor.grant,
-          pages: descriptor.pageCount,
-          designation: "",
-        }]);
-        setLocalMessage(descriptor.pageCount === null
-          ? "Added a large PDF; its page count will be determined during the production build."
-          : null);
-        return;
+      const countedEntries = entries.filter((entry): entry is ProductionSetFile => entry !== null);
+      if (countedEntries.length > 0) {
+        setFiles((current) => [...current, ...countedEntries]);
       }
 
-      const opened = result.file;
-      setPendingPageCountReads((current) => current + 1);
-      setLocalMessage("Reading page count...");
-
-      try {
-        const pages = await readProductionSetPageCount(opened.bytes);
-        if (!mountedRef.current) {
-          return;
-        }
-        setFiles((current) => [...current, fromOpenedFile(opened, pages)]);
-        setLocalMessage(null);
-      } catch {
-        if (!mountedRef.current) {
-          return;
-        }
-        setLocalMessage("That PDF's pages could not be counted. Reopen or repair it before building production.");
-      } finally {
-        if (mountedRef.current) {
-          setPendingPageCountReads((current) => Math.max(0, current - 1));
-        }
-      }
+      setLocalMessage(addSummaryMessage(summary, deferredCount, uncountedNames));
     } finally {
       if (mountedRef.current) {
         setAddingFile(false);
@@ -280,9 +313,9 @@ export function ProductionSetWorkspace({
             <button
               type="button"
               className="production-workspace__secondary-button"
-              onClick={addFile}
+              onClick={() => void addFiles()}
               disabled={addFileBusy || progress.running}
-              title={addFileBusy ? "Wait for the current PDF page count to finish." : "Add another PDF to the production order."}
+              title={addFileBusy ? "Wait for the current page counts to finish." : "Add one or more PDFs to the production order."}
             >
               <PlusIcon size={14} /> Add PDF
             </button>
@@ -544,6 +577,42 @@ function fromOpenedFile(file: OpenedFile, pages: number): ProductionSetFile {
 
 function productionSetFileId(name: string): string {
   return `${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/**
+ * Folds the pick-level `tooLarge`/`error` failures together with any page
+ * counts that failed AFTER the pick succeeded (a bytes-kind file pdf-lib
+ * could not parse) into one status line, and otherwise falls back to the
+ * deferred-count note for above-threshold descriptor adds.
+ */
+function addSummaryMessage(
+  summary: FileAddSummary,
+  deferredCount: number,
+  uncountedNames: readonly string[],
+): string | null {
+  const uncounted: FileAddFailure[] = uncountedNames.map((name) => ({
+    name,
+    reason: "its pages could not be counted",
+  }));
+  const failureMessage = fileAddBatchMessage(
+    {
+      addedCount: summary.addedCount - uncountedNames.length,
+      totalCount: summary.totalCount,
+      failures: [...summary.failures, ...uncounted],
+    },
+    "document",
+  );
+  if (failureMessage) {
+    return failureMessage;
+  }
+
+  if (deferredCount === 0) {
+    return null;
+  }
+
+  return deferredCount === 1
+    ? "Added a large PDF; its page count will be determined during the production build."
+    : `Added ${deferredCount} large PDFs; their page counts will be determined during the production build.`;
 }
 
 export async function readProductionSetPageCount(bytes: Uint8Array): Promise<number> {

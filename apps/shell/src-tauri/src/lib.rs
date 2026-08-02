@@ -199,6 +199,17 @@ struct PickedPdf {
 struct PickedPdfs {
     files: Vec<PickedPdf>,
     threshold_bytes: u64,
+    /// Files the pick could not serve (vanished between dialog and stat,
+    /// unreadable metadata, grant failure). One bad file must not reject the
+    /// rest of a multi-select batch.
+    skipped: Vec<SkippedPick>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkippedPick {
+    name: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -831,19 +842,50 @@ async fn pick_pdfs_for_add(
 
     let threshold_bytes = large_doc_threshold_bytes();
     let mut files = Vec::with_capacity(paths.len());
+    let mut skipped = Vec::new();
 
     for path in paths {
-        let path = path.into_path().map_err(|error| error.to_string())?;
-        require_pdf_or_docx_extension(&path)?;
-        let size_bytes = fs::metadata(&path)
-            .map_err(|_| READ_PDF_ERROR.to_string())?
-            .len();
+        // Per-file failures skip that file only: one path that vanished or
+        // can't be statted must not reject the rest of the batch.
+        let display_name = path.to_string();
+        let path = match path.into_path() {
+            Ok(path) => path,
+            Err(error) => {
+                skipped.push(SkippedPick {
+                    name: display_name,
+                    message: error.to_string(),
+                });
+                continue;
+            }
+        };
+        let name = file_name(&path);
+        if let Err(message) = require_pdf_or_docx_extension(&path) {
+            skipped.push(SkippedPick { name, message });
+            continue;
+        }
+        let size_bytes = match fs::metadata(&path) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => {
+                skipped.push(SkippedPick {
+                    name,
+                    message: READ_PDF_ERROR.to_string(),
+                });
+                continue;
+            }
+        };
         let source = picked_add_source(&path);
         let markup_scan =
             matches!(source, PickedAddSource::Docx).then(|| docx_scan::scan_docx_markup(&path));
+        let grant = match file_grants.grant(path.clone()) {
+            Ok(grant) => grant,
+            Err(message) => {
+                skipped.push(SkippedPick { name, message });
+                continue;
+            }
+        };
         files.push(PickedPdf {
-            grant: file_grants.grant(path.clone())?,
-            name: file_name(&path),
+            grant,
+            name,
             size_bytes,
             source,
             markup_scan,
@@ -854,6 +896,7 @@ async fn pick_pdfs_for_add(
     Ok(Some(PickedPdfs {
         files,
         threshold_bytes,
+        skipped,
     }))
 }
 

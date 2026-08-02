@@ -17,6 +17,13 @@
  *   never yield a shell grant [R3-2], so callers surface an honest
  *   "this file is too large to add here" gate.
  *
+ * The package add flows (Production Set, Batch Cleanup, Filing Packet) pick
+ * and read every file the user selected in one go via `pickFilesForAdd`,
+ * which runs each pick through this same per-file logic and never lets one
+ * bad file drop the rest of the batch (see its `{ kind: "error" }` case).
+ * `pickFileForAdd` is the older single-file wrapper, kept for callers that
+ * only ever want the first pick.
+ *
  * SHELL COMMAND CONTRACTS:
  * - `pick_pdfs_for_add(multiple)` -> `[{ grant, name, sizeBytes }]` multi-select
  *   picker with NO eager byte read [R5-1].
@@ -33,7 +40,10 @@ import {
   readPdfRange,
   type FileGrant,
   type OpenedFile,
+  type SkippedPickForAdd,
 } from "./filePort";
+
+export type { SkippedPickForAdd } from "./filePort";
 import {
   getLargeDocThresholdBytes,
   setLargeDocThresholdBytes,
@@ -79,6 +89,12 @@ export interface PickPdfsForAddOptions {
   onDocxRowsChange?: (rows: readonly DocxConversionProgressRow[]) => void;
   onWordUnavailable?: (message: string, capability: WordCapability) => void;
   onDocxErrors?: (errors: readonly DocxAddError[]) => void;
+  /**
+   * Files the shell picker itself could not serve (vanished between dialog and
+   * stat, unreadable metadata). Reported per-file so one bad path never drops
+   * the rest of a multi-select batch.
+   */
+  onSkippedPicks?: (skipped: readonly SkippedPickForAdd[]) => void;
 }
 
 export interface FileAddDescriptor {
@@ -95,7 +111,15 @@ export interface FileAddDescriptor {
 export type FileAddResult =
   | { kind: "bytes"; file: OpenedFile }
   | { kind: "descriptor"; descriptor: FileAddDescriptor }
-  | { kind: "tooLarge"; name: string; sizeBytes: number };
+  | { kind: "tooLarge"; name: string; sizeBytes: number }
+  /**
+   * One picked file failed to read (a range read that hit `FILE_CHANGED`/`IO`,
+   * or any other per-file exception) -- the batch keeps going for the rest of
+   * the pick rather than losing every file to one bad read. Only ever produced
+   * by `pickFilesForAdd`'s per-file try/catch; `readFileForAdd` itself still
+   * throws on a read failure for the single-file callers that catch around it.
+   */
+  | { kind: "error"; name: string; message: string };
 
 export type FileAddInput = File | PickedPdfForAdd;
 
@@ -156,6 +180,11 @@ export async function pickPdfsForAdd(
     // The shell echoes its authoritative threshold with every pick — keep
     // the UI-side constant in lockstep so the two can never drift.
     setLargeDocThresholdBytes(picked.thresholdBytes);
+
+    if (picked.skipped?.length) {
+      options.onSkippedPicks?.(picked.skipped);
+    }
+
     return await normalizePickedFilesForAdd([...picked.files], options);
   } catch (error) {
     if (isMissingCommandError(error, "pick_pdfs_for_add")) {
@@ -169,32 +198,146 @@ export async function pickPdfsForAdd(
 }
 
 /**
- * Single-file pick-and-read for the package add flows (Production Set, Batch
- * Cleanup, Filing Packet). Uses `pick_pdfs_for_add` + `readFileForAdd`.
- * Returns `null` when the user cancels.
+ * Multi-select pick-and-read for the package add flows (Production Set, Batch
+ * Cleanup, Filing Packet). Maps EVERY picked file through `readFileForAdd`,
+ * preserving picker order. Returns `null` when the user cancels; an empty `[]`
+ * only happens if the picker itself returns zero files (not a normal case --
+ * `pick_pdfs_for_add`'s own cancel already surfaces as `null` here).
  *
  * The shell that serves this UI always ships `pick_pdfs_for_add` (UI and shell
  * are one binary), so `pickPdfsForAdd`'s legacy `null` ("no picker available")
  * result is unreachable here — it is treated as a cancel rather than falling
  * back to the main-document dialog.
+ *
+ * Partial-failure behavior: a per-file read failure (e.g. the file changed on
+ * disk between pick and read) does NOT drop the rest of the batch. That file
+ * comes back as a `{ kind: "error" }` entry alongside the successful reads --
+ * callers use `summarizeFileAddResults` / `fileAddBatchMessage` to report
+ * "N of M added; K failed: <names>" instead of losing the whole pick. Picks
+ * the shell itself couldn't serve (vanished path, unreadable metadata) are
+ * appended as error entries the same way.
+ *
+ * Memory contract: below-threshold picks materialize their bytes here, and
+ * callers retain those same Uint8Array references in workspace state — the
+ * batch itself adds no copies, so peak memory equals the steady state after
+ * adding the same files one at a time. Above-threshold picks stay descriptors.
+ */
+export async function pickFilesForAdd(
+  options: PickPdfsForAddOptions = {},
+): Promise<FileAddResult[] | null> {
+  if (!isTauriRuntime()) {
+    // Browser: pick the DOM File ourselves so the size check runs BEFORE any
+    // read [R2-4]. The browser has no native multi-select surface here (one
+    // DOM `<input type=file>`, matching the pre-existing single-pick UX).
+    const file = await pickBrowserFile();
+    return file ? [await readFileForAdd(file)] : null;
+  }
+
+  const skippedByPicker: SkippedPickForAdd[] = [];
+  const picks = await pickPdfsForAdd({
+    ...options,
+    onSkippedPicks: (skipped) => {
+      skippedByPicker.push(...skipped);
+      options.onSkippedPicks?.(skipped);
+    },
+  });
+  if (picks === null) {
+    return null;
+  }
+
+  const results: FileAddResult[] = [];
+  for (const pick of picks) {
+    try {
+      results.push(await readFileForAdd(pick));
+    } catch (error) {
+      results.push({
+        kind: "error",
+        name: pick.name,
+        message: error instanceof Error ? error.message : "This PDF could not be read.",
+      });
+    }
+  }
+
+  // Files the shell picker itself couldn't serve join the batch as error
+  // entries, so "N of M added; K failed" covers them too.
+  for (const skipped of skippedByPicker) {
+    results.push({ kind: "error", name: skipped.name, message: skipped.message });
+  }
+
+  return results;
+}
+
+/**
+ * Single-file pick-and-read for callers not yet migrated to the plural
+ * `pickFilesForAdd`. Thin wrapper: picks the whole batch and returns its
+ * first entry. Returns `null` when the user cancels.
  */
 export async function pickFileForAdd(
   options: PickPdfsForAddOptions = {},
 ): Promise<FileAddResult | null> {
-  if (!isTauriRuntime()) {
-    // Browser: pick the DOM File ourselves so the size check runs BEFORE any
-    // read [R2-4].
-    const file = await pickBrowserFile();
-    return file ? readFileForAdd(file) : null;
-  }
-
-  const pick = (await pickPdfsForAdd(options))?.[0];
-  return pick ? readFileForAdd(pick) : null;
+  const picked = await pickFilesForAdd(options);
+  return picked?.[0] ?? null;
 }
 
 /** Shared honest-gate copy for above-threshold adds. */
 export function tooLargeToAddMessage(name: string): string {
   return `"${name}" is too large to add here.`;
+}
+
+/** One entry the batch add flow did NOT add, with a short human reason. */
+export interface FileAddFailure {
+  name: string;
+  reason: string;
+}
+
+/** Summary of a `pickFilesForAdd` batch: how many landed vs. why the rest didn't. */
+export interface FileAddSummary {
+  addedCount: number;
+  totalCount: number;
+  failures: readonly FileAddFailure[];
+}
+
+/**
+ * Reduces a `pickFilesForAdd` batch to counts + per-file failure reasons.
+ * `bytes` and `descriptor` results count as added; `tooLarge` and `error`
+ * results are reported as failures without dropping the successes around them.
+ */
+export function summarizeFileAddResults(results: readonly FileAddResult[]): FileAddSummary {
+  const failures: FileAddFailure[] = results.flatMap((result) => {
+    if (result.kind === "tooLarge") {
+      return [{ name: result.name, reason: "too large to add here" }];
+    }
+    if (result.kind === "error") {
+      return [{ name: result.name, reason: result.message }];
+    }
+    return [];
+  });
+
+  return {
+    addedCount: results.length - failures.length,
+    totalCount: results.length,
+    failures,
+  };
+}
+
+/**
+ * "N of M added; K failed: name (reason), name (reason)." Returns `null` when
+ * there is nothing to report (no failures) so callers can fall back to their
+ * normal success copy.
+ */
+export function fileAddBatchMessage(summary: FileAddSummary, noun = "file"): string | null {
+  if (summary.failures.length === 0) {
+    return null;
+  }
+
+  const plural = summary.failures.length === 1 ? noun : `${noun}s`;
+  const names = summary.failures.map((failure) => `${failure.name} (${failure.reason})`).join(", ");
+
+  if (summary.addedCount === 0) {
+    return `${summary.failures.length} ${plural} could not be added: ${names}`;
+  }
+
+  return `${summary.addedCount} of ${summary.totalCount} added; ${summary.failures.length} failed: ${names}`;
 }
 
 /**

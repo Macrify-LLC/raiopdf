@@ -167,7 +167,8 @@ export interface PrepareForFilingWorkspaceProps {
   onCourtProfileSelect: (profileId: string) => void;
   onCourtProfileSave: (profile: { name: string; maxMegabytes: number }) => void;
   onPrepare: (certificate: CertificateOfServiceDraft | null, options: PrepareOptions) => void;
-  onAddPacketFile?: () => Promise<FilingPacketFile | null>;
+  /** Picks and page-counts every selected file, in order; `null` = cancelled. */
+  onAddPacketFile?: () => Promise<FilingPacketFile[] | null>;
   onBuildPacket?: (input: FilingPacketBuildInput) => Promise<void>;
   packetProgress?: FilingPacketProgress | undefined;
   defaultPacketLayoutMode?: FilingPacketLayoutMode | undefined;
@@ -399,15 +400,17 @@ export const PrepareForFilingWorkspace = forwardRef<
     });
   }
 
-  async function addPacketFile() {
+  async function addPacketFiles() {
     if (!onAddPacketFile) {
       return;
     }
-    const file = await onAddPacketFile();
-    if (!file) {
+    const picked = await onAddPacketFile();
+    if (!picked || picked.length === 0) {
       return;
     }
-    setPacketFiles((current) => [...current, file]);
+    // App.tsx's conversion loop already preserves pick order and reports
+    // partial-add failures through `packetProgress.message` -- just append.
+    setPacketFiles((current) => [...current, ...picked]);
   }
 
   function movePacketFile(index: number, delta: -1 | 1) {
@@ -552,7 +555,7 @@ export const PrepareForFilingWorkspace = forwardRef<
             onOutputDirChange={setPacketOutputDir}
             onLayoutModeChange={setPacketLayoutMode}
             onPrefixFilenamesChange={setPacketPrefixFilenames}
-            onAddFile={addPacketFile}
+            onAddFile={() => void addPacketFiles()}
             onMoveFile={movePacketFile}
             onRemoveFile={(id) => setPacketFiles((current) => current.filter((file) => file.id !== id))}
             onBuild={() => void buildPacket()}
@@ -886,7 +889,12 @@ function PacketBuilderPanel({
           <p className="filing-packet__title">Packet order</p>
           <p className="filing-packet__subtitle">{files.length} document{files.length === 1 ? "" : "s"}</p>
         </div>
-        <button type="button" className="filing-card__secondary-button" onClick={onAddFile}>
+        <button
+          type="button"
+          className="filing-card__secondary-button"
+          onClick={onAddFile}
+          title="Add one or more PDFs to the filing packet order."
+        >
           <PlusIcon size={14} /> Add PDF
         </button>
       </div>

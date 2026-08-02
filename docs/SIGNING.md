@@ -310,3 +310,6 @@ prints an **upload plan**. Upload exactly that plan (or pass `--combine
 platform-scoped checksum file is superseded by the stage-root one and is
 deliberately excluded. As with Windows-only releases, `latest.json` is uploaded
 last, to a **published, non-prerelease** release.
+
+Before uploading, reconcile the public Known Issues thread (#158) against
+`CHANGELOG.md` — check off entries this release fixes.

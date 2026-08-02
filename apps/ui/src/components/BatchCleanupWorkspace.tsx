@@ -1,6 +1,10 @@
 import { useState } from "react";
 import type { JurisdictionPack } from "@raiopdf/rules";
-import { tooLargeToAddMessage, type FileAddResult } from "../lib/readFileForAdd";
+import {
+  fileAddBatchMessage,
+  summarizeFileAddResults,
+  type FileAddResult,
+} from "../lib/readFileForAdd";
 import { formatBatchFailureReason } from "../lib/userMessages";
 import { CheckIcon, HelpIcon, PlusIcon } from "../icons";
 import { IconButton } from "./IconButton";
@@ -89,8 +93,10 @@ export interface BatchCleanupWorkspaceProps {
   packs: readonly JurisdictionPack[];
   progress: BatchCleanupProgress;
   /** Add flow rides the `readFileForAdd` choke point [R7-2]: descriptor adds
-   * carry the grant, browser `tooLarge` adds render an honest gate here. */
-  onAddFile: () => Promise<FileAddResult | null>;
+   * carry the grant, browser `tooLarge` adds render an honest gate here. Batch
+   * Cleanup is path-based end-to-end, so every picked file maps straight to a
+   * queue entry -- no page-count loop like Production Set's. */
+  onAddFile: () => Promise<FileAddResult[] | null>;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -146,24 +152,33 @@ export function BatchCleanupWorkspace({
   const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
   const canRun = files.length > 0 && outputDir.trim().length > 0 && !progress.running;
 
-  async function addFile() {
-    const result = await onAddFile();
-    if (!result) {
+  async function addFiles() {
+    const picked = await onAddFile();
+    if (!picked || picked.length === 0) {
       return;
     }
 
-    if (result.kind === "tooLarge") {
-      // A browser DOM `File` can never yield a shell grant [R3-2] — honest
-      // gate instead of a silently-broken queue entry.
-      setLocalMessage(tooLargeToAddMessage(result.name));
-      return;
+    // Every picked file maps straight to a queue entry -- path-based end to
+    // end, no page-count loop -- so a plain map/filter preserves picker order.
+    const added = picked.flatMap((result) => {
+      if (result.kind === "tooLarge" || result.kind === "error") {
+        // A browser DOM `File` can never yield a shell grant [R3-2] — honest
+        // gate instead of a silently-broken queue entry; `error` is a per-file
+        // read failure. Both are reported below without dropping the rest.
+        return [];
+      }
+
+      const source: BatchCleanupSourceFile = result.kind === "bytes"
+        ? { name: result.file.name, path: result.file.path }
+        : { name: result.descriptor.name, path: result.descriptor.grant };
+      return [fromSourceFile(source)];
+    });
+
+    if (added.length > 0) {
+      setFiles((current) => [...current, ...added]);
     }
 
-    const source: BatchCleanupSourceFile = result.kind === "bytes"
-      ? { name: result.file.name, path: result.file.path }
-      : { name: result.descriptor.name, path: result.descriptor.grant };
-    setLocalMessage(null);
-    setFiles((current) => [...current, fromSourceFile(source)]);
+    setLocalMessage(fileAddBatchMessage(summarizeFileAddResults(picked)));
   }
 
   async function run() {
@@ -240,7 +255,12 @@ export function BatchCleanupWorkspace({
                 onClick={onHelpRequested}
               />
             ) : null}
-            <button type="button" className="batch-workspace__secondary-button" onClick={addFile}>
+            <button
+              type="button"
+              className="batch-workspace__secondary-button"
+              onClick={() => void addFiles()}
+              title="Add one or more PDFs to the cleanup queue."
+            >
               <PlusIcon size={14} /> Add PDF
             </button>
           </div>

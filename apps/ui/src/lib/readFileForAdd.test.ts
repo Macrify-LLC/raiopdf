@@ -11,6 +11,7 @@ import {
   pickFileForAdd,
   pickFilesForAdd,
   pickPdfsForAdd,
+  promptDocxMarkupMode,
   readFileForAdd,
   summarizeFileAddResults,
   tooLargeToAddMessage,
@@ -18,6 +19,11 @@ import {
   type FileAddResult,
 } from "./readFileForAdd";
 import { getLargeDocThresholdBytes, setLargeDocThresholdBytes } from "./largeDocThreshold";
+import {
+  isTopDialogStackEntry,
+  registerDialogStackEntry,
+  resetDialogStackForTests,
+} from "../components/FloatingDialog";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -637,6 +643,7 @@ describe("addFolderFilesForAdd", () => {
     setLargeDocThresholdBytes(null);
     delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     document.querySelector(".folder-add-gate")?.remove();
+    resetDialogStackForTests();
   });
 
   it("returns null in the browser runtime instead of scanning", async () => {
@@ -794,5 +801,100 @@ describe("addFolderFilesForAdd", () => {
 
     gate?.querySelector<HTMLButtonElement>("[data-action='cancel']")?.click();
     await expect(pending).resolves.toBeNull();
+  });
+
+  it("lets Escape cancel only the gate, not a FloatingDialog workspace underneath", async () => {
+    // Mirrors FloatingDialog's own window-capture Escape handling (see
+    // FloatingDialog.tsx) so this test actually proves the two participate
+    // in the same dialog stack, rather than just asserting the gate closes.
+    const workspaceStackId = "workspace";
+    const workspaceClose = vi.fn();
+    const unregisterWorkspace = registerDialogStackEntry(workspaceStackId);
+    function workspaceKeyDown(event: KeyboardEvent) {
+      if (isTopDialogStackEntry(workspaceStackId) && event.key === "Escape") {
+        workspaceClose();
+      }
+    }
+    window.addEventListener("keydown", workspaceKeyDown, true);
+
+    try {
+      const pending = confirmFolderAdd(summary);
+      expect(document.querySelector(".folder-add-gate")).not.toBeNull();
+      // The gate is now the top dialog stack entry -- the workspace underneath
+      // must see itself as no longer top and stay open.
+      expect(isTopDialogStackEntry(workspaceStackId)).toBe(false);
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+
+      await expect(pending).resolves.toBeNull();
+      expect(document.querySelector(".folder-add-gate")).toBeNull();
+      expect(workspaceClose).not.toHaveBeenCalled();
+      // The gate unregistered on close, so the workspace is top again.
+      expect(isTopDialogStackEntry(workspaceStackId)).toBe(true);
+    } finally {
+      window.removeEventListener("keydown", workspaceKeyDown, true);
+      unregisterWorkspace();
+    }
+  });
+});
+
+describe("promptDocxMarkupMode", () => {
+  const gate = {
+    markupCount: 1,
+    uninspectableCount: 0,
+    markupFiles: ["tracked.docx"],
+    uninspectableFiles: [],
+  };
+
+  afterEach(() => {
+    document.querySelector(".docx-markup-gate")?.remove();
+    resetDialogStackForTests();
+  });
+
+  it("resolves with the checked mode when Continue is clicked", async () => {
+    const pending = promptDocxMarkupMode(gate);
+    const host = document.querySelector(".docx-markup-gate");
+    const showMarkup = host?.querySelector<HTMLInputElement>(
+      "input[name='docx-markup-mode'][value='showMarkup']",
+    );
+    showMarkup!.checked = true;
+    host?.querySelector<HTMLButtonElement>("[data-action='continue']")?.click();
+
+    await expect(pending).resolves.toBe("showMarkup");
+    expect(document.querySelector(".docx-markup-gate")).toBeNull();
+  });
+
+  it("lets Escape resolve the gate (default mode) without leaking to a FloatingDialog workspace underneath", async () => {
+    const workspaceStackId = "workspace";
+    const workspaceClose = vi.fn();
+    const unregisterWorkspace = registerDialogStackEntry(workspaceStackId);
+    function workspaceKeyDown(event: KeyboardEvent) {
+      if (isTopDialogStackEntry(workspaceStackId) && event.key === "Escape") {
+        workspaceClose();
+      }
+    }
+    window.addEventListener("keydown", workspaceKeyDown, true);
+
+    try {
+      const pending = promptDocxMarkupMode(gate);
+      expect(document.querySelector(".docx-markup-gate")).not.toBeNull();
+      expect(isTopDialogStackEntry(workspaceStackId)).toBe(false);
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+
+      // Default radio selection is "final" -- Escape resolves with it rather
+      // than leaving the gate hanging or falling through to the workspace.
+      await expect(pending).resolves.toBe("final");
+      expect(document.querySelector(".docx-markup-gate")).toBeNull();
+      expect(workspaceClose).not.toHaveBeenCalled();
+      expect(isTopDialogStackEntry(workspaceStackId)).toBe(true);
+    } finally {
+      window.removeEventListener("keydown", workspaceKeyDown, true);
+      unregisterWorkspace();
+    }
   });
 });

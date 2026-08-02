@@ -68,6 +68,11 @@ import {
   wordUnavailableMessage as wordUnavailableSummary,
   type WordCapability,
 } from "./wordCapability";
+import {
+  getFocusableElements,
+  isTopDialogStackEntry,
+  registerDialogStackEntry,
+} from "../components/FloatingDialog";
 
 /** Contract of one entry returned by the shell's `pick_pdfs_for_add` command. */
 export interface PickedPdfForAdd {
@@ -382,6 +387,75 @@ export function folderAddNotes(summary: FolderScanSummary): string[] {
   return notes;
 }
 
+let modalGateIdCounter = 0;
+
+/**
+ * Wires an imperatively-built modal gate (folder-add confirm, Word
+ * markup-mode) into the same shared dialog stack `FloatingDialog` uses.
+ *
+ * These gates are opened from inside a package workspace, which is itself a
+ * `FloatingDialog` -- and `FloatingDialog` owns Escape/Tab via a `window`
+ * CAPTURE keydown listener gated on "am I the top dialog stack entry."
+ * Without joining that same stack, the gate's own listener and the parent's
+ * listener both fire independently: Escape closes the *parent* workspace out
+ * from under the still-mounted gate, and Tab can walk focus into the now
+ * hidden parent. Registering here makes the gate the new top-of-stack entry,
+ * so the parent's listener sees `isTopDialogStackEntry(parentId) === false`
+ * and no-ops while the gate is up -- Escape only ever cancels the gate, and
+ * Tab is trapped inside it, exactly like a native `FloatingDialog`.
+ *
+ * Returns a `dispose` function the caller MUST invoke when the gate closes
+ * (on every exit path -- confirm, cancel, or otherwise) to unregister from
+ * the stack and remove the listener.
+ */
+function attachModalGateKeyboardHandling(host: HTMLElement, onEscape: () => void): () => void {
+  const stackId = `modal-gate-${modalGateIdCounter++}`;
+  const unregister = registerDialogStackEntry(stackId);
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (!isTopDialogStackEntry(stackId)) {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onEscape();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    event.stopImmediatePropagation();
+    const focusable = getFocusableElements(host);
+
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  window.addEventListener("keydown", onKeyDown, true);
+
+  return () => {
+    window.removeEventListener("keydown", onKeyDown, true);
+    unregister();
+  };
+}
+
 /**
  * Confirm step for folder add. Built imperatively (like the Word markup gate)
  * so all three package workspaces get the identical dialog without any of them
@@ -436,19 +510,14 @@ export async function confirmFolderAdd(summary: FolderScanSummary): Promise<Fold
     };
 
     const finish = (choice: FolderAddChoice | null): void => {
-      document.removeEventListener("keydown", onKeyDown);
+      dispose();
       host.remove();
       resolve(choice);
     };
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        finish(null);
-      }
-    }
+    const dispose = attachModalGateKeyboardHandling(host, () => finish(null));
 
     subfolders?.addEventListener("change", syncAddButton);
     syncAddButton();
-    document.addEventListener("keydown", onKeyDown);
     cancelButton?.addEventListener("click", () => finish(null));
     addButton?.addEventListener("click", () => {
       finish({ includeSubfolders: subfolders ? subfolders.checked : false });
@@ -776,6 +845,14 @@ function wordUnavailableMessage(capability: WordCapability): string {
   return `${wordUnavailableSummary(capability)} Word documents were not added.`;
 }
 
+/**
+ * Markup-mode gate for the Word add flow. Built imperatively for the same
+ * reason as `confirmFolderAdd` and, before the dialog-stack fix above, had
+ * the identical defect: an unmanaged keyboard listener let Escape leak
+ * through to close a `FloatingDialog` workspace underneath while this gate
+ * stayed mounted. Now joins the shared stack via
+ * `attachModalGateKeyboardHandling` too.
+ */
 export async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMarkupMode> {
   if (typeof document === "undefined") {
     return "final";
@@ -806,11 +883,24 @@ export async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMa
     document.body.append(host);
     const button = host.querySelector<HTMLButtonElement>("[data-action='continue']");
     button?.focus();
-    button?.addEventListener("click", () => {
-      const checked = host.querySelector<HTMLInputElement>("input[name='docx-markup-mode']:checked");
+
+    const finish = (mode: DocxMarkupMode): void => {
+      dispose();
       host.remove();
-      resolve(checked?.value === "showMarkup" ? "showMarkup" : "final");
-    }, { once: true });
+      resolve(mode);
+    };
+    const currentChoice = (): DocxMarkupMode => {
+      const checked = host.querySelector<HTMLInputElement>("input[name='docx-markup-mode']:checked");
+      return checked?.value === "showMarkup" ? "showMarkup" : "final";
+    };
+    // No explicit "cancel" concept here (unlike the folder-add gate) -- the
+    // add always proceeds, this gate only ever decides the markup mode. So
+    // Escape resolves with whatever's currently selected, same as clicking
+    // Continue -- it just also has to stop owning Escape/Tab so it doesn't
+    // leak into the FloatingDialog workspace underneath.
+    const dispose = attachModalGateKeyboardHandling(host, () => finish(currentChoice()));
+
+    button?.addEventListener("click", () => finish(currentChoice()), { once: true });
   });
 }
 

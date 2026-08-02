@@ -275,6 +275,12 @@ struct FolderWalkOutcome {
 /// the counts already went to the UI with the summary.
 struct FolderScan {
     files: Vec<ScannedPdf>,
+    /// The scanned folder's canonical (all-symlinks-resolved) path, captured
+    /// once at scan time. `claim_folder_scan` re-canonicalizes each file
+    /// against this root so a claim can never grant a path that has escaped
+    /// the folder the user approved, even if a file or an ancestor directory
+    /// was swapped for a symlink between the scan and the confirm.
+    canonical_root: PathBuf,
 }
 
 /// Outstanding scans, oldest first. Bounded: a scan the user never confirms
@@ -993,10 +999,22 @@ async fn scan_folder_for_add(
     };
 
     let root = path.into_path().map_err(|error| error.to_string())?;
-    let (folder_name, outcome) =
-        on_command_blocking_pool(move || Ok(walk_folder_for_pdfs(&root))).await?;
+    let (folder_name, canonical_root, outcome) = on_command_blocking_pool(move || {
+        // Canonicalize once, at scan time, while the folder is presumably
+        // still what the user picked. This is the containment root every
+        // claimed file gets checked against later -- see `claim_folder_scan`.
+        let canonical_root = fs::canonicalize(&root)
+            .map_err(|_| "That folder could not be read. Choose it again.".to_string())?;
+        let (folder_name, outcome) = walk_folder_for_pdfs(&root);
+        Ok((folder_name, canonical_root, outcome))
+    })
+    .await?;
 
-    Ok(Some(folder_scans.insert(folder_name, outcome)?))
+    Ok(Some(folder_scans.insert(
+        folder_name,
+        canonical_root,
+        outcome,
+    )?))
 }
 
 /// Stage 2 of folder add: mint grants for the confirmed scope of a scan.
@@ -1023,15 +1041,17 @@ async fn claim_folder_scan(
 
         // Per-file failures skip that file only, exactly as the multi-select
         // picker does: a file deleted between scan and confirm must not reject
-        // the rest of the folder.
+        // the rest of the folder. `revalidate_scanned_pdf_for_claim` folds in
+        // the TOCTOU re-check: a grant here is authority to read a path the
+        // user approved by *scope* (the scanned folder) at scan time, not by
+        // this specific path, so the claim must not trust the scan blindly if
+        // something changed underneath it before the confirm.
         let name = file_name(&scanned.path);
-        let size_bytes = match fs::metadata(&scanned.path) {
-            Ok(metadata) => metadata.len(),
-            Err(_) => {
-                skipped.push(SkippedPick {
-                    name,
-                    message: READ_PDF_ERROR.to_string(),
-                });
+        let size_bytes = match revalidate_scanned_pdf_for_claim(&scanned.path, &scan.canonical_root)
+        {
+            Ok(size_bytes) => size_bytes,
+            Err(message) => {
+                skipped.push(SkippedPick { name, message });
                 continue;
             }
         };
@@ -1059,12 +1079,52 @@ async fn claim_folder_scan(
     })
 }
 
+/// Re-checks one scanned file immediately before it's granted, against the
+/// folder root canonicalized at scan time. A grant issued from a stale scan
+/// is authority the user approved by *scope* -- "everything under this
+/// folder" -- not by this specific path, so the claim must not trust that
+/// the scan is still an honest description of the filesystem.
+///
+/// Catches two TOCTOU windows between scan and claim:
+/// - the file itself was swapped for a symlink: `symlink_metadata` never
+///   follows the final path component, so a leaf-level swap shows up
+///   directly as a link (or a non-regular-file) here;
+/// - an *ancestor* directory was swapped for a symlink that resolves outside
+///   the scanned folder: `symlink_metadata` alone would silently follow
+///   that, since ancestor components are always resolved to locate the file
+///   at all. Canonicalizing resolves every symlink in the path, so checking
+///   containment against `canonical_root` catches it.
+///
+/// Returns the file's byte length on success. On failure, returns a
+/// plain-language reason for the caller to report as a per-file skip --
+/// never as an error for the whole claim, matching every other per-file
+/// failure path in `claim_folder_scan`.
+fn revalidate_scanned_pdf_for_claim(path: &Path, canonical_root: &Path) -> Result<u64, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| READ_PDF_ERROR.to_string())?;
+
+    if is_link_entry(&metadata) || !metadata.is_file() {
+        return Err(FOLDER_SCAN_CLAIM_UNSAFE_ERROR.to_string());
+    }
+
+    let canonical_path = fs::canonicalize(path).map_err(|_| READ_PDF_ERROR.to_string())?;
+
+    if !canonical_path.starts_with(canonical_root) {
+        return Err(FOLDER_SCAN_CLAIM_UNSAFE_ERROR.to_string());
+    }
+
+    // Already confirmed above to be a non-link regular file's own stat --
+    // safe to read its length directly instead of stat'ing again (which
+    // would only reopen the exact race this function exists to close).
+    Ok(metadata.len())
+}
+
 impl FolderScans {
     /// Store a walk result and return its summary. Evicts the oldest scan when
     /// the outstanding-scan cap is already met.
     fn insert(
         &self,
         folder_name: String,
+        canonical_root: PathBuf,
         outcome: FolderWalkOutcome,
     ) -> Result<FolderScanSummary, String> {
         let token = Uuid::new_v4().to_string();
@@ -1095,6 +1155,7 @@ impl FolderScans {
             token,
             FolderScan {
                 files: outcome.files,
+                canonical_root,
             },
         ));
 
@@ -2065,6 +2126,11 @@ const SAVE_PDF_ERROR: &str =
     "RaioPDF couldn't save this PDF. Check that the folder is writable and try again.";
 const READ_PDF_ERROR: &str =
     "RaioPDF couldn't read this PDF. Check that the file is still there and try again.";
+/// A folder-scan claim refused a file because it (or a folder above it)
+/// changed to something other than the plain file that was scanned -- most
+/// often a symlink swapped in after the scan and before the confirm.
+const FOLDER_SCAN_CLAIM_UNSAFE_ERROR: &str =
+    "This file changed since it was scanned and was skipped for safety.";
 const SAVE_WORD_ERROR: &str =
     "RaioPDF couldn't save this Word document. Check that the folder is writable and try again.";
 const OUTPUT_FOLDER_ERROR: &str =
@@ -3685,11 +3751,17 @@ mod tests {
 
     #[test]
     fn folder_scans_are_one_shot_and_bounded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let canonical_root = fs::canonicalize(dir.path()).expect("canonicalize temp dir");
         let scans = FolderScans::default();
         let mut tokens = Vec::new();
         for index in 0..(MAX_OUTSTANDING_FOLDER_SCANS + 1) {
             let summary = scans
-                .insert(format!("folder-{index}"), FolderWalkOutcome::default())
+                .insert(
+                    format!("folder-{index}"),
+                    canonical_root.clone(),
+                    FolderWalkOutcome::default(),
+                )
                 .expect("insert scan");
             tokens.push(summary.token);
         }
@@ -3705,15 +3777,82 @@ mod tests {
     #[test]
     fn folder_scan_summary_counts_top_level_and_subfolder_pdfs() {
         let dir = scan_fixture_tree();
+        let canonical_root = fs::canonicalize(dir.path()).expect("canonicalize temp dir");
         let scans = FolderScans::default();
         let (name, outcome) = walk_folder_for_pdfs(dir.path());
 
-        let summary = scans.insert(name, outcome).expect("insert scan");
+        let summary = scans
+            .insert(name, canonical_root, outcome)
+            .expect("insert scan");
 
         assert_eq!(summary.total_pdfs, 4);
         assert_eq!(summary.top_level_pdfs, 2);
         assert_eq!(summary.subfolder_pdfs, 2);
         assert!(!summary.truncated);
+    }
+
+    /// Covers the scan->claim TOCTOU window directly: `claim_folder_scan`
+    /// grants paths the scan recorded, so if something changes between the
+    /// scan and the confirm, `revalidate_scanned_pdf_for_claim` (the function
+    /// `claim_folder_scan` calls per file) must catch it -- never a fresh
+    /// `fs::metadata` that would just follow the swap.
+    #[cfg(unix)]
+    #[test]
+    fn claim_skips_a_file_swapped_for_an_escaping_symlink_but_still_grants_its_siblings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::write(root.join("kept.pdf"), b"%PDF-1.7 kept").expect("kept.pdf");
+        fs::write(root.join("swapped.pdf"), b"%PDF-1.7 original").expect("swapped.pdf");
+        let canonical_root = fs::canonicalize(root).expect("canonicalize root");
+
+        let outside = tempfile::tempdir().expect("outside dir");
+        let secret = outside.path().join("secret.pdf");
+        fs::write(&secret, b"%PDF-1.7 secret").expect("secret.pdf");
+
+        // Simulate the race: after the scan recorded `swapped.pdf` as a plain
+        // file, something replaced it with a symlink pointing outside the
+        // folder the user approved, before the claim ran.
+        fs::remove_file(root.join("swapped.pdf")).expect("remove original");
+        std::os::unix::fs::symlink(&secret, root.join("swapped.pdf")).expect("swap for symlink");
+
+        assert!(
+            revalidate_scanned_pdf_for_claim(&root.join("swapped.pdf"), &canonical_root).is_err()
+        );
+        // The swap must not take down the rest of the claim -- an untouched
+        // sibling in the same folder still grants normally.
+        assert!(revalidate_scanned_pdf_for_claim(&root.join("kept.pdf"), &canonical_root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_rejects_a_file_reached_through_an_ancestor_directory_swapped_for_a_symlink() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::create_dir(root.join("nested")).expect("nested");
+        fs::write(root.join("nested/inner.pdf"), b"%PDF-1.7 inner").expect("inner.pdf");
+        let canonical_root = fs::canonicalize(root).expect("canonicalize root");
+
+        let outside = tempfile::tempdir().expect("outside dir");
+        fs::create_dir(outside.path().join("nested")).expect("outside nested");
+        fs::write(outside.path().join("nested/inner.pdf"), b"%PDF-1.7 escaped")
+            .expect("escaped.pdf");
+
+        // Simulate the race: `nested/` itself gets replaced with a symlink to
+        // a directory outside the approved folder, after the scan walked the
+        // real `nested/inner.pdf` but before the claim ran.
+        // `symlink_metadata` on the full scanned path still resolves straight
+        // through this -- only the leaf component is left unfollowed, and the
+        // leaf itself is a plain file -- so the leaf-level link check alone
+        // would miss it. Canonicalizing and checking containment is what
+        // catches an ancestor-level swap.
+        fs::remove_dir_all(root.join("nested")).expect("remove nested");
+        std::os::unix::fs::symlink(outside.path().join("nested"), root.join("nested"))
+            .expect("swap ancestor for symlink");
+
+        assert!(
+            revalidate_scanned_pdf_for_claim(&root.join("nested/inner.pdf"), &canonical_root)
+                .is_err()
+        );
     }
 
     #[test]

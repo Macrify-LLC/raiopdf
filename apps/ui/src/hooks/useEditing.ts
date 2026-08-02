@@ -93,6 +93,14 @@ export interface ExhibitStampRenumberRequest {
   templateId: string;
   /** Stamps of that design the renumber would rewrite, in reading order later. */
   count: number;
+  /**
+   * The sequence (prefix/style/layout/suffix) carried by one of the live
+   * stamps themselves, captured when the confirmation opens. A stamp's
+   * sequence is self-contained by design, so this lets the dialog build its
+   * confirmation even when the design's gallery template was later deleted
+   * and `findExhibitStampTemplate` can no longer resolve it.
+   */
+  fallbackSequence: PdfStampSequence;
 }
 
 /** What a completed renumber changed, for the message the user reads after. */
@@ -260,7 +268,10 @@ export function newEditId(): string {
   return `edit-${editIdCounter}`;
 }
 
-export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
+export function useEditing(
+  pdfDocument: PDFDocumentProxy | null,
+  documentGeneration = 0,
+): EditingState {
   const [tool, setToolState] = useState<EditToolId>("select");
   const [pendingEdits, setPendingEdits] = useState<readonly PendingEdit[]>([]);
   const [importedAnnotIds, setImportedAnnotIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -313,6 +324,12 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   // re-create (and re-render every consumer) each time the document changes.
   const pdfDocumentRef = useRef(pdfDocument);
   pdfDocumentRef.current = pdfDocument;
+  // Mirrors the caller's document identity [R1-8] so a renumber in flight
+  // across an `await` can tell whether the document it started against is
+  // still the one on screen — a tab switch, or any other identity-changing
+  // swap, must not let a stale renumber land on the new document.
+  const documentGenerationRef = useRef(documentGeneration);
+  documentGenerationRef.current = documentGeneration;
 
   useEffect(() => {
     let disposed = false;
@@ -647,13 +664,17 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   );
 
   const requestExhibitStampRenumber = useCallback((templateId: string) => {
-    const count = renumberableStamps(pendingEditsRef.current, templateId).length;
+    const stamps = renumberableStamps(pendingEditsRef.current, templateId);
 
-    if (count === 0) {
+    if (stamps.length === 0) {
       return;
     }
 
-    setExhibitStampRenumberRequest({ templateId, count });
+    setExhibitStampRenumberRequest({
+      templateId,
+      count: stamps.length,
+      fallbackSequence: stamps[0]!.sequence,
+    });
   }, []);
 
   const cancelExhibitStampRenumber = useCallback(() => {
@@ -668,9 +689,18 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
    * can't be written the labels still stand — the stamps on the page are the
    * thing the user asked to fix — and the failure is reported back so the
    * caller can say so.
+   *
+   * Bound to the document it started against [R1-8]: the pdf.js measurement
+   * below is the one genuine await, and a document swap (tab switch, or any
+   * other identity-changing swap) that lands while it's in flight must not
+   * let the plan it produces get applied to whatever document is now on
+   * screen. `documentGenerationRef` is re-checked right after that await —
+   * if it moved, the renumber aborts before touching a single edit or the
+   * counter, both of which now belong to a different document.
    */
   const renumberExhibitStamps = useCallback(
     async (templateId: string, startIndex: number) => {
+      const startGeneration = documentGenerationRef.current;
       const stamps = renumberableStamps(pendingEditsRef.current, templateId);
 
       if (stamps.length === 0) {
@@ -678,6 +708,12 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       }
 
       const visualRects = await readStampVisualRects(pdfDocumentRef.current, stamps);
+
+      if (documentGenerationRef.current !== startGeneration) {
+        setMessage("Renumbering cancelled — the document changed.");
+        return null;
+      }
+
       const steps = planExhibitStampRenumber(stamps, visualRects, startIndex);
 
       for (const step of steps) {
@@ -685,19 +721,27 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       }
 
       const lastIndex = startIndex + steps.length - 1;
-      const identifierStyle = findExhibitStampTemplate(templateId)?.identifierStyle ??
-        stamps[0]!.sequence.identifierStyle;
-      const counter = await setNextIdentifier(
-        templateId,
-        formatExhibitIdentifier(identifierStyle, lastIndex + 1),
-      );
+      const template = findExhibitStampTemplate(templateId);
+
+      // A design whose gallery entry was deleted has no live counter to
+      // advance — the stamps themselves carry their own sequence, so the
+      // renumber above still lands; there is just nothing to point at the
+      // next free number.
+      let counterError: string | null = null;
+      if (template) {
+        const counter = await setNextIdentifier(
+          templateId,
+          formatExhibitIdentifier(template.identifierStyle, lastIndex + 1),
+        );
+        counterError = counter.ok ? null : counter.error;
+      }
 
       refreshArmedExhibitStamp();
 
       return {
         count: steps.length,
         lastIndex,
-        counterError: counter.ok ? null : counter.error,
+        counterError,
       };
     },
     [refreshArmedExhibitStamp, updateEdit],

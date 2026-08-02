@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EditingState } from "../hooks/useEditing";
+import type { PdfStampSequence } from "@raiopdf/engine-api";
+import type { EditingState, ExhibitStampRenumberRequest } from "../hooks/useEditing";
 import { resetExhibitStampCacheForTests } from "../lib/exhibitStamps";
 import { ExhibitStampRenumberDialog } from "./ExhibitStampRenumberDialog";
 import { resetDialogStackForTests } from "./FloatingDialog";
@@ -11,12 +12,21 @@ import { resetDialogStackForTests } from "./FloatingDialog";
 
 const PLAINTIFF = "plaintiffs-exhibit";
 
+const PLAINTIFF_SEQUENCE: PdfStampSequence = {
+  schemaVersion: 1,
+  identifierStyle: "numbers",
+  prefix: "Plaintiff's Exhibit",
+  layout: "stacked",
+  index: 0,
+};
+
 describe("ExhibitStampRenumberDialog", () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
   let renumberExhibitStamps: ReturnType<typeof vi.fn>;
   let cancelExhibitStampRenumber: ReturnType<typeof vi.fn>;
   let setMessage: ReturnType<typeof vi.fn>;
+  let countPlacedExhibitStamps: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -26,6 +36,9 @@ describe("ExhibitStampRenumberDialog", () => {
     );
     cancelExhibitStampRenumber = vi.fn();
     setMessage = vi.fn();
+    // Matches the request's opened count by default -- the "live set changed"
+    // path is exercised explicitly by the tests that need it.
+    countPlacedExhibitStamps = vi.fn(() => 3);
   });
 
   afterEach(() => {
@@ -110,6 +123,81 @@ describe("ExhibitStampRenumberDialog", () => {
     );
   });
 
+  // Finding 2 (P2): the dialog stays open over an interactive editor, so what
+  // was true when it opened may no longer be true by the time the user
+  // confirms.
+  it("refreshes a stale count on the first confirm and only renumbers on a matching second confirm", async () => {
+    countPlacedExhibitStamps = vi.fn(() => 5);
+
+    await render({
+      request: { templateId: PLAINTIFF, count: 3, fallbackSequence: PLAINTIFF_SEQUENCE },
+    });
+
+    expect(question()).toBe(
+      "Renumber 3 stamps as Plaintiff's Exhibit 1…Plaintiff's Exhibit 3?",
+    );
+
+    await clickText("Renumber");
+
+    // First confirm only refreshes what's shown -- it must not renumber a set
+    // the user never actually saw.
+    expect(renumberExhibitStamps).not.toHaveBeenCalled();
+    expect(question()).toBe(
+      "Renumber 5 stamps as Plaintiff's Exhibit 1…Plaintiff's Exhibit 5?",
+    );
+    expect(document.querySelector("[role='status']")?.textContent).toBe(
+      "The stamps changed — now renumbering 5. Confirm again.",
+    );
+
+    await clickText("Renumber");
+
+    expect(renumberExhibitStamps).toHaveBeenCalledWith(PLAINTIFF, 0);
+  });
+
+  it("blocks a final index that only exceeds the maximum once the live set is counted", async () => {
+    countPlacedExhibitStamps = vi.fn(() => 5);
+
+    await render({
+      request: { templateId: PLAINTIFF, count: 1, fallbackSequence: PLAINTIFF_SEQUENCE },
+    });
+
+    // A start that fits the stale opened count of 1, but not the live count
+    // of 5 once it's actually recomputed.
+    await typeStart("999998");
+
+    await clickText("Renumber");
+    expect(renumberExhibitStamps).not.toHaveBeenCalled();
+
+    await clickText("Renumber");
+    expect(renumberExhibitStamps).not.toHaveBeenCalled();
+    expect(document.querySelector("[role='alert']")?.textContent).toContain(
+      "That start leaves more exhibits than this stamp can number.",
+    );
+  });
+
+  // Finding 3 (P2): a placed stamp keeps its templateId (and its own sequence)
+  // after the gallery design it came from is deleted.
+  it("still renders and renumbers from the stamps' own sequence once the gallery design is deleted", async () => {
+    await render({
+      request: {
+        templateId: "deleted-template",
+        count: 3,
+        fallbackSequence: PLAINTIFF_SEQUENCE,
+      },
+    });
+
+    expect(question()).toBe(
+      "Renumber 3 stamps as Plaintiff's Exhibit 1…Plaintiff's Exhibit 3?",
+    );
+    expect(container?.ownerDocument.body.textContent).toContain(
+      "This design is no longer in your gallery",
+    );
+
+    await clickText("Renumber");
+
+    expect(renumberExhibitStamps).toHaveBeenCalledWith("deleted-template", 0);
+  });
+
   function question(): string | null | undefined {
     return document.querySelector(".exhibit-stamp-renumber__question")?.textContent;
   }
@@ -150,16 +238,26 @@ describe("ExhibitStampRenumberDialog", () => {
     }
   }
 
-  async function render(options: { documentStreamed?: boolean } = {}): Promise<void> {
+  async function render(
+    options: {
+      documentStreamed?: boolean;
+      request?: ExhibitStampRenumberRequest;
+    } = {},
+  ): Promise<void> {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
 
     const editing = {
-      exhibitStampRenumberRequest: { templateId: PLAINTIFF, count: 3 },
+      exhibitStampRenumberRequest: options.request ?? {
+        templateId: PLAINTIFF,
+        count: 3,
+        fallbackSequence: PLAINTIFF_SEQUENCE,
+      },
       renumberExhibitStamps,
       cancelExhibitStampRenumber,
       setMessage,
+      countPlacedExhibitStamps,
     } as unknown as EditingState;
 
     await act(async () => {

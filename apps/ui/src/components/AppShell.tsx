@@ -70,6 +70,7 @@ export interface AppShellProps {
   /** Second arg is the failure's correlation id — forward BOTH, or a report
    * loses its link to the failure it describes. */
   onRenderError: (message: string, diagnosticId?: string | null) => void;
+  onDocumentErrorDismiss: () => void;
   onThumbnailClick: (pageIndex: number, event: MouseEvent<HTMLButtonElement>) => void;
   onRotateSelected: () => void;
   onRotateLeft: () => void;
@@ -79,6 +80,7 @@ export interface AppShellProps {
   onMoveSelectedDown: () => void;
   onBookmarkNavigate: (pageIndex: number) => void;
   onOutlineChange: (outline: PdfOutlineState) => Promise<boolean>;
+  onOutlineStatusDismiss: () => void;
   ocrState: OcrUiState;
   /** Whether Microsoft Word was detected on this computer (gates the Word-dependent menu items). */
   wordAvailable: boolean;
@@ -159,6 +161,7 @@ export function AppShell({
   onFitZoomResolved,
   onPageSizeChange,
   onRenderError,
+  onDocumentErrorDismiss,
   onThumbnailClick,
   onRotateSelected,
   onRotateLeft,
@@ -168,6 +171,7 @@ export function AppShell({
   onMoveSelectedDown,
   onBookmarkNavigate,
   onOutlineChange,
+  onOutlineStatusDismiss,
   ocrState,
   wordAvailable,
   ocrStarting,
@@ -329,6 +333,7 @@ export function AppShell({
           onMoveSelectedDown={onMoveSelectedDown}
           onBookmarkNavigate={onBookmarkNavigate}
           onOutlineChange={onOutlineChange}
+          onOutlineStatusDismiss={onOutlineStatusDismiss}
         />
         <CanvasWell
           workspace={workspace}
@@ -345,6 +350,7 @@ export function AppShell({
           scrollIntent={pageScrollIntent}
           onVisiblePageChange={onVisiblePageChange}
           error={document.error}
+          onErrorDismiss={onDocumentErrorDismiss}
           onZoomOut={onZoomOut}
           onZoomIn={onZoomIn}
           onFitZoomResolved={onFitZoomResolved}

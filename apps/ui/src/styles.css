@@ -15,14 +15,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.pack-integrity-banner {
-  background: var(--identity-amber-soft);
-  border-bottom: 1px solid var(--identity-amber);
-  color: var(--primary-deep);
-  font-size: var(--text-base);
-  padding: var(--space-2) var(--space-4);
-}
-
 .force-ocr-confirmation {
   display: grid;
   gap: var(--space-3);

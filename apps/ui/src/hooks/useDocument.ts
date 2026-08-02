@@ -57,7 +57,7 @@ export type DocumentSource =
  * materializing the document in memory.
  */
 export const STREAMED_DOCUMENT_GATE_MESSAGE =
-  "This document is very large, so some tools are turned off for it. In the installed app, available: exhibits, split, extract, compress, repair, Make Searchable (OCR), redaction, Bates stamps, page numbers, and watermarks. Not available for files this size: text editing, form filling, crop/rotate, adding images, and password protection.";
+  "This document is very large, so RaioPDF uses file-to-file processing for it. In the installed app, available tools include adding annotations and markup, PDF Security, exhibits, merging/inserting/splitting/extracting PDF pages, compress, repair, Make Searchable (OCR), redaction, Bates stamps, page numbers, and watermarks. Still unavailable for files this size: Edit Text, signing, form filling or field creation, changing existing annotations, making markup permanent, crop/rotate, and inserting image files as new pages.";
 
 export interface DocumentState {
   bytes: Uint8Array | null;
@@ -733,6 +733,18 @@ export function useDocument(options: UseDocumentOptions = {}) {
       ...current,
       error: error === null ? null : { message: error, diagnosticId },
     }));
+  }, [setDocument]);
+
+  const dismissOutlineStatus = useCallback(() => {
+    setDocument((current) => current.outlineStatus === null
+      ? current
+      : { ...current, outlineStatus: null });
+  }, [setDocument]);
+
+  const dismissSignatureInvalidationNotice = useCallback(() => {
+    setDocument((current) => current.signatureInvalidationNotice === null
+      ? current
+      : { ...current, signatureInvalidationNotice: null });
   }, [setDocument]);
 
   const setProtectionFacts = useCallback((
@@ -2454,6 +2466,8 @@ export function useDocument(options: UseDocumentOptions = {}) {
     setTextLayerCoverage,
     setPageSizeInches,
     setError,
+    dismissOutlineStatus,
+    dismissSignatureInvalidationNotice,
     setProtectionFacts,
     rotatePages,
     deletePages,

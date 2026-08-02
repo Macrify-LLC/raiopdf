@@ -9,6 +9,7 @@ import {
   PlusIcon,
 } from "../icons";
 import { IconButton } from "./IconButton";
+import { DismissButton } from "./DismissButton";
 import { Switch } from "./Switch";
 import "./BookmarksRail.css";
 
@@ -20,6 +21,7 @@ export interface BookmarksRailProps {
   disabled?: boolean | undefined;
   /** Shown in place of the generic empty state when the caller disabled bookmarks. */
   disabledReason?: string | undefined;
+  onStatusDismiss: () => void;
   onNavigate: (pageIndex: number) => void;
   onChange: (outline: PdfOutlineState) => Promise<boolean>;
 }
@@ -33,6 +35,7 @@ export function BookmarksRail({
   currentPage,
   disabled = false,
   disabledReason,
+  onStatusDismiss,
   onNavigate,
   onChange,
 }: BookmarksRailProps) {
@@ -117,7 +120,17 @@ export function BookmarksRail({
         </div>
       </div>
 
-      {outlineStatus ? <p className="bookmarks-rail__status">{outlineStatus}</p> : null}
+      {outlineStatus ? (
+        <div className="bookmarks-rail__status" role="status">
+          <span>{outlineStatus}</span>
+          <DismissButton
+            className="bookmarks-rail__status-close"
+            label="Close bookmark warning"
+            compact
+            onClick={onStatusDismiss}
+          />
+        </div>
+      ) : null}
 
       {outline.items.length === 0 ? (
         <p className="bookmarks-rail__empty">No bookmarks</p>

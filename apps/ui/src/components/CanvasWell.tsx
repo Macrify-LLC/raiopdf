@@ -7,6 +7,7 @@ import type { EditingState } from "../hooks/useEditing";
 import type { CapturedTextSelection } from "../lib/selectedTextEdit";
 import type { DisplayedFailure } from "../lib/diagnostics";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
+import { DismissButton } from "./DismissButton";
 import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
@@ -43,6 +44,7 @@ export interface CanvasWellProps {
    * report.
    */
   error?: DisplayedFailure | null | undefined;
+  onErrorDismiss: () => void;
   onZoomIn?: (() => void) | undefined;
   onZoomOut?: (() => void) | undefined;
   onFitZoomResolved?: ((zoom: number) => void) | undefined;
@@ -96,6 +98,7 @@ export function CanvasWell({
   scrollIntent = null,
   onVisiblePageChange,
   error = null,
+  onErrorDismiss,
   onZoomIn,
   onZoomOut,
   onFitZoomResolved,
@@ -253,10 +256,11 @@ export function CanvasWell({
             lazyPageMeasurement={lazyPageMeasurement}
           />
           {error ? (
-            <div className="canvas-well__message canvas-well__message--floating" role="alert">
-              <p className="canvas-well__message-text">{error.message}</p>
-              <ErrorActions diagnosticId={error.diagnosticId} />
-            </div>
+            <DocumentMessage
+              error={error}
+              floating
+              onDismiss={onErrorDismiss}
+            />
           ) : null}
         </>
       ) : (
@@ -284,10 +288,7 @@ export function CanvasWell({
             New here? Open Help
           </button>
           {error ? (
-            <div className="canvas-well__message" role="alert">
-              <p className="canvas-well__message-text">{error.message}</p>
-              <ErrorActions diagnosticId={error.diagnosticId} />
-            </div>
+            <DocumentMessage error={error} onDismiss={onErrorDismiss} />
           ) : null}
         </div>
       )}
@@ -298,6 +299,31 @@ export function CanvasWell({
       ) : null}
       {overlay}
     </section>
+  );
+}
+
+function DocumentMessage({
+  error,
+  floating = false,
+  onDismiss,
+}: {
+  error: DisplayedFailure;
+  floating?: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      className={`canvas-well__message${floating ? " canvas-well__message--floating" : ""}`}
+      role="alert"
+    >
+      <p className="canvas-well__message-text">{error.message}</p>
+      <ErrorActions diagnosticId={error.diagnosticId} />
+      <DismissButton
+        className="canvas-well__message-close"
+        label="Close message"
+        onClick={onDismiss}
+      />
+    </div>
   );
 }
 

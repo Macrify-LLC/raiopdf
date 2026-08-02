@@ -48,9 +48,15 @@ describe("useDocument streamed mode", () => {
   let container: HTMLDivElement | null = null;
   let latest: UseDocumentValue | null = null;
 
-  it("scopes delegated streamed features to the installed app in gate copy", () => {
-    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("In the installed app, available");
-    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("split, extract");
+  it("keeps the large-document warning aligned with current streamed capabilities", () => {
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("In the installed app");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("PDF Security");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("adding annotations and markup");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("signing");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("changing existing annotations");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("making markup permanent");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).toContain("inserting image files as new pages");
+    expect(STREAMED_DOCUMENT_GATE_MESSAGE).not.toContain("password protection");
   });
 
   beforeEach(() => {

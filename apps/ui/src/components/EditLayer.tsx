@@ -9,11 +9,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import {
   clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
   isTextMarkupTool,
+  resizeExhibitStamp,
   MARKUP_FROM_SELECTION_EVENT,
   DEFAULT_TEXT_BOX_FONT_SIZE,
   TEXT_BOX_FONT_SIZES,
@@ -23,6 +23,7 @@ import {
   type PendingCallout,
   type PendingComment,
   type PendingEdit,
+  type PendingExhibitStamp,
   type PendingFormField,
   type PendingImageStamp,
   type PendingShape,
@@ -54,9 +55,17 @@ import {
   DEFAULT_TEXT_FONT_FAMILY,
   pdfEditColorToHex,
 } from "../lib/editStyles";
-import { newEditId, type ArmedImageStamp, type EditingState } from "../hooks/useEditing";
+import {
+  newEditId,
+  type ArmedExhibitStamp,
+  type ArmedImageStamp,
+  type EditingState,
+} from "../hooks/useEditing";
+import { usePreviewFont } from "../hooks/usePreviewFont";
 import { mergeClientRectsIntoLines } from "../lib/clientRectLines";
 import { isTextEntryTarget } from "../lib/domGuards";
+import { exhibitLabelLines, formatExhibitIdentifier, parseIdentifier } from "../lib/exhibitLabels";
+import { cssTextBoxFontFamily } from "../lib/previewFonts";
 import type { PDFPageProxy } from "../lib/pdfjs";
 import { getPdfPageTextContent } from "../lib/pdfTextContent";
 import {
@@ -81,6 +90,7 @@ import {
 import { CommentMarkerIcon } from "../icons";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { hasOpenDialogStackEntry } from "./FloatingDialog";
+import { StampPreview, type StampPreviewStyle } from "./StampPreview";
 import "./EditLayer.css";
 
 /** Rapid re-clicks inside this window never place a second item. */
@@ -174,6 +184,13 @@ interface StampGhost {
   dataUrl: string;
 }
 
+/** The open "Edit label..." popover for one placed exhibit stamp. */
+interface LabelDraft {
+  editId: string;
+  rect: ViewportRect;
+  text: string;
+}
+
 export interface EditLayerProps {
   page: PDFPageProxy;
   viewport: PageViewport;
@@ -221,6 +238,10 @@ export function EditLayer({
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [stampGhost, setStampGhost] = useState<StampGhost | null>(null);
+  // Only the ghost's box is kept; its label is read live from the armed stamp
+  // so the number the user sees is always the one the next click will use.
+  const [exhibitGhostRect, setExhibitGhostRect] = useState<ViewportRect | null>(null);
+  const [labelDraft, setLabelDraft] = useState<LabelDraft | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -293,6 +314,8 @@ export function EditLayer({
     setCommentDraft(null);
     setDragPreview(null);
     setStampGhost(null);
+    setExhibitGhostRect(null);
+    setLabelDraft(null);
     setContextMenu(null);
     dragStartRef.current = null;
     drawPointsRef.current = [];
@@ -359,6 +382,35 @@ export function EditLayer({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [removeEdit, selectedIdOnThisPage, setSelectedId]);
+
+  // Esc puts the stamp tool down without leaving it, so a mis-picked template
+  // costs one keystroke instead of a trip back through the gallery. Switching
+  // tools disarms too (see useEditing's setTool).
+  const armedExhibitStamp = editing.armedExhibitStamp;
+  const disarmExhibitStamp = editing.disarmExhibitStamp;
+
+  useEffect(() => {
+    if (tool !== "stamp" || !armedExhibitStamp) {
+      return;
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (
+        event.key !== "Escape" ||
+        isTextEntryTarget(event.target) ||
+        hasOpenDialogStackEntry()
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      disarmExhibitStamp();
+      setExhibitGhostRect(null);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [armedExhibitStamp, disarmExhibitStamp, tool]);
 
   const getClientLayerPoint = useCallback(
     (
@@ -733,6 +785,11 @@ export function EditLayer({
     }
 
     // An open inline editor absorbs the click: commit it, never also place.
+    if (labelDraft) {
+      commitLabelDraft();
+      return;
+    }
+
     if (closeDraftsForOutsideClick()) {
       return;
     }
@@ -893,6 +950,22 @@ export function EditLayer({
       return;
     }
 
+    if (tool === "stamp") {
+      const armed = editing.armedExhibitStamp;
+
+      if (!armed) {
+        editing.setStampCardOpen(true);
+        return;
+      }
+
+      if (!guardPlacement()) {
+        return;
+      }
+
+      placeExhibitStamp(armed, exhibitGhostRect ?? exhibitStampRect(point, armed, viewport, scale));
+      return;
+    }
+
     if (tool === "image" || tool === "sign") {
       const armed = tool === "image" ? editing.armedImage : editing.armedSignature;
 
@@ -974,6 +1047,13 @@ export function EditLayer({
       setCalloutPlacementDraft((current) =>
         current ? { ...current, tipPreview: point } : current,
       );
+      return;
+    }
+
+    if (tool === "stamp") {
+      const armed = editing.armedExhibitStamp;
+
+      setExhibitGhostRect(armed ? exhibitStampRect(point, armed, viewport, scale) : null);
       return;
     }
 
@@ -1119,9 +1199,113 @@ export function EditLayer({
     }
   }
 
+  /**
+   * Places one exhibit stamp — but only once the counter has actually moved on
+   * disk. The number is reserved first; if that write fails nothing lands on
+   * the page, because a stamp carrying a number the counter never consumed
+   * would be handed out again on the next reload. The tool stays armed, so the
+   * next click stamps the next exhibit.
+   */
+  function placeExhibitStamp(armed: ArmedExhibitStamp, rect: ViewportRect) {
+    const template = armed.template;
+
+    void editing.allocateExhibitStampIdentifier().then((allocation) => {
+      if (!allocation) {
+        return;
+      }
+
+      const id = newEditId();
+      const pdfRect = viewportRectToPdfRect(rect, viewport);
+
+      addEdit({
+        kind: "stamp",
+        id,
+        pageIndex,
+        rect: pdfRect,
+        lines: allocation.lines,
+        fontSizePt: template.fontSizePt,
+        fontFamily: template.fontFamily,
+        bold: template.bold,
+        italic: template.italic,
+        color: template.textColor,
+        fillColor: template.fillColor,
+        borderColor: template.borderColor,
+        borderWidthPt: template.borderWidthPt,
+        cornerRadiusPt: template.cornerRadiusPt,
+        templateId: allocation.templateId,
+        templateRevision: allocation.templateRevision,
+        sequence: allocation.sequence,
+        // The box as placed is the resize baseline from here on.
+        design: {
+          widthPt: pdfRect.w,
+          heightPt: pdfRect.h,
+          fontSizePt: template.fontSizePt,
+          borderWidthPt: template.borderWidthPt,
+          cornerRadiusPt: template.cornerRadiusPt,
+        },
+      });
+      setSelectedId(id);
+    });
+  }
+
+  function openStampLabelForEditing(edit: PendingExhibitStamp) {
+    if (!edit.sequence) {
+      return;
+    }
+
+    setSelectedId(edit.id);
+    setLabelDraft({
+      editId: edit.id,
+      rect: pdfRectToViewportRect(edit.rect, viewport),
+      text: formatExhibitIdentifier(edit.sequence.identifierStyle, edit.sequence.index),
+    });
+    suppressPlacement();
+  }
+
+  function commitLabelDraft() {
+    setLabelDraft((draft) => {
+      if (!draft) {
+        return null;
+      }
+
+      const index = parseIdentifier(draft.text);
+
+      if (index === null) {
+        editing.setMessage("Enter a number (12) or a letter (AB) for this exhibit.");
+        return draft;
+      }
+
+      updateEdit(draft.editId, (edit) =>
+        edit.kind === "stamp" && edit.sequence
+          ? {
+              ...edit,
+              sequence: { ...edit.sequence, index },
+              lines: exhibitLabelLines(
+                edit.sequence.prefix,
+                edit.sequence.identifierStyle,
+                index,
+                edit.sequence.layout,
+                edit.sequence.suffix,
+              ),
+            }
+          : edit,
+      );
+      editing.setMessage(null);
+
+      return null;
+    });
+    suppressPlacement();
+  }
+
   function beginItemDrag(
     event: ReactPointerEvent<HTMLElement | SVGElement>,
-    edit: PendingTextBox | PendingImageStamp | PendingShape | PendingCallout | PendingFormField,
+    edit:
+      | PendingTextBox
+      | PendingImageStamp
+      | PendingExhibitStamp
+      | PendingShape
+      | PendingCallout
+      | PendingFormField,
     mode: "move" | "resize",
     corner: ResizeCorner | null = null,
   ) {
@@ -1154,7 +1338,7 @@ export function EditLayer({
         moved: false,
       };
     } else {
-      const rect = edit.rect;
+      const startRect = pdfRectToViewportRect(edit.rect, viewport);
 
       itemDragRef.current = {
         id: edit.id,
@@ -1163,9 +1347,16 @@ export function EditLayer({
         corner,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startRect: pdfRectToViewportRect(rect, viewport),
+        startRect,
+        // A stamp's aspect is locked to the box on screen rather than to its
+        // design ratio, so the lock stays correct on rotated pages (where the
+        // user-space width is the visual height).
         aspectRatio:
-          edit.kind === "image" || edit.kind === "signature" ? edit.aspectRatio : null,
+          edit.kind === "image" || edit.kind === "signature"
+            ? edit.aspectRatio
+            : edit.kind === "stamp" && startRect.height > 0
+              ? startRect.width / startRect.height
+              : null,
         moved: false,
       };
     }
@@ -1249,16 +1440,22 @@ export function EditLayer({
       const pdfRect = viewportRectToPdfRect(rect, viewport);
       // A callout drag moves only its box; its `tip` stays put so the leader
       // re-anchors to the same target point.
-      updateEdit(drag.id, (edit) =>
-        edit.kind === "textBox" ||
-        edit.kind === "image" ||
-        edit.kind === "signature" ||
-        edit.kind === "callout" ||
-        edit.kind === "formField" ||
-        (edit.kind === "shape" && !isLinePendingShape(edit))
+      updateEdit(drag.id, (edit) => {
+        // A stamp's label, border, and rounding re-fit the new box, always
+        // measured from its unchanging design so repeated resizes can't drift.
+        if (edit.kind === "stamp") {
+          return resizeExhibitStamp(edit, pdfRect);
+        }
+
+        return edit.kind === "textBox" ||
+          edit.kind === "image" ||
+          edit.kind === "signature" ||
+          edit.kind === "callout" ||
+          edit.kind === "formField" ||
+          (edit.kind === "shape" && !isLinePendingShape(edit))
           ? { ...edit, rect: pdfRect }
-          : edit,
-      );
+          : edit;
+      });
     }
     setSelectedId(drag.id);
     suppressPlacement();
@@ -1342,6 +1539,7 @@ export function EditLayer({
     if (
       textDraft ||
       commentDraft ||
+      labelDraft ||
       isTextEntryTarget(event.target) ||
       hasOpenDialogStackEntry()
     ) {
@@ -1373,6 +1571,7 @@ export function EditLayer({
         openTextBoxForEditing,
         openCalloutForEditing,
         openCommentForEditing,
+        openStampLabelForEditing,
       });
       selectId = edit.kind === "comment" ? null : edit.id;
       break;
@@ -1614,6 +1813,30 @@ export function EditLayer({
           );
         }
 
+        if (edit.kind === "stamp") {
+          return (
+            <ExhibitStampOverlay
+              key={edit.id}
+              edit={edit}
+              viewport={viewport}
+              scale={scale}
+              selected={selectedId === edit.id}
+              previewRect={
+                dragPreview?.id === edit.id && dragPreview.kind === "rect"
+                  ? dragPreview.rect
+                  : null
+              }
+              onPointerDown={(event) => beginItemDrag(event, edit, "move")}
+              onPointerMove={handleItemPointerMove}
+              onPointerUp={handleItemPointerUp}
+              onResizeStart={(event, corner) => beginItemDrag(event, edit, "resize", corner)}
+              onEditLabelRequested={() => openStampLabelForEditing(edit)}
+              onRemove={() => removeEdit(edit.id)}
+              onTogglePin={() => setPinned(edit.id, edit.pinned !== true)}
+            />
+          );
+        }
+
         if (edit.kind === "image" || edit.kind === "signature") {
           return (
             <StampOverlay
@@ -1721,6 +1944,15 @@ export function EditLayer({
 
       {stampGhost ? <StampGhostOverlay ghost={stampGhost} /> : null}
 
+      {tool === "stamp" && exhibitGhostRect && editing.armedExhibitStamp ? (
+        <span className="edit-layer__stamp-ghost" style={toOverlayStyle(exhibitGhostRect)}>
+          <StampPreview
+            scale={scale}
+            stamp={armedStampPreviewStyle(editing.armedExhibitStamp, exhibitGhostRect, scale)}
+          />
+        </span>
+      ) : null}
+
       {isTextMarkupTool(tool) && textLayerError ? (
         <p className="edit-layer__message" role="status">
           {textLayerError}
@@ -1784,6 +2016,21 @@ export function EditLayer({
         />
       ) : null}
 
+      {labelDraft ? (
+        <ExhibitStampLabelPopover
+          draft={labelDraft}
+          viewport={viewport}
+          onTextChange={(text) =>
+            setLabelDraft((current) => (current ? { ...current, text } : null))
+          }
+          onCommit={commitLabelDraft}
+          onCancel={() => {
+            setLabelDraft(null);
+            suppressPlacement();
+          }}
+        />
+      ) : null}
+
       {contextMenu ? (
         <ContextMenu
           x={contextMenu.x}
@@ -1832,6 +2079,7 @@ function editHitTest(edit: PendingEdit, point: PdfSpacePoint): boolean {
     case "callout":
     case "image":
     case "signature":
+    case "stamp":
     case "formField":
       return pdfRectContainsPoint(edit.rect, point);
     case "comment":
@@ -1860,6 +2108,7 @@ function buildEditContextMenu(
     openTextBoxForEditing: (edit: PendingTextBox) => void;
     openCalloutForEditing: (edit: PendingCallout) => void;
     openCommentForEditing: (edit: PendingComment) => void;
+    openStampLabelForEditing: (edit: PendingExhibitStamp) => void;
   },
 ): ContextMenuItem[] {
   if (edit.kind === "comment") {
@@ -1877,6 +2126,15 @@ function buildEditContextMenu(
 
   if (edit.kind === "callout") {
     items.push({ label: "Edit text", onSelect: () => actions.openCalloutForEditing(edit) });
+  }
+
+  // Only a stamp that carries its numbering can be renumbered — one whose
+  // provenance was stripped is still movable, just not re-lettered.
+  if (edit.kind === "stamp" && edit.sequence) {
+    items.push({
+      label: "Edit label...",
+      onSelect: () => actions.openStampLabelForEditing(edit),
+    });
   }
 
   items.push({ label: "Pin", onSelect: () => actions.setPinned(edit.id, true) });
@@ -2356,7 +2614,7 @@ function CalloutOverlay({
   const strokeColor = edit.strokeColor ?? DEFAULT_CALLOUT_STROKE_COLOR;
   const strokeWidthPt = edit.strokeWidthPt ?? DEFAULT_CALLOUT_STROKE_WIDTH_PT;
   const pinned = edit.pinned === true;
-  const font = useTextBoxPreviewFont(
+  const font = usePreviewFont(
     edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
     Boolean(edit.bold),
     Boolean(edit.italic),
@@ -2716,7 +2974,7 @@ function TextBoxOverlay({
 }) {
   const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
   const pinned = edit.pinned === true;
-  const font = useTextBoxPreviewFont(
+  const font = usePreviewFont(
     edit.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
     Boolean(edit.bold),
     Boolean(edit.italic),
@@ -2830,6 +3088,205 @@ function StampOverlay({
         onRemove={onRemove}
       />
       {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
+    </div>
+  );
+}
+
+/**
+ * A placed exhibit sticker. Drawn by the same `StampPreview` the gallery and
+ * the drag ghost use, so what the user drags is what the engine bakes; while a
+ * resize is in flight the preview re-fits live from the design baseline.
+ */
+function ExhibitStampOverlay({
+  edit,
+  viewport,
+  scale,
+  selected,
+  previewRect,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onResizeStart,
+  onEditLabelRequested,
+  onRemove,
+  onTogglePin,
+}: {
+  edit: PendingExhibitStamp;
+  viewport: PageViewport;
+  scale: number;
+  selected: boolean;
+  previewRect: ViewportRect | null;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>, corner: ResizeCorner) => void;
+  onEditLabelRequested: () => void;
+  onRemove: () => void;
+  onTogglePin: () => void;
+}) {
+  const rect = previewRect ?? pdfRectToViewportRect(edit.rect, viewport);
+  const displayed = previewRect
+    ? resizeExhibitStamp(edit, viewportRectToPdfRect(previewRect, viewport))
+    : edit;
+  const pinned = edit.pinned === true;
+
+  return (
+    <div
+      className="edit-layer__item edit-layer__exhibit-stamp"
+      data-selected={selected ? "true" : undefined}
+      data-status={edit.status}
+      data-pinned={pinned ? "true" : undefined}
+      style={toOverlayStyle(rect)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onEditLabelRequested();
+      }}
+    >
+      <StampPreview scale={scale} stamp={stampPreviewStyle(displayed, rect, scale)} />
+      <PinControls pinned={pinned} onTogglePin={onTogglePin} onRemove={onRemove} />
+      {selected && !pinned ? <ResizeHandles onResizeStart={onResizeStart} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The on-screen box is the source of truth for the sticker's visual size: on a
+ * 90/270 page the user-space width IS the visual height, so measuring the
+ * viewport rect keeps the label fit correct at every rotation.
+ */
+function stampPreviewStyle(
+  edit: PendingExhibitStamp,
+  rect: ViewportRect,
+  scale: number,
+): StampPreviewStyle {
+  return {
+    lines: edit.lines,
+    widthPt: rect.width / scale,
+    heightPt: rect.height / scale,
+    fontSizePt: edit.fontSizePt,
+    fontFamily: edit.fontFamily,
+    bold: edit.bold,
+    italic: edit.italic,
+    color: edit.color,
+    fillColor: edit.fillColor,
+    borderColor: edit.borderColor,
+    borderWidthPt: edit.borderWidthPt,
+    cornerRadiusPt: edit.cornerRadiusPt,
+  };
+}
+
+function armedStampPreviewStyle(
+  armed: ArmedExhibitStamp,
+  rect: ViewportRect,
+  scale: number,
+): StampPreviewStyle {
+  const template = armed.template;
+
+  return {
+    lines: armed.lines,
+    widthPt: rect.width / scale,
+    heightPt: rect.height / scale,
+    fontSizePt: template.fontSizePt,
+    fontFamily: template.fontFamily,
+    bold: template.bold,
+    italic: template.italic,
+    color: template.textColor,
+    fillColor: template.fillColor,
+    borderColor: template.borderColor,
+    borderWidthPt: template.borderWidthPt,
+    cornerRadiusPt: template.cornerRadiusPt,
+  };
+}
+
+/** Centers the armed sticker, at its designed size, on the pointer. */
+function exhibitStampRect(
+  point: ViewportPoint,
+  armed: ArmedExhibitStamp,
+  viewport: PageViewport,
+  scale: number,
+): ViewportRect {
+  const width = armed.template.widthPt * scale;
+  const height = armed.template.heightPt * scale;
+
+  return {
+    left: clamp(point.x - width / 2, 0, Math.max(0, viewport.width - width)),
+    top: clamp(point.y - height / 2, 0, Math.max(0, viewport.height - height)),
+    width,
+    height,
+  };
+}
+
+/**
+ * Renumbers one placed stamp. Only this sticker changes — the template's
+ * running counter and every other stamp on the page stay where they are, so
+ * fixing a single mis-numbered exhibit never renumbers the set.
+ */
+function ExhibitStampLabelPopover({
+  draft,
+  viewport,
+  onTextChange,
+  onCommit,
+  onCancel,
+}: {
+  draft: LabelDraft;
+  viewport: PageViewport;
+  onTextChange: (text: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const width = 220;
+  const left = clamp(draft.rect.left, 0, Math.max(0, viewport.width - width));
+  const top = clamp(
+    draft.rect.top + draft.rect.height + 8,
+    0,
+    Math.max(0, viewport.height - 96),
+  );
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      onCommit();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onCancel();
+    }
+  }
+
+  return (
+    <div
+      className="edit-layer__comment-popover"
+      role="dialog"
+      aria-label="Exhibit label"
+      style={{ left: `${left}px`, top: `${top}px`, width: `${width}px` }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <label className="edit-layer__stamp-label-field">
+        <span>Exhibit</span>
+        <input
+          type="text"
+          aria-label="Exhibit number or letter"
+          value={draft.text}
+          autoFocus
+          onChange={(event) => onTextChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+      </label>
+      <div className="edit-layer__comment-actions">
+        <button type="button" className="edit-layer__comment-save" onClick={onCommit}>
+          Update Label
+        </button>
+        <button type="button" className="edit-layer__comment-cancel" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -3103,7 +3560,7 @@ export function TextBoxDraftEditor({
   onCancel: () => void;
 }) {
   const color = draft.color ?? DEFAULT_TEXT_COLOR;
-  const font = useTextBoxPreviewFont(
+  const font = usePreviewFont(
     draft.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY,
     Boolean(draft.bold),
     Boolean(draft.italic),
@@ -3332,93 +3789,6 @@ function textContentStyle(
     textAlign: textStyle.align ?? DEFAULT_TEXT_ALIGN,
     color: pdfEditColorToHex(color),
   };
-}
-
-function cssTextBoxFontFamily(fontFamily: PdfTextBoxFontFamily): string {
-  switch (fontFamily) {
-    case "times":
-      return '"Times New Roman", Times, serif';
-    case "courier":
-      return '"Courier New", Courier, monospace';
-    case "helvetica":
-      return "Helvetica, Arial, sans-serif";
-  }
-}
-
-function useTextBoxPreviewFont(
-  fontFamily: PdfTextBoxFontFamily,
-  bold: boolean,
-  italic: boolean,
-): PDFFont | null {
-  const [font, setFont] = useState<PDFFont | null>(null);
-  const key = textBoxFontKey(fontFamily, bold, italic);
-
-  useEffect(() => {
-    let disposed = false;
-
-    setFont(null);
-    void loadTextBoxPreviewFont(key).then((loadedFont) => {
-      if (!disposed) {
-        setFont(loadedFont);
-      }
-    });
-
-    return () => {
-      disposed = true;
-    };
-  }, [key]);
-
-  return font;
-}
-
-type TextBoxPreviewFontKey =
-  `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" | "boldItalic"}`;
-
-const TEXT_BOX_PREVIEW_STANDARD_FONTS: Record<TextBoxPreviewFontKey, StandardFonts> = {
-  "helvetica:regular": StandardFonts.Helvetica,
-  "helvetica:bold": StandardFonts.HelveticaBold,
-  "helvetica:italic": StandardFonts.HelveticaOblique,
-  "helvetica:boldItalic": StandardFonts.HelveticaBoldOblique,
-  "times:regular": StandardFonts.TimesRoman,
-  "times:bold": StandardFonts.TimesRomanBold,
-  "times:italic": StandardFonts.TimesRomanItalic,
-  "times:boldItalic": StandardFonts.TimesRomanBoldItalic,
-  "courier:regular": StandardFonts.Courier,
-  "courier:bold": StandardFonts.CourierBold,
-  "courier:italic": StandardFonts.CourierOblique,
-  "courier:boldItalic": StandardFonts.CourierBoldOblique,
-};
-const textBoxPreviewFontCache = new Map<TextBoxPreviewFontKey, Promise<PDFFont>>();
-
-function textBoxFontKey(
-  fontFamily: PdfTextBoxFontFamily,
-  bold: boolean,
-  italic: boolean,
-): TextBoxPreviewFontKey {
-  if (bold && italic) {
-    return `${fontFamily}:boldItalic`;
-  }
-
-  if (bold) {
-    return `${fontFamily}:bold`;
-  }
-
-  if (italic) {
-    return `${fontFamily}:italic`;
-  }
-
-  return `${fontFamily}:regular`;
-}
-
-function loadTextBoxPreviewFont(key: TextBoxPreviewFontKey): Promise<PDFFont> {
-  let font = textBoxPreviewFontCache.get(key);
-
-  if (!font) {
-    font = PDFDocument.create().then((pdf) => pdf.embedFont(TEXT_BOX_PREVIEW_STANDARD_FONTS[key]));
-    textBoxPreviewFontCache.set(key, font);
-  }
-
-  return font;
 }
 
 function moveRect(

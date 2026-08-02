@@ -322,7 +322,10 @@ import {
 } from "./lib/wordReflow";
 import { describeTextLayerStatus, deriveTextLayerStatus } from "./lib/textLayerStatus";
 import { extractPageTextForIndexes } from "./lib/pageTextCache";
-import { editToolStreamedGateMessage } from "./lib/editToolGate";
+import {
+  editToolStreamedGateMessage,
+  streamedAnnotationPlanGateMessage,
+} from "./lib/editToolGate";
 import {
   collectRedactionAreaTexts,
   extractTextBoxes,
@@ -2292,9 +2295,10 @@ export function App() {
     if (source.kind === "memory") {
       const sourceBytes = source.bytes;
 
-      // Stamps have no overlay yet (see pendingEditFromRaioAnnotation), so
-      // they must keep their native appearance in the display copy.
-      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes, { keepVisibleKinds: ["stamp"] })
+      // Every RaioPDF annotation kind now has an overlay that draws it, so
+      // none of them stay visible in the display copy — otherwise each one
+      // would render twice, once from the file and once from the overlay.
+      void hideRaioPdfImportedAnnotationsForDisplay(sourceBytes)
         .then((displayBytes) => loadPdfDocument(displayBytes))
         .then((loaded) => {
           loadedDocument = loaded;
@@ -2717,7 +2721,9 @@ export function App() {
       openExperimentalFeaturesSettings();
       return;
     }
-    editing.clearPendingEdits();
+    // A genuine discard, not post-save cleanup — any draft exhibit stamps in
+    // the abandoned batch must give their numbers back.
+    void editing.discardPendingEdits();
     setTextEditAnnotationPrompt(null);
     enterTextEditMode();
     consumeReplaceSelectionReselectHint();
@@ -4612,11 +4618,10 @@ export function App() {
           return null;
         }
 
-        if (
-          pendingApply.plan.updateEdits.length > 0 ||
-          pendingApply.plan.deleteAnnotIds.length > 0
-        ) {
-          setError("Editing existing annotations on very large documents is not available yet.");
+        const streamedPlanGate = streamedAnnotationPlanGateMessage(pendingApply.plan);
+
+        if (streamedPlanGate) {
+          setError(streamedPlanGate);
           return null;
         }
 
@@ -4915,6 +4920,12 @@ export function App() {
     }
 
     setTabClosePrompt(null);
+    if (action === "discard" && prompt.closesVisibleDocument) {
+      // The visible document's pending edits belong to the tab we're about
+      // to close and are never coming back — any draft exhibit stamps in
+      // that batch must give their numbers back before the state is wiped.
+      await editing.discardPendingEdits();
+    }
     const tab = documentTabs.find((candidate) => candidate.id === prompt.tabId);
     const closed = await closeDocumentTab(prompt.tabId);
     if (closed && tab) {
@@ -4923,7 +4934,7 @@ export function App() {
     if (closed && prompt.closesVisibleDocument) {
       resetVisibleDocumentAppState(prompt.nextVisibleState);
     }
-  }, [closeDocumentTab, documentTabs, resetVisibleDocumentAppState, saveToFile, tabClosePrompt]);
+  }, [closeDocumentTab, documentTabs, editing, resetVisibleDocumentAppState, saveToFile, tabClosePrompt]);
 
   const moveActiveTabToNewWindow = useCallback(
     async (tabId: string, fileGrant: FileGrant, dirty: boolean) => {

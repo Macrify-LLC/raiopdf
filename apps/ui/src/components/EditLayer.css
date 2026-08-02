@@ -28,7 +28,8 @@
 }
 
 .edit-layer[data-tool="image"],
-.edit-layer[data-tool="sign"] {
+.edit-layer[data-tool="sign"],
+.edit-layer[data-tool="stamp"] {
   cursor: copy;
 }
 
@@ -206,6 +207,40 @@
 .edit-layer__stamp {
   border: 1px dashed var(--border);
   cursor: move;
+}
+
+/* ---- Exhibit stamps ---- */
+
+/* The sticker draws its own border, fill, and rounding through StampPreview,
+   so the overlay contributes only the working chrome (selection outline,
+   handles) — a second border here would double every edge. */
+.edit-layer__exhibit-stamp {
+  cursor: move;
+}
+
+.edit-layer__exhibit-stamp[data-selected="true"] {
+  outline: 1px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.edit-layer__stamp-label-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.edit-layer__stamp-label-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  padding: 3px 6px;
 }
 
 .edit-layer__stamp-image {

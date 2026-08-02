@@ -1,4 +1,5 @@
 import type { PdfEditColor, PdfStampSequence, PdfTextBoxFontFamily } from "@raiopdf/engine-api";
+import { DEFAULT_STAMP_BORDER_WIDTH_PT } from "./edits";
 import { DEFAULT_TEXT_COLOR } from "./editStyles";
 import {
   exhibitLabelLines,
@@ -31,8 +32,8 @@ const STORAGE_KEY = "raiopdf.exhibit-stamps.v1";
 export const DEFAULT_STAMP_WIDTH_PT = 115.2;
 export const DEFAULT_STAMP_HEIGHT_PT = 72;
 export const DEFAULT_STAMP_FONT_SIZE_PT = 14;
-export const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
 export const DEFAULT_STAMP_CORNER_RADIUS_PT = 4;
+export { DEFAULT_STAMP_BORDER_WIDTH_PT };
 const DEFAULT_STAMP_FILL_COLOR: PdfEditColor = { r: 1, g: 1, b: 1 };
 
 export interface ExhibitStampTemplateV1 {

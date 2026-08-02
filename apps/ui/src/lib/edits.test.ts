@@ -8,9 +8,11 @@ import {
   excerpt,
   normalizePdfRectFromPoints,
   pendingEditsFromRaioAnnotations,
+  resizeExhibitStamp,
   toPdfEdits,
   type PageTextBox,
   type PendingEdit,
+  type PendingExhibitStamp,
 } from "./edits";
 
 describe("toPdfEdits", () => {
@@ -852,8 +854,8 @@ describe("exhibit stamps", () => {
     expect(plan.deleteAnnotIds).toEqual([]);
   });
 
-  it("leaves an imported stamp alone until the overlay exists", () => {
-    expect(pendingEditsFromRaioAnnotations([
+  it("imports a saved stamp as an editable overlay item", () => {
+    const [imported] = pendingEditsFromRaioAnnotations([
       {
         pageIndex: 0,
         annotId: "stamp-annot",
@@ -863,9 +865,70 @@ describe("exhibit stamps", () => {
           pageIndex: 0,
           rect: { x: 0, y: 0, w: 100, h: 50 },
           lines: ["Exhibit A"],
+          fontSizePt: 14,
+          borderWidthPt: 2,
+          cornerRadiusPt: 4,
+          sequence: {
+            schemaVersion: 1,
+            identifierStyle: "letters",
+            prefix: "Exhibit",
+            layout: "inline",
+            index: 0,
+          },
         },
       },
-    ])).toEqual([]);
+    ]);
+
+    expect(imported).toMatchObject({
+      kind: "stamp",
+      annotId: "stamp-annot",
+      status: "applied",
+      lines: ["Exhibit A"],
+      fontSizePt: 14,
+      // Geometry as saved becomes the resize baseline for the reopened stamp.
+      design: {
+        widthPt: 100,
+        heightPt: 50,
+        fontSizePt: 14,
+        borderWidthPt: 2,
+        cornerRadiusPt: 4,
+      },
+    });
+    // Unchanged, an imported stamp is neither re-appended nor re-written.
+    expect(
+      buildAnnotationSavePlan([imported!], new Set(["stamp-annot"])),
+    ).toMatchObject({ appendEdits: [], updateEdits: [], deleteAnnotIds: [] });
+  });
+
+  it("re-fits the label, border, and rounding from the design when resized", () => {
+    const placed: PendingExhibitStamp = {
+      kind: "stamp",
+      id: "stamp-resize",
+      pageIndex: 0,
+      rect: { x: 0, y: 0, w: 100, h: 50 },
+      lines: ["Exhibit", "A"],
+      fontSizePt: 14,
+      borderWidthPt: 2,
+      cornerRadiusPt: 4,
+      design: {
+        widthPt: 100,
+        heightPt: 50,
+        fontSizePt: 14,
+        borderWidthPt: 2,
+        cornerRadiusPt: 4,
+      },
+    };
+    const doubled = resizeExhibitStamp(placed, { x: 0, y: 0, w: 200, h: 100 });
+    // Halving the doubled stamp lands back on the design, not on a value that
+    // drifted through the intermediate size.
+    const halved = resizeExhibitStamp(doubled, { x: 0, y: 0, w: 100, h: 50 });
+    // A move (same size, new origin) changes nothing but the box.
+    const moved = resizeExhibitStamp(placed, { x: 20, y: 30, w: 100, h: 50 });
+
+    expect(doubled).toMatchObject({ fontSizePt: 28, borderWidthPt: 4, cornerRadiusPt: 8 });
+    expect(halved).toMatchObject({ fontSizePt: 14, borderWidthPt: 2, cornerRadiusPt: 4 });
+    expect(halved.design).toEqual(placed.design);
+    expect(moved).toMatchObject({ fontSizePt: 14, borderWidthPt: 2, cornerRadiusPt: 4 });
   });
 
   it("describes itself by its resolved label", () => {

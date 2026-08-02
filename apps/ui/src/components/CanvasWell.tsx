@@ -10,6 +10,7 @@ import type { PDFDocumentProxy } from "../lib/pdfjs";
 import { DismissButton } from "./DismissButton";
 import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
+import { ExhibitStampCard } from "./ExhibitStampCard";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
 import { PageList } from "./PageList";
@@ -151,6 +152,9 @@ export function CanvasWell({
   const signatureCardOpen = Boolean(
     editing && editing.tool === "sign" && editing.signatureCardOpen,
   );
+  const stampCardOpen = Boolean(
+    editing && editing.tool === "stamp" && editing.stampCardOpen,
+  );
 
   return (
     <section
@@ -209,6 +213,16 @@ export function CanvasWell({
           onClose={() => editing.setSignatureCardOpen(false)}
         >
           <SignatureCard editing={editing} />
+        </FloatingDialog>
+      ) : null}
+      {viewerActive && stampCardOpen && editing ? (
+        <FloatingDialog
+          title="Exhibit stamps"
+          eyebrow="Edit"
+          width="md"
+          onClose={() => editing.setStampCardOpen(false)}
+        >
+          <ExhibitStampCard editing={editing} />
         </FloatingDialog>
       ) : null}
       {workspace ? (

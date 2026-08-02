@@ -1608,6 +1608,27 @@ describe("exhibit stamp round-trip", () => {
     expect(await reimportStampWithSourceEdit(STAMP_EDIT)).toHaveLength(1);
   });
 
+  it("hides stamps in the display copy by default", async () => {
+    // The UI overlay draws imported stamps itself, so leaving the file's own
+    // appearance visible would render every reopened sticker twice.
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], {
+      markupMode: "annotation",
+    });
+    const savedBytes = await engine.saveToBytes(edited);
+
+    const displayBytes = await hideRaioPdfImportedAnnotationsForDisplay(savedBytes);
+    const display = await PDFDocument.load(displayBytes);
+    const HIDDEN = 2;
+    const flags = readPageAnnotations(display, 0).map(
+      (annotation) => annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0,
+    );
+
+    expect(flags).toHaveLength(1);
+    expect((flags[0] ?? 0) & HIDDEN).toBe(HIDDEN);
+  });
+
   it("keeps stamps visible in the display copy while hiding overlay-backed kinds", async () => {
     const engine = createLocalPdfEngine();
     const document = await engine.open(await createPdf([[612, 792]]));

@@ -220,7 +220,13 @@ const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
 const DEFAULT_CALLOUT_STROKE_WIDTH_PT = DEFAULT_SHAPE_STROKE_WIDTH_PT;
 const DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT = 0.75;
-const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
+/**
+ * Border thickness a stamp edit draws when it omits `borderWidthPt`.
+ * Exported so the UI's preview can resolve the same default instead of
+ * quietly diverging to its own guess (see `resolveStampBorderWidthPt` below,
+ * the only other reader of this constant).
+ */
+export const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
 /** Gap between the inside of a stamp's border and its text block. */
 const STAMP_TEXT_PADDING_PT = 2;
 /**

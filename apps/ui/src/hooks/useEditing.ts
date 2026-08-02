@@ -4,6 +4,7 @@ import type {
   PdfEditImageFormat,
   PdfFormFieldValue,
   PdfRaioAnnotationImport,
+  PdfStampSequence,
 } from "@raiopdf/engine-api";
 import {
   annotationSavePlanHasChanges,
@@ -17,9 +18,18 @@ import {
   type EditToolId,
   type PendingEdit,
   type PendingEditStatus,
+  type PendingExhibitStamp,
   type ShapeToolId,
   type TextMarkupToolId,
 } from "../lib/edits";
+import { exhibitLabelLines, formatExhibitLabel } from "../lib/exhibitLabels";
+import {
+  allocateIdentifier,
+  findExhibitStampTemplate,
+  rollbackIdentifier,
+  type ExhibitStampAllocation,
+  type ExhibitStampTemplateV1,
+} from "../lib/exhibitStamps";
 import { closestTextLayer } from "../lib/selectedTextEdit";
 import {
   DEFAULT_INK_STROKE_WIDTH_PT,
@@ -42,6 +52,23 @@ export interface ArmedImageStamp {
   /** Natural pixel width, used for the initial placement size and aspect lock. */
   width: number;
   height: number;
+}
+
+/**
+ * An exhibit stamp template picked and ready to place, previewing the number
+ * the NEXT click will use.
+ *
+ * Arming reserves nothing: the counter only advances when a stamp actually
+ * lands on a page (`allocateExhibitStampIdentifier`), so arming the tool and
+ * then changing your mind never burns an exhibit number. `label`/`lines` are
+ * therefore a preview recomputed from the store after every placement.
+ */
+export interface ArmedExhibitStamp {
+  templateId: string;
+  label: string;
+  lines: readonly string[];
+  sequence: PdfStampSequence;
+  template: ExhibitStampTemplateV1;
 }
 
 export interface SavedSignature {
@@ -80,6 +107,16 @@ export interface EditingState {
   removeEdit: (id: string) => void;
   clearPending: () => void;
   clearPendingEdits: () => void;
+  /**
+   * The bulk-discard door: every path that abandons the WHOLE pending list
+   * without saving it (not just one item — see `removeEdit` for that) goes
+   * through here, so a discarded batch of draft exhibit stamps gives its
+   * numbers back the same way a single deleted stamp does. `clearPending` /
+   * `clearPendingEdits` stay as the plain, non-rollback clears used after a
+   * successful save or flatten, where the edits were consumed rather than
+   * abandoned and their exhibit numbers are rightly spent.
+   */
+  discardPendingEdits: () => Promise<void>;
   draftEditCount: number;
   appliedEditCount: number;
   applyPending: () => void;
@@ -107,6 +144,21 @@ export interface EditingState {
   deleteSavedSignature: (id: string) => void;
   armSignatureFromDataUrl: (dataUrl: string) => Promise<boolean>;
   disarmSignature: () => void;
+  /** Pick-to-place state for the Exhibit Stamp tool. */
+  armedExhibitStamp: ArmedExhibitStamp | null;
+  stampCardOpen: boolean;
+  setStampCardOpen: (open: boolean) => void;
+  /** Arms a template and previews the number its next placement will use. */
+  armExhibitStamp: (templateId: string) => boolean;
+  /** Re-reads the armed template so an edited counter shows up immediately. */
+  refreshArmedExhibitStamp: () => void;
+  disarmExhibitStamp: () => void;
+  /**
+   * Reserves the next exhibit number for the armed template and advances the
+   * counter on disk. Returns null — with the reason in `message` — when the
+   * counter could not be committed, in which case nothing may be placed.
+   */
+  allocateExhibitStampIdentifier: () => Promise<ExhibitStampAllocation | null>;
   flattenOnSave: boolean;
   setFlattenOnSave: (flatten: boolean) => void;
   /** AcroForm fill state — document-scoped changed values only. */
@@ -173,6 +225,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [armedImage, setArmedImage] = useState<ArmedImageStamp | null>(null);
   const [armedSignature, setArmedSignature] = useState<ArmedImageStamp | null>(null);
   const [signatureCardOpen, setSignatureCardOpen] = useState(false);
+  const [armedExhibitStamp, setArmedExhibitStamp] = useState<ArmedExhibitStamp | null>(null);
+  const [stampCardOpen, setStampCardOpen] = useState(false);
   const [savedSignatures, setSavedSignatures] = useState<readonly SavedSignature[]>(
     loadSavedSignatures,
   );
@@ -201,6 +255,14 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   });
   const [message, setMessage] = useState<string | null>(null);
   const signatureIdRef = useRef(0);
+  // Latest-value refs so the stable callbacks below can read current state
+  // without taking it as a dependency (which would re-create every callback on
+  // each keystroke and, for removeEdit, force the whole editing object to
+  // change identity on every edit).
+  const pendingEditsRef = useRef(pendingEdits);
+  pendingEditsRef.current = pendingEdits;
+  const armedExhibitStampRef = useRef(armedExhibitStamp);
+  armedExhibitStampRef.current = armedExhibitStamp;
 
   useEffect(() => {
     let disposed = false;
@@ -233,6 +295,14 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setMessage(null);
     setSelectedEditId(null);
     setSignatureCardOpen(nextTool === "sign");
+    // Choosing the stamp tool with nothing armed opens the gallery, because
+    // there is nothing to place until a template is picked. Leaving the tool
+    // disarms, so a stray click under another tool can never stamp.
+    setStampCardOpen(nextTool === "stamp" && !armedExhibitStampRef.current);
+
+    if (nextTool !== "stamp") {
+      setArmedExhibitStamp(null);
+    }
 
     // A live page-text selection must not linger inert across a tool switch.
     // Switching to a text-markup tool converts it into that markup (the
@@ -272,10 +342,36 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     [],
   );
 
-  const removeEdit = useCallback((id: string) => {
-    setPendingEdits((current) => current.filter((edit) => edit.id !== id));
-    setSelectedEditId((current) => (current === id ? null : current));
+  const refreshArmedExhibitStamp = useCallback(() => {
+    const armed = armedExhibitStampRef.current;
+
+    if (armed) {
+      setArmedExhibitStamp(nextArmedExhibitStamp(armed.templateId));
+    }
   }, []);
+
+  /**
+   * The single removal door — every delete path (the X badge, the right-click
+   * menu, the Delete/Backspace key, and Undo) goes through here, so giving an
+   * exhibit number back can never depend on which one the user used.
+   */
+  const removeEdit = useCallback(
+    (id: string) => {
+      const removed = pendingEditsRef.current.find((edit) => edit.id === id);
+
+      if (removed) {
+        void returnExhibitNumber(removed).then((returned) => {
+          if (returned) {
+            refreshArmedExhibitStamp();
+          }
+        });
+      }
+
+      setPendingEdits((current) => current.filter((edit) => edit.id !== id));
+      setSelectedEditId((current) => (current === id ? null : current));
+    },
+    [refreshArmedExhibitStamp],
+  );
 
   const clearPending = useCallback(() => {
     setPendingEdits([]);
@@ -289,6 +385,29 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setImportedAnnotIds(new Set());
     setSelectedEditId(null);
   }, []);
+
+  const discardPendingEdits = useCallback(async () => {
+    const drafts = pendingEditsRef.current.filter(isDraftExhibitStamp);
+    // Newest first: the store's only-latest rollback rule accepts each of
+    // these in turn (giving back stamp N moves the counter to N, which is
+    // exactly what stamp N-1 needs next) and naturally stops the moment a
+    // gap appears — e.g. a draft whose template's counter already moved for
+    // another reason — leaving that reservation alone instead of erroring.
+    const orderedDrafts = [...drafts].sort((a, b) => b.sequence.index - a.sequence.index);
+
+    for (const draft of orderedDrafts) {
+      const result = await rollbackIdentifier(draft.templateId, draft.sequence.index);
+
+      if (!result.ok) {
+        break;
+      }
+    }
+
+    setPendingEdits([]);
+    setImportedAnnotIds(new Set());
+    setSelectedEditId(null);
+    refreshArmedExhibitStamp();
+  }, [refreshArmedExhibitStamp]);
 
   const draftEditCount = useMemo(
     () => pendingEdits.filter((edit) => edit.status !== "applied").length,
@@ -417,6 +536,58 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setArmedSignature(null);
   }, []);
 
+  const armExhibitStamp = useCallback((templateId: string) => {
+    const armed = nextArmedExhibitStamp(templateId);
+
+    if (!armed) {
+      setMessage("That exhibit stamp is no longer available.");
+      return false;
+    }
+
+    setArmedExhibitStamp(armed);
+    setStampCardOpen(false);
+    setMessage(null);
+    return true;
+  }, []);
+
+  const disarmExhibitStamp = useCallback(() => {
+    setArmedExhibitStamp(null);
+  }, []);
+
+  /**
+   * Drops the armed stamp when the document under the tool changes (a new
+   * file, or a tab switch restoring another document's edits). The armed
+   * preview shows a number read at arm time; carrying it across documents
+   * would show a stale one, and the counter is shared across tabs.
+   */
+  const disarmForNewDocument = useCallback(() => {
+    setArmedExhibitStamp(null);
+    setStampCardOpen(false);
+  }, []);
+
+  const allocateExhibitStampIdentifier = useCallback(async () => {
+    const armed = armedExhibitStampRef.current;
+
+    if (!armed) {
+      return null;
+    }
+
+    const result = await allocateIdentifier(armed.templateId);
+
+    if (!result.ok) {
+      // The counter did not move, so nothing may be placed — the caller reads
+      // this null as "abandon the placement" and the number stays unused.
+      setMessage(result.error);
+      return null;
+    }
+
+    // The ghost now previews the NEXT number, so repeat stamping reads right
+    // before the user clicks again.
+    setArmedExhibitStamp(nextArmedExhibitStamp(armed.templateId) ?? armed);
+    setMessage(null);
+    return result.value;
+  }, []);
+
   const setFormValue = useCallback((fieldName: string, value: PdfFormFieldValue) => {
     setFormValues((current) => ({ ...current, [fieldName]: value }));
   }, []);
@@ -533,7 +704,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setFormValues({});
     setMessage(null);
     setSelectedEditId(null);
-  }, []);
+    disarmForNewDocument();
+  }, [disarmForNewDocument]);
 
   const captureDocumentState = useCallback((): EditingDocumentSnapshot => ({
     pendingEdits,
@@ -541,14 +713,18 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     formValues,
   }), [formValues, importedAnnotIds, pendingEdits]);
 
-  const restoreDocumentState = useCallback((snapshot: EditingDocumentSnapshot) => {
-    setToolState(resetFormAuthoringTool);
-    setPendingEdits(snapshot.pendingEdits);
-    setImportedAnnotIds(snapshot.importedAnnotIds);
-    setFormValues({ ...snapshot.formValues });
-    setMessage(null);
-    setSelectedEditId(null);
-  }, []);
+  const restoreDocumentState = useCallback(
+    (snapshot: EditingDocumentSnapshot) => {
+      setToolState(resetFormAuthoringTool);
+      setPendingEdits(snapshot.pendingEdits);
+      setImportedAnnotIds(snapshot.importedAnnotIds);
+      setFormValues({ ...snapshot.formValues });
+      setMessage(null);
+      setSelectedEditId(null);
+      disarmForNewDocument();
+    },
+    [disarmForNewDocument],
+  );
 
   return useMemo(
     () => ({
@@ -560,6 +736,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       removeEdit,
       clearPending,
       clearPendingEdits,
+      discardPendingEdits,
       draftEditCount,
       appliedEditCount,
       applyPending,
@@ -579,6 +756,13 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       deleteSavedSignature,
       armSignatureFromDataUrl,
       disarmSignature,
+      armedExhibitStamp,
+      stampCardOpen,
+      setStampCardOpen,
+      armExhibitStamp,
+      refreshArmedExhibitStamp,
+      disarmExhibitStamp,
+      allocateExhibitStampIdentifier,
       flattenOnSave,
       setFlattenOnSave,
       hasFormFields,
@@ -616,6 +800,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       removeEdit,
       clearPending,
       clearPendingEdits,
+      discardPendingEdits,
       draftEditCount,
       appliedEditCount,
       applyPending,
@@ -633,6 +818,13 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       deleteSavedSignature,
       armSignatureFromDataUrl,
       disarmSignature,
+      armedExhibitStamp,
+      stampCardOpen,
+      setStampCardOpen,
+      armExhibitStamp,
+      refreshArmedExhibitStamp,
+      disarmExhibitStamp,
+      allocateExhibitStampIdentifier,
       flattenOnSave,
       hasFormFields,
       formValues,
@@ -660,6 +852,80 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       restoreDocumentState,
     ],
   );
+}
+
+/**
+ * The armed preview for a template as the store has it right now: the label
+ * its next placement would use. Returns null when the template is gone (it can
+ * be deleted from the gallery, or by another window).
+ */
+function nextArmedExhibitStamp(templateId: string): ArmedExhibitStamp | null {
+  const template = findExhibitStampTemplate(templateId);
+
+  if (!template) {
+    return null;
+  }
+
+  const index = template.nextIndex;
+
+  return {
+    templateId,
+    label: formatExhibitLabel(
+      template.prefix,
+      template.identifierStyle,
+      index,
+      template.suffix,
+    ),
+    lines: exhibitLabelLines(
+      template.prefix,
+      template.identifierStyle,
+      index,
+      template.layout,
+      template.suffix,
+    ),
+    sequence: {
+      schemaVersion: 1,
+      identifierStyle: template.identifierStyle,
+      prefix: template.prefix,
+      ...(template.suffix ? { suffix: template.suffix } : {}),
+      layout: template.layout,
+      index,
+    },
+    template,
+  };
+}
+
+/**
+ * Hands an exhibit number back after a stamp placed in this session is
+ * removed, and reports whether the counter actually moved.
+ *
+ * Only the newest number can be returned — the store refuses anything else, so
+ * deleting the third of five stamps leaves the counter alone rather than
+ * reissuing a number that is already on a page. A refusal is ordinary, not an
+ * error, so nothing is surfaced. Imported stamps are skipped outright: their
+ * number belongs to the saved file, not to this session's counter.
+ */
+async function returnExhibitNumber(edit: PendingEdit): Promise<boolean> {
+  if (!isDraftExhibitStamp(edit)) {
+    return false;
+  }
+
+  const result = await rollbackIdentifier(edit.templateId, edit.sequence.index);
+
+  return result.ok;
+}
+
+/**
+ * A stamp placed in this session whose exhibit number can still be given
+ * back: not yet saved to the file (no `annotId`) and still carrying the
+ * template/sequence it was allocated against. Shared by the single-item door
+ * (`returnExhibitNumber`, behind `removeEdit`) and the bulk-discard door
+ * (`discardPendingEdits`) so both agree on what counts as "still reservable."
+ */
+function isDraftExhibitStamp(
+  edit: PendingEdit,
+): edit is PendingExhibitStamp & { templateId: string; sequence: NonNullable<PendingExhibitStamp["sequence"]> } {
+  return edit.kind === "stamp" && !edit.annotId && Boolean(edit.templateId) && Boolean(edit.sequence);
 }
 
 async function armStampFromFile(file: File): Promise<ArmedImageStamp> {

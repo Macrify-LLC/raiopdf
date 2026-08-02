@@ -14,6 +14,7 @@ import {
   CommentIcon,
   DrawIcon,
   EllipseIcon,
+  ExhibitStampIcon,
   HighlightIcon,
   ImageIcon,
   LineIcon,
@@ -43,6 +44,7 @@ const EDIT_TOOL_ICONS: Record<EditToolId, (size: number) => ReactNode> = {
   shapeLine: (size) => <LineIcon size={size} />,
   shapeArrow: (size) => <ArrowLineIcon size={size} />,
   sign: (size) => <SignIcon size={size} />,
+  stamp: (size) => <ExhibitStampIcon size={size} />,
 };
 
 const GROUP_ENDS = new Set<EditToolId>([

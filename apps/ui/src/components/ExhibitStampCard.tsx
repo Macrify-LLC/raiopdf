@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditingState } from "../hooks/useEditing";
 import { exhibitLabelLines, formatExhibitIdentifier } from "../lib/exhibitLabels";
 import {
@@ -47,6 +47,19 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
     setTemplates(listExhibitStampTemplates());
     editing.refreshArmedExhibitStamp();
   }, [editing]);
+
+  // A renumber moves the design's counter, so the "Next" fields have to be
+  // re-read once its dialog closes — the gallery holds a snapshot of the
+  // stored templates, not a live view of them.
+  const renumberOpen = Boolean(editing.exhibitStampRenumberRequest);
+  const renumberWasOpen = useRef(renumberOpen);
+  useEffect(() => {
+    if (renumberWasOpen.current && !renumberOpen) {
+      reload();
+    }
+
+    renumberWasOpen.current = renumberOpen;
+  }, [reload, renumberOpen]);
 
   const handleDuplicate = useCallback(
     (template: ExhibitStampTemplateV1) => {
@@ -108,7 +121,9 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
             armed={editing.armedExhibitStamp?.templateId === template.id}
             canMoveUp={index > 0}
             canMoveDown={index < templates.length - 1}
+            placedCount={editing.countPlacedExhibitStamps(template.id)}
             onArm={() => editing.armExhibitStamp(template.id)}
+            onRenumber={() => editing.requestExhibitStampRenumber(template.id)}
             onCounterChanged={reload}
             onMessage={editing.setMessage}
             onEdit={() => setDesigner({ mode: "edit", template })}
@@ -168,7 +183,9 @@ function ExhibitStampTemplateCard({
   armed,
   canMoveUp,
   canMoveDown,
+  placedCount,
   onArm,
+  onRenumber,
   onCounterChanged,
   onMessage,
   onEdit,
@@ -180,7 +197,10 @@ function ExhibitStampTemplateCard({
   armed: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  /** Stamps of this design placed in the open document. */
+  placedCount: number;
   onArm: () => void;
+  onRenumber: () => void;
   onCounterChanged: () => void;
   onMessage: (message: string | null) => void;
   onEdit: () => void;
@@ -296,6 +316,20 @@ function ExhibitStampTemplateCard({
       </div>
 
       <div className="exhibit-stamp-card__actions">
+        {/* Renumbering rewrites stickers already on the page, so it only shows
+            up once there are some, and never renumbers an unnumbered design. */}
+        <button
+          type="button"
+          className="exhibit-stamp-card__secondary"
+          aria-label={`Renumber placed ${template.name} stamps`}
+          disabled={placedCount === 0 || template.identifierStyle === "none"}
+          title={placedCount === 0
+            ? "Stamp a page first — this renumbers the stamps already placed."
+            : `Renumber all ${placedCount} placed ${template.name} stamps in reading order.`}
+          onClick={onRenumber}
+        >
+          Renumber placed stamps...
+        </button>
         <button type="button" className="exhibit-stamp-card__secondary" onClick={onEdit}>
           Edit design...
         </button>

@@ -22,11 +22,22 @@ import {
   type ShapeToolId,
   type TextMarkupToolId,
 } from "../lib/edits";
-import { exhibitLabelLines, formatExhibitLabel } from "../lib/exhibitLabels";
+import {
+  exhibitLabelLines,
+  formatExhibitIdentifier,
+  formatExhibitLabel,
+} from "../lib/exhibitLabels";
+import {
+  applyExhibitStampRenumberStep,
+  planExhibitStampRenumber,
+  readStampVisualRects,
+  renumberableStamps,
+} from "../lib/exhibitStampRenumber";
 import {
   allocateIdentifier,
   findExhibitStampTemplate,
   rollbackIdentifier,
+  setNextIdentifier,
   type ExhibitStampAllocation,
   type ExhibitStampTemplateV1,
 } from "../lib/exhibitStamps";
@@ -75,6 +86,30 @@ export interface SavedSignature {
   id: string;
   dataUrl: string;
   createdAt: number;
+}
+
+/** The open "Renumber placed stamps..." confirmation, and what it will act on. */
+export interface ExhibitStampRenumberRequest {
+  templateId: string;
+  /** Stamps of that design the renumber would rewrite, in reading order later. */
+  count: number;
+  /**
+   * The sequence (prefix/style/layout/suffix) carried by one of the live
+   * stamps themselves, captured when the confirmation opens. A stamp's
+   * sequence is self-contained by design, so this lets the dialog build its
+   * confirmation even when the design's gallery template was later deleted
+   * and `findExhibitStampTemplate` can no longer resolve it.
+   */
+  fallbackSequence: PdfStampSequence;
+}
+
+/** What a completed renumber changed, for the message the user reads after. */
+export interface ExhibitStampRenumberResult {
+  count: number;
+  /** Zero-based index of the last stamp in the renumbered set. */
+  lastIndex: number;
+  /** Set when the stamps were renumbered but the counter could not be moved. */
+  counterError: string | null;
 }
 
 /**
@@ -159,6 +194,22 @@ export interface EditingState {
    * counter could not be committed, in which case nothing may be placed.
    */
   allocateExhibitStampIdentifier: () => Promise<ExhibitStampAllocation | null>;
+  /** How many placed stamps of a design a renumber would rewrite. */
+  countPlacedExhibitStamps: (templateId: string) => number;
+  /** The open renumber confirmation, or null. */
+  exhibitStampRenumberRequest: ExhibitStampRenumberRequest | null;
+  /** Opens the confirmation for a design. No-op when nothing is placed. */
+  requestExhibitStampRenumber: (templateId: string) => void;
+  cancelExhibitStampRenumber: () => void;
+  /**
+   * Renumbers every placed stamp of one design in reading order from
+   * `startIndex`, then points the design's counter at the next free number.
+   * Returns null when there was nothing to renumber.
+   */
+  renumberExhibitStamps: (
+    templateId: string,
+    startIndex: number,
+  ) => Promise<ExhibitStampRenumberResult | null>;
   flattenOnSave: boolean;
   setFlattenOnSave: (flatten: boolean) => void;
   /** AcroForm fill state — document-scoped changed values only. */
@@ -217,7 +268,10 @@ export function newEditId(): string {
   return `edit-${editIdCounter}`;
 }
 
-export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
+export function useEditing(
+  pdfDocument: PDFDocumentProxy | null,
+  documentGeneration = 0,
+): EditingState {
   const [tool, setToolState] = useState<EditToolId>("select");
   const [pendingEdits, setPendingEdits] = useState<readonly PendingEdit[]>([]);
   const [importedAnnotIds, setImportedAnnotIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -227,6 +281,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [signatureCardOpen, setSignatureCardOpen] = useState(false);
   const [armedExhibitStamp, setArmedExhibitStamp] = useState<ArmedExhibitStamp | null>(null);
   const [stampCardOpen, setStampCardOpen] = useState(false);
+  const [exhibitStampRenumberRequest, setExhibitStampRenumberRequest] =
+    useState<ExhibitStampRenumberRequest | null>(null);
   const [savedSignatures, setSavedSignatures] = useState<readonly SavedSignature[]>(
     loadSavedSignatures,
   );
@@ -263,6 +319,17 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   pendingEditsRef.current = pendingEdits;
   const armedExhibitStampRef = useRef(armedExhibitStamp);
   armedExhibitStampRef.current = armedExhibitStamp;
+  // Renumbering sorts stamps in the visual page space the reader sees, which
+  // only the loaded document can supply. Held as a ref so the action doesn't
+  // re-create (and re-render every consumer) each time the document changes.
+  const pdfDocumentRef = useRef(pdfDocument);
+  pdfDocumentRef.current = pdfDocument;
+  // Mirrors the caller's document identity [R1-8] so a renumber in flight
+  // across an `await` can tell whether the document it started against is
+  // still the one on screen — a tab switch, or any other identity-changing
+  // swap, must not let a stale renumber land on the new document.
+  const documentGenerationRef = useRef(documentGeneration);
+  documentGenerationRef.current = documentGeneration;
 
   useEffect(() => {
     let disposed = false;
@@ -563,6 +630,9 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const disarmForNewDocument = useCallback(() => {
     setArmedExhibitStamp(null);
     setStampCardOpen(false);
+    // A renumber confirmation names stamps in the document that was open when
+    // it was raised; it must not survive into another one.
+    setExhibitStampRenumberRequest(null);
   }, []);
 
   const allocateExhibitStampIdentifier = useCallback(async () => {
@@ -587,6 +657,95 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setMessage(null);
     return result.value;
   }, []);
+
+  const countPlacedExhibitStamps = useCallback(
+    (templateId: string) => renumberableStamps(pendingEditsRef.current, templateId).length,
+    [],
+  );
+
+  const requestExhibitStampRenumber = useCallback((templateId: string) => {
+    const stamps = renumberableStamps(pendingEditsRef.current, templateId);
+
+    if (stamps.length === 0) {
+      return;
+    }
+
+    setExhibitStampRenumberRequest({
+      templateId,
+      count: stamps.length,
+      fallbackSequence: stamps[0]!.sequence,
+    });
+  }, []);
+
+  const cancelExhibitStampRenumber = useCallback(() => {
+    setExhibitStampRenumberRequest(null);
+  }, []);
+
+  /**
+   * Renumbers a whole design's stamps at once.
+   *
+   * The counter lands on the number after the last stamp, so the next
+   * placement continues the set rather than colliding with it. If the counter
+   * can't be written the labels still stand — the stamps on the page are the
+   * thing the user asked to fix — and the failure is reported back so the
+   * caller can say so.
+   *
+   * Bound to the document it started against [R1-8]: the pdf.js measurement
+   * below is the one genuine await, and a document swap (tab switch, or any
+   * other identity-changing swap) that lands while it's in flight must not
+   * let the plan it produces get applied to whatever document is now on
+   * screen. `documentGenerationRef` is re-checked right after that await —
+   * if it moved, the renumber aborts before touching a single edit or the
+   * counter, both of which now belong to a different document.
+   */
+  const renumberExhibitStamps = useCallback(
+    async (templateId: string, startIndex: number) => {
+      const startGeneration = documentGenerationRef.current;
+      const stamps = renumberableStamps(pendingEditsRef.current, templateId);
+
+      if (stamps.length === 0) {
+        return null;
+      }
+
+      const visualRects = await readStampVisualRects(pdfDocumentRef.current, stamps);
+
+      if (documentGenerationRef.current !== startGeneration) {
+        setMessage("Renumbering cancelled — the document changed.");
+        return null;
+      }
+
+      const steps = planExhibitStampRenumber(stamps, visualRects, startIndex);
+
+      for (const step of steps) {
+        updateEdit(step.id, (edit) => applyExhibitStampRenumberStep(edit, step));
+      }
+
+      const lastIndex = startIndex + steps.length - 1;
+      const template = findExhibitStampTemplate(templateId);
+
+      // A design whose gallery entry was deleted has no live counter to
+      // advance — the stamps themselves carry their own sequence, so the
+      // renumber above still lands; there is just nothing to point at the
+      // next free number.
+      let counterError: string | null = null;
+      if (template) {
+        const counter = await setNextIdentifier(
+          templateId,
+          formatExhibitIdentifier(template.identifierStyle, lastIndex + 1),
+        );
+        counterError = counter.ok ? null : counter.error;
+      }
+
+      refreshArmedExhibitStamp();
+
+      return {
+        count: steps.length,
+        lastIndex,
+        counterError,
+      };
+    },
+    [refreshArmedExhibitStamp, updateEdit],
+  );
 
   const setFormValue = useCallback((fieldName: string, value: PdfFormFieldValue) => {
     setFormValues((current) => ({ ...current, [fieldName]: value }));
@@ -763,6 +922,11 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       refreshArmedExhibitStamp,
       disarmExhibitStamp,
       allocateExhibitStampIdentifier,
+      countPlacedExhibitStamps,
+      exhibitStampRenumberRequest,
+      requestExhibitStampRenumber,
+      cancelExhibitStampRenumber,
+      renumberExhibitStamps,
       flattenOnSave,
       setFlattenOnSave,
       hasFormFields,
@@ -825,6 +989,11 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       refreshArmedExhibitStamp,
       disarmExhibitStamp,
       allocateExhibitStampIdentifier,
+      countPlacedExhibitStamps,
+      exhibitStampRenumberRequest,
+      requestExhibitStampRenumber,
+      cancelExhibitStampRenumber,
+      renumberExhibitStamps,
       flattenOnSave,
       hasFormFields,
       formValues,

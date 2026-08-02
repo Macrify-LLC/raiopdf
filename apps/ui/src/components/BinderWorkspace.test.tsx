@@ -7,7 +7,13 @@ vi.hoisted(() => {
   (globalThis as { DOMMatrix?: unknown }).DOMMatrix ??= class DOMMatrixStub {};
 });
 
-import type { DocumentState } from "../hooks/useDocument";
+import { PDFDocument } from "pdf-lib";
+import type { BinderExhibitInput, DocumentState } from "../hooks/useDocument";
+import type { PdfBinderOptions } from "@raiopdf/engine-api";
+import {
+  listExhibitStampTemplates,
+  resetExhibitStampCacheForTests,
+} from "../lib/exhibitStamps";
 import { BinderWorkspace } from "./BinderWorkspace";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -80,6 +86,61 @@ describe("BinderWorkspace", () => {
     expect(input?.accept).not.toContain("docx");
   });
 
+  it("offers a stamp design for the exhibit labels without touching its counter", async () => {
+    window.localStorage.clear();
+    resetExhibitStampCacheForTests();
+
+    const builds: Array<{
+      exhibits: readonly BinderExhibitInput[];
+      options: PdfBinderOptions;
+    }> = [];
+    container = window.document.createElement("div");
+    window.document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <BinderWorkspace
+          document={documentState}
+          onBuildBinder={async (exhibits, options) => {
+            builds.push({ exhibits, options });
+            return true;
+          }}
+          onOpenRequested={() => undefined}
+          onCancel={() => undefined}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    // Plain text is the default, with every stored design offered beside it.
+    expect(designChoiceLabels()).toEqual([
+      "Label design: Text label",
+      "Label design: Plaintiff's Exhibit",
+      "Label design: Defendant's Exhibit",
+      "Label design: Exhibit",
+    ]);
+    expect(designChoice("Text label").getAttribute("aria-pressed")).toBe("true");
+
+    await addExhibit("motion.pdf");
+    await click(designChoice("Plaintiff's Exhibit"));
+    await click(buttonWithText("Build Binder"));
+
+    const build = builds[0];
+    expect(build?.options.stampDesign).toMatchObject({ widthPt: 115.2, heightPt: 72 });
+    // The sticker's wording comes from the BINDER's own exhibit order (the
+    // default prefix and letter style), not from the design's template.
+    expect(build?.exhibits[0]?.label).toBe("Exhibit A");
+    expect(build?.exhibits[0]?.labelLines).toEqual(["Exhibit", "A"]);
+    // ...so the stamp gallery's running count is untouched by a binder build.
+    resetExhibitStampCacheForTests();
+    expect(listExhibitStampTemplates().map((template) => template.nextIndex)).toEqual([
+      0,
+      0,
+      0,
+    ]);
+  });
+
   it("does not mute the stable Add exhibits action when experiments are off", () => {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
@@ -95,4 +156,73 @@ describe("BinderWorkspace", () => {
     expect(caption?.getAttribute("aria-disabled")).toBe("true");
     expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Enable it in Settings");
   });
+
+  function designChoiceLabels(): (string | null)[] {
+    return [...window.document.querySelectorAll(".binder-stamp-design")].map((button) =>
+      button.getAttribute("aria-label"),
+    );
+  }
+
+  function designChoice(name: string): HTMLButtonElement {
+    const button = window.document.querySelector<HTMLButtonElement>(
+      `[aria-label="Label design: ${name}"]`,
+    );
+
+    if (!button) {
+      throw new Error(`expected a label-design choice for "${name}"`);
+    }
+
+    return button;
+  }
+
+  function buttonWithText(text: string): HTMLButtonElement {
+    const button = [...window.document.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes(text),
+    );
+
+    if (!button) {
+      throw new Error(`expected a button containing "${text}"`);
+    }
+
+    return button;
+  }
+
+  async function click(element: HTMLElement): Promise<void> {
+    await act(async () => {
+      element.click();
+    });
+    await settle();
+  }
+
+  async function addExhibit(name: string): Promise<void> {
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]);
+    const bytes = await pdf.save();
+    const file = new File([bytes.slice().buffer as ArrayBuffer], name, {
+      type: "application/pdf",
+    });
+    const input = window.document.querySelector<HTMLInputElement>(
+      'input[aria-label="Add exhibits"]',
+    );
+
+    if (!input) {
+      throw new Error("expected the add-exhibits input");
+    }
+
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+  }
+
+  /** Reading a picked file and building the binder each chain a few promises. */
+  async function settle(): Promise<void> {
+    for (let tick = 0; tick < 8; tick += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
 });

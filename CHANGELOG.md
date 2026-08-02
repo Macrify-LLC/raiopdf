@@ -26,6 +26,21 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   renumbering the set, and design your own stamp. Deleting the sticker you just placed
   gives its number back. Stamps stay live objects after you reopen a file — move,
   resize, or renumber them — until you **Make markup permanent**.
+- **Renumber every exhibit stamp of one design at once, in reading order.**
+  **Renumber placed stamps...** — on a stamp's card, or by right-clicking any sticker —
+  renumbers all of that design's stamps in the open document: page by page, top of the
+  page down, and left to right when two share a line. Rotated and upside-down pages are
+  read the way you see them on screen, not the way the file stores them. You pick where
+  the set starts, the dialog says exactly what it will produce before it runs, and the
+  running count picks up after the last one. Stamps already saved in the file are
+  renumbered too and written back on save.
+- **Exhibit binders can use one of your stamp designs for the labels.** **Combine with
+  Exhibits** gains a **Label design** choice: keep the plain text label on the page edge,
+  or draw each exhibit's label as one of your exhibit stickers — border, colors, font and
+  all — at the same header/footer position and on the same first-page-or-every-page
+  setting. The design only lends its look: the letters or numbers still come from the
+  binder's own exhibit order, so building a binder never spends numbers from that
+  stamp's running count.
 - **Design your own exhibit sticker, with a live preview as you build it.** **New
   design...** now opens a full designer instead of a bare name-and-color form: wording,
   numbering style, stacked or inline layout, three size presets or a custom size, font

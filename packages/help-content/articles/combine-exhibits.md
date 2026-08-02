@@ -37,6 +37,10 @@ aren't changed.
   anything, like "Plaintiff's Exhibit."
 - **Placement** and **Position** — put the stamp in the **Header** or **Footer**,
   aligned **Left**, **Center**, or **Right**.
+- **Label design** — **Text label** puts a plain line of text on the page edge.
+  Pick one of your exhibit stamp designs instead and each label is drawn as
+  that sticker — border, colors, font and all. See [Exhibit Stamp](tool:exhibit-stamp)
+  for designing one.
 - **Stamp pages** — stamp the **First page only** of each exhibit, or **Every page**.
 - **Slip sheets** — optionally insert a separator page before each exhibit.
 - **Cover style** — when slip sheets are on, choose **Minimal** for just the
@@ -53,8 +57,17 @@ Every exhibit is bookmarked automatically, whether or not you use slip sheets.
   bottom — so arrange them before you build.
 - **Cover style can be a preference.** Set your usual exhibit cover style in
   **Preferences**; you can still change it for a specific binder.
+- **A stamp design only lends its look.** The letters or numbers still come
+  from this binder's own order and prefix, so building a binder never uses up
+  numbers from that stamp's running count in the Exhibit Stamp tool.
+- **The sticker sits where the text label would have.** It uses the same
+  header/footer, left/center/right position, and the same first-page-only or
+  every-page choice.
+- **Binder labels are printed into the page**, whichever style you choose —
+  they aren't movable objects like the stickers the Exhibit Stamp tool places.
 
 ## Related
 
+- [Exhibit Stamp](tool:exhibit-stamp) — design the sticker, or stamp exhibits one page at a time
 - [Prepare for Filing](tool:prepare-for-filing) — get the finished binder ready for the portal
 - [Redact](tool:redact) — remove confidential text before assembling

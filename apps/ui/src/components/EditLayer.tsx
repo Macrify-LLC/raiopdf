@@ -1572,6 +1572,7 @@ export function EditLayer({
         openCalloutForEditing,
         openCommentForEditing,
         openStampLabelForEditing,
+        requestExhibitStampRenumber: editing.requestExhibitStampRenumber,
       });
       selectId = edit.kind === "comment" ? null : edit.id;
       break;
@@ -2109,6 +2110,7 @@ function buildEditContextMenu(
     openCalloutForEditing: (edit: PendingCallout) => void;
     openCommentForEditing: (edit: PendingComment) => void;
     openStampLabelForEditing: (edit: PendingExhibitStamp) => void;
+    requestExhibitStampRenumber: (templateId: string) => void;
   },
 ): ContextMenuItem[] {
   if (edit.kind === "comment") {
@@ -2135,6 +2137,17 @@ function buildEditContextMenu(
       label: "Edit label...",
       onSelect: () => actions.openStampLabelForEditing(edit),
     });
+
+    // The whole-set door, next to the single-sticker one: same right-click,
+    // one fixes this sticker, the other re-runs the design's numbering.
+    const templateId = edit.templateId;
+
+    if (templateId && edit.sequence.identifierStyle !== "none") {
+      items.push({
+        label: "Renumber placed stamps...",
+        onSelect: () => actions.requestExhibitStampRenumber(templateId),
+      });
+    }
   }
 
   items.push({ label: "Pin", onSelect: () => actions.setPinned(edit.id, true) });

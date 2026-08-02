@@ -789,7 +789,7 @@ export function App() {
       disposed = true;
     };
   }, [pathOpsGrant]);
-  const editing = useEditing(pdfDocument);
+  const editing = useEditing(pdfDocument, document.generation);
   // The shell file grant to route a memory-mode engine op (OCR, PDF/A, compress,
   // redaction) through the file-based path_ops lane — non-null only when it is
   // SAFE to process the on-disk file instead of shipping the document bytes over

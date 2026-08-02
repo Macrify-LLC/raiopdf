@@ -900,6 +900,90 @@ describe("LocalPdfEngine", () => {
     ]);
   });
 
+  it("bakes an exhibit sticker in place of the text label when a stamp design is given", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792], [612, 792]]));
+
+    const binder = await engine.buildBinder(
+      main,
+      [{
+        doc: exhibit,
+        label: "Plaintiff's Exhibit 1",
+        // The design supplies appearance; the SEQUENCE is the binder's own.
+        labelLines: ["Plaintiff's Exhibit", "1"],
+      }],
+      {
+        slipSheets: false,
+        index: { enabled: false },
+        placement: { edge: "footer", align: "left" },
+        stampPages: "first",
+        marginIn: 0.5,
+        stampDesign: BINDER_STAMP_DESIGN,
+      },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    // Both stacked lines land on the exhibit's first page, and nowhere else.
+    await expectPageContentToContainLabel(bytes, 1, "Plaintiff's Exhibit");
+    await expectPageContentToContainLabel(bytes, 1, "1");
+    await expectPageContentNotToContainLabel(bytes, 2, "Plaintiff's Exhibit");
+    await expectPageContentNotToContainLabel(bytes, 0, "Plaintiff's Exhibit");
+
+    // The sticker box: 0.5in margin at the footer-left corner, with the
+    // border path inset by half its 1pt stroke so the stroke stays inside.
+    await expectPageDrawOrigin(bytes, 1, 36.5, 36.5);
+  });
+
+  it("anchors a design sticker against the visual page edge on a rotated exhibit page", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const upright = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.rotatePages(upright, [0], 90);
+
+    const binder = await engine.buildBinder(
+      main,
+      [{ doc: exhibit, label: "Exhibit A", labelLines: ["Exhibit", "A"] }],
+      {
+        slipSheets: false,
+        index: { enabled: false },
+        placement: { edge: "header", align: "right" },
+        stampPages: "all",
+        marginIn: 0.5,
+        stampDesign: BINDER_STAMP_DESIGN,
+      },
+    );
+    const bytes = await engine.saveToBytes(binder);
+
+    // The page is 612x792 turned sideways, so the reader sees 792x612: the
+    // header-right corner is at user-space (36, 640.8), and the sticker's
+    // width and height swap. Half the 1pt border inset moves it to
+    // (36.5, 641.3).
+    await expectPageDrawOrigin(bytes, 1, 36.5, 641.3);
+
+    const [matrix] = await readPageTextMatrices(bytes, 1);
+    expect(matrix).toMatchObject({
+      a: expect.closeTo(0, 10),
+      b: expect.closeTo(1, 10),
+      c: expect.closeTo(-1, 10),
+      d: expect.closeTo(0, 10),
+    });
+  });
+
+  it("rejects a binder stamp design with no usable size", async () => {
+    const engine = createLocalPdfEngine();
+    const main = await engine.open(await createPdf([[612, 792]]));
+    const exhibit = await engine.open(await createPdf([[612, 792]]));
+
+    await expect(
+      engine.buildBinder(main, [{ doc: exhibit, label: "Exhibit A" }], {
+        slipSheets: false,
+        index: { enabled: false },
+        stampDesign: { ...BINDER_STAMP_DESIGN, widthPt: 0 },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  });
+
   it.each(PDF_COVER_STYLES)("draws a saveable one-page $id cover", async ({ id }) => {
     const pdf = await PDFDocument.create();
     const page = pdf.addPage([612, 792]);
@@ -1390,6 +1474,18 @@ async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): P
 
   return pdf.save();
 }
+
+/** The 1.6in x 1in printed exhibit sticker, as the stamp gallery designs it. */
+const BINDER_STAMP_DESIGN = {
+  widthPt: 115.2,
+  heightPt: 72,
+  fontSizePt: 14,
+  bold: true,
+  fillColor: { r: 1, g: 1, b: 1 },
+  borderColor: { r: 0, g: 0, b: 0 },
+  borderWidthPt: 1,
+  cornerRadiusPt: 0,
+} as const;
 
 const THIRD_PARTY_APPEARANCE_MARKER = "0.9 0.1 0.2 rg";
 
@@ -1903,6 +1999,30 @@ async function expectPageContentToContainLabel(
   label: string,
 ): Promise<void> {
   expect(await readDecodedPageContent(bytes, pageIndex)).toContain(encodeTextAsHex(label));
+}
+
+/**
+ * Asserts the page draws something anchored at `x`/`y` in user space. pdf-lib
+ * emits a box as a translate (`1 0 0 1 x y cm`) followed by a path at the
+ * origin, so the translation IS the shape's position.
+ */
+async function expectPageDrawOrigin(
+  bytes: Uint8Array,
+  pageIndex: number,
+  x: number,
+  y: number,
+): Promise<void> {
+  const matrices = await readPageDrawMatrices(bytes, pageIndex);
+  const origin = matrices.find(
+    (matrix) => Math.abs(matrix.e - x) < 0.01 && Math.abs(matrix.f - y) < 0.01,
+  );
+
+  expect(
+    origin,
+    `expected a draw anchored at (${x}, ${y}); got ${JSON.stringify(
+      matrices.map((matrix) => [matrix.e, matrix.f]),
+    )}`,
+  ).toBeDefined();
 }
 
 async function expectPageContentNotToContainLabel(

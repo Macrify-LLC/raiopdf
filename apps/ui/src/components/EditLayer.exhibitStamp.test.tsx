@@ -221,7 +221,12 @@ describe("EditLayer exhibit stamps", () => {
       await Promise.resolve();
     });
 
-    expect(contextMenuLabels()).toEqual(["Edit label...", "Pin", "Delete"]);
+    expect(contextMenuLabels()).toEqual([
+      "Edit label...",
+      "Renumber placed stamps...",
+      "Pin",
+      "Delete",
+    ]);
 
     await act(async () => {
       findContextMenuItem("Edit label...").dispatchEvent(

@@ -56,6 +56,30 @@ it whenever you need to.
   stickers save normally; moving or renumbering one that's already in the file
   isn't available at that size yet.
 
+## Renumber placed stamps
+
+Sometimes the numbering has to be redone: an exhibit was dropped, two got
+swapped, or the set needs to start at 12 because it continues someone else's.
+**Renumber placed stamps...** — on that stamp's card in the gallery, or by
+right-clicking any sticker of that design — renumbers *all* of them at once.
+
+- **They're numbered in reading order**, not in the order you stamped them:
+  page by page, top of the page down, and left to right when two sit on the
+  same line. Sideways and upside-down pages are read the way you see them on
+  screen, not the way the file stores them.
+- **You choose where the set starts.** The dialog says exactly what it will
+  produce ("Renumber 8 stamps as Plaintiff's Exhibit 1…Plaintiff's Exhibit 8?")
+  and updates as you change the starting number or letter.
+- **Only that design is touched.** Plaintiff's and Defendant's exhibits keep
+  their own numbering, and stickers from another design are left alone.
+- **The count picks up after the set.** Once the renumber lands, the next stamp
+  you place continues from the end of it.
+- **It can't be undone**, which is why it asks first. Stamps already saved in
+  the file are renumbered too, and are written back when you save.
+- **On a very large PDF it only reaches the stamps you placed this session** —
+  ones already saved in the file can't be renumbered at that size yet, and the
+  dialog says so.
+
 ## Design your own
 
 **New design...** opens the full sticker designer, with a live preview that

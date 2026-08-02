@@ -59,7 +59,7 @@ Four ways it fits into an actual day at the firm:
 | **Open it and go** | No account screen, no sign-in, no "create a free account to continue." |
 | **Drop in a scan, hit "Make Searchable"** | OCR runs entirely offline — no upload, no wait on a server. And the status bar tells you honestly whether the result can be trusted. |
 | **One click, "Prepare for Filing"** | Pick your court's e-filing pack, get a prep checklist and a rule-cited preflight report, normalize every page, and split an oversized file into properly labeled, sequential, portal-compliant parts. |
-| **"Combine with Exhibits"** | Assembles a motion or brief with exhibit files in order, auto-stamped ("Exhibit A" — configurable), auto-bookmarked, with selectable exhibit cover styles. |
+| **"Combine with Exhibits"** | Assembles a motion or brief with exhibit files in order, auto-stamped ("Exhibit A" — configurable, and optionally drawn as one of your own exhibit sticker designs), auto-bookmarked, with selectable exhibit cover styles. |
 
 ## Features
 
@@ -73,7 +73,7 @@ Four ways it fits into an actual day at the firm:
 | **Honest text layers** | The status bar tells you whether a document's text is verified searchable, missing, or garbled — and "Fix garbled text" rebuilds a bad text layer offline, refusing to claim success it can't verify |
 | **Edit Text** *(experimental; enable in Settings)* | Change the real text in a typed PDF — find & replace across the document (case-sensitive, optional whole-word), or right-click a selection and choose "Replace text..." to change exactly that occurrence. Born-digital documents only (not scans); the text doesn't reflow. In the installed app, selected edits rebuild only that page and splice it into a fresh copy; bulk replacements still rebuild the whole document |
 | Annotate | Highlight, underline, strikethrough, freehand draw, shapes and arrows, callouts, text boxes, comments, images — with color, opacity, and stroke-width controls |
-| **Exhibit stamps** | Stamp "Plaintiff's Exhibit 12" onto a page with a number that moves on by itself as you stamp. Keep separate counts per stamp design, set where the count resumes, fix a single sticker's label, or design your own. They stay movable and re-numberable after you reopen the file. |
+| **Exhibit stamps** | Stamp "Plaintiff's Exhibit 12" onto a page with a number that moves on by itself as you stamp. Keep separate counts per stamp design, set where the count resumes, fix a single sticker's label, renumber a whole design's stamps at once in reading order, or design your own. They stay movable and re-numberable after you reopen the file. |
 | Fill & sign | Fill existing forms or add reusable text fields and checkboxes to fieldless PDFs; add text, images, and signature stamps; flatten when needed for filing |
 | Compress & clean up | Compression, sanitize (strip JavaScript, attachments, external links), watermarks, page numbers, document properties |
 | **Word ↔ PDF** *(experimental)* | Import a Word document (with a tracked-changes check first), add Word documents alongside PDFs where supported, or export a PDF back to editable Word. Runs through your own installed, signed-in copy of Microsoft Word. On macOS, Word may open visibly for the conversion; allow RaioPDF under **System Settings > Privacy & Security > Automation** if asked. If you deny it, enable it there before retrying because retrying does not show the prompt again. Formatting is approximate; check the result. |
@@ -91,7 +91,7 @@ Four ways it fits into an actual day at the firm:
 | **Filing packet builder** | Assemble a multi-document filing as one packet with a manifest — including checks from your jurisdiction pack, like Florida's certificate-of-conferral requirement on motions (Fla. R. Civ. P. 1.202) |
 | **Case caption & cover page** *(experimental; enable in Settings)* | Fill a case caption once, choose a local caption style with live previews, save it as a PDF, or put it at the front of the open document |
 | **Table of Authorities** *(experimental; enable in Settings)* | Scan a brief for cited cases, statutes, rules, and constitutional provisions, review the hits, fix or merge them, then save the finished table or drop it onto the front of the PDF |
-| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped, auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
+| **Combine with Exhibits** | Assembles a motion or brief with exhibit files in order, auto-stamped — as a plain edge label or as one of your own exhibit sticker designs — auto-bookmarked, with selectable slip-sheet cover styles and an optional generated index |
 | **Production sets** | Build a Bates-numbered discovery production from a document set — confidentiality designations, index files, volume splits, one package out |
 | **Bates numbering** | Across an entire document set, in one pass — one continuous sequence across a whole folder |
 | **Batch cleanup** | Queue OCR, compression, sanitizing, metadata scrubbing, and filing splits across many PDFs at once, against your jurisdiction pack |

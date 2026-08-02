@@ -750,6 +750,42 @@ describe("legal tools (local pdf-lib engine)", () => {
     expect(content.outputs).toHaveLength(2);
   });
 
+  it("build_production_set writes a load file at the package root and threads custodian when includeLoadFiles is set", async () => {
+    const source = await makePdf("load-file.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: source, custodian: "J. Smith" }],
+        outputDir,
+        prefix: "MCPDAT",
+        includeLoadFiles: true,
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.loadFileDat).toBe("production.dat");
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    expect([...datBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const text = new TextDecoder().decode(datBytes.subarray(3));
+    expect(text).toContain("J. Smith");
+  });
+
+  it("returns loadFileDat: null when includeLoadFiles is omitted (default false)", async () => {
+    const source = await makePdf("no-load-file.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      { sources: [{ path: source }], outputDir, prefix: "MCPNODAT" },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.loadFileDat).toBeNull();
+    await expect(fs.access(path.join(outputDir, "production.dat"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   describe("productionSetInputSchema (round trip)", () => {
     const schema = z.object(productionSetInputSchema);
 
@@ -805,6 +841,24 @@ describe("legal tools (local pdf-lib engine)", () => {
     it("omits duplicateHandling entirely without error (backward compatible)", () => {
       const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
       expect(parsed.duplicateHandling).toBeUndefined();
+    });
+
+    it("accepts includeLoadFiles and per-source custodian", () => {
+      const parsed = schema.parse({
+        sources: [{ path: "/abs/a.pdf", custodian: "J. Smith" }],
+        outputDir: "/abs/out",
+        prefix: "SMITH",
+        includeLoadFiles: true,
+      });
+
+      expect(parsed.includeLoadFiles).toBe(true);
+      expect(parsed.sources[0]).toMatchObject({ custodian: "J. Smith" });
+    });
+
+    it("omits includeLoadFiles and custodian entirely without error (backward compatible)", () => {
+      const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
+      expect(parsed.includeLoadFiles).toBeUndefined();
+      expect(parsed.sources[0]!.custodian).toBeUndefined();
     });
   });
 });

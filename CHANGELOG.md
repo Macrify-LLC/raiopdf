@@ -99,6 +99,17 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   so the sequence stays unbroken. Either way, the duplicate cross-reference is recorded
   in the production's manifest for later review — it never shows up as an extra column
   in the index.
+- **Production Set can write a litigation load file your review platform can import.**
+  Check **Litigation load file (DAT)** and RaioPDF adds a `production.dat` to the
+  package — Relativity-compatible Concordance DAT defaults, with the Bates range,
+  confidentiality designation, page count, and file location already filled in for
+  every document you produced. It only lists what was actually produced, matching
+  the index; a combined PDF or a skipped duplicate never gets a row. This is a DAT
+  file only — an image-level cross-reference some platforms also read (an "OPT"
+  file) isn't included yet, because that format expects page-by-page images and
+  RaioPDF's productions aren't split that way. Package and MCP callers can also set
+  a custodian name per document, recorded in the load file; there's no per-document
+  custodian field in the app yet, so those rows are blank when you build from here.
 
 ### Changed
 

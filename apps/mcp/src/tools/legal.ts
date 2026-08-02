@@ -742,6 +742,13 @@ export const productionSetInputSchema = {
             "Every page in the given range is stamped. Omit for every page (default, unchanged). " +
             "Ignored -- and rejected -- when this source has no designation.",
         ),
+      custodian: z
+        .string()
+        .optional()
+        .describe(
+          "Custodian name for this source, recorded in the load file's CUSTODIAN column (see " +
+            "includeLoadFiles). Omit for a blank CUSTODIAN value. No effect unless includeLoadFiles is set.",
+        ),
     }))
     .min(1)
     .describe("Ordered source PDFs in production order."),
@@ -794,6 +801,15 @@ export const productionSetInputSchema = {
         "stamps and produces only the first occurrence (source order); later ones are omitted and consume no " +
         "Bates numbers, so numbering stays contiguous.",
     ),
+  includeLoadFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Writes a litigation load file ("production.dat", "Relativity-compatible Concordance DAT defaults" -- ' +
+        "0x14-delimited, þ-qualified, UTF-8 with BOM, CRLF) at the package root. Default false. Only produced " +
+        "files get a row -- a combined production PDF and any produce-once-omitted duplicate never appear in " +
+        "it. No OPT/Opticon image cross-reference is written; see docs/PRODUCTION-SETS.md for why.",
+    ),
 };
 /** Cap on `duplicateGroups` in the structured result -- the package manifest
  * (`productionDuplicates` detail, and `production.json`) always holds the
@@ -820,6 +836,11 @@ export const productionSetOutputSchema = {
   indexPdf: z.string().nullable().optional(),
   indexCsv: z.string().nullable().optional(),
   combinedPdf: z.string().nullable().optional(),
+  loadFileDat: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('Package-root-relative location of "production.dat", or null when includeLoadFiles was false.'),
   continuation: z
     .object({
       mode: z.enum(["strict", "override"]),
@@ -842,7 +863,12 @@ export const productionSetOutputSchema = {
     .describe(`True when duplicateGroups was capped at ${MAX_DUPLICATE_GROUPS_IN_RESULT}; read the manifest for the rest.`),
 };
 export interface ProductionSetInput {
-  sources: { path: string; designation?: string | undefined; designationPages?: string | undefined }[];
+  sources: {
+    path: string;
+    designation?: string | undefined;
+    designationPages?: string | undefined;
+    custodian?: string | undefined;
+  }[];
   outputDir: string;
   prefix: string;
   start?: number | undefined;
@@ -857,6 +883,7 @@ export interface ProductionSetInput {
   continueFrom?: string | undefined;
   continuationOverride?: { reason: string } | undefined;
   duplicateHandling?: "produce-all" | "produce-once" | undefined;
+  includeLoadFiles?: boolean | undefined;
 }
 export async function handleProductionSet(
   input: ProductionSetInput,
@@ -890,6 +917,7 @@ export async function handleProductionSet(
     ...(continueFrom === undefined ? {} : { continueFrom }),
     ...(input.continuationOverride === undefined ? {} : { continuationOverride: input.continuationOverride }),
     ...(input.duplicateHandling === undefined ? {} : { duplicateHandling: input.duplicateHandling }),
+    ...(input.includeLoadFiles === undefined ? {} : { includeLoadFiles: input.includeLoadFiles }),
   });
 
   const duplicateGroupsTruncated = result.duplicateGroups.length > MAX_DUPLICATE_GROUPS_IN_RESULT;
@@ -906,6 +934,7 @@ export async function handleProductionSet(
       indexPdf: result.indexPdf,
       indexCsv: result.indexCsv,
       combinedPdf: result.combinedPdf,
+      loadFileDat: result.loadFileDat,
       continuation: result.continuation,
       duplicateCount: result.duplicateCount,
       duplicateGroups: result.duplicateGroups.slice(0, MAX_DUPLICATE_GROUPS_IN_RESULT),

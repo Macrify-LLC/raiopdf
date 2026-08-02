@@ -64,15 +64,15 @@
   text-align: center;
 }
 
-.exhibit-stamp-card__counter {
+.exhibit-stamp-card__counter,
+.exhibit-stamp-card__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
 }
 
-.exhibit-stamp-card__counter-field,
-.exhibit-stamp-card__field {
+.exhibit-stamp-card__counter-field {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -82,21 +82,6 @@
 
 .exhibit-stamp-card__counter-field input {
   width: 4.5em;
-}
-
-.exhibit-stamp-card__field {
-  justify-content: space-between;
-}
-
-.exhibit-stamp-card__field input,
-.exhibit-stamp-card__field select {
-  min-width: 0;
-  flex: 1 1 8em;
-}
-
-.exhibit-stamp-card__counter-field input,
-.exhibit-stamp-card__field input,
-.exhibit-stamp-card__field select {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--panel);
@@ -124,33 +109,14 @@
   color: var(--on-primary, #fff);
 }
 
-.exhibit-stamp-card__primary:disabled {
+.exhibit-stamp-card__primary:disabled,
+.exhibit-stamp-card__secondary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 .exhibit-stamp-card__new {
   align-self: flex-start;
-}
-
-.exhibit-stamp-card__design {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  padding: var(--space-3);
-}
-
-.exhibit-stamp-card__design-title {
-  margin: 0;
-  font-weight: 600;
-}
-
-.exhibit-stamp-card__design-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
 }
 
 .exhibit-stamp-card__swatches {

@@ -1,0 +1,111 @@
+.exhibit-stamp-designer {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: var(--space-5);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--body);
+}
+
+@media (max-width: 560px) {
+  .exhibit-stamp-designer {
+    grid-template-columns: 1fr;
+  }
+}
+
+.exhibit-stamp-designer__preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  align-self: start;
+}
+
+/* Sized in PDF points by the component, so what's shown is what will print
+   -- the same discipline the gallery card's own preview box follows. */
+.exhibit-stamp-designer__preview-box {
+  position: relative;
+  display: block;
+  flex: none;
+  max-width: 100%;
+}
+
+.exhibit-stamp-designer__preview-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.exhibit-stamp-designer__form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.exhibit-stamp-designer__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.exhibit-stamp-designer__field input,
+.exhibit-stamp-designer__field select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  padding: 4px 8px;
+}
+
+.exhibit-stamp-designer__field input:disabled {
+  opacity: 0.5;
+}
+
+.exhibit-stamp-designer__toggle-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.exhibit-stamp-designer__toggle {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--panel);
+  color: var(--body);
+  font: inherit;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.exhibit-stamp-designer__toggle[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary, #fff);
+}
+
+.exhibit-stamp-designer__size-inputs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.exhibit-stamp-designer__size-inputs input {
+  min-width: 0;
+  flex: 1 1 4em;
+}
+
+.exhibit-stamp-designer__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}

@@ -1,30 +1,17 @@
 import { useCallback, useMemo, useState } from "react";
-import type { PdfEditColor } from "@raiopdf/engine-api";
 import type { EditingState } from "../hooks/useEditing";
+import { exhibitLabelLines, formatExhibitIdentifier } from "../lib/exhibitLabels";
 import {
-  DEFAULT_TEXT_COLOR,
-  INK_TEXT_COLOR_OPTIONS,
-  SHAPE_FILL_COLOR_OPTIONS,
-  pdfEditColorToHex,
-} from "../lib/editStyles";
-import {
-  exhibitLabelLines,
-  formatExhibitIdentifier,
-  type ExhibitIdentifierStyle,
-} from "../lib/exhibitLabels";
-import {
-  DEFAULT_STAMP_BORDER_WIDTH_PT,
-  DEFAULT_STAMP_CORNER_RADIUS_PT,
-  DEFAULT_STAMP_FONT_SIZE_PT,
-  DEFAULT_STAMP_HEIGHT_PT,
-  DEFAULT_STAMP_WIDTH_PT,
   deleteExhibitStampTemplate,
   listExhibitStampTemplates,
+  moveExhibitStampTemplate,
   resetCounter,
   saveExhibitStampTemplate,
   setNextIdentifier,
   type ExhibitStampTemplateV1,
 } from "../lib/exhibitStamps";
+import { confirmWithUser } from "../lib/nativeConfirm";
+import { ExhibitStampDesigner } from "./ExhibitStampDesigner";
 import { StampPreview } from "./StampPreview";
 import "./ExhibitStampCard.css";
 
@@ -34,6 +21,13 @@ const GALLERY_PREVIEW_SCALE = 1;
 export interface ExhibitStampCardProps {
   editing: EditingState;
 }
+
+/** Which flavor of the designer dialog is open, and (for edit) which
+ *  template it's editing. `null` means the dialog is closed. */
+type DesignerState =
+  | { mode: "create" }
+  | { mode: "edit"; template: ExhibitStampTemplateV1 }
+  | null;
 
 /**
  * The exhibit-stamp gallery: pick the sticker to place, see the number it will
@@ -47,12 +41,53 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
   const [templates, setTemplates] = useState<readonly ExhibitStampTemplateV1[]>(
     listExhibitStampTemplates,
   );
-  const [designOpen, setDesignOpen] = useState(false);
+  const [designer, setDesigner] = useState<DesignerState>(null);
 
   const reload = useCallback(() => {
     setTemplates(listExhibitStampTemplates());
     editing.refreshArmedExhibitStamp();
   }, [editing]);
+
+  const handleDuplicate = useCallback(
+    (template: ExhibitStampTemplateV1) => {
+      const now = Date.now();
+      const duplicate: ExhibitStampTemplateV1 = {
+        ...template,
+        id: `stamp-${now}-${Math.random().toString(36).slice(2, 8)}`,
+        name: `${template.name} copy`,
+        // A duplicate is a new design, not a continuation of the original's
+        // count -- it starts fresh the same way any newly created stamp does.
+        nextIndex: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      void saveExhibitStampTemplate(duplicate).then((result) => {
+        if (!result.ok) {
+          editing.setMessage(result.error);
+          return;
+        }
+
+        editing.setMessage(null);
+        reload();
+      });
+    },
+    [editing, reload],
+  );
+
+  const handleMove = useCallback(
+    (templateId: string, direction: "up" | "down") => {
+      void moveExhibitStampTemplate(templateId, direction).then((result) => {
+        if (!result.ok) {
+          editing.setMessage(result.error);
+          return;
+        }
+
+        reload();
+      });
+    },
+    [editing, reload],
+  );
 
   return (
     <div className="exhibit-stamp-card">
@@ -61,16 +96,24 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
       </p>
 
       <ul className="exhibit-stamp-card__grid">
-        {templates.map((template) => (
+        {templates.map((template, index) => (
           <ExhibitStampTemplateCard
             // Keyed by the counter too, so an edited or reset number resyncs
             // the "Next" field instead of leaving the old text in it.
-            key={`${template.id}:${template.nextIndex}`}
+            // identifierStyle is part of the key: switching numbers↔letters
+            // must remount the card so its draft "Next" text re-derives from
+            // the new representation instead of showing the old one.
+            key={`${template.id}:${template.nextIndex}:${template.identifierStyle}`}
             template={template}
             armed={editing.armedExhibitStamp?.templateId === template.id}
+            canMoveUp={index > 0}
+            canMoveDown={index < templates.length - 1}
             onArm={() => editing.armExhibitStamp(template.id)}
             onCounterChanged={reload}
             onMessage={editing.setMessage}
+            onEdit={() => setDesigner({ mode: "edit", template })}
+            onDuplicate={() => handleDuplicate(template)}
+            onMove={(direction) => handleMove(template.id, direction)}
             onDeleted={() => {
               if (editing.armedExhibitStamp?.templateId === template.id) {
                 editing.disarmExhibitStamp();
@@ -82,29 +125,40 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
         ))}
       </ul>
 
-      {designOpen ? (
-        <NewStampDesign
-          onCancel={() => setDesignOpen(false)}
-          onMessage={editing.setMessage}
-          onCreated={(templateId) => {
-            setDesignOpen(false);
-            setTemplates(listExhibitStampTemplates());
-            editing.armExhibitStamp(templateId);
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          className="exhibit-stamp-card__new"
-          onClick={() => setDesignOpen(true)}
-        >
-          New design...
-        </button>
-      )}
+      <button
+        type="button"
+        className="exhibit-stamp-card__new"
+        onClick={() => setDesigner({ mode: "create" })}
+      >
+        New design...
+      </button>
 
       <p className="exhibit-stamp-card__note">
         Your stamps and their numbering stay on this computer.
       </p>
+
+      {designer ? (
+        <ExhibitStampDesigner
+          mode={designer.mode}
+          template={designer.mode === "edit" ? designer.template : null}
+          onCancel={() => setDesigner(null)}
+          onMessage={editing.setMessage}
+          onSaved={(templateId, isNew) => {
+            setDesigner(null);
+            reload();
+
+            // Arm a freshly created design so the click that made it can be
+            // followed straight by the click that places it. An edit doesn't
+            // re-arm -- `reload()` above already refreshes the armed preview
+            // if the edited template happened to be the one in hand, and
+            // switching tools out from under an unrelated armed stamp would
+            // be a surprise, not a convenience.
+            if (isNew) {
+              editing.armExhibitStamp(templateId);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -112,16 +166,26 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
 function ExhibitStampTemplateCard({
   template,
   armed,
+  canMoveUp,
+  canMoveDown,
   onArm,
   onCounterChanged,
   onMessage,
+  onEdit,
+  onDuplicate,
+  onMove,
   onDeleted,
 }: {
   template: ExhibitStampTemplateV1;
   armed: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   onArm: () => void;
   onCounterChanged: () => void;
   onMessage: (message: string | null) => void;
+  onEdit: () => void;
+  onDuplicate: () => void;
+  onMove: (direction: "up" | "down") => void;
   onDeleted: () => void;
 }) {
   const nextIdentifier = formatExhibitIdentifier(template.identifierStyle, template.nextIndex);
@@ -229,18 +293,53 @@ function ExhibitStampTemplateCard({
         >
           Start over
         </button>
+      </div>
+
+      <div className="exhibit-stamp-card__actions">
+        <button type="button" className="exhibit-stamp-card__secondary" onClick={onEdit}>
+          Edit design...
+        </button>
+        <button type="button" className="exhibit-stamp-card__secondary" onClick={onDuplicate}>
+          Duplicate
+        </button>
+        <button
+          type="button"
+          className="exhibit-stamp-card__secondary"
+          aria-label={`Move ${template.name} up`}
+          disabled={!canMoveUp}
+          onClick={() => onMove("up")}
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          className="exhibit-stamp-card__secondary"
+          aria-label={`Move ${template.name} down`}
+          disabled={!canMoveDown}
+          onClick={() => onMove("down")}
+        >
+          ▼
+        </button>
         <button
           type="button"
           className="exhibit-stamp-card__secondary"
           aria-label={`Delete ${template.name}`}
           onClick={() => {
-            void deleteExhibitStampTemplate(template.id).then((result) => {
-              if (!result.ok) {
-                onMessage(result.error);
+            void confirmWithUser(
+              `Delete "${template.name}"? This can't be undone.`,
+            ).then((confirmed) => {
+              if (!confirmed) {
                 return;
               }
 
-              onDeleted();
+              void deleteExhibitStampTemplate(template.id).then((result) => {
+                if (!result.ok) {
+                  onMessage(result.error);
+                  return;
+                }
+
+                onDeleted();
+              });
             });
           }}
         >
@@ -248,188 +347,5 @@ function ExhibitStampTemplateCard({
         </button>
       </div>
     </li>
-  );
-}
-
-/**
- * The deliberately small "new design" form: a name, how it numbers, and two
- * colors. Sizes, fonts, and per-corner styling are left to the full designer;
- * a starter stamp that reads right is worth more here than every knob.
- */
-function NewStampDesign({
-  onCancel,
-  onCreated,
-  onMessage,
-}: {
-  onCancel: () => void;
-  onCreated: (templateId: string) => void;
-  onMessage: (message: string | null) => void;
-}) {
-  const [name, setName] = useState("");
-  const [prefix, setPrefix] = useState("");
-  const [identifierStyle, setIdentifierStyle] = useState<ExhibitIdentifierStyle>("numbers");
-  const [textColor, setTextColor] = useState<PdfEditColor>(DEFAULT_TEXT_COLOR);
-  const [fillColor, setFillColor] = useState<PdfEditColor | null>({ r: 1, g: 1, b: 1 });
-  const trimmedName = name.trim();
-  const resolvedPrefix = prefix.trim() || trimmedName;
-
-  function create() {
-    if (!trimmedName) {
-      onMessage("Give the stamp a name first.");
-      return;
-    }
-
-    const now = Date.now();
-    const template: ExhibitStampTemplateV1 = {
-      version: 1,
-      id: `stamp-${now}-${Math.random().toString(36).slice(2, 8)}`,
-      name: trimmedName,
-      prefix: resolvedPrefix,
-      identifierStyle,
-      nextIndex: 0,
-      layout: "stacked",
-      widthPt: DEFAULT_STAMP_WIDTH_PT,
-      heightPt: DEFAULT_STAMP_HEIGHT_PT,
-      fontFamily: "helvetica",
-      bold: true,
-      italic: false,
-      fontSizePt: DEFAULT_STAMP_FONT_SIZE_PT,
-      textColor,
-      fillColor,
-      // The border tracks the ink so a one-color pick still reads as one
-      // design; picking them apart is the full designer's job.
-      borderColor: textColor,
-      borderWidthPt: DEFAULT_STAMP_BORDER_WIDTH_PT,
-      cornerRadiusPt: DEFAULT_STAMP_CORNER_RADIUS_PT,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    void saveExhibitStampTemplate(template).then((result) => {
-      if (!result.ok) {
-        onMessage(result.error);
-        return;
-      }
-
-      onMessage(null);
-      onCreated(result.value.id);
-    });
-  }
-
-  return (
-    <div className="exhibit-stamp-card__design">
-      <p className="exhibit-stamp-card__design-title">New stamp</p>
-      <label className="exhibit-stamp-card__field">
-        <span>Name</span>
-        <input
-          type="text"
-          aria-label="Stamp name"
-          placeholder="Defendant's Exhibit"
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-        />
-      </label>
-      <label className="exhibit-stamp-card__field">
-        <span>Wording</span>
-        <input
-          type="text"
-          aria-label="Stamp wording"
-          placeholder={trimmedName || "Text before the number"}
-          value={prefix}
-          onChange={(event) => setPrefix(event.currentTarget.value)}
-        />
-      </label>
-      <label className="exhibit-stamp-card__field">
-        <span>Numbering</span>
-        <select
-          aria-label="Stamp numbering"
-          value={identifierStyle}
-          onChange={(event) =>
-            setIdentifierStyle(event.currentTarget.value as ExhibitIdentifierStyle)
-          }
-        >
-          <option value="numbers">1, 2, 3</option>
-          <option value="letters">A, B, C</option>
-          <option value="none">No number</option>
-        </select>
-      </label>
-      <ColorRow
-        label="Ink"
-        options={INK_TEXT_COLOR_OPTIONS}
-        selected={textColor}
-        onSelect={setTextColor}
-      />
-      <ColorRow
-        label="Background"
-        options={[{ id: "white", label: "White", color: { r: 1, g: 1, b: 1 } }, ...SHAPE_FILL_COLOR_OPTIONS]}
-        selected={fillColor}
-        onSelect={setFillColor}
-        onNone={() => setFillColor(null)}
-      />
-      <div className="exhibit-stamp-card__design-actions">
-        <button type="button" className="exhibit-stamp-card__secondary" onClick={onCancel}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="exhibit-stamp-card__primary"
-          disabled={!trimmedName}
-          onClick={create}
-        >
-          Create Stamp
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ColorRow({
-  label,
-  options,
-  selected,
-  onSelect,
-  onNone,
-}: {
-  label: string;
-  options: readonly { id: string; label: string; color: PdfEditColor }[];
-  selected: PdfEditColor | null;
-  onSelect: (color: PdfEditColor) => void;
-  onNone?: (() => void) | undefined;
-}) {
-  const selectedHex = selected ? pdfEditColorToHex(selected) : null;
-
-  return (
-    <div className="exhibit-stamp-card__field">
-      <span>{label}</span>
-      <span className="exhibit-stamp-card__swatches">
-        {onNone ? (
-          <button
-            type="button"
-            className="exhibit-stamp-card__secondary"
-            aria-label={`${label}: none`}
-            aria-pressed={selected === null}
-            onClick={onNone}
-          >
-            None
-          </button>
-        ) : null}
-        {options.map((option) => {
-          const hex = pdfEditColorToHex(option.color);
-
-          return (
-            <button
-              key={option.id}
-              type="button"
-              className="exhibit-stamp-card__swatch"
-              style={{ background: hex }}
-              aria-label={`${label}: ${option.label}`}
-              aria-pressed={hex === selectedHex}
-              title={option.label}
-              onClick={() => onSelect(option.color)}
-            />
-          );
-        })}
-      </span>
-    </div>
   );
 }

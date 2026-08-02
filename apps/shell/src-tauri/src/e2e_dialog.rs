@@ -14,7 +14,8 @@
 //!   "open_pdf_dialog": "/abs/fixture.pdf",
 //!   "save_pdf_dialog": "/abs/out.pdf",
 //!   "pick_output_directory": "/abs/outdir",
-//!   "pick_pdfs_for_add": ["/abs/a.pdf", "/abs/b.pdf"]
+//!   "pick_pdfs_for_add": ["/abs/a.pdf", "/abs/b.pdf"],
+//!   "scan_folder_for_add": "/abs/folder"
 //! }
 //! ```
 //! A missing env var, unreadable file, or absent key yields `None`, so the real

@@ -169,6 +169,12 @@ export interface PrepareForFilingWorkspaceProps {
   onPrepare: (certificate: CertificateOfServiceDraft | null, options: PrepareOptions) => void;
   /** Picks and page-counts every selected file, in order; `null` = cancelled. */
   onAddPacketFile?: () => Promise<FilingPacketFile[] | null>;
+  /**
+   * Adds every PDF in a chosen folder. Same contract as `onAddPacketFile` --
+   * the scan/confirm/claim flow happens above this component. Absent in the
+   * browser build, which has no folder picker that yields readable paths.
+   */
+  onAddPacketFolder?: (() => Promise<FilingPacketFile[] | null>) | undefined;
   onBuildPacket?: (input: FilingPacketBuildInput) => Promise<void>;
   packetProgress?: FilingPacketProgress | undefined;
   defaultPacketLayoutMode?: FilingPacketLayoutMode | undefined;
@@ -224,6 +230,7 @@ export const PrepareForFilingWorkspace = forwardRef<
     onCourtProfileSave,
     onPrepare,
     onAddPacketFile,
+    onAddPacketFolder,
     onBuildPacket,
     packetProgress = { running: false, message: null, result: null },
     defaultPacketLayoutMode = "separate-files",
@@ -400,11 +407,11 @@ export const PrepareForFilingWorkspace = forwardRef<
     });
   }
 
-  async function addPacketFiles() {
-    if (!onAddPacketFile) {
+  async function addPacketFiles(add: (() => Promise<FilingPacketFile[] | null>) | undefined = onAddPacketFile) {
+    if (!add) {
       return;
     }
-    const picked = await onAddPacketFile();
+    const picked = await add();
     if (!picked || picked.length === 0) {
       return;
     }
@@ -556,6 +563,7 @@ export const PrepareForFilingWorkspace = forwardRef<
             onLayoutModeChange={setPacketLayoutMode}
             onPrefixFilenamesChange={setPacketPrefixFilenames}
             onAddFile={() => void addPacketFiles()}
+            onAddFolder={onAddPacketFolder ? () => void addPacketFiles(onAddPacketFolder) : undefined}
             onMoveFile={movePacketFile}
             onRemoveFile={(id) => setPacketFiles((current) => current.filter((file) => file.id !== id))}
             onBuild={() => void buildPacket()}
@@ -863,6 +871,7 @@ function PacketBuilderPanel({
   onLayoutModeChange,
   onPrefixFilenamesChange,
   onAddFile,
+  onAddFolder,
   onMoveFile,
   onRemoveFile,
   onBuild,
@@ -878,6 +887,7 @@ function PacketBuilderPanel({
   onLayoutModeChange: (value: FilingPacketLayoutMode) => void;
   onPrefixFilenamesChange: (value: boolean) => void;
   onAddFile: () => void;
+  onAddFolder?: (() => void) | undefined;
   onMoveFile: (index: number, delta: -1 | 1) => void;
   onRemoveFile: (id: string) => void;
   onBuild: () => void;
@@ -897,6 +907,16 @@ function PacketBuilderPanel({
         >
           <PlusIcon size={14} /> Add PDF
         </button>
+        {onAddFolder ? (
+          <button
+            type="button"
+            className="filing-card__secondary-button"
+            onClick={onAddFolder}
+            title="Add every PDF in a folder to the filing packet order."
+          >
+            <PlusIcon size={14} /> Add Folder
+          </button>
+        ) : null}
       </div>
       <div className="filing-packet__files" role="list">
         {files.length === 0 ? (

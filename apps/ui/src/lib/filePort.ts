@@ -63,6 +63,25 @@ export interface PickedPdfsForAdd {
   skipped?: readonly SkippedPickForAdd[];
 }
 
+/** What a folder scan found. Counts only — no grants and no bytes. */
+export interface FolderScanSummary {
+  /** One-shot handle to the shell-side path list; consumed by `claimFolderScan`. */
+  token: string;
+  folderName: string;
+  totalPdfs: number;
+  topLevelPdfs: number;
+  subfolderPdfs: number;
+  skippedNonPdf: number;
+  /** Hidden files and folders; hidden folders were not opened. */
+  skippedHidden: number;
+  /** Shortcuts/symlinks the scan refused to follow, so a skipped subtree shows. */
+  skippedLinks: number;
+  permissionFailures: number;
+  permissionFailureExamples: readonly string[];
+  /** The scan hit the shell's per-folder ceiling; more PDFs exist below. */
+  truncated: boolean;
+}
+
 export interface PickedPdfForWord {
   grant: FileGrant;
   name: string;
@@ -214,6 +233,37 @@ export async function pickPdfsForAdd(): Promise<PickedPdfsForAdd | null> {
 
   const invoke = await getTauriInvoke();
   return invoke<PickedPdfsForAdd | null>("pick_pdfs_for_add");
+}
+
+/**
+ * Stage 1 of folder add: pick a folder and scan it for PDFs. Issues NO grants —
+ * the shell holds the path list behind `summary.token` and only mints grants
+ * when `claimFolderScan` names a scope. `null` = the user cancelled the picker.
+ */
+export async function scanFolderForAdd(): Promise<FolderScanSummary | null> {
+  if (!isTauriRuntime()) {
+    throw new Error("scanFolderForAdd is desktop-only; the browser has no folder picker.");
+  }
+
+  const invoke = await getTauriInvoke();
+  return invoke<FolderScanSummary | null>("scan_folder_for_add");
+}
+
+/**
+ * Stage 2 of folder add: mint grants for the confirmed scope. Returns the same
+ * shape as `pickPdfsForAdd`, so everything downstream is shared. The token is
+ * one-shot — a scan the user cancels is simply never claimed.
+ */
+export async function claimFolderScan(
+  token: string,
+  includeSubfolders: boolean,
+): Promise<PickedPdfsForAdd> {
+  if (!isTauriRuntime()) {
+    throw new Error("claimFolderScan is desktop-only.");
+  }
+
+  const invoke = await getTauriInvoke();
+  return invoke<PickedPdfsForAdd>("claim_folder_scan", { token, includeSubfolders });
 }
 
 export async function pickPdfForWord(): Promise<PickedPdfForWord | null> {

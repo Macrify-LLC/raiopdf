@@ -52,6 +52,10 @@ you get it split into properly labeled, sequential parts instead.
   you might not want — flattening an unsigned form, or a signature. Before it
   changes anything, RaioPDF lists what would be affected so you can cancel and
   handle those first.
+- **Filing packets take a whole folder.** In the **Filing packet** tab, **Add PDF**
+  takes one or more files and **Add Folder** takes every PDF in a folder at once —
+  it tells you what it found, lets you leave subfolders out, and adds nothing until
+  you say yes.
 - **Redact before you prepare.** If you've marked redactions, apply them first,
   then run Prepare for Filing.
 - **This gets the mechanics right, not the law.** It helps you meet the portal's

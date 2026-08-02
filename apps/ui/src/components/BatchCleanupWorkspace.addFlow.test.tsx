@@ -26,6 +26,7 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
   function render(
     onAddFile: () => Promise<FileAddResult[] | null>,
     currentFileNotice: string | null = null,
+    onAddFolder?: () => Promise<FileAddResult[] | null>,
   ) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
@@ -39,6 +40,7 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
           packs={[getPack()]}
           progress={progress}
           onAddFile={onAddFile}
+          onAddFolder={onAddFolder}
           onRun={async () => undefined}
         />,
       );
@@ -48,6 +50,19 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
   async function clickAddPdf() {
     const button = Array.from(window.document.querySelectorAll("button")).find((candidate) =>
       candidate.textContent?.includes("Add PDF"),
+    );
+    expect(button).toBeDefined();
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function clickAdd(label: string) {
+    const button = Array.from(window.document.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.includes(label),
     );
     expect(button).toBeDefined();
 
@@ -132,5 +147,28 @@ describe("BatchCleanupWorkspace add flow (FileAddResult, no byte bridge)", () =>
     expect(container?.textContent).toContain("1 of 3 added");
     expect(container?.textContent).toContain("huge.pdf (too large to add here)");
     expect(container?.textContent).toContain("broken.pdf (The PDF range could not be read.)");
+  });
+  it("hides Add Folder when the runtime has no folder picker", () => {
+    render(async () => null);
+
+    expect(container?.textContent).toContain("Add PDF");
+    expect(container?.textContent).not.toContain("Add Folder");
+  });
+
+  it("queues a folder add through the same path as a file add", async () => {
+    render(
+      async () => null,
+      null,
+      async () => [
+        { kind: "bytes", file: { bytes: new Uint8Array([1]), name: "folder-a.pdf", path: "grant-a" } },
+        { kind: "descriptor", descriptor: { grant: "grant-b", name: "folder-b.pdf", sizeBytes: 999_999_999, pageCount: null } },
+        { kind: "error", name: "folder-c.pdf", message: "The PDF could not be read." },
+      ],
+    );
+
+    await clickAdd("Add Folder");
+
+    expect(fileNames()).toEqual(["folder-a.pdf", "folder-b.pdf"]);
+    expect(container?.textContent).toContain("2 of 3 added");
   });
 });

@@ -240,7 +240,12 @@ export function resetDialogStackForTests(): void {
   dialogStack.splice(0, dialogStack.length);
 }
 
-function getFocusableElements(root: HTMLElement): HTMLElement[] {
+/**
+ * Shared with any imperatively-built modal gate that layers on top of a
+ * `FloatingDialog` (e.g. the folder-add confirm and Word markup-mode gates in
+ * `readFileForAdd.ts`) so they can trap Tab the same way this component does.
+ */
+export function getFocusableElements(root: HTMLElement): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>(
       [

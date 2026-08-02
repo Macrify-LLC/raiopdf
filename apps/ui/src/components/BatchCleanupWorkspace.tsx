@@ -97,6 +97,12 @@ export interface BatchCleanupWorkspaceProps {
    * Cleanup is path-based end-to-end, so every picked file maps straight to a
    * queue entry -- no page-count loop like Production Set's. */
   onAddFile: () => Promise<FileAddResult[] | null>;
+  /**
+   * Adds every PDF in a chosen folder. Same contract as `onAddFile` -- the
+   * scan/confirm/claim flow happens above this component. Absent in the browser
+   * build, which has no folder picker that yields readable paths.
+   */
+  onAddFolder?: (() => Promise<FileAddResult[] | null>) | undefined;
   onRun: (input: BatchCleanupRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -132,6 +138,7 @@ export function BatchCleanupWorkspace({
   packs,
   progress,
   onAddFile,
+  onAddFolder,
   onRun,
   onOpenPackageRoot,
   onHelpRequested,
@@ -152,8 +159,8 @@ export function BatchCleanupWorkspace({
   const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
   const canRun = files.length > 0 && outputDir.trim().length > 0 && !progress.running;
 
-  async function addFiles() {
-    const picked = await onAddFile();
+  async function addFiles(pick: () => Promise<FileAddResult[] | null> = onAddFile) {
+    const picked = await pick();
     if (!picked || picked.length === 0) {
       return;
     }
@@ -263,6 +270,16 @@ export function BatchCleanupWorkspace({
             >
               <PlusIcon size={14} /> Add PDF
             </button>
+            {onAddFolder ? (
+              <button
+                type="button"
+                className="batch-workspace__secondary-button"
+                onClick={() => void addFiles(onAddFolder)}
+                title="Add every PDF in a folder to the cleanup queue."
+              >
+                <PlusIcon size={14} /> Add Folder
+              </button>
+            ) : null}
           </div>
         </div>
         <div className="batch-workspace__file-list" role="list">

@@ -22,8 +22,10 @@ lost afternoon. Batch Cleanup does the whole stack in a single run.
 ## How to do it
 
 1. In the **Legal** tools, choose **Batch Cleanup**.
-2. Click **Add PDF** and select one or more files (add again for more). Files
-   need to be opened from your computer.
+2. Click **Add PDF** and select one or more files (add again for more), or click
+   **Add Folder** to queue every PDF in a folder at once — it tells you what it
+   found, lets you leave subfolders out, and adds nothing until you say yes.
+   Files need to be opened from your computer.
 3. Choose an empty **Package root folder** — where the cleaned files and report
    will go.
 4. Turn on the steps you want (below).

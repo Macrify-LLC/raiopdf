@@ -24,26 +24,39 @@
  * `pickFileForAdd` is the older single-file wrapper, kept for callers that
  * only ever want the first pick.
  *
+ * Folder add (`addFolderFilesForAdd`) reaches the same place by a different
+ * road: the shell scans the chosen folder and reports counts with NO grants,
+ * the user confirms the scope, and only then does the shell mint grants -- in
+ * the exact `pick_pdfs_for_add` shape, so everything after the confirm is the
+ * same code the file picker uses.
+ *
  * SHELL COMMAND CONTRACTS:
  * - `pick_pdfs_for_add(multiple)` -> `[{ grant, name, sizeBytes }]` multi-select
  *   picker with NO eager byte read [R5-1].
+ * - `scan_folder_for_add()` -> `{ token, folderName, counts..., truncated }`;
+ *   walks a picked folder for PDFs and issues NO grants.
+ * - `claim_folder_scan(token, includeSubfolders)` -> the same `PickedPdfs` shape
+ *   as the picker, for the confirmed scope only. The token is one-shot.
  * - `read_pdf_range(grant, offset, length)` -> raw binary response; per-call
  *   length cap is max(4 MB, threshold), so a whole below-threshold file fits in
  *   one call [R6-2].
  * - `page_count(grant)` -> number (qpdf --show-npages) [R2-3].
  */
 import {
+  claimFolderScan,
   isTauriRuntime,
   pickBrowserFile,
   pickPdfsForAdd as pickPdfsForAddPrimitive,
   readBrowserFile,
   readPdfRange,
+  scanFolderForAdd as scanFolderForAddPrimitive,
   type FileGrant,
+  type FolderScanSummary,
   type OpenedFile,
   type SkippedPickForAdd,
 } from "./filePort";
 
-export type { SkippedPickForAdd } from "./filePort";
+export type { FolderScanSummary, SkippedPickForAdd } from "./filePort";
 import {
   getLargeDocThresholdBytes,
   setLargeDocThresholdBytes,
@@ -55,6 +68,11 @@ import {
   wordUnavailableMessage as wordUnavailableSummary,
   type WordCapability,
 } from "./wordCapability";
+import {
+  getFocusableElements,
+  isTopDialogStackEntry,
+  registerDialogStackEntry,
+} from "../components/FloatingDialog";
 
 /** Contract of one entry returned by the shell's `pick_pdfs_for_add` command. */
 export interface PickedPdfForAdd {
@@ -245,6 +263,18 @@ export async function pickFilesForAdd(
     return null;
   }
 
+  return readPickedFilesForAdd(picks, skippedByPicker);
+}
+
+/**
+ * Shared tail of every batch add: read each pick through `readFileForAdd`,
+ * keeping order, and fold the shell's own per-file skips in as error entries so
+ * "N of M added; K failed" covers them too.
+ */
+async function readPickedFilesForAdd(
+  picks: readonly PickedPdfForAdd[],
+  skippedByPicker: readonly SkippedPickForAdd[],
+): Promise<FileAddResult[]> {
   const results: FileAddResult[] = [];
   for (const pick of picks) {
     try {
@@ -258,13 +288,265 @@ export async function pickFilesForAdd(
     }
   }
 
-  // Files the shell picker itself couldn't serve join the batch as error
-  // entries, so "N of M added; K failed" covers them too.
   for (const skipped of skippedByPicker) {
     results.push({ kind: "error", name: skipped.name, message: skipped.message });
   }
 
   return results;
+}
+
+/** What the user chose in the folder-add confirm step. */
+export interface FolderAddChoice {
+  includeSubfolders: boolean;
+}
+
+export interface AddFolderFilesOptions {
+  /** Overridable for tests; defaults to the built-in confirm dialog. */
+  confirmFolderAdd?: (summary: FolderScanSummary) => Promise<FolderAddChoice | null>;
+}
+
+/**
+ * Folder add, in two stages, so a folder is never turned into file access the
+ * user did not confirm:
+ *
+ * 1. `scan_folder_for_add` walks the chosen folder and returns COUNTS ONLY --
+ *    no grants, no bytes. A cancel here (or at the confirm dialog) leaves the
+ *    WebView with nothing it could read a file with; the shell drops the scan.
+ * 2. `claim_folder_scan` mints grants for the confirmed scope only (top level,
+ *    or the whole tree) and returns the same shape the multi-select picker
+ *    returns, so the reads, per-file failure handling, and batch summary below
+ *    are exactly the ones the file picker already uses.
+ *
+ * Returns `null` when the user cancels at either stage.
+ */
+export async function addFolderFilesForAdd(
+  options: AddFolderFilesOptions = {},
+): Promise<FileAddResult[] | null> {
+  if (!isTauriRuntime()) {
+    // The browser has no folder picker that yields readable paths; callers hide
+    // the entry point rather than offering a broken one.
+    return null;
+  }
+
+  const summary = await scanFolderForAddPrimitive();
+  if (!summary) {
+    return null;
+  }
+
+  const choice = await (options.confirmFolderAdd ?? confirmFolderAdd)(summary);
+  if (!choice) {
+    return null;
+  }
+
+  const claimed = await claimFolderScan(summary.token, choice.includeSubfolders);
+  setLargeDocThresholdBytes(claimed.thresholdBytes);
+
+  return readPickedFilesForAdd(
+    claimed.files.map((file) => ({
+      grant: file.grant,
+      name: file.name,
+      sizeBytes: file.sizeBytes,
+    })),
+    claimed.skipped ?? [],
+  );
+}
+
+/** "3 PDFs" / "1 PDF" — used by the confirm dialog's counts. */
+export function folderAddPdfCountLabel(count: number): string {
+  return `${count} PDF${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The lines under the folder-add question: what the scan did NOT take. Every
+ * one of these is a real omission, so they are stated rather than implied.
+ */
+export function folderAddNotes(summary: FolderScanSummary): string[] {
+  const notes: string[] = [];
+  if (summary.truncated) {
+    notes.push(
+      `This folder holds more than ${summary.totalPdfs} PDFs. Only the first ${folderAddPdfCountLabel(summary.totalPdfs)} were found; add the rest from their own folders.`,
+    );
+  }
+  if (summary.skippedNonPdf > 0) {
+    notes.push(`${summary.skippedNonPdf} file${summary.skippedNonPdf === 1 ? "" : "s"} skipped (not a PDF).`);
+  }
+  if (summary.skippedHidden > 0) {
+    notes.push(`${summary.skippedHidden} hidden item${summary.skippedHidden === 1 ? "" : "s"} skipped.`);
+  }
+  if (summary.skippedLinks > 0) {
+    notes.push(
+      `${summary.skippedLinks} shortcut${summary.skippedLinks === 1 ? "" : "s"} skipped — RaioPDF does not follow shortcuts out of the folder you chose.`,
+    );
+  }
+  if (summary.permissionFailures > 0) {
+    const examples = summary.permissionFailureExamples.join(", ");
+    notes.push(
+      `${summary.permissionFailures} item${summary.permissionFailures === 1 ? "" : "s"} could not be read${examples ? ` (${examples})` : ""}.`,
+    );
+  }
+  return notes;
+}
+
+let modalGateIdCounter = 0;
+
+/**
+ * Wires an imperatively-built modal gate (folder-add confirm, Word
+ * markup-mode) into the same shared dialog stack `FloatingDialog` uses.
+ *
+ * These gates are opened from inside a package workspace, which is itself a
+ * `FloatingDialog` -- and `FloatingDialog` owns Escape/Tab via a `window`
+ * CAPTURE keydown listener gated on "am I the top dialog stack entry."
+ * Without joining that same stack, the gate's own listener and the parent's
+ * listener both fire independently: Escape closes the *parent* workspace out
+ * from under the still-mounted gate, and Tab can walk focus into the now
+ * hidden parent. Registering here makes the gate the new top-of-stack entry,
+ * so the parent's listener sees `isTopDialogStackEntry(parentId) === false`
+ * and no-ops while the gate is up -- Escape only ever cancels the gate, and
+ * Tab is trapped inside it, exactly like a native `FloatingDialog`.
+ *
+ * Returns a `dispose` function the caller MUST invoke when the gate closes
+ * (on every exit path -- confirm, cancel, or otherwise) to unregister from
+ * the stack and remove the listener.
+ */
+function attachModalGateKeyboardHandling(host: HTMLElement, onEscape: () => void): () => void {
+  const stackId = `modal-gate-${modalGateIdCounter++}`;
+  const unregister = registerDialogStackEntry(stackId);
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (!isTopDialogStackEntry(stackId)) {
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onEscape();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    event.stopImmediatePropagation();
+    const focusable = getFocusableElements(host);
+
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  window.addEventListener("keydown", onKeyDown, true);
+
+  return () => {
+    window.removeEventListener("keydown", onKeyDown, true);
+    unregister();
+  };
+}
+
+/**
+ * Confirm step for folder add. Built imperatively (like the Word markup gate)
+ * so all three package workspaces get the identical dialog without any of them
+ * carrying dialog state. Resolves `null` on cancel — which is what keeps the
+ * scan unclaimed and no grants issued.
+ */
+export async function confirmFolderAdd(summary: FolderScanSummary): Promise<FolderAddChoice | null> {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    const host = document.createElement("div");
+    host.className = "folder-add-gate";
+    const notes = folderAddNotes(summary);
+    host.innerHTML = `
+      <div class="folder-add-gate__panel" role="dialog" aria-modal="true" aria-labelledby="folder-add-gate-title">
+        <h2 id="folder-add-gate-title">${summary.totalPdfs === 0
+          ? `No PDFs in "${escapeHtml(summary.folderName)}"`
+          : `Add ${folderAddPdfCountLabel(summary.totalPdfs)} from "${escapeHtml(summary.folderName)}"?`}</h2>
+        <p class="folder-add-gate__counts">${escapeHtml(
+          `${folderAddPdfCountLabel(summary.topLevelPdfs)} in the folder itself, ${summary.subfolderPdfs} in subfolders.`,
+        )}</p>
+        ${summary.subfolderPdfs > 0
+          ? `<label class="folder-add-gate__toggle"><input type="checkbox" data-action="subfolders" checked /> Include subfolders</label>`
+          : ""}
+        ${notes.length > 0
+          ? `<ul class="folder-add-gate__notes">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>`
+          : ""}
+        <div class="folder-add-gate__actions">
+          <button type="button" data-action="cancel">Cancel</button>
+          <button type="button" data-action="add">Add</button>
+        </div>
+      </div>
+    `;
+    ensureFolderAddGateStyles();
+    document.body.append(host);
+
+    const subfolders = host.querySelector<HTMLInputElement>("[data-action='subfolders']");
+    const addButton = host.querySelector<HTMLButtonElement>("[data-action='add']");
+    const cancelButton = host.querySelector<HTMLButtonElement>("[data-action='cancel']");
+
+    const selectedCount = (): number =>
+      subfolders && !subfolders.checked ? summary.topLevelPdfs : summary.totalPdfs;
+    const syncAddButton = (): void => {
+      if (!addButton) {
+        return;
+      }
+      const count = selectedCount();
+      addButton.textContent = count === 0 ? "Add" : `Add ${folderAddPdfCountLabel(count)}`;
+      addButton.disabled = count === 0;
+    };
+
+    const finish = (choice: FolderAddChoice | null): void => {
+      dispose();
+      host.remove();
+      resolve(choice);
+    };
+    const dispose = attachModalGateKeyboardHandling(host, () => finish(null));
+
+    subfolders?.addEventListener("change", syncAddButton);
+    syncAddButton();
+    cancelButton?.addEventListener("click", () => finish(null));
+    addButton?.addEventListener("click", () => {
+      finish({ includeSubfolders: subfolders ? subfolders.checked : false });
+    });
+    (addButton?.disabled ? cancelButton : addButton)?.focus();
+  });
+}
+
+function ensureFolderAddGateStyles() {
+  if (document.getElementById("folder-add-gate-styles")) {
+    return;
+  }
+
+  const style = document.createElement("style");
+  style.id = "folder-add-gate-styles";
+  style.textContent = `
+    .folder-add-gate{position:fixed;inset:0;z-index:10000;display:grid;place-items:center;background:rgba(15,23,42,.28)}
+    .folder-add-gate__panel{width:min(460px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;background:#fff;border:1px solid #d8dee8;border-radius:8px;box-shadow:0 18px 60px rgba(15,23,42,.22);padding:18px;color:#172033;font:14px system-ui,sans-serif}
+    .folder-add-gate__panel h2{font-size:16px;line-height:1.35;margin:0 0 10px}
+    .folder-add-gate__counts{margin:0 0 12px;color:#4a5568}
+    .folder-add-gate__toggle{display:flex;gap:8px;align-items:center;margin:0 0 12px}
+    .folder-add-gate__notes{margin:0 0 4px 18px;padding:0;color:#4a5568}
+    .folder-add-gate__notes li{margin:4px 0}
+    .folder-add-gate__actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+    .folder-add-gate__actions button{border:1px solid #d8dee8;border-radius:6px;background:#fff;color:#172033;padding:8px 12px;font-weight:600}
+    .folder-add-gate__actions button[data-action='add']{border-color:#172033;background:#172033;color:#fff}
+    .folder-add-gate__actions button[disabled]{opacity:.5}
+  `;
+  document.head.append(style);
 }
 
 /**
@@ -563,6 +845,14 @@ function wordUnavailableMessage(capability: WordCapability): string {
   return `${wordUnavailableSummary(capability)} Word documents were not added.`;
 }
 
+/**
+ * Markup-mode gate for the Word add flow. Built imperatively for the same
+ * reason as `confirmFolderAdd` and, before the dialog-stack fix above, had
+ * the identical defect: an unmanaged keyboard listener let Escape leak
+ * through to close a `FloatingDialog` workspace underneath while this gate
+ * stayed mounted. Now joins the shared stack via
+ * `attachModalGateKeyboardHandling` too.
+ */
 export async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMarkupMode> {
   if (typeof document === "undefined") {
     return "final";
@@ -593,11 +883,24 @@ export async function promptDocxMarkupMode(gate: DocxMarkupGate): Promise<DocxMa
     document.body.append(host);
     const button = host.querySelector<HTMLButtonElement>("[data-action='continue']");
     button?.focus();
-    button?.addEventListener("click", () => {
-      const checked = host.querySelector<HTMLInputElement>("input[name='docx-markup-mode']:checked");
+
+    const finish = (mode: DocxMarkupMode): void => {
+      dispose();
       host.remove();
-      resolve(checked?.value === "showMarkup" ? "showMarkup" : "final");
-    }, { once: true });
+      resolve(mode);
+    };
+    const currentChoice = (): DocxMarkupMode => {
+      const checked = host.querySelector<HTMLInputElement>("input[name='docx-markup-mode']:checked");
+      return checked?.value === "showMarkup" ? "showMarkup" : "final";
+    };
+    // No explicit "cancel" concept here (unlike the folder-add gate) -- the
+    // add always proceeds, this gate only ever decides the markup mode. So
+    // Escape resolves with whatever's currently selected, same as clicking
+    // Continue -- it just also has to stop owning Escape/Tab so it doesn't
+    // leak into the FloatingDialog workspace underneath.
+    const dispose = attachModalGateKeyboardHandling(host, () => finish(currentChoice()));
+
+    button?.addEventListener("click", () => finish(currentChoice()), { once: true });
   });
 }
 

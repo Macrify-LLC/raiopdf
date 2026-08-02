@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildDocxMarkupGate,
   docxConversionProgressMessage,
+  fileAddBatchMessage,
   mergeConvertedDocxPicks,
   pickFileForAdd,
+  pickFilesForAdd,
   pickPdfsForAdd,
   readFileForAdd,
+  summarizeFileAddResults,
   tooLargeToAddMessage,
   wordDocxAddErrorMessage,
+  type FileAddResult,
 } from "./readFileForAdd";
 import { getLargeDocThresholdBytes, setLargeDocThresholdBytes } from "./largeDocThreshold";
 
@@ -356,6 +360,173 @@ describe("pickFileForAdd (Tauri, pick_pdfs_for_add available)", () => {
       kind: "descriptor",
       descriptor: { grant: "g-big", name: "big.pdf", sizeBytes: THRESHOLD * 10, pageCount: 250 },
     });
+  });
+});
+
+describe("pickFilesForAdd (Tauri, pick_pdfs_for_add available)", () => {
+  beforeEach(() => {
+    setLargeDocThresholdBytes(THRESHOLD);
+    invokeMock.mockReset();
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    setLargeDocThresholdBytes(null);
+    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it("reads every picked file, in picker order (all-success)", async () => {
+    invokeMock.mockImplementation(async (command: string, params?: { grant?: string }) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          files: [
+            { grant: "g-1", name: "a.pdf", sizeBytes: 8 },
+            { grant: "g-2", name: "b.pdf", sizeBytes: 8 },
+          ],
+          thresholdBytes: THRESHOLD,
+        };
+      }
+      if (command === "read_pdf_range") {
+        return new Uint8Array(8).fill(params?.grant === "g-1" ? 1 : 2).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const results = await pickFilesForAdd();
+
+    expect(results).toHaveLength(2);
+    expect(results?.map((result) => result.kind)).toEqual(["bytes", "bytes"]);
+    expect(results?.[0]).toMatchObject({ kind: "bytes", file: { name: "a.pdf", path: "g-1" } });
+    expect(results?.[1]).toMatchObject({ kind: "bytes", file: { name: "b.pdf", path: "g-2" } });
+  });
+
+  it("keeps the successful reads and reports a per-file read failure as an error entry", async () => {
+    invokeMock.mockImplementation(async (command: string, params?: { grant?: string }) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          files: [
+            { grant: "g-ok", name: "ok.pdf", sizeBytes: 8 },
+            { grant: "g-bad", name: "bad.pdf", sizeBytes: 8 },
+          ],
+          thresholdBytes: THRESHOLD,
+        };
+      }
+      if (command === "read_pdf_range") {
+        if (params?.grant === "g-bad") {
+          // Mirrors the shell's typed FileRangeError shape (e.g. the file
+          // changed on disk between the pick and the read).
+          throw { code: "FILE_CHANGED", message: "The file changed on disk." };
+        }
+        return new Uint8Array(8).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const results = await pickFilesForAdd();
+
+    expect(results).toHaveLength(2);
+    expect(results?.[0]).toMatchObject({ kind: "bytes", file: { name: "ok.pdf" } });
+    expect(results?.[1]).toEqual({
+      kind: "error",
+      name: "bad.pdf",
+      message: "The file changed on disk.",
+    });
+  });
+
+  it("returns [] when the dialog is cancelled — matches pickPdfsForAdd's own convention", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        // Shell returns null when the dialog is cancelled.
+        return null;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await expect(pickFilesForAdd()).resolves.toEqual([]);
+  });
+
+  it("returns null when the shell predates pick_pdfs_for_add", async () => {
+    invokeMock.mockRejectedValue(missingCommandError("pick_pdfs_for_add"));
+
+    await expect(pickFilesForAdd()).resolves.toBeNull();
+  });
+
+  it("pickFileForAdd still returns only the first pick (thin wrapper over pickFilesForAdd)", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          files: [
+            { grant: "g-1", name: "a.pdf", sizeBytes: 8 },
+            { grant: "g-2", name: "b.pdf", sizeBytes: 8 },
+          ],
+          thresholdBytes: THRESHOLD,
+        };
+      }
+      if (command === "read_pdf_range") {
+        return new Uint8Array(8).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const result = await pickFileForAdd();
+
+    expect(result).toMatchObject({ kind: "bytes", file: { name: "a.pdf" } });
+  });
+});
+
+describe("summarizeFileAddResults / fileAddBatchMessage", () => {
+  it("counts bytes and descriptor results as added, with no failures", () => {
+    const results: FileAddResult[] = [
+      { kind: "bytes", file: { bytes: new Uint8Array(1), name: "a.pdf", path: null } },
+      { kind: "descriptor", descriptor: { grant: "g", name: "b.pdf", sizeBytes: 1, pageCount: 3 } },
+    ];
+
+    const summary = summarizeFileAddResults(results);
+
+    expect(summary).toEqual({ addedCount: 2, totalCount: 2, failures: [] });
+    expect(fileAddBatchMessage(summary)).toBeNull();
+  });
+
+  it("reports tooLarge and error results as failures without dropping the successes", () => {
+    const results: FileAddResult[] = [
+      { kind: "bytes", file: { bytes: new Uint8Array(1), name: "ok.pdf", path: null } },
+      { kind: "tooLarge", name: "huge.pdf", sizeBytes: 999 },
+      { kind: "error", name: "broken.pdf", message: "Could not be read." },
+    ];
+
+    const summary = summarizeFileAddResults(results);
+
+    expect(summary).toEqual({
+      addedCount: 1,
+      totalCount: 3,
+      failures: [
+        { name: "huge.pdf", reason: "too large to add here" },
+        { name: "broken.pdf", reason: "Could not be read." },
+      ],
+    });
+    expect(fileAddBatchMessage(summary)).toBe(
+      "1 of 3 added; 2 failed: huge.pdf (too large to add here), broken.pdf (Could not be read.)",
+    );
+  });
+
+  it("reports every-file-failed with a plural/singular-aware noun and no added count", () => {
+    const results: FileAddResult[] = [
+      { kind: "tooLarge", name: "huge.pdf", sizeBytes: 999 },
+    ];
+
+    const summary = summarizeFileAddResults(results);
+
+    expect(fileAddBatchMessage(summary, "document")).toBe(
+      "1 document could not be added: huge.pdf (too large to add here)",
+    );
+
+    const twoFailures = summarizeFileAddResults([
+      { kind: "tooLarge", name: "huge.pdf", sizeBytes: 999 },
+      { kind: "error", name: "broken.pdf", message: "Could not be read." },
+    ]);
+    expect(fileAddBatchMessage(twoFailures, "document")).toBe(
+      "2 documents could not be added: huge.pdf (too large to add here), broken.pdf (Could not be read.)",
+    );
   });
 });
 

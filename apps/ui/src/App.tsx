@@ -201,9 +201,11 @@ import {
   materializePdfBytesGrant,
 } from "./lib/dropMaterialize";
 import {
-  pickFileForAdd,
-  tooLargeToAddMessage,
+  fileAddBatchMessage,
+  pickFilesForAdd,
+  summarizeFileAddResults,
   wordDocxAddErrorMessage,
+  type FileAddFailure,
   type FileAddResult,
   type PickPdfsForAddOptions,
 } from "./lib/readFileForAdd";
@@ -4140,13 +4142,13 @@ export function App() {
     };
   }
 
-  const openProductionFile = useCallback(async (): Promise<FileAddResult | null> => {
+  const openProductionFile = useCallback(async (): Promise<FileAddResult[] | null> => {
     try {
-      return await pickFileForAdd(packageDocxAddOptions(setProductionProgress, "production set"));
+      return await pickFilesForAdd(packageDocxAddOptions(setProductionProgress, "production set"));
     } catch (error: unknown) {
       setProductionProgress({
         running: false,
-        message: "This PDF could not be added to the production set.",
+        message: "These PDFs could not be added to the production set.",
         result: null,
         diagnosticId: logWorkflowFailure("production.add-file-failed", error),
       });
@@ -4154,71 +4156,94 @@ export function App() {
     }
   }, []);
 
-  const openBatchCleanupFile = useCallback(async (): Promise<FileAddResult | null> => {
+  const openBatchCleanupFile = useCallback(async (): Promise<FileAddResult[] | null> => {
     try {
-      // The workspace consumes the FileAddResult directly: descriptor adds
-      // carry the grant (batch cleanup is path-based end-to-end), and the
-      // browser tooLarge case renders its own honest gate.
-      return await pickFileForAdd(packageDocxAddOptions(setBatchCleanupProgress, "batch"));
+      // The workspace consumes the FileAddResult array directly: descriptor
+      // adds carry the grant (batch cleanup is path-based end-to-end), and
+      // the browser tooLarge/error cases render their own honest gate.
+      return await pickFilesForAdd(packageDocxAddOptions(setBatchCleanupProgress, "batch"));
     } catch {
       setBatchCleanupProgress({
         running: false,
-        message: "This PDF could not be added to the batch.",
+        message: "These PDFs could not be added to the batch.",
         result: null,
       });
       return null;
     }
   }, []);
 
-  const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile | null> => {
+  const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile[] | null> => {
     try {
-      const result = await pickFileForAdd(packageDocxAddOptions(setFilingPacketProgress, "filing packet"));
-      if (!result) {
+      const picked = await pickFilesForAdd(packageDocxAddOptions(setFilingPacketProgress, "filing packet"));
+      if (!picked || picked.length === 0) {
         return null;
       }
 
-      if (result.kind === "tooLarge") {
-        setFilingPacketProgress({
-          running: false,
-          message: tooLargeToAddMessage(result.name),
-          result: null,
-        });
-        return null;
-      }
+      // FilingPacketFile requires a known page count, so bytes-kind adds are
+      // counted sequentially here (bounded: one pdf-lib parse in flight at a
+      // time) rather than raced the way Production Set's loop does -- packet
+      // order matters more than add latency for this flow.
+      const summary = summarizeFileAddResults(picked);
+      const extraFailures: FileAddFailure[] = [];
+      const files: FilingPacketFile[] = [];
 
-      if (result.kind === "descriptor") {
-        // FilingPacketFile requires a known page count. `path_op_page_count`
-        // ships in the same shell now, so a null count only happens when the
-        // bundled qpdf is missing or the count itself failed — still gated
-        // honestly rather than shown with a fake count.
-        if (result.descriptor.pageCount === null) {
-          setFilingPacketProgress({
-            running: false,
-            message: `"${result.descriptor.name}" is too large to add until RaioPDF can count its pages without opening it.`,
-            result: null,
-          });
-          return null;
+      for (const result of picked) {
+        if (result.kind === "tooLarge" || result.kind === "error") {
+          continue;
         }
 
-        return {
-          id: `${result.descriptor.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          name: result.descriptor.name,
-          path: result.descriptor.grant,
-          pages: result.descriptor.pageCount,
-        };
+        if (result.kind === "descriptor") {
+          // FilingPacketFile requires a known page count. `path_op_page_count`
+          // ships in the same shell now, so a null count only happens when the
+          // bundled qpdf is missing or the count itself failed — still gated
+          // honestly rather than shown with a fake count.
+          if (result.descriptor.pageCount === null) {
+            extraFailures.push({
+              name: result.descriptor.name,
+              reason: "too large to add until RaioPDF can count its pages without opening it",
+            });
+            continue;
+          }
+
+          files.push({
+            id: `${result.descriptor.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            name: result.descriptor.name,
+            path: result.descriptor.grant,
+            pages: result.descriptor.pageCount,
+          });
+          continue;
+        }
+
+        const file = result.file;
+        try {
+          const pages = await countPdfPages(file.bytes);
+          files.push({
+            id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            name: file.name,
+            path: file.path,
+            pages,
+          });
+        } catch {
+          // One corrupt file in the middle of a pick must not drop every file
+          // already counted around it -- report it and keep going.
+          extraFailures.push({ name: file.name, reason: "its pages could not be counted" });
+        }
       }
 
-      const file = result.file;
-      return {
-        id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        name: file.name,
-        path: file.path,
-        pages: await countPdfPages(file.bytes),
-      };
+      const message = fileAddBatchMessage({
+        addedCount: files.length,
+        totalCount: summary.totalCount,
+        failures: [...summary.failures, ...extraFailures],
+      });
+      if (message) {
+        setFilingPacketProgress({ running: false, message, result: null });
+      }
+
+      return files.length > 0 ? files : null;
     } catch {
       setFilingPacketProgress({
         running: false,
-        message: "This PDF could not be added to the filing packet.",
+        message: "These PDFs could not be added to the filing packet.",
         result: null,
       });
       return null;

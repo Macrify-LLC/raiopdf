@@ -39,6 +39,11 @@ polish.
   couldn't select, restyle, move, or delete them — only start over. Now they reopen as
   live objects, the way highlights and text boxes already did. **Flatten markup** still
   makes them permanent when that's what you want.
+- **You can now add several PDFs at once** in Production Set, Batch Cleanup, and the
+  filing packet builder — select multiple files in the picker instead of clicking
+  Add PDF once per document. If a few files in the batch can't be added (too large,
+  or an unreadable file), the rest still go in and you're told exactly which ones
+  didn't.
 
 ### Changed
 

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { PdfDocumentHandle, PdfEngine, PdfStampPlacement } from "@raiopdf/engine-api";
+import type { PdfDocumentHandle, PdfEngine, PdfPageSelection, PdfStampPlacement } from "@raiopdf/engine-api";
+import { formatPageRangeSpec, parsePageRanges, PageRangeError } from "@raiopdf/engine-api";
 import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { createPackage, readPackageManifest } from "@raiopdf/package-writer";
 import type { PackageManifest } from "@raiopdf/package-writer";
@@ -10,6 +11,15 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 export interface ProductionSourceInput {
   path: string;
   designation?: string | undefined;
+  /**
+   * 1-based, human-entered page range restricting the confidentiality
+   * designation to specific pages of THIS source (e.g. "1-3,7"). Parsed by
+   * the shared `parsePageRanges` (`@raiopdf/engine-api`) against this
+   * source's actual page count at build time. `undefined`/`""` (the
+   * default) designates every page, matching the prior behavior. Ignored
+   * when `designation` is empty -- there's nothing to restrict.
+   */
+  designationPages?: string | undefined;
 }
 
 export interface ProductionContinuationOverrideInput {
@@ -28,6 +38,27 @@ export interface BuildProductionSetInput {
   volumeSizeMb?: number | undefined;
   appVersion?: string | undefined;
   createdAt?: string | undefined;
+  /**
+   * Page edge and horizontal alignment for the Bates number. Defaults to
+   * `{ edge: "footer", align: "right" }`, unchanged from before this option
+   * existed.
+   */
+  batesPlacement?: PdfStampPlacement | undefined;
+  /**
+   * Page edge and horizontal alignment for the confidentiality designation.
+   * Defaults to `{ edge: "header", align: "center" }`, unchanged from
+   * before this option existed. Rejected (pre-output) if it shares an edge
+   * with `batesPlacement` -- see `assertPlacementsDoNotShareEdge`.
+   */
+  designationPlacement?: PdfStampPlacement | undefined;
+  /**
+   * Font size, in points, for BOTH the Bates numbers and the confidentiality
+   * designation. Defaults to 10 (unchanged). Must be between 6 and 24; the
+   * engine's own width-fitting can still shrink the RENDERED size below the
+   * configured value on a narrow page, which is checked separately and
+   * pre-output by `assertStampsFitAtMinimumSize`.
+   */
+  stampFontSizePt?: number | undefined;
   /**
    * Root folder of a prior production package to continue the same Bates
    * series from. When set, this run re-verifies that package (defense in
@@ -93,6 +124,13 @@ export interface ProductionSetFileResult {
   lastNumber: number;
   pages: number;
   designation: string;
+  /**
+   * Normalized 1-based spec string (e.g. "1-3,7") when the designation was
+   * restricted to a strict subset of this source's pages; `null` when the
+   * designation covers the whole document (including when it's empty, or
+   * when an explicit spec happened to resolve to every page anyway).
+   */
+  designationPages: string | null;
   sha256: string;
   bytes: number;
   volume: string | null;
@@ -146,11 +184,29 @@ interface ProductionSourcePlan {
   sourceSha256: string;
   sourceBytes: number;
   pages: number;
+  /** Per-page visual geometry (width/height/rotation), used only to
+   * pre-check that stamps stay at or above the minimum rendered size. */
+  pageGeometry: readonly PlannedPageGeometry[];
   firstNumber: number;
   lastNumber: number;
   batesStart: string;
   batesEnd: string;
   designation: string;
+  /** Zero-based pages the designation is stamped on; only meaningful when
+   * `designation !== ""`. */
+  designationPageIndexes: PdfPageSelection;
+  /** Normalized spec string to record on the result/manifest/index, or
+   * `null` when the designation covers the whole document. */
+  designationPagesSpec: string | null;
+}
+
+/** A source page's size and rotation, as read directly from the PDF (independent
+ * of which `PdfEngine` implementation will actually perform the stamp) -- used
+ * only for the pre-output minimum-rendered-size check. */
+interface PlannedPageGeometry {
+  widthPt: number;
+  heightPt: number;
+  rotationDegrees: number;
 }
 
 interface NormalizedInput {
@@ -167,13 +223,24 @@ interface NormalizedInput {
   volumeBytes: number | null;
   continueFrom: string | null;
   continuationOverride: ProductionContinuationOverrideInput | null;
+  batesPlacement: PdfStampPlacement;
+  designationPlacement: PdfStampPlacement;
+  stampFontSizePt: number;
 }
 
 const DEFAULT_DIGITS = 6;
 const DEFAULT_START = 1;
 const DEFAULT_APP_VERSION = "0.1.0";
-const BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
-const DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
+const DEFAULT_BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
+const DEFAULT_DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
+const DEFAULT_STAMP_FONT_SIZE_PT = 10;
+const MIN_STAMP_FONT_SIZE_PT = 6;
+const MAX_STAMP_FONT_SIZE_PT = 24;
+/** Matches `engine-local`/`engine-sidecar`'s own default `marginIn` for
+ * `stampText`/`batesStamp` -- production-set never overrides it, so the
+ * pre-output fit check has to assume the same margin the real stamp uses. */
+const STAMP_MARGIN_IN = 0.5;
+const POINTS_PER_INCH = 72;
 
 /**
  * Soft cap on how many sources a run may combine into one production PDF.
@@ -521,6 +588,7 @@ export async function buildProductionSet(
           batesStart: plan.batesStart,
           batesEnd: plan.batesEnd,
           designation: plan.designation,
+          designationPages: plan.designationPagesSpec,
         });
         volumeArtifacts.push({
           outputName,
@@ -540,6 +608,7 @@ export async function buildProductionSet(
           lastNumber: plan.lastNumber,
           pages: plan.pages,
           designation: plan.designation,
+          designationPages: plan.designationPagesSpec,
           sha256: entry.sha256,
           bytes: entry.bytes,
           volume: volumeName,
@@ -614,6 +683,7 @@ export async function buildProductionSet(
       batesEnd: file.batesEnd,
       pages: file.pages,
       designation: file.designation,
+      designationPages: file.designationPages,
     })));
     session.recordDetail("productionOptions", {
       prefix: options.prefix,
@@ -622,6 +692,9 @@ export async function buildProductionSet(
       includeFilenameInIndex: options.includeFilenameInIndex,
       combinedPdf: options.combinedPdf,
       volumeSizeMb: input.volumeSizeMb ?? null,
+      batesPlacement: options.batesPlacement,
+      designationPlacement: options.designationPlacement,
+      stampFontSizePt: options.stampFontSizePt,
     });
     if (input.volumeSizeMb !== undefined) {
       session.recordOverride({
@@ -682,6 +755,9 @@ export async function buildProductionSet(
       nextNumber: running,
       includeFilenameInIndex: options.includeFilenameInIndex,
       combinedPdf,
+      batesPlacement: options.batesPlacement,
+      designationPlacement: options.designationPlacement,
+      stampFontSizePt: options.stampFontSizePt,
       files: files.map((file) => ({
         sourceFilename: file.sourceFilename,
         outputName: file.outputName,
@@ -690,6 +766,7 @@ export async function buildProductionSet(
         batesEnd: file.batesEnd,
         pages: file.pages,
         designation: file.designation,
+        designationPages: file.designationPages,
         sha256: file.sha256,
         volume: file.volume,
       })),
@@ -753,28 +830,50 @@ async function prepareProductionSourcePlans(
 
   for (const source of options.sources) {
     const sourcePath = path.resolve(source.path);
+    const sourceFilename = path.basename(sourcePath);
     const sourceBytes = await fs.readFile(sourcePath);
     const original = await engine.open(sourceBytes);
+    let pages: number;
 
     try {
-      scanned.push({
-        sourcePath,
-        sourceFilename: path.basename(sourcePath),
-        sourceSha256: sha256Hex(sourceBytes),
-        sourceBytes: sourceBytes.byteLength,
-        pages: await engine.pageCount(original),
-        designation: normalizeDesignation(source.designation),
-      });
+      pages = await engine.pageCount(original);
     } finally {
       await engine.close(original).catch(() => undefined);
     }
+
+    const designation = normalizeDesignation(source.designation);
+    const designationPageIndexes = resolveDesignationPageIndexes(
+      designation,
+      source.designationPages,
+      pages,
+      sourceFilename,
+    );
+
+    scanned.push({
+      sourcePath,
+      sourceFilename,
+      sourceSha256: sha256Hex(sourceBytes),
+      sourceBytes: sourceBytes.byteLength,
+      pages,
+      // Read directly via pdf-lib rather than through `engine` -- the
+      // opaque `PdfDocumentHandle` has no page-geometry accessor on
+      // `PdfEngine`, and this is only needed for the pre-output fit check
+      // below, not for the actual stamp (which still goes through `engine`
+      // in `stampPlannedSource`). Same bytes already in memory; no extra I/O.
+      pageGeometry: await readPageGeometry(sourceBytes),
+      designation,
+      designationPageIndexes,
+      designationPagesSpec: designation === ""
+        ? null
+        : formatPartialDesignationPagesSpec(designationPageIndexes, pages),
+    });
   }
 
   const totalPages = scanned.reduce((sum, source) => sum + source.pages, 0);
   assertBatesFits(options.digits, options.start + totalPages - 1);
 
   let running = options.start;
-  return scanned.map((source) => {
+  const plans = scanned.map((source) => {
     const firstNumber = running;
     const lastNumber = firstNumber + source.pages - 1;
     running = lastNumber + 1;
@@ -787,6 +886,205 @@ async function prepareProductionSourcePlans(
       batesEnd: formatBates(options.prefix, lastNumber, options.digits),
     };
   });
+
+  await assertStampsFitAtMinimumSize(plans, options);
+
+  return plans;
+}
+
+/**
+ * Resolves a source's designation page restriction against its actual page
+ * count. Requires `designationPages` to be empty when there's no
+ * designation to restrict (nothing to stamp, so a page range would be
+ * meaningless), and wraps any `PageRangeError` with the source's filename so
+ * a multi-file production's error names which file is at fault.
+ */
+function resolveDesignationPageIndexes(
+  designation: string,
+  designationPages: string | undefined,
+  pageCount: number,
+  sourceFilename: string,
+): PdfPageSelection {
+  if (designation === "") {
+    if (designationPages !== undefined && designationPages.trim() !== "") {
+      throw new Error(
+        `"${sourceFilename}": a page range was set ("${designationPages}") but no confidentiality ` +
+          "designation was chosen for this file -- choose a designation, or clear the page range.",
+      );
+    }
+    return "all";
+  }
+
+  try {
+    return parsePageRanges(designationPages, pageCount);
+  } catch (error) {
+    if (error instanceof PageRangeError) {
+      throw new Error(`"${sourceFilename}": ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/** Only records a spec when it's a genuine restriction to fewer than every
+ * page -- an explicit spec that happens to name every page is functionally
+ * identical to the (unrecorded) whole-document default. */
+function formatPartialDesignationPagesSpec(
+  pageIndexes: PdfPageSelection,
+  pageCount: number,
+): string | null {
+  if (pageIndexes === "all" || pageIndexes === "first" || pageIndexes.length >= pageCount) {
+    return null;
+  }
+  return formatPageRangeSpec(pageIndexes);
+}
+
+async function readPageGeometry(bytes: Uint8Array): Promise<readonly PlannedPageGeometry[]> {
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  return pdf.getPages().map((page) => ({
+    widthPt: page.getWidth(),
+    heightPt: page.getHeight(),
+    rotationDegrees: page.getRotation().angle,
+  }));
+}
+
+/** `true` when the page's visual (as-viewed) orientation swaps width and
+ * height -- mirrors `engine-local`'s own `isSidewaysRotation`, rounded to
+ * the nearest 90-degree increment since that's the only rotation PDF page
+ * dictionaries support. */
+function isPlannedPageSideways(rotationDegrees: number): boolean {
+  const normalized = ((Math.round(rotationDegrees / 90) * 90) % 360 + 360) % 360;
+  return normalized === 90 || normalized === 270;
+}
+
+interface StampFitProbe {
+  label: "Bates numbers" | "confidentiality designation";
+  text: string;
+  sourceFilename: string;
+  /** 1-based, for the error message. */
+  pageNumber: number;
+  geometry: PlannedPageGeometry;
+}
+
+/**
+ * Pre-output check that every stamp this build will apply still renders at
+ * or above `MIN_STAMP_FONT_SIZE_PT` once the engine's own width-fitting
+ * (`fitFontSizeToWidth` in `engine-local`, mirrored here) shrinks it to fit
+ * the narrowest page it lands on. Runs BEFORE any output exists, same as
+ * `assertBatesFits` above -- a build that would silently produce
+ * illegibly-small stamps fails here instead, naming the exact offending
+ * text and page.
+ *
+ * This re-implements the engine's own fit math (same Helvetica metrics, same
+ * default 0.5in margin) rather than calling the engine, because `PdfEngine`
+ * has no "measure without stamping" operation and `stampText`/`batesStamp`
+ * only report the stamped bytes, not the rendered size they landed on.
+ * `buildProductionSet` is only ever invoked against the local (pdf-lib)
+ * engine in this codebase (see `handleProductionSet` in
+ * `apps/mcp/src/tools/legal.ts`), so this mirrors the exact algorithm that
+ * will actually run, not an approximation of a different backend.
+ */
+async function assertStampsFitAtMinimumSize(
+  plans: readonly ProductionSourcePlan[],
+  options: NormalizedInput,
+): Promise<void> {
+  const probes = buildStampFitProbes(plans, options);
+  if (probes.length === 0) {
+    return;
+  }
+
+  const measuringDoc = await PDFDocument.create();
+  const font = await measuringDoc.embedFont(StandardFonts.Helvetica);
+  const marginPt = STAMP_MARGIN_IN * POINTS_PER_INCH;
+
+  let worst: { probe: StampFitProbe; renderedSize: number; visualWidth: number } | null = null;
+
+  for (const probe of probes) {
+    const visualWidth = isPlannedPageSideways(probe.geometry.rotationDegrees)
+      ? probe.geometry.heightPt
+      : probe.geometry.widthPt;
+    const maxTextWidth = visualWidth - 2 * marginPt;
+    const textWidth = font.widthOfTextAtSize(probe.text, options.stampFontSizePt);
+    const renderedSize = maxTextWidth <= 0
+      ? 0
+      : Math.min(options.stampFontSizePt, options.stampFontSizePt * (maxTextWidth / textWidth));
+
+    if (worst === null || renderedSize < worst.renderedSize) {
+      worst = { probe, renderedSize, visualWidth };
+    }
+  }
+
+  if (worst !== null && worst.renderedSize < MIN_STAMP_FONT_SIZE_PT) {
+    throw new Error(
+      `The ${worst.probe.label} "${worst.probe.text}" would shrink to ${worst.renderedSize.toFixed(1)}pt ` +
+        `on page ${worst.probe.pageNumber} of "${worst.probe.sourceFilename}" (that page is ` +
+        `${worst.visualWidth.toFixed(0)}pt wide) -- below the ${MIN_STAMP_FONT_SIZE_PT}pt minimum. Use a ` +
+        "smaller font size, shorter text, or a different placement.",
+    );
+  }
+}
+
+/**
+ * Normalizes a `PdfPageSelection` (as stored on a plan) to concrete
+ * zero-based page indexes. `designationPageIndexes` on a plan is only ever
+ * `"all"` or an explicit array in practice (see `resolveDesignationPageIndexes`
+ * above -- `parsePageRanges` never returns `"first"`), but the shared
+ * `PdfPageSelection` type is broader, so `"first"` is handled defensively
+ * rather than assumed away.
+ */
+function resolveConcreteDesignationPages(
+  selection: PdfPageSelection,
+  pageCount: number,
+): readonly number[] {
+  if (selection === "all") {
+    return Array.from({ length: pageCount }, (_, index) => index);
+  }
+  if (selection === "first") {
+    return pageCount > 0 ? [0] : [];
+  }
+  return selection;
+}
+
+function buildStampFitProbes(
+  plans: readonly ProductionSourcePlan[],
+  options: NormalizedInput,
+): StampFitProbe[] {
+  const probes: StampFitProbe[] = [];
+
+  for (const plan of plans) {
+    for (let pageIndex = 0; pageIndex < plan.pages; pageIndex += 1) {
+      const geometry = plan.pageGeometry[pageIndex];
+      if (geometry === undefined) {
+        continue;
+      }
+      probes.push({
+        label: "Bates numbers",
+        text: formatBates(options.prefix, plan.firstNumber + pageIndex, options.digits),
+        sourceFilename: plan.sourceFilename,
+        pageNumber: pageIndex + 1,
+        geometry,
+      });
+    }
+
+    if (plan.designation === "") {
+      continue;
+    }
+
+    for (const pageIndex of resolveConcreteDesignationPages(plan.designationPageIndexes, plan.pages)) {
+      const geometry = plan.pageGeometry[pageIndex];
+      if (geometry === undefined) {
+        continue;
+      }
+      probes.push({
+        label: "confidentiality designation",
+        text: plan.designation,
+        sourceFilename: plan.sourceFilename,
+        pageNumber: pageIndex + 1,
+        geometry,
+      });
+    }
+  }
+
+  return probes;
 }
 
 /**
@@ -808,8 +1106,8 @@ async function stampPlannedSource(
       prefix: options.prefix,
       start: plan.firstNumber,
       digits: options.digits,
-      placement: BATES_PLACEMENT,
-      fontSizePt: 10,
+      placement: options.batesPlacement,
+      fontSizePt: options.stampFontSizePt,
     });
   } finally {
     await engine.close(original).catch(() => undefined);
@@ -822,9 +1120,9 @@ async function stampPlannedSource(
   try {
     return await engine.stampText(produced, {
       text: plan.designation,
-      pageIndexes: "all",
-      placement: DESIGNATION_PLACEMENT,
-      fontSizePt: 10,
+      pageIndexes: plan.designationPageIndexes,
+      placement: options.designationPlacement,
+      fontSizePt: options.stampFontSizePt,
     });
   } finally {
     await engine.close(produced).catch(() => undefined);
@@ -885,6 +1183,21 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     );
   }
 
+  const stampFontSizePt = input.stampFontSizePt ?? DEFAULT_STAMP_FONT_SIZE_PT;
+  if (
+    !Number.isFinite(stampFontSizePt) ||
+    stampFontSizePt < MIN_STAMP_FONT_SIZE_PT ||
+    stampFontSizePt > MAX_STAMP_FONT_SIZE_PT
+  ) {
+    throw new Error(
+      `Stamp font size must be between ${MIN_STAMP_FONT_SIZE_PT} and ${MAX_STAMP_FONT_SIZE_PT} points.`,
+    );
+  }
+
+  const batesPlacement = input.batesPlacement ?? DEFAULT_BATES_PLACEMENT;
+  const designationPlacement = input.designationPlacement ?? DEFAULT_DESIGNATION_PLACEMENT;
+  assertPlacementsDoNotShareEdge(batesPlacement, designationPlacement);
+
   return {
     sources: input.sources,
     outputDir: input.outputDir,
@@ -899,7 +1212,40 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     volumeBytes: input.volumeSizeMb === undefined ? null : Math.floor(input.volumeSizeMb * 1024 * 1024),
     continueFrom: input.continueFrom ?? null,
     continuationOverride: input.continuationOverride ?? null,
+    batesPlacement,
+    designationPlacement,
+    stampFontSizePt,
   };
+}
+
+/**
+ * Collision guard (v1): Bates numbers and the confidentiality designation
+ * may not share a page edge, regardless of alignment.
+ *
+ * The task this guards against is real -- a long designation centered in the
+ * header can run into a right-aligned Bates number also in the header -- but
+ * measuring whether any two ACTUAL strings would overlap at build time is
+ * disproportionate to implement correctly: it would need per-page text-width
+ * measurement (already added for the min-size check below, but that check is
+ * single-stamp; overlap is pairwise) crossed against every rotation, and it
+ * would still be a moving target every time a filename-derived Bates string
+ * or a custom designation changes length between pages. Prohibiting the
+ * same edge outright is unambiguous, cheap, always correct (two placements
+ * on different edges can never collide), and easy to reason about: put Bates
+ * in the footer and the designation in the header (the defaults), or vice
+ * versa. A future version could relax this with real pairwise measurement if
+ * the blanket rule proves too restrictive in practice.
+ */
+function assertPlacementsDoNotShareEdge(
+  batesPlacement: PdfStampPlacement,
+  designationPlacement: PdfStampPlacement,
+): void {
+  if (batesPlacement.edge === designationPlacement.edge) {
+    throw new Error(
+      `Bates numbers and the confidentiality designation can't both be placed in the ` +
+        `${batesPlacement.edge} -- put one in the header and the other in the footer.`,
+    );
+  }
 }
 
 function formatBates(prefix: string, value: number, digits: number): string {
@@ -1003,6 +1349,10 @@ export interface ProductionIndexRow {
   filename: string;
   pages: number;
   designation: string;
+  /** Normalized 1-based page-range spec (e.g. "1-3,7") when the designation
+   * is restricted to part of the document; `null` for whole-document
+   * coverage (including no designation at all). */
+  designationPages: string | null;
   sha256: string;
 }
 
@@ -1013,6 +1363,7 @@ function toIndexRow(file: ProductionSetFileResult): ProductionIndexRow {
     filename: file.outputName,
     pages: file.pages,
     designation: file.designation,
+    designationPages: file.designationPages,
     sha256: file.sha256,
   };
 }
@@ -1027,6 +1378,7 @@ export function formatProductionCsv(
     ...(includeFilename ? ["Filename"] : []),
     "Pages",
     "Designation",
+    "Designation Pages",
     "SHA-256",
   ];
   const lines = rows.map((row) => [
@@ -1035,6 +1387,7 @@ export function formatProductionCsv(
     ...(includeFilename ? [row.filename] : []),
     String(row.pages),
     row.designation,
+    row.designationPages ?? "",
     row.sha256,
   ]);
   return `${[headers, ...lines].map((line) => line.map(csvCell).join(",")).join("\n")}\n`;
@@ -1099,13 +1452,16 @@ async function createProductionIndexPdf(
     nextPageIfNeeded();
     draw(row.batesStart, margin);
     draw(row.batesEnd, margin + 92);
+    const designationDisplay = row.designationPages === null
+      ? row.designation
+      : `${row.designation} (pp. ${row.designationPages})`;
     if (includeFilename) {
       draw(truncate(row.filename, 44), margin + 184);
       draw(String(row.pages), margin + 390);
-      draw(truncate(row.designation, 31), margin + 430);
+      draw(truncate(designationDisplay, 31), margin + 430);
     } else {
       draw(String(row.pages), margin + 184);
-      draw(truncate(row.designation, 56), margin + 230);
+      draw(truncate(designationDisplay, 56), margin + 230);
     }
     y -= rowHeight;
   }

@@ -21,6 +21,147 @@ export type PdfStampTextOptions = {
   marginIn?: number;
 };
 
+export type PageRangeErrorCode = "invalid-syntax" | "out-of-bounds" | "reversed-range";
+
+/** Typed failure from `parsePageRanges`, naming exactly which entry was wrong. */
+export class PageRangeError extends Error {
+  readonly code: PageRangeErrorCode;
+
+  constructor(code: PageRangeErrorCode, message: string) {
+    super(message);
+    this.name = "PageRangeError";
+    this.code = code;
+  }
+}
+
+/**
+ * Parses a 1-based, human-entered page-range spec (e.g. `"1-3,7"`) into the
+ * zero-based `PdfPageSelection` the stamping engine expects.
+ *
+ * This is a pure function with no engine or filesystem dependency so it can
+ * be shared verbatim between the interactive UI (inline validation as
+ * someone types) and `@raiopdf/production-set`'s build-time gate -- one
+ * implementation, not two copies that can drift. It lives here, in
+ * `@raiopdf/engine-api`, rather than in `production-set` itself, because
+ * `production-set` pulls in `node:fs`/`node:crypto` and isn't (and shouldn't
+ * become) a UI dependency, whereas `engine-api` is already a pure,
+ * browser-safe dependency of both `apps/ui` and `production-set`.
+ *
+ * Semantics:
+ * - `undefined` or an all-whitespace string means "every page" and returns
+ *   `"all"` -- the same default the stamping engine already applies when no
+ *   `pageIndexes` is given.
+ * - Entries are comma-separated; each is either a single page ("7") or an
+ *   inclusive range ("1-3"). Whitespace around numbers/commas is tolerated.
+ * - Duplicate or overlapping entries ("1-3,2-4") are tolerated and
+ *   normalized (deduplicated, ascending) rather than rejected -- there's
+ *   nothing genuinely ambiguous about "stamp page 2 twice," and a
+ *   hand-edited range will produce this by accident.
+ * - Every page number must fall within `[1, pageCount]`; a reversed range
+ *   ("5-2") or unparsable entry throws a typed `PageRangeError` naming the
+ *   exact offending entry.
+ */
+export function parsePageRanges(spec: string | undefined, pageCount: number): PdfPageSelection {
+  const trimmed = (spec ?? "").trim();
+  if (trimmed === "") {
+    return "all";
+  }
+
+  const pages = new Set<number>();
+  for (const rawSegment of trimmed.split(",")) {
+    const segment = rawSegment.trim();
+    if (segment === "") {
+      throw new PageRangeError("invalid-syntax", `"${trimmed}" has an empty entry between commas.`);
+    }
+
+    const rangeMatch = /^(\d+)\s*-\s*(\d+)$/.exec(segment);
+    if (rangeMatch) {
+      const start = Number.parseInt(rangeMatch[1]!, 10);
+      const end = Number.parseInt(rangeMatch[2]!, 10);
+      if (end < start) {
+        throw new PageRangeError(
+          "reversed-range",
+          `"${segment}" ends before it starts -- did you mean "${end}-${start}"?`,
+        );
+      }
+      assertPageInPageRangeBounds(start, pageCount, segment, trimmed);
+      assertPageInPageRangeBounds(end, pageCount, segment, trimmed);
+      for (let page = start; page <= end; page += 1) {
+        pages.add(page - 1);
+      }
+      continue;
+    }
+
+    if (!/^\d+$/.test(segment)) {
+      throw new PageRangeError(
+        "invalid-syntax",
+        `"${segment}" in "${trimmed}" isn't a page number or range (e.g. "7" or "1-3").`,
+      );
+    }
+    const page = Number.parseInt(segment, 10);
+    assertPageInPageRangeBounds(page, pageCount, segment, trimmed);
+    pages.add(page - 1);
+  }
+
+  return [...pages].sort((left, right) => left - right);
+}
+
+function assertPageInPageRangeBounds(
+  page: number,
+  pageCount: number,
+  segment: string,
+  spec: string,
+): void {
+  if (page < 1 || page > pageCount) {
+    throw new PageRangeError(
+      "out-of-bounds",
+      `Page ${page} in "${segment}" is out of range -- "${spec}" was checked against a ` +
+        `${pageCount}-page document.`,
+    );
+  }
+}
+
+/**
+ * Inverse of `parsePageRanges`: renders a resolved zero-based selection back
+ * into the same 1-based, comma/hyphen spec a person would type, collapsing
+ * consecutive runs into ranges. Returns `null` for `"all"` (and the
+ * unrelated `"first"` selection) -- callers that only want to record or
+ * display a spec when it's a genuine restriction, not simply "every page,"
+ * should treat `null` as "there's nothing to show."
+ */
+export function formatPageRangeSpec(selection: PdfPageSelection): string | null {
+  if (selection === "all" || selection === "first") {
+    return null;
+  }
+
+  const sorted = [...new Set(selection)].sort((left, right) => left - right);
+  if (sorted.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  let rangeStart = sorted[0]!;
+  let rangeEnd = sorted[0]!;
+
+  const flush = (): void => {
+    parts.push(rangeStart === rangeEnd ? `${rangeStart + 1}` : `${rangeStart + 1}-${rangeEnd + 1}`);
+  };
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const page = sorted[index]!;
+    if (page === rangeEnd + 1) {
+      rangeEnd = page;
+      continue;
+    }
+    flush();
+    rangeStart = page;
+    rangeEnd = page;
+  }
+  flush();
+
+  return parts.join(",");
+}
+
 export type PdfRedactionArea = {
   /** Zero-based page index containing the rectangle to redact. */
   pageIndex: number;

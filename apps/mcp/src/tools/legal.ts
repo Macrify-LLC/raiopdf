@@ -734,6 +734,14 @@ export const productionSetInputSchema = {
     .array(z.object({
       path: absoluteInput,
       designation: z.string().optional().describe("Whole-document confidentiality designation."),
+      designationPages: z
+        .string()
+        .optional()
+        .describe(
+          '1-based page range restricting the designation to part of THIS source, e.g. "1-3,7". ' +
+            "Every page in the given range is stamped. Omit for every page (default, unchanged). " +
+            "Ignored -- and rejected -- when this source has no designation.",
+        ),
     }))
     .min(1)
     .describe("Ordered source PDFs in production order."),
@@ -747,6 +755,21 @@ export const productionSetInputSchema = {
   includeIndex: z.boolean().optional().describe("Write production-index.pdf and production-index.csv. Default true."),
   combinedPdf: z.boolean().optional().describe("Also write a single combined production PDF. Default false."),
   volumeSizeMb: z.number().positive().optional().describe("Optional volume folder cap in megabytes."),
+  batesPlacement: placementSchema
+    .optional()
+    .describe('Page edge/alignment for the Bates number. Default { edge: "footer", align: "right" }.'),
+  designationPlacement: placementSchema
+    .optional()
+    .describe(
+      'Page edge/alignment for the confidentiality designation. Default { edge: "header", align: "center" }. ' +
+        "Must use a different edge than batesPlacement -- Bates and the designation can't share a page edge.",
+    ),
+  stampFontSizePt: z
+    .number()
+    .min(6)
+    .max(24)
+    .optional()
+    .describe("Shared font size, in points, for both the Bates number and the designation. Default 10."),
   continueFrom: z
     .string()
     .optional()
@@ -779,7 +802,7 @@ export const productionSetOutputSchema = {
     .optional(),
 };
 export interface ProductionSetInput {
-  sources: { path: string; designation?: string | undefined }[];
+  sources: { path: string; designation?: string | undefined; designationPages?: string | undefined }[];
   outputDir: string;
   prefix: string;
   start?: number | undefined;
@@ -788,6 +811,9 @@ export interface ProductionSetInput {
   includeIndex?: boolean | undefined;
   combinedPdf?: boolean | undefined;
   volumeSizeMb?: number | undefined;
+  batesPlacement?: Placement | undefined;
+  designationPlacement?: Placement | undefined;
+  stampFontSizePt?: number | undefined;
   continueFrom?: string | undefined;
   continuationOverride?: { reason: string } | undefined;
 }
@@ -817,6 +843,9 @@ export async function handleProductionSet(
     ...(input.includeIndex === undefined ? {} : { includeIndex: input.includeIndex }),
     ...(input.combinedPdf === undefined ? {} : { combinedPdf: input.combinedPdf }),
     ...(input.volumeSizeMb === undefined ? {} : { volumeSizeMb: input.volumeSizeMb }),
+    ...(input.batesPlacement === undefined ? {} : { batesPlacement: input.batesPlacement }),
+    ...(input.designationPlacement === undefined ? {} : { designationPlacement: input.designationPlacement }),
+    ...(input.stampFontSizePt === undefined ? {} : { stampFontSizePt: input.stampFontSizePt }),
     ...(continueFrom === undefined ? {} : { continueFrom }),
     ...(input.continuationOverride === undefined ? {} : { continuationOverride: input.continuationOverride }),
   });

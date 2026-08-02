@@ -1714,6 +1714,8 @@ export function App() {
           return {
             grant,
             designation: file.designation || undefined,
+            // A range without a designation is meaningless — never forward one.
+            designationPages: file.designation ? file.designationPages || undefined : undefined,
           };
         }),
         outputDir: input.outputDir,
@@ -1724,6 +1726,9 @@ export function App() {
         includeFilenameInIndex: input.includeFilenameInIndex,
         combinedPdf: input.combinedPdf,
         volumeSizeMb: input.volumeSizeMb ?? undefined,
+        batesPlacement: input.batesPlacement,
+        designationPlacement: input.designationPlacement,
+        stampFontSizePt: input.stampFontSizePt,
         continueFrom: input.continueFrom,
         continuationOverrideReason: input.continuationOverrideReason,
       });

@@ -100,7 +100,10 @@ export function ExhibitStampCard({ editing }: ExhibitStampCardProps) {
           <ExhibitStampTemplateCard
             // Keyed by the counter too, so an edited or reset number resyncs
             // the "Next" field instead of leaving the old text in it.
-            key={`${template.id}:${template.nextIndex}`}
+            // identifierStyle is part of the key: switching numbers↔letters
+            // must remount the card so its draft "Next" text re-derives from
+            // the new representation instead of showing the old one.
+            key={`${template.id}:${template.nextIndex}:${template.identifierStyle}`}
             template={template}
             armed={editing.armedExhibitStamp?.templateId === template.id}
             canMoveUp={index > 0}

@@ -128,6 +128,34 @@ describe("ExhibitStampCard", () => {
     ).toBe("Plaintiff's Exhibit");
   });
 
+  it("re-derives the Next field when a design's numbering style changes", async () => {
+    await render();
+
+    await allocateIdentifier(PLAINTIFF);
+
+    // Editing the design from numbers to letters must not leave the mounted
+    // card's Next draft showing the old digit representation.
+    await clickByText("Edit design...", 0);
+    const numbering = container?.querySelector(
+      'select[aria-label="Stamp numbering"]',
+    ) as HTMLSelectElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLSelectElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(numbering, "letters");
+      numbering.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await clickByText("Save Design", 0);
+
+    const after = container?.querySelector(
+      'input[aria-label="Next exhibit for Plaintiff\'s Exhibit"]',
+    ) as HTMLInputElement;
+    expect(after.value).toBe("B");
+  });
+
   it("duplicates a design with a fresh, independent counter", async () => {
     await render();
 

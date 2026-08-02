@@ -125,14 +125,18 @@ describe("ExhibitStampDesigner", () => {
   it("applies size presets and clamps free-size inputs to 0.5-4 inches", async () => {
     await render({ mode: "create", template: null });
 
+    // Wide preset (2in x 1in = 144pt x 72pt) exceeds the 240px preview cap, so
+    // BOTH dimensions shrink by one uniform factor (240/144): aspect preserved.
     await click(button("Wide size"));
-    expect(previewBoxSizePx()).toEqual({ width: 288, height: 144 }); // 2in x 1in @ 2px/pt
+    expect(previewBoxSizePx()).toEqual({ width: 240, height: 120 });
 
     await type(input('input[aria-label="Sticker width in inches"]'), "10");
-    expect(previewBoxSizePx().width).toBe(576); // clamped to 4in
+    const clamped = previewBoxSizePx(); // clamped to 4in wide, capped at 240px
+    expect(clamped.width).toBe(240);
+    expect(clamped.width / clamped.height).toBeCloseTo(288 / 72, 5);
 
     await type(input('input[aria-label="Sticker width in inches"]'), "0.01");
-    expect(previewBoxSizePx().width).toBe(72); // clamped to 0.5in
+    expect(previewBoxSizePx().width).toBe(72); // clamped to 0.5in, under the cap
   });
 
   it("saves a new design to the store and reports it as new", async () => {

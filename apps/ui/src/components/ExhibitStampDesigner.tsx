@@ -48,6 +48,20 @@ const STAMP_MAX_BORDER_WIDTH_FRACTION = 0.25;
 /** Screen pixels per PDF point in the designer's live preview -- bigger than
  *  the gallery's 1:1 so fine detail (border, rounding) reads clearly. */
 const DESIGNER_PREVIEW_SCALE = 2;
+/**
+ * Widest the preview may render, in screen pixels. Wide/custom designs shrink
+ * by ONE uniform factor (never a width-only CSS squeeze) so the preview keeps
+ * the saved design's true proportions — font, border, and radius scale with it.
+ */
+const DESIGNER_PREVIEW_MAX_WIDTH_PX = 240;
+
+function designerPreviewScale(widthPt: number): number {
+  if (widthPt <= 0) {
+    return DESIGNER_PREVIEW_SCALE;
+  }
+
+  return Math.min(DESIGNER_PREVIEW_SCALE, DESIGNER_PREVIEW_MAX_WIDTH_PX / widthPt);
+}
 
 interface StampSizePreset {
   id: string;
@@ -170,6 +184,8 @@ export function ExhibitStampDesigner({
   // the gallery card does -- editing the design must never imply editing the
   // count.
   const previewIndex = mode === "edit" && template ? template.nextIndex : 0;
+  const previewScale = designerPreviewScale(widthPt);
+
   const previewLines = useMemo(
     () =>
       exhibitLabelLines(
@@ -248,12 +264,12 @@ export function ExhibitStampDesigner({
           <span
             className="exhibit-stamp-designer__preview-box"
             style={{
-              width: `${widthPt * DESIGNER_PREVIEW_SCALE}px`,
-              height: `${heightPt * DESIGNER_PREVIEW_SCALE}px`,
+              width: `${widthPt * previewScale}px`,
+              height: `${heightPt * previewScale}px`,
             }}
           >
             <StampPreview
-              scale={DESIGNER_PREVIEW_SCALE}
+              scale={previewScale}
               stamp={{
                 lines: previewLines,
                 widthPt,

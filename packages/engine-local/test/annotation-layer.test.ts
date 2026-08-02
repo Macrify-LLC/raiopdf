@@ -1451,6 +1451,434 @@ describe("ink, shape, and callout round-trip", () => {
   });
 });
 
+const STAMP_EDIT = {
+  type: "stamp",
+  pageIndex: 0,
+  rect: { x: 40, y: 60, w: 120, h: 56 },
+  lines: ["Plaintiff's Exhibit", "12"],
+  fontSizePt: 12,
+  fontFamily: "times",
+  bold: true,
+  color: { r: 0.1, g: 0.1, b: 0.5 },
+  fillColor: { r: 1, g: 0.98, b: 0.85 },
+  borderColor: { r: 0.2, g: 0.2, b: 0.2 },
+  borderWidthPt: 1.5,
+  cornerRadiusPt: 6,
+  templateId: "plaintiff-exhibit",
+  templateRevision: 3,
+  sequence: {
+    schemaVersion: 1,
+    identifierStyle: "numbers",
+    prefix: "Plaintiff's Exhibit",
+    layout: "stacked",
+    index: 11,
+  },
+} satisfies PdfEdit;
+
+/** `rect` grown by the appearance stroke margin for the default 1.5pt border. */
+const STAMP_ANNOTATION_RECT = [39, 59, 161, 117];
+
+/**
+ * Stored `SourceEdit` shapes that must be dropped on import rather than drawn
+ * or thrown — one per optional-field family plus the required-field cases.
+ */
+const tamperedStampSourceEdits: ReadonlyArray<{ name: string; sourceEdit: unknown }> = [
+  { name: "a non-object edit", sourceEdit: "stamp" },
+  { name: "a fractional page index", sourceEdit: { ...STAMP_EDIT, pageIndex: 0.5 } },
+  {
+    name: "a negative-width rect",
+    sourceEdit: { ...STAMP_EDIT, rect: { x: 40, y: 60, w: -120, h: 56 } },
+  },
+  { name: "no lines at all", sourceEdit: { ...STAMP_EDIT, lines: [] } },
+  {
+    name: "an absurd number of lines",
+    sourceEdit: { ...STAMP_EDIT, lines: Array.from({ length: 40 }, () => "x") },
+  },
+  {
+    name: "a line that is not a string",
+    sourceEdit: { ...STAMP_EDIT, lines: ["Exhibit", 12] },
+  },
+  { name: "a zero font size", sourceEdit: { ...STAMP_EDIT, fontSizePt: 0 } },
+  { name: "an unknown font family", sourceEdit: { ...STAMP_EDIT, fontFamily: "comic" } },
+  { name: "a non-boolean bold flag", sourceEdit: { ...STAMP_EDIT, bold: "yes" } },
+  {
+    name: "an out-of-range color component",
+    sourceEdit: { ...STAMP_EDIT, color: { r: 2, g: 0, b: 0 } },
+  },
+  { name: "a fill color that is not a color", sourceEdit: { ...STAMP_EDIT, fillColor: "yellow" } },
+  { name: "a negative border width", sourceEdit: { ...STAMP_EDIT, borderWidthPt: -3 } },
+  { name: "a negative corner radius", sourceEdit: { ...STAMP_EDIT, cornerRadiusPt: -1 } },
+  { name: "a non-string template id", sourceEdit: { ...STAMP_EDIT, templateId: 7 } },
+  { name: "a non-numeric template revision", sourceEdit: { ...STAMP_EDIT, templateRevision: "3" } },
+  {
+    name: "a sequence from a newer schema",
+    sourceEdit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, schemaVersion: 2 } },
+  },
+  {
+    name: "a sequence with an unknown layout",
+    sourceEdit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, layout: "diagonal" } },
+  },
+];
+
+describe("exhibit stamp round-trip", () => {
+  it("re-imports a placed stamp with its template and sequence provenance intact", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+    const imports = await engine.readRaioPdfAnnotations(edited);
+
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.edit).toMatchObject(STAMP_EDIT);
+    expect(imports[0]?.edit).toMatchObject({
+      templateId: "plaintiff-exhibit",
+      templateRevision: 3,
+      sequence: { schemaVersion: 1, index: 11, layout: "stacked", prefix: "Plaintiff's Exhibit" },
+    });
+    expect(imports[0]?.annotId).toBeTruthy();
+  });
+
+  it("emits a Stamp annotation carrying the RaioPDF exhibit icon name and its label", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+    const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+    const [annotation] = readPageAnnotations(pdf, 0);
+
+    expect(annotation).toBeDefined();
+    expect(readName(annotation!, "Subtype")).toBe("Stamp");
+    expect(readName(annotation!, "Name")).toBe("RaioPDFExhibit");
+    expect(readString(annotation!, "Contents")).toBe("Plaintiff's Exhibit\n12");
+    expect(readNumberArray(annotation!.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
+      STAMP_ANNOTATION_RECT,
+    );
+    expect(annotation!.lookup(PDFName.of("F"), PDFNumber).asNumber()).toBe(4);
+    expect(annotation!.lookupMaybe(PDFName.of("RaioPDF"), PDFDict)).toBeInstanceOf(PDFDict);
+  });
+
+  it("renumbers a stamp in place by id and deletes it by id", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+    const [placed] = await engine.readRaioPdfAnnotations(edited);
+
+    if (!placed) {
+      throw new Error("Expected an imported stamp annotation.");
+    }
+
+    const renumbered = await engine.updateAnnotationById(edited, placed.annotId, {
+      ...STAMP_EDIT,
+      annotId: placed.annotId,
+      lines: ["Plaintiff's Exhibit", "13"],
+      sequence: { ...STAMP_EDIT.sequence, index: 12 },
+    });
+    const afterRenumber = await engine.readRaioPdfAnnotations(renumbered);
+    const renumberedPdf = await PDFDocument.load(await engine.saveToBytes(renumbered));
+
+    expect(afterRenumber).toHaveLength(1);
+    expect(afterRenumber[0]?.annotId).toBe(placed.annotId);
+    expect(afterRenumber[0]?.edit).toMatchObject({
+      type: "stamp",
+      lines: ["Plaintiff's Exhibit", "13"],
+      sequence: { index: 12 },
+    });
+    expect(readString(readPageAnnotations(renumberedPdf, 0)[0]!, "Contents")).toBe(
+      "Plaintiff's Exhibit\n13",
+    );
+
+    const deleted = await engine.deleteAnnotationById(renumbered, placed.annotId);
+
+    expect(await engine.readRaioPdfAnnotations(deleted)).toHaveLength(0);
+  });
+
+  it("survives a save-and-reopen cycle with a fresh engine", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+    const savedBytes = await engine.saveToBytes(edited);
+
+    const reopenEngine = createLocalPdfEngine();
+    const reopened = await reopenEngine.open(savedBytes);
+    const imports = await reopenEngine.readRaioPdfAnnotations(reopened);
+
+    expect(imports.map((entry) => entry.edit.type)).toEqual(["stamp"]);
+    expect(imports[0]?.edit).toMatchObject(STAMP_EDIT);
+  });
+
+  it("re-imports an untampered stamp marker", async () => {
+    expect(await reimportStampWithSourceEdit(STAMP_EDIT)).toHaveLength(1);
+  });
+
+  it("keeps stamps visible in the display copy while hiding overlay-backed kinds", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(
+      document,
+      [
+        STAMP_EDIT,
+        { type: "highlight", pageIndex: 0, rects: [{ x: 20, y: 700, w: 80, h: 12 }], opacity: 0.4 },
+      ],
+      { markupMode: "annotation" },
+    );
+    const savedBytes = await engine.saveToBytes(edited);
+
+    const displayBytes = await hideRaioPdfImportedAnnotationsForDisplay(savedBytes, {
+      keepVisibleKinds: ["stamp"],
+    });
+    const display = await PDFDocument.load(displayBytes);
+    const HIDDEN = 2;
+    const flags = readPageAnnotations(display, 0).map(
+      (annotation) => annotation.lookupMaybe(PDFName.of("F"), PDFNumber)?.asNumber() ?? 0,
+    );
+
+    expect(flags).toHaveLength(2);
+    expect((flags[0] ?? 0) & HIDDEN).toBe(0);
+    expect((flags[1] ?? 0) & HIDDEN).toBe(HIDDEN);
+  });
+
+  it.each(tamperedStampSourceEdits)(
+    "drops rather than throws on a stored stamp edit with $name",
+    async ({ sourceEdit }) => {
+      await expect(reimportStampWithSourceEdit(sourceEdit)).resolves.toHaveLength(0);
+    },
+  );
+
+  it.each([
+    {
+      name: "more lines than a stamp can carry",
+      edit: { ...STAMP_EDIT, lines: Array.from({ length: 40 }, () => "x") },
+    },
+    {
+      name: "a line longer than a stamp can carry",
+      edit: { ...STAMP_EDIT, lines: ["x".repeat(500)] },
+    },
+    { name: "no lines at all", edit: { ...STAMP_EDIT, lines: [] } },
+    { name: "a negative border width", edit: { ...STAMP_EDIT, borderWidthPt: -1 } },
+    { name: "a negative corner radius", edit: { ...STAMP_EDIT, cornerRadiusPt: -1 } },
+    { name: "an out-of-range color", edit: { ...STAMP_EDIT, color: { r: 2, g: 0, b: 0 } } },
+    { name: "a zero-height rect", edit: { ...STAMP_EDIT, rect: { x: 40, y: 60, w: 120, h: 0 } } },
+    {
+      name: "a negative sequence index",
+      edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, index: -1 } },
+    },
+    {
+      name: "an unknown sequence schema version",
+      edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, schemaVersion: 2 } },
+    },
+    {
+      name: "an unknown sequence layout",
+      edit: { ...STAMP_EDIT, sequence: { ...STAMP_EDIT.sequence, layout: "diagonal" } },
+    },
+  ])(
+    // Anything writable has to be re-importable, or a saved stamp would come
+    // back inert. Rejecting on the way in is what keeps the two in step.
+    "rejects a stamp edit with $name rather than writing one it cannot re-import",
+    async ({ edit }) => {
+      const engine = createLocalPdfEngine();
+      const document = await engine.open(await createPdf([[612, 792]]));
+
+      await expect(
+        engine.applyEdits(document, [edit as PdfEdit], { markupMode: "annotation" }),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("bakes the sticker into page content and removes the annotation on flatten", async () => {
+    const engine = createLocalPdfEngine();
+    const document = await engine.open(await createPdf([[612, 792]]));
+    const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+    const flattened = await engine.flattenMarkupAnnotations(edited);
+    const flattenedBytes = await engine.saveToBytes(flattened);
+    const flattenedPdf = await PDFDocument.load(flattenedBytes);
+    const content = await readDecodedPageContent(flattenedBytes, 0);
+    const placement = readSingleFlattenedAppearance(flattenedPdf, content);
+    const appearance = readPageXObjectStream(
+      flattenedPdf,
+      0,
+      placement.name.replace(/^\//, ""),
+    );
+
+    expect(readPageAnnotations(flattenedPdf, 0)).toHaveLength(0);
+    expect(await engine.readRaioPdfAnnotations(flattened)).toHaveLength(0);
+    expect(readTextRuns(decodePdfStream(appearance!)).map((run) => run.text)).toEqual([
+      "Plaintiff's Exhibit",
+      "12",
+    ]);
+  });
+
+  it("draws the same sticker whether it is baked or flattened from an annotation", async () => {
+    const equivalence = await renderBakedAndFlattenedMark(STAMP_EDIT, await createPdf([[612, 792]]));
+
+    expect(readName(equivalence.annotation, "Subtype")).toBe("Stamp");
+    expect(readNumberArray(equivalence.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
+      STAMP_ANNOTATION_RECT,
+    );
+    expect(equivalence.apMatrix).toEqual([1, 0, 0, 1, 0, 0]);
+    expectTransformedBBoxMatchesAnnotationRect(equivalence);
+    expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
+    expectPaintedPathsEquivalent(
+      equivalence.bakedPaths,
+      equivalence.apPaths,
+      equivalence.placementMatrix,
+    );
+    expectTextRunsEquivalent(
+      equivalence.bakedTextRuns,
+      equivalence.apTextRuns,
+      equivalence.placementMatrix,
+    );
+  });
+
+  it.each([90, 180, 270] as const)(
+    "keeps the label upright and the drawing equivalent on a %i-degree rotated page",
+    async (rotation) => {
+      const equivalence = await renderBakedAndFlattenedMark(
+        STAMP_EDIT,
+        await createRotatedPdf(rotation),
+      );
+      const [firstRun] = equivalence.apTextRuns;
+      const radians = (rotation * Math.PI) / 180;
+
+      expect(equivalence.annotationPdf.getPage(0).getRotation().angle).toBe(rotation);
+      expect(readName(equivalence.annotation, "Subtype")).toBe("Stamp");
+      expect(firstRun).toBeDefined();
+      // Text is counter-rotated with the page so it reads upright to the viewer.
+      expectNumberClose(firstRun!.matrix[0], Math.cos(radians));
+      expectNumberClose(firstRun!.matrix[1], Math.sin(radians));
+      expectTransformedBBoxMatchesAnnotationRect(equivalence);
+      expectPaintedPathsInsideBBox(equivalence.apPaths, equivalence.apBBox);
+      expectPaintedPathsEquivalent(
+        equivalence.bakedPaths,
+        equivalence.apPaths,
+        equivalence.placementMatrix,
+      );
+      expectTextRunsEquivalent(
+        equivalence.bakedTextRuns,
+        equivalence.apTextRuns,
+        equivalence.placementMatrix,
+      );
+    },
+  );
+
+  it("places the sticker in user space regardless of a non-zero CropBox origin", async () => {
+    const cropped = await renderBakedAndFlattenedMark(STAMP_EDIT, await createCroppedPdf());
+    const uncropped = await renderBakedAndFlattenedMark(
+      STAMP_EDIT,
+      await createPdf([[612, 792]]),
+    );
+
+    // Edit geometry is absolute user space, so a shifted CropBox must not move
+    // the sticker or the appearance it is placed through.
+    expect(readNumberArray(cropped.annotation.lookup(PDFName.of("Rect"), PDFArray))).toEqual(
+      STAMP_ANNOTATION_RECT,
+    );
+    expect(cropped.apBBox).toEqual(uncropped.apBBox);
+    expect(cropped.placementMatrix).toEqual(uncropped.placementMatrix);
+    expectTransformedBBoxMatchesAnnotationRect(cropped);
+    expectPaintedPathsInsideBBox(cropped.apPaths, cropped.apBBox);
+    expectPaintedPathsEquivalent(cropped.bakedPaths, cropped.apPaths, cropped.placementMatrix);
+  });
+
+  it("shrinks an oversized label to fit instead of overflowing the sticker", async () => {
+    const runs = await readStampAppearanceTextRuns({
+      ...STAMP_EDIT,
+      rect: { x: 40, y: 60, w: 120, h: 56 },
+      lines: ["Defendant's Exhibit for Identification"],
+      cornerRadiusPt: 0,
+    });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.text).toBe("Defendant's Exhibit for Identification");
+    expect(runs[0]?.fontSize).toBeLessThan(12);
+    expect(runs[0]?.fontSize).toBeGreaterThanOrEqual(6);
+  });
+
+  it("clamps a label that cannot fit even at the minimum size instead of throwing", async () => {
+    const runs = await readStampAppearanceTextRuns({
+      ...STAMP_EDIT,
+      rect: { x: 40, y: 60, w: 34, h: 22 },
+      lines: ["Defendant's Exhibit for Identification", "Filed under seal", "Page 4"],
+      cornerRadiusPt: 0,
+    });
+
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.length).toBeLessThan(3);
+    for (const run of runs) {
+      expect(run.fontSize).toBe(6);
+      expect(run.text.endsWith("...")).toBe(true);
+    }
+  });
+
+  it("clamps a corner radius larger than the sticker can round", async () => {
+    const clampedRadius = await readStampAppearanceContent({
+      ...STAMP_EDIT,
+      cornerRadiusPt: (56 - 1.5) / 2,
+    });
+    const absurdRadius = await readStampAppearanceContent({
+      ...STAMP_EDIT,
+      cornerRadiusPt: 5000,
+    });
+
+    expect(absurdRadius).toBe(clampedRadius);
+  });
+
+  it("keeps a square-cornered sticker on the plain straight-edged path", async () => {
+    const rounded = await readStampAppearanceContent({ ...STAMP_EDIT, cornerRadiusPt: 6 });
+    const square = await readStampAppearanceContent({ ...STAMP_EDIT, cornerRadiusPt: 0 });
+
+    // Rounded corners are the only reason this drawing emits Bezier segments.
+    expect(square).not.toContain(" c\n");
+    expect(rounded).toContain(" c\n");
+  });
+});
+
+async function reimportStampWithSourceEdit(
+  sourceEdit: unknown,
+): Promise<readonly { edit: { type: string } }[]> {
+  const engine = createLocalPdfEngine();
+  const document = await engine.open(await createPdf([[612, 792]]));
+  const edited = await engine.applyEdits(document, [STAMP_EDIT], { markupMode: "annotation" });
+  const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+  const [annotation] = readPageAnnotations(pdf, 0);
+
+  if (!annotation) {
+    throw new Error("Expected a Stamp annotation.");
+  }
+
+  annotation
+    .lookup(PDFName.of("RaioPDF"), PDFDict)
+    .set(PDFName.of("SourceEdit"), PDFString.of(JSON.stringify(sourceEdit)));
+
+  const tamperedEngine = createLocalPdfEngine();
+
+  return tamperedEngine.readRaioPdfAnnotations(await tamperedEngine.open(await pdf.save()));
+}
+
+async function readStampAppearanceContent(edit: PdfEdit): Promise<string> {
+  const engine = createLocalPdfEngine();
+  const document = await engine.open(await createPdf([[612, 792]]));
+  const edited = await engine.applyEdits(document, [edit], { markupMode: "annotation" });
+  const pdf = await PDFDocument.load(await engine.saveToBytes(edited));
+  const [annotation] = readPageAnnotations(pdf, 0);
+
+  if (!annotation) {
+    throw new Error("Expected a Stamp annotation.");
+  }
+
+  return decodePdfStream(readNormalAppearanceStream(pdf, annotation));
+}
+
+async function readStampAppearanceTextRuns(edit: PdfEdit): Promise<TextRun[]> {
+  return readTextRuns(await readStampAppearanceContent(edit));
+}
+
+async function createCroppedPdf(): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+
+  page.setCropBox(36, 24, 540, 744);
+
+  return pdf.save();
+}
+
 async function createPdf(pageSizes: ReadonlyArray<readonly [number, number]>): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
 

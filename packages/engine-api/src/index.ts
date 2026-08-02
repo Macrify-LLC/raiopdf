@@ -813,6 +813,79 @@ export type PdfCalloutEdit = {
 };
 
 /**
+ * Sequence metadata carried alongside a stamp's resolved label.
+ *
+ * Purely descriptive: `lines` is what actually renders, and this record only
+ * says how the caller derived it, so a later renumber can regenerate the label
+ * without re-deriving the template. `schemaVersion` guards the shape when a
+ * stored stamp is re-imported from a file written by a newer build.
+ */
+export type PdfStampSequence = {
+  schemaVersion: 1;
+  /** How the caller numbered this stamp within its set. */
+  identifierStyle: "numbers" | "letters" | "none";
+  /** Text before the identifier, e.g. `"Exhibit "`. */
+  prefix: string;
+  /** Text after the identifier. */
+  suffix?: string;
+  /** Whether the caller rendered prefix and identifier on one line or two. */
+  layout: "stacked" | "inline";
+  /** Zero-based position of this stamp within its sequence. */
+  index: number;
+};
+
+/**
+ * A placed, re-editable exhibit-sticker annotation.
+ *
+ * Distinct from `PdfStampPlacement`, which is the edge-anchored header/footer
+ * placement used by the baked `stampText`/Bates operations: this variant is a
+ * free-floating box the user positions anywhere on the page, and it round-trips
+ * as a live `/Stamp` annotation so it can be moved, restyled, or renumbered
+ * after reopening the file.
+ *
+ * `lines` is the rendering source of truth — already resolved to final display
+ * text (`["Plaintiff's Exhibit", "12"]`). `templateId`/`templateRevision` and
+ * `sequence` are provenance the caller may attach; engines never re-derive
+ * `lines` from them. Text is centered in `rect` and shrunk to fit; on pages with
+ * `/Rotate` 90/180/270 it renders upright to the viewer.
+ */
+export type PdfStampEdit = {
+  type: "stamp";
+  /** Stable RaioPDF annotation id when updating/importing a live annotation. */
+  annotId?: string;
+  /** Zero-based page index receiving the stamp. */
+  pageIndex: number;
+  /** User-space bounding box of the sticker. */
+  rect: PdfEditRect;
+  /** Resolved label lines. Must not be empty; each entry renders as one line. */
+  lines: readonly string[];
+  /** Requested font size in points. Defaults to 12; shrunk to fit `rect`. */
+  fontSizePt?: number;
+  /** Standard PDF font family. Defaults to Helvetica. */
+  fontFamily?: PdfTextBoxFontFamily;
+  /** Use the bold face of the selected standard font family. Defaults to false. */
+  bold?: boolean;
+  /** Use the italic/oblique face of the selected standard font family. Defaults to false. */
+  italic?: boolean;
+  /** Text ink color. Defaults to near-black (#111111). */
+  color?: PdfEditColor;
+  /** Sticker fill color. Omitted or null means transparent. */
+  fillColor?: PdfEditColor | null;
+  /** Border color. Omitted defaults to near-black (#111111); null draws no border. */
+  borderColor?: PdfEditColor | null;
+  /** Border thickness in points. Defaults to 1. */
+  borderWidthPt?: number;
+  /** Corner rounding in points. Defaults to 0 (square corners). */
+  cornerRadiusPt?: number;
+  /** Caller-owned id of the stamp template `lines` was rendered from. */
+  templateId?: string;
+  /** Caller-owned revision of that template. */
+  templateRevision?: number;
+  /** How the caller numbered this stamp within its set. */
+  sequence?: PdfStampSequence;
+};
+
+/**
  * A raster image drawn inside a rectangle.
  *
  * On rotated pages the image is drawn upright to the viewer; `rect` is the
@@ -1034,6 +1107,7 @@ export type PdfEdit =
   | PdfTextMarkupEdit
   | PdfTextBoxEdit
   | PdfCalloutEdit
+  | PdfStampEdit
   | PdfImageEdit
   | PdfInkEdit
   | PdfShapeEdit
@@ -1047,6 +1121,7 @@ export type PdfRaioAnnotationEdit =
   | PdfTextMarkupEdit
   | PdfTextBoxEdit
   | PdfCalloutEdit
+  | PdfStampEdit
   | PdfInkEdit
   | PdfShapeEdit
   | PdfCommentEdit;

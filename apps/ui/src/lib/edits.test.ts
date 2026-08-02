@@ -4,6 +4,7 @@ import {
   buildAnnotationSavePlan,
   clipMarkupRectsToDragBand,
   computeTextMarkupSelectionRects,
+  describePendingEdit,
   excerpt,
   normalizePdfRectFromPoints,
   pendingEditsFromRaioAnnotations,
@@ -767,6 +768,111 @@ describe("clipMarkupRectsToDragBand", () => {
     expect(clipMarkupRectsToDragBand(rects, band, true)).toEqual([
       { x: 100, y: 10, w: 12, h: 200 },
     ]);
+  });
+});
+
+describe("exhibit stamps", () => {
+  const stamp: PendingEdit = {
+    kind: "stamp",
+    id: "stamp-1",
+    pageIndex: 2,
+    rect: { x: 40, y: 60, w: 115.2, h: 72 },
+    lines: ["Plaintiff's Exhibit", "12"],
+    fontSizePt: 14,
+    bold: true,
+    fillColor: { r: 1, g: 1, b: 1 },
+    borderColor: null,
+    borderWidthPt: 1,
+    cornerRadiusPt: 4,
+    templateId: "plaintiffs-exhibit",
+    templateRevision: 7,
+    sequence: {
+      schemaVersion: 1,
+      identifierStyle: "numbers",
+      prefix: "Plaintiff's Exhibit",
+      layout: "stacked",
+      index: 11,
+    },
+  };
+
+  it("maps onto the engine stamp edit, keeping null fill and border meaningful", () => {
+    expect(toPdfEdits([stamp])).toEqual([
+      {
+        type: "stamp",
+        pageIndex: 2,
+        rect: { x: 40, y: 60, w: 115.2, h: 72 },
+        lines: ["Plaintiff's Exhibit", "12"],
+        fontSizePt: 14,
+        bold: true,
+        fillColor: { r: 1, g: 1, b: 1 },
+        borderColor: null,
+        borderWidthPt: 1,
+        cornerRadiusPt: 4,
+        templateId: "plaintiffs-exhibit",
+        templateRevision: 7,
+        sequence: {
+          schemaVersion: 1,
+          identifierStyle: "numbers",
+          prefix: "Plaintiff's Exhibit",
+          layout: "stacked",
+          index: 11,
+        },
+      },
+    ]);
+  });
+
+  it("omits styling the engine already defaults", () => {
+    expect(toPdfEdits([{
+      kind: "stamp",
+      id: "stamp-2",
+      pageIndex: 0,
+      rect: { x: 0, y: 0, w: 100, h: 50 },
+      lines: ["Exhibit A"],
+      fontSizePt: 12,
+      fontFamily: "helvetica",
+    }])).toEqual([
+      {
+        type: "stamp",
+        pageIndex: 0,
+        rect: { x: 0, y: 0, w: 100, h: 50 },
+        lines: ["Exhibit A"],
+        fontSizePt: 12,
+      },
+    ]);
+  });
+
+  it("updates an imported stamp in place rather than appending a duplicate", () => {
+    const plan = buildAnnotationSavePlan(
+      [{ ...stamp, annotId: "stamp-annot", status: "applied" }],
+      new Set(["stamp-annot"]),
+    );
+
+    expect(plan.appendEdits).toEqual([]);
+    expect(plan.updateEdits).toHaveLength(1);
+    expect(plan.deleteAnnotIds).toEqual([]);
+  });
+
+  it("leaves an imported stamp alone until the overlay exists", () => {
+    expect(pendingEditsFromRaioAnnotations([
+      {
+        pageIndex: 0,
+        annotId: "stamp-annot",
+        edit: {
+          type: "stamp",
+          annotId: "stamp-annot",
+          pageIndex: 0,
+          rect: { x: 0, y: 0, w: 100, h: 50 },
+          lines: ["Exhibit A"],
+        },
+      },
+    ])).toEqual([]);
+  });
+
+  it("describes itself by its resolved label", () => {
+    expect(describePendingEdit(stamp)).toEqual({
+      label: "Exhibit stamp",
+      detail: "Plaintiff's Exhibit 12",
+    });
   });
 });
 

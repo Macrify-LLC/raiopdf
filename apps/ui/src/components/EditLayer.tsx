@@ -24,8 +24,8 @@ import {
   type PendingComment,
   type PendingEdit,
   type PendingFormField,
+  type PendingImageStamp,
   type PendingShape,
-  type PendingStamp,
   type PendingTextBox,
   type ShapeToolId,
   type TextMarkupToolId,
@@ -54,7 +54,7 @@ import {
   DEFAULT_TEXT_FONT_FAMILY,
   pdfEditColorToHex,
 } from "../lib/editStyles";
-import { newEditId, type ArmedStamp, type EditingState } from "../hooks/useEditing";
+import { newEditId, type ArmedImageStamp, type EditingState } from "../hooks/useEditing";
 import { mergeClientRectsIntoLines } from "../lib/clientRectLines";
 import { isTextEntryTarget } from "../lib/domGuards";
 import type { PDFPageProxy } from "../lib/pdfjs";
@@ -1121,7 +1121,7 @@ export function EditLayer({
 
   function beginItemDrag(
     event: ReactPointerEvent<HTMLElement | SVGElement>,
-    edit: PendingTextBox | PendingStamp | PendingShape | PendingCallout | PendingFormField,
+    edit: PendingTextBox | PendingImageStamp | PendingShape | PendingCallout | PendingFormField,
     mode: "move" | "resize",
     corner: ResizeCorner | null = null,
   ) {
@@ -2793,7 +2793,7 @@ function StampOverlay({
   onRemove,
   onTogglePin,
 }: {
-  edit: PendingStamp;
+  edit: PendingImageStamp;
   viewport: PageViewport;
   selected: boolean;
   previewRect: ViewportRect | null;
@@ -3457,7 +3457,7 @@ function moveLine(
 
 function stampPlacementRect(
   point: ViewportPoint,
-  stamp: ArmedStamp,
+  stamp: ArmedImageStamp,
   viewport: PageViewport,
   scale: number,
 ): ViewportRect {

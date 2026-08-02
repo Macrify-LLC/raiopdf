@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { PdfBinderOptions, PdfCoverStyle } from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { BinderExhibitInput, DocumentState } from "../hooks/useDocument";
+import { formatExhibitLabel } from "../lib/exhibitLabels";
 import type { FileGrant } from "../lib/filePort";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
@@ -753,32 +754,6 @@ function isBinderPreset(value: unknown): value is BinderPresetV1 {
     ) &&
     typeof preset.indexEnabled === "boolean" &&
     typeof preset.indexIncludeSourceFileName === "boolean";
-}
-
-function formatExhibitLabel(
-  prefix: string,
-  identifierStyle: IdentifierStyle,
-  index: number,
-): string {
-  const cleanPrefix = prefix.trim() || "Exhibit";
-  const identifier = identifierStyle === "letters"
-    ? toLetters(index)
-    : String(index + 1);
-
-  return `${cleanPrefix} ${identifier}`;
-}
-
-function toLetters(index: number): string {
-  let value = index + 1;
-  let label = "";
-
-  while (value > 0) {
-    value -= 1;
-    label = String.fromCharCode(65 + (value % 26)) + label;
-    value = Math.floor(value / 26);
-  }
-
-  return label;
 }
 
 function stripPdfExtension(fileName: string): string {

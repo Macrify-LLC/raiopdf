@@ -11,6 +11,23 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
+## [Unreleased]
+
+Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release.
+
+### Added
+
+- **Drawings, shapes, and callouts stay editable after you reopen a file.** They already
+  came back looking right, but RaioPDF no longer recognized them as its own, so you
+  couldn't select, restyle, move, or delete them — only start over. Now they reopen as
+  live objects, the way highlights and text boxes already did. **Flatten markup** still
+  makes them permanent when that's what you want.
+- **You can now add several PDFs at once** in Production Set, Batch Cleanup, and the
+  filing packet builder — select multiple files in the picker instead of clicking
+  Add PDF once per document. If a few files in the batch can't be added (too large,
+  or an unreadable file), the rest still go in and you're told exactly which ones
+  didn't.
+
 ## [0.1.5] - 2026-07-22
 
 Sixth public alpha. Highlights: **Word import/export on the Mac**, **printing on the
@@ -34,16 +51,6 @@ polish.
   status, and real cancellation. (Windows already printed.)
 - **Edit Text: "Replace text…" on right-click.** Right-click selected text to replace it
   in place. The old "Find & Replace" entry is renamed to match how it's actually used.
-- **Drawings, shapes, and callouts stay editable after you reopen a file.** They already
-  came back looking right, but RaioPDF no longer recognized them as its own, so you
-  couldn't select, restyle, move, or delete them — only start over. Now they reopen as
-  live objects, the way highlights and text boxes already did. **Flatten markup** still
-  makes them permanent when that's what you want.
-- **You can now add several PDFs at once** in Production Set, Batch Cleanup, and the
-  filing packet builder — select multiple files in the picker instead of clicking
-  Add PDF once per document. If a few files in the batch can't be added (too large,
-  or an unreadable file), the rest still go in and you're told exactly which ones
-  didn't.
 
 ### Changed
 

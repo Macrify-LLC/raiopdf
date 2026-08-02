@@ -78,15 +78,16 @@ interface VolumeUploadArtifact {
   volume: string | null;
 }
 
-interface OpenedHandle {
-  handle: PdfDocumentHandle;
-}
-
+/**
+ * One planned source. Deliberately scalars only -- no open engine handle and no
+ * bytes -- so planning a 1,000-document production costs kilobytes of metadata
+ * instead of holding 1,000 parsed PDFs open before the first output is written.
+ */
 interface ProductionSourcePlan {
   sourcePath: string;
   sourceFilename: string;
   sourceSha256: string;
-  original: PdfDocumentHandle;
+  sourceBytes: number;
   pages: number;
   firstNumber: number;
   lastNumber: number;
@@ -115,21 +116,40 @@ const DEFAULT_APP_VERSION = "0.1.0";
 const BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
 const DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
 
+/**
+ * Soft cap on how many sources a run may combine into one production PDF.
+ *
+ * The default (per-document) path is O(1) in document count: each source is
+ * opened, stamped, written, and closed before the next one starts. The combined
+ * PDF cannot be: `PdfEngine.merge` takes every document handle at once, so every
+ * stamped document must still be open when the merge runs, and one stamped
+ * document costs roughly its own byte size. Rather than let that grow without
+ * limit, a combined run refuses up front with a clear error and points at the
+ * per-document outputs, which have no such bound. Raising this cap means
+ * changing the engine merge API to accept documents incrementally -- a pairwise
+ * merge would nest each accumulated outline under the previous document's
+ * bookmark root and change the combined PDF's bookmark tree, so it is not a
+ * drop-in substitute.
+ */
+export const MAX_COMBINED_PRODUCTION_SOURCES = 200;
+
 export async function buildProductionSet(
   input: BuildProductionSetInput,
   engine: PdfEngine = createLocalPdfEngine(),
 ): Promise<ProductionSetResult> {
   const options = normalizeInput(input);
-  const opened: OpenedHandle[] = [];
+  // Only the combined-PDF path retains stamped documents past their own write;
+  // the default path closes each one before opening the next.
   const stampedForCombined: PdfDocumentHandle[] = [];
   const files: ProductionSetFileResult[] = [];
   const volumeArtifacts: VolumeUploadArtifact[] = [];
   const volume: VolumeState | null = options.volumeBytes === null ? null : createVolume(1);
+  let combinedHandle: PdfDocumentHandle | null = null;
   let session: ReturnType<typeof createPackage> | undefined;
   let finalized = false;
 
   try {
-    const sourcePlans = await prepareProductionSourcePlans(options, engine, opened);
+    const sourcePlans = await prepareProductionSourcePlans(options, engine);
     session = createPackage(options.outputDir, {
       appVersion: options.appVersion,
       createdAt: options.createdAt,
@@ -139,60 +159,56 @@ export async function buildProductionSet(
     const running = sourcePlans.length === 0 ? options.start : sourcePlans[sourcePlans.length - 1]!.lastNumber + 1;
 
     for (const plan of sourcePlans) {
-      let produced = await engine.batesStamp(plan.original, {
-        prefix: options.prefix,
-        start: plan.firstNumber,
-        digits: options.digits,
-        placement: BATES_PLACEMENT,
-        fontSizePt: 10,
-      });
-      opened.push({ handle: produced });
+      // Output pass: reopen exactly one source, stamp it, write it, and close
+      // every handle it produced before moving to the next plan entry.
+      const produced = await stampPlannedSource(plan, options, engine);
+      let retained = false;
 
-      if (plan.designation !== "") {
-        produced = await engine.stampText(produced, {
-          text: plan.designation,
-          pageIndexes: "all",
-          placement: DESIGNATION_PLACEMENT,
-          fontSizePt: 10,
+      try {
+        const outputBytes = await engine.saveToBytes(produced);
+        const outputName = `${plan.batesStart} - ${plan.batesEnd} - ${safePdfName(plan.sourceFilename)}`;
+        const volumeName = assignVolume(volume, outputName, outputBytes.byteLength, options.volumeBytes);
+        const packageName = volumeName === null ? outputName : `${volumeName}/${outputName}`;
+        const entry = await session.addUploadFile(outputBytes, packageName, {
+          pages: plan.pages,
+          sourceFilename: plan.sourceFilename,
+          sourceSha256: plan.sourceSha256,
+          batesStart: plan.batesStart,
+          batesEnd: plan.batesEnd,
+          designation: plan.designation,
         });
-        opened.push({ handle: produced });
+        volumeArtifacts.push({
+          outputName,
+          bytes: entry.bytes,
+          volume: volumeName,
+        });
+
+        files.push({
+          sourcePath: plan.sourcePath,
+          sourceFilename: plan.sourceFilename,
+          sourceSha256: plan.sourceSha256,
+          outputName,
+          packageRelativePath: entry.relativePath,
+          batesStart: plan.batesStart,
+          batesEnd: plan.batesEnd,
+          firstNumber: plan.firstNumber,
+          lastNumber: plan.lastNumber,
+          pages: plan.pages,
+          designation: plan.designation,
+          sha256: entry.sha256,
+          bytes: entry.bytes,
+          volume: volumeName,
+        });
+
+        if (options.combinedPdf) {
+          stampedForCombined.push(produced);
+          retained = true;
+        }
+      } finally {
+        if (!retained) {
+          await engine.close(produced).catch(() => undefined);
+        }
       }
-
-      const outputBytes = await engine.saveToBytes(produced);
-      const outputName = `${plan.batesStart} - ${plan.batesEnd} - ${safePdfName(plan.sourceFilename)}`;
-      const volumeName = assignVolume(volume, outputName, outputBytes.byteLength, options.volumeBytes);
-      const packageName = volumeName === null ? outputName : `${volumeName}/${outputName}`;
-      const entry = await session.addUploadFile(outputBytes, packageName, {
-        pages: plan.pages,
-        sourceFilename: plan.sourceFilename,
-        sourceSha256: plan.sourceSha256,
-        batesStart: plan.batesStart,
-        batesEnd: plan.batesEnd,
-        designation: plan.designation,
-      });
-      volumeArtifacts.push({
-        outputName,
-        bytes: entry.bytes,
-        volume: volumeName,
-      });
-
-      files.push({
-        sourcePath: plan.sourcePath,
-        sourceFilename: plan.sourceFilename,
-        sourceSha256: plan.sourceSha256,
-        outputName,
-        packageRelativePath: entry.relativePath,
-        batesStart: plan.batesStart,
-        batesEnd: plan.batesEnd,
-        firstNumber: plan.firstNumber,
-        lastNumber: plan.lastNumber,
-        pages: plan.pages,
-        designation: plan.designation,
-        sha256: entry.sha256,
-        bytes: entry.bytes,
-        volume: volumeName,
-      });
-      stampedForCombined.push(produced);
     }
 
     const indexRows = files.map(toIndexRow);
@@ -217,7 +233,7 @@ export async function buildProductionSet(
         labels: files.map((file) => file.sourceFilename),
       });
       const combined = merged.document;
-      opened.push({ handle: combined });
+      combinedHandle = combined;
       const combinedBytes = await engine.saveToBytes(combined);
       const combinedName = `${formatBates(options.prefix, options.start, options.digits)} - ${formatBates(
         options.prefix,
@@ -273,6 +289,15 @@ export async function buildProductionSet(
       status: "pass",
       detail: "Production index PDF and CSV use produced filenames only; source paths are in manifest detail.",
     });
+    if (options.combinedPdf) {
+      // The per-document path holds one document at a time; the combined PDF
+      // cannot, so record the bound it ran under next to the output it applies to.
+      session.recordCheck({
+        checkId: "production-combined-memory-bound",
+        status: "pass",
+        detail: `Combined production PDF held ${files.length} stamped documents open at once (cap ${MAX_COMBINED_PRODUCTION_SOURCES}); the per-document outputs hold one at a time.`,
+      });
+    }
     await session.addManifestJson("production.json", {
       prefix: options.prefix,
       digits: options.digits,
@@ -319,7 +344,10 @@ export async function buildProductionSet(
       manifest,
     };
   } finally {
-    for (const { handle } of opened.reverse()) {
+    if (combinedHandle !== null) {
+      await engine.close(combinedHandle).catch(() => undefined);
+    }
+    for (const handle of stampedForCombined.reverse()) {
       await engine.close(handle).catch(() => undefined);
     }
     if (!finalized && session !== undefined) {
@@ -328,53 +356,118 @@ export async function buildProductionSet(
   }
 }
 
+/**
+ * Planning pass. Each source is read, hashed, counted, and CLOSED before the
+ * next one is touched, so the whole plan is scalars: no bytes and no open
+ * handles survive it. Bates validation still runs across the complete plan
+ * before any output exists, exactly as before.
+ *
+ * The tradeoff is one extra read per source (planning reads it, the output pass
+ * reads it again) in exchange for peak memory that no longer grows with the
+ * number of documents in the production.
+ */
 async function prepareProductionSourcePlans(
   options: NormalizedInput,
   engine: PdfEngine,
-  opened: OpenedHandle[],
 ): Promise<ProductionSourcePlan[]> {
   const scanned: Array<Omit<ProductionSourcePlan, "firstNumber" | "lastNumber" | "batesStart" | "batesEnd">> = [];
 
-  try {
-    for (const source of options.sources) {
-      const sourcePath = path.resolve(source.path);
-      const sourceBytes = await fs.readFile(sourcePath);
-      const original = await engine.open(sourceBytes);
-      opened.push({ handle: original });
+  for (const source of options.sources) {
+    const sourcePath = path.resolve(source.path);
+    const sourceBytes = await fs.readFile(sourcePath);
+    const original = await engine.open(sourceBytes);
 
+    try {
       scanned.push({
         sourcePath,
         sourceFilename: path.basename(sourcePath),
         sourceSha256: sha256Hex(sourceBytes),
-        original,
+        sourceBytes: sourceBytes.byteLength,
         pages: await engine.pageCount(original),
         designation: normalizeDesignation(source.designation),
       });
+    } finally {
+      await engine.close(original).catch(() => undefined);
     }
-
-    const totalPages = scanned.reduce((sum, source) => sum + source.pages, 0);
-    assertBatesFits(options.digits, options.start + totalPages - 1);
-
-    let running = options.start;
-    return scanned.map((source) => {
-      const firstNumber = running;
-      const lastNumber = firstNumber + source.pages - 1;
-      running = lastNumber + 1;
-
-      return {
-        ...source,
-        firstNumber,
-        lastNumber,
-        batesStart: formatBates(options.prefix, firstNumber, options.digits),
-        batesEnd: formatBates(options.prefix, lastNumber, options.digits),
-      };
-    });
-  } catch (error) {
-    for (const { handle } of opened.splice(0).reverse()) {
-      await engine.close(handle).catch(() => undefined);
-    }
-    throw error;
   }
+
+  const totalPages = scanned.reduce((sum, source) => sum + source.pages, 0);
+  assertBatesFits(options.digits, options.start + totalPages - 1);
+
+  let running = options.start;
+  return scanned.map((source) => {
+    const firstNumber = running;
+    const lastNumber = firstNumber + source.pages - 1;
+    running = lastNumber + 1;
+
+    return {
+      ...source,
+      firstNumber,
+      lastNumber,
+      batesStart: formatBates(options.prefix, firstNumber, options.digits),
+      batesEnd: formatBates(options.prefix, lastNumber, options.digits),
+    };
+  });
+}
+
+/**
+ * Reopens one planned source and applies its stamps, closing each intermediate
+ * document as soon as the next one exists. Returns the final stamped document;
+ * the caller owns closing it.
+ */
+async function stampPlannedSource(
+  plan: ProductionSourcePlan,
+  options: NormalizedInput,
+  engine: PdfEngine,
+): Promise<PdfDocumentHandle> {
+  const sourceBytes = await readPlannedSourceBytes(plan);
+  const original = await engine.open(sourceBytes);
+  let produced: PdfDocumentHandle;
+
+  try {
+    produced = await engine.batesStamp(original, {
+      prefix: options.prefix,
+      start: plan.firstNumber,
+      digits: options.digits,
+      placement: BATES_PLACEMENT,
+      fontSizePt: 10,
+    });
+  } finally {
+    await engine.close(original).catch(() => undefined);
+  }
+
+  if (plan.designation === "") {
+    return produced;
+  }
+
+  try {
+    return await engine.stampText(produced, {
+      text: plan.designation,
+      pageIndexes: "all",
+      placement: DESIGNATION_PLACEMENT,
+      fontSizePt: 10,
+    });
+  } finally {
+    await engine.close(produced).catch(() => undefined);
+  }
+}
+
+/**
+ * Rereads a planned source and refuses it if it no longer matches the bytes the
+ * plan was built from. Planning and output are two separate reads now, so a file
+ * edited in between would otherwise be produced under a page range and a source
+ * hash that describe the older document.
+ */
+async function readPlannedSourceBytes(plan: ProductionSourcePlan): Promise<Uint8Array> {
+  const bytes = await fs.readFile(plan.sourcePath);
+
+  if (bytes.byteLength !== plan.sourceBytes || sha256Hex(bytes) !== plan.sourceSha256) {
+    throw new Error(
+      `"${plan.sourceFilename}" changed on disk during the production build. Start the production again.`,
+    );
+  }
+
+  return bytes;
 }
 
 function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
@@ -396,6 +489,15 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
   }
   if (input.volumeSizeMb !== undefined && (!Number.isFinite(input.volumeSizeMb) || input.volumeSizeMb <= 0)) {
     throw new Error("Volume size cap must be a positive number of MB.");
+  }
+  // Refused before anything is written, so the user still has the choice of
+  // running the same production without the combined PDF.
+  if ((input.combinedPdf ?? false) && input.sources.length > MAX_COMBINED_PRODUCTION_SOURCES) {
+    throw new Error(
+      `A combined production PDF is limited to ${MAX_COMBINED_PRODUCTION_SOURCES} documents ` +
+        `(${input.sources.length} selected) because every document must be held open to merge them. ` +
+        "Turn off the combined PDF to produce this set; the Bates-stamped documents are not limited.",
+    );
   }
 
   return {

@@ -201,6 +201,7 @@ import {
   materializePdfBytesGrant,
 } from "./lib/dropMaterialize";
 import {
+  addFolderFilesForAdd,
   fileAddBatchMessage,
   pickFilesForAdd,
   summarizeFileAddResults,
@@ -4158,6 +4159,44 @@ export function App() {
     }
   }, []);
 
+  // Folder add needs a shell folder picker and real paths; the browser build
+  // hides the entry point rather than offering one that cannot work.
+  const folderAddSupported = isTauriRuntime();
+
+  /**
+   * Folder add for the package workspaces. Same return contract as their file
+   * add, so the workspaces append through the exact path they already use --
+   * the scan/confirm/claim dance lives entirely inside `addFolderFilesForAdd`.
+   */
+  const addFolderFor = useCallback(async (
+    setProgress: (progress: { running: boolean; message: string | null; result: null }) => void,
+    noun: string,
+  ): Promise<FileAddResult[] | null> => {
+    try {
+      return await addFolderFilesForAdd();
+    } catch (error: unknown) {
+      setProgress({
+        running: false,
+        // Keep the shell's own reason when it has one (an expired scan asks for
+        // a re-pick, which the generic line would hide).
+        message: formatWorkflowError(error, `This folder could not be added to the ${noun}.`),
+        result: null,
+      });
+      logWorkflowFailure("folder.add-failed", error);
+      return null;
+    }
+  }, []);
+
+  const openProductionFolder = useCallback(
+    () => addFolderFor(setProductionProgress, "production set"),
+    [addFolderFor],
+  );
+
+  const openBatchCleanupFolder = useCallback(
+    () => addFolderFor(setBatchCleanupProgress, "batch"),
+    [addFolderFor],
+  );
+
   const openBatchCleanupFile = useCallback(async (): Promise<FileAddResult[] | null> => {
     try {
       // The workspace consumes the FileAddResult array directly: descriptor
@@ -4174,9 +4213,12 @@ export function App() {
     }
   }, []);
 
-  const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile[] | null> => {
-    try {
-      const picked = await pickFilesForAdd(packageDocxAddOptions(setFilingPacketProgress, "filing packet"));
+  /**
+   * Shared conversion for both filing-packet add flows (file picker and folder
+   * add): counts pages, keeps order, and reports what did not make it in.
+   */
+  const toFilingPacketFiles = useCallback(
+    async (picked: FileAddResult[] | null): Promise<FilingPacketFile[] | null> => {
       if (!picked || picked.length === 0) {
         return null;
       }
@@ -4242,6 +4284,15 @@ export function App() {
       }
 
       return files.length > 0 ? files : null;
+    },
+    [],
+  );
+
+  const openFilingPacketFile = useCallback(async (): Promise<FilingPacketFile[] | null> => {
+    try {
+      return await toFilingPacketFiles(
+        await pickFilesForAdd(packageDocxAddOptions(setFilingPacketProgress, "filing packet")),
+      );
     } catch {
       setFilingPacketProgress({
         running: false,
@@ -4250,7 +4301,21 @@ export function App() {
       });
       return null;
     }
-  }, []);
+  }, [toFilingPacketFiles]);
+
+  const openFilingPacketFolder = useCallback(async (): Promise<FilingPacketFile[] | null> => {
+    try {
+      return await toFilingPacketFiles(await addFolderFilesForAdd());
+    } catch (error: unknown) {
+      setFilingPacketProgress({
+        running: false,
+        message: formatWorkflowError(error, "This folder could not be added to the filing packet."),
+        result: null,
+      });
+      logWorkflowFailure("folder.add-failed", error);
+      return null;
+    }
+  }, [toFilingPacketFiles]);
 
   const openDroppedFile = useCallback(
     (file: File) => {
@@ -9030,6 +9095,7 @@ export function App() {
             onCourtProfileSave={handleCourtProfileSave}
             onPrepare={prepareFilingCopy}
             onAddPacketFile={openFilingPacketFile}
+            onAddPacketFolder={folderAddSupported ? openFilingPacketFolder : undefined}
             onBuildPacket={buildFilingPacketFromUi}
             packetProgress={filingPacketProgress}
             defaultPacketLayoutMode={filingPreferences.packetLayoutMode}
@@ -9065,6 +9131,7 @@ export function App() {
             packs={AVAILABLE_FILING_PACKS}
             progress={batchCleanupProgress}
             onAddFile={openBatchCleanupFile}
+            onAddFolder={folderAddSupported ? openBatchCleanupFolder : undefined}
             onRun={buildBatchCleanupFromUi}
             onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("batch-cleanup")}
@@ -9088,6 +9155,7 @@ export function App() {
             currentPageCount={document.pageCount}
             progress={productionProgress}
             onAddFile={openProductionFile}
+            onAddFolder={folderAddSupported ? openProductionFolder : undefined}
             onRun={buildProductionSetFromUi}
             onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("production-set")}

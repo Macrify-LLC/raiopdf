@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addFolderFilesForAdd,
   buildDocxMarkupGate,
+  confirmFolderAdd,
+  folderAddNotes,
   docxConversionProgressMessage,
   fileAddBatchMessage,
   mergeConvertedDocxPicks,
@@ -607,5 +610,189 @@ describe("DOCX add gate helpers", () => {
       { grant: "pdf", name: "a.pdf", sizeBytes: 1 },
       { grant: "converted", name: "c.pdf", sizeBytes: 4 },
     ]);
+  });
+});
+
+describe("addFolderFilesForAdd", () => {
+  const summary = {
+    token: "scan-token",
+    folderName: "Discovery",
+    totalPdfs: 3,
+    topLevelPdfs: 1,
+    subfolderPdfs: 2,
+    skippedNonPdf: 2,
+    skippedHidden: 1,
+    skippedLinks: 1,
+    permissionFailures: 1,
+    permissionFailureExamples: ["locked"],
+    truncated: false,
+  };
+
+  beforeEach(() => {
+    setLargeDocThresholdBytes(THRESHOLD);
+    invokeMock.mockReset();
+  });
+
+  afterEach(() => {
+    setLargeDocThresholdBytes(null);
+    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    document.querySelector(".folder-add-gate")?.remove();
+  });
+
+  it("returns null in the browser runtime instead of scanning", async () => {
+    await expect(addFolderFilesForAdd()).resolves.toBeNull();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("issues no grants when the user cancels the folder picker", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const confirmFolderAdd = vi.fn();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "scan_folder_for_add") {
+        return null;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await expect(addFolderFilesForAdd({ confirmFolderAdd })).resolves.toBeNull();
+    expect(confirmFolderAdd).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("claim_folder_scan", expect.anything());
+  });
+
+  it("issues no grants when the user cancels the confirm dialog", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "scan_folder_for_add") {
+        return summary;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await expect(addFolderFilesForAdd({ confirmFolderAdd: async () => null })).resolves.toBeNull();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).not.toHaveBeenCalledWith("claim_folder_scan", expect.anything());
+  });
+
+  it("claims only the confirmed scope and reads every claimed file", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "scan_folder_for_add") {
+        return summary;
+      }
+      if (command === "claim_folder_scan") {
+        return {
+          thresholdBytes: 1024,
+          files: [
+            { grant: "g-1", name: "a.pdf", sizeBytes: 10 },
+            { grant: "g-2", name: "b.pdf", sizeBytes: 20 },
+          ],
+          skipped: [{ name: "vanished.pdf", message: "The PDF could not be read." }],
+        };
+      }
+      if (command === "read_pdf_range") {
+        return new Uint8Array(10).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const results = await addFolderFilesForAdd({
+      confirmFolderAdd: async () => ({ includeSubfolders: false }),
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("claim_folder_scan", {
+      token: "scan-token",
+      includeSubfolders: false,
+    });
+    // The shell's threshold echo wins here exactly as it does for the picker.
+    expect(getLargeDocThresholdBytes()).toBe(1024);
+    expect(results?.map((result) => result.kind)).toEqual(["bytes", "bytes", "error"]);
+    expect(summarizeFileAddResults(results ?? [])).toEqual({
+      addedCount: 2,
+      totalCount: 3,
+      failures: [{ name: "vanished.pdf", reason: "The PDF could not be read." }],
+    });
+  });
+
+  it("keeps the rest of a folder when one file fails to read", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockImplementation(async (command: string, args?: { grant?: string }) => {
+      if (command === "scan_folder_for_add") {
+        return summary;
+      }
+      if (command === "claim_folder_scan") {
+        return {
+          thresholdBytes: THRESHOLD,
+          files: [
+            { grant: "g-1", name: "good.pdf", sizeBytes: 10 },
+            { grant: "g-2", name: "broken.pdf", sizeBytes: 10 },
+          ],
+        };
+      }
+      if (command === "read_pdf_range") {
+        if (args?.grant === "g-2") {
+          throw new Error("The PDF range could not be read.");
+        }
+        return new Uint8Array(10).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const results = await addFolderFilesForAdd({
+      confirmFolderAdd: async () => ({ includeSubfolders: true }),
+    });
+
+    expect(results?.[0]?.kind).toBe("bytes");
+    expect(results?.[1]).toMatchObject({ kind: "error", name: "broken.pdf" });
+  });
+
+  it("states every omission the scan made", () => {
+    expect(folderAddNotes(summary)).toEqual([
+      "2 files skipped (not a PDF).",
+      "1 hidden item skipped.",
+      "1 shortcut skipped — RaioPDF does not follow shortcuts out of the folder you chose.",
+      "1 item could not be read (locked).",
+    ]);
+    expect(folderAddNotes({ ...summary, truncated: true })[0]).toContain("more than 3 PDFs");
+    expect(folderAddNotes({
+      ...summary,
+      skippedNonPdf: 0,
+      skippedHidden: 0,
+      skippedLinks: 0,
+      permissionFailures: 0,
+    })).toEqual([]);
+  });
+
+  it("confirms the whole tree by default and reports the toggled scope", async () => {
+    const pending = confirmFolderAdd(summary);
+    const gate = document.querySelector(".folder-add-gate");
+    expect(gate?.textContent).toContain('Add 3 PDFs from "Discovery"?');
+
+    const subfolders = gate?.querySelector<HTMLInputElement>("[data-action='subfolders']");
+    expect(subfolders?.checked).toBe(true);
+    const add = gate?.querySelector<HTMLButtonElement>("[data-action='add']");
+    expect(add?.textContent).toBe("Add 3 PDFs");
+
+    subfolders!.checked = false;
+    subfolders!.dispatchEvent(new Event("change"));
+    expect(add?.textContent).toBe("Add 1 PDF");
+
+    add?.click();
+    await expect(pending).resolves.toEqual({ includeSubfolders: false });
+    expect(document.querySelector(".folder-add-gate")).toBeNull();
+  });
+
+  it("offers no way to add an empty folder", async () => {
+    const pending = confirmFolderAdd({
+      ...summary,
+      totalPdfs: 0,
+      topLevelPdfs: 0,
+      subfolderPdfs: 0,
+    });
+    const gate = document.querySelector(".folder-add-gate");
+    expect(gate?.textContent).toContain('No PDFs in "Discovery"');
+    expect(gate?.querySelector<HTMLButtonElement>("[data-action='add']")?.disabled).toBe(true);
+
+    gate?.querySelector<HTMLButtonElement>("[data-action='cancel']")?.click();
+    await expect(pending).resolves.toBeNull();
   });
 });

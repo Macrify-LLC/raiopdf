@@ -85,6 +85,12 @@ export interface ProductionSetWorkspaceProps {
   currentPageCount: number;
   progress: ProductionSetProgress;
   onAddFile: () => Promise<FileAddResult[] | null>;
+  /**
+   * Adds every PDF in a chosen folder. Same contract as `onAddFile` -- the
+   * scan/confirm/claim flow happens above this component. Absent in the browser
+   * build, which has no folder picker that yields readable paths.
+   */
+  onAddFolder?: (() => Promise<FileAddResult[] | null>) | undefined;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -104,6 +110,7 @@ export function ProductionSetWorkspace({
   currentPageCount,
   progress,
   onAddFile,
+  onAddFolder,
   onRun,
   onOpenPackageRoot,
   onHelpRequested,
@@ -158,7 +165,7 @@ export function ProductionSetWorkspace({
     }
   }, [effectivePrefix]);
 
-  async function addFiles() {
+  async function addFiles(pick: () => Promise<FileAddResult[] | null> = onAddFile) {
     if (addFilePendingRef.current) {
       return;
     }
@@ -167,7 +174,7 @@ export function ProductionSetWorkspace({
     setAddingFile(true);
 
     try {
-      const picked = await onAddFile();
+      const picked = await pick();
       if (!picked || picked.length === 0 || !mountedRef.current) {
         return;
       }
@@ -319,6 +326,17 @@ export function ProductionSetWorkspace({
             >
               <PlusIcon size={14} /> Add PDF
             </button>
+            {onAddFolder ? (
+              <button
+                type="button"
+                className="production-workspace__secondary-button"
+                onClick={() => void addFiles(onAddFolder)}
+                disabled={addFileBusy || progress.running}
+                title={addFileBusy ? "Wait for the current page counts to finish." : "Add every PDF in a folder to the production order."}
+              >
+                <PlusIcon size={14} /> Add Folder
+              </button>
+            ) : null}
           </div>
         </div>
         <div className="production-workspace__file-list" role="list">

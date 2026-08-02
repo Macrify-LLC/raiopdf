@@ -28,6 +28,7 @@ describe("ProductionSetWorkspace add flow", () => {
     currentFile: { name: string; path: string | null } | null = null,
     currentPageCount = 0,
     currentFileNotice: string | null = null,
+    onAddFolder?: () => Promise<FileAddResult[] | null>,
   ) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
@@ -41,6 +42,7 @@ describe("ProductionSetWorkspace add flow", () => {
           currentPageCount={currentPageCount}
           progress={progress}
           onAddFile={onAddFile}
+          onAddFolder={onAddFolder}
           onRun={async () => undefined}
         />,
       );
@@ -57,6 +59,20 @@ describe("ProductionSetWorkspace add flow", () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       // Flush the internal `Promise.all` page-count loop (and any subsequent
       // microtasks it schedules) before the assertions below inspect the DOM.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function clickAdd(label: string) {
+    const button = Array.from(window.document.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.includes(label),
+    );
+    expect(button).toBeDefined();
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -184,5 +200,34 @@ describe("ProductionSetWorkspace add flow", () => {
     expect(container?.textContent).toContain("1 of 3 added");
     expect(container?.textContent).toContain("huge.pdf (too large to add here)");
     expect(container?.textContent).toContain("broken.pdf (The PDF range could not be read.)");
+  });
+  it("hides Add Folder when the runtime has no folder picker", () => {
+    render(async () => null);
+
+    expect(container?.textContent).toContain("Add PDF");
+    expect(container?.textContent).not.toContain("Add Folder");
+  });
+
+  it("appends a folder add through the same path as a file add", async () => {
+    render(
+      async () => [{ kind: "descriptor", descriptor: { grant: "g-file", name: "picked.pdf", sizeBytes: 999_999_999, pageCount: 2 } }],
+      null,
+      0,
+      null,
+      async () => [
+        { kind: "descriptor", descriptor: { grant: "g-1", name: "folder-a.pdf", sizeBytes: 999_999_999, pageCount: 3 } },
+        { kind: "descriptor", descriptor: { grant: "g-2", name: "folder-b.pdf", sizeBytes: 999_999_999, pageCount: 4 } },
+        { kind: "error", name: "folder-c.pdf", message: "The PDF could not be read." },
+      ],
+    );
+
+    await clickAdd("Add Folder");
+
+    expect(fileNames()).toEqual(["folder-a.pdf", "folder-b.pdf"]);
+    expect(container?.textContent).toContain("2 of 3 added");
+
+    // The file picker still works alongside it and appends after the folder.
+    await clickAdd("Add PDF");
+    expect(fileNames()).toEqual(["folder-a.pdf", "folder-b.pdf", "picked.pdf"]);
   });
 });

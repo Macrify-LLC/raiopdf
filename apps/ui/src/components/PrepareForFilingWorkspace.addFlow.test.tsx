@@ -33,7 +33,10 @@ describe("PrepareForFilingWorkspace packet add flow", () => {
     container = null;
   });
 
-  function render(onAddPacketFile: () => Promise<FilingPacketFile[] | null>) {
+  function render(
+    onAddPacketFile: () => Promise<FilingPacketFile[] | null>,
+    onAddPacketFolder?: () => Promise<FilingPacketFile[] | null>,
+  ) {
     const pack = getPack();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -60,6 +63,7 @@ describe("PrepareForFilingWorkspace packet add flow", () => {
           onCourtProfileSave={() => undefined}
           onPrepare={() => undefined}
           onAddPacketFile={onAddPacketFile}
+          onAddPacketFolder={onAddPacketFolder}
           onBuildPacket={async () => undefined}
           onDismissImpact={() => undefined}
           onCompressFirst={() => undefined}
@@ -83,6 +87,19 @@ describe("PrepareForFilingWorkspace packet add flow", () => {
   async function clickAddPdf() {
     const button = Array.from(document.querySelectorAll("button")).find((candidate) =>
       candidate.textContent?.includes("Add PDF"),
+    );
+    expect(button).toBeDefined();
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function clickAdd(label: string) {
+    const button = Array.from(document.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.includes(label),
     );
     expect(button).toBeDefined();
 
@@ -134,6 +151,26 @@ describe("PrepareForFilingWorkspace packet add flow", () => {
     await clickAddPdf();
 
     expect(packetFileNames()).toEqual(["motion.pdf"]);
+  });
+
+  it("hides Add Folder when the runtime has no folder picker", () => {
+    render(async () => null);
+    openPacketMode();
+
+    expect(document.body.textContent).toContain("Add PDF");
+    expect(document.body.textContent).not.toContain("Add Folder");
+  });
+
+  it("appends a folder add in order, on top of the seeded current document", async () => {
+    render(async () => null, async () => [
+      { id: "a", name: "folder-a.pdf", path: "grant-a", pages: 3 },
+      { id: "b", name: "folder-b.pdf", path: "grant-b", pages: 5 },
+    ]);
+    openPacketMode();
+
+    await clickAdd("Add Folder");
+
+    expect(packetFileNames()).toEqual(["motion.pdf", "folder-a.pdf", "folder-b.pdf"]);
   });
 });
 

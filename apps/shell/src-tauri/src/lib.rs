@@ -102,6 +102,15 @@ const HEADER_DROPPED_PDF_SIZE: &str = "x-raio-dropped-pdf-size";
 const HEADER_DROPPED_PDF_TOKEN: &str = "x-raio-dropped-pdf-token";
 const MAX_DROPPED_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_IN_FLIGHT_DROPPED_UPLOADS: usize = 4;
+/// Hard ceiling on the PDFs one folder scan will collect. A folder add is a
+/// convenience over picking files by hand, not a corpus importer: past this the
+/// walk stops and the confirm dialog says the folder was truncated, instead of
+/// walking a whole drive and minting thousands of grants.
+const MAX_FOLDER_SCAN_PDFS: usize = 2_000;
+/// How many unconfirmed folder scans may be held at once. Oldest is evicted.
+const MAX_OUTSTANDING_FOLDER_SCANS: usize = 4;
+/// How many names a scan reports for unreadable entries.
+const MAX_PERMISSION_FAILURE_EXAMPLES: usize = 3;
 
 #[derive(Default)]
 struct PendingPdfBytes {
@@ -210,6 +219,70 @@ struct PickedPdfs {
 struct SkippedPick {
     name: String,
     message: String,
+}
+
+/// What one folder scan found. Deliberately grant-free: a scan issues NO file
+/// grants, so browsing a folder the user then cancels out of hands the WebView
+/// nothing. Grants are minted only by `claim_folder_scan`, for the scope the
+/// user actually confirmed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderScanSummary {
+    token: String,
+    folder_name: String,
+    total_pdfs: usize,
+    top_level_pdfs: usize,
+    subfolder_pdfs: usize,
+    /// Files that are not PDFs.
+    skipped_non_pdf: usize,
+    /// Hidden entries (dot-prefixed anywhere; also the Windows hidden attribute).
+    /// Hidden folders are not descended into.
+    skipped_hidden: usize,
+    /// Symlinks and Windows reparse points the scan refused to follow. Reported
+    /// separately so a skipped subtree is visible rather than silently missing.
+    skipped_links: usize,
+    /// Entries that could not be read or stat'ed (permissions, vanished mid-walk).
+    permission_failures: usize,
+    /// A few names from `permission_failures`, for an honest UI line.
+    permission_failure_examples: Vec<String>,
+    /// The walk stopped at `MAX_FOLDER_SCAN_PDFS`; more PDFs exist below.
+    truncated: bool,
+}
+
+/// One PDF a folder scan found, with the sort key used to keep scan order
+/// deterministic across platforms and filesystems.
+#[derive(Clone)]
+struct ScannedPdf {
+    path: PathBuf,
+    /// Path relative to the scanned root, `/`-joined; the sort key is its
+    /// lowercase form with the original as tiebreak.
+    relative: String,
+    in_subfolder: bool,
+}
+
+#[derive(Default)]
+struct FolderWalkOutcome {
+    files: Vec<ScannedPdf>,
+    skipped_non_pdf: usize,
+    skipped_hidden: usize,
+    skipped_links: usize,
+    permission_failures: usize,
+    permission_failure_examples: Vec<String>,
+    truncated: bool,
+}
+
+/// A completed scan held for the user's confirm step. Only the paths survive —
+/// the counts already went to the UI with the summary.
+struct FolderScan {
+    files: Vec<ScannedPdf>,
+}
+
+/// Outstanding scans, oldest first. Bounded: a scan the user never confirms
+/// costs a path list, and only `MAX_OUTSTANDING_FOLDER_SCANS` of those can
+/// exist at once (the oldest is dropped to make room).
+#[derive(Default)]
+struct FolderScans {
+    scans: Mutex<VecDeque<(String, FolderScan)>>,
 }
 
 #[derive(Serialize)]
@@ -898,6 +971,311 @@ async fn pick_pdfs_for_add(
         threshold_bytes,
         skipped,
     }))
+}
+
+/// Stage 1 of folder add: pick a folder and scan it, issuing NO grants.
+///
+/// The scan walks the folder on the blocking pool and returns counts plus a
+/// token. Nothing the WebView can read a file with is created here, so a user
+/// who cancels the confirm dialog has handed the renderer exactly nothing.
+/// Stage 2 (`claim_folder_scan`) mints grants for the confirmed scope only.
+#[tauri::command]
+async fn scan_folder_for_add(
+    app: tauri::AppHandle,
+    folder_scans: tauri::State<'_, FolderScans>,
+) -> Result<Option<FolderScanSummary>, String> {
+    let picked = match e2e_dialog_override("scan_folder_for_add") {
+        Some(path) => Some(path),
+        None => app.dialog().file().blocking_pick_folder(),
+    };
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let root = path.into_path().map_err(|error| error.to_string())?;
+    let (folder_name, outcome) =
+        on_command_blocking_pool(move || Ok(walk_folder_for_pdfs(&root))).await?;
+
+    Ok(Some(folder_scans.insert(folder_name, outcome)?))
+}
+
+/// Stage 2 of folder add: mint grants for the confirmed scope of a scan.
+///
+/// Returns the same shape as `pick_pdfs_for_add`, so the UI's existing add
+/// plumbing (threshold echo, per-file skip reporting) consumes it unchanged.
+/// The token is consumed either way — a claim is one-shot.
+#[tauri::command]
+async fn claim_folder_scan(
+    token: String,
+    include_subfolders: bool,
+    folder_scans: tauri::State<'_, FolderScans>,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<PickedPdfs, String> {
+    let scan = folder_scans.take(&token)?;
+    let threshold_bytes = large_doc_threshold_bytes();
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+
+    for scanned in scan.files {
+        if scanned.in_subfolder && !include_subfolders {
+            continue;
+        }
+
+        // Per-file failures skip that file only, exactly as the multi-select
+        // picker does: a file deleted between scan and confirm must not reject
+        // the rest of the folder.
+        let name = file_name(&scanned.path);
+        let size_bytes = match fs::metadata(&scanned.path) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => {
+                skipped.push(SkippedPick {
+                    name,
+                    message: READ_PDF_ERROR.to_string(),
+                });
+                continue;
+            }
+        };
+        let grant = match file_grants.grant(scanned.path.clone()) {
+            Ok(grant) => grant,
+            Err(message) => {
+                skipped.push(SkippedPick { name, message });
+                continue;
+            }
+        };
+        files.push(PickedPdf {
+            grant,
+            name,
+            size_bytes,
+            source: PickedAddSource::Pdf,
+            markup_scan: None,
+            converted_from_grant: None,
+        });
+    }
+
+    Ok(PickedPdfs {
+        files,
+        threshold_bytes,
+        skipped,
+    })
+}
+
+impl FolderScans {
+    /// Store a walk result and return its summary. Evicts the oldest scan when
+    /// the outstanding-scan cap is already met.
+    fn insert(
+        &self,
+        folder_name: String,
+        outcome: FolderWalkOutcome,
+    ) -> Result<FolderScanSummary, String> {
+        let token = Uuid::new_v4().to_string();
+        let top_level_pdfs = outcome
+            .files
+            .iter()
+            .filter(|file| !file.in_subfolder)
+            .count();
+        let summary = FolderScanSummary {
+            token: token.clone(),
+            folder_name,
+            total_pdfs: outcome.files.len(),
+            top_level_pdfs,
+            subfolder_pdfs: outcome.files.len() - top_level_pdfs,
+            skipped_non_pdf: outcome.skipped_non_pdf,
+            skipped_hidden: outcome.skipped_hidden,
+            skipped_links: outcome.skipped_links,
+            permission_failures: outcome.permission_failures,
+            permission_failure_examples: outcome.permission_failure_examples,
+            truncated: outcome.truncated,
+        };
+
+        let mut scans = self.scans.lock().map_err(|_| "Folder scan lock poisoned")?;
+        while scans.len() >= MAX_OUTSTANDING_FOLDER_SCANS {
+            scans.pop_front();
+        }
+        scans.push_back((
+            token,
+            FolderScan {
+                files: outcome.files,
+            },
+        ));
+
+        Ok(summary)
+    }
+
+    /// Remove and return a scan. The entry is gone whatever the caller does
+    /// with it, so a claim can never be replayed.
+    fn take(&self, token: &str) -> Result<FolderScan, String> {
+        let mut scans = self.scans.lock().map_err(|_| "Folder scan lock poisoned")?;
+        let index = scans
+            .iter()
+            .position(|(candidate, _)| candidate == token)
+            .ok_or_else(|| "That folder scan has expired. Choose the folder again.".to_string())?;
+
+        scans
+            .remove(index)
+            .map(|(_, scan)| scan)
+            .ok_or_else(|| "That folder scan has expired. Choose the folder again.".to_string())
+    }
+}
+
+/// Recursively collects `.pdf` files under `root`.
+///
+/// Policy, in precedence order per directory entry:
+/// 1. Hidden entries (dot-prefixed, or the Windows hidden attribute) are
+///    skipped; hidden folders are not descended into.
+/// 2. Symlinks and Windows reparse points are never followed — a linked folder
+///    is not walked (which is how a scan avoids cycles and escaping the chosen
+///    folder entirely) and is counted in `skipped_links`.
+/// 3. Directories are walked; files ending in `.pdf` are collected; everything
+///    else counts as `skipped_non_pdf`.
+/// 4. Anything that fails to stat or list counts as a permission failure with
+///    its name kept as an example, never as a hard error — one unreadable
+///    subfolder must not fail the whole scan.
+///
+/// Traversal visits each directory's entries in name order and results are
+/// sorted by case-insensitively normalized relative path (original path as
+/// tiebreak), so both the collected set under truncation and the final order
+/// are deterministic.
+fn walk_folder_for_pdfs(root: &Path) -> (String, FolderWalkOutcome) {
+    let mut outcome = FolderWalkOutcome::default();
+    let mut stack = vec![root.to_path_buf()];
+
+    'walk: while let Some(directory) = stack.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                record_scan_failure(&mut outcome, &directory);
+                continue;
+            }
+        };
+
+        let mut names: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => names.push(entry.path()),
+                Err(_) => record_scan_failure(&mut outcome, &directory),
+            }
+        }
+        // Sort each directory level so truncation keeps the same files run to run.
+        names.sort_by(|left, right| {
+            let left_name = file_name(left).to_lowercase();
+            let right_name = file_name(right).to_lowercase();
+            left_name.cmp(&right_name).then_with(|| left.cmp(right))
+        });
+
+        let mut child_directories: Vec<PathBuf> = Vec::new();
+        for path in names {
+            // `symlink_metadata` never follows, so a linked folder is judged as
+            // a link rather than as the directory it points at.
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    record_scan_failure(&mut outcome, &path);
+                    continue;
+                }
+            };
+
+            if is_hidden_entry(&path, &metadata) {
+                outcome.skipped_hidden += 1;
+                continue;
+            }
+            if is_link_entry(&metadata) {
+                outcome.skipped_links += 1;
+                continue;
+            }
+            if metadata.is_dir() {
+                child_directories.push(path);
+                continue;
+            }
+            if !is_pdf_path(&path) {
+                outcome.skipped_non_pdf += 1;
+                continue;
+            }
+
+            if outcome.files.len() >= MAX_FOLDER_SCAN_PDFS {
+                outcome.truncated = true;
+                break 'walk;
+            }
+            let relative = relative_scan_path(root, &path);
+            outcome.files.push(ScannedPdf {
+                path,
+                relative,
+                in_subfolder: directory != root,
+            });
+        }
+
+        // Pushed in reverse so the stack pops them in name order.
+        child_directories.reverse();
+        stack.extend(child_directories);
+    }
+
+    outcome.files.sort_by(|left, right| {
+        left.relative
+            .to_lowercase()
+            .cmp(&right.relative.to_lowercase())
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    (file_name(root), outcome)
+}
+
+fn record_scan_failure(outcome: &mut FolderWalkOutcome, path: &Path) {
+    outcome.permission_failures += 1;
+    if outcome.permission_failure_examples.len() < MAX_PERMISSION_FAILURE_EXAMPLES {
+        outcome.permission_failure_examples.push(file_name(path));
+    }
+}
+
+/// `/`-joined path relative to the scanned root; falls back to the file name
+/// when the path is somehow not under the root (it always is in practice).
+fn relative_scan_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|relative| {
+            relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|_| file_name(path))
+}
+
+/// Dot-prefixed on every platform; additionally the Windows hidden attribute,
+/// which is how Windows actually marks hidden files (they are rarely dotted).
+fn is_hidden_entry(path: &Path, metadata: &fs::Metadata) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.'))
+        || has_hidden_attribute(metadata)
+}
+
+#[cfg(windows)]
+fn has_hidden_attribute(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+    metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+}
+
+#[cfg(not(windows))]
+fn has_hidden_attribute(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+/// A symlink or (on Windows) any reparse point — junctions and mount points
+/// included, which `is_symlink` alone does not reliably cover.
+fn is_link_entry(metadata: &fs::Metadata) -> bool {
+    metadata.is_symlink() || is_reparse_point(metadata)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 #[tauri::command]
@@ -2463,6 +2841,7 @@ pub fn run() {
             app.manage(PendingPdfBytes::default());
             app.manage(FileGrants::default());
             app.manage(DirectoryGrants::default());
+            app.manage(FolderScans::default());
             app.manage(DroppedUploads::default());
             app.manage(path_ops::ProtectedOutputTargets::default());
             app.manage(StartupPdf::default());
@@ -2593,6 +2972,8 @@ pub fn run() {
             dropped_pdf_abort,
             read_pdf_range,
             pick_pdfs_for_add,
+            scan_folder_for_add,
+            claim_folder_scan,
             pick_pdf_for_word,
             pick_docx_for_import,
             convert_docx_for_add,
@@ -3148,6 +3529,192 @@ const fn native_menu_policy(platform: NativeMenuPlatform) -> NativeMenuPolicy {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Builds a folder tree for the scan tests:
+    /// `b.pdf`, `A.pdf`, `notes.txt`, `.hidden.pdf`, `nested/inner.pdf`,
+    /// `nested/deeper/deep.pdf`, `.hidden-folder/secret.pdf`.
+    fn scan_fixture_tree() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::write(root.join("b.pdf"), b"%PDF-1.7 b").expect("b.pdf");
+        fs::write(root.join("A.pdf"), b"%PDF-1.7 a").expect("A.pdf");
+        fs::write(root.join("notes.txt"), b"not a pdf").expect("notes.txt");
+        fs::write(root.join(".hidden.pdf"), b"%PDF-1.7 hidden").expect(".hidden.pdf");
+        fs::create_dir(root.join("nested")).expect("nested");
+        fs::write(root.join("nested/inner.pdf"), b"%PDF-1.7 inner").expect("inner.pdf");
+        fs::create_dir(root.join("nested/deeper")).expect("deeper");
+        fs::write(root.join("nested/deeper/deep.pdf"), b"%PDF-1.7 deep").expect("deep.pdf");
+        fs::create_dir(root.join(".hidden-folder")).expect("hidden folder");
+        fs::write(root.join(".hidden-folder/secret.pdf"), b"%PDF-1.7 secret").expect("secret.pdf");
+        dir
+    }
+
+    #[test]
+    fn folder_scan_collects_pdfs_in_deterministic_order_and_counts_skips() {
+        let dir = scan_fixture_tree();
+
+        let (name, outcome) = walk_folder_for_pdfs(dir.path());
+
+        assert_eq!(name, file_name(dir.path()));
+        assert_eq!(
+            outcome
+                .files
+                .iter()
+                .map(|file| file.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "A.pdf",
+                "b.pdf",
+                "nested/deeper/deep.pdf",
+                "nested/inner.pdf"
+            ],
+        );
+        assert_eq!(
+            outcome
+                .files
+                .iter()
+                .map(|file| file.in_subfolder)
+                .collect::<Vec<_>>(),
+            vec![false, false, true, true],
+        );
+        // `.hidden.pdf` plus the whole `.hidden-folder` (never descended into).
+        assert_eq!(outcome.skipped_hidden, 2);
+        assert_eq!(outcome.skipped_non_pdf, 1);
+        assert!(!outcome.truncated);
+        assert_eq!(outcome.permission_failures, 0);
+    }
+
+    #[test]
+    fn folder_scan_order_is_stable_across_runs() {
+        let dir = scan_fixture_tree();
+
+        let first = walk_folder_for_pdfs(dir.path()).1;
+        let second = walk_folder_for_pdfs(dir.path()).1;
+
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .map(|file| file.relative.clone())
+                .collect::<Vec<_>>(),
+            second
+                .files
+                .iter()
+                .map(|file| file.relative.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn folder_scan_stops_at_the_ceiling_and_reports_truncation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for index in 0..(MAX_FOLDER_SCAN_PDFS + 5) {
+            fs::write(
+                dir.path().join(format!("doc-{index:05}.pdf")),
+                b"%PDF-1.7 tiny",
+            )
+            .expect("write pdf");
+        }
+
+        let outcome = walk_folder_for_pdfs(dir.path()).1;
+
+        assert_eq!(outcome.files.len(), MAX_FOLDER_SCAN_PDFS);
+        assert!(outcome.truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_scan_never_follows_directory_links() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::create_dir(root.join("real")).expect("real");
+        fs::write(root.join("real/kept.pdf"), b"%PDF-1.7 kept").expect("kept.pdf");
+        let outside = tempfile::tempdir().expect("outside dir");
+        fs::write(outside.path().join("escaped.pdf"), b"%PDF-1.7 escaped").expect("escaped.pdf");
+        std::os::unix::fs::symlink(outside.path(), root.join("linked")).expect("dir symlink");
+        // A self-referential link would be an infinite walk if links were followed.
+        std::os::unix::fs::symlink(root, root.join("loop")).expect("loop symlink");
+
+        let outcome = walk_folder_for_pdfs(root).1;
+
+        assert_eq!(
+            outcome
+                .files
+                .iter()
+                .map(|file| file.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["real/kept.pdf"],
+        );
+        assert_eq!(outcome.skipped_links, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_scan_counts_unreadable_folders_instead_of_failing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::write(root.join("readable.pdf"), b"%PDF-1.7 readable").expect("readable.pdf");
+        let locked = root.join("locked");
+        fs::create_dir(&locked).expect("locked dir");
+        fs::write(locked.join("unreachable.pdf"), b"%PDF-1.7 nope").expect("unreachable.pdf");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("lock dir");
+
+        let outcome = walk_folder_for_pdfs(root).1;
+
+        // Running as root defeats the permission bits; skip rather than fail there.
+        if outcome.permission_failures > 0 {
+            assert_eq!(outcome.permission_failures, 1);
+            assert_eq!(
+                outcome.permission_failure_examples,
+                vec!["locked".to_string()]
+            );
+        }
+        assert_eq!(
+            outcome
+                .files
+                .iter()
+                .map(|file| file.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["readable.pdf"],
+        );
+
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).expect("unlock dir");
+    }
+
+    #[test]
+    fn folder_scans_are_one_shot_and_bounded() {
+        let scans = FolderScans::default();
+        let mut tokens = Vec::new();
+        for index in 0..(MAX_OUTSTANDING_FOLDER_SCANS + 1) {
+            let summary = scans
+                .insert(format!("folder-{index}"), FolderWalkOutcome::default())
+                .expect("insert scan");
+            tokens.push(summary.token);
+        }
+
+        // The oldest scan was evicted to keep the outstanding set bounded.
+        assert!(scans.take(&tokens[0]).is_err());
+        let newest = tokens.last().expect("token");
+        assert!(scans.take(newest).is_ok());
+        // A claimed token is gone, so a claim can never be replayed.
+        assert!(scans.take(newest).is_err());
+    }
+
+    #[test]
+    fn folder_scan_summary_counts_top_level_and_subfolder_pdfs() {
+        let dir = scan_fixture_tree();
+        let scans = FolderScans::default();
+        let (name, outcome) = walk_folder_for_pdfs(dir.path());
+
+        let summary = scans.insert(name, outcome).expect("insert scan");
+
+        assert_eq!(summary.total_pdfs, 4);
+        assert_eq!(summary.top_level_pdfs, 2);
+        assert_eq!(summary.subfolder_pdfs, 2);
+        assert!(!summary.truncated);
+    }
 
     #[test]
     fn docx_batch_preparation_progress_is_neutral_about_word_launch() {

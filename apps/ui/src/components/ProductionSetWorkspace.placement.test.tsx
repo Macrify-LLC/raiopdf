@@ -232,6 +232,21 @@ describe("ProductionSetWorkspace stamp placement + page-range designations", () 
     expect(pagesInput().disabled).toBe(false);
   });
 
+  it("clears a stale page range when the designation returns to None", () => {
+    render();
+
+    selectValue(designationSelect(), "Confidential");
+    typeInto(pagesInput(), "1-2");
+    expect(pagesInput().value).toBe("1-2");
+
+    // Back to None: the disabled input must not hold a value the user can't
+    // reach but the build would still validate against.
+    selectValue(designationSelect(), "");
+
+    expect(pagesInput().disabled).toBe(true);
+    expect(pagesInput().value).toBe("");
+  });
+
   it("shows an inline error for an out-of-bounds page range against a known page count, and gates Build", () => {
     render({ currentPageCount: 5 });
 

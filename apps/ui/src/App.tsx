@@ -1714,7 +1714,8 @@ export function App() {
           return {
             grant,
             designation: file.designation || undefined,
-            designationPages: file.designationPages || undefined,
+            // A range without a designation is meaningless — never forward one.
+            designationPages: file.designation ? file.designationPages || undefined : undefined,
           };
         }),
         outputDir: input.outputDir,

@@ -559,7 +559,16 @@ export function ProductionSetWorkspace({
                   onChange={(event) => {
                     const next = event.target.value === "Custom" ? file.designation : event.target.value;
                     setFiles((current) => current.map((item) => (
-                      item.id === file.id ? { ...item, designation: next } : item
+                      item.id === file.id
+                        ? {
+                            ...item,
+                            designation: next,
+                            // No designation means no range: keep the disabled
+                            // Pages input from holding a stale value the user
+                            // can't reach but the build would still validate.
+                            designationPages: next === "" ? "" : item.designationPages,
+                          }
+                        : item
                     )));
                   }}
                 >

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PdfDocumentHandle, PdfEngine } from "@raiopdf/engine-api";
 import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { readPackageManifest } from "@raiopdf/package-writer";
-import { buildProductionSet, MAX_COMBINED_PRODUCTION_SOURCES } from "../src/index";
+import {
+  buildProductionSet,
+  MAX_COMBINED_PRODUCTION_SOURCES,
+  ProductionContinuationError,
+  readProductionContinuation,
+} from "../src/index";
 
 let dir: string;
 
@@ -321,6 +327,265 @@ describe("buildProductionSet", () => {
   });
 });
 
+describe("readProductionContinuation", () => {
+  it("reads where the next production in the series should start", async () => {
+    const source = await makePdf("first.pdf", 3);
+    const outputDir = path.join(dir, "package");
+
+    const built = await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "SMITH",
+      start: 1,
+      digits: 6,
+      createdAt: "2026-07-14T10:00:00.000Z",
+    });
+    expect(built.continuation).toBeNull();
+
+    const continuation = await readProductionContinuation(outputDir);
+    expect(continuation).toEqual({
+      prefix: "SMITH",
+      digits: 6,
+      nextNumber: 4,
+      lastBates: "SMITH000003",
+      createdAt: "2026-07-14T10:00:00.000Z",
+      fileCount: 1,
+    });
+  });
+
+  it("rejects a folder that isn't a RaioPDF production package", async () => {
+    const notAPackage = path.join(dir, "not-a-package");
+    await fs.mkdir(notAPackage, { recursive: true });
+
+    await expect(readProductionContinuation(notAPackage)).rejects.toMatchObject({
+      code: "not-a-production-package",
+    });
+    await expect(readProductionContinuation(notAPackage)).rejects.toBeInstanceOf(ProductionContinuationError);
+  });
+
+  it("rejects a package whose Bates report was edited after it was produced", async () => {
+    const source = await makePdf("tamper.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "TAMP",
+    });
+
+    const reportPath = path.join(outputDir, "raio-manifest", "production.json");
+    const report = JSON.parse(await fs.readFile(reportPath, "utf8")) as { nextNumber: number };
+    report.nextNumber = 999;
+    await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+
+    await expect(readProductionContinuation(outputDir)).rejects.toMatchObject({ code: "tampered" });
+  });
+
+  it("rejects overlapping Bates ranges as inconsistent", async () => {
+    const source = await makePdf("overlap.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "OVLP",
+      digits: 6,
+    });
+
+    // Rewrite production.json (still hash-matched below) with a second file
+    // row whose range overlaps the first, then re-point manifest.json's
+    // machine-report hash at the edited bytes so only the numbering
+    // invariant -- not the hash check -- is under test here.
+    const reportPath = path.join(outputDir, "raio-manifest", "production.json");
+    const parsed = JSON.parse(await fs.readFile(reportPath, "utf8")) as {
+      lastNumber: number;
+      nextNumber: number;
+      files: Array<{ batesStart: string; batesEnd: string }>;
+    };
+    parsed.files.push({ batesStart: "OVLP000001", batesEnd: "OVLP000001" });
+    parsed.lastNumber = 1;
+    parsed.nextNumber = 2;
+    await rewriteReportAndManifestHash(outputDir, parsed);
+
+    await expect(readProductionContinuation(outputDir)).rejects.toMatchObject({ code: "inconsistent" });
+  });
+
+  it("rejects a lastNumber/nextNumber mismatch as inconsistent", async () => {
+    const source = await makePdf("mismatch.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "MISM",
+    });
+
+    const reportPath = path.join(outputDir, "raio-manifest", "production.json");
+    const parsed = JSON.parse(await fs.readFile(reportPath, "utf8")) as { nextNumber: number };
+    parsed.nextNumber = parsed.nextNumber + 5;
+    await rewriteReportAndManifestHash(outputDir, parsed);
+
+    await expect(readProductionContinuation(outputDir)).rejects.toMatchObject({ code: "inconsistent" });
+  });
+});
+
+describe("buildProductionSet Bates continuation", () => {
+  it("continues numbering from a prior production in strict mode", async () => {
+    const first = await makePdf("a.pdf", 2);
+    const priorDir = path.join(dir, "prior");
+    const prior = await buildProductionSet({
+      sources: [{ path: first }],
+      outputDir: priorDir,
+      prefix: "SMITH",
+      start: 1,
+      digits: 6,
+    });
+    expect(prior.nextNumber).toBe(3);
+
+    const second = await makePdf("b.pdf", 1);
+    const nextDir = path.join(dir, "next");
+    const result = await buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: nextDir,
+      prefix: "SMITH",
+      start: prior.nextNumber,
+      digits: 6,
+      continueFrom: priorDir,
+    });
+
+    expect(result.firstNumber).toBe(3);
+    expect(result.files[0]!.batesStart).toBe("SMITH000003");
+    expect(result.continuation).toEqual({ mode: "strict", priorLastBates: "SMITH000002" });
+
+    const manifest = await readPackageManifest(nextDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({
+        checkId: "bates-continuation",
+        status: "pass",
+        detail: expect.objectContaining({ mode: "strict", priorLastBates: "SMITH000002" }),
+      }),
+    );
+    expect(manifest.details.productionContinuationSource).toMatchObject({
+      priorPackageRoot: path.resolve(priorDir),
+      mode: "strict",
+    });
+  });
+
+  it("rejects a case-drifted prefix even in strict mode", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" });
+
+    const second = await makePdf("b.pdf", 1);
+    await expect(buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: path.join(dir, "next"),
+      prefix: "smith",
+      start: 2,
+      continueFrom: priorDir,
+    })).rejects.toThrow(/prefix mismatch/i);
+  });
+
+  it("rejects a digit-width mismatch without an override", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH", digits: 6 });
+
+    const second = await makePdf("b.pdf", 1);
+    await expect(buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: path.join(dir, "next"),
+      prefix: "SMITH",
+      start: 2,
+      digits: 4,
+      continueFrom: priorDir,
+    })).rejects.toThrow(/digit-width mismatch/i);
+  });
+
+  it("rejects a start mismatch without an override", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" });
+
+    const second = await makePdf("b.pdf", 1);
+    await expect(buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: path.join(dir, "next"),
+      prefix: "SMITH",
+      start: 1,
+      continueFrom: priorDir,
+    })).rejects.toThrow(/start mismatch/i);
+  });
+
+  it("allows a gap-start override with a reason and records it", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" });
+
+    const second = await makePdf("b.pdf", 1);
+    const nextDir = path.join(dir, "next");
+    const result = await buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: nextDir,
+      prefix: "SMITH",
+      start: 500,
+      digits: 6,
+      continueFrom: priorDir,
+      continuationOverride: { reason: "Reserving 000002-000499 for a supplemental production." },
+    });
+
+    expect(result.firstNumber).toBe(500);
+    expect(result.continuation).toEqual({ mode: "override", priorLastBates: "SMITH000001" });
+
+    const manifest = await readPackageManifest(nextDir);
+    expect(manifest.overrides).toContainEqual(
+      expect.objectContaining({
+        type: "production-bates-continuation",
+        reason: "Reserving 000002-000499 for a supplemental production.",
+      }),
+    );
+  });
+
+  it("requires a reason to use continuationOverride", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" });
+
+    const second = await makePdf("b.pdf", 1);
+    await expect(buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: path.join(dir, "next"),
+      prefix: "SMITH",
+      start: 500,
+      continueFrom: priorDir,
+      continuationOverride: { reason: "   " },
+    })).rejects.toThrow(/reason is required/i);
+  });
+
+  it("rejects a tampered prior production before writing anything", async () => {
+    const first = await makePdf("a.pdf", 1);
+    const priorDir = path.join(dir, "prior");
+    await buildProductionSet({ sources: [{ path: first }], outputDir: priorDir, prefix: "SMITH" });
+
+    const reportPath = path.join(priorDir, "raio-manifest", "production.json");
+    const parsed = JSON.parse(await fs.readFile(reportPath, "utf8")) as { nextNumber: number };
+    parsed.nextNumber = 999;
+    await fs.writeFile(reportPath, JSON.stringify(parsed, null, 2));
+
+    const second = await makePdf("b.pdf", 1);
+    const nextDir = path.join(dir, "next");
+    await expect(buildProductionSet({
+      sources: [{ path: second }],
+      outputDir: nextDir,
+      prefix: "SMITH",
+      start: 2,
+      continueFrom: priorDir,
+    })).rejects.toMatchObject({ code: "tampered" });
+
+    await expect(fs.readdir(nextDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
 /**
  * Counting wrapper around the local engine. The engine interface exposes no
  * handle census, so the test observes open/close directly for every call that
@@ -354,6 +619,29 @@ function countingEngine(): { engine: PdfEngine; liveOpen: number; peakOpen: numb
   });
 
   return state;
+}
+
+/**
+ * Rewrites `raio-manifest/production.json` with `content` and re-points
+ * `manifest.json`'s machine-report hash for it at the new bytes -- isolates a
+ * test to the SEMANTIC (numbering) check by keeping the hash check passing.
+ */
+async function rewriteReportAndManifestHash(outputDir: string, content: unknown): Promise<void> {
+  const reportPath = path.join(outputDir, "raio-manifest", "production.json");
+  const manifestPath = path.join(outputDir, "raio-manifest", "manifest.json");
+  const bytes = `${JSON.stringify(content, null, 2)}\n`;
+  await fs.writeFile(reportPath, bytes);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+    machineReports: Array<{ name: string; sha256: string }>;
+  };
+  const entry = manifest.machineReports.find((report) => report.name === "production.json");
+  if (!entry) {
+    throw new Error("test setup: production.json machine report entry not found");
+  }
+  entry.sha256 = sha256;
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function makePdf(name: string, pages: number): Promise<string> {

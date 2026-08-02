@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::FileGrants;
+use crate::{DirectoryGrants, FileGrants};
 
 const FLAG_DIR: &str = "me.macrify.raiopdf";
 const FLAG_FILE: &str = "mcp-enabled";
@@ -47,6 +47,12 @@ pub struct ProductionSetSourceGrant {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ProductionSetContinuationOverride {
+    reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProductionSetOneShotInput {
     sources: Vec<ProductionSetSource>,
     output_dir: String,
@@ -60,6 +66,25 @@ struct ProductionSetOneShotInput {
     combined_pdf: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume_size_mb: Option<f64>,
+    /// Absolute root of a prior production package to continue the same
+    /// Bates series from -- resolved from a directory grant by
+    /// `build_production_set` before this is constructed; see
+    /// `resolve_source_path` for why the shell never accepts a raw path from
+    /// the renderer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    continue_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    continuation_override: Option<ProductionSetContinuationOverride>,
+}
+
+/// Mirrors `packages/production-set`'s `ProductionSetResult.continuation`
+/// (via the Node one-shot JSON boundary) and is re-serialized straight back
+/// to the renderer on `ProductionSetShellOutput.continuation`.
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProductionSetContinuationResult {
+    mode: String,
+    prior_last_bates: String,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +96,8 @@ struct ProductionSetOneShotOutput {
     outputs: Option<Vec<String>>,
     next_number: Option<u32>,
     index_pdf: Option<String>,
+    #[serde(default)]
+    continuation: Option<ProductionSetContinuationResult>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +112,21 @@ pub struct ProductionSetShellOutput {
     package_root: String,
     index_location: Option<String>,
     next_number: u32,
+    file_count: usize,
+    continuation: Option<ProductionSetContinuationResult>,
+}
+
+/// UI-prefill summary from `read_production_continuation` -- see its doc
+/// comment for the verification this represents. Mirrors
+/// `packages/production-set`'s `ProductionContinuationSummary`.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionContinuationSummary {
+    prefix: String,
+    digits: i64,
+    next_number: i64,
+    last_bates: String,
+    created_at: String,
     file_count: usize,
 }
 
@@ -381,6 +423,237 @@ async fn run_one_shot_on_blocking_pool<T: Serialize + Send + 'static>(
     .map_err(|error| format!("RaioPDF's background task failed: {error}"))?
 }
 
+// ---- Bates continuation ----
+//
+// `read_production_continuation` is a fast, synchronous (well, blocking-pool)
+// prefill read for the UI form: given a directory grant for a prior
+// production package, it parses that package's `raio-manifest/manifest.json`
+// and `raio-manifest/production.json` with serde (tolerant -- only the
+// fields below are declared, so extra fields in either file are ignored) and
+// re-does the cheap verifications. It does NOT spawn the Node one-shot; the
+// authoritative check still happens inside `buildProductionSet`
+// (`packages/production-set`) at build time via `continueFrom`, which this
+// command's caller is expected to also pass through.
+
+const PACKAGE_MANIFEST_RELATIVE: &str = "raio-manifest/manifest.json";
+const PRODUCTION_REPORT_RELATIVE: &str = "raio-manifest/production.json";
+const PRODUCTION_REPORT_NAME: &str = "production.json";
+const NOT_A_PACKAGE_MESSAGE: &str = "This folder doesn't look like a RaioPDF production package.";
+const TAMPERED_MESSAGE: &str =
+    "This production's Bates report doesn't match the package manifest -- the folder may have \
+     changed since it was produced. Verify against the served copy before continuing.";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestProvenanceForContinuation {
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestMachineReportEntry {
+    name: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageManifestForContinuation {
+    provenance: ManifestProvenanceForContinuation,
+    machine_reports: Vec<ManifestMachineReportEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductionReportFile {
+    bates_start: String,
+    bates_end: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductionReport {
+    prefix: String,
+    digits: i64,
+    first_number: i64,
+    last_number: i64,
+    next_number: i64,
+    files: Vec<ProductionReportFile>,
+}
+
+#[tauri::command]
+pub async fn read_production_continuation(
+    directory_grant: String,
+    directory_grants: tauri::State<'_, DirectoryGrants>,
+) -> Result<ProductionContinuationSummary, String> {
+    let root = directory_grants.resolve(&directory_grant)?;
+    crate::on_command_blocking_pool(move || read_production_continuation_sync(&root)).await
+}
+
+fn read_production_continuation_sync(root: &Path) -> Result<ProductionContinuationSummary, String> {
+    let metadata = fs::metadata(root).map_err(|_| NOT_A_PACKAGE_MESSAGE.to_string())?;
+    if !metadata.is_dir() {
+        return Err("Selected item is not a folder.".to_string());
+    }
+
+    let manifest_bytes = fs::read(root.join(PACKAGE_MANIFEST_RELATIVE))
+        .map_err(|_| NOT_A_PACKAGE_MESSAGE.to_string())?;
+    let manifest: PackageManifestForContinuation =
+        serde_json::from_slice(&manifest_bytes).map_err(|_| NOT_A_PACKAGE_MESSAGE.to_string())?;
+
+    let report_entry = manifest
+        .machine_reports
+        .iter()
+        .find(|entry| entry.name == PRODUCTION_REPORT_NAME)
+        .ok_or_else(|| {
+            "This folder doesn't look like a RaioPDF production package -- it has no Bates \
+             continuation report."
+                .to_string()
+        })?;
+
+    let report_bytes = fs::read(root.join(PRODUCTION_REPORT_RELATIVE)).map_err(|_| {
+        "This production's Bates report is missing, even though the package manifest lists it. \
+         Verify against the served copy before continuing."
+            .to_string()
+    })?;
+
+    if sha256_hex(&report_bytes) != report_entry.sha256 {
+        return Err(TAMPERED_MESSAGE.to_string());
+    }
+
+    let report: ProductionReport = serde_json::from_slice(&report_bytes)
+        .map_err(|_| "This production's Bates report could not be read.".to_string())?;
+
+    verify_and_summarize_continuation(&report, manifest.provenance.created_at)
+}
+
+/// Re-does the numbering checks `packages/production-set`'s
+/// `readProductionContinuation` performs: contiguous, non-overlapping file
+/// ranges consistent with the report's own prefix/digit width, and
+/// `lastNumber + 1 == nextNumber`.
+fn verify_and_summarize_continuation(
+    report: &ProductionReport,
+    created_at: String,
+) -> Result<ProductionContinuationSummary, String> {
+    if report.digits < 1 {
+        return Err("This production's Bates report has an invalid digit width.".to_string());
+    }
+    if report.first_number < 0 || report.next_number < 0 {
+        return Err("This production's Bates report has an invalid numbering field.".to_string());
+    }
+    if report.last_number + 1 != report.next_number {
+        return Err(
+            "This production's Bates report numbering is inconsistent -- its last and next \
+             numbers don't line up."
+                .to_string(),
+        );
+    }
+
+    let digits = usize::try_from(report.digits)
+        .map_err(|_| "This production's Bates report has an invalid digit width.".to_string())?;
+    let mut previous_end: Option<i64> = None;
+
+    for (index, file) in report.files.iter().enumerate() {
+        let start = parse_bates_number(&file.bates_start, &report.prefix, digits, index, "start")?;
+        let end = parse_bates_number(&file.bates_end, &report.prefix, digits, index, "end")?;
+        if end < start {
+            return Err(format!(
+                "This production's Bates report has an invalid range at file {}.",
+                index + 1
+            ));
+        }
+
+        match previous_end {
+            None if start != report.first_number => {
+                return Err(
+                    "This production's Bates report's first file doesn't match its recorded first \
+                     number."
+                        .to_string(),
+                );
+            }
+            Some(previous_end_value) if start != previous_end_value + 1 => {
+                return Err(format!(
+                    "This production's Bates report has a gap or overlap between files {index} and {}.",
+                    index + 1
+                ));
+            }
+            _ => {}
+        }
+
+        previous_end = Some(end);
+    }
+
+    match previous_end {
+        None if report.last_number != report.first_number - 1 => {
+            return Err("This production's Bates report numbering is inconsistent.".to_string());
+        }
+        Some(last_end) if last_end != report.last_number => {
+            return Err(
+                "This production's Bates report's last file doesn't match its recorded last number."
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+
+    Ok(ProductionContinuationSummary {
+        prefix: report.prefix.clone(),
+        digits: report.digits,
+        next_number: report.next_number,
+        last_bates: format_bates(&report.prefix, report.last_number, digits),
+        created_at,
+        file_count: report.files.len(),
+    })
+}
+
+/// Also doubles as the "digits/prefix consistent across rows" check: a row
+/// whose Bates string doesn't start with the report's own prefix, or whose
+/// numeric tail isn't exactly `digits` zero-padded digits, fails here.
+fn parse_bates_number(
+    value: &str,
+    prefix: &str,
+    digits: usize,
+    index: usize,
+    which: &str,
+) -> Result<i64, String> {
+    let Some(numeric) = value.strip_prefix(prefix) else {
+        return Err(format!(
+            "This production's Bates report has a {which} number at file {} that doesn't match its \
+             prefix.",
+            index + 1
+        ));
+    };
+    if numeric.len() != digits || !numeric.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!(
+            "This production's Bates report has a {which} number at file {} that doesn't match its \
+             digit width.",
+            index + 1
+        ));
+    }
+    numeric.parse::<i64>().map_err(|_| {
+        format!(
+            "This production's Bates report has an invalid {which} number at file {}.",
+            index + 1
+        )
+    })
+}
+
+fn format_bates(prefix: &str, value: i64, digits: usize) -> String {
+    format!("{prefix}{value:0digits$}")
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn build_production_set(
@@ -393,7 +666,14 @@ pub async fn build_production_set(
     include_index: bool,
     combined_pdf: bool,
     volume_size_mb: Option<f64>,
+    // Directory grant for a prior production package to continue the same
+    // Bates series from -- never a raw path from the renderer, same
+    // discipline as every source grant here. Resolved to a path below,
+    // immediately before it's handed to the one-shot subprocess.
+    continue_from: Option<String>,
+    continuation_override_reason: Option<String>,
     file_grants: tauri::State<'_, FileGrants>,
+    directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
     let output_dir = resolve_output_dir(&output_dir)?;
     let sources = sources
@@ -410,6 +690,13 @@ pub async fn build_production_set(
         .iter()
         .map(|source| file_size_or_zero(&source.path))
         .sum();
+    let continue_from = match continue_from {
+        Some(grant) => Some(path_to_utf8_string(
+            directory_grants.resolve(&grant)?,
+            "Prior production folder",
+        )?),
+        None => None,
+    };
 
     let input = ProductionSetOneShotInput {
         sources,
@@ -421,6 +708,9 @@ pub async fn build_production_set(
         include_index,
         combined_pdf,
         volume_size_mb,
+        continue_from,
+        continuation_override: continuation_override_reason
+            .map(|reason| ProductionSetContinuationOverride { reason }),
     };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
@@ -445,6 +735,7 @@ pub async fn build_production_set(
         index_location: output.index_pdf,
         next_number,
         file_count,
+        continuation: output.continuation,
     })
 }
 
@@ -853,12 +1144,152 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        one_shot_node_options, package_one_shot_timeout, resolve_output_dir,
-        sanitize_one_shot_failure, NODE_SECURITY_FLAG,
+        one_shot_node_options, package_one_shot_timeout, read_production_continuation_sync,
+        resolve_output_dir, sanitize_one_shot_failure, sha256_hex, NODE_SECURITY_FLAG,
     };
+    use std::fs;
     use std::time::Duration;
 
     const GENERIC_FAILURE: &str = "RaioPDF couldn't complete that operation. Please try again.";
+
+    /// Builds a well-formed production package fixture: `raio-manifest/production.json`
+    /// plus a `manifest.json` whose `machineReports` entry hashes to match, so
+    /// individual tests can mutate ONE side (the report content, or the recorded
+    /// hash) and isolate which verification step fails.
+    fn write_continuation_fixture(root: &std::path::Path, report_json: &str, created_at: &str) {
+        let manifest_dir = root.join("raio-manifest");
+        fs::create_dir_all(&manifest_dir).expect("create raio-manifest dir");
+        let report_bytes = report_json.as_bytes();
+        fs::write(manifest_dir.join("production.json"), report_bytes)
+            .expect("write production.json");
+        let sha256 = sha256_hex(report_bytes);
+        let manifest_json = format!(
+            r#"{{
+  "manifestVersion": 1,
+  "provenance": {{ "appVersion": "0.1.0", "createdAt": "{created_at}", "confirmCurrentRequirements": "x" }},
+  "uploadFiles": [],
+  "rootDocuments": [],
+  "machineReports": [
+    {{ "name": "production.json", "relativePath": "raio-manifest/production.json", "bytes": {}, "sha256": "{sha256}" }}
+  ],
+  "overrides": [],
+  "checks": [],
+  "details": {{}}
+}}"#,
+            report_bytes.len(),
+        );
+        fs::write(manifest_dir.join("manifest.json"), manifest_json).expect("write manifest.json");
+    }
+
+    const VALID_REPORT: &str = r#"{
+  "prefix": "SMITH",
+  "digits": 6,
+  "firstNumber": 1,
+  "lastNumber": 5,
+  "nextNumber": 6,
+  "files": [
+    { "batesStart": "SMITH000001", "batesEnd": "SMITH000003" },
+    { "batesStart": "SMITH000004", "batesEnd": "SMITH000005" }
+  ]
+}"#;
+
+    #[test]
+    fn reads_and_verifies_a_well_formed_continuation_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_continuation_fixture(dir.path(), VALID_REPORT, "2026-07-14T10:00:00.000Z");
+
+        let summary = read_production_continuation_sync(dir.path()).expect("valid fixture reads");
+        assert_eq!(summary.prefix, "SMITH");
+        assert_eq!(summary.digits, 6);
+        assert_eq!(summary.next_number, 6);
+        assert_eq!(summary.last_bates, "SMITH000005");
+        assert_eq!(summary.created_at, "2026-07-14T10:00:00.000Z");
+        assert_eq!(summary.file_count, 2);
+    }
+
+    #[test]
+    fn rejects_a_folder_with_no_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let error = read_production_continuation_sync(dir.path()).expect_err("no manifest");
+        assert!(
+            error.contains("doesn't look like a RaioPDF production package"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_grant_that_is_not_a_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("not-a-folder.txt");
+        fs::write(&file_path, b"not a folder").expect("write file");
+
+        let error = read_production_continuation_sync(&file_path).expect_err("not a directory");
+        assert_eq!(error, "Selected item is not a folder.");
+    }
+
+    #[test]
+    fn rejects_a_report_edited_after_the_manifest_recorded_its_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_continuation_fixture(dir.path(), VALID_REPORT, "2026-07-14T10:00:00.000Z");
+        // Edit the report bytes on disk WITHOUT touching the manifest's recorded
+        // hash -- exactly what a hand-edited package looks like.
+        fs::write(
+            dir.path().join("raio-manifest").join("production.json"),
+            VALID_REPORT.replace("\"nextNumber\": 6", "\"nextNumber\": 999"),
+        )
+        .expect("tamper with report");
+
+        let error = read_production_continuation_sync(dir.path()).expect_err("tampered report");
+        assert!(
+            error.contains("doesn't match the package manifest"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_overlapping_bates_ranges() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = r#"{
+  "prefix": "OVLP",
+  "digits": 6,
+  "firstNumber": 1,
+  "lastNumber": 2,
+  "nextNumber": 3,
+  "files": [
+    { "batesStart": "OVLP000001", "batesEnd": "OVLP000002" },
+    { "batesStart": "OVLP000002", "batesEnd": "OVLP000003" }
+  ]
+}"#;
+        write_continuation_fixture(dir.path(), report, "2026-07-14T10:00:00.000Z");
+
+        let error = read_production_continuation_sync(dir.path()).expect_err("overlapping ranges");
+        assert!(error.contains("gap or overlap"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_last_number_next_number_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = VALID_REPORT.replace("\"nextNumber\": 6", "\"nextNumber\": 12");
+        write_continuation_fixture(dir.path(), &report, "2026-07-14T10:00:00.000Z");
+
+        let error = read_production_continuation_sync(dir.path())
+            .expect_err("lastNumber/nextNumber mismatch");
+        assert!(error.contains("don't line up"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_prefix_that_does_not_match_a_bates_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = VALID_REPORT.replace(
+            "\"batesStart\": \"SMITH000001\"",
+            "\"batesStart\": \"JONES000001\"",
+        );
+        write_continuation_fixture(dir.path(), &report, "2026-07-14T10:00:00.000Z");
+
+        let error =
+            read_production_continuation_sync(dir.path()).expect_err("prefix drift in a row");
+        assert!(error.contains("doesn't match its prefix"), "{error}");
+    }
 
     #[test]
     fn node_security_flag_travels_via_node_options() {

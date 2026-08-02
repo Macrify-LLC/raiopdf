@@ -43,6 +43,10 @@ export interface ProductionSetRunInput {
   includeFilenameInIndex: boolean;
   combinedPdf: boolean;
   volumeSizeMb: number | null;
+  /** Directory grant of a prior production package, from `onContinueFromPriorProduction`. */
+  continueFrom?: string | undefined;
+  /** Set only when the user used "Adjust start…" with a reason. */
+  continuationOverrideReason?: string | undefined;
 }
 
 export interface ProductionSetRunResult {
@@ -50,7 +54,29 @@ export interface ProductionSetRunResult {
   indexLocation: string | null;
   nextNumber: number;
   fileCount: number;
+  continuation?: { mode: "strict" | "override"; priorLastBates: string } | null | undefined;
 }
+
+/** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
+export interface ProductionContinuationSummaryView {
+  prefix: string;
+  digits: number;
+  nextNumber: number;
+  lastBates: string;
+  createdAt: string;
+  fileCount: number;
+}
+
+export interface ProductionContinuationPick {
+  /** Directory grant of the picked prior package -- reused as `continueFrom` at run time. */
+  grant: string;
+  summary: ProductionContinuationSummaryView;
+}
+
+export type ProductionContinuationPickOutcome =
+  | { status: "picked"; pick: ProductionContinuationPick }
+  | { status: "cancelled" }
+  | { status: "error"; message: string };
 
 export interface ProductionSetProgress {
   running: boolean;
@@ -91,6 +117,12 @@ export interface ProductionSetWorkspaceProps {
    * build, which has no folder picker that yields readable paths.
    */
   onAddFolder?: (() => Promise<FileAddResult[] | null>) | undefined;
+  /**
+   * Picks a prior production package folder and reads its verified Bates
+   * continuation, for the "Continue from prior production…" affordance.
+   * Absent in the browser build, which has no folder picker.
+   */
+  onContinueFromPriorProduction?: (() => Promise<ProductionContinuationPickOutcome>) | undefined;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -111,6 +143,7 @@ export function ProductionSetWorkspace({
   progress,
   onAddFile,
   onAddFolder,
+  onContinueFromPriorProduction,
   onRun,
   onOpenPackageRoot,
   onHelpRequested,
@@ -140,16 +173,28 @@ export function ProductionSetWorkspace({
   const [addingFile, setAddingFile] = useState(false);
   const [pendingPageCountReads, setPendingPageCountReads] = useState(0);
   const [localMessage, setLocalMessage] = useState<string | null>(currentFileNotice ?? null);
+  const [continuationPick, setContinuationPick] = useState<ProductionContinuationPick | null>(null);
+  const [continuationPicking, setContinuationPicking] = useState(false);
+  const [continuationError, setContinuationError] = useState<string | null>(null);
+  const [continuationAdjusting, setContinuationAdjusting] = useState(false);
+  const [continuationReason, setContinuationReason] = useState("");
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
   const addFileBusy = addingFile || pendingPageCountReads > 0;
+  // While a continuation is active, the prefix is fixed to the prior series;
+  // Start and Digits stay fixed too unless "Adjust start…" is in progress --
+  // and even then, Build stays gated on a reason (see canRun below).
+  const continuationActive = continuationPick !== null;
+  const continuationReasonMissing = continuationAdjusting && continuationReason.trim().length === 0;
+  const continuationStartDigitsLocked = continuationActive && !continuationAdjusting;
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
     !prefixMissing &&
     !overflows &&
     !addFileBusy &&
+    !continuationReasonMissing &&
     !progress.running;
 
   useEffect(() => {
@@ -159,11 +204,18 @@ export function ProductionSetWorkspace({
   }, []);
 
   useEffect(() => {
+    // The local last-used hint is a convenience for free-form entry only. While
+    // a continuation is active, the verified number from the prior package is
+    // authoritative — the hint must not overwrite it when the prefix changes.
+    if (continuationActive) {
+      return;
+    }
+
     const lastUsed = readProductionLastUsed(effectivePrefix);
     if (lastUsed !== null) {
       setStart(lastUsed + 1);
     }
-  }, [effectivePrefix]);
+  }, [effectivePrefix, continuationActive]);
 
   async function addFiles(pick: () => Promise<FileAddResult[] | null> = onAddFile) {
     if (addFilePendingRef.current) {
@@ -272,12 +324,67 @@ export function ProductionSetWorkspace({
     });
   }
 
+  async function pickContinuation() {
+    if (!onContinueFromPriorProduction || continuationPicking) {
+      return;
+    }
+
+    setContinuationPicking(true);
+    setContinuationError(null);
+
+    try {
+      const outcome = await onContinueFromPriorProduction();
+      if (!mountedRef.current || outcome.status === "cancelled") {
+        return;
+      }
+      if (outcome.status === "error") {
+        setContinuationError(outcome.message);
+        return;
+      }
+
+      const { pick } = outcome;
+      setContinuationPick(pick);
+      setContinuationAdjusting(false);
+      setContinuationReason("");
+      setNoPrefix(pick.summary.prefix === "");
+      setPrefix(pick.summary.prefix);
+      setStart(pick.summary.nextNumber);
+      setDigits(pick.summary.digits);
+    } finally {
+      if (mountedRef.current) {
+        setContinuationPicking(false);
+      }
+    }
+  }
+
+  function detachContinuation() {
+    setContinuationPick(null);
+    setContinuationAdjusting(false);
+    setContinuationReason("");
+    setContinuationError(null);
+  }
+
+  function beginAdjustContinuation() {
+    setContinuationAdjusting(true);
+  }
+
+  function cancelAdjustContinuation() {
+    if (continuationPick) {
+      setStart(continuationPick.summary.nextNumber);
+      setDigits(continuationPick.summary.digits);
+    }
+    setContinuationAdjusting(false);
+    setContinuationReason("");
+  }
+
   async function run() {
     setLocalMessage(null);
     if (!canRun) {
       setLocalMessage(overflows
         ? "Increase the digit width or lower the start number."
-        : "Add files and choose an empty package root folder.");
+        : continuationReasonMissing
+          ? "Add a reason for adjusting the Bates continuation start or digits."
+          : "Add files and choose an empty package root folder.");
       return;
     }
 
@@ -291,6 +398,10 @@ export function ProductionSetWorkspace({
       includeFilenameInIndex,
       combinedPdf,
       volumeSizeMb: useVolumeCap ? volumeSizeMb : null,
+      continueFrom: continuationPick?.grant,
+      continuationOverrideReason: continuationAdjusting && continuationReason.trim().length > 0
+        ? continuationReason.trim()
+        : undefined,
     });
   }
 
@@ -410,7 +521,7 @@ export function ProductionSetWorkspace({
             <input
               value={prefix}
               placeholder="e.g. SMITH"
-              disabled={noPrefix}
+              disabled={noPrefix || continuationActive}
               onChange={(event) => setPrefix(event.target.value)}
             />
           </label>
@@ -420,6 +531,7 @@ export function ProductionSetWorkspace({
               type="number"
               min="0"
               value={start}
+              disabled={continuationStartDigitsLocked}
               onChange={(event) => setStart(Number(event.target.value))}
             />
           </label>
@@ -430,6 +542,7 @@ export function ProductionSetWorkspace({
               min="1"
               max="12"
               value={digits}
+              disabled={continuationStartDigitsLocked}
               onChange={(event) => setDigits(Number(event.target.value))}
             />
           </label>
@@ -450,6 +563,7 @@ export function ProductionSetWorkspace({
           <input
             type="checkbox"
             checked={noPrefix}
+            disabled={continuationActive}
             onChange={(event) => setNoPrefix(event.target.checked)}
           />
           <span>No prefix (numbers only)</span>
@@ -461,6 +575,66 @@ export function ProductionSetWorkspace({
         {prefixMissing ? (
           <p className="production-workspace__status">{gateMessage}</p>
         ) : null}
+        <div className="production-workspace__continuation" aria-label="Bates continuation">
+          {onContinueFromPriorProduction && !continuationActive ? (
+            <button
+              type="button"
+              className="production-workspace__secondary-button"
+              onClick={() => void pickContinuation()}
+              disabled={continuationPicking || progress.running}
+            >
+              {continuationPicking ? "Reading prior production…" : "Continue from prior production…"}
+            </button>
+          ) : null}
+          {continuationActive && continuationPick ? (
+            <div className="production-workspace__continuation-active">
+              <p className="production-workspace__status" role="status">
+                Continuing {continuationPick.summary.prefix || "(no prefix)"} from{" "}
+                {formatBatesNumber(continuationPick.summary.prefix, continuationPick.summary.nextNumber, continuationPick.summary.digits)}{" "}
+                (prior production ended at {continuationPick.summary.lastBates}, produced{" "}
+                {formatShortDate(continuationPick.summary.createdAt)}) — verify against the served copy.
+              </p>
+              <div className="production-workspace__continuation-actions">
+                {continuationAdjusting ? (
+                  <>
+                    <input
+                      className="production-workspace__continuation-reason"
+                      value={continuationReason}
+                      placeholder="Reason (required), e.g. reserving a range"
+                      aria-label="Reason for adjusting the Bates continuation"
+                      onChange={(event) => setContinuationReason(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="production-workspace__secondary-button"
+                      onClick={cancelAdjustContinuation}
+                    >
+                      Cancel adjust
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="production-workspace__secondary-button"
+                    onClick={beginAdjustContinuation}
+                    disabled={progress.running}
+                  >
+                    Adjust start…
+                  </button>
+                )}
+                <IconButton
+                  icon={<span aria-hidden="true">×</span>}
+                  label="Detach from prior production"
+                  onClick={detachContinuation}
+                  disabled={progress.running}
+                />
+              </div>
+            </div>
+          ) : null}
+          {continuationError ? (
+            <p className="production-workspace__status" role="status">{continuationError}</p>
+          ) : null}
+        </div>
       </section>
 
       <section className="production-workspace__section" aria-label="Output options">
@@ -544,6 +718,12 @@ export function ProductionSetWorkspace({
               <p className="production-workspace__result-subtitle">
                 {progress.result.fileCount} file{progress.result.fileCount === 1 ? "" : "s"} Bates-stamped and written.
               </p>
+              {progress.result.continuation ? (
+                <p className="production-workspace__result-subtitle">
+                  Continued from prior production (ended at {progress.result.continuation.priorLastBates}
+                  {progress.result.continuation.mode === "override" ? ", start adjusted" : ""}).
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="production-workspace__result-parts">
@@ -577,6 +757,18 @@ export function ProductionSetWorkspace({
       ) : null}
     </section>
   );
+}
+
+function formatBatesNumber(prefix: string, value: number, digits: number): string {
+  return `${prefix}${String(value).padStart(digits, "0")}`;
+}
+
+function formatShortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
 function fromSourceFile(file: ProductionSetSourceFile, pages: number): ProductionSetFile {

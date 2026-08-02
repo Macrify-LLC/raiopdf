@@ -3064,6 +3064,7 @@ pub fn run() {
             mcp::mcp_status,
             mcp::mcp_set_enabled,
             mcp::build_production_set,
+            mcp::read_production_continuation,
             mcp::batch_cleanup,
             mcp::build_filing_packet,
             path_ops::path_ops_status,

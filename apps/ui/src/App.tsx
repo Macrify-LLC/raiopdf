@@ -85,6 +85,7 @@ import {
 } from "./components/BatchCleanupWorkspace";
 import {
   ProductionSetWorkspace,
+  type ProductionContinuationPickOutcome,
   type ProductionSetProgress,
   type ProductionSetRunInput,
 } from "./components/ProductionSetWorkspace";
@@ -187,6 +188,7 @@ import {
   openFileInNewWindow,
   openGrantInNewWindow,
   readBrowserFileSource,
+  readProductionContinuation,
   saveStreamedCopy,
   saveStreamedCopyIntoDirectory,
   takeStartupFile,
@@ -1701,6 +1703,7 @@ export function App() {
         indexLocation: string | null;
         nextNumber: number;
         fileCount: number;
+        continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
           const grant = sourceGrants[index];
@@ -1721,6 +1724,8 @@ export function App() {
         includeFilenameInIndex: input.includeFilenameInIndex,
         combinedPdf: input.combinedPdf,
         volumeSizeMb: input.volumeSizeMb ?? undefined,
+        continueFrom: input.continueFrom,
+        continuationOverrideReason: input.continuationOverrideReason,
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);
@@ -4197,6 +4202,31 @@ export function App() {
     () => addFolderFor(setProductionProgress, "production set"),
     [addFolderFor],
   );
+
+  /**
+   * Picks a prior production package folder and reads its verified Bates
+   * continuation for the "Continue from prior production…" prefill. Returns
+   * the shell's directory GRANT (never a raw path [R1-9]) -- the workspace
+   * reuses that same grant as `continueFrom` when the build actually runs,
+   * so the folder is resolved to a path exactly once, in Rust.
+   */
+  const openProductionContinuation = useCallback(async (): Promise<ProductionContinuationPickOutcome> => {
+    const directory = await filePort.pickDirectory();
+    if (!directory) {
+      return { status: "cancelled" };
+    }
+
+    try {
+      const summary = await readProductionContinuation(directory.grant);
+      return { status: "picked", pick: { grant: directory.grant, summary } };
+    } catch (error: unknown) {
+      logWorkflowFailure("production.continuation-failed", error);
+      return {
+        status: "error",
+        message: formatWorkflowError(error, "This folder doesn't look like a RaioPDF production package."),
+      };
+    }
+  }, []);
 
   const openBatchCleanupFolder = useCallback(
     () => addFolderFor(setBatchCleanupProgress, "batch"),
@@ -9167,6 +9197,7 @@ export function App() {
             progress={productionProgress}
             onAddFile={openProductionFile}
             onAddFolder={folderAddSupported ? openProductionFolder : undefined}
+            onContinueFromPriorProduction={folderAddSupported ? openProductionContinuation : undefined}
             onRun={buildProductionSetFromUi}
             onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("production-set")}

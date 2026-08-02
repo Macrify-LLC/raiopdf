@@ -43,6 +43,16 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   hidden files, shortcuts it won't follow out of your folder, and anything it couldn't
   read. Nothing is opened until you say yes. Very large folders stop at 2,000 PDFs and
   tell you so.
+- **Production Set can verify where your last production left off.** Click
+  **Continue from prior production…**, choose the earlier package's folder, and RaioPDF
+  reads that package's own record of what it produced and fills in the prefix, start
+  number, and digit width — with a line telling you exactly what it's continuing from.
+  Those fields lock while a continuation is active so numbers can't be quietly reused;
+  detach to edit freely, or use **Adjust start…** (a one-line reason required) for a
+  deliberate gap or a digit-width change. This is a real, checked reading of the prior
+  package, not just a remembered number — the quieter "picks up where you left off"
+  hint still exists as a fallback, but only this checks the earlier package before
+  committing to a number.
 
 ### Changed
 

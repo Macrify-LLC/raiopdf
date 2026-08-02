@@ -12,6 +12,10 @@ export interface ProductionSourceInput {
   designation?: string | undefined;
 }
 
+export interface ProductionContinuationOverrideInput {
+  reason: string;
+}
+
 export interface BuildProductionSetInput {
   sources: readonly ProductionSourceInput[];
   outputDir: string;
@@ -24,6 +28,57 @@ export interface BuildProductionSetInput {
   volumeSizeMb?: number | undefined;
   appVersion?: string | undefined;
   createdAt?: string | undefined;
+  /**
+   * Root folder of a prior production package to continue the same Bates
+   * series from. When set, this run re-verifies that package (defense in
+   * depth -- the caller has usually already called `readProductionContinuation`
+   * once to prefill the form) and, absent `continuationOverride`, requires an
+   * EXACT match: `prefix` case-sensitive-identical, `digits` identical, and
+   * `start` equal to the prior package's `nextNumber`. Any mismatch is a
+   * pre-output error -- nothing is written.
+   */
+  continueFrom?: string | undefined;
+  /**
+   * Permits `start` and/or `digits` to differ from the prior production (a
+   * deliberate gap, a reserved range, a digit-width change) while still
+   * requiring `prefix` to match exactly. Only meaningful together with
+   * `continueFrom`; a non-empty `reason` is required and is recorded on the
+   * package via `recordOverride`.
+   */
+  continuationOverride?: ProductionContinuationOverrideInput | undefined;
+}
+
+export type ProductionContinuationErrorCode =
+  | "not-a-production-package"
+  | "tampered"
+  | "inconsistent";
+
+/**
+ * Typed failure from `readProductionContinuation`. `code` distinguishes three
+ * cases so callers (the UI, the build-time re-verification) can react
+ * differently: the folder simply isn't a RaioPDF production package, its
+ * Bates report doesn't match what the package manifest recorded (or is
+ * missing), or the report is self-inconsistent (numbering doesn't add up).
+ */
+export class ProductionContinuationError extends Error {
+  readonly code: ProductionContinuationErrorCode;
+
+  constructor(code: ProductionContinuationErrorCode, message: string) {
+    super(message);
+    this.name = "ProductionContinuationError";
+    this.code = code;
+  }
+}
+
+export interface ProductionContinuationSummary {
+  prefix: string;
+  digits: number;
+  nextNumber: number;
+  /** The prior production's last Bates number, formatted (e.g. "SMITH000122"). */
+  lastBates: string;
+  /** The prior package's creation timestamp (ISO 8601), from its manifest. */
+  createdAt: string;
+  fileCount: number;
 }
 
 export interface ProductionSetFileResult {
@@ -63,6 +118,8 @@ export interface ProductionSetResult {
   indexCsv: string | null;
   combinedPdf: string | null;
   manifest: PackageManifest;
+  /** Set when `continueFrom` was used for this build; `null` otherwise. */
+  continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
 }
 
 interface VolumeState {
@@ -108,6 +165,8 @@ interface NormalizedInput {
   appVersion: string;
   createdAt: string;
   volumeBytes: number | null;
+  continueFrom: string | null;
+  continuationOverride: ProductionContinuationOverrideInput | null;
 }
 
 const DEFAULT_DIGITS = 6;
@@ -133,6 +192,284 @@ const DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "cente
  */
 export const MAX_COMBINED_PRODUCTION_SOURCES = 200;
 
+const PRODUCTION_REPORT_NAME = "production.json";
+
+/**
+ * Reads and verifies a prior production package's Bates continuation report
+ * (`raio-manifest/production.json`), returning where the NEXT production in
+ * the same series should start.
+ *
+ * Verification (all must pass, or this throws a `ProductionContinuationError`):
+ * 1. `production.json` is listed in the package's `manifest.json`
+ *    `machineReports` with a matching SHA-256 (catches a report edited or
+ *    replaced after the package was produced).
+ * 2. The report parses to the expected shape (prefix, digit width, and a
+ *    file list whose `batesStart`/`batesEnd` match that prefix and digit
+ *    width).
+ * 3. Every file's Bates range is contiguous with the one before it (no gaps,
+ *    no overlaps) and the first/last numbers line up with the report's own
+ *    `firstNumber`/`lastNumber`.
+ * 4. `lastNumber + 1 === nextNumber`.
+ *
+ * This is deliberately re-run by `buildProductionSet` itself when
+ * `continueFrom` is set -- callers that already ran it once (e.g. the UI, to
+ * prefill the form) still get it re-verified at build time.
+ */
+export async function readProductionContinuation(
+  packageRoot: string,
+): Promise<ProductionContinuationSummary> {
+  const manifest = await readPackageManifest(packageRoot).catch(() => {
+    throw new ProductionContinuationError(
+      "not-a-production-package",
+      "This folder doesn't look like a RaioPDF production package.",
+    );
+  });
+
+  const reportEntry = manifest.machineReports.find((entry) => entry.name === PRODUCTION_REPORT_NAME);
+  if (reportEntry === undefined) {
+    throw new ProductionContinuationError(
+      "not-a-production-package",
+      "This folder doesn't look like a RaioPDF production package -- it has no Bates continuation report.",
+    );
+  }
+
+  const reportPath = path.join(path.resolve(packageRoot), "raio-manifest", PRODUCTION_REPORT_NAME);
+  let reportBytes: Uint8Array;
+  try {
+    reportBytes = await fs.readFile(reportPath);
+  } catch {
+    throw new ProductionContinuationError(
+      "tampered",
+      "This production's Bates report is missing, even though the package manifest lists it. " +
+        "Verify against the served copy before continuing.",
+    );
+  }
+
+  if (sha256Hex(reportBytes) !== reportEntry.sha256) {
+    throw new ProductionContinuationError(
+      "tampered",
+      "This production's Bates report doesn't match the package manifest -- the folder may have " +
+        "changed since it was produced. Verify against the served copy before continuing.",
+    );
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(new TextDecoder().decode(reportBytes));
+  } catch {
+    throw new ProductionContinuationError(
+      "inconsistent",
+      "This production's Bates report could not be read.",
+    );
+  }
+
+  const report = parseProductionReport(parsedJson);
+  const rows = report.files.map((file, index) => parseBatesRow(file, report.prefix, report.digits, index));
+  assertContiguousAndOrdered(rows, report);
+
+  return {
+    prefix: report.prefix,
+    digits: report.digits,
+    nextNumber: report.nextNumber,
+    lastBates: formatBates(report.prefix, report.lastNumber, report.digits),
+    createdAt: manifest.provenance.createdAt,
+    fileCount: rows.length,
+  };
+}
+
+interface ProductionReportFileShape {
+  batesStart: string;
+  batesEnd: string;
+}
+
+interface ProductionReportShape {
+  prefix: string;
+  digits: number;
+  firstNumber: number;
+  lastNumber: number;
+  nextNumber: number;
+  files: readonly ProductionReportFileShape[];
+}
+
+function parseProductionReport(value: unknown): ProductionReportShape {
+  if (!isRecord(value)) {
+    throw inconsistentReport("This production's Bates report is not in the expected format.");
+  }
+
+  const { prefix, digits, firstNumber, lastNumber, nextNumber, files } = value;
+
+  if (typeof prefix !== "string") {
+    throw inconsistentReport("This production's Bates report is missing its prefix.");
+  }
+  if (!isInteger(digits) || digits < 1) {
+    throw inconsistentReport("This production's Bates report has an invalid digit width.");
+  }
+  if (!isInteger(firstNumber) || firstNumber < 0) {
+    throw inconsistentReport("This production's Bates report has an invalid first number.");
+  }
+  if (!isInteger(lastNumber)) {
+    throw inconsistentReport("This production's Bates report has an invalid last number.");
+  }
+  if (!isInteger(nextNumber) || nextNumber < 0) {
+    throw inconsistentReport("This production's Bates report has an invalid next number.");
+  }
+  if (!Array.isArray(files)) {
+    throw inconsistentReport("This production's Bates report is missing its file list.");
+  }
+
+  const parsedFiles = files.map((file, index) => {
+    if (!isRecord(file) || typeof file.batesStart !== "string" || typeof file.batesEnd !== "string") {
+      throw inconsistentReport(
+        `This production's Bates report is missing Bates range data for file ${index + 1}.`,
+      );
+    }
+    return { batesStart: file.batesStart, batesEnd: file.batesEnd };
+  });
+
+  return { prefix, digits, firstNumber, lastNumber, nextNumber, files: parsedFiles };
+}
+
+interface BatesRowRange {
+  start: number;
+  end: number;
+}
+
+function parseBatesRow(
+  file: ProductionReportFileShape,
+  prefix: string,
+  digits: number,
+  index: number,
+): BatesRowRange {
+  const start = parseBatesNumber(file.batesStart, prefix, digits, index, "start");
+  const end = parseBatesNumber(file.batesEnd, prefix, digits, index, "end");
+  if (end < start) {
+    throw inconsistentReport(`This production's Bates report has an invalid range at file ${index + 1}.`);
+  }
+  return { start, end };
+}
+
+/** Also doubles as the "digits/prefix consistent across rows" check: a row
+ * whose Bates string doesn't start with the report's own prefix, or whose
+ * numeric tail isn't exactly `digits` zero-padded digits, fails here. */
+function parseBatesNumber(
+  value: string,
+  prefix: string,
+  digits: number,
+  index: number,
+  which: "start" | "end",
+): number {
+  if (!value.startsWith(prefix)) {
+    throw inconsistentReport(
+      `This production's Bates report has a ${which} number at file ${index + 1} that doesn't match its prefix.`,
+    );
+  }
+  const numeric = value.slice(prefix.length);
+  if (numeric.length !== digits || !/^[0-9]+$/.test(numeric)) {
+    throw inconsistentReport(
+      `This production's Bates report has a ${which} number at file ${index + 1} that doesn't match its digit width.`,
+    );
+  }
+  return Number.parseInt(numeric, 10);
+}
+
+function assertContiguousAndOrdered(rows: readonly BatesRowRange[], report: ProductionReportShape): void {
+  if (report.lastNumber + 1 !== report.nextNumber) {
+    throw inconsistentReport(
+      "This production's Bates report numbering is inconsistent -- its last and next numbers don't line up.",
+    );
+  }
+
+  if (rows.length === 0) {
+    if (report.lastNumber !== report.firstNumber - 1) {
+      throw inconsistentReport("This production's Bates report numbering is inconsistent.");
+    }
+    return;
+  }
+
+  if (rows[0]!.start !== report.firstNumber) {
+    throw inconsistentReport(
+      "This production's Bates report's first file doesn't match its recorded first number.",
+    );
+  }
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1]!;
+    const current = rows[index]!;
+    if (current.start !== previous.end + 1) {
+      throw inconsistentReport(
+        `This production's Bates report has a gap or overlap between files ${index} and ${index + 1}.`,
+      );
+    }
+  }
+
+  if (rows[rows.length - 1]!.end !== report.lastNumber) {
+    throw inconsistentReport(
+      "This production's Bates report's last file doesn't match its recorded last number.",
+    );
+  }
+}
+
+function inconsistentReport(message: string): ProductionContinuationError {
+  return new ProductionContinuationError("inconsistent", message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
+interface ProductionContinuationCheck {
+  mode: "strict" | "override";
+  summary: ProductionContinuationSummary;
+}
+
+/**
+ * Re-verifies `options.continueFrom` at build time (defense in depth against
+ * a caller reusing a stale prefill) and enforces the strict-vs-override
+ * numbering contract described on `BuildProductionSetInput.continueFrom`.
+ */
+async function verifyProductionContinuation(options: NormalizedInput): Promise<ProductionContinuationCheck> {
+  const continueFrom = options.continueFrom;
+  if (continueFrom === null) {
+    throw new Error("Internal error: no prior production selected to continue from.");
+  }
+
+  const summary = await readProductionContinuation(continueFrom);
+
+  if (summary.prefix !== options.prefix) {
+    throw new Error(
+      `Continuing prefix mismatch: the prior production used "${summary.prefix}", but this run is set ` +
+        `to "${options.prefix}". The prefix must match exactly to continue the same Bates series.`,
+    );
+  }
+
+  if (options.continuationOverride === null) {
+    if (summary.digits !== options.digits) {
+      throw new Error(
+        `Continuing digit-width mismatch: the prior production used ${summary.digits}-digit Bates ` +
+          `numbers (last: ${summary.lastBates}), but this run is set to ${options.digits}. Use ` +
+          '"Adjust start" with a reason to override, or match the prior digit width.',
+      );
+    }
+    if (summary.nextNumber !== options.start) {
+      const expected = formatBates(summary.prefix, summary.nextNumber, summary.digits);
+      const actual = formatBates(options.prefix, options.start, options.digits);
+      throw new Error(
+        `Continuing start mismatch: the prior production's next available number is ${expected}, but ` +
+          `this run starts at ${actual}. Use "Adjust start" with a reason to override, or start at ${expected}.`,
+      );
+    }
+  }
+
+  return {
+    mode: options.continuationOverride === null ? "strict" : "override",
+    summary,
+  };
+}
+
 export async function buildProductionSet(
   input: BuildProductionSetInput,
   engine: PdfEngine = createLocalPdfEngine(),
@@ -149,6 +486,14 @@ export async function buildProductionSet(
   let finalized = false;
 
   try {
+    // Pre-output: re-verify the prior production and enforce the numbering
+    // contract BEFORE anything is read or written -- a mismatch here must
+    // leave no half-built package behind, same as the Bates-digit-overflow
+    // check below.
+    const continuation = options.continueFrom === null
+      ? null
+      : await verifyProductionContinuation(options);
+
     const sourcePlans = await prepareProductionSourcePlans(options, engine);
     session = createPackage(options.outputDir, {
       appVersion: options.appVersion,
@@ -284,6 +629,37 @@ export async function buildProductionSet(
         valueMb: input.volumeSizeMb,
       });
     }
+    if (continuation !== null) {
+      session.recordCheck({
+        checkId: "bates-continuation",
+        status: "pass",
+        detail: {
+          priorLastBates: continuation.summary.lastBates,
+          priorCreatedAt: continuation.summary.createdAt,
+          priorFileCount: continuation.summary.fileCount,
+          mode: continuation.mode,
+        },
+      });
+      // The absolute prior-package path is allowed here on the same terms as
+      // `productionSources[].sourcePath` above: this is an internal audit
+      // detail, never routed through `addManifestJson` (whose absolute-path
+      // guard covers machine reports meant for review/upload, not this).
+      session.recordDetail("productionContinuationSource", {
+        priorPackageRoot: path.resolve(options.continueFrom!),
+        mode: continuation.mode,
+      });
+      if (continuation.mode === "override") {
+        session.recordOverride({
+          type: "production-bates-continuation",
+          reason: options.continuationOverride!.reason,
+          priorPrefix: continuation.summary.prefix,
+          priorDigits: continuation.summary.digits,
+          priorNextNumber: continuation.summary.nextNumber,
+          appliedStart: options.start,
+          appliedDigits: options.digits,
+        });
+      }
+    }
     session.recordCheck({
       checkId: "production-index-path-hygiene",
       status: "pass",
@@ -342,6 +718,9 @@ export async function buildProductionSet(
       indexCsv,
       combinedPdf,
       manifest,
+      continuation: continuation === null
+        ? null
+        : { mode: continuation.mode, priorLastBates: continuation.summary.lastBates },
     };
   } finally {
     if (combinedHandle !== null) {
@@ -490,6 +869,12 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
   if (input.volumeSizeMb !== undefined && (!Number.isFinite(input.volumeSizeMb) || input.volumeSizeMb <= 0)) {
     throw new Error("Volume size cap must be a positive number of MB.");
   }
+  if (input.continuationOverride !== undefined && input.continueFrom === undefined) {
+    throw new Error("Adjusting the Bates continuation start or digit width requires continuing from a prior production.");
+  }
+  if (input.continuationOverride !== undefined && input.continuationOverride.reason.trim().length === 0) {
+    throw new Error("A reason is required to adjust the Bates continuation start or digit width.");
+  }
   // Refused before anything is written, so the user still has the choice of
   // running the same production without the combined PDF.
   if ((input.combinedPdf ?? false) && input.sources.length > MAX_COMBINED_PRODUCTION_SOURCES) {
@@ -512,6 +897,8 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     appVersion: input.appVersion ?? DEFAULT_APP_VERSION,
     createdAt: input.createdAt ?? new Date().toISOString(),
     volumeBytes: input.volumeSizeMb === undefined ? null : Math.floor(input.volumeSizeMb * 1024 * 1024),
+    continueFrom: input.continueFrom ?? null,
+    continuationOverride: input.continuationOverride ?? null,
   };
 }
 

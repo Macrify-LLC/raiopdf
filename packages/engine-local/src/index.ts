@@ -49,6 +49,7 @@ import type {
   PdfShapeKind,
   PdfSignatureEdit,
   PdfSplitByMaxBytesResult,
+  PdfStampEdit,
   PdfStampPlacement,
   PdfStampTextOptions,
   PdfTableOfAuthoritiesOptions,
@@ -150,7 +151,14 @@ type TextBoxFontKey = `${PdfTextBoxFontFamily}:${"regular" | "bold" | "italic" |
 
 type TextRenderableEdit = PdfTextBoxEdit | PdfCalloutEdit;
 
-type TextBoxFontResolver = (edit: TextRenderableEdit) => Promise<PDFFont>;
+/**
+ * The only fields that pick a standard-font face. Kept narrower than
+ * `TextRenderableEdit` so stamps — which render their own centered layout
+ * rather than the text-box one — can share the font cache.
+ */
+type FontFaceSelection = Pick<PdfTextBoxEdit, "fontFamily" | "bold" | "italic">;
+
+type TextBoxFontResolver = (edit: FontFaceSelection) => Promise<PDFFont>;
 
 export type ExhibitBinderIndexExhibit = {
   label: string;
@@ -212,6 +220,29 @@ const DEFAULT_INK_STROKE_WIDTH_PT = 1.5;
 const DEFAULT_SHAPE_STROKE_WIDTH_PT = 1.5;
 const DEFAULT_CALLOUT_STROKE_WIDTH_PT = DEFAULT_SHAPE_STROKE_WIDTH_PT;
 const DEFAULT_CALLOUT_BOX_BORDER_WIDTH_PT = 0.75;
+const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
+/** Gap between the inside of a stamp's border and its text block. */
+const STAMP_TEXT_PADDING_PT = 2;
+/**
+ * Floor for stamp shrink-to-fit. Below this the label stops being legible at
+ * print size, so the renderer clamps lines instead of shrinking further.
+ */
+const MIN_STAMP_FONT_SIZE_PT = 6;
+const STAMP_FONT_SIZE_STEP_PT = 0.5;
+/**
+ * A border thicker than this fraction of the sticker's short side would eat the
+ * text area, so `borderWidthPt` is clamped to it.
+ */
+const STAMP_MAX_BORDER_WIDTH_FRACTION = 0.25;
+const STAMP_ANNOTATION_NAME = "RaioPDFExhibit";
+/**
+ * Caps on the label a stamp may carry. Enforced on the way in *and* on import,
+ * so a stamp this engine writes is always one it can read back.
+ */
+const STAMP_MAX_LINES = 12;
+const STAMP_MAX_LINE_LENGTH = 200;
+/** Control-point ratio that turns a cubic Bezier into a quarter circle. */
+const CIRCLE_BEZIER_KAPPA = 0.5522847498307936;
 const ARROW_HEAD_MIN_PT = 8;
 const ARROW_HEAD_MAX_PT = 32;
 const COMMENT_ICON_SIZE_PT = 20;
@@ -237,6 +268,7 @@ const RAIOPDF_MARKUP_ANNOTATION_SUBTYPES = new Set([
   "Polygon",
   "Square",
   "Squiggly",
+  "Stamp",
   "StrikeOut",
   "Underline",
 ]);
@@ -259,6 +291,7 @@ const RAIO_ROUNDTRIP_SUBTYPE_BY_KIND = {
   strikethrough: "StrikeOut",
   textBox: "FreeText",
   callout: "FreeText",
+  stamp: "Stamp",
   ink: "Ink",
   comment: "Text",
 } satisfies Record<Exclude<PdfRaioAnnotationEdit["type"], "shape">, string>;
@@ -1590,6 +1623,14 @@ function isRaioAnnotationEdit(value: unknown): value is PdfRaioAnnotationEdit {
         isEditRectLike(edit.rect) &&
         isEditPointLike(edit.tip) &&
         typeof edit.text === "string";
+    case "stamp":
+      return (
+        isEditPageIndexLike(edit.pageIndex) &&
+        isPositiveEditRectLike(edit.rect) &&
+        isStampLineListLike(edit.lines) &&
+        isStampStyleLike(edit) &&
+        isStampSequenceLike(edit.sequence)
+      );
     case "ink":
       return typeof edit.pageIndex === "number" && isInkStrokeListLike(edit.strokes);
     case "shape":
@@ -1631,6 +1672,117 @@ function isShapeGeometryLike(edit: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * Stamps carry more optional style than the other kinds, so their stored
+ * `SourceEdit` is checked field by field. An option that is present but
+ * wrong-typed drops the whole annotation rather than falling back to a default:
+ * a hand-edited marker must not be able to quietly restyle a stamp.
+ */
+function isStampStyleLike(edit: Record<string, unknown>): boolean {
+  return (
+    isOptionally(edit.fontSizePt, isPositiveFiniteNumber) &&
+    isOptionally(edit.fontFamily, isTextBoxFontFamilyLike) &&
+    isOptionally(edit.bold, isBooleanLike) &&
+    isOptionally(edit.italic, isBooleanLike) &&
+    isOptionally(edit.color, isEditColorLike) &&
+    isOptionallyNullable(edit.fillColor, isEditColorLike) &&
+    isOptionallyNullable(edit.borderColor, isEditColorLike) &&
+    isOptionally(edit.borderWidthPt, isNonNegativeFiniteNumber) &&
+    isOptionally(edit.cornerRadiusPt, isNonNegativeFiniteNumber) &&
+    isOptionally(edit.templateId, isStringLike) &&
+    isOptionally(edit.templateRevision, isNonNegativeFiniteNumber)
+  );
+}
+
+function isStampSequenceLike(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const sequence = value as Record<string, unknown>;
+
+  return (
+    sequence.schemaVersion === 1 &&
+    (sequence.identifierStyle === "numbers" ||
+      sequence.identifierStyle === "letters" ||
+      sequence.identifierStyle === "none") &&
+    typeof sequence.prefix === "string" &&
+    isOptionally(sequence.suffix, isStringLike) &&
+    (sequence.layout === "stacked" || sequence.layout === "inline") &&
+    isEditPageIndexLike(sequence.index)
+  );
+}
+
+/** A stamp needs at least one line, and bounded lines so a marker can't bloat. */
+function isStampLineListLike(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= STAMP_MAX_LINES &&
+    value.every((line) => typeof line === "string" && line.length <= STAMP_MAX_LINE_LENGTH)
+  );
+}
+
+function isOptionally(value: unknown, isValid: (candidate: unknown) => boolean): boolean {
+  return value === undefined || isValid(value);
+}
+
+function isOptionallyNullable(value: unknown, isValid: (candidate: unknown) => boolean): boolean {
+  return value === undefined || value === null || isValid(value);
+}
+
+function isStringLike(value: unknown): boolean {
+  return typeof value === "string";
+}
+
+function isBooleanLike(value: unknown): boolean {
+  return typeof value === "boolean";
+}
+
+function isPositiveFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isTextBoxFontFamilyLike(value: unknown): boolean {
+  return value === "helvetica" || value === "times" || value === "courier";
+}
+
+function isEditColorLike(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const color = value as Record<string, unknown>;
+
+  return (["r", "g", "b"] as const).every((channel) => {
+    const component = color[channel];
+
+    return typeof component === "number" && Number.isFinite(component) &&
+      component >= 0 && component <= 1;
+  });
+}
+
+function isEditPageIndexLike(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPositiveEditRectLike(value: unknown): value is PdfEditRect {
+  return (
+    isEditRectLike(value) &&
+    [value.x, value.y, value.w, value.h].every((component) => Number.isFinite(component)) &&
+    value.w > 0 &&
+    value.h > 0
+  );
 }
 
 function isEditRectLike(value: unknown): value is PdfEditRect {
@@ -2238,6 +2390,13 @@ async function applyEditInPlace(
         applyCalloutEdit(pdf, edit, await resolveTextBoxFont(edit));
       }
       return;
+    case "stamp":
+      if (markupMode === "annotation") {
+        applyStampAnnotationEdit(pdf, edit, await resolveTextBoxFont(edit), markupAnnotationOptions);
+      } else {
+        applyStampEdit(pdf, edit, await resolveTextBoxFont(edit));
+      }
+      return;
     case "image":
     case "signature":
       await applyImageEdit(pdf, edit);
@@ -2292,6 +2451,14 @@ async function applyRaioAnnotationEditInPlace(
       return;
     case "callout":
       applyCalloutAnnotationEdit(
+        pdf,
+        edit,
+        await resolveTextBoxFont(edit),
+        markupAnnotationOptions,
+      );
+      return;
+    case "stamp":
+      applyStampAnnotationEdit(
         pdf,
         edit,
         await resolveTextBoxFont(edit),
@@ -2391,6 +2558,17 @@ function applyCalloutEdit(pdf: PDFDocument, edit: PdfCalloutEdit, font: PDFFont)
   }
 
   drawTextBoxText(pdf, edit, font, target);
+}
+
+/**
+ * Draws the exhibit sticker straight into page content for
+ * `markupMode: "baked"`, so a baked request never silently emits a live
+ * annotation.
+ */
+function applyStampEdit(pdf: PDFDocument, edit: PdfStampEdit, font: PDFFont): void {
+  const page = pdf.getPage(edit.pageIndex);
+
+  drawStamp(createPageDrawTarget(page), edit, font, stampGeometry(page));
 }
 
 function drawTextBoxText(
@@ -2528,6 +2706,265 @@ function computeCalloutLeaderAnchor(rect: PdfEditRect, tip: PdfEditPoint): PdfEd
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+type StampGeometry = {
+  pageWidth: number;
+  pageHeight: number;
+  pageRotation: PageRotation;
+};
+
+type StampLayout = {
+  /** Effective border thickness after clamping. Zero when no border is drawn. */
+  borderWidthPt: number;
+  /** Border path rect, inset by half the stroke so the stroke stays inside `rect`. */
+  borderRect: PdfEditRect;
+  cornerRadiusPt: number;
+  /** Text area in visual space, inset from the border by the text padding. */
+  contentRect: PdfEditRect;
+  fontSizePt: number;
+  /** Sanitized, fitted lines. May be shorter than `edit.lines` when clamped. */
+  lines: readonly string[];
+};
+
+function stampGeometry(page: ReturnType<PDFDocument["getPage"]>): StampGeometry {
+  return {
+    pageWidth: page.getWidth(),
+    pageHeight: page.getHeight(),
+    pageRotation: normalizePageRotation(page.getRotation().angle),
+  };
+}
+
+/**
+ * A border thicker than a quarter of the sticker's short side would leave no
+ * room for the label, so the requested width is clamped. `borderColor: null`
+ * means no border at all.
+ */
+function resolveStampBorderWidthPt(edit: PdfStampEdit): number {
+  if (edit.borderColor === null) {
+    return 0;
+  }
+
+  return clamp(
+    edit.borderWidthPt ?? DEFAULT_STAMP_BORDER_WIDTH_PT,
+    0,
+    Math.min(edit.rect.w, edit.rect.h) * STAMP_MAX_BORDER_WIDTH_FRACTION,
+  );
+}
+
+function computeStampLayout(
+  edit: PdfStampEdit,
+  font: PDFFont,
+  geometry: StampGeometry,
+): StampLayout {
+  const borderWidthPt = resolveStampBorderWidthPt(edit);
+  const borderRect = insetRect(edit.rect, borderWidthPt / 2);
+  const cornerRadiusPt = clamp(
+    edit.cornerRadiusPt ?? 0,
+    0,
+    Math.min(borderRect.w, borderRect.h) / 2,
+  );
+  // Text is laid out in visual space so it reads upright on rotated pages. The
+  // inset is symmetric, so insetting the mapped rect matches insetting the
+  // user-space rect and then mapping it.
+  const contentRect = insetRect(
+    mapPageRectToVisualRect(edit.rect, geometry.pageWidth, geometry.pageHeight, geometry.pageRotation),
+    borderWidthPt + STAMP_TEXT_PADDING_PT,
+  );
+  const sanitizedLines = edit.lines.map((line) => sanitizeIndexTextForFont(font, line));
+  const fitted = fitStampLines(
+    sanitizedLines,
+    font,
+    contentRect,
+    edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE_PT,
+  );
+
+  return {
+    borderWidthPt,
+    borderRect,
+    cornerRadiusPt,
+    contentRect,
+    fontSizePt: fitted.fontSizePt,
+    lines: fitted.lines,
+  };
+}
+
+/**
+ * Shrinks the label until it fits the sticker, in fixed steps down to
+ * `MIN_STAMP_FONT_SIZE_PT`. A label that still overflows at the floor is
+ * clamped — surplus lines dropped, long lines ellipsized — so the stamp always
+ * draws something and never paints outside its own box.
+ */
+function fitStampLines(
+  lines: readonly string[],
+  font: PDFFont,
+  contentRect: PdfEditRect,
+  requestedFontSizePt: number,
+): { fontSizePt: number; lines: readonly string[] } {
+  const maxWidth = Math.max(0, contentRect.w);
+  const maxHeight = Math.max(0, contentRect.h);
+  const startFontSizePt = Math.max(MIN_STAMP_FONT_SIZE_PT, requestedFontSizePt);
+  const steps = Math.ceil((startFontSizePt - MIN_STAMP_FONT_SIZE_PT) / STAMP_FONT_SIZE_STEP_PT);
+
+  for (let step = 0; step <= steps; step += 1) {
+    const fontSizePt = Math.max(
+      MIN_STAMP_FONT_SIZE_PT,
+      startFontSizePt - step * STAMP_FONT_SIZE_STEP_PT,
+    );
+
+    if (stampLinesFit(lines, font, fontSizePt, maxWidth, maxHeight)) {
+      return { fontSizePt, lines };
+    }
+  }
+
+  const lineHeight = MIN_STAMP_FONT_SIZE_PT * TEXT_BOX_LINE_HEIGHT_FACTOR;
+
+  return {
+    fontSizePt: MIN_STAMP_FONT_SIZE_PT,
+    lines: lines
+      .slice(0, Math.max(1, Math.floor(maxHeight / lineHeight)))
+      .map((line) => fitTextToWidth(font, line, MIN_STAMP_FONT_SIZE_PT, maxWidth)),
+  };
+}
+
+function stampLinesFit(
+  lines: readonly string[],
+  font: PDFFont,
+  fontSizePt: number,
+  maxWidth: number,
+  maxHeight: number,
+): boolean {
+  return (
+    lines.length * fontSizePt * TEXT_BOX_LINE_HEIGHT_FACTOR <= maxHeight &&
+    lines.every((line) => font.widthOfTextAtSize(line, fontSizePt) <= maxWidth)
+  );
+}
+
+function insetRect(rect: PdfEditRect, inset: number): PdfEditRect {
+  return {
+    x: rect.x + inset,
+    y: rect.y + inset,
+    w: rect.w - inset * 2,
+    h: rect.h - inset * 2,
+  };
+}
+
+/**
+ * Draws one exhibit sticker: fill, then border, then the centered label.
+ *
+ * Everything handed to `target` is page user space — except the rounded-corner
+ * path, because `drawSvgPath` submits its path verbatim at the target's own
+ * origin instead of mapping it. That path is therefore built through
+ * `target.mapPoint`, which is the identity for page drawing and the
+ * rect-relative offset for an appearance stream.
+ */
+function drawStamp(
+  target: DrawTarget,
+  edit: PdfStampEdit,
+  font: PDFFont,
+  geometry: StampGeometry,
+): void {
+  const layout = computeStampLayout(edit, font, geometry);
+  const fillColor = edit.fillColor ? toEditColor(edit.fillColor, EDIT_INK_COLOR) : undefined;
+  const strokeColor =
+    layout.borderWidthPt > 0
+      ? toEditColor(edit.borderColor ?? undefined, EDIT_INK_COLOR)
+      : undefined;
+  const paint = {
+    ...(fillColor ? { fillColor } : {}),
+    ...(strokeColor ? { strokeColor, strokeWidthPt: layout.borderWidthPt } : {}),
+  };
+
+  if (fillColor || strokeColor) {
+    if (layout.cornerRadiusPt > 0) {
+      target.drawSvgPath({
+        path: roundedRectPath(
+          target.mapPoint(layout.borderRect),
+          layout.borderRect.w,
+          layout.borderRect.h,
+          layout.cornerRadiusPt,
+        ),
+        ...paint,
+      });
+    } else {
+      target.drawRectangle({ rect: layout.borderRect, ...paint });
+    }
+  }
+
+  drawStampLines(target, edit, font, geometry, layout);
+}
+
+function drawStampLines(
+  target: DrawTarget,
+  edit: PdfStampEdit,
+  font: PDFFont,
+  geometry: StampGeometry,
+  layout: StampLayout,
+): void {
+  const lineHeight = layout.fontSizePt * TEXT_BOX_LINE_HEIGHT_FACTOR;
+  const blockTop =
+    layout.contentRect.y + (layout.contentRect.h + layout.lines.length * lineHeight) / 2;
+  const color = toEditColor(edit.color, EDIT_INK_COLOR);
+
+  layout.lines.forEach((line, lineIndex) => {
+    if (line.length === 0) {
+      return;
+    }
+
+    const lineWidth = font.widthOfTextAtSize(line, layout.fontSizePt);
+    const anchor = mapVisualPointToPagePoint({
+      visualX: layout.contentRect.x + (layout.contentRect.w - lineWidth) / 2,
+      visualY: blockTop - layout.fontSizePt - lineIndex * lineHeight,
+      pageWidth: geometry.pageWidth,
+      pageHeight: geometry.pageHeight,
+      pageRotation: geometry.pageRotation,
+    });
+
+    target.drawText({
+      text: line,
+      at: anchor,
+      fontSizePt: layout.fontSizePt,
+      font,
+      color,
+      rotateDegrees: geometry.pageRotation,
+    });
+  });
+}
+
+/**
+ * Rounded-rectangle path in the draw target's LOCAL space, given the rect's
+ * local bottom-left corner.
+ *
+ * `drawSvgPath` applies pdf-lib's SVG y-flip (`scale(1, -1)`), so every y here
+ * is negated. A rounded rectangle is symmetric under that flip, so the drawn
+ * box is the same rectangle either way.
+ */
+function roundedRectPath(
+  origin: PdfEditPoint,
+  width: number,
+  height: number,
+  radius: number,
+): string {
+  const left = origin.x;
+  const right = origin.x + width;
+  const near = -origin.y;
+  const far = -(origin.y + height);
+  const pull = radius * CIRCLE_BEZIER_KAPPA;
+  const point = (x: number, y: number): string =>
+    `${formatPdfNumber(x)} ${formatPdfNumber(y)}`;
+
+  return [
+    `M ${point(left + radius, near)}`,
+    `L ${point(right - radius, near)}`,
+    `C ${point(right - radius + pull, near)} ${point(right, near - radius + pull)} ${point(right, near - radius)}`,
+    `L ${point(right, far + radius)}`,
+    `C ${point(right, far + radius - pull)} ${point(right - radius + pull, far)} ${point(right - radius, far)}`,
+    `L ${point(left + radius, far)}`,
+    `C ${point(left + radius - pull, far)} ${point(left, far + radius - pull)} ${point(left, far + radius)}`,
+    `L ${point(left, near - radius)}`,
+    `C ${point(left, near - radius + pull)} ${point(left + radius - pull, near)} ${point(left + radius, near)}`,
+    "Z",
+  ].join(" ");
 }
 
 /**
@@ -2955,6 +3392,37 @@ function applyCalloutAnnotationEdit(
     C: colorToPdfArray(edit.color),
     BS: { W: thickness, S: "S" },
     ...(edit.arrowhead ?? true ? { LE: PDFName.of("ClosedArrow") } : {}),
+    AP: { N: appearanceTarget.finish() },
+  }, edit);
+}
+
+/**
+ * Emits the sticker as a live `/Stamp` annotation whose appearance stream is
+ * drawn AP-local by the same routine the baked path uses, so flattening it
+ * reproduces the baked drawing.
+ */
+function applyStampAnnotationEdit(
+  pdf: PDFDocument,
+  edit: PdfStampEdit,
+  font: PDFFont,
+  options: MarkupAnnotationOptions,
+): void {
+  const page = pdf.getPage(edit.pageIndex);
+  const geometry = stampGeometry(page);
+  // The border is inset by half its width, so it already sits inside `rect`;
+  // the margin is pure anti-clipping slack at the BBox edge.
+  const appearanceTarget = createAnnotationAppearanceTarget(pdf, edit.rect, geometry.pageRotation, {
+    marginPt: appearanceStrokeMargin(resolveStampBorderWidthPt(edit)),
+  });
+
+  drawStamp(appearanceTarget, edit, font, geometry);
+
+  addMarkupAnnotation(page, options, {
+    Subtype: "Stamp",
+    Name: PDFName.of(STAMP_ANNOTATION_NAME),
+    Rect: rectToPdfArray(appearanceTarget.annotationRect),
+    Contents: PDFString.of(edit.lines.join("\n")),
+    C: colorToPdfArray(edit.color),
     AP: { N: appearanceTarget.finish() },
   }, edit);
 }
@@ -3398,6 +3866,9 @@ function assertValidEdit(edit: PdfEdit, pageCount: number): void {
         assertEditColor(edit.boxFill, "Callout box fill");
       }
       return;
+    case "stamp":
+      assertValidStampEdit(edit);
+      return;
     case "image":
     case "signature":
       assertEditRect(edit.rect);
@@ -3482,6 +3953,70 @@ function assertValidTextRenderableEdit(edit: TextRenderableEdit, label: string):
       "INVALID_DOCUMENT",
       `${label} align must be left, center, or right.`,
     );
+  }
+}
+
+/**
+ * Every bound here is also enforced by the import validator, so a stamp this
+ * engine accepts is always one it can read back out of the saved file.
+ */
+function assertValidStampEdit(edit: PdfStampEdit): void {
+  assertEditRect(edit.rect);
+
+  if (edit.lines.length === 0 || edit.lines.length > STAMP_MAX_LINES) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Stamp edits require 1 to ${STAMP_MAX_LINES} lines.`,
+    );
+  }
+
+  if (edit.lines.some((line) => line.length > STAMP_MAX_LINE_LENGTH)) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      `Stamp lines must be at most ${STAMP_MAX_LINE_LENGTH} characters.`,
+    );
+  }
+
+  if (edit.templateRevision !== undefined) {
+    assertNonNegativeNumber(edit.templateRevision, "templateRevision");
+  }
+
+  if (edit.sequence) {
+    assertNonNegativeInteger(edit.sequence.index, "sequence.index");
+  }
+
+  if (edit.fontSizePt !== undefined) {
+    assertPositiveNumber(edit.fontSizePt, "fontSizePt");
+  }
+
+  if (
+    edit.fontFamily !== undefined &&
+    !["helvetica", "times", "courier"].includes(edit.fontFamily)
+  ) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "Stamp fontFamily must be helvetica, times, or courier.",
+    );
+  }
+
+  if (edit.color !== undefined) {
+    assertEditColor(edit.color, "Stamp color");
+  }
+
+  if (edit.fillColor) {
+    assertEditColor(edit.fillColor, "Stamp fill color");
+  }
+
+  if (edit.borderColor) {
+    assertEditColor(edit.borderColor, "Stamp border color");
+  }
+
+  if (edit.borderWidthPt !== undefined) {
+    assertNonNegativeNumber(edit.borderWidthPt, "borderWidthPt");
+  }
+
+  if (edit.cornerRadiusPt !== undefined) {
+    assertNonNegativeNumber(edit.cornerRadiusPt, "cornerRadiusPt");
   }
 }
 
@@ -3593,7 +4128,7 @@ function toEditColor(
   return color ? rgb(color.r, color.g, color.b) : fallback;
 }
 
-function textBoxFontKey(edit: TextRenderableEdit): TextBoxFontKey {
+function textBoxFontKey(edit: FontFaceSelection): TextBoxFontKey {
   const family = edit.fontFamily ?? "helvetica";
 
   if (edit.bold && edit.italic) {

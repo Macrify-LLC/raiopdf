@@ -326,8 +326,15 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   }, []);
 
   const loadImportedAnnotations = useCallback((annotations: readonly PdfRaioAnnotationImport[]) => {
-    setPendingEdits(pendingEditsFromRaioAnnotations(annotations));
-    setImportedAnnotIds(new Set(annotations.map((annotation) => annotation.annotId)));
+    const imported = pendingEditsFromRaioAnnotations(annotations);
+
+    setPendingEdits(imported);
+    // Ids come from the edits the overlay actually took on, not the raw
+    // annotation list: an annotation kind the overlay can't represent must not
+    // look deleted to the save plan.
+    setImportedAnnotIds(
+      new Set(imported.flatMap((edit) => (edit.annotId ? [edit.annotId] : []))),
+    );
     setSelectedEditId(null);
   }, []);
 

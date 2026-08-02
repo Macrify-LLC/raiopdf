@@ -383,16 +383,23 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
   }
 }
 
+/**
+ * Imported annotations the overlay can edit. Kinds it can't represent are
+ * dropped here; since `buildAnnotationSavePlan` only deletes ids it was handed,
+ * callers must derive `importedAnnotIds` from this result so a dropped
+ * annotation survives the next save untouched.
+ */
 export function pendingEditsFromRaioAnnotations(
   annotations: readonly PdfRaioAnnotationImport[],
 ): PendingEdit[] {
-  return annotations.map((annotation) => {
+  return annotations.flatMap((annotation) => {
     const pending = pendingEditFromRaioAnnotation(annotation);
 
-    return {
-      ...pending,
-      sourceBaseline: JSON.stringify(toPdfEdit(pending)),
-    };
+    if (!pending) {
+      return [];
+    }
+
+    return [{ ...pending, sourceBaseline: JSON.stringify(toPdfEdit(pending)) }];
   });
 }
 
@@ -449,7 +456,12 @@ export function annotationSavePlanHasChanges(plan: AnnotationSavePlan): boolean 
     plan.deleteAnnotIds.length > 0;
 }
 
-function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): PendingEdit {
+/**
+ * Returns null for an annotation kind the overlay can't represent yet. Callers
+ * must leave those annotations alone in the file rather than treating them as
+ * removed — see `pendingEditsFromRaioAnnotations`.
+ */
+function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): PendingEdit | null {
   const common = {
     id: `annot-${annotation.annotId}`,
     annotId: annotation.annotId,
@@ -550,6 +562,11 @@ function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): Pen
         at: edit.at,
         text: edit.text,
       };
+    case "stamp":
+      // No overlay for placed exhibit stamps yet. The engine round-trips them,
+      // so leave the annotation alone rather than surface a half-editable
+      // object.
+      return null;
   }
 }
 

@@ -169,6 +169,7 @@ describe("ProductionSetWorkspace trust behaviors", () => {
           indexLocation: "/tmp/production-package/index.pdf",
           nextNumber: 4,
           fileCount: 1,
+          duplicateCount: 0,
         },
       },
       onOpenPackageRoot,

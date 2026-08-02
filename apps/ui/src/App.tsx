@@ -184,6 +184,7 @@ import {
 } from "./lib/pdfRangeTransport";
 import {
   filePort,
+  hashFileForGrant,
   isFileChangedError,
   openFileInNewWindow,
   openGrantInNewWindow,
@@ -1704,6 +1705,7 @@ export function App() {
         nextNumber: number;
         fileCount: number;
         continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
+        duplicateCount: number;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
           const grant = sourceGrants[index];
@@ -1731,6 +1733,7 @@ export function App() {
         stampFontSizePt: input.stampFontSizePt,
         continueFrom: input.continueFrom,
         continuationOverrideReason: input.continuationOverrideReason,
+        duplicateHandling: input.duplicateHandling,
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);
@@ -4232,6 +4235,16 @@ export function App() {
       };
     }
   }, []);
+
+  /**
+   * Advisory duplicate-detection hash for a Production Set above-threshold
+   * (descriptor-kind) add -- see `hashFileForGrant`'s doc comment for why a
+   * failure resolves `null` instead of throwing.
+   */
+  const hashProductionSetGrant = useCallback(
+    (grant: string) => hashFileForGrant(grant as FileGrant),
+    [],
+  );
 
   const openBatchCleanupFolder = useCallback(
     () => addFolderFor(setBatchCleanupProgress, "batch"),
@@ -9203,6 +9216,7 @@ export function App() {
             onAddFile={openProductionFile}
             onAddFolder={folderAddSupported ? openProductionFolder : undefined}
             onContinueFromPriorProduction={folderAddSupported ? openProductionContinuation : undefined}
+            onHashGrant={folderAddSupported ? hashProductionSetGrant : undefined}
             onRun={buildProductionSetFromUi}
             onOpenPackageRoot={openPackageRootFolder}
             onHelpRequested={() => openHelp("production-set")}

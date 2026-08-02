@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use engine_sidecar_core::path_ops::PathOpError;
 use serde::{Deserialize, Serialize};
 
 use crate::{DirectoryGrants, FileGrants};
@@ -96,6 +97,12 @@ struct ProductionSetOneShotInput {
     continue_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     continuation_override: Option<ProductionSetContinuationOverride>,
+    /// How to handle two or more sources whose bytes hash identical --
+    /// `"produce-all"` (default) or `"produce-once"`. Mirrors
+    /// `packages/production-set`'s `ProductionDuplicateHandling`; validated
+    /// there, not here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duplicate_handling: Option<String>,
 }
 
 /// Mirrors `packages/production-set`'s `ProductionSetResult.continuation`
@@ -119,6 +126,8 @@ struct ProductionSetOneShotOutput {
     index_pdf: Option<String>,
     #[serde(default)]
     continuation: Option<ProductionSetContinuationResult>,
+    #[serde(default)]
+    duplicate_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -135,6 +144,7 @@ pub struct ProductionSetShellOutput {
     next_number: u32,
     file_count: usize,
     continuation: Option<ProductionSetContinuationResult>,
+    duplicate_count: u32,
 }
 
 /// UI-prefill summary from `read_production_continuation` -- see its doc
@@ -696,6 +706,7 @@ pub async fn build_production_set(
     // immediately before it's handed to the one-shot subprocess.
     continue_from: Option<String>,
     continuation_override_reason: Option<String>,
+    duplicate_handling: Option<String>,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
@@ -739,6 +750,7 @@ pub async fn build_production_set(
         continue_from,
         continuation_override: continuation_override_reason
             .map(|reason| ProductionSetContinuationOverride { reason }),
+        duplicate_handling,
     };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
@@ -764,6 +776,51 @@ pub async fn build_production_set(
         next_number,
         file_count,
         continuation: output.continuation,
+        duplicate_count: output.duplicate_count.unwrap_or(0),
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashFileForGrantOutput {
+    sha256: String,
+}
+
+/// Streaming SHA-256 of a grant-resolved file, hex-encoded.
+///
+/// Backs the Production Set UI's advisory add-time duplicate badge for
+/// above-threshold (descriptor-kind) sources, whose bytes never load into
+/// the WebView -- a bytes-kind source hashes client-side via
+/// `crypto.subtle.digest` instead, needing no round trip here. Reuses
+/// `path_ops::sha256_file`, the same streaming hasher the protected-output
+/// drift guard (`ensure_forbidden_sources_unchanged`) already uses, rather
+/// than a second implementation.
+///
+/// This is advisory only: the production build re-groups duplicates
+/// authoritatively from ITS OWN planning-pass hashes
+/// (`packages/production-set`), so a stale read here (the file changed
+/// between add and build) or a failed one only ever affects the UI badge,
+/// never what actually gets produced -- callers should treat any error as
+/// "skip the badge for this row," not surface it as a build blocker.
+#[tauri::command]
+pub async fn hash_file_for_grant(
+    grant: String,
+    file_grants: tauri::State<'_, FileGrants>,
+) -> Result<HashFileForGrantOutput, PathOpError> {
+    let path = crate::path_ops::resolve_grant(&file_grants, &grant)?;
+    crate::path_ops::on_blocking_pool(move || hash_path_sha256(&path)).await
+}
+
+/// The command's actual work, split out so it's testable against a plain
+/// `&Path` -- `tauri::State` has no public constructor outside the app
+/// manager, so (as with `read_production_continuation_sync` above) the
+/// grant-resolution step stays in the thin command and everything after it
+/// is a free function.
+fn hash_path_sha256(
+    path: &Path,
+) -> engine_sidecar_core::path_ops::OpResult<HashFileForGrantOutput> {
+    crate::path_ops::sha256_file(path).map(|digest| HashFileForGrantOutput {
+        sha256: digest.iter().map(|byte| format!("{byte:02x}")).collect(),
     })
 }
 
@@ -1172,9 +1229,10 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        one_shot_node_options, package_one_shot_timeout, read_production_continuation_sync,
-        resolve_output_dir, sanitize_one_shot_failure, sha256_hex, ProductionSetSource,
-        ProductionSetSourceGrant, ProductionSetStampPlacement, NODE_SECURITY_FLAG,
+        hash_path_sha256, one_shot_node_options, package_one_shot_timeout,
+        read_production_continuation_sync, resolve_output_dir, sanitize_one_shot_failure,
+        sha256_hex, ProductionSetSource, ProductionSetSourceGrant, ProductionSetStampPlacement,
+        NODE_SECURITY_FLAG,
     };
     use std::fs;
     use std::time::Duration;
@@ -1485,5 +1543,68 @@ mod tests {
             serde_json::from_str(r#"{"edge":"footer","align":"right"}"#).expect("deserialize");
         assert_eq!(parsed.edge, "footer");
         assert_eq!(parsed.align, "right");
+    }
+
+    #[test]
+    fn hash_path_sha256_streams_a_known_test_vector() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("vector.txt");
+        // Well-known SHA-256 test vector: sha256("abc") ==
+        // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.
+        fs::write(&path, b"abc").expect("write test vector");
+
+        let output = hash_path_sha256(&path).expect("hash a real file");
+        assert_eq!(
+            output.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn hash_path_sha256_hashes_a_larger_file_across_multiple_read_chunks() {
+        // `sha256_file` reads in 1 MiB chunks; exercise more than one chunk
+        // so a chunk-boundary bug in the streaming loop would show up here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("big.bin");
+        let payload = vec![0x5au8; 2 * 1024 * 1024 + 17];
+        fs::write(&path, &payload).expect("write large file");
+
+        use sha2::{Digest, Sha256};
+        let mut expected_hasher = Sha256::new();
+        expected_hasher.update(&payload);
+        let expected: String = expected_hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+
+        let output = hash_path_sha256(&path).expect("hash a real file");
+        assert_eq!(output.sha256, expected);
+    }
+
+    #[test]
+    fn hash_path_sha256_reports_io_error_for_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("does-not-exist.pdf");
+
+        let error = hash_path_sha256(&path).expect_err("missing file should fail");
+        assert_eq!(error.code, engine_sidecar_core::path_ops::ERR_IO);
+    }
+
+    /// `hash_file_for_grant`'s grant-resolution step is `resolve_grant`, a
+    /// two-line wrapper that maps `FileGrants::resolve`'s `String` error
+    /// onto `PathOpError { code: "INVALID_INPUT", .. }`. `resolve_grant`
+    /// itself takes `tauri::State<'_, FileGrants>`, which has no public
+    /// constructor outside the app manager, so it (and the full
+    /// `hash_file_for_grant` command) isn't reachable from a unit test --
+    /// same boundary `read_production_continuation`/`_sync` above is split
+    /// around. What IS directly testable, and is the actual "does an
+    /// unknown grant fail" behavior underneath the wrapper, is exercised
+    /// here and in `file_grants_resolve_only_shell_owned_paths` (`lib.rs`).
+    #[test]
+    fn an_unknown_grant_fails_to_resolve() {
+        let grants = crate::FileGrants::default();
+
+        assert!(grants.resolve("nonexistent-grant").is_err());
     }
 }

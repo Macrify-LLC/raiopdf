@@ -35,6 +35,15 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+/** Byte-identical copy under a new name -- `makePdf` here draws no
+ * filename-dependent content, but relying on two separate `makePdf` calls
+ * happening to produce identical bytes would be fragile; copy explicitly. */
+async function copyAs(sourcePath: string, name: string): Promise<string> {
+  const filePath = path.join(dir, name);
+  await fs.copyFile(sourcePath, filePath);
+  return filePath;
+}
+
 async function makePdf(name: string, pages: number): Promise<string> {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -696,6 +705,51 @@ describe("legal tools (local pdf-lib engine)", () => {
     ).rejects.toThrow(/can't both be placed in the footer/);
   });
 
+  it("build_production_set threads duplicateHandling through and returns duplicateCount/duplicateGroups", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [{ path: first }, { path: second }],
+        outputDir,
+        prefix: "MCPDUP",
+        duplicateHandling: "produce-once",
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.duplicateCount).toBe(1);
+    expect(content.duplicateGroupsTruncated).toBe(false);
+    expect(content.duplicateGroups).toEqual([
+      expect.objectContaining({
+        occurrences: [
+          expect.objectContaining({ sourceFilename: "dup-a.pdf", action: "produced" }),
+          expect.objectContaining({ sourceFilename: "dup-b.pdf", action: "omitted", batesRange: null }),
+        ],
+      }),
+    ]);
+    // Only the first occurrence was produced.
+    expect(content.outputs).toHaveLength(1);
+  });
+
+  it("defaults to produce-all, producing every occurrence, when duplicateHandling is omitted", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      { sources: [{ path: first }, { path: second }], outputDir, prefix: "MCPDUPALL" },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.duplicateCount).toBe(1);
+    expect(content.outputs).toHaveLength(2);
+  });
+
   describe("productionSetInputSchema (round trip)", () => {
     const schema = z.object(productionSetInputSchema);
 
@@ -739,6 +793,18 @@ describe("legal tools (local pdf-lib engine)", () => {
       const base = { sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" };
       expect(() => schema.parse({ ...base, batesPlacement: { edge: "middle", align: "right" } })).toThrow();
       expect(() => schema.parse({ ...base, designationPlacement: { edge: "header", align: "up" } })).toThrow();
+    });
+
+    it("accepts duplicateHandling and rejects an out-of-enum value", () => {
+      const base = { sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" };
+      expect(schema.parse({ ...base, duplicateHandling: "produce-once" }).duplicateHandling).toBe("produce-once");
+      expect(schema.parse({ ...base, duplicateHandling: "produce-all" }).duplicateHandling).toBe("produce-all");
+      expect(() => schema.parse({ ...base, duplicateHandling: "keep-first" })).toThrow();
+    });
+
+    it("omits duplicateHandling entirely without error (backward compatible)", () => {
+      const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
+      expect(parsed.duplicateHandling).toBeUndefined();
     });
   });
 });

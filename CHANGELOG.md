@@ -90,6 +90,15 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   the set — both are caught before anything is written, with a plain explanation of
   what to change. The page range you used is recorded in the production's index and
   manifest so it's visible later, not just in the moment.
+- **Production Set now flags duplicate documents before you build.** If two or more
+  files in the order have identical content, RaioPDF badges each one "duplicate" as
+  you add them and shows how many it found. You choose what happens: **Produce all
+  (cross-referenced)** — the default, so nothing is ever silently left out — stamps
+  and produces every copy with its own Bates range; **Produce once** stamps and
+  produces only the first copy and skips the Bates numbers the others would have used,
+  so the sequence stays unbroken. Either way, the duplicate cross-reference is recorded
+  in the production's manifest for later review — it never shows up as an extra column
+  in the index.
 
 ### Changed
 

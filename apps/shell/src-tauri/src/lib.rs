@@ -3067,6 +3067,7 @@ pub fn run() {
             mcp::read_production_continuation,
             mcp::batch_cleanup,
             mcp::build_filing_packet,
+            mcp::hash_file_for_grant,
             path_ops::path_ops_status,
             path_ops::path_op_cancel,
             path_ops::path_op_page_count,

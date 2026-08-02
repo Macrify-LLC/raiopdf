@@ -906,6 +906,219 @@ describe("buildProductionSet Bates continuation", () => {
   });
 });
 
+describe("buildProductionSet duplicate detection", () => {
+  it("produces every occurrence of byte-identical sources with its own Bates range in produce-all mode (default)", async () => {
+    const first = await makePdf("dup-a.pdf", 2);
+    const second = await copyAs(first, "dup-b.pdf");
+    const other = await makePdf("other.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }, { path: other }],
+      outputDir,
+      prefix: "DUP",
+    });
+
+    expect(result.files.map((file) => [file.sourceFilename, file.batesStart, file.batesEnd])).toEqual([
+      ["dup-a.pdf", "DUP000001", "DUP000002"],
+      ["dup-b.pdf", "DUP000003", "DUP000004"],
+      ["other.pdf", "DUP000005", "DUP000005"],
+    ]);
+    expect(result.duplicateCount).toBe(1);
+    expect(result.duplicateGroups).toHaveLength(1);
+    expect(result.duplicateGroups[0]!.occurrences).toEqual([
+      { sourceFilename: "dup-a.pdf", sourceOrdinal: 1, action: "produced", batesRange: "DUP000001-DUP000002" },
+      { sourceFilename: "dup-b.pdf", sourceOrdinal: 2, action: "produced", batesRange: "DUP000003-DUP000004" },
+    ]);
+    expect(result.duplicateGroups[0]!.canonicalOccurrenceOrdinal).toBe(1);
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({
+        checkId: "duplicate-sources",
+        status: "pass",
+        detail: "2 duplicate sources in 1 group; produced all",
+      }),
+    );
+    expect(manifest.details.productionDuplicates).toMatchObject({
+      duplicateHandling: "produce-all",
+      duplicateCount: 1,
+    });
+  });
+
+  it("omits later duplicate occurrences and keeps Bates numbering contiguous in produce-once mode", async () => {
+    const first = await makePdf("dup-a.pdf", 2);
+    const second = await copyAs(first, "dup-b.pdf");
+    const following = await makePdf("following.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }, { path: following }],
+      outputDir,
+      prefix: "ONCE",
+      duplicateHandling: "produce-once",
+    });
+
+    // The omitted occurrence consumes NO Bates number, so the following
+    // file's range starts right after the produced duplicate's -- proof
+    // that numbering stayed contiguous rather than leaving a gap.
+    expect(result.files.map((file) => [file.sourceFilename, file.batesStart, file.batesEnd])).toEqual([
+      ["dup-a.pdf", "ONCE000001", "ONCE000002"],
+      ["following.pdf", "ONCE000003", "ONCE000003"],
+    ]);
+    expect(result.nextNumber).toBe(4);
+    expect(result.duplicateCount).toBe(1);
+    expect(result.duplicateGroups[0]!.occurrences).toEqual([
+      { sourceFilename: "dup-a.pdf", sourceOrdinal: 1, action: "produced", batesRange: "ONCE000001-ONCE000002" },
+      { sourceFilename: "dup-b.pdf", sourceOrdinal: 2, action: "omitted", batesRange: null },
+    ]);
+
+    // The omitted occurrence never reaches upload/ or the index -- the
+    // cross-reference lives only in manifest/audit detail.
+    expect(result.files.map((file) => file.sourceFilename)).not.toContain("dup-b.pdf");
+    const csv = await fs.readFile(path.join(outputDir, result.indexCsv!), "utf8");
+    expect(csv).not.toContain("dup-b.pdf");
+    expect(csv).not.toMatch(/duplicate/i);
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.uploadFiles).toHaveLength(2);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({
+        checkId: "duplicate-sources",
+        status: "pass",
+        detail: "2 duplicate sources in 1 group; produced once, 1 omitted",
+      }),
+    );
+    expect(manifest.details.productionDuplicates).toMatchObject({
+      duplicateHandling: "produce-once",
+      duplicateCount: 1,
+      groups: [
+        expect.objectContaining({
+          occurrences: [
+            expect.objectContaining({ sourceFilename: "dup-a.pdf", action: "produced" }),
+            expect.objectContaining({ sourceFilename: "dup-b.pdf", action: "omitted", batesRange: null }),
+          ],
+        }),
+      ],
+    });
+  });
+
+  it("does not group near-miss sources that differ by even a little content", async () => {
+    // makePdf bakes the filename into the page content, so two different
+    // names are never byte-identical -- this is the near-miss case: close,
+    // but not the same hash.
+    const first = await makePdf("near-a.pdf", 1);
+    const second = await makePdf("near-b.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "NEAR",
+      duplicateHandling: "produce-once",
+    });
+
+    expect(result.duplicateGroups).toEqual([]);
+    expect(result.duplicateCount).toBe(0);
+    expect(result.files).toHaveLength(2);
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({
+        checkId: "duplicate-sources",
+        status: "pass",
+        detail: "No duplicate sources detected.",
+      }),
+    );
+  });
+
+  it("records the check even when no duplicates were found, in produce-all mode too", async () => {
+    const source = await makePdf("solo.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "SOLO",
+    });
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({ checkId: "duplicate-sources", detail: "No duplicate sources detected." }),
+    );
+    expect(manifest.details.productionDuplicates).toBeUndefined();
+  });
+
+  it("excludes an omitted duplicate from the combined production PDF", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "COMBDUP",
+      duplicateHandling: "produce-once",
+      combinedPdf: true,
+    });
+
+    expect(result.files).toHaveLength(1);
+    const combined = await PDFDocument.load(await fs.readFile(path.join(outputDir, result.combinedPdf!)));
+    expect(combined.getPageCount()).toBe(1);
+  });
+
+  it("includes every occurrence in the combined production PDF in produce-all mode", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "COMBALL",
+      combinedPdf: true,
+    });
+
+    expect(result.files).toHaveLength(2);
+    const combined = await PDFDocument.load(await fs.readFile(path.join(outputDir, result.combinedPdf!)));
+    expect(combined.getPageCount()).toBe(2);
+  });
+
+  it("excludes an omitted duplicate from volume assignment, keeping later files' volumes correct", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const third = await makePdf("third.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }, { path: third }],
+      outputDir,
+      prefix: "VOLDUP",
+      duplicateHandling: "produce-once",
+      volumeSizeMb: 0.0001,
+    });
+
+    expect(result.files.map((file) => file.sourceFilename)).toEqual(["dup-a.pdf", "third.pdf"]);
+    expect(result.files.map((file) => file.volume)).toEqual(["VOL001", "VOL002"]);
+  });
+
+  it("rejects an invalid duplicateHandling value", async () => {
+    const source = await makePdf("bad.pdf", 1);
+    const outputDir = path.join(dir, "package");
+    const invalidInput = {
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "BAD",
+      duplicateHandling: "nonsense",
+    } as unknown as Parameters<typeof buildProductionSet>[0];
+
+    await expect(buildProductionSet(invalidInput)).rejects.toThrow(
+      /must be "produce-all" or "produce-once"/,
+    );
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
 /**
  * Counting wrapper around the local engine. The engine interface exposes no
  * handle census, so the test observes open/close directly for every call that
@@ -962,6 +1175,15 @@ async function rewriteReportAndManifestHash(outputDir: string, content: unknown)
   }
   entry.sha256 = sha256;
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** Writes a byte-identical copy of an existing file under a new name in the
+ * same temp dir -- the duplicate-detection tests' way of producing two
+ * sources that hash identical without hand-building matching PDF bytes. */
+async function copyAs(sourcePath: string, name: string): Promise<string> {
+  const filePath = path.join(dir, name);
+  await fs.copyFile(sourcePath, filePath);
+  return filePath;
 }
 
 async function makePdf(

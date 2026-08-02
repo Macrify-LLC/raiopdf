@@ -79,6 +79,29 @@ production if your chosen text and font size wouldn't fit legibly (at least
 6pt once fully rendered) on the narrowest page in the set — pick a smaller
 font, shorter text, or a different placement, and try again.
 
+## Duplicate documents
+
+If two or more files in your production order have identical content, RaioPDF
+badges each one **duplicate** as you add them, and shows a line like "2 duplicate
+files in this production." You choose what happens to them:
+
+- **Produce all (cross-referenced)** — the default. Every copy is Bates-stamped
+  and produced with its own range, just like any other document. Nothing is ever
+  silently left out of a discovery production.
+- **Produce once** — only the first copy (in your production order) is stamped
+  and produced; later copies are skipped and use none of the Bates numbers they
+  would otherwise have taken, so the sequence stays unbroken for the documents
+  that follow.
+
+Either way, the cross-reference between the duplicate copies is recorded in the
+production's manifest for later review — it's never added as an extra column in
+the production index, which only ever lists what was actually produced.
+
+The badge you see while adding files is a quick heads-up, not the final word: the
+build itself re-checks every file's content right before it writes anything, so
+what actually gets produced is always correct even if a file changed after you
+added it.
+
 ## Continuing from a prior production
 
 Click **Continue from prior production…** and choose the folder of an earlier

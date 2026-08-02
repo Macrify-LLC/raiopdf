@@ -26,6 +26,47 @@ export interface ProductionContinuationOverrideInput {
   reason: string;
 }
 
+/**
+ * How a run handles two or more sources that hash identical (same
+ * `sourceSha256`, computed during the bounded planning pass -- see
+ * `ProductionSourcePlan`):
+ *
+ * - `"produce-all"` -- every occurrence is Bates-stamped and produced with
+ *   its own range, same as before duplicate detection existed. Default,
+ *   because silently dropping a document from a discovery production is the
+ *   dangerous failure mode, not the safe one -- an over-inclusive production
+ *   is a nuisance; an under-inclusive one is a discovery problem.
+ * - `"produce-once"` -- only the first occurrence (input order) is
+ *   Bates-stamped, uploaded, and indexed; every later occurrence is
+ *   `"omitted"` and consumes NO Bates numbers, so numbering stays
+ *   contiguous. The cross-reference lives only in the manifest/audit detail
+ *   (`duplicateGroups` below and the `productionDuplicates` package detail)
+ *   -- never a synthesized column in the index CSV.
+ */
+export type ProductionDuplicateHandling = "produce-all" | "produce-once";
+
+/** One occurrence of a source that shares its `sourceSha256` with at least
+ * one other source in the run. `batesRange` is `null` exactly when `action`
+ * is `"omitted"` (produce-once mode, not the first occurrence). */
+export interface ProductionDuplicateOccurrence {
+  sourceFilename: string;
+  /** 1-based position of this occurrence in the run's overall `sources`
+   * input order (not its position within the group). */
+  sourceOrdinal: number;
+  action: "produced" | "omitted";
+  /** `"${batesStart}-${batesEnd}"` when produced; `null` when omitted. */
+  batesRange: string | null;
+}
+
+/** A group of two or more sources sharing one `sourceSha256`. */
+export interface ProductionDuplicateGroup {
+  sourceSha256: string;
+  occurrences: readonly ProductionDuplicateOccurrence[];
+  /** `sourceOrdinal` of the first-encountered (and, in `"produce-once"`
+   * mode, the only produced) occurrence in this group. */
+  canonicalOccurrenceOrdinal: number;
+}
+
 export interface BuildProductionSetInput {
   sources: readonly ProductionSourceInput[];
   outputDir: string;
@@ -77,6 +118,11 @@ export interface BuildProductionSetInput {
    * package via `recordOverride`.
    */
   continuationOverride?: ProductionContinuationOverrideInput | undefined;
+  /**
+   * How to handle two or more sources whose bytes hash identical. Default
+   * `"produce-all"` -- see `ProductionDuplicateHandling`.
+   */
+  duplicateHandling?: ProductionDuplicateHandling | undefined;
 }
 
 export type ProductionContinuationErrorCode =
@@ -158,6 +204,13 @@ export interface ProductionSetResult {
   manifest: PackageManifest;
   /** Set when `continueFrom` was used for this build; `null` otherwise. */
   continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
+  /** Every group of two or more sources sharing a `sourceSha256`; `[]` when
+   * none were found. */
+  duplicateGroups: readonly ProductionDuplicateGroup[];
+  /** Occurrences beyond the first in each duplicate group (total sources
+   * minus unique hashes) -- 0 when no duplicates were found, regardless of
+   * `duplicateHandling`. */
+  duplicateCount: number;
 }
 
 interface VolumeState {
@@ -183,6 +236,10 @@ interface ProductionSourcePlan {
   sourceFilename: string;
   sourceSha256: string;
   sourceBytes: number;
+  /** 1-based position in the run's overall (pre-exclusion) `sources` input
+   * order -- carried through from `ScannedSource` so a produced plan can be
+   * matched back to its `ProductionDuplicateOccurrence`. */
+  sourceOrdinal: number;
   pages: number;
   /** Per-page visual geometry (width/height/rotation), used only to
    * pre-check that stamps stay at or above the minimum rendered size. */
@@ -226,6 +283,7 @@ interface NormalizedInput {
   batesPlacement: PdfStampPlacement;
   designationPlacement: PdfStampPlacement;
   stampFontSizePt: number;
+  duplicateHandling: ProductionDuplicateHandling;
 }
 
 const DEFAULT_DIGITS = 6;
@@ -234,6 +292,10 @@ const DEFAULT_APP_VERSION = "0.1.0";
 const DEFAULT_BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
 const DEFAULT_DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
 const DEFAULT_STAMP_FONT_SIZE_PT = 10;
+/** Silently dropping a document from a discovery production is the
+ * dangerous default; producing every occurrence (with its own Bates range,
+ * cross-referenced) is the safe one. */
+const DEFAULT_DUPLICATE_HANDLING: ProductionDuplicateHandling = "produce-all";
 const MIN_STAMP_FONT_SIZE_PT = 6;
 const MAX_STAMP_FONT_SIZE_PT = 24;
 /** Matches `engine-local`/`engine-sidecar`'s own default `marginIn` for
@@ -561,7 +623,10 @@ export async function buildProductionSet(
       ? null
       : await verifyProductionContinuation(options);
 
-    const sourcePlans = await prepareProductionSourcePlans(options, engine);
+    const { plans: sourcePlans, duplicateGroups, duplicateCount } = await prepareProductionSourcePlans(
+      options,
+      engine,
+    );
     session = createPackage(options.outputDir, {
       appVersion: options.appVersion,
       createdAt: options.createdAt,
@@ -695,7 +760,34 @@ export async function buildProductionSet(
       batesPlacement: options.batesPlacement,
       designationPlacement: options.designationPlacement,
       stampFontSizePt: options.stampFontSizePt,
+      duplicateHandling: options.duplicateHandling,
     });
+    // JsonValue is a mutable-array shape; copy every readonly array into a
+    // plain one rather than widen the public `ProductionDuplicateGroup` type.
+    const duplicateGroupsDetail = duplicateGroups.map((group) => ({
+      sourceSha256: group.sourceSha256,
+      canonicalOccurrenceOrdinal: group.canonicalOccurrenceOrdinal,
+      occurrences: group.occurrences.map((occurrence) => ({ ...occurrence })),
+    }));
+    // Recorded in both modes and even when nothing was found -- an auditor
+    // reading the manifest later should be able to see that duplicate
+    // detection ran, not just infer it from an absent check.
+    session.recordCheck({
+      checkId: "duplicate-sources",
+      status: "pass",
+      detail: formatDuplicateCheckDetail(options.duplicateHandling, duplicateGroups, duplicateCount),
+    });
+    if (duplicateGroups.length > 0) {
+      // The cross-reference between an omitted duplicate and the occurrence
+      // that was actually produced lives ONLY here (and in production.json
+      // below) -- never as a synthesized column in the index CSV/PDF, which
+      // only ever lists what was actually produced.
+      session.recordDetail("productionDuplicates", {
+        duplicateHandling: options.duplicateHandling,
+        duplicateCount,
+        groups: duplicateGroupsDetail,
+      });
+    }
     if (input.volumeSizeMb !== undefined) {
       session.recordOverride({
         type: "production-volume-size",
@@ -758,6 +850,9 @@ export async function buildProductionSet(
       batesPlacement: options.batesPlacement,
       designationPlacement: options.designationPlacement,
       stampFontSizePt: options.stampFontSizePt,
+      duplicateHandling: options.duplicateHandling,
+      duplicateCount,
+      duplicateGroups: duplicateGroupsDetail,
       files: files.map((file) => ({
         sourceFilename: file.sourceFilename,
         outputName: file.outputName,
@@ -798,6 +893,8 @@ export async function buildProductionSet(
       continuation: continuation === null
         ? null
         : { mode: continuation.mode, priorLastBates: continuation.summary.lastBates },
+      duplicateGroups,
+      duplicateCount,
     };
   } finally {
     if (combinedHandle !== null) {
@@ -812,6 +909,14 @@ export async function buildProductionSet(
   }
 }
 
+type ScannedSource = Omit<ProductionSourcePlan, "firstNumber" | "lastNumber" | "batesStart" | "batesEnd">;
+
+interface ProductionSourcePlanningResult {
+  plans: ProductionSourcePlan[];
+  duplicateGroups: ProductionDuplicateGroup[];
+  duplicateCount: number;
+}
+
 /**
  * Planning pass. Each source is read, hashed, counted, and CLOSED before the
  * next one is touched, so the whole plan is scalars: no bytes and no open
@@ -821,14 +926,22 @@ export async function buildProductionSet(
  * The tradeoff is one extra read per source (planning reads it, the output pass
  * reads it again) in exchange for peak memory that no longer grows with the
  * number of documents in the production.
+ *
+ * Duplicate sources (matching `sourceSha256`) are detected here, from the
+ * SAME hash every source already computes for the planning pass -- no extra
+ * read. In `"produce-once"` mode, every occurrence but the first (input
+ * order) within a group is excluded from `plans` before Bates numbers are
+ * assigned, so an omitted duplicate consumes no Bates number and never
+ * reaches `stampPlannedSource` -- it is never re-read, so the #335 drift
+ * guard (`readPlannedSourceBytes`) never runs against it either.
  */
 async function prepareProductionSourcePlans(
   options: NormalizedInput,
   engine: PdfEngine,
-): Promise<ProductionSourcePlan[]> {
-  const scanned: Array<Omit<ProductionSourcePlan, "firstNumber" | "lastNumber" | "batesStart" | "batesEnd">> = [];
+): Promise<ProductionSourcePlanningResult> {
+  const scanned: ScannedSource[] = [];
 
-  for (const source of options.sources) {
+  for (const [index, source] of options.sources.entries()) {
     const sourcePath = path.resolve(source.path);
     const sourceFilename = path.basename(sourcePath);
     const sourceBytes = await fs.readFile(sourcePath);
@@ -854,6 +967,7 @@ async function prepareProductionSourcePlans(
       sourceFilename,
       sourceSha256: sha256Hex(sourceBytes),
       sourceBytes: sourceBytes.byteLength,
+      sourceOrdinal: index + 1,
       pages,
       // Read directly via pdf-lib rather than through `engine` -- the
       // opaque `PdfDocumentHandle` has no page-geometry accessor on
@@ -869,11 +983,14 @@ async function prepareProductionSourcePlans(
     });
   }
 
-  const totalPages = scanned.reduce((sum, source) => sum + source.pages, 0);
+  const { groups, excludedSourceOrdinals } = groupDuplicateSources(scanned, options.duplicateHandling);
+  const included = scanned.filter((source) => !excludedSourceOrdinals.has(source.sourceOrdinal));
+
+  const totalPages = included.reduce((sum, source) => sum + source.pages, 0);
   assertBatesFits(options.digits, options.start + totalPages - 1);
 
   let running = options.start;
-  const plans = scanned.map((source) => {
+  const plans: ProductionSourcePlan[] = included.map((source) => {
     const firstNumber = running;
     const lastNumber = firstNumber + source.pages - 1;
     running = lastNumber + 1;
@@ -889,7 +1006,97 @@ async function prepareProductionSourcePlans(
 
   await assertStampsFitAtMinimumSize(plans, options);
 
-  return plans;
+  const producedByOrdinal = new Map(plans.map((plan) => [plan.sourceOrdinal, plan]));
+  let duplicateCount = 0;
+  const duplicateGroups: ProductionDuplicateGroup[] = groups.map((group) => {
+    duplicateCount += group.members.length - 1;
+    return {
+      sourceSha256: group.sourceSha256,
+      canonicalOccurrenceOrdinal: group.members[0]!.sourceOrdinal,
+      occurrences: group.members.map((member) => {
+        const plan = producedByOrdinal.get(member.sourceOrdinal);
+        return {
+          sourceFilename: member.sourceFilename,
+          sourceOrdinal: member.sourceOrdinal,
+          action: plan === undefined ? "omitted" : "produced",
+          batesRange: plan === undefined ? null : `${plan.batesStart}-${plan.batesEnd}`,
+        };
+      }),
+    };
+  });
+
+  return { plans, duplicateGroups, duplicateCount };
+}
+
+interface ScannedSourceGroup {
+  sourceSha256: string;
+  /** In input (`sources`) order -- the first entry is the group's canonical
+   * occurrence. */
+  members: ScannedSource[];
+}
+
+/**
+ * Groups `scanned` sources by `sourceSha256`, keeping only groups with two
+ * or more members (a lone hash isn't a duplicate of anything). In
+ * `"produce-once"` mode, every member but the first (source order) is
+ * marked excluded -- the caller drops those before Bates numbers are
+ * assigned, so numbering stays contiguous and an excluded duplicate never
+ * reaches output.
+ */
+function groupDuplicateSources(
+  scanned: readonly ScannedSource[],
+  duplicateHandling: ProductionDuplicateHandling,
+): { groups: ScannedSourceGroup[]; excludedSourceOrdinals: ReadonlySet<number> } {
+  const bySha = new Map<string, ScannedSource[]>();
+  for (const source of scanned) {
+    const members = bySha.get(source.sourceSha256);
+    if (members === undefined) {
+      bySha.set(source.sourceSha256, [source]);
+    } else {
+      members.push(source);
+    }
+  }
+
+  const groups: ScannedSourceGroup[] = [];
+  const excludedSourceOrdinals = new Set<number>();
+
+  // Map iteration order already reflects first-seen order (insertion order),
+  // which is source order here -- sorting explicitly keeps that guarantee
+  // even if a future refactor changes how `bySha` is built.
+  for (const [sourceSha256, members] of bySha) {
+    if (members.length < 2) {
+      continue;
+    }
+    groups.push({ sourceSha256, members });
+    if (duplicateHandling === "produce-once") {
+      for (const member of members.slice(1)) {
+        excludedSourceOrdinals.add(member.sourceOrdinal);
+      }
+    }
+  }
+  groups.sort((left, right) => left.members[0]!.sourceOrdinal - right.members[0]!.sourceOrdinal);
+
+  return { groups, excludedSourceOrdinals };
+}
+
+/** The `duplicate-sources` check detail string -- shared by every
+ * `duplicateHandling` mode so the manifest always records that duplicate
+ * detection ran, not just when it found something. */
+function formatDuplicateCheckDetail(
+  duplicateHandling: ProductionDuplicateHandling,
+  duplicateGroups: readonly ProductionDuplicateGroup[],
+  duplicateCount: number,
+): string {
+  if (duplicateGroups.length === 0) {
+    return "No duplicate sources detected.";
+  }
+
+  const totalOccurrences = duplicateGroups.reduce((sum, group) => sum + group.occurrences.length, 0);
+  const groupWord = duplicateGroups.length === 1 ? "group" : "groups";
+  const base = `${totalOccurrences} duplicate sources in ${duplicateGroups.length} ${groupWord}`;
+  return duplicateHandling === "produce-all"
+    ? `${base}; produced all`
+    : `${base}; produced once, ${duplicateCount} omitted`;
 }
 
 /**
@@ -1173,6 +1380,10 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
   if (input.continuationOverride !== undefined && input.continuationOverride.reason.trim().length === 0) {
     throw new Error("A reason is required to adjust the Bates continuation start or digit width.");
   }
+  const duplicateHandling = input.duplicateHandling ?? DEFAULT_DUPLICATE_HANDLING;
+  if (duplicateHandling !== "produce-all" && duplicateHandling !== "produce-once") {
+    throw new Error('Duplicate handling must be "produce-all" or "produce-once".');
+  }
   // Refused before anything is written, so the user still has the choice of
   // running the same production without the combined PDF.
   if ((input.combinedPdf ?? false) && input.sources.length > MAX_COMBINED_PRODUCTION_SOURCES) {
@@ -1215,6 +1426,7 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     batesPlacement,
     designationPlacement,
     stampFontSizePt,
+    duplicateHandling,
   };
 }
 

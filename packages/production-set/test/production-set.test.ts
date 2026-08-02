@@ -1120,6 +1120,30 @@ describe("buildProductionSet duplicate detection", () => {
 });
 
 describe("buildProductionSet load file (DAT)", () => {
+  it("keeps the physical filename and the DAT LINK byte-identical for DAT-hostile names", async () => {
+    // þ and ® are structural/substituted bytes in the DAT: they must be
+    // normalized out of the produced filename itself so the LINK always
+    // points at a file that exists.
+    const source = await makePdf("thorn þ and ® name.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "SMIþTH",
+      includeLoadFiles: true,
+    });
+
+    expect(result.loadFileDat).toBe("production.dat");
+    const rows = parseDatRows(await fs.readFile(path.join(outputDir, "production.dat")));
+    const link = rows[0]!.LINK.replaceAll("\\", "/");
+
+    // The LINK resolves to a real produced file, byte-for-byte.
+    await expect(fs.access(path.join(outputDir, link))).resolves.toBeUndefined();
+    expect(link.includes("þ")).toBe(false);
+    expect(link.includes("®")).toBe(false);
+  });
+
   it("writes no production.dat and reports loadFileDat: null when includeLoadFiles is unset (default false)", async () => {
     const source = await makePdf("no-dat.pdf", 1);
     const outputDir = path.join(dir, "package");

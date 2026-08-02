@@ -676,7 +676,10 @@ export async function buildProductionSet(
 
       try {
         const outputBytes = await engine.saveToBytes(produced);
-        const outputName = `${plan.batesStart} - ${plan.batesEnd} - ${safePdfName(plan.sourceFilename)}`;
+        // The whole composed name goes through safePdfName: the Bates prefix
+        // can legally carry characters the DAT LINK field must substitute,
+        // and physical filename and LINK must stay byte-identical.
+        const outputName = safePdfName(`${plan.batesStart} - ${plan.batesEnd} - ${plan.sourceFilename}`);
         const volumeName = assignVolume(volume, outputName, outputBytes.byteLength, options.volumeBytes);
         const packageName = volumeName === null ? outputName : `${volumeName}/${outputName}`;
         const entry = await session.addUploadFile(outputBytes, packageName, {
@@ -762,11 +765,11 @@ export async function buildProductionSet(
       const combined = merged.document;
       combinedHandle = combined;
       const combinedBytes = await engine.saveToBytes(combined);
-      const combinedName = `${formatBates(options.prefix, options.start, options.digits)} - ${formatBates(
+      const combinedName = safePdfName(`${formatBates(options.prefix, options.start, options.digits)} - ${formatBates(
         options.prefix,
         running - 1,
         options.digits,
-      )} - combined-production.pdf`;
+      )} - combined-production.pdf`);
       const volumeName = assignVolume(volume, combinedName, combinedBytes.byteLength, options.volumeBytes);
       const packageName = volumeName === null ? combinedName : `${volumeName}/${combinedName}`;
       const entry = await session.addUploadFile(combinedBytes, packageName, {
@@ -1547,7 +1550,17 @@ function safePdfName(value: string): string {
 
 function isUnsafeFileNameCharacter(character: string): boolean {
   const code = character.charCodeAt(0);
-  return code < 0x20 || code === 0x7f || "\\/:*?\"<>|".includes(character);
+  // 0x14 and þ (0xFE) are the DAT load file's structural bytes: a produced
+  // filename containing them could never round-trip through the DAT LINK
+  // field, so they are normalized out of physical names to keep the two
+  // identical. ® is substituted in DAT values too, so it is excluded as well.
+  return (
+    code < 0x20 ||
+    code === 0x7f ||
+    code === 0xfe ||
+    code === 0xae ||
+    "\\/:*?\"<>|".includes(character)
+  );
 }
 
 function sha256Hex(bytes: Uint8Array): string {

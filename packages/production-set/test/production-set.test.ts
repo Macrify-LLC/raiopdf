@@ -1119,6 +1119,160 @@ describe("buildProductionSet duplicate detection", () => {
   });
 });
 
+describe("buildProductionSet load file (DAT)", () => {
+  it("writes no production.dat and reports loadFileDat: null when includeLoadFiles is unset (default false)", async () => {
+    const source = await makePdf("no-dat.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "NODAT",
+    });
+
+    expect(result.loadFileDat).toBeNull();
+    await expect(fs.access(path.join(outputDir, "production.dat"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes production.dat at the package root (not under upload/) with correct rows and backslash LINK paths", async () => {
+    const first = await makePdf("alpha.pdf", 2);
+    const second = await makePdf("beta.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first, designation: "Confidential" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "DAT",
+      includeLoadFiles: true,
+    });
+
+    expect(result.loadFileDat).toBe("production.dat");
+    // Root document, sibling of upload/ and raio-manifest/ -- never inside upload/.
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    expect([...datBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+    const rows = parseDatRows(datBytes);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      BEGBATES: "DAT000001",
+      ENDBATES: "DAT000002",
+      BEGATTACH: "",
+      ENDATTACH: "",
+      PAGECOUNT: "2",
+      CONFIDENTIALITY: "Confidential",
+      CUSTODIAN: "",
+      FILENAME: result.files[0]!.outputName,
+      SHA256: result.files[0]!.sha256,
+    });
+    expect(rows[0]!.LINK).toBe(`upload\\${result.files[0]!.outputName}`);
+    expect(rows[0]!.LINK).not.toContain("/");
+    expect(rows[1]).toMatchObject({
+      BEGBATES: "DAT000003",
+      ENDBATES: "DAT000003",
+      CONFIDENTIALITY: "",
+    });
+
+    // Never appended -- the raw designation only, per the module docstring.
+    expect(rows[0]!.CONFIDENTIALITY).not.toContain("pages");
+  });
+
+  it("resolves LINK backslash-separated across volume splits and plain (non-volume) runs alike", async () => {
+    const first = await makePdf("one.pdf", 1);
+    const second = await makePdf("two.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "DATVOL",
+      includeLoadFiles: true,
+      volumeSizeMb: 0.0001,
+    });
+
+    expect(result.files.map((file) => file.volume)).toEqual(["VOL001", "VOL002"]);
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    const rows = parseDatRows(datBytes);
+    expect(rows[0]!.LINK).toBe(`upload\\VOL001\\${result.files[0]!.outputName}`);
+    expect(rows[1]!.LINK).toBe(`upload\\VOL002\\${result.files[1]!.outputName}`);
+    for (const row of rows) {
+      expect(row.LINK).not.toContain("/");
+    }
+  });
+
+  it("blanks the FILENAME column (header stays) when includeFilenameInIndex is false", async () => {
+    const source = await makePdf("secret-name.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "NOFN",
+      includeLoadFiles: true,
+      includeFilenameInIndex: false,
+    });
+
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    const text = new TextDecoder().decode(datBytes.subarray(3));
+    expect(text).toMatch(/þFILENAMEþ/);
+    const rows = parseDatRows(datBytes);
+    // The FILENAME field itself is blank -- LINK still names the produced
+    // file (the physical path is inherently named that way, same as the
+    // production index's own includeFilenameInIndex option leaves LINK-
+    // equivalent paths alone) -- so this asserts the FILENAME field, not
+    // "the filename never appears anywhere in the DAT."
+    expect(rows[0]!.FILENAME).toBe("");
+    expect(rows[0]!.LINK).toContain("secret-name.pdf");
+  });
+
+  it("threads per-source custodian into CUSTODIAN, blank when unset", async () => {
+    const withCustodian = await makePdf("custodied.pdf", 1);
+    const withoutCustodian = await makePdf("uncustodied.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [
+        { path: withCustodian, custodian: "J. Smith" },
+        { path: withoutCustodian },
+      ],
+      outputDir,
+      prefix: "CUST",
+      includeLoadFiles: true,
+    });
+
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    const rows = parseDatRows(datBytes);
+    expect(rows[0]!.CUSTODIAN).toBe("J. Smith");
+    expect(rows[1]!.CUSTODIAN).toBe("");
+  });
+
+  it("omits a produce-once-omitted duplicate's row and any combined production PDF from production.dat", async () => {
+    const first = await makePdf("dup-a.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: first }, { path: second }],
+      outputDir,
+      prefix: "DATDUP",
+      includeLoadFiles: true,
+      duplicateHandling: "produce-once",
+      combinedPdf: true,
+    });
+
+    expect(result.files).toHaveLength(1);
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    const rows = parseDatRows(datBytes);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.FILENAME).toBe(result.files[0]!.outputName);
+    const text = new TextDecoder().decode(datBytes.subarray(3));
+    expect(text).not.toContain("dup-b.pdf");
+    expect(text).not.toContain("combined-production");
+  });
+});
+
 /**
  * Counting wrapper around the local engine. The engine interface exposes no
  * handle census, so the test observes open/close directly for every call that
@@ -1184,6 +1338,43 @@ async function copyAs(sourcePath: string, name: string): Promise<string> {
   const filePath = path.join(dir, name);
   await fs.copyFile(sourcePath, filePath);
   return filePath;
+}
+
+const DAT_ROW_FIELD_DELIMITER = String.fromCharCode(0x14);
+const DAT_ROW_TEXT_QUALIFIER = "þ";
+const DAT_ROW_FIELD_NAMES = [
+  "BEGBATES",
+  "ENDBATES",
+  "BEGATTACH",
+  "ENDATTACH",
+  "PAGECOUNT",
+  "CONFIDENTIALITY",
+  "CUSTODIAN",
+  "FILENAME",
+  "LINK",
+  "SHA256",
+] as const;
+
+/** Naive test-side DAT parser -- splits on the bare `0x14` delimiter (as a
+ * real importer's first pass would) and strips the `þ` qualifier off each
+ * field. Deliberately independent of `formatProductionDat`'s own
+ * implementation so these integration tests can't pass by construction. */
+function parseDatRows(bytes: Uint8Array): Record<(typeof DAT_ROW_FIELD_NAMES)[number], string>[] {
+  const text = new TextDecoder().decode(bytes.subarray(3)); // strip the UTF-8 BOM
+  const lines = text.split("\r\n").filter((line) => line.length > 0);
+  const [, ...dataLines] = lines;
+  return dataLines.map((line) => {
+    const fields = line.split(DAT_ROW_FIELD_DELIMITER).map((field) => (
+      field.startsWith(DAT_ROW_TEXT_QUALIFIER) && field.endsWith(DAT_ROW_TEXT_QUALIFIER)
+        ? field.slice(DAT_ROW_TEXT_QUALIFIER.length, field.length - DAT_ROW_TEXT_QUALIFIER.length)
+        : field
+    ));
+    const row = {} as Record<(typeof DAT_ROW_FIELD_NAMES)[number], string>;
+    DAT_ROW_FIELD_NAMES.forEach((name, index) => {
+      row[name] = fields[index] ?? "";
+    });
+    return row;
+  });
 }
 
 async function makePdf(

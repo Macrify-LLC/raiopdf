@@ -35,6 +35,11 @@ pub struct ProductionSetSource {
     designation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     designation_pages: Option<String>,
+    /// Recorded in the load file's CUSTODIAN column when `include_load_files`
+    /// is set -- see `ProductionSetOneShotInput::include_load_files`. No
+    /// desktop UI input in v1: UI-originated builds never set this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custodian: Option<String>,
 }
 
 /// What the renderer actually sends: an opaque grant, never a real path. The
@@ -48,6 +53,12 @@ pub struct ProductionSetSourceGrant {
     designation: Option<String>,
     #[serde(default)]
     designation_pages: Option<String>,
+    /// Package/MCP-level field only -- the desktop UI has no per-file
+    /// custodian input in v1, so this is always `None` from the renderer.
+    /// Kept here (rather than only on `ProductionSetSource`) so a future UI
+    /// input needs no further plumbing change.
+    #[serde(default)]
+    custodian: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -103,6 +114,12 @@ struct ProductionSetOneShotInput {
     /// there, not here.
     #[serde(skip_serializing_if = "Option::is_none")]
     duplicate_handling: Option<String>,
+    /// Writes a litigation load file (`production.dat`) at the package root
+    /// when `true`. Mirrors `packages/production-set`'s
+    /// `BuildProductionSetInput.includeLoadFiles`; defaults `false` there
+    /// too, but always sent explicitly here like `include_index` and
+    /// `combined_pdf` above.
+    include_load_files: bool,
 }
 
 /// Mirrors `packages/production-set`'s `ProductionSetResult.continuation`
@@ -128,6 +145,8 @@ struct ProductionSetOneShotOutput {
     continuation: Option<ProductionSetContinuationResult>,
     #[serde(default)]
     duplicate_count: Option<u32>,
+    #[serde(default)]
+    load_file_dat: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +164,7 @@ pub struct ProductionSetShellOutput {
     file_count: usize,
     continuation: Option<ProductionSetContinuationResult>,
     duplicate_count: u32,
+    load_file_dat: Option<String>,
 }
 
 /// UI-prefill summary from `read_production_continuation` -- see its doc
@@ -707,6 +727,10 @@ pub async fn build_production_set(
     continue_from: Option<String>,
     continuation_override_reason: Option<String>,
     duplicate_handling: Option<String>,
+    // Always sent explicitly by the renderer (default false), same as
+    // `include_index`/`combined_pdf` above -- never a raw path, never
+    // optional at this boundary.
+    include_load_files: bool,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
@@ -718,6 +742,7 @@ pub async fn build_production_set(
                 path: resolve_source_path(&file_grants, &source.grant)?,
                 designation: source.designation,
                 designation_pages: source.designation_pages,
+                custodian: source.custodian,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -751,6 +776,7 @@ pub async fn build_production_set(
         continuation_override: continuation_override_reason
             .map(|reason| ProductionSetContinuationOverride { reason }),
         duplicate_handling,
+        include_load_files,
     };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
@@ -777,6 +803,7 @@ pub async fn build_production_set(
         file_count,
         continuation: output.continuation,
         duplicate_count: output.duplicate_count.unwrap_or(0),
+        load_file_dat: output.load_file_dat,
     })
 }
 
@@ -1511,11 +1538,26 @@ mod tests {
     }
 
     #[test]
+    fn production_set_source_grant_deserializes_custodian() {
+        let json = r#"{"grant":"g1","designation":"Confidential","custodian":"J. Smith"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.custodian.as_deref(), Some("J. Smith"));
+    }
+
+    #[test]
+    fn production_set_source_grant_defaults_custodian_to_none_when_absent() {
+        let json = r#"{"grant":"g1","designation":"Confidential"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.custodian, None);
+    }
+
+    #[test]
     fn production_set_source_serializes_designation_pages_camel_case_and_omits_when_none() {
         let with_range = ProductionSetSource {
             path: "/abs/a.pdf".to_string(),
             designation: Some("Confidential".to_string()),
             designation_pages: Some("1-3,7".to_string()),
+            custodian: None,
         };
         let json = serde_json::to_string(&with_range).expect("serialize");
         assert!(json.contains(r#""designationPages":"1-3,7""#), "{json}");
@@ -1524,10 +1566,32 @@ mod tests {
             path: "/abs/a.pdf".to_string(),
             designation: None,
             designation_pages: None,
+            custodian: None,
         };
         let json = serde_json::to_string(&without_range).expect("serialize");
         assert!(!json.contains("designationPages"), "{json}");
         assert!(!json.contains("designation"), "{json}");
+    }
+
+    #[test]
+    fn production_set_source_serializes_custodian_camel_case_and_omits_when_none() {
+        let with_custodian = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: None,
+            designation_pages: None,
+            custodian: Some("J. Smith".to_string()),
+        };
+        let json = serde_json::to_string(&with_custodian).expect("serialize");
+        assert!(json.contains(r#""custodian":"J. Smith""#), "{json}");
+
+        let without_custodian = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: None,
+            designation_pages: None,
+            custodian: None,
+        };
+        let json = serde_json::to_string(&without_custodian).expect("serialize");
+        assert!(!json.contains("custodian"), "{json}");
     }
 
     #[test]

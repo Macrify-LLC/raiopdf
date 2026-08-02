@@ -43,6 +43,26 @@ reuse numbers.
 - **Filename column in index** — include each document's filename in that index.
 - **Combined production PDF** — also produce a single merged PDF of the whole set.
 - **Volume folders** — split the production into volumes under a size you set.
+- **Litigation load file (DAT)** — see "Load file" below.
+
+## Load file
+
+Check **Litigation load file (DAT)** and RaioPDF writes a `production.dat`
+file into the package alongside the index — a standard format that most
+review platforms (Relativity and others that accept a Concordance-style
+load file) can read to import the whole production in one step, with the
+Bates range, confidentiality designation, page count, and file location for
+every document already filled in.
+
+- It only lists documents that were actually produced — a combined PDF or a
+  duplicate you chose to skip never appears in it.
+- If **Filename column in index** is off, the load file's filename field
+  stays blank too, matching the index.
+- This version doesn't include a separate image-level cross-reference file
+  some platforms also accept (an "OPT" file) — RaioPDF's production PDFs
+  aren't split into individual page images yet, which that format requires.
+  The full technical notes are in this project's repository, in
+  `docs/PRODUCTION-SETS.md`, if you or your vendor want the specifics.
 
 ## Restricting a designation to certain pages
 

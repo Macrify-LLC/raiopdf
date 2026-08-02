@@ -287,6 +287,7 @@ describe("ProductionSetWorkspace Bates continuation", () => {
           fileCount: 5,
           continuation: { mode: "strict", priorLastBates: "SMITH000122" },
           duplicateCount: 0,
+          loadFileDat: null,
         },
       },
     });

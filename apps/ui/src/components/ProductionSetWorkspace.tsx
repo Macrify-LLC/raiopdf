@@ -98,6 +98,14 @@ export interface ProductionSetRunInput {
   continuationOverrideReason?: string | undefined;
   /** How to handle two or more sources whose bytes hash identical. */
   duplicateHandling: ProductionDuplicateHandling;
+  /**
+   * Writes a litigation load file (`production.dat`, "Relativity-compatible
+   * Concordance DAT defaults") at the package root. Per-source custodian
+   * (also part of that file) is a package/MCP-level input only -- there's no
+   * per-file custodian control here in v1, so every row's CUSTODIAN column
+   * is blank for a UI-built production.
+   */
+  includeLoadFiles: boolean;
 }
 
 export interface ProductionSetRunResult {
@@ -108,6 +116,9 @@ export interface ProductionSetRunResult {
   continuation?: { mode: "strict" | "override"; priorLastBates: string } | null | undefined;
   /** Occurrences beyond the first in each duplicate group; 0 when none were found. */
   duplicateCount: number;
+  /** Package-root-relative location of the litigation load file, or `null`
+   * when "Litigation load file (DAT)" wasn't checked. */
+  loadFileDat: string | null;
 }
 
 /** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
@@ -232,6 +243,7 @@ export function ProductionSetWorkspace({
   const [includeIndex, setIncludeIndex] = useState(true);
   const [includeFilenameInIndex, setIncludeFilenameInIndex] = useState(true);
   const [combinedPdf, setCombinedPdf] = useState(false);
+  const [includeLoadFiles, setIncludeLoadFiles] = useState(false);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
   const [addingFile, setAddingFile] = useState(false);
@@ -575,6 +587,7 @@ export function ProductionSetWorkspace({
         ? continuationReason.trim()
         : undefined,
       duplicateHandling,
+      includeLoadFiles,
     });
   }
 
@@ -986,6 +999,17 @@ export function ProductionSetWorkspace({
             />
             <span>Volume folders</span>
           </label>
+          <label
+            className="production-workspace__checkbox-row"
+            title="Write production.dat, a Relativity-compatible Concordance-style load file, alongside the production index -- for importing this production straight into a review platform."
+          >
+            <input
+              type="checkbox"
+              checked={includeLoadFiles}
+              onChange={(event) => setIncludeLoadFiles(event.target.checked)}
+            />
+            <span>Litigation load file (DAT)</span>
+          </label>
         </div>
         {useVolumeCap ? (
           <label className="production-workspace__number" title="Maximum size for each volume folder before starting the next volume.">
@@ -1061,6 +1085,12 @@ export function ProductionSetWorkspace({
               <span className="production-workspace__result-part-label">Next Bates number</span>
               <span className="production-workspace__result-part-value">{progress.result.nextNumber}</span>
             </div>
+            {progress.result.loadFileDat ? (
+              <div className="production-workspace__result-part">
+                <span className="production-workspace__result-part-label">Load file</span>
+                <span className="production-workspace__result-part-value">{progress.result.loadFileDat}</span>
+              </div>
+            ) : null}
           </div>
           {onOpenPackageRoot ? (
             <div className="package-workflow-result-actions">

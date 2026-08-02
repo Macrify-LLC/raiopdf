@@ -7,6 +7,13 @@ import { createLocalPdfEngine } from "@raiopdf/engine-local";
 import { createPackage, readPackageManifest } from "@raiopdf/package-writer";
 import type { PackageManifest } from "@raiopdf/package-writer";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { formatProductionDat, type ProductionDatRow } from "./loadFiles";
+
+export {
+  formatProductionDat,
+  type FormatProductionDatOptions,
+  type ProductionDatRow,
+} from "./loadFiles";
 
 export interface ProductionSourceInput {
   path: string;
@@ -20,6 +27,13 @@ export interface ProductionSourceInput {
    * when `designation` is empty -- there's nothing to restrict.
    */
   designationPages?: string | undefined;
+  /**
+   * Custodian name recorded on this source's load-file (DAT) row. Package
+   * and MCP callers only -- the desktop UI has no per-file custodian input
+   * in v1, so UI-originated rows simply never set this and the resulting
+   * `CUSTODIAN` column is blank for them.
+   */
+  custodian?: string | undefined;
 }
 
 export interface ProductionContinuationOverrideInput {
@@ -123,6 +137,15 @@ export interface BuildProductionSetInput {
    * `"produce-all"` -- see `ProductionDuplicateHandling`.
    */
   duplicateHandling?: ProductionDuplicateHandling | undefined;
+  /**
+   * Writes a litigation load file (`production.dat`, "Relativity-compatible
+   * Concordance DAT defaults" -- see `./loadFiles.ts`) at the package root
+   * alongside `upload/`. Default `false`. Only produced files get a row --
+   * a combined production PDF and any produce-once-omitted duplicate
+   * occurrence never appear in it. An OPT/Opticon image cross-reference is
+   * deliberately NOT written -- see `docs/PRODUCTION-SETS.md` for why.
+   */
+  includeLoadFiles?: boolean | undefined;
 }
 
 export type ProductionContinuationErrorCode =
@@ -177,6 +200,9 @@ export interface ProductionSetFileResult {
    * when an explicit spec happened to resolve to every page anyway).
    */
   designationPages: string | null;
+  /** Custodian name, or `""` when none was set for this source (the desktop
+   * UI never sets one in v1 -- see `ProductionSourceInput.custodian`). */
+  custodian: string;
   sha256: string;
   bytes: number;
   volume: string | null;
@@ -201,6 +227,9 @@ export interface ProductionSetResult {
   indexPdf: string | null;
   indexCsv: string | null;
   combinedPdf: string | null;
+  /** Package-root-relative location of `production.dat`, or `null` when
+   * `includeLoadFiles` was `false`. */
+  loadFileDat: string | null;
   manifest: PackageManifest;
   /** Set when `continueFrom` was used for this build; `null` otherwise. */
   continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
@@ -255,6 +284,9 @@ interface ProductionSourcePlan {
   /** Normalized spec string to record on the result/manifest/index, or
    * `null` when the designation covers the whole document. */
   designationPagesSpec: string | null;
+  /** Custodian name, or `""` when none was set -- see
+   * `ProductionSourceInput.custodian`. */
+  custodian: string;
 }
 
 /** A source page's size and rotation, as read directly from the PDF (independent
@@ -284,6 +316,7 @@ interface NormalizedInput {
   designationPlacement: PdfStampPlacement;
   stampFontSizePt: number;
   duplicateHandling: ProductionDuplicateHandling;
+  includeLoadFiles: boolean;
 }
 
 const DEFAULT_DIGITS = 6;
@@ -674,6 +707,7 @@ export async function buildProductionSet(
           pages: plan.pages,
           designation: plan.designation,
           designationPages: plan.designationPagesSpec,
+          custodian: plan.custodian,
           sha256: entry.sha256,
           bytes: entry.bytes,
           volume: volumeName,
@@ -704,6 +738,20 @@ export async function buildProductionSet(
       );
       indexCsv = csvEntry.relativePath;
       indexPdf = pdfEntry.relativePath;
+    }
+
+    let loadFileDat: string | null = null;
+    if (options.includeLoadFiles) {
+      // Only ever built from `files` -- the per-document produced set --
+      // so a combined production PDF and any produce-once-omitted duplicate
+      // never get a row, matching the production index.
+      const datEntry = await session.addRootDocument(
+        "production.dat",
+        formatProductionDat(files.map(toDatRow), {
+          includeFilenameInIndex: options.includeFilenameInIndex,
+        }),
+      );
+      loadFileDat = datEntry.relativePath;
     }
 
     let combinedPdf: string | null = null;
@@ -749,6 +797,7 @@ export async function buildProductionSet(
       pages: file.pages,
       designation: file.designation,
       designationPages: file.designationPages,
+      custodian: file.custodian,
     })));
     session.recordDetail("productionOptions", {
       prefix: options.prefix,
@@ -761,6 +810,7 @@ export async function buildProductionSet(
       designationPlacement: options.designationPlacement,
       stampFontSizePt: options.stampFontSizePt,
       duplicateHandling: options.duplicateHandling,
+      includeLoadFiles: options.includeLoadFiles,
     });
     // JsonValue is a mutable-array shape; copy every readonly array into a
     // plain one rather than widen the public `ProductionDuplicateGroup` type.
@@ -853,6 +903,8 @@ export async function buildProductionSet(
       duplicateHandling: options.duplicateHandling,
       duplicateCount,
       duplicateGroups: duplicateGroupsDetail,
+      includeLoadFiles: options.includeLoadFiles,
+      loadFileDat,
       files: files.map((file) => ({
         sourceFilename: file.sourceFilename,
         outputName: file.outputName,
@@ -862,6 +914,7 @@ export async function buildProductionSet(
         pages: file.pages,
         designation: file.designation,
         designationPages: file.designationPages,
+        custodian: file.custodian,
         sha256: file.sha256,
         volume: file.volume,
       })),
@@ -889,6 +942,7 @@ export async function buildProductionSet(
       indexPdf,
       indexCsv,
       combinedPdf,
+      loadFileDat,
       manifest,
       continuation: continuation === null
         ? null
@@ -980,6 +1034,7 @@ async function prepareProductionSourcePlans(
       designationPagesSpec: designation === ""
         ? null
         : formatPartialDesignationPagesSpec(designationPageIndexes, pages),
+      custodian: normalizeCustodian(source.custodian),
     });
   }
 
@@ -1427,6 +1482,7 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     designationPlacement,
     stampFontSizePt,
     duplicateHandling,
+    includeLoadFiles: input.includeLoadFiles ?? false,
   };
 }
 
@@ -1471,6 +1527,13 @@ function assertBatesFits(digits: number, lastNumber: number): void {
 }
 
 function normalizeDesignation(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+/** Same shape as `normalizeDesignation` -- trim, default to `""` -- kept as
+ * its own function since it normalizes a semantically distinct field
+ * (`ProductionSourceInput.custodian`, not the confidentiality designation). */
+function normalizeCustodian(value: string | undefined): string {
   return value?.trim() ?? "";
 }
 
@@ -1576,6 +1639,22 @@ function toIndexRow(file: ProductionSetFileResult): ProductionIndexRow {
     pages: file.pages,
     designation: file.designation,
     designationPages: file.designationPages,
+    sha256: file.sha256,
+  };
+}
+
+/** `LINK` is written backslash-separated by `formatProductionDat` itself --
+ * this only needs to hand over the forward-slash `packageRelativePath` the
+ * package writer already produced. */
+function toDatRow(file: ProductionSetFileResult): ProductionDatRow {
+  return {
+    begBates: file.batesStart,
+    endBates: file.batesEnd,
+    pageCount: file.pages,
+    confidentiality: file.designation,
+    custodian: file.custodian,
+    filename: file.outputName,
+    link: file.packageRelativePath,
     sha256: file.sha256,
   };
 }

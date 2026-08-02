@@ -170,6 +170,7 @@ describe("ProductionSetWorkspace trust behaviors", () => {
           nextNumber: 4,
           fileCount: 1,
           duplicateCount: 0,
+          loadFileDat: null,
         },
       },
       onOpenPackageRoot,

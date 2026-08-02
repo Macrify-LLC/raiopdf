@@ -1706,6 +1706,7 @@ export function App() {
         fileCount: number;
         continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
         duplicateCount: number;
+        loadFileDat: string | null;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
           const grant = sourceGrants[index];
@@ -1734,6 +1735,7 @@ export function App() {
         continueFrom: input.continueFrom,
         continuationOverrideReason: input.continuationOverrideReason,
         duplicateHandling: input.duplicateHandling,
+        includeLoadFiles: input.includeLoadFiles,
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);

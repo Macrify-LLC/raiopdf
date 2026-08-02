@@ -1203,8 +1203,12 @@ async function prepareProductionSourcePlans(
       sourceFilename,
     );
     const status = normalizeProductionStatus(source.status, sourceFilename);
-    const privilegeAsserted = normalizePrivilegeText(source.privilegeAsserted);
-    const basis = normalizePrivilegeText(source.basis);
+    // Privilege text has no meaning for a produced document, and it is
+    // sensitive attorney work product: a value left over from a reverted
+    // Withhold choice must never reach the package manifest.
+    const privilegeAsserted =
+      status === "produce" ? "" : normalizePrivilegeText(source.privilegeAsserted);
+    const basis = status === "produce" ? "" : normalizePrivilegeText(source.basis);
     if (status === "withhold" && privilegeAsserted === "") {
       throw new Error(
         `"${sourceFilename}": withholding a document requires a privilege basis ("Privilege asserted").`,

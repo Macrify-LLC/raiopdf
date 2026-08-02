@@ -122,6 +122,34 @@ describe("ProductionSetWorkspace withhold / produce-redacted (draft privilege lo
     expect(container?.textContent).toContain("NOT ready to serve");
   });
 
+  it("discards privilege text and its overflow weight when a row reverts to Produce", async () => {
+    const onRun = vi.fn<(input: ProductionSetRunInput) => Promise<void>>(async () => undefined);
+    render({ onRun });
+
+    selectValue(statusSelect(), "withhold");
+    typeInto(fieldByLabel("Privilege asserted") as HTMLInputElement, "Attorney-client privilege");
+    typeInto(fieldByLabel("Description") as HTMLInputElement, "Counsel email");
+
+    // Back to Produce: the sensitive text must not linger unseen or be
+    // forwarded to the build.
+    selectValue(statusSelect(), "produce");
+    expect(fieldByLabel("Privilege asserted")).toBeNull();
+
+    selectValue(statusSelect(), "withhold");
+    expect((fieldByLabel("Privilege asserted") as HTMLInputElement).value).toBe("");
+    selectValue(statusSelect(), "produce");
+
+    typeInto(outputDirInput(), "/tmp/production-package");
+    typeInto(prefixInput(), "SMITH");
+    await act(async () => {
+      buttonByText("Build Production").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const files = onRun.mock.calls[0]?.[0]?.files ?? [];
+    expect(files[0]?.privilegeAsserted).toBe("");
+    expect(files[0]?.basis).toBe("");
+  });
+
   it("reveals the same fields for Produce with redactions", () => {
     render();
 

@@ -1298,6 +1298,41 @@ describe("buildProductionSet load file (DAT)", () => {
 });
 
 describe("buildProductionSet withhold and produce-redacted (draft privilege log)", () => {
+  it("records no privilege text for a produce-status source, even when supplied", async () => {
+    // A reverted Withhold choice can leave privilege text on a source the UI
+    // forwards as produce; it is sensitive work product and must not reach
+    // the package manifest or production report.
+    const source = await makePdf("reverted.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [
+        {
+          path: source,
+          status: "produce",
+          privilegeAsserted: "Attorney-client privilege",
+          basis: "Counsel email",
+        },
+      ],
+      outputDir,
+      prefix: "REV",
+    });
+
+    const manifestText = JSON.stringify(await readPackageManifest(outputDir));
+    const reportText = await fs.readFile(
+      path.join(outputDir, "raio-manifest", "production.json"),
+      "utf8",
+    );
+
+    expect(manifestText.includes("Attorney-client privilege")).toBe(false);
+    expect(manifestText.includes("Counsel email")).toBe(false);
+    expect(reportText.includes("Attorney-client privilege")).toBe(false);
+    expect(reportText.includes("Counsel email")).toBe(false);
+    await expect(fs.access(path.join(outputDir, "draft-privilege-log.csv"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("excludes a withheld source from upload/, the production index, and the DAT, without consuming a Bates number", async () => {
     const first = await makePdf("keep-a.pdf", 2);
     const withheld = await makePdf("secret.pdf", 3);

@@ -1725,8 +1725,12 @@ export function App() {
             // "produce" is the backend default too -- omit it so the common
             // case sends the same shape it always has.
             status: file.status === "produce" ? undefined : file.status,
-            privilegeAsserted: file.privilegeAsserted || undefined,
-            basis: file.basis || undefined,
+            // Privilege text is sensitive work product — a value left over
+            // from a reverted Withhold choice is never forwarded for a
+            // produced document.
+            privilegeAsserted:
+              file.status === "produce" ? undefined : file.privilegeAsserted || undefined,
+            basis: file.status === "produce" ? undefined : file.basis || undefined,
           };
         }),
         outputDir: input.outputDir,

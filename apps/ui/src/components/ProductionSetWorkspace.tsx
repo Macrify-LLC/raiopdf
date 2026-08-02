@@ -298,7 +298,12 @@ export function ProductionSetWorkspace({
   const [stampFontSizePt, setStampFontSizePt] = useState(DEFAULT_STAMP_FONT_SIZE_PT);
   const [duplicateHandling, setDuplicateHandling] = useState<ProductionDuplicateHandling>("produce-all");
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
-  const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
+  // Withheld documents consume no Bates numbers, so they must not count
+  // toward the digit-width overflow gate.
+  const totalPages = files.reduce(
+    (sum, file) => sum + (file.status === "withhold" ? 0 : file.pages ?? 0),
+    0,
+  );
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
   const addFileBusy = addingFile || pendingPageCountReads > 0;
@@ -741,7 +746,17 @@ export function ProductionSetWorkspace({
                     onChange={(event) => {
                       const next = event.target.value as ProductionSourceStatus;
                       setFiles((current) => current.map((item) => (
-                        item.id === file.id ? { ...item, status: next } : item
+                        item.id === file.id
+                          ? {
+                              ...item,
+                              status: next,
+                              // Reverting to Produce discards privilege text:
+                              // it is sensitive and meaningless for a produced
+                              // document, and must not linger unseen.
+                              privilegeAsserted: next === "produce" ? "" : item.privilegeAsserted,
+                              basis: next === "produce" ? "" : item.basis,
+                            }
+                          : item
                       )));
                     }}
                   >

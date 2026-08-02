@@ -291,6 +291,7 @@ describe("ProductionSetWorkspace Bates continuation", () => {
           withheldCount: 0,
           redactedCount: 0,
           privilegeLogLocation: null,
+          slipSheetCount: 0,
         },
       },
     });

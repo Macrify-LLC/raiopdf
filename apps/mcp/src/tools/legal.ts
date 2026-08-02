@@ -843,6 +843,18 @@ export const productionSetInputSchema = {
         "produce-redacted row, source name for a withheld row). Default true. Independent of " +
         "includeFilenameInIndex. false blanks the Filename VALUE only -- the column and header stay.",
     ),
+  withheldHandling: z
+    .enum(["slip-sheet", "omit"])
+    .optional()
+    .describe(
+      'How a withheld source\'s canonical occurrence appears in the produced set. Default "slip-sheet" -- a ' +
+        'generated, one-page, Bates-stamped placeholder ("DOCUMENT WITHHELD", the privilege asserted, an ' +
+        "optional wrapped basis) takes its place in production order, consuming exactly ONE Bates number " +
+        'there, and appears in upload/, the index, the DAT (blank CONFIDENTIALITY), and the combined PDF. ' +
+        '"omit" is the prior behavior: a pure omission, consuming no Bates number and never appearing ' +
+        "anywhere in the produced set. A withheld duplicate group produces exactly ONE slip sheet (its " +
+        "canonical occurrence) regardless of duplicateHandling. See docs/PRODUCTION-SETS.md.",
+    ),
 };
 /** Cap on `duplicateGroups` in the structured result -- the package manifest
  * (`productionDuplicates` detail, and `production.json`) always holds the
@@ -894,6 +906,13 @@ export const productionSetOutputSchema = {
         'non-"produce" status. NOT ready to serve -- Date/DocType/Author/Recipients are always blank, manual ' +
         "columns for the requester to complete before any use.",
     ),
+  slipSheetCount: z
+    .number()
+    .optional()
+    .describe(
+      'Generated slip-sheet placeholders produced for withheld sources -- one per canonical withheld ' +
+        'occurrence, ONLY when withheldHandling is "slip-sheet". Always 0 under "omit".',
+    ),
   continuation: z
     .object({
       mode: z.enum(["strict", "override"]),
@@ -941,6 +960,7 @@ export interface ProductionSetInput {
   duplicateHandling?: "produce-all" | "produce-once" | undefined;
   includeLoadFiles?: boolean | undefined;
   includeFilenameInPrivilegeLog?: boolean | undefined;
+  withheldHandling?: "slip-sheet" | "omit" | undefined;
 }
 export async function handleProductionSet(
   input: ProductionSetInput,
@@ -978,6 +998,7 @@ export async function handleProductionSet(
     ...(input.includeFilenameInPrivilegeLog === undefined
       ? {}
       : { includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog }),
+    ...(input.withheldHandling === undefined ? {} : { withheldHandling: input.withheldHandling }),
   });
 
   const duplicateGroupsTruncated = result.duplicateGroups.length > MAX_DUPLICATE_GROUPS_IN_RESULT;
@@ -988,9 +1009,19 @@ export async function handleProductionSet(
     ? ` ${result.withheldCount} withheld, ${result.redactedCount} produced with redactions -- draft privilege ` +
       `log at ${result.privilegeLogLocation} (NOT ready to serve; review and complete it first).`
     : "";
+  const slipSheetNote = result.slipSheetCount > 0
+    ? ` ${result.slipSheetCount} slip sheet(s) generated for withheld sources.`
+    : "";
+  // The only way `result.files.length` is 0 with `withheldCount > 0` is
+  // every source withheld under `withheldHandling: "omit"` -- an
+  // audit-only package (see `docs/PRODUCTION-SETS.md`'s zero-output note).
+  const zeroOutputNote = result.files.length === 0 && result.withheldCount > 0
+    ? " Every source was withheld and left out entirely -- this package is audit-only (no documents produced)."
+    : "";
 
   return successResult(
-    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.${duplicateNote}${privilegeLogNote}`,
+    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.` +
+      `${duplicateNote}${privilegeLogNote}${slipSheetNote}${zeroOutputNote}`,
     {
       packageRoot: result.packageRoot,
       outputs: result.files.map((file) => file.packageRelativePath),
@@ -1002,6 +1033,7 @@ export async function handleProductionSet(
       withheldCount: result.withheldCount,
       redactedCount: result.redactedCount,
       privilegeLogLocation: result.privilegeLogLocation,
+      slipSheetCount: result.slipSheetCount,
       continuation: result.continuation,
       duplicateCount: result.duplicateCount,
       duplicateGroups: result.duplicateGroups.slice(0, MAX_DUPLICATE_GROUPS_IN_RESULT),

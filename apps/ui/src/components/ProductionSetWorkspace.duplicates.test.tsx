@@ -281,6 +281,7 @@ describe("ProductionSetWorkspace duplicate detection", () => {
               withheldCount: 0,
               redactedCount: 0,
               privilegeLogLocation: null,
+              slipSheetCount: 0,
             },
           }}
           onAddFile={async () => null}
@@ -315,6 +316,7 @@ describe("ProductionSetWorkspace duplicate detection", () => {
               withheldCount: 0,
               redactedCount: 0,
               privilegeLogLocation: null,
+              slipSheetCount: 0,
             },
           }}
           onAddFile={async () => null}

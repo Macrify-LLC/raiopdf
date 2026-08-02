@@ -8,6 +8,18 @@ import { createPackage, readPackageManifest } from "@raiopdf/package-writer";
 import type { PackageManifest } from "@raiopdf/package-writer";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { formatProductionDat, type ProductionDatRow } from "./loadFiles";
+import { createSlipSheetPageBytes, SLIP_SHEET_PAGE_GEOMETRY } from "./slipSheet";
+
+export {
+  createSlipSheetPageBytes,
+  layoutSlipSheetText,
+  SLIP_SHEET_BASIS_MAX_CHARS,
+  SLIP_SHEET_MIN_BODY_FONT_SIZE_PT,
+  SLIP_SHEET_PAGE_GEOMETRY,
+  truncateSlipSheetBasis,
+  type SlipSheetContentInput,
+  type SlipSheetTextLayout,
+} from "./slipSheet";
 
 export {
   formatProductionDat,
@@ -40,14 +52,15 @@ export interface ProductionSourceInput {
    * part of a production build -- see the `Redact` tool for that), or
    * withheld entirely. Default `"produce"`.
    *
-   * A withheld source is filtered out before Bates numbers are assigned --
-   * same mechanism as a `"produce-once"`-omitted duplicate -- so it consumes
-   * no Bates number, is never stamped, and never appears in `upload/`, the
-   * production index, or the DAT. Its planning hash is still recorded in the
-   * `privilegeLog` manifest detail. THIS PHASE never writes a slip-sheet
-   * placeholder in its place; that (and zero-produced-output edge semantics)
-   * is deliberately deferred to the next phase -- see
-   * `ProductionSetResult.privilegeLogLocation`.
+   * How a withheld source appears in the produced set is controlled by the
+   * run-level `BuildProductionSetInput.withheldHandling` -- default
+   * `"slip-sheet"`, a generated one-page Bates-stamped placeholder in its
+   * original ordering position; `"omit"` is a pure omission (filtered out
+   * before Bates numbers are assigned -- same mechanism as a
+   * `"produce-once"`-omitted duplicate -- so it consumes no Bates number
+   * and never appears in `upload/`, the production index, or the DAT).
+   * Either way, its planning hash is recorded in the `privilegeLog`
+   * manifest detail. See `docs/PRODUCTION-SETS.md` for the full spec.
    */
   status?: ProductionSourceStatus | undefined;
   /**
@@ -79,6 +92,31 @@ export interface ProductionSourceInput {
  * `ProductionSourceInput.status`).
  */
 export type ProductionSourceStatus = "produce" | "produce-redacted" | "withhold";
+
+/**
+ * How a withheld (`status: "withhold"`) source's canonical occurrence
+ * appears in the produced set. Default `"slip-sheet"`.
+ *
+ * - `"slip-sheet"` -- a generated, one-page pdf-lib PDF ("DOCUMENT WITHHELD",
+ *   the privilege asserted, an optional wrapped basis) takes the withheld
+ *   document's place in production order, consuming exactly ONE Bates number
+ *   there, Bates-stamped like any produced page (same placement/font
+ *   options), and landing in `upload/`, the production index, the DAT (with
+ *   a blank `CONFIDENTIALITY` value), and the combined PDF when requested.
+ *   The withheld source's own bytes are never read for its content -- only
+ *   re-hashed for drift detection (see `readPlannedSourceBytes`). A
+ *   withheld duplicate group produces exactly ONE slip sheet (its canonical
+ *   occurrence), regardless of `duplicateHandling`, mirroring the single
+ *   privilege-log-row rule.
+ * - `"omit"` -- the prior (pre-slip-sheet) behavior: the withheld source is
+ *   a pure omission, consuming no Bates number and never appearing anywhere
+ *   in the produced set.
+ *
+ * See `docs/PRODUCTION-SETS.md` for the full spec, including the
+ * zero-produced-output edge case when every source is withheld under
+ * `"omit"`.
+ */
+export type WithheldHandling = "slip-sheet" | "omit";
 
 export interface ProductionContinuationOverrideInput {
   reason: string;
@@ -201,6 +239,11 @@ export interface BuildProductionSetInput {
    * `includeFilenameInIndex`.
    */
   includeFilenameInPrivilegeLog?: boolean | undefined;
+  /**
+   * How a withheld source's canonical occurrence appears in the produced
+   * set. Default `"slip-sheet"` -- see `WithheldHandling`.
+   */
+  withheldHandling?: WithheldHandling | undefined;
 }
 
 export type ProductionContinuationErrorCode =
@@ -258,8 +301,10 @@ export interface ProductionSetFileResult {
   /** Custodian name, or `""` when none was set for this source (the desktop
    * UI never sets one in v1 -- see `ProductionSourceInput.custodian`). */
   custodian: string;
-  /** Always `"produce"` or `"produce-redacted"` here -- a `"withhold"`
-   * source never reaches `files` in the first place. */
+  /** `"produce"` or `"produce-redacted"` for an ordinary produced file. A
+   * `"withhold"` source reaches `files` ONLY as a generated slip sheet
+   * (`withheldHandling: "slip-sheet"`) -- an `"omit"`-handled withheld
+   * source never reaches `files` at all. */
   status: ProductionSourceStatus;
   /** `""` when not set for this source. */
   privilegeAsserted: string;
@@ -316,6 +361,10 @@ export interface ProductionSetResult {
    * when no source had a non-`"produce"` status (the file is never written
    * in that case). Written whenever `withheldCount + redactedCount > 0`. */
   privilegeLogLocation: string | null;
+  /** Number of generated slip-sheet placeholders produced for withheld
+   * sources -- one per canonical withheld occurrence, ONLY when
+   * `withheldHandling` was `"slip-sheet"`. Always `0` under `"omit"`. */
+  slipSheetCount: number;
 }
 
 interface VolumeState {
@@ -363,14 +412,23 @@ interface ProductionSourcePlan {
   /** Custodian name, or `""` when none was set -- see
    * `ProductionSourceInput.custodian`. */
   custodian: string;
-  /** Never `"withhold"` on a `ProductionSourcePlan` -- a withheld source is
-   * filtered out of `included` before plans are built (see
-   * `prepareProductionSourcePlans`). */
+  /** `"withhold"` reaches a plan ONLY as a slip-sheet placeholder's status
+   * (`isSlipSheet: true`, `withheldHandling: "slip-sheet"`) -- an
+   * `"omit"`-handled withheld source (or any withheld source under the
+   * default `"omit"`) is filtered out of `included` before plans are built
+   * (see `prepareProductionSourcePlans`) and never reaches this type. */
   status: ProductionSourceStatus;
   /** `""` when none was set -- see `ProductionSourceInput.privilegeAsserted`. */
   privilegeAsserted: string;
   /** `""` when none was set -- see `ProductionSourceInput.basis`. */
   basis: string;
+  /** `true` for a generated slip-sheet placeholder standing in for a
+   * withheld source's canonical occurrence (`withheldHandling:
+   * "slip-sheet"`) -- `pages`/`pageGeometry` describe the GENERATED page
+   * (always 1, Letter-size), not the withheld source's own document, and
+   * `designation` is always forced to `""` (a slip sheet is never
+   * confidentiality-designated). `false` for every ordinary plan. */
+  isSlipSheet: boolean;
 }
 
 /** A source page's size and rotation, as read directly from the PDF (independent
@@ -402,6 +460,7 @@ interface NormalizedInput {
   duplicateHandling: ProductionDuplicateHandling;
   includeLoadFiles: boolean;
   includeFilenameInPrivilegeLog: boolean;
+  withheldHandling: WithheldHandling;
 }
 
 const DEFAULT_DIGITS = 6;
@@ -415,6 +474,9 @@ const DEFAULT_PRODUCTION_STATUS: ProductionSourceStatus = "produce";
  * dangerous default; producing every occurrence (with its own Bates range,
  * cross-referenced) is the safe one. */
 const DEFAULT_DUPLICATE_HANDLING: ProductionDuplicateHandling = "produce-all";
+/** A slip-sheet placeholder holds a withheld document's place in the
+ * production and its Bates sequence -- the owner's decided default. */
+const DEFAULT_WITHHELD_HANDLING: WithheldHandling = "slip-sheet";
 const MIN_STAMP_FONT_SIZE_PT = 6;
 const MAX_STAMP_FONT_SIZE_PT = 24;
 /** Matches `engine-local`/`engine-sidecar`'s own default `marginIn` for
@@ -744,6 +806,7 @@ export async function buildProductionSet(
 
     const { plans: sourcePlans, duplicateGroups, duplicateCount, withheldLogSources } =
       await prepareProductionSourcePlans(options, engine);
+    const slipSheetCount = sourcePlans.filter((plan) => plan.isSlipSheet).length;
     session = createPackage(options.outputDir, {
       appVersion: options.appVersion,
       createdAt: options.createdAt,
@@ -833,8 +896,14 @@ export async function buildProductionSet(
       indexPdf = pdfEntry.relativePath;
     }
 
+    // A withheld source's canonical occurrence has a produced plan ONLY
+    // under `withheldHandling: "slip-sheet"` (the slip sheet itself) -- this
+    // is how the privilege log's new `Bates` column tells the two modes
+    // apart for a "Withheld" row (see `ProductionPrivilegeLogRow.bates`).
+    const sourcePlansByOrdinal = new Map(sourcePlans.map((plan) => [plan.sourceOrdinal, plan]));
+
     // Draft privilege log: one row per withheld document's canonical
-    // occurrence (never produced -- filename falls back to the source name)
+    // occurrence (produced-name for a slip sheet, source name otherwise)
     // plus one row per produced "produce-redacted" file (filename is the
     // Bates-stamped output name, matching the production index). Written
     // ONLY when at least one row exists -- a source marked withhold or
@@ -842,17 +911,23 @@ export async function buildProductionSet(
     // before output never gets its own row (see `selectCanonicalWithheldSources`
     // and the duplicate-status conflict check above).
     const privilegeLogRows: ProductionPrivilegeLogRowPlan[] = [
-      ...withheldLogSources.map((source) => ({
-        status: "Withheld" as const,
-        privilegeAsserted: source.privilegeAsserted,
-        basis: source.basis,
-        filename: source.sourceFilename,
-        pages: source.pages,
-        sourceOrdinal: source.sourceOrdinal,
-        sourceFilename: source.sourceFilename,
-        sourcePath: source.sourcePath,
-        sourceSha256: source.sourceSha256,
-      })),
+      ...withheldLogSources.map((source) => {
+        const slipSheetPlan = sourcePlansByOrdinal.get(source.sourceOrdinal);
+        return {
+          status: "Withheld" as const,
+          privilegeAsserted: source.privilegeAsserted,
+          basis: source.basis,
+          filename: source.sourceFilename,
+          pages: source.pages,
+          // "" under "omit" (no Bates number was ever consumed); the slip
+          // sheet's own range under "slip-sheet".
+          bates: slipSheetPlan === undefined ? "" : `${slipSheetPlan.batesStart}-${slipSheetPlan.batesEnd}`,
+          sourceOrdinal: source.sourceOrdinal,
+          sourceFilename: source.sourceFilename,
+          sourcePath: source.sourcePath,
+          sourceSha256: source.sourceSha256,
+        };
+      }),
       // `files` is built by pushing exactly one entry per `sourcePlans` entry,
       // in the same loop, in the same order -- a direct index zip, not a
       // lookup, is what ties a produced file back to its plan's ordinal.
@@ -865,6 +940,9 @@ export async function buildProductionSet(
           basis: file.basis,
           filename: file.outputName,
           pages: file.pages,
+          // A "produce-redacted" source is always produced (independent of
+          // withheldHandling), so it always has a real Bates range.
+          bates: `${file.batesStart}-${file.batesEnd}`,
           sourceOrdinal: plan.sourceOrdinal,
           sourceFilename: file.sourceFilename,
           sourcePath: file.sourcePath,
@@ -892,6 +970,7 @@ export async function buildProductionSet(
         rows: privilegeLogRows.map((row) => ({
           rowId: row.rowId,
           status: row.status,
+          bates: row.bates,
           privilegeAsserted: row.privilegeAsserted,
           basis: row.basis,
           sourceFilename: row.sourceFilename,
@@ -922,7 +1001,15 @@ export async function buildProductionSet(
     }
 
     let combinedPdf: string | null = null;
-    if (options.combinedPdf) {
+    // Zero-produced-output guard: with `withheldHandling: "omit"` and every
+    // source withheld, `files` is empty and `stampedForCombined` (only ever
+    // populated inside the per-plan loop above) is empty too -- merging
+    // zero documents, and formatting a "last produced Bates" string from
+    // `running - 1` (which here equals `options.start - 1`, a number that
+    // was never actually stamped on anything), would both be nonsensical.
+    // No combined PDF is produced in that case; see the
+    // `production-zero-output` check recorded below.
+    if (options.combinedPdf && files.length > 0) {
       const merged = await engine.merge(stampedForCombined, {
         labels: files.map((file) => file.sourceFilename),
       });
@@ -966,6 +1053,10 @@ export async function buildProductionSet(
       designationPages: file.designationPages,
       custodian: file.custodian,
       status: file.status,
+      // Only ever true for a produced "withhold"-status file -- a generated
+      // slip-sheet placeholder -- since that's the only way `status`
+      // reaches `files` as "withhold" at all (see `ProductionSourcePlan.isSlipSheet`).
+      isSlipSheet: file.status === "withhold",
       privilegeAsserted: file.privilegeAsserted,
       basis: file.basis,
     })));
@@ -982,6 +1073,7 @@ export async function buildProductionSet(
       duplicateHandling: options.duplicateHandling,
       includeLoadFiles: options.includeLoadFiles,
       includeFilenameInPrivilegeLog: options.includeFilenameInPrivilegeLog,
+      withheldHandling: options.withheldHandling,
     });
     // JsonValue is a mutable-array shape; copy every readonly array into a
     // plain one rather than widen the public `ProductionDuplicateGroup` type.
@@ -1051,13 +1143,30 @@ export async function buildProductionSet(
       status: "pass",
       detail: "Production index PDF and CSV use produced filenames only; source paths are in manifest detail.",
     });
-    if (options.combinedPdf) {
+    if (options.combinedPdf && files.length > 0) {
       // The per-document path holds one document at a time; the combined PDF
       // cannot, so record the bound it ran under next to the output it applies to.
       session.recordCheck({
         checkId: "production-combined-memory-bound",
         status: "pass",
         detail: `Combined production PDF held ${files.length} stamped documents open at once (cap ${MAX_COMBINED_PRODUCTION_SOURCES}); the per-document outputs hold one at a time.`,
+      });
+    }
+    // Explicit, plain-language record of the zero-produced-output edge case:
+    // every source was withheld and `withheldHandling` is "omit", so no
+    // document was ever stamped -- `nextNumber` stays at `options.start`
+    // and `upload/` is empty. The package is still a normal, complete
+    // AUDIT-ONLY package: the draft privilege log (naming every withheld
+    // document and its asserted privilege), the manifest, and every other
+    // check are still written.
+    if (files.length === 0) {
+      session.recordCheck({
+        checkId: "production-zero-output",
+        status: "pass",
+        detail:
+          'Every source was withheld and withheldHandling is "omit" -- no documents were produced. This ' +
+          "package is audit-only: upload/ is empty, but the draft privilege log, manifest, and checks are " +
+          "still written.",
       });
     }
     await session.addManifestJson("production.json", {
@@ -1080,6 +1189,8 @@ export async function buildProductionSet(
       privilegeLogLocation,
       withheldCount,
       redactedCount,
+      withheldHandling: options.withheldHandling,
+      slipSheetCount,
       files: files.map((file) => ({
         sourceFilename: file.sourceFilename,
         outputName: file.outputName,
@@ -1091,6 +1202,7 @@ export async function buildProductionSet(
         designationPages: file.designationPages,
         custodian: file.custodian,
         status: file.status,
+        isSlipSheet: file.status === "withhold",
         privilegeAsserted: file.privilegeAsserted,
         basis: file.basis,
         sha256: file.sha256,
@@ -1130,6 +1242,7 @@ export async function buildProductionSet(
       withheldCount,
       redactedCount,
       privilegeLogLocation,
+      slipSheetCount,
     };
   } finally {
     if (combinedHandle !== null) {
@@ -1237,6 +1350,7 @@ async function prepareProductionSourcePlans(
       status,
       privilegeAsserted,
       basis,
+      isSlipSheet: false,
     });
   }
 
@@ -1245,18 +1359,53 @@ async function prepareProductionSourcePlans(
   // production statuses -- checked BEFORE anything downstream (Bates
   // assignment, withhold filtering) treats the group as consistent.
   assertNoConflictingDuplicateStatuses(groups);
-  // A withheld source is excluded the same way a produce-once-omitted
+  // Under `withheldHandling: "omit"` (or when nothing is withheld), a
+  // withheld source is excluded the same way a produce-once-omitted
   // duplicate is -- filtered out before Bates numbers are assigned, so
-  // numbering stays contiguous and a withheld source never reaches
-  // `stampPlannedSource`. This exclusion is unconditional (not gated on
-  // `duplicateHandling`): a document marked withhold is never produced,
-  // regardless of how duplicates are otherwise handled.
-  const withheldOrdinals = new Set(
-    scanned.filter((source) => source.status === "withhold").map((source) => source.sourceOrdinal),
-  );
-  const included = scanned.filter((source) =>
-    !excludedSourceOrdinals.has(source.sourceOrdinal) && !withheldOrdinals.has(source.sourceOrdinal)
-  );
+  // numbering stays contiguous and it never reaches `stampPlannedSource`.
+  // Under `"slip-sheet"`, only a withheld duplicate group's NON-CANONICAL
+  // occurrences are excluded this way -- the canonical occurrence instead
+  // becomes a slip-sheet plan below, regardless of `duplicateHandling`
+  // (mirroring the single-privilege-log-row rule for withheld duplicates).
+  const withheldSources = scanned.filter((source) => source.status === "withhold");
+  const withheldNonCanonicalOrdinals = new Set<number>();
+  if (options.withheldHandling === "slip-sheet") {
+    const seenWithheldSha256 = new Set<string>();
+    for (const source of withheldSources) {
+      if (seenWithheldSha256.has(source.sourceSha256)) {
+        withheldNonCanonicalOrdinals.add(source.sourceOrdinal);
+      } else {
+        seenWithheldSha256.add(source.sourceSha256);
+      }
+    }
+  }
+  const withheldExcludedOrdinals = options.withheldHandling === "slip-sheet"
+    ? withheldNonCanonicalOrdinals
+    : new Set(withheldSources.map((source) => source.sourceOrdinal));
+  const included = scanned
+    .filter((source) =>
+      !excludedSourceOrdinals.has(source.sourceOrdinal) && !withheldExcludedOrdinals.has(source.sourceOrdinal)
+    )
+    .map((source) => {
+      if (options.withheldHandling !== "slip-sheet" || source.status !== "withhold") {
+        return source;
+      }
+      // The slip sheet is a GENERATED one-page placeholder -- it consumes
+      // exactly one Bates number regardless of the withheld document's real
+      // page count (still recorded, informationally, on `scanned` for the
+      // privilege log's Pages column), and it is never confidentiality
+      // designated (see `WithheldHandling`'s doc comment and
+      // `docs/PRODUCTION-SETS.md`).
+      return {
+        ...source,
+        pages: 1,
+        pageGeometry: [SLIP_SHEET_PAGE_GEOMETRY],
+        designation: "",
+        designationPageIndexes: "all" as PdfPageSelection,
+        designationPagesSpec: null,
+        isSlipSheet: true,
+      };
+    });
 
   const totalPages = included.reduce((sum, source) => sum + source.pages, 0);
   assertBatesFits(options.digits, options.start + totalPages - 1);
@@ -1423,6 +1572,12 @@ function formatDuplicateCheckDetail(
 interface ProductionPrivilegeLogRowPlan {
   rowId: string;
   status: "Withheld" | "Produced with redactions";
+  /** `"${batesStart}-${batesEnd}"` when this row's document was actually
+   * produced and consumed a Bates range -- always true for "Produced with
+   * redactions"; true for "Withheld" ONLY under `withheldHandling:
+   * "slip-sheet"` (the slip sheet's own range). `""` for a "Withheld" row
+   * under `"omit"`, which consumed no Bates number at all. */
+  bates: string;
   privilegeAsserted: string;
   basis: string;
   filename: string;
@@ -1662,7 +1817,7 @@ async function stampPlannedSource(
   options: NormalizedInput,
   engine: PdfEngine,
 ): Promise<PdfDocumentHandle> {
-  const sourceBytes = await readPlannedSourceBytes(plan);
+  const sourceBytes = await resolvePlannedSourceBytes(plan);
   const original = await engine.open(sourceBytes);
   let produced: PdfDocumentHandle;
 
@@ -1712,6 +1867,32 @@ async function readPlannedSourceBytes(plan: ProductionSourcePlan): Promise<Uint8
   return bytes;
 }
 
+/**
+ * Resolves the bytes `stampPlannedSource` actually opens for a plan.
+ *
+ * For an ordinary plan, this is just `readPlannedSourceBytes` -- the
+ * source's own (re-verified, drift-checked) bytes. For a slip-sheet
+ * placeholder (`plan.isSlipSheet`), the withheld source's FILE is still
+ * never read for its content -- `readPlannedSourceBytes` runs anyway,
+ * purely as a drift guard (same #335 fix family as an ordinary produced
+ * source: the planning hash must still match what's on disk right before
+ * output, so the privilege log and manifest are never attested against a
+ * stale fingerprint), and its return value is discarded. The actual output
+ * bytes come from `createSlipSheetPageBytes`, a generated page carrying the
+ * privilege asserted and basis, never the withheld document's bytes.
+ */
+async function resolvePlannedSourceBytes(plan: ProductionSourcePlan): Promise<Uint8Array> {
+  if (!plan.isSlipSheet) {
+    return readPlannedSourceBytes(plan);
+  }
+
+  await readPlannedSourceBytes(plan);
+  return createSlipSheetPageBytes({
+    privilegeAsserted: plan.privilegeAsserted,
+    basis: plan.basis,
+  });
+}
+
 function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
   const prefix = input.prefix.trim();
   const start = input.start ?? DEFAULT_START;
@@ -1741,6 +1922,10 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
   const duplicateHandling = input.duplicateHandling ?? DEFAULT_DUPLICATE_HANDLING;
   if (duplicateHandling !== "produce-all" && duplicateHandling !== "produce-once") {
     throw new Error('Duplicate handling must be "produce-all" or "produce-once".');
+  }
+  const withheldHandling = input.withheldHandling ?? DEFAULT_WITHHELD_HANDLING;
+  if (withheldHandling !== "slip-sheet" && withheldHandling !== "omit") {
+    throw new Error('Withheld handling must be "slip-sheet" or "omit".');
   }
   // Refused before anything is written, so the user still has the choice of
   // running the same production without the combined PDF.
@@ -1787,6 +1972,7 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     duplicateHandling,
     includeLoadFiles: input.includeLoadFiles ?? false,
     includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog ?? true,
+    withheldHandling,
   };
 }
 
@@ -2042,6 +2228,11 @@ export interface ProductionPrivilegeLogRow {
   /** Stable, e.g. `"P-001"` -- see `formatPrivilegeLogRowId`. */
   rowId: string;
   status: "Withheld" | "Produced with redactions";
+  /** `"${batesStart}-${batesEnd}"` when the row's document consumed a Bates
+   * range (always for "Produced with redactions"; a "Withheld" row only
+   * under `withheldHandling: "slip-sheet"`), `""` otherwise -- a "Withheld"
+   * row under `"omit"` consumed no Bates number at all. */
+  bates: string;
   privilegeAsserted: string;
   /** The `Description` column. */
   basis: string;
@@ -2057,7 +2248,9 @@ export interface ProductionPrivilegeLogRow {
  * worse than a sparse one. Unlike `formatProductionCsv`'s filename column
  * (entirely omitted when off), `includeFilename` here only blanks the
  * `Filename` VALUES; the column and its header always exist, matching
- * `formatProductionDat`'s `FILENAME` behavior.
+ * `formatProductionDat`'s `FILENAME` behavior. `Bates` is never blanked by
+ * `includeFilename` -- it's independent of the filename option, and blank
+ * only when the row's document genuinely never consumed a Bates number.
  */
 export function formatPrivilegeLogCsv(
   rows: readonly ProductionPrivilegeLogRow[],
@@ -2066,6 +2259,7 @@ export function formatPrivilegeLogCsv(
   const headers = [
     "RowId",
     "Status",
+    "Bates",
     "PrivilegeAsserted",
     "Description",
     "Filename",
@@ -2078,6 +2272,7 @@ export function formatPrivilegeLogCsv(
   const lines = rows.map((row) => [
     row.rowId,
     row.status,
+    row.bates,
     row.privilegeAsserted,
     row.basis,
     includeFilename ? row.filename : "",

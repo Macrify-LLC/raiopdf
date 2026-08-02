@@ -1710,6 +1710,7 @@ export function App() {
         withheldCount: number;
         redactedCount: number;
         privilegeLogLocation: string | null;
+        slipSheetCount: number;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
           const grant = sourceGrants[index];
@@ -1749,6 +1750,7 @@ export function App() {
         duplicateHandling: input.duplicateHandling,
         includeLoadFiles: input.includeLoadFiles,
         includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog,
+        withheldHandling: input.withheldHandling,
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);

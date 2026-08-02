@@ -55,7 +55,10 @@ Bates range, confidentiality designation, page count, and file location for
 every document already filled in.
 
 - It only lists documents that were actually produced — a combined PDF, a
-  duplicate you chose to skip, or a document you withheld never appears in it.
+  duplicate you chose to skip never appears in it. A withheld document depends on
+your withheld-documents choice: its Bates-numbered slip sheet (the default) gets
+a row like any produced page, while "Leave out entirely" keeps it out of the
+load file altogether.
 - If **Filename column in index** is off, the load file's filename field
   stays blank too, matching the index.
 - This version doesn't include a separate image-level cross-reference file
@@ -134,10 +137,9 @@ Designation:
   removed, do that first with the [Redact](tool:redact) tool, then add the
   already-redacted file here. This status only tells RaioPDF to log the document
   as redacted.
-- **Withhold** — the document is left out of the production entirely. It's never
-  Bates-stamped, never copied into the upload folder, never listed in the
-  production index or the load file, and it uses none of the Bates numbers, so
-  the numbering stays unbroken for the documents around it.
+- **Withhold** — the document is left out of the production content entirely,
+  but you choose whether it still holds its place in the sequence — see
+  "Withheld documents: slip sheet or leave out" below.
 
 Choosing **Withhold** or **Produce with redactions** reveals two more fields:
 
@@ -153,27 +155,56 @@ and shows a warning that a draft privilege log will be written.
 
 **This is a draft, not something you can file or serve as-is.** The log has a
 row for every withheld document and every document produced with redactions,
-with these columns: Row ID, Status, Privilege Asserted, Description, Filename,
-Pages, Date, Doc Type, Author, and Recipients. **The last four columns —
-Date, Doc Type, Author, Recipients — are always left blank.** RaioPDF doesn't
-guess at them: a privilege log entry with a wrong autopopulated date or author
-is worse than one with a blank you know to fill in yourself. Treat the whole
-log the way you'd treat a Rule 26(b)(5)-style privilege log draft — review and
-complete every row before it's ever used or shared. The **Filename column in
-privilege log** option controls whether the Filename column is filled in or
-left blank (the column itself always exists either way) — it's independent of
-the production index's own filename option.
+with these columns: Row ID, Status, Bates, Privilege Asserted, Description,
+Filename, Pages, Date, Doc Type, Author, and Recipients. **Bates** shows the
+range the row actually used — a produced-with-redactions row always has one;
+a withheld row has one only if you chose the slip sheet below, and stays
+blank if you chose to leave the document out entirely. **The last four
+columns — Date, Doc Type, Author, Recipients — are always left blank.**
+RaioPDF doesn't guess at them: a privilege log entry with a wrong
+autopopulated date or author is worse than one with a blank you know to fill
+in yourself. Treat the whole log the way you'd treat a Rule 26(b)(5)-style
+privilege log draft — review and complete every row before it's ever used or
+shared. The **Filename column in privilege log** option controls whether the
+Filename column is filled in or left blank (the column itself always exists
+either way) — it's independent of the production index's own filename
+option.
 
 If two or more files in your order have identical content (see "Duplicate
 documents" above), they all need the **same** Status — RaioPDF stops and names
 the files if you give identical documents conflicting statuses, since a
 document can't be simultaneously handed over and withheld. If you withhold the
 same document more than once, the log gets exactly one row for it, not one per
-copy.
+copy — and, if you chose the slip sheet, exactly one slip sheet, not one per
+copy either.
 
-**Not yet included:** withheld documents don't get a placeholder page ("slip
-sheet") in the produced set showing where they were removed from — that's
-planned for a future release.
+## Withheld documents: slip sheet or leave out
+
+Once any file is set to Withhold, a second choice appears — **Withheld
+documents:**
+
+- **Bates-numbered slip sheet in the production** (the default) — a generated,
+  one-page placeholder takes the withheld document's place. It reads "DOCUMENT
+  WITHHELD," the privilege you asserted, and your description if you gave one.
+  It's Bates-stamped in the withheld document's own spot in the sequence — the
+  numbering never skips a range — and shows up in the upload folder, the
+  index, the load file (with no confidentiality designation), and a combined
+  production PDF if you build one, the same as any other page. Which protocol
+  you're producing under decides which choice is right; a slip sheet keeps the
+  Bates sequence gap-free and visibly marks where something was withheld,
+  which many courts and review platforms expect.
+- **Leave out entirely** — the older behavior. The document is never
+  Bates-stamped, never copied into the upload folder, never listed in the
+  production index or the load file, and it uses none of the Bates numbers, so
+  the numbering stays unbroken for the documents around it, just without a
+  placeholder marking the gap.
+
+If every single document in your production order ends up withheld and you
+chose **Leave out entirely**, RaioPDF still builds a complete package — the
+draft privilege log, the index, and the manifest are all written normally,
+and the next production you build will pick up exactly where this one's Bates
+numbering left off. Only the upload folder is empty, since nothing was
+actually produced.
 
 ## Continuing from a prior production
 

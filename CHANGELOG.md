@@ -125,6 +125,18 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   Review and complete it before it's ever used. A duplicate document can't be given
   conflicting statuses (RaioPDF stops and asks you to resolve it before building), and
   withholding the same document twice produces just one log entry.
+- **Withheld documents can hold their place with a Bates-numbered slip sheet, so the
+  production shows exactly where each one was removed from.** Whenever a file is
+  withheld, Production Set now asks how: **Bates-numbered slip sheet in the production
+  (default)**, a generated one-page placeholder — "DOCUMENT WITHHELD," the privilege
+  asserted, and an optional description — Bates-stamped in the withheld document's own
+  place in the sequence, so numbering never has to skip a range; or **Leave out
+  entirely**, the prior behavior, where the document (and its Bates number) simply
+  never appears. The draft privilege log gains a **Bates** column showing the range a
+  slip sheet used, blank when a document was left out entirely. Withholding every
+  document in a run and leaving them all out still produces a complete package — the
+  draft privilege log, index, and manifest are all written normally; only the upload
+  folder is empty.
 
 ### Changed
 

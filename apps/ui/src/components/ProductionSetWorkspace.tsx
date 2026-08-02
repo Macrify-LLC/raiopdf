@@ -70,6 +70,11 @@ export type ProductionSourceStatus = "produce" | "produce-redacted" | "withhold"
  * Mirrors `@raiopdf/production-set`'s `ProductionDuplicateHandling`. */
 export type ProductionDuplicateHandling = "produce-all" | "produce-once";
 
+/** How a withheld source's canonical occurrence appears in the produced set.
+ * Mirrors `@raiopdf/production-set`'s `WithheldHandling`. Default
+ * `"slip-sheet"`. */
+export type WithheldHandling = "slip-sheet" | "omit";
+
 const STATUS_OPTIONS: readonly { value: ProductionSourceStatus; label: string }[] = [
   { value: "produce", label: "Produce" },
   { value: "produce-redacted", label: "Produce with redactions" },
@@ -135,6 +140,13 @@ export interface ProductionSetRunInput {
    * withheld row). Default true. Independent of `includeFilenameInIndex`.
    */
   includeFilenameInPrivilegeLog: boolean;
+  /**
+   * How a withheld source's canonical occurrence appears in the produced
+   * set -- a Bates-numbered slip sheet in its place (default), or left out
+   * of the production entirely. No effect unless at least one file is
+   * withheld.
+   */
+  withheldHandling: WithheldHandling;
 }
 
 export interface ProductionSetRunResult {
@@ -157,6 +169,9 @@ export interface ProductionSetRunResult {
   /** Package-root-relative location of the draft privilege log, or `null`
    * when every source was produced normally. NOT ready to serve. */
   privilegeLogLocation: string | null;
+  /** Generated slip-sheet placeholders produced for withheld sources. 0
+   * when `withheldHandling` was `"omit"`, or nothing was withheld. */
+  slipSheetCount: number;
 }
 
 /** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
@@ -297,11 +312,20 @@ export function ProductionSetWorkspace({
   const [designationPlacementKey, setDesignationPlacementKey] = useState(DEFAULT_DESIGNATION_PLACEMENT_KEY);
   const [stampFontSizePt, setStampFontSizePt] = useState(DEFAULT_STAMP_FONT_SIZE_PT);
   const [duplicateHandling, setDuplicateHandling] = useState<ProductionDuplicateHandling>("produce-all");
+  const [withheldHandling, setWithheldHandling] = useState<WithheldHandling>("slip-sheet");
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   // Withheld documents consume no Bates numbers, so they must not count
   // toward the digit-width overflow gate.
+  // A withheld document consumes one Bates number as a slip sheet and none
+  // when left out entirely -- the overflow gate must mirror the build's math.
   const totalPages = files.reduce(
-    (sum, file) => sum + (file.status === "withhold" ? 0 : file.pages ?? 0),
+    (sum, file) =>
+      sum +
+      (file.status === "withhold"
+        ? withheldHandling === "slip-sheet"
+          ? 1
+          : 0
+        : file.pages ?? 0),
     0,
   );
   const lastNumber = start + Math.max(0, totalPages - 1);
@@ -357,6 +381,13 @@ export function ProductionSetWorkspace({
   // written at all -- recomputed the same way, never stored.
   const anyNonProduceStatus = useMemo(
     () => files.some((file) => file.status !== "produce"),
+    [files],
+  );
+  // Governs the "Withheld documents:" slip-sheet/omit choice -- distinct
+  // from `anyNonProduceStatus` above, since "produce-redacted" files never
+  // need this choice.
+  const anyWithheldStatus = useMemo(
+    () => files.some((file) => file.status === "withhold"),
     [files],
   );
   // Advisory grouping by add-time hash -- purely for the UI badge/status
@@ -658,6 +689,7 @@ export function ProductionSetWorkspace({
       duplicateHandling,
       includeLoadFiles,
       includeFilenameInPrivilegeLog,
+      withheldHandling,
     });
   }
 
@@ -895,6 +927,37 @@ export function ProductionSetWorkspace({
             A draft privilege log will be written -- it is NOT ready to serve; review and complete it before
             any use.
           </p>
+        ) : null}
+        {anyWithheldStatus ? (
+          <div className="production-workspace__withheld-handling" role="group" aria-label="Withheld documents">
+            <p className="production-workspace__status" role="status">Withheld documents:</p>
+            <div className="production-workspace__duplicates-options">
+              <label
+                className="production-workspace__radio-row"
+                title="Each withheld document's place is held by a generated, Bates-stamped placeholder page naming the privilege asserted -- the numbering sequence stays gap-free."
+              >
+                <input
+                  type="radio"
+                  name="production-withheld-handling"
+                  checked={withheldHandling === "slip-sheet"}
+                  onChange={() => setWithheldHandling("slip-sheet")}
+                />
+                <span>Bates-numbered slip sheet in the production (default)</span>
+              </label>
+              <label
+                className="production-workspace__radio-row"
+                title="A withheld document is a pure omission -- it consumes no Bates number and leaves no trace in the produced set."
+              >
+                <input
+                  type="radio"
+                  name="production-withheld-handling"
+                  checked={withheldHandling === "omit"}
+                  onChange={() => setWithheldHandling("omit")}
+                />
+                <span>Leave out entirely</span>
+              </label>
+            </div>
+          </div>
         ) : null}
         {duplicateFileIds.ids.size > 0 ? (
           <div className="production-workspace__duplicates" role="group" aria-label="Duplicate documents">
@@ -1231,6 +1294,12 @@ export function ProductionSetWorkspace({
                 <p className="production-workspace__result-subtitle">
                   {progress.result.withheldCount} withheld, {progress.result.redactedCount} with redactions --
                   draft privilege log written (not ready to serve).
+                </p>
+              ) : null}
+              {progress.result.slipSheetCount > 0 ? (
+                <p className="production-workspace__result-subtitle">
+                  {progress.result.slipSheetCount} slip sheet{progress.result.slipSheetCount === 1 ? "" : "s"} --
+                  Bates-numbered placeholders standing in for withheld documents.
                 </p>
               ) : null}
             </div>

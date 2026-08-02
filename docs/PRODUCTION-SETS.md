@@ -94,7 +94,7 @@ is `"withhold"`; both fields are optional (encouraged, not required) for
 ### Columns (fixed)
 
 ```
-RowId, Status, PrivilegeAsserted, Description, Filename, Pages,
+RowId, Status, Bates, PrivilegeAsserted, Description, Filename, Pages,
 Date, DocType, Author, Recipients
 ```
 
@@ -104,12 +104,21 @@ Date, DocType, Author, Recipients
   reproduces identical row ids.
 - **`Status`** — `"Withheld"` or `"Produced with redactions"`. A `"produce"`
   source never gets a row.
+- **`Bates`** — `"${batesStart}-${batesEnd}"` when the row's document
+  actually consumed a Bates range: always for `"Produced with redactions"`
+  (that source is always produced, independent of `withheldHandling`), and
+  for a `"Withheld"` row only under `withheldHandling: "slip-sheet"` (the
+  slip sheet's own one-number range). Blank for a `"Withheld"` row under
+  `"omit"`, which never consumed a Bates number at all. See "Slip sheets"
+  below.
 - **`Filename`** — the produced, Bates-stamped output name for a
   `"Produced with redactions"` row (matching the production index); the
-  SOURCE filename for a `"Withheld"` row, since it was never produced and has
-  no output name. Blanked (column and header stay) when
-  `includeFilenameInPrivilegeLog` is `false` — independent of the load
-  file's/index's own filename option.
+  withheld document's OWN source filename for a `"Withheld"` row, always —
+  even under `withheldHandling: "slip-sheet"`, where the row's Bates
+  column names the generated placeholder's range, but Filename still names
+  the withheld document itself, not the slip sheet's own output name.
+  Blanked (column and header stay) when `includeFilenameInPrivilegeLog` is
+  `false` — independent of the load file's/index's own filename option.
 - **`Date`, `DocType`, `Author`, `Recipients`** — **always blank.** These are
   manual columns for a human to complete. RaioPDF never guesses at them: a
   wrong autopopulated privilege log entry is worse than a sparse one that
@@ -144,17 +153,71 @@ the production index and load file. Two rules specific to the privilege log:
   is. This collapse happens regardless of `duplicateHandling`, since neither
   occurrence is ever produced either way.
 
-### Not yet included: slip sheets
+### Slip sheets
 
-A withheld source is currently a clean **omission** — it simply doesn't
-appear in `upload/`, the index, or the load file, and its planning hash is
-recorded only in the `privilegeLog` manifest detail. It does **not** insert a
-placeholder page ("slip sheet") into the produced set showing where the
-withheld document would have sat, and there is no Bates-numbered slip-sheet
-option. That — along with the zero-produced-output edge case it implies — is
-deliberately deferred to a follow-up release; this release's package types
-(`ProductionSourceStatus`, the `privilegeLog` manifest detail) are shaped to
-leave room for it without a breaking change.
+`withheldHandling` (default **`"slip-sheet"`**) controls how a withheld
+source's canonical occurrence appears in the produced set:
+
+- **`"slip-sheet"`** (default) — a generated, one-page pdf-lib PDF takes the
+  withheld document's place in production order:
+  - **Page content**: centered "DOCUMENT WITHHELD," the privilege asserted,
+    and an optional wrapped basis (`Description:`). The basis is capped at
+    ~500 rendered characters (ellipsis if longer; the FULL text still
+    reaches the `privilegeLog` manifest detail, only the drawn page is
+    capped) and wraps within the page at a font size that never drops below
+    8pt. Text is sanitized through the same font-encoding pass the
+    production index PDF uses — an unencodable character is replaced, never
+    thrown. Letter size (612×792pt), independent of the withheld document's
+    own page size.
+  - **Bates behavior**: the slip sheet consumes exactly ONE Bates number, in
+    the withheld source's original ordering position — numbering stays
+    contiguous either way, it just isn't a gap anymore. It's Bates-stamped
+    the same way any other produced page is: the same `batesPlacement` and
+    `stampFontSizePt` options, applied by the same `PdfEngine.batesStamp`
+    pass. It is never confidentiality-designated (no `designationPlacement`
+    stamp) — the produced/index/DAT `CONFIDENTIALITY`/designation value is
+    always blank for a slip sheet, regardless of what the withheld source's
+    own `designation` field held.
+  - **Where it appears**: `upload/` (and a volume folder, if volumes are in
+    use), the production index (PDF and CSV), the DAT (blank
+    `CONFIDENTIALITY`), and the combined production PDF when
+    `combinedPdf` is set — same as any other produced page.
+  - **The withheld source's own bytes are never read for its content** —
+    only re-hashed, right before output, as a drift guard: if the file
+    changed on disk since planning, the build fails with no output, the
+    same #335/#341 discipline every other planned source (and, before this
+    release, every omitted duplicate) gets. The privilege log is never
+    attested against a stale fingerprint.
+  - **Duplicates**: a withheld duplicate group produces exactly ONE slip
+    sheet — its canonical (first, by source order) occurrence — regardless
+    of `duplicateHandling`, mirroring the single-privilege-log-row rule
+    above. The other occurrence(s) stay `"omitted"` in `duplicateGroups`,
+    same as before.
+- **`"omit"`** — the prior (pre-slip-sheet) behavior: a withheld source is a
+  clean omission. It never appears in `upload/`, the index, or the load
+  file, consumes no Bates number, and its planning hash is recorded only in
+  the `privilegeLog` manifest detail.
+
+`ProductionSetResult.slipSheetCount` reports how many slip sheets a run
+generated — always `0` under `"omit"`.
+
+### Zero-produced-output semantics
+
+When `withheldHandling` is `"omit"` and EVERY source in the run is withheld,
+no document is ever produced: `files` is empty, `nextNumber` stays equal to
+the configured `start` (nothing was ever stamped, so nothing advanced it),
+and no combined production PDF is written even if `combinedPdf` was
+requested — merging zero documents, or naming a "last produced Bates" that
+was never actually stamped on anything, would both be nonsensical. The build
+still **succeeds**, as a normal, audit-only package: the draft privilege log
+(naming every withheld document and its asserted privilege), the manifest,
+and every other check are still written; a `production-zero-output` check is
+recorded plainly noting what happened. `upload/` is simply empty.
+
+Under `"slip-sheet"`, an all-withheld run is NOT a zero-output case — every
+source still produces its own slip sheet, so the result is a normal package
+with `files.length` equal to the number of distinct withheld documents (after
+duplicate collapse).
 
 ## Evaluated and deferred: OPT / Opticon
 
@@ -186,6 +249,10 @@ common denominator.
 - [`packages/production-set/src/index.ts`](../packages/production-set/src/index.ts)
   — the privilege-log implementation (`formatPrivilegeLogCsv`,
   `ProductionSourceStatus`, the withhold/produce-redacted plumbing).
+- [`packages/production-set/src/slipSheet.ts`](../packages/production-set/src/slipSheet.ts)
+  — the slip-sheet page generator (`createSlipSheetPageBytes`,
+  `layoutSlipSheetText`) this page's "Slip sheets" section documents.
 - The in-app help article for Production Set covers the "Litigation load
   file (DAT)" checkbox and the "Withholding documents and the draft
-  privilege log" section in plain terms.
+  privilege log" section (including the slip-sheet/omit choice) in plain
+  terms.

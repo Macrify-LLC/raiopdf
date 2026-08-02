@@ -2,6 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PdfEditRect } from "@raiopdf/engine-api";
 import type { PendingEdit } from "../lib/edits";
 import {
   listExhibitStampTemplates,
@@ -301,6 +302,96 @@ describe("useEditing exhibit stamps", () => {
     expect(getEditing().stampCardOpen).toBe(false);
   });
 
+  it("renumbers a design's drafts and imported stamps in one pass, then moves the counter", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      // An imported stamp (already in the file) and two drafts placed this
+      // session, deliberately out of reading order down the page.
+      getEditing().loadImportedAnnotations([
+        {
+          annotId: "annot-1",
+          pageIndex: 0,
+          edit: {
+            type: "stamp",
+            pageIndex: 0,
+            rect: { x: 10, y: 300, w: 115.2, h: 72 },
+            lines: ["Plaintiff's Exhibit", "9"],
+            fontSizePt: 14,
+            templateId: PLAINTIFF,
+            sequence: {
+              schemaVersion: 1,
+              identifierStyle: "numbers",
+              prefix: "Plaintiff's Exhibit",
+              layout: "stacked",
+              index: 8,
+            },
+          },
+        },
+      ]);
+      getEditing().addEdit(stampEdit("draft-low", 5, { x: 10, y: 100, w: 115.2, h: 72 }));
+      getEditing().addEdit(stampEdit("draft-high", 3, { x: 10, y: 600, w: 115.2, h: 72 }));
+    });
+
+    let result: Awaited<ReturnType<EditingState["renumberExhibitStamps"]>> = null;
+    await act(async () => {
+      result = await getEditing().renumberExhibitStamps(PLAINTIFF, 0);
+    });
+
+    expect(result).toMatchObject({ count: 3, lastIndex: 2, counterError: null });
+    // Top of the page down: the draft at y=600, the imported one at y=300,
+    // then the draft at y=100.
+    expect(
+      getEditing().pendingEdits.map((edit) => [edit.id, (edit as { lines?: string[] }).lines?.[1]]),
+    ).toEqual([
+      ["annot-annot-1", "2"],
+      ["draft-low", "3"],
+      ["draft-high", "1"],
+    ]);
+    // The counter continues the set rather than colliding with it.
+    expect(nextIndex()).toBe(3);
+
+    // The imported stamp changed, so it goes down the save plan's UPDATE lane
+    // (rewriting the annotation in the file), while the drafts are appends.
+    const plan = getEditing().collectMarkupAnnotationSavePlan();
+    expect(plan.updateEdits.map((entry) => entry.annotId)).toEqual(["annot-1"]);
+    expect(plan.deleteAnnotIds).toEqual([]);
+    expect(plan.appendEdits).toHaveLength(2);
+  });
+
+  it("renumbers from the identifier the caller starts at", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().addEdit(stampEdit("stamp-1", 0));
+      getEditing().addEdit(stampEdit("stamp-2", 1));
+    });
+
+    await act(async () => {
+      await getEditing().renumberExhibitStamps(PLAINTIFF, 11);
+    });
+
+    expect(
+      getEditing().pendingEdits.map((edit) => (edit as { lines?: string[] }).lines?.[1]),
+    ).toEqual(["12", "13"]);
+    expect(nextIndex()).toBe(13);
+  });
+
+  it("renumbers nothing when the design has no stamps on the page", async () => {
+    const getEditing = renderHookValue();
+
+    let result: Awaited<ReturnType<EditingState["renumberExhibitStamps"]>> = null;
+    await act(async () => {
+      getEditing().requestExhibitStampRenumber(PLAINTIFF);
+      result = await getEditing().renumberExhibitStamps(PLAINTIFF, 0);
+    });
+
+    expect(result).toBeNull();
+    // Nothing to confirm, so no confirmation is raised.
+    expect(getEditing().exhibitStampRenumberRequest).toBeNull();
+    expect(nextIndex()).toBe(0);
+  });
+
   function nextIndex(): number {
     resetExhibitStampCacheForTests();
 
@@ -335,12 +426,16 @@ function Harness({ onValue }: { onValue: (value: EditingState) => void }): React
   return null;
 }
 
-function stampEdit(id: string, index: number): PendingEdit {
+function stampEdit(
+  id: string,
+  index: number,
+  rect: PdfEditRect = { x: 10, y: 10, w: 115.2, h: 72 },
+): PendingEdit {
   return {
     kind: "stamp",
     id,
     pageIndex: 0,
-    rect: { x: 10, y: 10, w: 115.2, h: 72 },
+    rect,
     lines: ["Plaintiff's Exhibit", String(index + 1)],
     fontSizePt: 14,
     templateId: PLAINTIFF,

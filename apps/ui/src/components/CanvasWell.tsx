@@ -11,6 +11,7 @@ import { DismissButton } from "./DismissButton";
 import { ErrorActions } from "./ErrorActions";
 import { FloatingDialog } from "./FloatingDialog";
 import { ExhibitStampCard } from "./ExhibitStampCard";
+import { ExhibitStampRenumberDialog } from "./ExhibitStampRenumberDialog";
 import { FloatingMarkupToolbar } from "./FloatingMarkupToolbar";
 import { LoadingSun } from "./LoadingSun";
 import { PageList } from "./PageList";
@@ -77,6 +78,12 @@ export interface CanvasWellProps {
   /** Streamed mode: PageList skips the full page-size sweep [R2-1]. */
   lazyPageMeasurement?: boolean;
   /**
+   * True for a streamed (very large) document. Distinct from
+   * `lazyPageMeasurement` in intent: this one is about what editing can reach,
+   * and lets dialogs say so instead of quietly doing less than they claim.
+   */
+  documentStreamed?: boolean;
+  /**
    * True while the desktop engine sidecar is booting (`engineBridge.starting`
    * in App.tsx). Only meaningful with a document open -- see the big
    * `canvas-well__engine-starting` overlay below.
@@ -124,6 +131,7 @@ export function CanvasWell({
   searchResults = [],
   activeSearchResultId = null,
   lazyPageMeasurement = false,
+  documentStreamed = false,
   engineStarting = false,
 }: CanvasWellProps) {
   const hasDocument = Boolean(pdfDocument);
@@ -224,6 +232,11 @@ export function CanvasWell({
         >
           <ExhibitStampCard editing={editing} />
         </FloatingDialog>
+      ) : null}
+      {/* Not gated on the stamp tool: a renumber can be asked for from the
+          right-click menu on a placed sticker in Select mode too. */}
+      {viewerActive && editing?.exhibitStampRenumberRequest ? (
+        <ExhibitStampRenumberDialog editing={editing} documentStreamed={documentStreamed} />
       ) : null}
       {workspace ? (
         workspace

@@ -371,6 +371,7 @@ export function AppShell({
           searchResults={activeTextEdit && textEdit ? textEdit.matches : documentSearch.results}
           activeSearchResultId={activeTextEdit && textEdit ? textEdit.activeMatch?.id ?? null : documentSearch.activeMatch?.id ?? null}
           lazyPageMeasurement={streamedDocument}
+          documentStreamed={streamedDocument}
           engineStarting={showEngineStartingOverlay}
         />
         <ToolPanel

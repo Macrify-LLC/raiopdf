@@ -7,6 +7,7 @@ import {
   allocateIdentifier,
   listExhibitStampTemplates,
   resetExhibitStampCacheForTests,
+  setNextIdentifier,
 } from "../lib/exhibitStamps";
 import { ExhibitStampCard } from "./ExhibitStampCard";
 import { resetDialogStackForTests } from "./FloatingDialog";
@@ -205,6 +206,43 @@ describe("ExhibitStampCard", () => {
     expect(listExhibitStampTemplates().map((template) => template.id)).not.toContain(PLAINTIFF);
   });
 
+  it("offers a renumber only once that design has stamps on the page", async () => {
+    const requestExhibitStampRenumber = vi.fn();
+
+    await render({
+      countPlacedExhibitStamps: (templateId: string) =>
+        templateId === PLAINTIFF ? 3 : 0,
+      requestExhibitStampRenumber,
+    } as unknown as Partial<EditingState>);
+
+    const plaintiff = renumberButton("Plaintiff's Exhibit");
+    const defendant = renumberButton("Defendant's Exhibit");
+
+    expect(plaintiff.disabled).toBe(false);
+    expect(plaintiff.title).toContain("3");
+    // Nothing placed for this design yet, so there is nothing to renumber.
+    expect(defendant.disabled).toBe(true);
+
+    await clickByLabel("Renumber placed Plaintiff's Exhibit stamps");
+
+    expect(requestExhibitStampRenumber).toHaveBeenCalledWith(PLAINTIFF);
+  });
+
+  it("re-reads the Next field after a renumber closes", async () => {
+    await render({
+      countPlacedExhibitStamps: () => 2,
+      exhibitStampRenumberRequest: { templateId: PLAINTIFF, count: 2 },
+    } as unknown as Partial<EditingState>);
+
+    expect(nextField().value).toBe("1");
+
+    // The renumber lands while its dialog is open, then the dialog closes.
+    await setNextIdentifier(PLAINTIFF, "3");
+    await rerender({ countPlacedExhibitStamps: () => 2 });
+
+    expect(nextField().value).toBe("3");
+  });
+
   it("reorders designs and persists the new order", async () => {
     await render();
 
@@ -221,6 +259,30 @@ describe("ExhibitStampCard", () => {
       "Exhibit",
     ]);
   });
+
+  function nextField(): HTMLInputElement {
+    const field = container?.querySelector<HTMLInputElement>(
+      'input[aria-label="Next exhibit for Plaintiff\'s Exhibit"]',
+    );
+
+    if (!field) {
+      throw new Error("expected the Next field");
+    }
+
+    return field;
+  }
+
+  function renumberButton(templateName: string): HTMLButtonElement {
+    const button = document.querySelector<HTMLButtonElement>(
+      `[aria-label="Renumber placed ${templateName} stamps"]`,
+    );
+
+    if (!button) {
+      throw new Error(`expected a renumber button for "${templateName}"`);
+    }
+
+    return button;
+  }
 
   function cardNames(): (string | null)[] {
     return [...(container?.querySelectorAll(".exhibit-stamp-card__name") ?? [])].map(
@@ -292,10 +354,17 @@ describe("ExhibitStampCard", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
+    await rerender(overrides);
+  }
 
+  /** Re-renders into the same root, so component state survives. */
+  async function rerender(overrides: Partial<EditingState> = {}): Promise<void> {
     const editing = {
       armedExhibitStamp: null,
       armExhibitStamp,
+      countPlacedExhibitStamps: () => 0,
+      exhibitStampRenumberRequest: null,
+      requestExhibitStampRenumber: () => undefined,
       refreshArmedExhibitStamp: () => undefined,
       disarmExhibitStamp: () => undefined,
       setMessage: () => undefined,

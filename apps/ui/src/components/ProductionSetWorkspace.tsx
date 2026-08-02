@@ -316,8 +316,16 @@ export function ProductionSetWorkspace({
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   // Withheld documents consume no Bates numbers, so they must not count
   // toward the digit-width overflow gate.
+  // A withheld document consumes one Bates number as a slip sheet and none
+  // when left out entirely -- the overflow gate must mirror the build's math.
   const totalPages = files.reduce(
-    (sum, file) => sum + (file.status === "withhold" ? 0 : file.pages ?? 0),
+    (sum, file) =>
+      sum +
+      (file.status === "withhold"
+        ? withheldHandling === "slip-sheet"
+          ? 1
+          : 0
+        : file.pages ?? 0),
     0,
   );
   const lastNumber = start + Math.max(0, totalPages - 1);

@@ -55,7 +55,10 @@ Bates range, confidentiality designation, page count, and file location for
 every document already filled in.
 
 - It only lists documents that were actually produced — a combined PDF, a
-  duplicate you chose to skip, or a document you withheld never appears in it.
+  duplicate you chose to skip never appears in it. A withheld document depends on
+your withheld-documents choice: its Bates-numbered slip sheet (the default) gets
+a row like any produced page, while "Leave out entirely" keeps it out of the
+load file altogether.
 - If **Filename column in index** is off, the load file's filename field
   stays blank too, matching the index.
 - This version doesn't include a separate image-level cross-reference file

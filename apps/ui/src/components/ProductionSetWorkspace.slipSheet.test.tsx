@@ -5,8 +5,10 @@
 // `withheldHandling` through to `onRun`, and the completion card mentions
 // "N slip sheets" when the result reports any.
 import { act } from "react";
+import { PDFDocument } from "pdf-lib";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FileAddResult } from "../lib/readFileForAdd";
 import {
   ProductionSetWorkspace,
   type ProductionSetProgress,
@@ -33,6 +35,7 @@ describe("ProductionSetWorkspace withheld handling (slip sheets)", () => {
   function render(options: {
     progress?: ProductionSetProgress;
     onRun?: (input: ProductionSetRunInput) => Promise<void>;
+    onAddFile?: () => Promise<FileAddResult[] | null>;
   } = {}) {
     container = window.document.createElement("div");
     window.document.body.appendChild(container);
@@ -44,7 +47,7 @@ describe("ProductionSetWorkspace withheld handling (slip sheets)", () => {
           currentFile={{ name: "source.pdf", path: "/cases/source.pdf" }}
           currentPageCount={5}
           progress={options.progress ?? idleProgress}
-          onAddFile={async () => null}
+          onAddFile={options.onAddFile ?? (async () => null)}
           onRun={options.onRun ?? (async () => undefined)}
         />,
       );
@@ -174,6 +177,62 @@ describe("ProductionSetWorkspace withheld handling (slip sheets)", () => {
 
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(onRun.mock.calls[0]?.[0]?.withheldHandling).toBe("omit");
+  });
+
+  it("counts one page per withheld row in the overflow gate under slip-sheet mode only", async () => {
+    const added = await PDFDocument.create();
+    added.addPage();
+    const addedBytes = await added.save();
+
+    render({
+      onAddFile: async () => [
+        { kind: "bytes", file: { bytes: addedBytes, name: "withheld.pdf", path: null } },
+      ],
+    });
+
+    const addButton = Array.from(window.document.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.trim() === "Add PDF",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      addButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    // Withhold the ADDED one-page file; the seeded 5-page file stays produced.
+    const statusSelects = Array.from(
+      window.document.querySelectorAll<HTMLSelectElement>("select"),
+    ).filter((select) => select.closest("label")?.textContent?.includes("Status"));
+    act(() => {
+      statusSelects[1]!.value = "withhold";
+      statusSelects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const privilegeInput = fieldByLabel("Privilege asserted");
+    if (privilegeInput) {
+      typeInto(privilegeInput, "Attorney-client privilege");
+    }
+
+    // digits=1, start=5: five produced pages end at 9 (fits); a slip sheet
+    // pushes the last number to 10 and overflows -- omit mode must not.
+    const numberInputs = Array.from(
+      window.document.querySelectorAll<HTMLInputElement>("input[type='number']"),
+    );
+    typeInto(numberInputs[0]!, "5"); // start
+    typeInto(numberInputs[1]!, "1"); // digits
+    typeInto(outputDirInput(), "/cases/out");
+    typeInto(prefixInput(), "OV");
+
+    const buildButton = () =>
+      Array.from(window.document.querySelectorAll("button")).find((candidate) =>
+        candidate.textContent?.includes("Build Production"),
+      ) as HTMLButtonElement;
+
+    expect(buildButton().disabled).toBe(true); // slip sheet consumes number 10
+
+    act(() => {
+      radioByLabel("Leave out entirely").click();
+    });
+
+    expect(buildButton().disabled).toBe(false); // omit consumes nothing
   });
 
   it("even without any withheld row, onRun still carries the default withheldHandling", async () => {

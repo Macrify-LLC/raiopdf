@@ -26,6 +26,15 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   renumbering the set, and design your own stamp. Deleting the sticker you just placed
   gives its number back. Stamps stay live objects after you reopen a file — move,
   resize, or renumber them — until you **Make markup permanent**.
+- **Design your own exhibit sticker, with a live preview as you build it.** **New
+  design...** now opens a full designer instead of a bare name-and-color form: wording,
+  numbering style, stacked or inline layout, three size presets or a custom size, font
+  and font size, and ink, background, and border colors (or none, for a transparent
+  fill or no border at all). Every sticker in the gallery also gets **Edit design...**,
+  so you can restyle one you're already using — its running count keeps going exactly
+  where it left off, and stamps you've already placed keep the look they had when you
+  placed them. **Duplicate** copies a design with a fresh count, the gallery reorders
+  with **▲**/**▼**, and **Delete** now asks you to confirm first.
 - **Drawings, shapes, and callouts stay editable after you reopen a file.** They already
   came back looking right, but RaioPDF no longer recognized them as its own, so you
   couldn't select, restyle, move, or delete them — only start over. Now they reopen as

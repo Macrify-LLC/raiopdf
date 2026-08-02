@@ -55,8 +55,35 @@ it whenever you need to.
 - **On a very large PDF you can add stamps but not change saved ones.** New
   stickers save normally; moving or renumbering one that's already in the file
   isn't available at that size yet.
-- **New design...** creates your own sticker — a name, how it numbers, and its
-  colors.
+
+## Design your own
+
+**New design...** opens the full sticker designer, with a live preview that
+updates as you go:
+
+- **Wording** — the name, the text before the number, optional text after it
+  ("Exhibit 12 to Deposition"), and how it numbers (1, 2, 3 / A, B, C / no
+  number at all), plus whether the wording stacks on two lines or sits inline
+  with the number.
+- **Size** — three starting presets (Classic, Compact, Wide), or a custom
+  width and height from half an inch to four inches.
+- **Font** — Helvetica, Times, or Courier, bold and italic, and the font size
+  (it still shrinks to fit the sticker if the label doesn't).
+- **Colors** — the ink, the background (or none, for a transparent sticker),
+  and the border (or none), plus how thick the border is and how rounded its
+  corners are.
+
+Every card in the gallery also has **Edit design...**, so you can restyle a
+sticker you've already been using. Editing a design never touches its running
+count — the number picks up exactly where it left off — and stamps you've
+already placed keep the look they had when you placed them; restyling the
+design only changes what the *next* stamp from that card looks like.
+
+**Duplicate** copies a design under a new name with its own count starting
+from the first exhibit, useful for a near-identical sticker for a different
+party or matter. The up/down arrows on a card reorder the gallery. **Delete**
+asks you to confirm first, since a design's history goes with it; deleting
+the one you have armed clears the tool until you pick another.
 
 ## Related
 

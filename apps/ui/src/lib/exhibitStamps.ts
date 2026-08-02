@@ -281,6 +281,40 @@ export function resetCounter(templateId: string): Promise<ExhibitStampResult<voi
   });
 }
 
+/**
+ * Moves a template one slot toward the front or back of the gallery. The
+ * gallery's display order IS the stored template array order, so reordering
+ * is just an array splice under the same commit cycle every other mutation
+ * uses. A no-op at either edge (already first going up, already last going
+ * down) rather than an error -- the caller only shows the button when it
+ * would move something, but a stale render racing a delete shouldn't surface
+ * a scary message for what is, from the user's seat, nothing happening.
+ */
+export function moveExhibitStampTemplate(
+  templateId: string,
+  direction: "up" | "down",
+): Promise<ExhibitStampResult<void>> {
+  return commitMutation((store) => {
+    const index = store.templates.findIndex((template) => template.id === templateId);
+
+    if (index === -1) {
+      return { error: MISSING_TEMPLATE_MESSAGE };
+    }
+
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (targetIndex < 0 || targetIndex >= store.templates.length) {
+      return { templates: store.templates, value: undefined };
+    }
+
+    const templates = [...store.templates];
+    const [moved] = templates.splice(index, 1);
+    templates.splice(targetIndex, 0, moved!);
+
+    return { templates, value: undefined };
+  });
+}
+
 /** Test seam: drops the read cache and the in-flight mutation queue. */
 export function resetExhibitStampCacheForTests(): void {
   cachedStore = null;

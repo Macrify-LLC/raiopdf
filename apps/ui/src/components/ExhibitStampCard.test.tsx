@@ -4,10 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditingState } from "../hooks/useEditing";
 import {
+  allocateIdentifier,
   listExhibitStampTemplates,
   resetExhibitStampCacheForTests,
 } from "../lib/exhibitStamps";
 import { ExhibitStampCard } from "./ExhibitStampCard";
+import { resetDialogStackForTests } from "./FloatingDialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,6 +36,7 @@ describe("ExhibitStampCard", () => {
     container?.remove();
     root = null;
     container = null;
+    resetDialogStackForTests();
     vi.restoreAllMocks();
   });
 
@@ -108,6 +111,139 @@ describe("ExhibitStampCard", () => {
     expect(setMessage).toHaveBeenCalledWith(expect.stringContaining("Enter a number"));
     expect(nextIndex()).toBe(0);
   });
+
+  it("opens the designer from New design... and from a card's Edit design...", async () => {
+    await render();
+
+    await clickByText("New design...");
+    expect(dialogTitle()).toBe("New exhibit stamp");
+
+    await clickByLabel(`Close New exhibit stamp`);
+    expect(document.querySelector("[role='dialog']")).toBeNull();
+
+    await clickByText("Edit design...");
+    expect(dialogTitle()).toBe("Edit exhibit stamp");
+    expect(
+      container?.querySelector<HTMLInputElement>('input[aria-label="Stamp name"]')?.value,
+    ).toBe("Plaintiff's Exhibit");
+  });
+
+  it("duplicates a design with a fresh, independent counter", async () => {
+    await render();
+
+    // Advance the original's counter so the duplicate's independence is
+    // actually being tested, not just its initial value.
+    await allocateIdentifier(PLAINTIFF);
+    await allocateIdentifier(PLAINTIFF);
+
+    await clickByText("Duplicate", 0);
+
+    const names = [...(container?.querySelectorAll(".exhibit-stamp-card__name") ?? [])].map(
+      (element) => element.textContent,
+    );
+    expect(names).toContain("Plaintiff's Exhibit copy");
+
+    resetExhibitStampCacheForTests();
+    const duplicate = listExhibitStampTemplates().find(
+      (template) => template.name === "Plaintiff's Exhibit copy",
+    );
+    expect(duplicate?.nextIndex).toBe(0);
+
+    const original = listExhibitStampTemplates().find((template) => template.id === PLAINTIFF);
+    expect(original?.nextIndex).toBe(2);
+  });
+
+  it("asks for confirmation before deleting, and disarms the deleted template if it was armed", async () => {
+    const disarmExhibitStamp = vi.fn();
+    await render({
+      armedExhibitStamp: {
+        templateId: PLAINTIFF,
+        label: "Plaintiff's Exhibit 1",
+        lines: ["Plaintiff's Exhibit", "1"],
+        sequence: { schemaVersion: 1, identifierStyle: "numbers", prefix: "Plaintiff's Exhibit", layout: "stacked", index: 0 },
+        template: listExhibitStampTemplates().find((template) => template.id === PLAINTIFF)!,
+      },
+      disarmExhibitStamp,
+    });
+
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await clickByLabel("Delete Plaintiff's Exhibit");
+    expect(disarmExhibitStamp).not.toHaveBeenCalled();
+    expect(listExhibitStampTemplates().map((template) => template.id)).toContain(PLAINTIFF);
+
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await clickByLabel("Delete Plaintiff's Exhibit");
+    expect(disarmExhibitStamp).toHaveBeenCalledOnce();
+    expect(listExhibitStampTemplates().map((template) => template.id)).not.toContain(PLAINTIFF);
+  });
+
+  it("reorders designs and persists the new order", async () => {
+    await render();
+
+    expect(cardNames()).toEqual(["Plaintiff's Exhibit", "Defendant's Exhibit", "Exhibit"]);
+
+    await clickByLabel("Move Plaintiff's Exhibit down");
+
+    expect(cardNames()).toEqual(["Defendant's Exhibit", "Plaintiff's Exhibit", "Exhibit"]);
+
+    resetExhibitStampCacheForTests();
+    expect(listExhibitStampTemplates().map((template) => template.name)).toEqual([
+      "Defendant's Exhibit",
+      "Plaintiff's Exhibit",
+      "Exhibit",
+    ]);
+  });
+
+  function cardNames(): (string | null)[] {
+    return [...(container?.querySelectorAll(".exhibit-stamp-card__name") ?? [])].map(
+      (element) => element.textContent,
+    );
+  }
+
+  function dialogTitle(): string | null | undefined {
+    return document.querySelector("[role='dialog'] h2")?.textContent;
+  }
+
+  async function clickByLabel(ariaLabel: string): Promise<void> {
+    const element = document.querySelector<HTMLElement>(`[aria-label="${ariaLabel}"]`);
+
+    if (!element) {
+      throw new Error(`expected an element labeled "${ariaLabel}"`);
+    }
+
+    await act(async () => {
+      element.click();
+    });
+    await settle();
+  }
+
+  async function clickByText(text: string, occurrence = 0): Promise<void> {
+    const candidates = [...document.querySelectorAll<HTMLElement>("button")].filter(
+      (button) => button.textContent?.trim() === text,
+    );
+    const element = candidates[occurrence];
+
+    if (!element) {
+      throw new Error(`expected a button with text "${text}" (occurrence ${occurrence})`);
+    }
+
+    await act(async () => {
+      element.click();
+    });
+    await settle();
+  }
+
+  /** Some actions (delete's confirm prompt, duplicate/reorder's store commit)
+   *  chain several promises deep before their state update lands -- one tick
+   *  isn't always enough, so this settles a handful under `act` before the
+   *  caller reads the DOM. */
+  async function settle(): Promise<void> {
+    for (let tick = 0; tick < 6; tick += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
 
   /** The store commits through a promise chain and a Web Lock shim. */
   async function flushStore(): Promise<void> {

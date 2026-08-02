@@ -45,7 +45,8 @@ export type EditToolId =
   | "shapeEllipse"
   | "shapeLine"
   | "shapeArrow"
-  | "sign";
+  | "sign"
+  | "stamp";
 
 export type TextMarkupToolId = "highlight" | "underline" | "strikethrough";
 
@@ -143,6 +144,24 @@ export interface PendingImageStamp extends PendingEditBase {
 }
 
 /**
+ * The measurements an exhibit sticker was designed at.
+ *
+ * Resizing scales every measurement from THIS baseline by a single factor
+ * derived from the new width. Scaling the *current* values instead would
+ * compound rounding — and, worse, bake in the minimum-size clamp — so a stamp
+ * dragged small and then large again would come back with the wrong label size
+ * and border weight. The baseline never changes after placement (or, for an
+ * imported stamp, after import).
+ */
+export interface ExhibitStampDesign {
+  widthPt: number;
+  heightPt: number;
+  fontSizePt: number;
+  borderWidthPt: number;
+  cornerRadiusPt: number;
+}
+
+/**
  * A placed exhibit sticker: text lines drawn inside a box, round-tripped as a
  * live `/Stamp` annotation so it can be moved, restyled, or renumbered after
  * reopening. `lines` is the rendering source of truth — already resolved to
@@ -167,6 +186,45 @@ export interface PendingExhibitStamp extends PendingEditBase {
   templateId?: string;
   templateRevision?: number;
   sequence?: PdfStampSequence;
+  /**
+   * UI-only resize baseline — never sent to the engine (`toPdfEdit` drops it,
+   * so it also stays out of `sourceBaseline`).
+   */
+  design?: ExhibitStampDesign;
+}
+
+/** The resize baseline, falling back to a stamp's current geometry. */
+export function exhibitStampDesign(edit: PendingExhibitStamp): ExhibitStampDesign {
+  return edit.design ?? {
+    widthPt: edit.rect.w,
+    heightPt: edit.rect.h,
+    fontSizePt: edit.fontSizePt,
+    borderWidthPt: edit.borderWidthPt ?? DEFAULT_STAMP_BORDER_WIDTH_PT,
+    cornerRadiusPt: edit.cornerRadiusPt ?? 0,
+  };
+}
+
+/**
+ * Re-fits a stamp into a new rectangle: the label, border, and corner rounding
+ * all scale by the same factor the box did, so a resized sticker stays the
+ * same design at a different size instead of a stretched box with stranded
+ * 14pt text in it. A pure move leaves the factor at 1 and changes nothing.
+ */
+export function resizeExhibitStamp(
+  edit: PendingExhibitStamp,
+  rect: PdfEditRect,
+): PendingExhibitStamp {
+  const design = exhibitStampDesign(edit);
+  const factor = design.widthPt > 0 ? rect.w / design.widthPt : 1;
+
+  return {
+    ...edit,
+    design,
+    rect,
+    fontSizePt: design.fontSizePt * factor,
+    ...(design.borderWidthPt > 0 ? { borderWidthPt: design.borderWidthPt * factor } : {}),
+    ...(design.cornerRadiusPt > 0 ? { cornerRadiusPt: design.cornerRadiusPt * factor } : {}),
+  };
 }
 
 export interface PendingComment extends PendingEditBase {
@@ -244,6 +302,8 @@ export const DEFAULT_TEXT_BOX_FONT_SIZE = 12;
 export const TEXT_BOX_LINE_HEIGHT = 1.2;
 export const INK_STROKE_WIDTH_PT = 1.5;
 export const COMMENT_ICON_SIZE_PT = 20;
+/** Border thickness the engine draws when a stamp edit omits `borderWidthPt`. */
+export const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
 
 /**
  * Builds the engine `PdfEdit[]` for one applyEdits call. Placed overlays go
@@ -621,15 +681,43 @@ function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): Pen
         at: edit.at,
         text: edit.text,
       };
-    case "stamp":
-      // No overlay for placed exhibit stamps yet, so an imported stamp is left
-      // alone in the file instead of surfaced as a half-editable object. The
-      // create direction (`PendingExhibitStamp` → `PdfStampEdit`) is wired; this
-      // import direction lands with the stamp overlay, together with dropping
-      // App.tsx's `keepVisibleKinds: ["stamp"]` display exemption — until the
-      // overlay can draw a stamp, that exemption is what keeps an imported one
-      // visible.
-      return null;
+    case "stamp": {
+      // An imported stamp has no design history, so its geometry as saved
+      // becomes its resize baseline from here on.
+      const fontSizePt = edit.fontSizePt ?? DEFAULT_TEXT_BOX_FONT_SIZE;
+      const borderWidthPt = edit.borderWidthPt ?? DEFAULT_STAMP_BORDER_WIDTH_PT;
+      const cornerRadiusPt = edit.cornerRadiusPt ?? 0;
+
+      return {
+        ...common,
+        kind: "stamp",
+        rect: edit.rect,
+        lines: edit.lines,
+        fontSizePt,
+        design: {
+          widthPt: edit.rect.w,
+          heightPt: edit.rect.h,
+          fontSizePt,
+          borderWidthPt,
+          cornerRadiusPt,
+        },
+        ...(edit.fontFamily ? { fontFamily: edit.fontFamily } : {}),
+        ...(edit.bold !== undefined ? { bold: edit.bold } : {}),
+        ...(edit.italic !== undefined ? { italic: edit.italic } : {}),
+        ...(edit.color ? { color: edit.color } : {}),
+        // null is meaningful for both (no fill / no border), so they carry
+        // through whenever they were stored rather than only when truthy.
+        ...(edit.fillColor !== undefined ? { fillColor: edit.fillColor } : {}),
+        ...(edit.borderColor !== undefined ? { borderColor: edit.borderColor } : {}),
+        ...(edit.borderWidthPt !== undefined ? { borderWidthPt: edit.borderWidthPt } : {}),
+        ...(edit.cornerRadiusPt !== undefined ? { cornerRadiusPt: edit.cornerRadiusPt } : {}),
+        ...(edit.templateId ? { templateId: edit.templateId } : {}),
+        ...(edit.templateRevision !== undefined
+          ? { templateRevision: edit.templateRevision }
+          : {}),
+        ...(edit.sequence ? { sequence: edit.sequence } : {}),
+      };
+    }
   }
 }
 

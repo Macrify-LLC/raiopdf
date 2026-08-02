@@ -66,6 +66,7 @@ export const TOOL_PANEL_ANNOTATE_TOOLS = [
   { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", description: "Drag a straight line that will be saved with the PDF." },
   { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", description: "Drag an arrow that will be saved with the PDF." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", description: "Place a signature image as a visible page edit." },
+  { id: "stamp", label: "Exhibit Stamp", group: "edit", helpArticleId: "exhibit-stamp", description: "Stamp a numbered exhibit sticker whose number advances as you place it." },
 ] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 
 export const EDIT_DIALOG_TOOLS = [
@@ -90,6 +91,7 @@ export const COMMAND_BAR_EDIT_TOOLS = [
   { id: "shapeLine", label: "Line", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved line on the current page." },
   { id: "shapeArrow", label: "Arrow", group: "edit", helpArticleId: "shapes", tooltip: "Drag a saved arrow on the current page." },
   { id: "sign", label: "Sign", group: "edit", helpArticleId: "sign", tooltip: "Place a signature image as a visible page edit." },
+  { id: "stamp", label: "Exhibit stamp", group: "edit", helpArticleId: "exhibit-stamp", tooltip: "Stamp a numbered exhibit sticker; the number advances as you place it." },
 ] as const satisfies readonly (ToolRegistryEntry & { id: EditToolId })[];
 
 export const HELP_ONLY_TOOL_ENTRIES = [

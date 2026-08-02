@@ -38,6 +38,7 @@ const TOOL_LABELS: Record<Exclude<EditToolId, "select">, string> = {
   shapeLine: "Line mode",
   shapeArrow: "Arrow mode",
   sign: "Sign mode",
+  stamp: "Exhibit stamp mode",
 };
 
 export interface EditModeBarProps {
@@ -112,6 +113,15 @@ export function EditModeBar({ editing }: EditModeBarProps) {
           onClick={() => editing.setSignatureCardOpen(true)}
         >
           Signature Card
+        </button>
+      ) : null}
+      {tool === "stamp" ? (
+        <button
+          type="button"
+          className="legal-mode-bar__button"
+          onClick={() => editing.setStampCardOpen(true)}
+        >
+          Exhibit Stamps...
         </button>
       ) : null}
       <button
@@ -529,6 +539,10 @@ function getToolHint(editing: EditingState): string {
       return editing.armedSignature
         ? "Click the page to place the signature."
         : "Draw or pick a signature in the card, then click the page.";
+    case "stamp":
+      return editing.armedExhibitStamp
+        ? `Click the page to stamp ${editing.armedExhibitStamp.label}. The number moves on after each one.`
+        : "Choose an exhibit stamp, then click the page to place it.";
     default:
       return "";
   }

@@ -1,0 +1,126 @@
+import type { PdfTextMeasureFont } from "@raiopdf/engine-api";
+import { TEXT_BOX_LINE_HEIGHT } from "./edits";
+
+/**
+ * On-screen geometry for an exhibit sticker, mirroring what the engine draws.
+ *
+ * The engine centers the label inside the box and shrinks it in fixed steps
+ * until it fits (`fitStampLines` in `engine-local`). The overlay has to reach
+ * the same numbers or a placed stamp jumps size the moment it is saved, so
+ * these constants and the shrink loop are deliberate copies of the engine's.
+ */
+
+/** Gap between the inside of the border and the label block. */
+export const STAMP_TEXT_PADDING_PT = 2;
+/** Floor for shrink-to-fit; below this the label stops being legible in print. */
+export const MIN_STAMP_FONT_SIZE_PT = 6;
+const STAMP_FONT_SIZE_STEP_PT = 0.5;
+/** A border thicker than this fraction of the short side would eat the label. */
+const STAMP_MAX_BORDER_WIDTH_FRACTION = 0.25;
+
+export interface StampPreviewLayout {
+  /** Border thickness actually drawn, after the short-side clamp. */
+  borderWidthPt: number;
+  /** Corner rounding actually drawn, after the half-short-side clamp. */
+  cornerRadiusPt: number;
+  /** Label size after shrink-to-fit. */
+  fontSizePt: number;
+  /** Lines after shrink-to-fit; surplus lines are dropped at the floor. */
+  lines: readonly string[];
+}
+
+export interface StampPreviewGeometryInput {
+  lines: readonly string[];
+  widthPt: number;
+  heightPt: number;
+  fontSizePt: number;
+  borderWidthPt: number;
+  cornerRadiusPt: number;
+  /** Omitted or null draws no border, so its thickness resolves to zero. */
+  hasBorder: boolean;
+  /** Null until the standard font loads; the label then renders un-shrunk. */
+  font: PdfTextMeasureFont | null;
+}
+
+export function computeStampPreviewLayout(
+  input: StampPreviewGeometryInput,
+): StampPreviewLayout {
+  const borderWidthPt = input.hasBorder
+    ? clampToRange(
+        input.borderWidthPt,
+        0,
+        Math.min(input.widthPt, input.heightPt) * STAMP_MAX_BORDER_WIDTH_FRACTION,
+      )
+    : 0;
+  const cornerRadiusPt = clampToRange(
+    input.cornerRadiusPt,
+    0,
+    Math.min(input.widthPt - borderWidthPt, input.heightPt - borderWidthPt) / 2,
+  );
+  const inset = borderWidthPt + STAMP_TEXT_PADDING_PT;
+  const contentWidthPt = Math.max(0, input.widthPt - inset * 2);
+  const contentHeightPt = Math.max(0, input.heightPt - inset * 2);
+
+  return {
+    borderWidthPt,
+    cornerRadiusPt,
+    ...fitStampPreviewLines(input, contentWidthPt, contentHeightPt),
+  };
+}
+
+/**
+ * Shrinks the label in the engine's fixed steps until it fits the content box.
+ *
+ * At the floor the engine also ellipsizes over-wide lines; the preview only
+ * drops surplus lines and lets CSS clip the width, because an ellipsized
+ * preview would misreport what the saved file contains.
+ */
+function fitStampPreviewLines(
+  input: StampPreviewGeometryInput,
+  contentWidthPt: number,
+  contentHeightPt: number,
+): { fontSizePt: number; lines: readonly string[] } {
+  const startFontSizePt = Math.max(MIN_STAMP_FONT_SIZE_PT, input.fontSizePt);
+  const font = input.font;
+
+  if (!font) {
+    return { fontSizePt: startFontSizePt, lines: input.lines };
+  }
+
+  const steps = Math.ceil((startFontSizePt - MIN_STAMP_FONT_SIZE_PT) / STAMP_FONT_SIZE_STEP_PT);
+
+  for (let step = 0; step <= steps; step += 1) {
+    const fontSizePt = Math.max(
+      MIN_STAMP_FONT_SIZE_PT,
+      startFontSizePt - step * STAMP_FONT_SIZE_STEP_PT,
+    );
+
+    if (stampPreviewLinesFit(input.lines, font, fontSizePt, contentWidthPt, contentHeightPt)) {
+      return { fontSizePt, lines: input.lines };
+    }
+  }
+
+  const lineHeight = MIN_STAMP_FONT_SIZE_PT * TEXT_BOX_LINE_HEIGHT;
+
+  return {
+    fontSizePt: MIN_STAMP_FONT_SIZE_PT,
+    lines: input.lines.slice(0, Math.max(1, Math.floor(contentHeightPt / lineHeight))),
+  };
+}
+
+function stampPreviewLinesFit(
+  lines: readonly string[],
+  font: PdfTextMeasureFont,
+  fontSizePt: number,
+  maxWidthPt: number,
+  maxHeightPt: number,
+): boolean {
+  return (
+    lines.length * fontSizePt * TEXT_BOX_LINE_HEIGHT <= maxHeightPt &&
+    lines.every((line) => font.widthOfTextAtSize(line, fontSizePt) <= maxWidthPt)
+  );
+}
+
+function clampToRange(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), Math.max(low, high));
+}

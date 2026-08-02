@@ -17,6 +17,15 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
 
 ### Added
 
+- **Exhibit stamps: design-free "Plaintiff's Exhibit 12" stickers with a number that
+  advances as you stamp.** Choose **Exhibit Stamp**, pick a sticker from the gallery —
+  each one shows the exact label its next placement will use — and click the page. The
+  number moves on by itself, so a stack of exhibits is a run of clicks instead of a run
+  of typing. Plaintiff's and Defendant's exhibits keep separate counts. You can set
+  where a count resumes, start it over, fix one sticker's label on its own without
+  renumbering the set, and design your own stamp. Deleting the sticker you just placed
+  gives its number back. Stamps stay live objects after you reopen a file — move,
+  resize, or renumber them — until you **Make markup permanent**.
 - **Drawings, shapes, and callouts stay editable after you reopen a file.** They already
   came back looking right, but RaioPDF no longer recognized them as its own, so you
   couldn't select, restyle, move, or delete them — only start over. Now they reopen as

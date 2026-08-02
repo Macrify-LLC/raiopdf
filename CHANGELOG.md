@@ -27,6 +27,26 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   Add PDF once per document. If a few files in the batch can't be added (too large,
   or an unreadable file), the rest still go in and you're told exactly which ones
   didn't.
+- **Add a whole folder of PDFs at once** in Production Set, Batch Cleanup, and the
+  filing packet builder. **Add Folder** looks through the folder you choose, then asks
+  before it adds anything: how many PDFs it found, how many of those are in subfolders
+  (include them or not — your choice), and what it left out — files that aren't PDFs,
+  hidden files, shortcuts it won't follow out of your folder, and anything it couldn't
+  read. Nothing is opened until you say yes. Very large folders stop at 2,000 PDFs and
+  tell you so.
+
+### Changed
+
+- **Production sets no longer load every document into memory before they start.**
+  Each PDF is now opened, stamped, written, and closed one at a time, so a production of
+  hundreds of documents uses about as much memory as a production of five. The optional
+  single combined production PDF is the one exception — every document has to be open at
+  once to merge them — so that option is now capped at 200 documents and says so up
+  front; the individually Bates-stamped documents have no such limit. Output files,
+  Bates numbering, and manifests are unchanged.
+- **A source file that changes on disk mid-production now stops the build** with a
+  clear error instead of being produced under a Bates range and hash that describe
+  the older version of the file.
 
 ## [0.1.5] - 2026-07-22
 

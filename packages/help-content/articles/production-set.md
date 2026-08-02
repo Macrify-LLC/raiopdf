@@ -24,8 +24,10 @@ reuse numbers.
 ## How to do it
 
 1. In the **Legal** tools, choose **Production Set**.
-2. Click **Add PDF** and select one or more documents (add again for more), then
-   use the up and down arrows to put them in production order.
+2. Click **Add PDF** and select one or more documents (add again for more), or
+   click **Add Folder** to take every PDF in a folder at once — it tells you what
+   it found, lets you leave subfolders out, and adds nothing until you say yes.
+   Then use the up and down arrows to put them in production order.
 3. For any document, set a **Designation** — none, **Confidential**,
    **Confidential - Attorneys' Eyes Only**, or your own custom text.
 4. Set the Bates format: a **Prefix**, a **Start** number, and how many **Digits**.

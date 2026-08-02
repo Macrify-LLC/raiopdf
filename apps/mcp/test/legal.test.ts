@@ -3,12 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { EngineHandle } from "../src/engine.js";
 import { extractPageText } from "../src/pdfjs-node.js";
 import {
   handleApplyEditsOneShot,
   handleBates,
   handleBatesFolder,
+  buildBinderOneShotInputSchema,
   handleBinder,
   handleBuildCoverPage,
   handleBuildBinderOneShot,
@@ -118,6 +120,23 @@ describe("legal tools (local pdf-lib engine)", () => {
       engine,
     );
     expect(await pageCount(output)).toBe(4);
+  });
+
+  it("keeps exhibit stamp designs off the build_binder surface", () => {
+    // Stamp designs are an in-app concept; the MCP schema must not quietly
+    // start accepting them just because the engine option exists.
+    const parsed = z.object(buildBinderOneShotInputSchema).parse({
+      mainPath: path.join(dir, "main.pdf"),
+      exhibits: [{ path: path.join(dir, "ex1.pdf"), label: "Exhibit A" }],
+      options: {
+        slipSheets: false,
+        stampDesign: { widthPt: 115.2, heightPt: 72 },
+      },
+      outputPath: path.join(dir, "binder.pdf"),
+      maxInputBytes: 1024,
+    });
+
+    expect(parsed.options).not.toHaveProperty("stampDesign");
   });
 
   it("build_cover_page writes a caption PDF and returns the output path", async () => {

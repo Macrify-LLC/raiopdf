@@ -403,6 +403,13 @@ export type PdfTableOfAuthoritiesOptions = {
 export type PdfBinderExhibit = {
   doc: PdfDocumentHandle;
   label: string;
+  /**
+   * The label broken into rendered lines, used only when `stampDesign` draws
+   * the label as a sticker (a stacked design puts the prefix and the
+   * identifier on separate lines). Falls back to `[label]`. Slip sheets, the
+   * generated index, and bookmarks always use `label`.
+   */
+  labelLines?: readonly string[] | undefined;
   description?: string | undefined;
   sourceFileName?: string | undefined;
 };
@@ -414,6 +421,39 @@ export type PdfBinderIndexOptions = {
   includeSourceFileName?: boolean | undefined;
 };
 
+/**
+ * Appearance for binder exhibit labels drawn as an exhibit sticker instead of
+ * the default edge-anchored line of text.
+ *
+ * Appearance only — the design says how the sticker LOOKS, never what it says.
+ * Every label still comes from the binder's own exhibit sequence
+ * (`PdfBinderExhibit.label` / `labelLines`), so a design borrowed from a stamp
+ * template can't drag that template's running counter into the binder. There
+ * is deliberately no template id here: the engine knows nothing about where
+ * the caller stores its designs.
+ *
+ * The sticker is baked into page content, like every other binder label.
+ */
+export type PdfBinderStampDesign = {
+  /** Sticker width in points. */
+  widthPt: number;
+  /** Sticker height in points. */
+  heightPt: number;
+  /** Requested font size in points. Defaults to 12; shrunk to fit. */
+  fontSizePt?: number | undefined;
+  fontFamily?: PdfTextBoxFontFamily | undefined;
+  bold?: boolean | undefined;
+  italic?: boolean | undefined;
+  /** Text ink color. Defaults to near-black (#111111). */
+  color?: PdfEditColor | undefined;
+  /** Sticker fill color. Omitted or null means transparent. */
+  fillColor?: PdfEditColor | null | undefined;
+  /** Border color. Omitted defaults to near-black (#111111); null draws none. */
+  borderColor?: PdfEditColor | null | undefined;
+  borderWidthPt?: number | undefined;
+  cornerRadiusPt?: number | undefined;
+};
+
 export type PdfBinderOptions = {
   slipSheets: boolean;
   coverStyle?: PdfCoverStyle | undefined;
@@ -422,6 +462,12 @@ export type PdfBinderOptions = {
   stampPages?: PdfPageSelection | undefined;
   fontSizePt?: number | undefined;
   marginIn?: number | undefined;
+  /**
+   * Draw each exhibit label as a sticker with this appearance, anchored at
+   * `placement` with `marginIn`, instead of as a line of text on the page
+   * edge. Omitted keeps the plain text label.
+   */
+  stampDesign?: PdfBinderStampDesign | undefined;
 };
 
 export type PdfOutlineTarget =

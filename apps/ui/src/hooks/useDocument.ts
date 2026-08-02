@@ -368,6 +368,13 @@ export interface SaveDocumentResult {
 
 interface BinderExhibitBase {
   label: string;
+  /**
+   * The label split into rendered lines, used only when the binder draws its
+   * labels with a stamp design (a stacked sticker puts the prefix and the
+   * identifier on separate lines). The flat `label` still drives slip sheets,
+   * the index, and bookmarks.
+   */
+  labelLines?: readonly string[] | undefined;
   description?: string | undefined;
   sourceFileName?: string | undefined;
 }
@@ -1870,6 +1877,7 @@ export function useDocument(options: UseDocumentOptions = {}) {
               exhibits.map((exhibit, index) => ({
                 doc: openedHandles[index]!,
                 label: exhibit.label,
+                labelLines: exhibit.labelLines,
                 description: exhibit.description,
                 sourceFileName: exhibit.sourceFileName,
               })),

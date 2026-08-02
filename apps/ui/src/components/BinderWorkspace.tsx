@@ -1,8 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import type { PdfBinderOptions, PdfCoverStyle } from "@raiopdf/engine-api";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import type {
+  PdfBinderOptions,
+  PdfBinderStampDesign,
+  PdfCoverStyle,
+} from "@raiopdf/engine-api";
 import { PDFDocument } from "pdf-lib";
 import type { BinderExhibitInput, DocumentState } from "../hooks/useDocument";
-import { formatExhibitLabel } from "../lib/exhibitLabels";
+import { exhibitLabelLines, formatExhibitLabel } from "../lib/exhibitLabels";
+import {
+  listExhibitStampTemplates,
+  type ExhibitStampTemplateV1,
+} from "../lib/exhibitStamps";
 import type { FileGrant } from "../lib/filePort";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
@@ -29,6 +43,7 @@ import {
 import { PdfMiniThumb } from "./PdfMiniThumb";
 import { IconButton } from "./IconButton";
 import { CoverStylePicker } from "./CoverStylePicker";
+import { StampPreview } from "./StampPreview";
 import { ExperimentalFeatureLock } from "./ExperimentalFeatureLock";
 import { LongProcessLoader } from "./LongProcessLoader";
 import "./BinderWorkspace.css";
@@ -51,6 +66,8 @@ interface BinderPresetV1 {
   coverStyle?: PdfCoverStyle | undefined;
   indexEnabled: boolean;
   indexIncludeSourceFileName: boolean;
+  /** Exhibit-stamp design id for the labels, or null/absent for plain text. */
+  stampDesignId?: string | null | undefined;
 }
 
 interface ExhibitFileBase {
@@ -118,6 +135,12 @@ export function BinderWorkspace({
   const [indexIncludeSourceFileName, setIndexIncludeSourceFileName] = useState(
     initialPreset.indexIncludeSourceFileName,
   );
+  // Stamp designs are read once: the binder is a build screen, not the stamp
+  // gallery, and a design edited mid-build shouldn't reshuffle the picker.
+  const stampDesigns = useMemo(listExhibitStampTemplates, []);
+  const [stampDesignId, setStampDesignId] = useState<string | null>(
+    initialPreset.stampDesignId ?? null,
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [docxRows, setDocxRows] = useState<readonly DocxConversionProgressRow[]>([]);
   const [building, setBuilding] = useState(false);
@@ -128,6 +151,23 @@ export function BinderWorkspace({
   const labels = useMemo(
     () => exhibits.map((_, index) => formatExhibitLabel(prefix, identifierStyle, index)),
     [exhibits, identifierStyle, prefix],
+  );
+  // Building the binder from a streamed main document runs through the
+  // file-to-file lane, which draws the plain text label only.
+  const stampDesignAvailable = document.source?.kind === "memory";
+  const stampDesign = stampDesignAvailable
+    ? stampDesigns.find((design) => design.id === stampDesignId) ?? null
+    : null;
+  // The design supplies APPEARANCE; the identifier still comes from the
+  // binder's own exhibit order, so no stamp gallery counter is consumed.
+  const labelLines = useMemo(
+    () =>
+      exhibits.map((_, index) =>
+        stampDesign
+          ? exhibitLabelLines(prefix, identifierStyle, index, stampDesign.layout)
+          : null,
+      ),
+    [exhibits, identifierStyle, prefix, stampDesign],
   );
   const totalPagesExact = exhibits.every((exhibit) => exhibit.pageCount !== null);
   const totalPages = mainPages + (indexEnabled ? 1 : 0) + exhibits.reduce(
@@ -239,6 +279,7 @@ export function BinderWorkspace({
       coverStyle,
       indexEnabled,
       indexIncludeSourceFileName,
+      stampDesignId,
     };
   }
 
@@ -252,6 +293,7 @@ export function BinderWorkspace({
     setCoverStyle(preset.coverStyle ?? defaultCoverStyle ?? "minimal");
     setIndexEnabled(preset.indexEnabled);
     setIndexIncludeSourceFileName(preset.indexIncludeSourceFileName);
+    setStampDesignId(preset.stampDesignId ?? null);
   }
 
   function savePreset() {
@@ -287,6 +329,7 @@ export function BinderWorkspace({
               pageCount: exhibit.pageCount,
             }),
           label: labels[index]!,
+          ...(labelLines[index] ? { labelLines: labelLines[index]! } : {}),
           description: exhibit.description,
           sourceFileName: exhibit.name,
         })),
@@ -304,6 +347,7 @@ export function BinderWorkspace({
           stampPages: stampPages === "first" ? "first" : "all",
           fontSizePt: 11,
           marginIn: 0.5,
+          ...(stampDesign ? { stampDesign: toBinderStampDesign(stampDesign) } : {}),
         },
         `${stripPdfExtension(mainName)} Binder.pdf`,
       );
@@ -503,6 +547,40 @@ export function BinderWorkspace({
             <label><input type="radio" name="placement-align" checked={placementAlign === "right"} onChange={() => setPlacementAlign("right")} disabled={building} /> Right</label>
           </fieldset>
 
+          <fieldset
+            className="binder-fieldset"
+            title="Choose whether each exhibit label is a plain line of text or one of your exhibit stamp designs."
+          >
+            <legend>Label design</legend>
+            <div className="binder-stamp-designs">
+              <StampDesignChoice
+                label="Text label"
+                selected={stampDesignId === null || !stampDesignAvailable}
+                disabled={building || !stampDesignAvailable}
+                onSelect={() => setStampDesignId(null)}
+              />
+              {stampDesigns.map((design) => (
+                <StampDesignChoice
+                  key={design.id}
+                  label={design.name}
+                  selected={stampDesignAvailable && stampDesignId === design.id}
+                  disabled={building || !stampDesignAvailable}
+                  onSelect={() => setStampDesignId(design.id)}
+                  design={design}
+                  // Sample the design against exhibit one of THIS binder, so
+                  // the thumbnail shows the prefix and identifier style the
+                  // settings above are set to.
+                  lines={exhibitLabelLines(prefix, identifierStyle, 0, design.layout)}
+                />
+              ))}
+            </div>
+            <p className="binder-card__hint">
+              {stampDesignAvailable
+                ? "A design sets how the label looks. The letters or numbers still come from this binder's order, so your stamp gallery's count isn't touched."
+                : "Label designs aren't available for a document this large — exhibits get the plain text label."}
+            </p>
+          </fieldset>
+
           <fieldset className="binder-fieldset" title="Choose whether exhibit labels appear on the first page of each exhibit or every exhibit page.">
             <legend>Stamp pages</legend>
             <label><input type="radio" name="stamp-pages" checked={stampPages === "first"} onChange={() => setStampPages("first")} disabled={building} /> First page only</label>
@@ -587,6 +665,93 @@ export function BinderWorkspace({
         </button>
       </footer>
     </section>
+  );
+}
+
+/** Screen pixels per PDF point for a design thumbnail in the settings column. */
+const STAMP_DESIGN_PREVIEW_MAX_WIDTH_PX = 84;
+
+function stampDesignPreviewScale(widthPt: number): number {
+  return widthPt > 0 ? Math.min(1, STAMP_DESIGN_PREVIEW_MAX_WIDTH_PX / widthPt) : 1;
+}
+
+/** The engine's appearance-only view of a stored stamp design. */
+function toBinderStampDesign(design: ExhibitStampTemplateV1): PdfBinderStampDesign {
+  return {
+    widthPt: design.widthPt,
+    heightPt: design.heightPt,
+    fontSizePt: design.fontSizePt,
+    fontFamily: design.fontFamily,
+    bold: design.bold,
+    italic: design.italic,
+    color: design.textColor,
+    fillColor: design.fillColor,
+    borderColor: design.borderColor,
+    borderWidthPt: design.borderWidthPt,
+    cornerRadiusPt: design.cornerRadiusPt,
+  };
+}
+
+function StampDesignChoice({
+  label,
+  selected,
+  disabled,
+  onSelect,
+  design,
+  lines,
+}: {
+  label: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  /** Omitted for the plain text-label choice. */
+  design?: ExhibitStampTemplateV1 | undefined;
+  lines?: readonly string[] | undefined;
+}) {
+  const scale = design ? stampDesignPreviewScale(design.widthPt) : 1;
+
+  return (
+    <button
+      type="button"
+      className="binder-stamp-design"
+      aria-pressed={selected}
+      aria-label={`Label design: ${label}`}
+      disabled={disabled}
+      onClick={onSelect}
+    >
+      <span
+        className="binder-stamp-design__preview"
+        style={design
+          ? {
+            width: `${design.widthPt * scale}px`,
+            height: `${design.heightPt * scale}px`,
+          }
+          : undefined}
+      >
+        {design && lines
+          ? (
+            <StampPreview
+              scale={scale}
+              stamp={{
+                lines,
+                widthPt: design.widthPt,
+                heightPt: design.heightPt,
+                fontSizePt: design.fontSizePt,
+                fontFamily: design.fontFamily,
+                bold: design.bold,
+                italic: design.italic,
+                color: design.textColor,
+                fillColor: design.fillColor,
+                borderColor: design.borderColor,
+                borderWidthPt: design.borderWidthPt,
+                cornerRadiusPt: design.cornerRadiusPt,
+              }}
+            />
+          )
+          : <span className="binder-stamp-design__text-sample">Exhibit A</span>}
+      </span>
+      <span className="binder-stamp-design__name">{label}</span>
+    </button>
   );
 }
 
@@ -745,6 +910,11 @@ function isBinderPreset(value: unknown): value is BinderPresetV1 {
       preset.placementAlign === "right"
     ) &&
     (preset.stampPages === "first" || preset.stampPages === "all") &&
+    (
+      preset.stampDesignId === undefined ||
+      preset.stampDesignId === null ||
+      typeof preset.stampDesignId === "string"
+    ) &&
     typeof preset.slipSheets === "boolean" &&
     (
       preset.coverStyle === undefined ||

@@ -2,6 +2,7 @@ import type {
   PdfBatesStampOptions,
   PdfBinderExhibit,
   PdfBinderOptions,
+  PdfBinderStampDesign,
   PdfBytes,
   PdfAConversionOptions,
   PdfApplyEditsOptions,
@@ -1003,6 +1004,19 @@ export class LocalPdfEngine implements PdfEngine {
     const stampBoldFont = coverStyle === "minimal"
       ? stampFont
       : await output.embedFont(StandardFonts.HelveticaBold);
+    // A sticker design is appearance only: the label text still comes from the
+    // exhibit's own binder sequence below, never from the design.
+    const stampDesign = options.stampDesign;
+
+    if (stampDesign) {
+      assertBinderStampDesign(stampDesign);
+    }
+
+    const stampDesignFont = stampDesign
+      ? await output.embedFont(
+        TEXT_BOX_STANDARD_FONTS[textBoxFontKey(binderStampDesignFontFace(stampDesign))],
+      )
+      : null;
 
     if (indexOptions.enabled) {
       const indexLayout = await createStableExhibitIndex({
@@ -1049,8 +1063,21 @@ export class LocalPdfEngine implements PdfEngine {
       copiedPages.forEach((page, pageIndex) => {
         output.addPage(page);
 
-        if (selectedExhibitPages.has(pageIndex)) {
-          drawStampText(output.getPage(exhibitPageStartIndex + pageIndex), stampFont, {
+        if (!selectedExhibitPages.has(pageIndex)) {
+          return;
+        }
+
+        const outputPageIndex = exhibitPageStartIndex + pageIndex;
+        const labelPage = output.getPage(outputPageIndex);
+
+        if (stampDesign && stampDesignFont) {
+          drawBinderStampDesign(labelPage, outputPageIndex, stampDesignFont, stampDesign, {
+            lines: binderStampDesignLines(exhibit),
+            placement: stampOptions.placement,
+            marginPt: stampOptions.marginIn * POINTS_PER_INCH,
+          });
+        } else {
+          drawStampText(labelPage, stampFont, {
             ...stampOptions,
             text: exhibit.label,
           });
@@ -2174,6 +2201,112 @@ function drawStampText(
   });
 }
 
+/** The label lines a binder sticker renders, defaulting to the flat label. */
+function binderStampDesignLines(exhibit: PdfBinderExhibit): readonly string[] {
+  const lines = exhibit.labelLines?.filter((line) => line.trim().length > 0) ?? [];
+
+  return lines.length > 0 ? lines : [exhibit.label];
+}
+
+/** The design's font face, as the shared standard-font cache expects it. */
+function binderStampDesignFontFace(design: PdfBinderStampDesign): FontFaceSelection {
+  return {
+    ...(design.fontFamily !== undefined ? { fontFamily: design.fontFamily } : {}),
+    ...(design.bold !== undefined ? { bold: design.bold } : {}),
+    ...(design.italic !== undefined ? { italic: design.italic } : {}),
+  };
+}
+
+function assertBinderStampDesign(design: PdfBinderStampDesign): void {
+  if (
+    !Number.isFinite(design.widthPt) ||
+    !Number.isFinite(design.heightPt) ||
+    design.widthPt <= 0 ||
+    design.heightPt <= 0
+  ) {
+    throw new PdfEngineError(
+      "INVALID_DOCUMENT",
+      "An exhibit sticker design needs a positive width and height.",
+    );
+  }
+}
+
+/**
+ * Draws one exhibit label as a sticker, baked into the page like every other
+ * binder label. Shares `drawStamp` with the placed exhibit-stamp tool, so a
+ * design previewed in the stamp gallery renders identically here.
+ */
+function drawBinderStampDesign(
+  page: ReturnType<PDFDocument["getPage"]>,
+  pageIndex: number,
+  font: PDFFont,
+  design: PdfBinderStampDesign,
+  options: {
+    lines: readonly string[];
+    placement: PdfStampPlacement;
+    marginPt: number;
+  },
+): void {
+  const geometry = stampGeometry(page);
+  const edit: PdfStampEdit = {
+    type: "stamp",
+    pageIndex,
+    rect: binderStampDesignRect(design, geometry, options.placement, options.marginPt),
+    lines: options.lines,
+    ...(design.fontSizePt !== undefined ? { fontSizePt: design.fontSizePt } : {}),
+    ...(design.fontFamily !== undefined ? { fontFamily: design.fontFamily } : {}),
+    ...(design.bold !== undefined ? { bold: design.bold } : {}),
+    ...(design.italic !== undefined ? { italic: design.italic } : {}),
+    ...(design.color !== undefined ? { color: design.color } : {}),
+    // null is meaningful for both (no fill / no border), so these carry
+    // through whenever they were set rather than only when truthy.
+    ...(design.fillColor !== undefined ? { fillColor: design.fillColor } : {}),
+    ...(design.borderColor !== undefined ? { borderColor: design.borderColor } : {}),
+    ...(design.borderWidthPt !== undefined ? { borderWidthPt: design.borderWidthPt } : {}),
+    ...(design.cornerRadiusPt !== undefined ? { cornerRadiusPt: design.cornerRadiusPt } : {}),
+  };
+
+  drawStamp(createPageDrawTarget(page), edit, font, geometry);
+}
+
+/**
+ * Anchors the sticker where the plain text label would have gone — the same
+ * header/footer edge, left/center/right position, and margin — and keeps it on
+ * the page even when the design is larger than the margin leaves room for. The
+ * box is laid out against the upright page, then mapped back to user space, so
+ * a rotated exhibit page reads the same as an upright one.
+ */
+function binderStampDesignRect(
+  design: PdfBinderStampDesign,
+  geometry: StampGeometry,
+  placement: PdfStampPlacement,
+  marginPt: number,
+): PdfEditRect {
+  const sideways = isSidewaysRotation(geometry.pageRotation);
+  const visualWidth = sideways ? geometry.pageHeight : geometry.pageWidth;
+  const visualHeight = sideways ? geometry.pageWidth : geometry.pageHeight;
+  const width = Math.min(design.widthPt, visualWidth);
+  const height = Math.min(design.heightPt, visualHeight);
+  const visualX = placement.align === "left"
+    ? marginPt
+    : placement.align === "right"
+      ? visualWidth - marginPt - width
+      : (visualWidth - width) / 2;
+  const visualY = placement.edge === "header" ? visualHeight - marginPt - height : marginPt;
+
+  return mapVisualRectToPageRect(
+    {
+      x: clamp(visualX, 0, Math.max(0, visualWidth - width)),
+      y: clamp(visualY, 0, Math.max(0, visualHeight - height)),
+      w: width,
+      h: height,
+    },
+    geometry.pageWidth,
+    geometry.pageHeight,
+    geometry.pageRotation,
+  );
+}
+
 function drawWatermarkText(
   page: ReturnType<PDFDocument["getPage"]>,
   font: Awaited<ReturnType<PDFDocument["embedFont"]>>,
@@ -2356,6 +2489,37 @@ function mapPageRectToVisualRect(
     { pageX: rect.x + rect.w, pageY: rect.y + rect.h },
   ].map((corner) =>
     mapPagePointToVisualPoint({ ...corner, pageWidth, pageHeight, pageRotation }),
+  );
+  const xs = corners.map((corner) => corner.x);
+  const ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(...xs) - minX,
+    h: Math.max(...ys) - minY,
+  };
+}
+
+/**
+ * Inverse of `mapPageRectToVisualRect`: takes a rectangle laid out against the
+ * upright page a reader sees and returns the user-space rectangle that draws
+ * there. Two opposite corners are enough — every page rotation is a multiple
+ * of 90 degrees, so the mapped box stays axis-aligned.
+ */
+function mapVisualRectToPageRect(
+  rect: PdfEditRect,
+  pageWidth: number,
+  pageHeight: number,
+  pageRotation: PageRotation,
+): PdfEditRect {
+  const corners = [
+    { visualX: rect.x, visualY: rect.y },
+    { visualX: rect.x + rect.w, visualY: rect.y + rect.h },
+  ].map((corner) =>
+    mapVisualPointToPagePoint({ ...corner, pageWidth, pageHeight, pageRotation }),
   );
   const xs = corners.map((corner) => corner.x);
   const ys = corners.map((corner) => corner.y);

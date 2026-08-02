@@ -266,6 +266,31 @@ export async function claimFolderScan(
   return invoke<PickedPdfsForAdd>("claim_folder_scan", { token, includeSubfolders });
 }
 
+/**
+ * Advisory SHA-256 (hex) of a grant-resolved file, streamed in Rust --
+ * backs the Production Set add-time duplicate badge for above-threshold
+ * (descriptor-kind) sources, whose bytes never load into the WebView (a
+ * bytes-kind source hashes client-side via `crypto.subtle.digest` instead,
+ * needing no round trip here). `null` on any failure (unsupported runtime,
+ * unresolved grant, I/O error) -- callers must treat that as "skip the
+ * badge for this row," never as a build blocker. The build itself re-groups
+ * duplicates authoritatively from its own planning-pass hashes, so a stale
+ * or failed read here only ever affects the UI badge.
+ */
+export async function hashFileForGrant(grant: FileGrant): Promise<string | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  try {
+    const invoke = await getTauriInvoke();
+    const response = await invoke<{ sha256: string }>("hash_file_for_grant", { grant });
+    return response.sha256;
+  } catch {
+    return null;
+  }
+}
+
 /** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
 export interface ProductionContinuationSummary {
   prefix: string;

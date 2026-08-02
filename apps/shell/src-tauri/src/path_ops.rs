@@ -1888,7 +1888,10 @@ fn target_matches_any_source(sources: &[PathBuf], target: &Path) -> bool {
         .any(|source| same_existing_file(source, target))
 }
 
-fn sha256_file(path: &Path) -> OpResult<[u8; 32]> {
+/// `pub(crate)` so `mcp::hash_file_for_grant` (the Production Set UI's
+/// advisory duplicate-detection command) reuses this streaming hasher rather
+/// than a second implementation -- see its doc comment.
+pub(crate) fn sha256_file(path: &Path) -> OpResult<[u8; 32]> {
     let mut file = fs::File::open(path).map_err(|error| PathOpError {
         code: core_ops::ERR_IO,
         message: format!("could not read file for verification: {error}"),

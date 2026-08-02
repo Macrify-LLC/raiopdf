@@ -784,7 +784,34 @@ export const productionSetInputSchema = {
     })
     .optional()
     .describe("Permits start/digits to differ from the prior production; prefix must still match exactly."),
+  duplicateHandling: z
+    .enum(["produce-all", "produce-once"])
+    .optional()
+    .describe(
+      'How to handle two or more sources whose bytes hash identical. "produce-all" (default) stamps and ' +
+        "produces every occurrence with its own Bates range, cross-referenced in the manifest -- silently " +
+        'dropping a document from a discovery production is the dangerous default, not this one. "produce-once" ' +
+        "stamps and produces only the first occurrence (source order); later ones are omitted and consume no " +
+        "Bates numbers, so numbering stays contiguous.",
+    ),
 };
+/** Cap on `duplicateGroups` in the structured result -- the package manifest
+ * (`productionDuplicates` detail, and `production.json`) always holds the
+ * full detail regardless of this cap; this only bounds what rides back over
+ * the tool-call response for a production with an unusually large number of
+ * duplicate groups. */
+export const MAX_DUPLICATE_GROUPS_IN_RESULT = 50;
+const duplicateOccurrenceSchema = z.object({
+  sourceFilename: z.string(),
+  sourceOrdinal: z.number(),
+  action: z.enum(["produced", "omitted"]),
+  batesRange: z.string().nullable(),
+});
+const duplicateGroupSchema = z.object({
+  sourceSha256: z.string(),
+  occurrences: z.array(duplicateOccurrenceSchema),
+  canonicalOccurrenceOrdinal: z.number(),
+});
 export const productionSetOutputSchema = {
   ...baseOutputSchema,
   packageRoot: z.string().optional(),
@@ -800,6 +827,19 @@ export const productionSetOutputSchema = {
     })
     .nullable()
     .optional(),
+  duplicateCount: z.number().optional().describe("Occurrences beyond the first in each duplicate group; 0 when none were found."),
+  duplicateGroups: z
+    .array(duplicateGroupSchema)
+    .optional()
+    .describe(
+      `Every group of sources sharing a hash, up to the first ${MAX_DUPLICATE_GROUPS_IN_RESULT} -- the ` +
+        "package manifest's productionDuplicates detail (and production.json) has the full list regardless " +
+        "of this cap.",
+    ),
+  duplicateGroupsTruncated: z
+    .boolean()
+    .optional()
+    .describe(`True when duplicateGroups was capped at ${MAX_DUPLICATE_GROUPS_IN_RESULT}; read the manifest for the rest.`),
 };
 export interface ProductionSetInput {
   sources: { path: string; designation?: string | undefined; designationPages?: string | undefined }[];
@@ -816,6 +856,7 @@ export interface ProductionSetInput {
   stampFontSizePt?: number | undefined;
   continueFrom?: string | undefined;
   continuationOverride?: { reason: string } | undefined;
+  duplicateHandling?: "produce-all" | "produce-once" | undefined;
 }
 export async function handleProductionSet(
   input: ProductionSetInput,
@@ -848,10 +889,16 @@ export async function handleProductionSet(
     ...(input.stampFontSizePt === undefined ? {} : { stampFontSizePt: input.stampFontSizePt }),
     ...(continueFrom === undefined ? {} : { continueFrom }),
     ...(input.continuationOverride === undefined ? {} : { continuationOverride: input.continuationOverride }),
+    ...(input.duplicateHandling === undefined ? {} : { duplicateHandling: input.duplicateHandling }),
   });
 
+  const duplicateGroupsTruncated = result.duplicateGroups.length > MAX_DUPLICATE_GROUPS_IN_RESULT;
+  const duplicateNote = result.duplicateCount > 0
+    ? ` ${result.duplicateCount} duplicate source(s) detected across ${result.duplicateGroups.length} group(s); see duplicateGroups.`
+    : "";
+
   return successResult(
-    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.`,
+    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.${duplicateNote}`,
     {
       packageRoot: result.packageRoot,
       outputs: result.files.map((file) => file.packageRelativePath),
@@ -860,6 +907,9 @@ export async function handleProductionSet(
       indexCsv: result.indexCsv,
       combinedPdf: result.combinedPdf,
       continuation: result.continuation,
+      duplicateCount: result.duplicateCount,
+      duplicateGroups: result.duplicateGroups.slice(0, MAX_DUPLICATE_GROUPS_IN_RESULT),
+      duplicateGroupsTruncated,
     },
   );
 }

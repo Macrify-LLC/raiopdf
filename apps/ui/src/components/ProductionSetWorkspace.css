@@ -113,6 +113,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+.production-workspace__file-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .production-workspace__file-name {
   min-width: 0;
   margin: 0;
@@ -128,6 +135,54 @@
   margin: 2px 0 0;
   color: var(--muted);
   font-size: var(--text-2xs);
+}
+
+/* Subtle heads-up, not an error -- another source in this run hashed the
+   same at add time. Advisory only: the build re-groups authoritatively from
+   its own hashes, and "Duplicate documents" below is where the consequence
+   (produce all vs. produce once) actually gets decided. */
+.production-workspace__file-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-chip);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+}
+
+.production-workspace__duplicates {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.production-workspace__duplicates-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* Same shape as `.production-workspace__checkbox-row`, named for what it
+   actually holds here (radio inputs, not checkboxes). */
+.production-workspace__radio-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.production-workspace__radio-row input {
+  width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
 }
 
 .production-workspace__file-actions {

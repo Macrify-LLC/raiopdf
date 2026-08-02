@@ -39,7 +39,19 @@ export interface ProductionSetFile {
    * Ignored while `designation` is empty.
    */
   designationPages: string;
+  /**
+   * Advisory SHA-256 (hex), computed at add time -- `null` while pending or
+   * on a hashing failure (never blocks the add). ADVISORY ONLY: the build
+   * re-groups duplicates authoritatively from its own planning-pass hashes,
+   * so this only drives the "duplicate" badge and status line, never what
+   * actually gets produced. See `ProductionSetRunInput.duplicateHandling`.
+   */
+  sourceSha256: string | null;
 }
+
+/** How the build handles two or more sources whose bytes hash identical.
+ * Mirrors `@raiopdf/production-set`'s `ProductionDuplicateHandling`. */
+export type ProductionDuplicateHandling = "produce-all" | "produce-once";
 
 /** The six placements a Bates number or designation can take: header/footer
  * crossed with left/center/right. Shared by both "Stamp placement" selects. */
@@ -84,6 +96,8 @@ export interface ProductionSetRunInput {
   continueFrom?: string | undefined;
   /** Set only when the user used "Adjust start…" with a reason. */
   continuationOverrideReason?: string | undefined;
+  /** How to handle two or more sources whose bytes hash identical. */
+  duplicateHandling: ProductionDuplicateHandling;
 }
 
 export interface ProductionSetRunResult {
@@ -92,6 +106,8 @@ export interface ProductionSetRunResult {
   nextNumber: number;
   fileCount: number;
   continuation?: { mode: "strict" | "override"; priorLastBates: string } | null | undefined;
+  /** Occurrences beyond the first in each duplicate group; 0 when none were found. */
+  duplicateCount: number;
 }
 
 /** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
@@ -160,6 +176,16 @@ export interface ProductionSetWorkspaceProps {
    * Absent in the browser build, which has no folder picker.
    */
   onContinueFromPriorProduction?: (() => Promise<ProductionContinuationPickOutcome>) | undefined;
+  /**
+   * Advisory SHA-256 for an above-threshold (descriptor-kind) add, backing
+   * the duplicate badge for sources whose bytes never load into the WebView
+   * (a bytes-kind add hashes in-component via WebCrypto instead, needing no
+   * callback). Absent in the browser build and any Tauri shell that
+   * predates `hash_file_for_grant` -- those rows just never badge. A `null`
+   * resolution (unsupported runtime, unresolved grant, I/O error) is the
+   * same "skip the badge" outcome as never calling this at all.
+   */
+  onHashGrant?: ((grant: string) => Promise<string | null>) | undefined;
   onRun: (input: ProductionSetRunInput) => Promise<void>;
   /** Opens the finished package root in the system file manager (desktop only). */
   onOpenPackageRoot?: ((path: string) => void) | undefined;
@@ -181,6 +207,7 @@ export function ProductionSetWorkspace({
   onAddFile,
   onAddFolder,
   onContinueFromPriorProduction,
+  onHashGrant,
   onRun,
   onOpenPackageRoot,
   onHelpRequested,
@@ -218,6 +245,7 @@ export function ProductionSetWorkspace({
   const [batesPlacementKey, setBatesPlacementKey] = useState(DEFAULT_BATES_PLACEMENT_KEY);
   const [designationPlacementKey, setDesignationPlacementKey] = useState(DEFAULT_DESIGNATION_PLACEMENT_KEY);
   const [stampFontSizePt, setStampFontSizePt] = useState(DEFAULT_STAMP_FONT_SIZE_PT);
+  const [duplicateHandling, setDuplicateHandling] = useState<ProductionDuplicateHandling>("produce-all");
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
   const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
   const lastNumber = start + Math.max(0, totalPages - 1);
@@ -255,6 +283,32 @@ export function ProductionSetWorkspace({
       }
     }
     return errors;
+  }, [files]);
+  // Advisory grouping by add-time hash -- purely for the UI badge/status
+  // line. Files whose hash hasn't resolved yet (or failed) simply never
+  // join a group; the build re-groups authoritatively from its own hashes.
+  const duplicateFileIds = useMemo(() => {
+    const bySha = new Map<string, string[]>();
+    for (const file of files) {
+      if (file.sourceSha256 === null) {
+        continue;
+      }
+      const ids = bySha.get(file.sourceSha256) ?? [];
+      ids.push(file.id);
+      bySha.set(file.sourceSha256, ids);
+    }
+    const duplicateIds = new Set<string>();
+    let groupCount = 0;
+    for (const ids of bySha.values()) {
+      if (ids.length < 2) {
+        continue;
+      }
+      groupCount += 1;
+      for (const id of ids) {
+        duplicateIds.add(id);
+      }
+    }
+    return { ids: duplicateIds, groupCount };
   }, [files]);
   const canRun = files.length > 0 &&
     outputDir.trim().length > 0 &&
@@ -309,6 +363,11 @@ export function ProductionSetWorkspace({
       let deferredCount = 0;
       const uncountedNames: string[] = [];
       const pageCountReads: { index: number; bytes: Uint8Array }[] = [];
+      // Above-threshold adds hash in the BACKGROUND (fired after this
+      // function returns entries into state) since it round-trips to Rust
+      // to stream a file that, by definition, is large -- unlike the
+      // bytes-kind hash below, it must not hold up "files added."
+      const descriptorHashTargets: { id: string; grant: string }[] = [];
 
       for (const result of picked) {
         if (result.kind === "tooLarge" || result.kind === "error") {
@@ -320,16 +379,21 @@ export function ProductionSetWorkspace({
           // page_count(grant) when the shell op exists; otherwise it stays
           // deferred (null) -- the path-based production build works either way.
           const { descriptor } = result;
+          const id = productionSetFileId(descriptor.name);
           entries.push({
-            id: productionSetFileId(descriptor.name),
+            id,
             name: descriptor.name,
             path: descriptor.grant,
             pages: descriptor.pageCount,
             designation: "",
             designationPages: "",
+            sourceSha256: null,
           });
           if (descriptor.pageCount === null) {
             deferredCount += 1;
+          }
+          if (onHashGrant) {
+            descriptorHashTargets.push({ id, grant: descriptor.grant });
           }
           continue;
         }
@@ -347,10 +411,18 @@ export function ProductionSetWorkspace({
 
         await Promise.all(pageCountReads.map(async ({ index, bytes }) => {
           try {
-            const pages = await readProductionSetPageCount(bytes);
+            // Page count and the advisory hash both need the bytes this add
+            // already has in memory -- read them together rather than a
+            // second async pass. A hash failure (e.g. WebCrypto unavailable)
+            // is swallowed to `null`: it only skips the duplicate badge, it
+            // must never drop or fail the add.
+            const [pages, sourceSha256] = await Promise.all([
+              readProductionSetPageCount(bytes),
+              sha256HexFromBytes(bytes).catch(() => null),
+            ]);
             const entry = entries[index];
             if (entry) {
-              entries[index] = { ...entry, pages };
+              entries[index] = { ...entry, pages, sourceSha256 };
             }
           } catch {
             uncountedNames.push(entries[index]?.name ?? "PDF");
@@ -373,6 +445,26 @@ export function ProductionSetWorkspace({
       }
 
       setLocalMessage(addSummaryMessage(summary, deferredCount, uncountedNames));
+
+      // Fire-and-forget: patches each row's badge in as its hash resolves,
+      // without holding up "files added" for a round trip per large file.
+      // `.catch(() => null)` is defense in depth -- `onHashGrant` itself
+      // already resolves `null` on failure rather than rejecting (see
+      // `hashFileForGrant`'s doc comment), but a hashing failure must never
+      // surface as an unhandled rejection or block anything downstream
+      // regardless of what the caller passed in.
+      if (onHashGrant) {
+        for (const target of descriptorHashTargets) {
+          void onHashGrant(target.grant).catch(() => null).then((sourceSha256) => {
+            if (!mountedRef.current || sourceSha256 === null) {
+              return;
+            }
+            setFiles((current) => current.map((item) => (
+              item.id === target.id ? { ...item, sourceSha256 } : item
+            )));
+          });
+        }
+      }
     } finally {
       if (mountedRef.current) {
         setAddingFile(false);
@@ -482,6 +574,7 @@ export function ProductionSetWorkspace({
       continuationOverrideReason: continuationAdjusting && continuationReason.trim().length > 0
         ? continuationReason.trim()
         : undefined,
+      duplicateHandling,
     });
   }
 
@@ -541,7 +634,17 @@ export function ProductionSetWorkspace({
                   {String(index + 1).padStart(2, "0")}
                 </span>
                 <div>
-                  <p className="production-workspace__file-name">{file.name}</p>
+                  <div className="production-workspace__file-name-row">
+                    <p className="production-workspace__file-name">{file.name}</p>
+                    {duplicateFileIds.ids.has(file.id) ? (
+                      <span
+                        className="production-workspace__file-badge"
+                        title="Another file in this production has the same content -- see the duplicate options below."
+                      >
+                        duplicate
+                      </span>
+                    ) : null}
+                  </div>
                   <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
                     {file.pages === null
                       ? "page count pending"
@@ -632,6 +735,40 @@ export function ProductionSetWorkspace({
             </div>
           ))}
         </div>
+        {duplicateFileIds.ids.size > 0 ? (
+          <div className="production-workspace__duplicates" role="group" aria-label="Duplicate documents">
+            <p className="production-workspace__status" role="status">
+              {duplicateFileIds.ids.size} duplicate file{duplicateFileIds.ids.size === 1 ? "" : "s"} in this
+              production{duplicateFileIds.groupCount > 1 ? ` (${duplicateFileIds.groupCount} groups)` : ""}
+            </p>
+            <div className="production-workspace__duplicates-options">
+              <label
+                className="production-workspace__radio-row"
+                title="Bates-stamp and produce every duplicate occurrence, each with its own range -- the safe default for a discovery production."
+              >
+                <input
+                  type="radio"
+                  name="production-duplicate-handling"
+                  checked={duplicateHandling === "produce-all"}
+                  onChange={() => setDuplicateHandling("produce-all")}
+                />
+                <span>Produce all (cross-referenced)</span>
+              </label>
+              <label
+                className="production-workspace__radio-row"
+                title="Produce only the first occurrence of each duplicate; later ones are omitted and use no Bates numbers."
+              >
+                <input
+                  type="radio"
+                  name="production-duplicate-handling"
+                  checked={duplicateHandling === "produce-once"}
+                  onChange={() => setDuplicateHandling("produce-once")}
+                />
+                <span>Produce once</span>
+              </label>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="production-workspace__section" aria-label="Bates numbering">
@@ -901,6 +1038,12 @@ export function ProductionSetWorkspace({
                   {progress.result.continuation.mode === "override" ? ", start adjusted" : ""}).
                 </p>
               ) : null}
+              {progress.result.duplicateCount > 0 ? (
+                <p className="production-workspace__result-subtitle">
+                  {progress.result.duplicateCount} duplicate{progress.result.duplicateCount === 1 ? "" : "s"} detected
+                  -- see the manifest for the cross-reference.
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="production-workspace__result-parts">
@@ -956,6 +1099,12 @@ function fromSourceFile(file: ProductionSetSourceFile, pages: number): Productio
     pages,
     designation: "",
     designationPages: "",
+    // The initially-seeded open document has neither in-memory bytes nor a
+    // grant plumbed through this narrower `ProductionSetSourceFile` prop, so
+    // it's never advisory-hashed -- it simply can't badge as a duplicate of
+    // a later add. Cosmetic only: the build's own authoritative grouping
+    // still covers it like any other source.
+    sourceSha256: null,
   };
 }
 
@@ -1006,6 +1155,20 @@ function addSummaryMessage(
 export async function readProductionSetPageCount(bytes: Uint8Array): Promise<number> {
   const pdf = await PDFDocument.load(bytes);
   return pdf.getPageCount();
+}
+
+/**
+ * Advisory SHA-256 (hex) of already-in-memory bytes -- the bytes-kind half
+ * of add-time duplicate detection (the descriptor-kind half round-trips to
+ * Rust via `onHashGrant`; see its doc comment). Callers must treat a
+ * rejection as "skip the badge," never as a reason to drop the file.
+ */
+export async function sha256HexFromBytes(bytes: Uint8Array): Promise<string> {
+  // Cast needed under TS's stricter typed-array generics (`Uint8Array<ArrayBufferLike>`
+  // isn't structurally a `BufferSource` there); harmless at runtime -- SubtleCrypto
+  // accepts any `Uint8Array` view.
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function designationSelectValue(value: string): string {

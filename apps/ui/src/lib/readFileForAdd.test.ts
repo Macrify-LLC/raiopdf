@@ -375,6 +375,32 @@ describe("pickFilesForAdd (Tauri, pick_pdfs_for_add available)", () => {
     delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
+  it("reports shell-side skipped picks as error entries without dropping the batch", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "pick_pdfs_for_add") {
+        return {
+          files: [{ grant: "g-1", name: "a.pdf", sizeBytes: 8 }],
+          thresholdBytes: THRESHOLD,
+          skipped: [{ name: "vanished.pdf", message: "The PDF could not be read." }],
+        };
+      }
+      if (command === "read_pdf_range") {
+        return new Uint8Array(8).fill(1).buffer;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const results = await pickFilesForAdd();
+
+    expect(results).toHaveLength(2);
+    expect(results?.[0]).toMatchObject({ kind: "bytes", file: { name: "a.pdf" } });
+    expect(results?.[1]).toEqual({
+      kind: "error",
+      name: "vanished.pdf",
+      message: "The PDF could not be read.",
+    });
+  });
+
   it("reads every picked file, in picker order (all-success)", async () => {
     invokeMock.mockImplementation(async (command: string, params?: { grant?: string }) => {
       if (command === "pick_pdfs_for_add") {

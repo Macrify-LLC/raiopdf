@@ -40,7 +40,10 @@ import {
   readPdfRange,
   type FileGrant,
   type OpenedFile,
+  type SkippedPickForAdd,
 } from "./filePort";
+
+export type { SkippedPickForAdd } from "./filePort";
 import {
   getLargeDocThresholdBytes,
   setLargeDocThresholdBytes,
@@ -86,6 +89,12 @@ export interface PickPdfsForAddOptions {
   onDocxRowsChange?: (rows: readonly DocxConversionProgressRow[]) => void;
   onWordUnavailable?: (message: string, capability: WordCapability) => void;
   onDocxErrors?: (errors: readonly DocxAddError[]) => void;
+  /**
+   * Files the shell picker itself could not serve (vanished between dialog and
+   * stat, unreadable metadata). Reported per-file so one bad path never drops
+   * the rest of a multi-select batch.
+   */
+  onSkippedPicks?: (skipped: readonly SkippedPickForAdd[]) => void;
 }
 
 export interface FileAddDescriptor {
@@ -171,6 +180,11 @@ export async function pickPdfsForAdd(
     // The shell echoes its authoritative threshold with every pick — keep
     // the UI-side constant in lockstep so the two can never drift.
     setLargeDocThresholdBytes(picked.thresholdBytes);
+
+    if (picked.skipped?.length) {
+      options.onSkippedPicks?.(picked.skipped);
+    }
+
     return await normalizePickedFilesForAdd([...picked.files], options);
   } catch (error) {
     if (isMissingCommandError(error, "pick_pdfs_for_add")) {
@@ -199,7 +213,14 @@ export async function pickPdfsForAdd(
  * disk between pick and read) does NOT drop the rest of the batch. That file
  * comes back as a `{ kind: "error" }` entry alongside the successful reads --
  * callers use `summarizeFileAddResults` / `fileAddBatchMessage` to report
- * "N of M added; K failed: <names>" instead of losing the whole pick.
+ * "N of M added; K failed: <names>" instead of losing the whole pick. Picks
+ * the shell itself couldn't serve (vanished path, unreadable metadata) are
+ * appended as error entries the same way.
+ *
+ * Memory contract: below-threshold picks materialize their bytes here, and
+ * callers retain those same Uint8Array references in workspace state — the
+ * batch itself adds no copies, so peak memory equals the steady state after
+ * adding the same files one at a time. Above-threshold picks stay descriptors.
  */
 export async function pickFilesForAdd(
   options: PickPdfsForAddOptions = {},
@@ -212,7 +233,14 @@ export async function pickFilesForAdd(
     return file ? [await readFileForAdd(file)] : null;
   }
 
-  const picks = await pickPdfsForAdd(options);
+  const skippedByPicker: SkippedPickForAdd[] = [];
+  const picks = await pickPdfsForAdd({
+    ...options,
+    onSkippedPicks: (skipped) => {
+      skippedByPicker.push(...skipped);
+      options.onSkippedPicks?.(skipped);
+    },
+  });
   if (picks === null) {
     return null;
   }
@@ -229,6 +257,13 @@ export async function pickFilesForAdd(
       });
     }
   }
+
+  // Files the shell picker itself couldn't serve join the batch as error
+  // entries, so "N of M added; K failed" covers them too.
+  for (const skipped of skippedByPicker) {
+    results.push({ kind: "error", name: skipped.name, message: skipped.message });
+  }
+
   return results;
 }
 

@@ -51,9 +51,16 @@ export interface PickedPdfForAdd {
   convertedFromGrant?: string | null;
 }
 
+export interface SkippedPickForAdd {
+  name: string;
+  message: string;
+}
+
 export interface PickedPdfsForAdd {
   files: readonly PickedPdfForAdd[];
   thresholdBytes: number;
+  /** Per-file picker failures; the rest of the batch is still served. */
+  skipped?: readonly SkippedPickForAdd[];
 }
 
 export interface PickedPdfForWord {

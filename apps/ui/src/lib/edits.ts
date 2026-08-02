@@ -9,6 +9,7 @@ import type {
   PdfShapeEdit,
   PdfShapeKind,
   PdfFormFieldValue,
+  PdfStampSequence,
   PdfTextBoxAlign,
   PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
@@ -126,7 +127,11 @@ export interface PendingCallout extends PendingEditBase {
   boxFill?: PdfEditColor | null;
 }
 
-export interface PendingStamp extends PendingEditBase {
+/**
+ * A placed raster image or drawn signature. Not an exhibit stamp — that is
+ * `PendingExhibitStamp`, which is text drawn from a template.
+ */
+export interface PendingImageStamp extends PendingEditBase {
   kind: "image" | "signature";
   rect: PdfEditRect;
   bytes: Uint8Array;
@@ -135,6 +140,33 @@ export interface PendingStamp extends PendingEditBase {
   dataUrl: string;
   /** Natural width / height, for aspect-locked resize. */
   aspectRatio: number;
+}
+
+/**
+ * A placed exhibit sticker: text lines drawn inside a box, round-tripped as a
+ * live `/Stamp` annotation so it can be moved, restyled, or renumbered after
+ * reopening. `lines` is the rendering source of truth — already resolved to
+ * final display text; `templateId` and `sequence` are provenance for a later
+ * renumber and are never re-derived into `lines` by the engine.
+ */
+export interface PendingExhibitStamp extends PendingEditBase {
+  kind: "stamp";
+  rect: PdfEditRect;
+  lines: readonly string[];
+  fontSizePt: number;
+  fontFamily?: PdfTextBoxFontFamily;
+  bold?: boolean;
+  italic?: boolean;
+  color?: PdfEditColor;
+  /** null draws no fill. */
+  fillColor?: PdfEditColor | null;
+  /** null draws no border. */
+  borderColor?: PdfEditColor | null;
+  borderWidthPt?: number;
+  cornerRadiusPt?: number;
+  templateId?: string;
+  templateRevision?: number;
+  sequence?: PdfStampSequence;
 }
 
 export interface PendingComment extends PendingEditBase {
@@ -193,7 +225,8 @@ export type PendingEdit =
   | PendingTextMarkup
   | PendingTextBox
   | PendingCallout
-  | PendingStamp
+  | PendingImageStamp
+  | PendingExhibitStamp
   | PendingComment
   | PendingFormField
   | PendingInk
@@ -300,6 +333,32 @@ export function toPdfEdit(edit: PendingEdit): PdfEdit {
         ...(edit.boxFill ? { boxFill: edit.boxFill } : {}),
       };
     }
+    case "stamp":
+      return {
+        type: "stamp",
+        ...(edit.annotId ? { annotId: edit.annotId } : {}),
+        pageIndex: edit.pageIndex,
+        rect: edit.rect,
+        lines: edit.lines,
+        fontSizePt: edit.fontSizePt,
+        ...(edit.fontFamily && edit.fontFamily !== "helvetica"
+          ? { fontFamily: edit.fontFamily }
+          : {}),
+        ...(edit.bold ? { bold: edit.bold } : {}),
+        ...(edit.italic ? { italic: edit.italic } : {}),
+        ...(edit.color ? { color: edit.color } : {}),
+        // null is meaningful for both (no fill / no border), so these carry
+        // through whenever they were set rather than only when truthy.
+        ...(edit.fillColor !== undefined ? { fillColor: edit.fillColor } : {}),
+        ...(edit.borderColor !== undefined ? { borderColor: edit.borderColor } : {}),
+        ...(edit.borderWidthPt !== undefined ? { borderWidthPt: edit.borderWidthPt } : {}),
+        ...(edit.cornerRadiusPt !== undefined ? { cornerRadiusPt: edit.cornerRadiusPt } : {}),
+        ...(edit.templateId ? { templateId: edit.templateId } : {}),
+        ...(edit.templateRevision !== undefined
+          ? { templateRevision: edit.templateRevision }
+          : {}),
+        ...(edit.sequence ? { sequence: edit.sequence } : {}),
+      };
     case "image":
     case "signature":
       return {
@@ -563,9 +622,13 @@ function pendingEditFromRaioAnnotation(annotation: PdfRaioAnnotationImport): Pen
         text: edit.text,
       };
     case "stamp":
-      // No overlay for placed exhibit stamps yet. The engine round-trips them,
-      // so leave the annotation alone rather than surface a half-editable
-      // object.
+      // No overlay for placed exhibit stamps yet, so an imported stamp is left
+      // alone in the file instead of surfaced as a half-editable object. The
+      // create direction (`PendingExhibitStamp` → `PdfStampEdit`) is wired; this
+      // import direction lands with the stamp overlay, together with dropping
+      // App.tsx's `keepVisibleKinds: ["stamp"]` display exemption — until the
+      // overlay can draw a stamp, that exemption is what keeps an imported one
+      // visible.
       return null;
   }
 }
@@ -576,6 +639,7 @@ function isRaioAnnotationPdfEdit(edit: PdfEdit): edit is PdfRaioAnnotationEdit {
     edit.type === "strikethrough" ||
     edit.type === "textBox" ||
     edit.type === "callout" ||
+    edit.type === "stamp" ||
     edit.type === "ink" ||
     edit.type === "shape" ||
     edit.type === "comment";
@@ -605,6 +669,8 @@ export function describePendingEdit(edit: PendingEdit): {
       return { label: "Text box", detail: excerpt(edit.text) };
     case "callout":
       return { label: "Callout", detail: excerpt(edit.text) };
+    case "stamp":
+      return { label: "Exhibit stamp", detail: excerpt(edit.lines.join(" ")) || null };
     case "image":
       return { label: "Image", detail: null };
     case "signature":

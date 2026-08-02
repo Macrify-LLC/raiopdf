@@ -35,7 +35,7 @@ import {
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 
 /** An image (or signature image) picked and ready to place with a click. */
-export interface ArmedStamp {
+export interface ArmedImageStamp {
   bytes: Uint8Array;
   format: PdfEditImageFormat;
   dataUrl: string;
@@ -95,11 +95,11 @@ export interface EditingState {
   selectedEditId: string | null;
   setSelectedEditId: (id: string | null) => void;
   /** Pick-to-place state for the Image tool. */
-  armedImage: ArmedStamp | null;
+  armedImage: ArmedImageStamp | null;
   handleImageFile: (file: File) => void;
   disarmImage: () => void;
   /** Pick-to-place state for the Sign tool. */
-  armedSignature: ArmedStamp | null;
+  armedSignature: ArmedImageStamp | null;
   signatureCardOpen: boolean;
   setSignatureCardOpen: (open: boolean) => void;
   savedSignatures: readonly SavedSignature[];
@@ -170,8 +170,8 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   const [pendingEdits, setPendingEdits] = useState<readonly PendingEdit[]>([]);
   const [importedAnnotIds, setImportedAnnotIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedEditId, setSelectedEditId] = useState<string | null>(null);
-  const [armedImage, setArmedImage] = useState<ArmedStamp | null>(null);
-  const [armedSignature, setArmedSignature] = useState<ArmedStamp | null>(null);
+  const [armedImage, setArmedImage] = useState<ArmedImageStamp | null>(null);
+  const [armedSignature, setArmedSignature] = useState<ArmedImageStamp | null>(null);
   const [signatureCardOpen, setSignatureCardOpen] = useState(false);
   const [savedSignatures, setSavedSignatures] = useState<readonly SavedSignature[]>(
     loadSavedSignatures,
@@ -662,7 +662,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
   );
 }
 
-async function armStampFromFile(file: File): Promise<ArmedStamp> {
+async function armStampFromFile(file: File): Promise<ArmedImageStamp> {
   const format = imageFormatFromFile(file);
 
   if (!format) {
@@ -681,7 +681,7 @@ async function armStampFromFile(file: File): Promise<ArmedStamp> {
   };
 }
 
-async function armStampFromDataUrl(dataUrl: string): Promise<ArmedStamp> {
+async function armStampFromDataUrl(dataUrl: string): Promise<ArmedImageStamp> {
   const format = imageFormatFromDataUrl(dataUrl);
 
   if (!format) {

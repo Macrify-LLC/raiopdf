@@ -116,7 +116,15 @@ export function findExhibitStampTemplate(templateId: string): ExhibitStampTempla
   return readExhibitStampStore().templates.find((template) => template.id === templateId) ?? null;
 }
 
-/** Creates or replaces a template, keyed by id. */
+/**
+ * Creates or replaces a template, keyed by id.
+ *
+ * The live counter is authoritative in the store, never in the caller's
+ * snapshot: an editor that held a template while an allocation advanced the
+ * counter must not roll `nextIndex` back on save. Counter changes go through
+ * `allocateIdentifier` / `rollbackIdentifier` / `setNextIdentifier` /
+ * `resetCounter` only.
+ */
 export function saveExhibitStampTemplate(
   template: ExhibitStampTemplateV1,
 ): Promise<ExhibitStampResult<ExhibitStampTemplateV1>> {
@@ -125,6 +133,7 @@ export function saveExhibitStampTemplate(
     const existing = store.templates.find((candidate) => candidate.id === template.id);
     const next: ExhibitStampTemplateV1 = {
       ...template,
+      nextIndex: existing?.nextIndex ?? template.nextIndex,
       createdAt: existing?.createdAt ?? template.createdAt,
       updatedAt: now,
     };
@@ -300,25 +309,49 @@ let subscribed = false;
  * rapid allocations can't read the same counter) and commits each one with a
  * read-modify-write-verify cycle, retrying once on a cross-window conflict.
  */
+const STORE_LOCK_NAME = "raiopdf.exhibit-stamps.v1";
+
+/**
+ * Cross-window exclusion for the read-modify-write-verify cycle. localStorage
+ * has no compare-and-swap, so revision verification alone can miss two windows
+ * interleaving cleanly around each other's verify reads — the Web Lock makes
+ * the whole cycle atomic across windows. Where Web Locks are unavailable the
+ * revision check remains as the best-effort fallback guard.
+ */
+function withStoreLock<T>(run: () => T): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+
+  if (!locks?.request) {
+    return Promise.resolve(run());
+  }
+
+  return locks.request(STORE_LOCK_NAME, async () => run());
+}
+
 function commitMutation<T>(mutate: (store: ExhibitStampStoreV1) => MutationOutcome<T>) {
-  const run = queue.then((): ExhibitStampResult<T> => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const outcome = attemptMutation(mutate);
+  const run = queue.then(() =>
+    withStoreLock((): ExhibitStampResult<T> => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const outcome = attemptMutation(mutate);
 
-      if (outcome.status === "ok") {
-        return { ok: true, value: outcome.value };
+        if (outcome.status === "ok") {
+          return { ok: true, value: outcome.value };
+        }
+
+        if (outcome.status === "failed") {
+          return { ok: false, error: outcome.error };
+        }
       }
 
-      if (outcome.status === "failed") {
-        return { ok: false, error: outcome.error };
-      }
-    }
-
-    return { ok: false, error: CONFLICT_MESSAGE };
-  });
+      return { ok: false, error: CONFLICT_MESSAGE };
+    }),
+  );
 
   // The queue must never reject or every later mutation inherits the failure.
-  queue = run.then(() => undefined, () => undefined);
+  queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
 
   return run;
 }

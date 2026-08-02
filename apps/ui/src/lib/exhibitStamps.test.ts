@@ -283,6 +283,43 @@ describe("counter maintenance", () => {
 });
 
 describe("template maintenance", () => {
+  it("preserves the live counter when saving a stale template snapshot", async () => {
+    const snapshot = listExhibitStampTemplates().find((template) => template.id === PLAINTIFF);
+
+    if (!snapshot) {
+      throw new Error("expected the plaintiff starter template");
+    }
+
+    // An editor holds `snapshot` (nextIndex 0) while two allocations land.
+    await allocateIdentifier(PLAINTIFF);
+    await allocateIdentifier(PLAINTIFF);
+
+    const saved = await saveExhibitStampTemplate({ ...snapshot, name: "Renamed" });
+
+    expect(saved.ok && saved.value.name).toBe("Renamed");
+    expect(saved.ok && saved.value.nextIndex).toBe(2);
+
+    // The next allocation continues the live sequence — no reissued number.
+    const next = await allocateIdentifier(PLAINTIFF);
+    expect(next.ok && next.value.sequence.index).toBe(2);
+  });
+
+  it("runs mutations under the cross-window Web Lock when available", async () => {
+    const request = vi.fn(
+      async (_name: string, callback: () => unknown | Promise<unknown>) => callback(),
+    );
+    vi.stubGlobal("navigator", { ...navigator, locks: { request } });
+
+    try {
+      const result = await allocateIdentifier(PLAINTIFF);
+
+      expect(result.ok).toBe(true);
+      expect(request).toHaveBeenCalledWith("raiopdf.exhibit-stamps.v1", expect.any(Function));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("adds a template and keeps its created timestamp on update", async () => {
     const seed = defaultExhibitStampTemplates()[0];
 

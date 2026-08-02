@@ -87,6 +87,15 @@ function fitStampPreviewLines(
     return { fontSizePt: startFontSizePt, lines: input.lines };
   }
 
+  // The engine sanitizes every stamp line against the embedded font before it
+  // ever measures or draws them (`computeStampLayout` in engine-local), so a
+  // glyph the font can't encode becomes a space long before `widthOfTextAtSize`
+  // sees it. The preview mirrors that sanitize-then-fit order for the same
+  // reason it mirrors the shrink-to-fit constants above: measuring the raw
+  // label here would size the preview against text the saved stamp never
+  // actually contains, and an emoji or other non-WinAnsi character would hit
+  // pdf-lib's `widthOfTextAtSize` unsanitized and throw.
+  const sanitizedLines = input.lines.map((line) => sanitizeStampPreviewLine(font, line));
   const steps = Math.ceil((startFontSizePt - MIN_STAMP_FONT_SIZE_PT) / STAMP_FONT_SIZE_STEP_PT);
 
   for (let step = 0; step <= steps; step += 1) {
@@ -95,8 +104,8 @@ function fitStampPreviewLines(
       startFontSizePt - step * STAMP_FONT_SIZE_STEP_PT,
     );
 
-    if (stampPreviewLinesFit(input.lines, font, fontSizePt, contentWidthPt, contentHeightPt)) {
-      return { fontSizePt, lines: input.lines };
+    if (stampPreviewLinesFit(sanitizedLines, font, fontSizePt, contentWidthPt, contentHeightPt)) {
+      return { fontSizePt, lines: sanitizedLines };
     }
   }
 
@@ -104,7 +113,7 @@ function fitStampPreviewLines(
 
   return {
     fontSizePt: MIN_STAMP_FONT_SIZE_PT,
-    lines: input.lines.slice(0, Math.max(1, Math.floor(contentHeightPt / lineHeight))),
+    lines: sanitizedLines.slice(0, Math.max(1, Math.floor(contentHeightPt / lineHeight))),
   };
 }
 
@@ -117,8 +126,62 @@ function stampPreviewLinesFit(
 ): boolean {
   return (
     lines.length * fontSizePt * TEXT_BOX_LINE_HEIGHT <= maxHeightPt &&
-    lines.every((line) => font.widthOfTextAtSize(line, fontSizePt) <= maxWidthPt)
+    lines.every((line) => measureStampPreviewLineWidth(font, line, fontSizePt) <= maxWidthPt)
   );
+}
+
+/**
+ * A deliberate copy of `sanitizeIndexTextForFont` in engine-local
+ * (`packages/engine-local/src/textFit.ts`): replaces whitespace, control
+ * characters, and any character the font can't encode (emoji, most
+ * non-WinAnsi glyphs) with a space, then collapses runs of spaces. Copied
+ * rather than imported for the same reason the fit constants above are —
+ * this file mirrors the engine's stamp geometry for a live drag preview.
+ */
+function sanitizeStampPreviewLine(font: PdfTextMeasureFont, text: string): string {
+  let sanitized = "";
+
+  for (const character of text) {
+    if (/\s/u.test(character) || isControlCharacter(character)) {
+      sanitized += " ";
+      continue;
+    }
+
+    try {
+      font.widthOfTextAtSize(character, 1);
+      sanitized += character;
+    } catch {
+      sanitized += " ";
+    }
+  }
+
+  return sanitized.replace(/\s+/gu, " ").trim();
+}
+
+function isControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+
+  return codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f);
+}
+
+/**
+ * Falls back to an approximate width (0.6 × font size per character) if
+ * measuring throws. Sanitizing above should make this unreachable — every
+ * character left in a sanitized line already measured successfully at size 1
+ * — but the live preview must never crash the app's error boundary on
+ * user-entered text, so this stays as a defensive backstop rather than an
+ * assumption that sanitization is airtight.
+ */
+function measureStampPreviewLineWidth(
+  font: PdfTextMeasureFont,
+  line: string,
+  fontSizePt: number,
+): number {
+  try {
+    return font.widthOfTextAtSize(line, fontSizePt);
+  } catch {
+    return line.length * fontSizePt * 0.6;
+  }
 }
 
 function clampToRange(value: number, low: number, high: number): number {

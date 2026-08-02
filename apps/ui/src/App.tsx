@@ -2720,7 +2720,9 @@ export function App() {
       openExperimentalFeaturesSettings();
       return;
     }
-    editing.clearPendingEdits();
+    // A genuine discard, not post-save cleanup — any draft exhibit stamps in
+    // the abandoned batch must give their numbers back.
+    void editing.discardPendingEdits();
     setTextEditAnnotationPrompt(null);
     enterTextEditMode();
     consumeReplaceSelectionReselectHint();
@@ -4853,6 +4855,12 @@ export function App() {
     }
 
     setTabClosePrompt(null);
+    if (action === "discard" && prompt.closesVisibleDocument) {
+      // The visible document's pending edits belong to the tab we're about
+      // to close and are never coming back — any draft exhibit stamps in
+      // that batch must give their numbers back before the state is wiped.
+      await editing.discardPendingEdits();
+    }
     const tab = documentTabs.find((candidate) => candidate.id === prompt.tabId);
     const closed = await closeDocumentTab(prompt.tabId);
     if (closed && tab) {
@@ -4861,7 +4869,7 @@ export function App() {
     if (closed && prompt.closesVisibleDocument) {
       resetVisibleDocumentAppState(prompt.nextVisibleState);
     }
-  }, [closeDocumentTab, documentTabs, resetVisibleDocumentAppState, saveToFile, tabClosePrompt]);
+  }, [closeDocumentTab, documentTabs, editing, resetVisibleDocumentAppState, saveToFile, tabClosePrompt]);
 
   const moveActiveTabToNewWindow = useCallback(
     async (tabId: string, fileGrant: FileGrant, dirty: boolean) => {

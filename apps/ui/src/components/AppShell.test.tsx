@@ -400,6 +400,7 @@ const mockEditing: EditingState = {
   removeEdit: noop,
   clearPending: noop,
   clearPendingEdits: noop,
+  discardPendingEdits: async () => undefined,
   draftEditCount: 0,
   appliedEditCount: 0,
   applyPending: noop,

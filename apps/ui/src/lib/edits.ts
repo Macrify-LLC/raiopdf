@@ -13,6 +13,7 @@ import type {
   PdfTextBoxAlign,
   PdfTextBoxFontFamily,
 } from "@raiopdf/engine-api";
+import { DEFAULT_STAMP_BORDER_WIDTH_PT as ENGINE_DEFAULT_STAMP_BORDER_WIDTH_PT } from "@raiopdf/engine-local";
 import {
   DEFAULT_CALLOUT_STROKE_COLOR,
   DEFAULT_CALLOUT_STROKE_WIDTH_PT,
@@ -302,8 +303,13 @@ export const DEFAULT_TEXT_BOX_FONT_SIZE = 12;
 export const TEXT_BOX_LINE_HEIGHT = 1.2;
 export const INK_STROKE_WIDTH_PT = 1.5;
 export const COMMENT_ICON_SIZE_PT = 20;
-/** Border thickness the engine draws when a stamp edit omits `borderWidthPt`. */
-export const DEFAULT_STAMP_BORDER_WIDTH_PT = 1;
+/**
+ * Border thickness the engine draws when a stamp edit omits `borderWidthPt`.
+ * Re-exported from `@raiopdf/engine-local` rather than duplicated as a
+ * literal, so a future change to the engine's default can't silently drift
+ * out of sync with what the UI previews and prefills.
+ */
+export const DEFAULT_STAMP_BORDER_WIDTH_PT = ENGINE_DEFAULT_STAMP_BORDER_WIDTH_PT;
 
 /**
  * Builds the engine `PdfEdit[]` for one applyEdits call. Placed overlays go

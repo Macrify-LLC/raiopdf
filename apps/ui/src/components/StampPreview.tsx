@@ -1,7 +1,7 @@
 import { useMemo, type CSSProperties } from "react";
 import type { PdfEditColor, PdfTextBoxFontFamily } from "@raiopdf/engine-api";
 import { usePreviewFont } from "../hooks/usePreviewFont";
-import { TEXT_BOX_LINE_HEIGHT } from "../lib/edits";
+import { DEFAULT_STAMP_BORDER_WIDTH_PT, TEXT_BOX_LINE_HEIGHT } from "../lib/edits";
 import {
   DEFAULT_TEXT_COLOR,
   DEFAULT_TEXT_FONT_FAMILY,
@@ -54,20 +54,25 @@ export function StampPreview({
     Boolean(stamp.bold),
     Boolean(stamp.italic),
   );
-  const layout = useMemo(
-    () =>
-      computeStampPreviewLayout({
-        lines: stamp.lines,
-        widthPt: stamp.widthPt,
-        heightPt: stamp.heightPt,
-        fontSizePt: stamp.fontSizePt,
-        borderWidthPt: stamp.borderWidthPt ?? 0,
-        cornerRadiusPt: stamp.cornerRadiusPt ?? 0,
-        hasBorder: stamp.borderColor !== null,
-        font,
-      }),
-    [font, stamp],
-  );
+  const layout = useMemo(() => {
+    const hasBorder = stamp.borderColor !== null;
+
+    return computeStampPreviewLayout({
+      lines: stamp.lines,
+      widthPt: stamp.widthPt,
+      heightPt: stamp.heightPt,
+      fontSizePt: stamp.fontSizePt,
+      // A border that's enabled but omits a width falls back to the engine's
+      // default (1pt), matching `resolveStampBorderWidthPt` in engine-local —
+      // otherwise a reopened stamp previews borderless while the saved PDF
+      // still draws its 1pt border. No border at all is still 0 regardless
+      // of `borderWidthPt`, same as the engine.
+      borderWidthPt: hasBorder ? stamp.borderWidthPt ?? DEFAULT_STAMP_BORDER_WIDTH_PT : 0,
+      cornerRadiusPt: stamp.cornerRadiusPt ?? 0,
+      hasBorder,
+      font,
+    });
+  }, [font, stamp]);
   const style: CSSProperties = {
     borderWidth: `${layout.borderWidthPt * scale}px`,
     borderStyle: layout.borderWidthPt > 0 ? "solid" : "none",

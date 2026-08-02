@@ -175,6 +175,97 @@ describe("useEditing exhibit stamps", () => {
     expect(nextIndex()).toBe(1);
   });
 
+  it("discarding two just-placed stamps returns both numbers so the next allocation reuses them", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().armExhibitStamp(PLAINTIFF);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      const first = await getEditing().allocateExhibitStampIdentifier();
+      getEditing().addEdit(stampEdit("stamp-1", first!.sequence.index));
+      const second = await getEditing().allocateExhibitStampIdentifier();
+      getEditing().addEdit(stampEdit("stamp-2", second!.sequence.index));
+    });
+
+    expect(nextIndex()).toBe(2);
+
+    await act(async () => {
+      await getEditing().discardPendingEdits();
+    });
+
+    expect(nextIndex()).toBe(0);
+    expect(getEditing().pendingEdits).toHaveLength(0);
+
+    await act(async () => {
+      const reused = await getEditing().allocateExhibitStampIdentifier();
+      expect(reused).toMatchObject({ sequence: { index: 0 } });
+    });
+  });
+
+  it("does not roll back anything when discard runs after the edits were already saved", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().armExhibitStamp(PLAINTIFF);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      const first = await getEditing().allocateExhibitStampIdentifier();
+      getEditing().addEdit(stampEdit("stamp-1", first!.sequence.index));
+    });
+
+    expect(nextIndex()).toBe(1);
+
+    // A real save flow clears the pending list once the edit is baked into
+    // the file — the number was spent, not abandoned, so no rollback door
+    // should touch it.
+    await act(async () => {
+      getEditing().clearPending();
+    });
+
+    await act(async () => {
+      await getEditing().discardPendingEdits();
+    });
+
+    expect(nextIndex()).toBe(1);
+  });
+
+  it("rolls back only the draft stamps in a mixed placed+imported discard", async () => {
+    const getEditing = renderHookValue();
+
+    await act(async () => {
+      getEditing().armExhibitStamp(PLAINTIFF);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      // An imported stamp already lives in the saved file (annotId set,
+      // arbitrary provenance index) sitting alongside a freshly placed draft.
+      getEditing().addEdit({
+        ...stampEdit("imported", 5),
+        annotId: "annot-1",
+        status: "applied",
+      });
+      const placed = await getEditing().allocateExhibitStampIdentifier();
+      getEditing().addEdit(stampEdit("stamp-1", placed!.sequence.index));
+    });
+
+    expect(nextIndex()).toBe(1);
+
+    await act(async () => {
+      await getEditing().discardPendingEdits();
+    });
+
+    // The draft's number comes back; the imported stamp's number was never
+    // touched — it belongs to the saved file, not this session's counter.
+    expect(nextIndex()).toBe(0);
+    expect(getEditing().pendingEdits).toHaveLength(0);
+  });
+
   it("disarms when the tool changes or another document's state is restored", async () => {
     const getEditing = renderHookValue();
 

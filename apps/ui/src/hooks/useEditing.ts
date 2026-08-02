@@ -18,6 +18,7 @@ import {
   type EditToolId,
   type PendingEdit,
   type PendingEditStatus,
+  type PendingExhibitStamp,
   type ShapeToolId,
   type TextMarkupToolId,
 } from "../lib/edits";
@@ -106,6 +107,16 @@ export interface EditingState {
   removeEdit: (id: string) => void;
   clearPending: () => void;
   clearPendingEdits: () => void;
+  /**
+   * The bulk-discard door: every path that abandons the WHOLE pending list
+   * without saving it (not just one item — see `removeEdit` for that) goes
+   * through here, so a discarded batch of draft exhibit stamps gives its
+   * numbers back the same way a single deleted stamp does. `clearPending` /
+   * `clearPendingEdits` stay as the plain, non-rollback clears used after a
+   * successful save or flatten, where the edits were consumed rather than
+   * abandoned and their exhibit numbers are rightly spent.
+   */
+  discardPendingEdits: () => Promise<void>;
   draftEditCount: number;
   appliedEditCount: number;
   applyPending: () => void;
@@ -374,6 +385,29 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
     setImportedAnnotIds(new Set());
     setSelectedEditId(null);
   }, []);
+
+  const discardPendingEdits = useCallback(async () => {
+    const drafts = pendingEditsRef.current.filter(isDraftExhibitStamp);
+    // Newest first: the store's only-latest rollback rule accepts each of
+    // these in turn (giving back stamp N moves the counter to N, which is
+    // exactly what stamp N-1 needs next) and naturally stops the moment a
+    // gap appears — e.g. a draft whose template's counter already moved for
+    // another reason — leaving that reservation alone instead of erroring.
+    const orderedDrafts = [...drafts].sort((a, b) => b.sequence.index - a.sequence.index);
+
+    for (const draft of orderedDrafts) {
+      const result = await rollbackIdentifier(draft.templateId, draft.sequence.index);
+
+      if (!result.ok) {
+        break;
+      }
+    }
+
+    setPendingEdits([]);
+    setImportedAnnotIds(new Set());
+    setSelectedEditId(null);
+    refreshArmedExhibitStamp();
+  }, [refreshArmedExhibitStamp]);
 
   const draftEditCount = useMemo(
     () => pendingEdits.filter((edit) => edit.status !== "applied").length,
@@ -702,6 +736,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       removeEdit,
       clearPending,
       clearPendingEdits,
+      discardPendingEdits,
       draftEditCount,
       appliedEditCount,
       applyPending,
@@ -765,6 +800,7 @@ export function useEditing(pdfDocument: PDFDocumentProxy | null): EditingState {
       removeEdit,
       clearPending,
       clearPendingEdits,
+      discardPendingEdits,
       draftEditCount,
       appliedEditCount,
       applyPending,
@@ -870,13 +906,26 @@ function nextArmedExhibitStamp(templateId: string): ArmedExhibitStamp | null {
  * number belongs to the saved file, not to this session's counter.
  */
 async function returnExhibitNumber(edit: PendingEdit): Promise<boolean> {
-  if (edit.kind !== "stamp" || edit.annotId || !edit.templateId || !edit.sequence) {
+  if (!isDraftExhibitStamp(edit)) {
     return false;
   }
 
   const result = await rollbackIdentifier(edit.templateId, edit.sequence.index);
 
   return result.ok;
+}
+
+/**
+ * A stamp placed in this session whose exhibit number can still be given
+ * back: not yet saved to the file (no `annotId`) and still carrying the
+ * template/sequence it was allocated against. Shared by the single-item door
+ * (`returnExhibitNumber`, behind `removeEdit`) and the bulk-discard door
+ * (`discardPendingEdits`) so both agree on what counts as "still reservable."
+ */
+function isDraftExhibitStamp(
+  edit: PendingEdit,
+): edit is PendingExhibitStamp & { templateId: string; sequence: NonNullable<PendingExhibitStamp["sequence"]> } {
+  return edit.kind === "stamp" && !edit.annotId && Boolean(edit.templateId) && Boolean(edit.sequence);
 }
 
 async function armStampFromFile(file: File): Promise<ArmedImageStamp> {

@@ -75,16 +75,25 @@
   text-align: center;
 }
 
-.production-workspace__file-row {
+/* The outer per-file container -- border/background/padding live here so
+   the optional privilege sub-row (`.production-workspace__privilege-fields`)
+   can sit below the main grid row inside the same card. */
+.production-workspace__file-entry {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(170px, 0.6fr) minmax(96px, 0.4fr) auto;
-  align-items: center;
   gap: var(--space-2);
-  min-height: 48px;
   padding: var(--space-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--panel);
+}
+
+.production-workspace__file-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1fr) minmax(118px, 0.4fr) minmax(150px, 0.55fr) minmax(90px, 0.35fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 48px;
 }
 
 .production-workspace__file-body {
@@ -219,6 +228,10 @@
   padding: 0 var(--space-2);
 }
 
+.production-workspace__status-select {
+  min-width: 0;
+}
+
 .production-workspace__designation {
   min-width: 0;
 }
@@ -227,7 +240,8 @@
   min-width: 0;
 }
 
-.production-workspace__pages input[aria-invalid="true"] {
+.production-workspace__pages input[aria-invalid="true"],
+.production-workspace__privilege-asserted input[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -241,6 +255,39 @@
 
 .production-workspace__pages-note--error {
   color: var(--danger);
+}
+
+/* Withhold / produce-redacted sub-row -- only rendered while a file's
+   status isn't the default "produce". Sits below the main grid row inside
+   the same `.production-workspace__file-entry` card. */
+.production-workspace__privilege-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.production-workspace__privilege-asserted {
+  min-width: 0;
+}
+
+.production-workspace__privilege-description {
+  min-width: 0;
+}
+
+/* Conspicuous, not alarming -- same warn palette as the duplicate badge,
+   but a full-width banner rather than an inline chip: this is a
+   whole-production consequence (a draft, not-for-service log gets written),
+   not a per-file heads-up. */
+.production-workspace__privilege-warning {
+  margin: 0;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-control);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  padding: var(--space-2) var(--space-3);
 }
 
 /* ---- Stamp placement -- collapsed by default, native <details> ---- */
@@ -538,7 +585,8 @@ label.production-workspace__checkbox-row {
   .production-workspace__file-row,
   .production-workspace__grid,
   .production-workspace__placement-grid,
-  .production-workspace__checks {
+  .production-workspace__checks,
+  .production-workspace__privilege-fields {
     grid-template-columns: 1fr;
   }
 }

@@ -110,6 +110,21 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   RaioPDF's productions aren't split that way. Package and MCP callers can also set
   a custodian name per document, recorded in the load file; there's no per-document
   custodian field in the app yet, so those rows are blank when you build from here.
+- **Production Set can withhold a document or flag it as produced with redactions, and
+  writes a draft privilege log.** Each file gets a **Status**: **Produce** (unchanged
+  default), **Produce with redactions** — the document is still produced normally
+  (RaioPDF applies no redaction itself; redact it first with the **Redact** tool), or
+  **Withhold** — the document is left out of the production entirely: never stamped,
+  never in the upload folder, the index, or the load file, and it uses none of the
+  Bates numbers, so the sequence stays unbroken. Withholding requires a **Privilege
+  asserted** basis (e.g. "Attorney-client privilege"); a **Description** is optional.
+  Whenever any file is withheld or redacted, RaioPDF writes `draft-privilege-log.csv`
+  alongside the production index. **This is a draft, not a filed privilege log** — the
+  Date, Doc Type, Author, and Recipients columns are always left blank for you to fill
+  in by hand, because a wrong autopopulated privilege log is worse than a sparse one.
+  Review and complete it before it's ever used. A duplicate document can't be given
+  conflicting statuses (RaioPDF stops and asks you to resolve it before building), and
+  withholding the same document twice produces just one log entry.
 
 ### Changed
 

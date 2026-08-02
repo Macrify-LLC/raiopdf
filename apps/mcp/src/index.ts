@@ -423,7 +423,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     {
       title: "Build production set",
       description:
-        "Builds a Bates-stamped discovery production package with upload files, production index, manifest, checksums, optional volumes, optional combined PDF, and an optional litigation load file (production.dat, includeLoadFiles). Detects duplicate sources and reports them (duplicateGroups/duplicateCount); duplicateHandling controls whether every occurrence is produced (default) or only the first.",
+        "Builds a Bates-stamped discovery production package with upload files, production index, manifest, checksums, optional volumes, optional combined PDF, and an optional litigation load file (production.dat, includeLoadFiles). Detects duplicate sources and reports them (duplicateGroups/duplicateCount); duplicateHandling controls whether every occurrence is produced (default) or only the first. Per-source status marks a document withhold (excluded entirely, no Bates number consumed, requires privilegeAsserted) or produce-redacted (produced normally -- this tool applies no redaction itself); either writes a draft-privilege-log.csv (withheldCount/redactedCount/privilegeLogLocation) that is NOT ready to serve without manual completion.",
       inputSchema: productionSetInputSchema,
       outputSchema: productionSetOutputSchema,
       annotations: WRITE_TOOL_ANNOTATIONS,

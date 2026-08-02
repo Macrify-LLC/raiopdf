@@ -1707,6 +1707,9 @@ export function App() {
         continuation: { mode: "strict" | "override"; priorLastBates: string } | null;
         duplicateCount: number;
         loadFileDat: string | null;
+        withheldCount: number;
+        redactedCount: number;
+        privilegeLogLocation: string | null;
       }>("build_production_set", {
         sources: input.files.map((file, index) => {
           const grant = sourceGrants[index];
@@ -1719,6 +1722,11 @@ export function App() {
             designation: file.designation || undefined,
             // A range without a designation is meaningless — never forward one.
             designationPages: file.designation ? file.designationPages || undefined : undefined,
+            // "produce" is the backend default too -- omit it so the common
+            // case sends the same shape it always has.
+            status: file.status === "produce" ? undefined : file.status,
+            privilegeAsserted: file.privilegeAsserted || undefined,
+            basis: file.basis || undefined,
           };
         }),
         outputDir: input.outputDir,
@@ -1736,6 +1744,7 @@ export function App() {
         continuationOverrideReason: input.continuationOverrideReason,
         duplicateHandling: input.duplicateHandling,
         includeLoadFiles: input.includeLoadFiles,
+        includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog,
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);

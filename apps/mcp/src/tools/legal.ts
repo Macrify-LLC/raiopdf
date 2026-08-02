@@ -749,6 +749,31 @@ export const productionSetInputSchema = {
           "Custodian name for this source, recorded in the load file's CUSTODIAN column (see " +
             "includeLoadFiles). Omit for a blank CUSTODIAN value. No effect unless includeLoadFiles is set.",
         ),
+      status: z
+        .enum(["produce", "produce-redacted", "withhold"])
+        .optional()
+        .describe(
+          'Default "produce". "produce-redacted" is still produced NORMALLY -- this tool performs and ' +
+            "verifies NO redaction as part of a production build; redact upstream with redact_terms first -- " +
+            'but gets a draft privilege log row. "withhold" excludes the source entirely: filtered out before ' +
+            "Bates numbers are assigned (like a produce-once-omitted duplicate), never stamped, never in " +
+            "upload/, the index, or the DAT, and consumes no Bates number. Requires privilegeAsserted.",
+        ),
+      privilegeAsserted: z
+        .string()
+        .optional()
+        .describe(
+          'The privilege basis asserted (e.g. "Attorney-client privilege"). REQUIRED when status is ' +
+            '"withhold" (pre-output validation error naming the file if omitted). Optional but encouraged for ' +
+            '"produce-redacted". No effect for the default "produce".',
+        ),
+      basis: z
+        .string()
+        .optional()
+        .describe(
+          "Free-text description of the withholding or redaction, recorded as the draft privilege log's " +
+            'Description column. Always optional -- encouraged for both "withhold" and "produce-redacted".',
+        ),
     }))
     .min(1)
     .describe("Ordered source PDFs in production order."),
@@ -810,6 +835,14 @@ export const productionSetInputSchema = {
         "files get a row -- a combined production PDF and any produce-once-omitted duplicate never appear in " +
         "it. No OPT/Opticon image cross-reference is written; see docs/PRODUCTION-SETS.md for why.",
     ),
+  includeFilenameInPrivilegeLog: z
+    .boolean()
+    .optional()
+    .describe(
+      'Includes each row\'s filename in "draft-privilege-log.csv" (produced Bates-stamped name for a ' +
+        "produce-redacted row, source name for a withheld row). Default true. Independent of " +
+        "includeFilenameInIndex. false blanks the Filename VALUE only -- the column and header stay.",
+    ),
 };
 /** Cap on `duplicateGroups` in the structured result -- the package manifest
  * (`productionDuplicates` detail, and `production.json`) always holds the
@@ -841,6 +874,26 @@ export const productionSetOutputSchema = {
     .nullable()
     .optional()
     .describe('Package-root-relative location of "production.dat", or null when includeLoadFiles was false.'),
+  withheldCount: z
+    .number()
+    .optional()
+    .describe('Number of "draft-privilege-log.csv" rows with Status "Withheld". 0 when nothing was withheld.'),
+  redactedCount: z
+    .number()
+    .optional()
+    .describe(
+      'Number of "draft-privilege-log.csv" rows with Status "Produced with redactions". 0 when nothing was ' +
+        'marked produce-redacted, or every such source was excluded by duplicateHandling: "produce-once".',
+    ),
+  privilegeLogLocation: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      'Package-root-relative location of "draft-privilege-log.csv", or null when no source had a ' +
+        'non-"produce" status. NOT ready to serve -- Date/DocType/Author/Recipients are always blank, manual ' +
+        "columns for the requester to complete before any use.",
+    ),
   continuation: z
     .object({
       mode: z.enum(["strict", "override"]),
@@ -868,6 +921,9 @@ export interface ProductionSetInput {
     designation?: string | undefined;
     designationPages?: string | undefined;
     custodian?: string | undefined;
+    status?: "produce" | "produce-redacted" | "withhold" | undefined;
+    privilegeAsserted?: string | undefined;
+    basis?: string | undefined;
   }[];
   outputDir: string;
   prefix: string;
@@ -884,6 +940,7 @@ export interface ProductionSetInput {
   continuationOverride?: { reason: string } | undefined;
   duplicateHandling?: "produce-all" | "produce-once" | undefined;
   includeLoadFiles?: boolean | undefined;
+  includeFilenameInPrivilegeLog?: boolean | undefined;
 }
 export async function handleProductionSet(
   input: ProductionSetInput,
@@ -918,15 +975,22 @@ export async function handleProductionSet(
     ...(input.continuationOverride === undefined ? {} : { continuationOverride: input.continuationOverride }),
     ...(input.duplicateHandling === undefined ? {} : { duplicateHandling: input.duplicateHandling }),
     ...(input.includeLoadFiles === undefined ? {} : { includeLoadFiles: input.includeLoadFiles }),
+    ...(input.includeFilenameInPrivilegeLog === undefined
+      ? {}
+      : { includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog }),
   });
 
   const duplicateGroupsTruncated = result.duplicateGroups.length > MAX_DUPLICATE_GROUPS_IN_RESULT;
   const duplicateNote = result.duplicateCount > 0
     ? ` ${result.duplicateCount} duplicate source(s) detected across ${result.duplicateGroups.length} group(s); see duplicateGroups.`
     : "";
+  const privilegeLogNote = result.privilegeLogLocation !== null
+    ? ` ${result.withheldCount} withheld, ${result.redactedCount} produced with redactions -- draft privilege ` +
+      `log at ${result.privilegeLogLocation} (NOT ready to serve; review and complete it first).`
+    : "";
 
   return successResult(
-    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.${duplicateNote}`,
+    `Built a Bates production package with ${result.files.length} file(s) at ${result.packageRoot}.${duplicateNote}${privilegeLogNote}`,
     {
       packageRoot: result.packageRoot,
       outputs: result.files.map((file) => file.packageRelativePath),
@@ -935,6 +999,9 @@ export async function handleProductionSet(
       indexCsv: result.indexCsv,
       combinedPdf: result.combinedPdf,
       loadFileDat: result.loadFileDat,
+      withheldCount: result.withheldCount,
+      redactedCount: result.redactedCount,
+      privilegeLogLocation: result.privilegeLogLocation,
       continuation: result.continuation,
       duplicateCount: result.duplicateCount,
       duplicateGroups: result.duplicateGroups.slice(0, MAX_DUPLICATE_GROUPS_IN_RESULT),

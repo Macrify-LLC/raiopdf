@@ -278,6 +278,9 @@ describe("ProductionSetWorkspace duplicate detection", () => {
               fileCount: 3,
               duplicateCount: 2,
               loadFileDat: null,
+              withheldCount: 0,
+              redactedCount: 0,
+              privilegeLogLocation: null,
             },
           }}
           onAddFile={async () => null}
@@ -309,6 +312,9 @@ describe("ProductionSetWorkspace duplicate detection", () => {
               fileCount: 3,
               duplicateCount: 0,
               loadFileDat: null,
+              withheldCount: 0,
+              redactedCount: 0,
+              privilegeLogLocation: null,
             },
           }}
           onAddFile={async () => null}

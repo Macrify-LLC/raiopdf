@@ -786,6 +786,65 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(path.join(outputDir, "production.dat"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("build_production_set withholds a source, excludes it from the Bates series, and writes a draft privilege log", async () => {
+    const first = await makePdf("keep.pdf", 1);
+    const withheld = await makePdf("secret.pdf", 2);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [
+          { path: first },
+          { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        ],
+        outputDir,
+        prefix: "MCPWH",
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.outputs).toHaveLength(1);
+    expect(content.withheldCount).toBe(1);
+    expect(content.redactedCount).toBe(0);
+    expect(content.privilegeLogLocation).toBe("draft-privilege-log.csv");
+    const logCsv = await fs.readFile(path.join(outputDir, "draft-privilege-log.csv"), "utf8");
+    expect(logCsv).toContain("secret.pdf");
+    expect(logCsv).toContain("Attorney-client privilege");
+    expect(logCsv).not.toContain(dir);
+  });
+
+  it("returns privilegeLogLocation: null and withheldCount/redactedCount: 0 when every source is produced normally", async () => {
+    const source = await makePdf("plain.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      { sources: [{ path: source }], outputDir, prefix: "MCPPLAIN" },
+      engine,
+    );
+
+    const content = structured(result);
+    expect(content.privilegeLogLocation).toBeNull();
+    expect(content.withheldCount).toBe(0);
+    expect(content.redactedCount).toBe(0);
+    await expect(fs.access(path.join(outputDir, "draft-privilege-log.csv"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("build_production_set rejects a withheld source with no privilegeAsserted before writing anything", async () => {
+    const source = await makePdf("no-basis.pdf", 1);
+    const outputDir = path.join(dir, "production-package");
+
+    await expect(
+      handleProductionSet(
+        { sources: [{ path: source, status: "withhold" }], outputDir, prefix: "MCPNOBASIS" },
+        engine,
+      ),
+    ).rejects.toThrow(/privilege basis/i);
+    await expect(fs.access(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   describe("productionSetInputSchema (round trip)", () => {
     const schema = z.object(productionSetInputSchema);
 
@@ -859,6 +918,43 @@ describe("legal tools (local pdf-lib engine)", () => {
       const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
       expect(parsed.includeLoadFiles).toBeUndefined();
       expect(parsed.sources[0]!.custodian).toBeUndefined();
+    });
+
+    it("accepts per-source status/privilegeAsserted/basis and includeFilenameInPrivilegeLog", () => {
+      const parsed = schema.parse({
+        sources: [{
+          path: "/abs/a.pdf",
+          status: "withhold",
+          privilegeAsserted: "Attorney-client privilege",
+          basis: "Internal legal memo",
+        }],
+        outputDir: "/abs/out",
+        prefix: "SMITH",
+        includeFilenameInPrivilegeLog: false,
+      });
+
+      expect(parsed.sources[0]).toMatchObject({
+        status: "withhold",
+        privilegeAsserted: "Attorney-client privilege",
+        basis: "Internal legal memo",
+      });
+      expect(parsed.includeFilenameInPrivilegeLog).toBe(false);
+    });
+
+    it("rejects an out-of-enum status value", () => {
+      const base = { outputDir: "/abs/out", prefix: "SMITH" };
+      expect(() => schema.parse({ ...base, sources: [{ path: "/abs/a.pdf", status: "produce" }] })).not.toThrow();
+      expect(() =>
+        schema.parse({ ...base, sources: [{ path: "/abs/a.pdf", status: "shred" }] }),
+      ).toThrow();
+    });
+
+    it("omits status/privilegeAsserted/basis/includeFilenameInPrivilegeLog entirely without error (backward compatible)", () => {
+      const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
+      expect(parsed.sources[0]!.status).toBeUndefined();
+      expect(parsed.sources[0]!.privilegeAsserted).toBeUndefined();
+      expect(parsed.sources[0]!.basis).toBeUndefined();
+      expect(parsed.includeFilenameInPrivilegeLog).toBeUndefined();
     });
   });
 });

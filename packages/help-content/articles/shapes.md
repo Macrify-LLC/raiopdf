@@ -21,6 +21,9 @@ arrows. When you save, the shapes become real PDF annotations.
 ## What to know
 
 - **It's held until you Save,** then saved as a PDF annotation.
+- **It's still yours after you reopen the file.** Saved shapes come back as
+  something you can select, restyle, move, or delete — not a mark frozen into
+  the page. Use **Flatten markup** when you do want it permanent.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   shapes when printing, or turn it off before saving new shapes.
 - **Flatten markup makes it permanent.** Use **Flatten markup** when you want

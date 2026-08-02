@@ -34,6 +34,9 @@ real PDF annotation.
 - **Remove it with the ×.** An unpinned callout shows a small × next to its pin;
   click it to delete the box and leader together. Unpin first to reveal the ×.
 - **It's held until you Save,** then saved as a PDF annotation.
+- **It's still yours after you reopen the file.** A saved callout comes back
+  whole — box, text, and leader — ready to move, retype, or delete, not a mark
+  frozen into the page. Use **Flatten markup** when you do want it permanent.
 - **Print markup controls printing.** Leave **Print markup** on to include saved
   callouts when printing, or turn it off before saving new callouts.
 - **Flatten markup makes it permanent.** Use **Flatten markup** when you want

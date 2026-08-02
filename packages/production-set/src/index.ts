@@ -34,7 +34,51 @@ export interface ProductionSourceInput {
    * `CUSTODIAN` column is blank for them.
    */
   custodian?: string | undefined;
+  /**
+   * Whether this source is produced normally, produced with redactions the
+   * caller applied upstream (RaioPDF performs and verifies NO redaction as
+   * part of a production build -- see the `Redact` tool for that), or
+   * withheld entirely. Default `"produce"`.
+   *
+   * A withheld source is filtered out before Bates numbers are assigned --
+   * same mechanism as a `"produce-once"`-omitted duplicate -- so it consumes
+   * no Bates number, is never stamped, and never appears in `upload/`, the
+   * production index, or the DAT. Its planning hash is still recorded in the
+   * `privilegeLog` manifest detail. THIS PHASE never writes a slip-sheet
+   * placeholder in its place; that (and zero-produced-output edge semantics)
+   * is deliberately deferred to the next phase -- see
+   * `ProductionSetResult.privilegeLogLocation`.
+   */
+  status?: ProductionSourceStatus | undefined;
+  /**
+   * The privilege basis asserted for this source (e.g. "Attorney-client
+   * privilege", "Work product"). REQUIRED when `status` is `"withhold"` --
+   * a withheld document with no asserted privilege is a pre-output
+   * validation error naming the file. Optional (but encouraged -- shown in
+   * the draft privilege log alongside `basis`) when `status` is
+   * `"produce-redacted"`; ignored when `status` is `"produce"` (the
+   * default).
+   */
+  privilegeAsserted?: string | undefined;
+  /**
+   * Free-text description of the withholding or redaction, recorded as the
+   * draft privilege log's `Description` column. Always optional -- never
+   * required, even for a withheld source -- but encouraged for both
+   * `"withhold"` and `"produce-redacted"` rows.
+   */
+  basis?: string | undefined;
 }
+
+/**
+ * Per-source production disposition. `"produce"` (default) is the ordinary
+ * path, unchanged. `"produce-redacted"` still produces the document
+ * normally -- RaioPDF applies and verifies NO redaction as part of a
+ * production build; the caller redacts upstream with the `Redact` tool
+ * first -- but records a draft privilege log row for it. `"withhold"`
+ * excludes the source from the production entirely (see
+ * `ProductionSourceInput.status`).
+ */
+export type ProductionSourceStatus = "produce" | "produce-redacted" | "withhold";
 
 export interface ProductionContinuationOverrideInput {
   reason: string;
@@ -146,6 +190,17 @@ export interface BuildProductionSetInput {
    * deliberately NOT written -- see `docs/PRODUCTION-SETS.md` for why.
    */
   includeLoadFiles?: boolean | undefined;
+  /**
+   * Includes each row's produced (or, for a withheld row, source) filename
+   * as the `Filename` column of `draft-privilege-log.csv`. Default `true` --
+   * a log row with no identifier at all is close to useless. Independent of
+   * `includeFilenameInIndex`: turning off the production index's filename
+   * column has no effect here, and vice versa. `false` blanks every row's
+   * `Filename` value; the column itself (and its header) still exists,
+   * matching how the DAT's `FILENAME` column behaves under
+   * `includeFilenameInIndex`.
+   */
+  includeFilenameInPrivilegeLog?: boolean | undefined;
 }
 
 export type ProductionContinuationErrorCode =
@@ -203,6 +258,13 @@ export interface ProductionSetFileResult {
   /** Custodian name, or `""` when none was set for this source (the desktop
    * UI never sets one in v1 -- see `ProductionSourceInput.custodian`). */
   custodian: string;
+  /** Always `"produce"` or `"produce-redacted"` here -- a `"withhold"`
+   * source never reaches `files` in the first place. */
+  status: ProductionSourceStatus;
+  /** `""` when not set for this source. */
+  privilegeAsserted: string;
+  /** `""` when not set for this source. */
+  basis: string;
   sha256: string;
   bytes: number;
   volume: string | null;
@@ -240,6 +302,20 @@ export interface ProductionSetResult {
    * minus unique hashes) -- 0 when no duplicates were found, regardless of
    * `duplicateHandling`. */
   duplicateCount: number;
+  /** Number of `draft-privilege-log.csv` rows with `Status: "Withheld"` --
+   * one per distinct withheld document (a withheld duplicate group collapses
+   * to its canonical occurrence's single row; see
+   * `ProductionSourceInput.status`). `0` when nothing was withheld. */
+  withheldCount: number;
+  /** Number of `draft-privilege-log.csv` rows with
+   * `Status: "Produced with redactions"`. `0` when nothing was marked
+   * `"produce-redacted"`, or when every such source was excluded by
+   * `duplicateHandling: "produce-once"` before it could reach output. */
+  redactedCount: number;
+  /** Package-root-relative location of `draft-privilege-log.csv`, or `null`
+   * when no source had a non-`"produce"` status (the file is never written
+   * in that case). Written whenever `withheldCount + redactedCount > 0`. */
+  privilegeLogLocation: string | null;
 }
 
 interface VolumeState {
@@ -287,6 +363,14 @@ interface ProductionSourcePlan {
   /** Custodian name, or `""` when none was set -- see
    * `ProductionSourceInput.custodian`. */
   custodian: string;
+  /** Never `"withhold"` on a `ProductionSourcePlan` -- a withheld source is
+   * filtered out of `included` before plans are built (see
+   * `prepareProductionSourcePlans`). */
+  status: ProductionSourceStatus;
+  /** `""` when none was set -- see `ProductionSourceInput.privilegeAsserted`. */
+  privilegeAsserted: string;
+  /** `""` when none was set -- see `ProductionSourceInput.basis`. */
+  basis: string;
 }
 
 /** A source page's size and rotation, as read directly from the PDF (independent
@@ -317,6 +401,7 @@ interface NormalizedInput {
   stampFontSizePt: number;
   duplicateHandling: ProductionDuplicateHandling;
   includeLoadFiles: boolean;
+  includeFilenameInPrivilegeLog: boolean;
 }
 
 const DEFAULT_DIGITS = 6;
@@ -325,6 +410,7 @@ const DEFAULT_APP_VERSION = "0.1.0";
 const DEFAULT_BATES_PLACEMENT: PdfStampPlacement = { edge: "footer", align: "right" };
 const DEFAULT_DESIGNATION_PLACEMENT: PdfStampPlacement = { edge: "header", align: "center" };
 const DEFAULT_STAMP_FONT_SIZE_PT = 10;
+const DEFAULT_PRODUCTION_STATUS: ProductionSourceStatus = "produce";
 /** Silently dropping a document from a discovery production is the
  * dangerous default; producing every occurrence (with its own Bates range,
  * cross-referenced) is the safe one. */
@@ -656,10 +742,8 @@ export async function buildProductionSet(
       ? null
       : await verifyProductionContinuation(options);
 
-    const { plans: sourcePlans, duplicateGroups, duplicateCount } = await prepareProductionSourcePlans(
-      options,
-      engine,
-    );
+    const { plans: sourcePlans, duplicateGroups, duplicateCount, withheldLogSources } =
+      await prepareProductionSourcePlans(options, engine);
     session = createPackage(options.outputDir, {
       appVersion: options.appVersion,
       createdAt: options.createdAt,
@@ -690,6 +774,9 @@ export async function buildProductionSet(
           batesEnd: plan.batesEnd,
           designation: plan.designation,
           designationPages: plan.designationPagesSpec,
+          status: plan.status,
+          privilegeAsserted: plan.privilegeAsserted,
+          basis: plan.basis,
         });
         volumeArtifacts.push({
           outputName,
@@ -711,6 +798,9 @@ export async function buildProductionSet(
           designation: plan.designation,
           designationPages: plan.designationPagesSpec,
           custodian: plan.custodian,
+          status: plan.status,
+          privilegeAsserted: plan.privilegeAsserted,
+          basis: plan.basis,
           sha256: entry.sha256,
           bytes: entry.bytes,
           volume: volumeName,
@@ -741,6 +831,80 @@ export async function buildProductionSet(
       );
       indexCsv = csvEntry.relativePath;
       indexPdf = pdfEntry.relativePath;
+    }
+
+    // Draft privilege log: one row per withheld document's canonical
+    // occurrence (never produced -- filename falls back to the source name)
+    // plus one row per produced "produce-redacted" file (filename is the
+    // Bates-stamped output name, matching the production index). Written
+    // ONLY when at least one row exists -- a source marked withhold or
+    // produce-redacted that a produce-once duplicate exclusion dropped
+    // before output never gets its own row (see `selectCanonicalWithheldSources`
+    // and the duplicate-status conflict check above).
+    const privilegeLogRows: ProductionPrivilegeLogRowPlan[] = [
+      ...withheldLogSources.map((source) => ({
+        status: "Withheld" as const,
+        privilegeAsserted: source.privilegeAsserted,
+        basis: source.basis,
+        filename: source.sourceFilename,
+        pages: source.pages,
+        sourceOrdinal: source.sourceOrdinal,
+        sourceFilename: source.sourceFilename,
+        sourcePath: source.sourcePath,
+        sourceSha256: source.sourceSha256,
+      })),
+      // `files` is built by pushing exactly one entry per `sourcePlans` entry,
+      // in the same loop, in the same order -- a direct index zip, not a
+      // lookup, is what ties a produced file back to its plan's ordinal.
+      ...sourcePlans
+        .map((plan, index) => ({ plan, file: files[index]! }))
+        .filter(({ plan }) => plan.status === "produce-redacted")
+        .map(({ plan, file }) => ({
+          status: "Produced with redactions" as const,
+          privilegeAsserted: file.privilegeAsserted,
+          basis: file.basis,
+          filename: file.outputName,
+          pages: file.pages,
+          sourceOrdinal: plan.sourceOrdinal,
+          sourceFilename: file.sourceFilename,
+          sourcePath: file.sourcePath,
+          sourceSha256: file.sourceSha256,
+        })),
+    ].sort((left, right) => left.sourceOrdinal - right.sourceOrdinal)
+      .map((row, index) => ({ ...row, rowId: formatPrivilegeLogRowId(index + 1) }));
+
+    const withheldCount = privilegeLogRows.filter((row) => row.status === "Withheld").length;
+    const redactedCount = privilegeLogRows.filter((row) => row.status === "Produced with redactions").length;
+
+    let privilegeLogLocation: string | null = null;
+    if (privilegeLogRows.length > 0) {
+      const privilegeLogEntry = await session.addRootDocument(
+        "draft-privilege-log.csv",
+        new TextEncoder().encode(
+          formatPrivilegeLogCsv(privilegeLogRows, options.includeFilenameInPrivilegeLog),
+        ),
+      );
+      privilegeLogLocation = privilegeLogEntry.relativePath;
+      session.recordDetail("privilegeLog", {
+        includeFilenameInPrivilegeLog: options.includeFilenameInPrivilegeLog,
+        withheldCount,
+        redactedCount,
+        rows: privilegeLogRows.map((row) => ({
+          rowId: row.rowId,
+          status: row.status,
+          privilegeAsserted: row.privilegeAsserted,
+          basis: row.basis,
+          sourceFilename: row.sourceFilename,
+          sourcePath: row.sourcePath,
+          sourceSha256: row.sourceSha256,
+          pages: row.pages,
+        })),
+      });
+      session.recordCheck({
+        checkId: "privilege-log-draft",
+        status: "pass",
+        detail: formatPrivilegeLogCheckDetail(withheldCount, redactedCount),
+      });
     }
 
     let loadFileDat: string | null = null;
@@ -801,6 +965,9 @@ export async function buildProductionSet(
       designation: file.designation,
       designationPages: file.designationPages,
       custodian: file.custodian,
+      status: file.status,
+      privilegeAsserted: file.privilegeAsserted,
+      basis: file.basis,
     })));
     session.recordDetail("productionOptions", {
       prefix: options.prefix,
@@ -814,6 +981,7 @@ export async function buildProductionSet(
       stampFontSizePt: options.stampFontSizePt,
       duplicateHandling: options.duplicateHandling,
       includeLoadFiles: options.includeLoadFiles,
+      includeFilenameInPrivilegeLog: options.includeFilenameInPrivilegeLog,
     });
     // JsonValue is a mutable-array shape; copy every readonly array into a
     // plain one rather than widen the public `ProductionDuplicateGroup` type.
@@ -908,6 +1076,10 @@ export async function buildProductionSet(
       duplicateGroups: duplicateGroupsDetail,
       includeLoadFiles: options.includeLoadFiles,
       loadFileDat,
+      includeFilenameInPrivilegeLog: options.includeFilenameInPrivilegeLog,
+      privilegeLogLocation,
+      withheldCount,
+      redactedCount,
       files: files.map((file) => ({
         sourceFilename: file.sourceFilename,
         outputName: file.outputName,
@@ -918,6 +1090,9 @@ export async function buildProductionSet(
         designation: file.designation,
         designationPages: file.designationPages,
         custodian: file.custodian,
+        status: file.status,
+        privilegeAsserted: file.privilegeAsserted,
+        basis: file.basis,
         sha256: file.sha256,
         volume: file.volume,
       })),
@@ -952,6 +1127,9 @@ export async function buildProductionSet(
         : { mode: continuation.mode, priorLastBates: continuation.summary.lastBates },
       duplicateGroups,
       duplicateCount,
+      withheldCount,
+      redactedCount,
+      privilegeLogLocation,
     };
   } finally {
     if (combinedHandle !== null) {
@@ -972,6 +1150,12 @@ interface ProductionSourcePlanningResult {
   plans: ProductionSourcePlan[];
   duplicateGroups: ProductionDuplicateGroup[];
   duplicateCount: number;
+  /** One `ScannedSource` per distinct content hash among withheld sources --
+   * the canonical (lowest-ordinal) occurrence of each. Feeds the draft
+   * privilege log's "Withheld" rows; a withheld duplicate group's
+   * non-canonical members appear only in `duplicateGroups`, never as their
+   * own log row. */
+  withheldLogSources: readonly ScannedSource[];
 }
 
 /**
@@ -1018,6 +1202,18 @@ async function prepareProductionSourcePlans(
       pages,
       sourceFilename,
     );
+    const status = normalizeProductionStatus(source.status, sourceFilename);
+    // Privilege text has no meaning for a produced document, and it is
+    // sensitive attorney work product: a value left over from a reverted
+    // Withhold choice must never reach the package manifest.
+    const privilegeAsserted =
+      status === "produce" ? "" : normalizePrivilegeText(source.privilegeAsserted);
+    const basis = status === "produce" ? "" : normalizePrivilegeText(source.basis);
+    if (status === "withhold" && privilegeAsserted === "") {
+      throw new Error(
+        `"${sourceFilename}": withholding a document requires a privilege basis ("Privilege asserted").`,
+      );
+    }
 
     scanned.push({
       sourcePath,
@@ -1038,11 +1234,29 @@ async function prepareProductionSourcePlans(
         ? null
         : formatPartialDesignationPagesSpec(designationPageIndexes, pages),
       custodian: normalizeCustodian(source.custodian),
+      status,
+      privilegeAsserted,
+      basis,
     });
   }
 
   const { groups, excludedSourceOrdinals } = groupDuplicateSources(scanned, options.duplicateHandling);
-  const included = scanned.filter((source) => !excludedSourceOrdinals.has(source.sourceOrdinal));
+  // Two occurrences of the identical document can't be given different
+  // production statuses -- checked BEFORE anything downstream (Bates
+  // assignment, withhold filtering) treats the group as consistent.
+  assertNoConflictingDuplicateStatuses(groups);
+  // A withheld source is excluded the same way a produce-once-omitted
+  // duplicate is -- filtered out before Bates numbers are assigned, so
+  // numbering stays contiguous and a withheld source never reaches
+  // `stampPlannedSource`. This exclusion is unconditional (not gated on
+  // `duplicateHandling`): a document marked withhold is never produced,
+  // regardless of how duplicates are otherwise handled.
+  const withheldOrdinals = new Set(
+    scanned.filter((source) => source.status === "withhold").map((source) => source.sourceOrdinal),
+  );
+  const included = scanned.filter((source) =>
+    !excludedSourceOrdinals.has(source.sourceOrdinal) && !withheldOrdinals.has(source.sourceOrdinal)
+  );
 
   const totalPages = included.reduce((sum, source) => sum + source.pages, 0);
   assertBatesFits(options.digits, options.start + totalPages - 1);
@@ -1083,7 +1297,50 @@ async function prepareProductionSourcePlans(
     };
   });
 
-  return { plans, duplicateGroups, duplicateCount };
+  return { plans, duplicateGroups, duplicateCount, withheldLogSources: selectCanonicalWithheldSources(scanned) };
+}
+
+/**
+ * Rejects, before any output exists, a duplicate group (byte-identical
+ * sources) whose members don't all share the same `status`. Two copies of
+ * the same document can't be simultaneously produced and withheld -- that
+ * would mean the production hands over a document the privilege log claims
+ * was never produced. Identically-statused duplicates proceed to the normal
+ * `duplicateHandling` (and, for a uniformly-withheld group, the
+ * single-canonical-row privilege log collapse in
+ * `selectCanonicalWithheldSources`) unaffected.
+ */
+function assertNoConflictingDuplicateStatuses(groups: readonly ScannedSourceGroup[]): void {
+  for (const group of groups) {
+    const statuses = new Set(group.members.map((member) => member.status));
+    if (statuses.size > 1) {
+      const names = group.members.map((member) => `"${member.sourceFilename}"`).join(", ");
+      throw new Error(
+        `${names} are identical documents with conflicting production statuses -- resolve before building.`,
+      );
+    }
+  }
+}
+
+/**
+ * Picks one canonical `ScannedSource` per distinct content hash among
+ * withheld sources, in `scanned` (source) order -- the first occurrence of
+ * each hash wins. A withheld duplicate group produces exactly one draft
+ * privilege log row (the group's canonical occurrence); its non-canonical
+ * members are recorded only in the `duplicateGroups` manifest
+ * cross-reference, same as any other duplicate group's excluded members.
+ */
+function selectCanonicalWithheldSources(scanned: readonly ScannedSource[]): ScannedSource[] {
+  const seenSha256 = new Set<string>();
+  const canonical: ScannedSource[] = [];
+  for (const source of scanned) {
+    if (source.status !== "withhold" || seenSha256.has(source.sourceSha256)) {
+      continue;
+    }
+    seenSha256.add(source.sourceSha256);
+    canonical.push(source);
+  }
+  return canonical;
 }
 
 interface ScannedSourceGroup {
@@ -1155,6 +1412,49 @@ function formatDuplicateCheckDetail(
   return duplicateHandling === "produce-all"
     ? `${base}; produced all`
     : `${base}; produced once, ${duplicateCount} omitted`;
+}
+
+/** A draft privilege log row, in production order (assigned after the full
+ * withheld + produce-redacted row set is sorted by source ordinal) -- see
+ * where `privilegeLogRows` is built in `buildProductionSet`. Carries the
+ * source's absolute path and hash for the `privilegeLog` manifest detail;
+ * `formatPrivilegeLogCsv` (the CSV surface) uses only the
+ * `ProductionPrivilegeLogRow` subset of these fields. */
+interface ProductionPrivilegeLogRowPlan {
+  rowId: string;
+  status: "Withheld" | "Produced with redactions";
+  privilegeAsserted: string;
+  basis: string;
+  filename: string;
+  pages: number;
+  sourceOrdinal: number;
+  sourceFilename: string;
+  sourcePath: string;
+  sourceSha256: string;
+}
+
+/** Zero-padded to 3 digits (e.g. `"P-001"`), widening naturally past 999
+ * rows -- never truncated or capped. Assigned by production order (source
+ * ordinal), so a rebuild of the identical input reproduces identical row
+ * ids -- see `ProductionSetResult` / the package README's "stable across
+ * two builds" requirement for `draft-privilege-log.csv`. */
+function formatPrivilegeLogRowId(sequence: number): string {
+  return `P-${String(sequence).padStart(3, "0")}`;
+}
+
+/** The `privilege-log-draft` check detail string -- only ever recorded when
+ * at least one row exists (see the `privilegeLogRows.length > 0` gate in
+ * `buildProductionSet`), so this never needs a "none found" branch the way
+ * `formatDuplicateCheckDetail` does. */
+function formatPrivilegeLogCheckDetail(withheldCount: number, redactedCount: number): string {
+  const parts: string[] = [];
+  if (withheldCount > 0) {
+    parts.push(`${withheldCount} withheld`);
+  }
+  if (redactedCount > 0) {
+    parts.push(`${redactedCount} produced with redactions`);
+  }
+  return `${parts.join(", ")} -- draft privilege log; not ready to serve, review and complete it before any use.`;
 }
 
 /**
@@ -1486,6 +1786,7 @@ function normalizeInput(input: BuildProductionSetInput): NormalizedInput {
     stampFontSizePt,
     duplicateHandling,
     includeLoadFiles: input.includeLoadFiles ?? false,
+    includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog ?? true,
   };
 }
 
@@ -1538,6 +1839,33 @@ function normalizeDesignation(value: string | undefined): string {
  * (`ProductionSourceInput.custodian`, not the confidentiality designation). */
 function normalizeCustodian(value: string | undefined): string {
   return value?.trim() ?? "";
+}
+
+/** Same shape again -- trim, default to `""` -- for `privilegeAsserted` and
+ * `basis`, which share identical normalization but are semantically
+ * distinct fields (see `ProductionSourceInput`). */
+function normalizePrivilegeText(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+/**
+ * Validates and defaults a source's `status`. Defensive at the type level
+ * (not just documentation): `input.sources` crosses a JSON boundary from the
+ * MCP tool and the Rust one-shot input, either of which could hand this an
+ * arbitrary string, same reasoning as `duplicateHandling`'s validation in
+ * `normalizeInput`. Named in the error so a multi-file production's error
+ * points at the offending source, matching `resolveDesignationPageIndexes`.
+ */
+function normalizeProductionStatus(value: unknown, sourceFilename: string): ProductionSourceStatus {
+  if (value === undefined) {
+    return DEFAULT_PRODUCTION_STATUS;
+  }
+  if (value === "produce" || value === "produce-redacted" || value === "withhold") {
+    return value;
+  }
+  throw new Error(
+    `"${sourceFilename}": status must be "produce", "produce-redacted", or "withhold".`,
+  );
 }
 
 function safePdfName(value: string): string {
@@ -1702,6 +2030,64 @@ function csvCell(value: string): string {
     return `"${value.replace(/"/g, "\"\"")}"`;
   }
   return value;
+}
+
+/**
+ * One `draft-privilege-log.csv` row's CSV-facing fields -- the subset of
+ * `ProductionPrivilegeLogRowPlan` that `formatPrivilegeLogCsv` actually
+ * writes; the plan's extra source-path/hash/ordinal fields stay in the
+ * `privilegeLog` manifest detail only.
+ */
+export interface ProductionPrivilegeLogRow {
+  /** Stable, e.g. `"P-001"` -- see `formatPrivilegeLogRowId`. */
+  rowId: string;
+  status: "Withheld" | "Produced with redactions";
+  privilegeAsserted: string;
+  /** The `Description` column. */
+  basis: string;
+  filename: string;
+  pages: number;
+}
+
+/**
+ * Formats the draft privilege log -- see `BuildProductionSetInput`'s doc
+ * comments and `docs/PRODUCTION-SETS.md` for the design. `Date`, `DocType`,
+ * `Author`, and `Recipients` are always blank: manual columns a human fills
+ * in, never guessed by RaioPDF -- a wrong autopopulated privilege log is
+ * worse than a sparse one. Unlike `formatProductionCsv`'s filename column
+ * (entirely omitted when off), `includeFilename` here only blanks the
+ * `Filename` VALUES; the column and its header always exist, matching
+ * `formatProductionDat`'s `FILENAME` behavior.
+ */
+export function formatPrivilegeLogCsv(
+  rows: readonly ProductionPrivilegeLogRow[],
+  includeFilename: boolean,
+): string {
+  const headers = [
+    "RowId",
+    "Status",
+    "PrivilegeAsserted",
+    "Description",
+    "Filename",
+    "Pages",
+    "Date",
+    "DocType",
+    "Author",
+    "Recipients",
+  ];
+  const lines = rows.map((row) => [
+    row.rowId,
+    row.status,
+    row.privilegeAsserted,
+    row.basis,
+    includeFilename ? row.filename : "",
+    String(row.pages),
+    "", // Date -- always blank; manual column.
+    "", // DocType -- always blank; manual column.
+    "", // Author -- always blank; manual column.
+    "", // Recipients -- always blank; manual column.
+  ]);
+  return `${[headers, ...lines].map((line) => line.map(csvCell).join(",")).join("\n")}\n`;
 }
 
 async function createProductionIndexPdf(

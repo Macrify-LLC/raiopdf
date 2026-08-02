@@ -1297,6 +1297,375 @@ describe("buildProductionSet load file (DAT)", () => {
   });
 });
 
+describe("buildProductionSet withhold and produce-redacted (draft privilege log)", () => {
+  it("records no privilege text for a produce-status source, even when supplied", async () => {
+    // A reverted Withhold choice can leave privilege text on a source the UI
+    // forwards as produce; it is sensitive work product and must not reach
+    // the package manifest or production report.
+    const source = await makePdf("reverted.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await buildProductionSet({
+      sources: [
+        {
+          path: source,
+          status: "produce",
+          privilegeAsserted: "Attorney-client privilege",
+          basis: "Counsel email",
+        },
+      ],
+      outputDir,
+      prefix: "REV",
+    });
+
+    const manifestText = JSON.stringify(await readPackageManifest(outputDir));
+    const reportText = await fs.readFile(
+      path.join(outputDir, "raio-manifest", "production.json"),
+      "utf8",
+    );
+
+    expect(manifestText.includes("Attorney-client privilege")).toBe(false);
+    expect(manifestText.includes("Counsel email")).toBe(false);
+    expect(reportText.includes("Attorney-client privilege")).toBe(false);
+    expect(reportText.includes("Counsel email")).toBe(false);
+    await expect(fs.access(path.join(outputDir, "draft-privilege-log.csv"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("excludes a withheld source from upload/, the production index, and the DAT, without consuming a Bates number", async () => {
+    const first = await makePdf("keep-a.pdf", 2);
+    const withheld = await makePdf("secret.pdf", 3);
+    const second = await makePdf("keep-b.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "WH",
+      includeLoadFiles: true,
+    });
+
+    // Numbering stays contiguous across the withheld gap -- exactly the same
+    // guarantee produce-once gives an omitted duplicate.
+    expect(result.files.map((file) => [file.sourceFilename, file.batesStart, file.batesEnd])).toEqual([
+      ["keep-a.pdf", "WH000001", "WH000002"],
+      ["keep-b.pdf", "WH000003", "WH000003"],
+    ]);
+    expect(result.nextNumber).toBe(4);
+    expect(result.withheldCount).toBe(1);
+    expect(result.redactedCount).toBe(0);
+
+    expect(await fs.readdir(path.join(outputDir, "upload"))).toEqual(
+      expect.not.arrayContaining([expect.stringContaining("secret")]),
+    );
+    const csv = await fs.readFile(path.join(outputDir, result.indexCsv!), "utf8");
+    expect(csv).not.toContain("secret.pdf");
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    expect(new TextDecoder().decode(datBytes.subarray(3))).not.toContain("secret.pdf");
+
+    expect(result.privilegeLogLocation).toBe("draft-privilege-log.csv");
+    const logCsv = await fs.readFile(path.join(outputDir, result.privilegeLogLocation!), "utf8");
+    const logRows = parsePrivilegeLogCsv(logCsv);
+    expect(logRows).toEqual([
+      expect.objectContaining({
+        RowId: "P-001",
+        Status: "Withheld",
+        PrivilegeAsserted: "Attorney-client privilege",
+        Filename: "secret.pdf",
+        Pages: "3",
+      }),
+    ]);
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({ checkId: "privilege-log-draft", status: "pass" }),
+    );
+    expect(manifest.details.privilegeLog).toMatchObject({
+      withheldCount: 1,
+      redactedCount: 0,
+      rows: [
+        expect.objectContaining({
+          rowId: "P-001",
+          status: "Withheld",
+          sourceFilename: "secret.pdf",
+          sourceSha256: createHash("sha256").update(await fs.readFile(withheld)).digest("hex"),
+        }),
+      ],
+    });
+  });
+
+  it("requires a privilege basis to withhold a document, before any output exists", async () => {
+    const source = await makePdf("no-basis.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await expect(buildProductionSet({
+      sources: [{ path: source, status: "withhold" }],
+      outputDir,
+      prefix: "NB",
+    })).rejects.toThrow(/privilege basis/i);
+
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes a golden-shaped draft privilege log with blank manual columns and RowIds stable across two identical builds", async () => {
+    const control = await makePdf("control.pdf", 1);
+    const secret = await makePdf("secret.pdf", 2);
+    const redacted = await makePdf("redacted.pdf", 1);
+    const sources = [
+      { path: control },
+      {
+        path: secret,
+        status: "withhold" as const,
+        privilegeAsserted: "Attorney-client privilege",
+        basis: "Internal legal memo",
+      },
+      {
+        path: redacted,
+        status: "produce-redacted" as const,
+        privilegeAsserted: "Attorney work product",
+        basis: "Draft settlement analysis",
+      },
+    ];
+
+    const firstOutputDir = path.join(dir, "package-1");
+    const firstResult = await buildProductionSet({ sources, outputDir: firstOutputDir, prefix: "GOLD" });
+    const firstCsv = await fs.readFile(path.join(firstOutputDir, firstResult.privilegeLogLocation!), "utf8");
+
+    expect(firstCsv.split("\n")[0]).toBe(
+      "RowId,Status,PrivilegeAsserted,Description,Filename,Pages,Date,DocType,Author,Recipients",
+    );
+    const firstRows = parsePrivilegeLogCsv(firstCsv);
+    expect(firstRows).toEqual([
+      expect.objectContaining({
+        RowId: "P-001",
+        Status: "Withheld",
+        PrivilegeAsserted: "Attorney-client privilege",
+        Description: "Internal legal memo",
+        Filename: "secret.pdf",
+        Pages: "2",
+        Date: "",
+        DocType: "",
+        Author: "",
+        Recipients: "",
+      }),
+      expect.objectContaining({
+        RowId: "P-002",
+        Status: "Produced with redactions",
+        PrivilegeAsserted: "Attorney work product",
+        Description: "Draft settlement analysis",
+        Pages: "1",
+        Date: "",
+        DocType: "",
+        Author: "",
+        Recipients: "",
+      }),
+    ]);
+    // The redacted row's Filename is the Bates-stamped OUTPUT name, not the
+    // source name -- unlike the withheld row above, which never has one.
+    expect(firstRows[1]!.Filename).toBe(firstResult.files[1]!.outputName);
+
+    const secondOutputDir = path.join(dir, "package-2");
+    const secondResult = await buildProductionSet({ sources, outputDir: secondOutputDir, prefix: "GOLD" });
+    const secondCsv = await fs.readFile(path.join(secondOutputDir, secondResult.privilegeLogLocation!), "utf8");
+    const secondRows = parsePrivilegeLogCsv(secondCsv);
+
+    expect(secondRows.map((row) => row.RowId)).toEqual(firstRows.map((row) => row.RowId));
+  });
+
+  it("produces a produce-redacted source normally (Bates-stamped, in the index) while logging it", async () => {
+    const source = await makePdf("redact-me.pdf", 2);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{
+        path: source,
+        status: "produce-redacted",
+        privilegeAsserted: "Attorney work product",
+        basis: "Redacted per protective order",
+      }],
+      outputDir,
+      prefix: "RED",
+    });
+
+    expect(result.files).toHaveLength(1);
+    expect(result.redactedCount).toBe(1);
+    expect(result.withheldCount).toBe(0);
+
+    // Produced exactly like an ordinary source: Bates-stamped, present in
+    // upload/ and the index. RaioPDF performs no redaction itself here.
+    const output = await fs.readFile(path.join(outputDir, result.files[0]!.packageRelativePath));
+    await expectPageContentToContainLabel(output, 0, "RED000001");
+    const csv = await fs.readFile(path.join(outputDir, result.indexCsv!), "utf8");
+    expect(csv).toContain("redact-me.pdf");
+
+    const logCsv = await fs.readFile(path.join(outputDir, result.privilegeLogLocation!), "utf8");
+    const logRows = parsePrivilegeLogCsv(logCsv);
+    expect(logRows).toEqual([
+      expect.objectContaining({
+        Status: "Produced with redactions",
+        Filename: result.files[0]!.outputName,
+        Pages: "2",
+      }),
+    ]);
+  });
+
+  it("rejects byte-identical sources with conflicting production statuses, before any output exists", async () => {
+    const first = await makePdf("dup.pdf", 1);
+    const second = await copyAs(first, "dup-b.pdf");
+    const outputDir = path.join(dir, "package");
+
+    await expect(buildProductionSet({
+      sources: [
+        { path: first },
+        { path: second, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+      ],
+      outputDir,
+      prefix: "CONFLICT",
+    })).rejects.toThrow(/"dup\.pdf".*"dup-b\.pdf".*conflicting production statuses/s);
+
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("collapses a uniformly-withheld duplicate group to one privilege log row, cross-referencing the rest", async () => {
+    const first = await makePdf("dup-with.pdf", 1);
+    const second = await copyAs(first, "dup-with-b.pdf");
+    const other = await makePdf("other.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first, status: "withhold", privilegeAsserted: "Attorney-client privilege", basis: "copy A" },
+        { path: second, status: "withhold", privilegeAsserted: "Attorney-client privilege", basis: "copy B" },
+        { path: other },
+      ],
+      outputDir,
+      prefix: "WDUP",
+      // Default duplicateHandling ("produce-all") -- the withheld collapse
+      // to one row happens regardless of this setting, since neither
+      // occurrence is ever produced either way.
+    });
+
+    expect(result.files.map((file) => file.sourceFilename)).toEqual(["other.pdf"]);
+    expect(result.withheldCount).toBe(1);
+
+    const logCsv = await fs.readFile(path.join(outputDir, result.privilegeLogLocation!), "utf8");
+    const logRows = parsePrivilegeLogCsv(logCsv);
+    expect(logRows).toEqual([
+      expect.objectContaining({ Status: "Withheld", Filename: "dup-with.pdf", Description: "copy A" }),
+    ]);
+
+    expect(result.duplicateGroups).toHaveLength(1);
+    expect(result.duplicateGroups[0]!.occurrences).toEqual([
+      { sourceFilename: "dup-with.pdf", sourceOrdinal: 1, action: "omitted", batesRange: null },
+      { sourceFilename: "dup-with-b.pdf", sourceOrdinal: 2, action: "omitted", batesRange: null },
+    ]);
+  });
+
+  it("blanks the Filename column (header stays) when includeFilenameInPrivilegeLog is false, independent of the index's own filename flag", async () => {
+    const withheld = await makePdf("secret.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir,
+      prefix: "NOFN",
+      includeFilenameInPrivilegeLog: false,
+      // Left at its default (true) on purpose -- proves the two flags are
+      // independent, not just that the whole log respects one shared flag.
+    });
+
+    const logCsv = await fs.readFile(path.join(outputDir, result.privilegeLogLocation!), "utf8");
+    expect(logCsv.split("\n")[0]).toContain("Filename");
+    const logRows = parsePrivilegeLogCsv(logCsv);
+    expect(logRows[0]!.Filename).toBe("");
+    expect(logRows[0]!.Status).toBe("Withheld");
+  });
+
+  it("excludes a withheld source from the combined production PDF", async () => {
+    const first = await makePdf("combined-a.pdf", 2);
+    const withheld = await makePdf("combined-secret.pdf", 5);
+    const second = await makePdf("combined-c.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "COMBWH",
+      combinedPdf: true,
+    });
+
+    expect(result.files).toHaveLength(2);
+    const combined = await PDFDocument.load(await fs.readFile(path.join(outputDir, result.combinedPdf!)));
+    expect(combined.getPageCount()).toBe(3);
+  });
+
+  it("excludes a withheld source from volume assignment, keeping later files' volumes correct", async () => {
+    const first = await makePdf("vol-a.pdf", 1);
+    const withheld = await makePdf("vol-secret.pdf", 1);
+    const second = await makePdf("vol-c.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "VOLWH",
+      volumeSizeMb: 0.0001,
+    });
+
+    expect(result.files.map((file) => file.sourceFilename)).toEqual(["vol-a.pdf", "vol-c.pdf"]);
+    expect(result.files.map((file) => file.volume)).toEqual(["VOL001", "VOL002"]);
+  });
+
+  it("keeps a continued Bates series contiguous across a withheld source in the continuing production", async () => {
+    const priorSource = await makePdf("prior.pdf", 2);
+    const priorOutputDir = path.join(dir, "prior-package");
+    const prior = await buildProductionSet({
+      sources: [{ path: priorSource }],
+      outputDir: priorOutputDir,
+      prefix: "CONT",
+      createdAt: "2026-07-03T12:00:00.000Z",
+    });
+
+    const withheld = await makePdf("continuing-secret.pdf", 4);
+    const produced = await makePdf("continuing-produced.pdf", 1);
+    const continuingOutputDir = path.join(dir, "continuing-package");
+    const result = await buildProductionSet({
+      sources: [
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: produced },
+      ],
+      outputDir: continuingOutputDir,
+      prefix: "CONT",
+      start: prior.nextNumber,
+      continueFrom: priorOutputDir,
+    });
+
+    // The withheld source never touches the Bates series -- the produced
+    // source picks up exactly where the prior production left off.
+    expect(result.files).toEqual([
+      expect.objectContaining({
+        sourceFilename: "continuing-produced.pdf",
+        batesStart: "CONT000003",
+        batesEnd: "CONT000003",
+      }),
+    ]);
+    expect(result.withheldCount).toBe(1);
+  });
+});
+
 /**
  * Counting wrapper around the local engine. The engine interface exposes no
  * handle census, so the test observes open/close directly for every call that
@@ -1399,6 +1768,65 @@ function parseDatRows(bytes: Uint8Array): Record<(typeof DAT_ROW_FIELD_NAMES)[nu
     });
     return row;
   });
+}
+
+const PRIVILEGE_LOG_HEADERS = [
+  "RowId",
+  "Status",
+  "PrivilegeAsserted",
+  "Description",
+  "Filename",
+  "Pages",
+  "Date",
+  "DocType",
+  "Author",
+  "Recipients",
+] as const;
+
+/** Naive test-side CSV row parser -- honors the same `"`-quoting/doubling
+ * rule `csvCell` writes, deliberately independent of `formatPrivilegeLogCsv`
+ * so these tests can't pass by construction. */
+function parsePrivilegeLogCsv(text: string): Record<(typeof PRIVILEGE_LOG_HEADERS)[number], string>[] {
+  const lines = text.split("\n").filter((line) => line.length > 0);
+  const [, ...dataLines] = lines;
+  return dataLines.map((line) => {
+    const fields = parseCsvLine(line);
+    const row = {} as Record<(typeof PRIVILEGE_LOG_HEADERS)[number], string>;
+    PRIVILEGE_LOG_HEADERS.forEach((name, index) => {
+      row[name] = fields[index] ?? "";
+    });
+    return row;
+  });
+}
+
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (inQuotes) {
+      if (character === '"') {
+        if (line[index + 1] === '"') {
+          current += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += character;
+      }
+    } else if (character === '"') {
+      inQuotes = true;
+    } else if (character === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  fields.push(current);
+  return fields;
 }
 
 async function makePdf(

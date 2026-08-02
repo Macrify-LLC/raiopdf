@@ -47,11 +47,34 @@ export interface ProductionSetFile {
    * actually gets produced. See `ProductionSetRunInput.duplicateHandling`.
    */
   sourceSha256: string | null;
+  /**
+   * Default `"produce"`. `"produce-redacted"` is still produced NORMALLY --
+   * RaioPDF applies and verifies no redaction here; redact upstream with the
+   * Redact tool first -- but gets a draft privilege log row.
+   * `"withhold"` excludes the file from the production entirely (no Bates
+   * number consumed) and requires `privilegeAsserted`.
+   */
+  status: ProductionSourceStatus;
+  /** The privilege basis asserted (e.g. "Attorney-client privilege").
+   * Required, and inline-validated, when `status` is `"withhold"`. */
+  privilegeAsserted: string;
+  /** Free-text description of the withholding or redaction, recorded as the
+   * draft privilege log's Description column. Always optional. */
+  basis: string;
 }
+
+/** Mirrors `@raiopdf/production-set`'s `ProductionSourceStatus`. */
+export type ProductionSourceStatus = "produce" | "produce-redacted" | "withhold";
 
 /** How the build handles two or more sources whose bytes hash identical.
  * Mirrors `@raiopdf/production-set`'s `ProductionDuplicateHandling`. */
 export type ProductionDuplicateHandling = "produce-all" | "produce-once";
+
+const STATUS_OPTIONS: readonly { value: ProductionSourceStatus; label: string }[] = [
+  { value: "produce", label: "Produce" },
+  { value: "produce-redacted", label: "Produce with redactions" },
+  { value: "withhold", label: "Withhold" },
+];
 
 /** The six placements a Bates number or designation can take: header/footer
  * crossed with left/center/right. Shared by both "Stamp placement" selects. */
@@ -106,6 +129,12 @@ export interface ProductionSetRunInput {
    * is blank for a UI-built production.
    */
   includeLoadFiles: boolean;
+  /**
+   * Includes each row's filename in `draft-privilege-log.csv` (produced
+   * Bates-stamped name for a produce-redacted row, source name for a
+   * withheld row). Default true. Independent of `includeFilenameInIndex`.
+   */
+  includeFilenameInPrivilegeLog: boolean;
 }
 
 export interface ProductionSetRunResult {
@@ -119,6 +148,15 @@ export interface ProductionSetRunResult {
   /** Package-root-relative location of the litigation load file, or `null`
    * when "Litigation load file (DAT)" wasn't checked. */
   loadFileDat: string | null;
+  /** Sources withheld (each a draft privilege log row's canonical
+   * occurrence). 0 when nothing was withheld. */
+  withheldCount: number;
+  /** Sources produced with redactions applied upstream. 0 when nothing was
+   * marked produce-redacted. */
+  redactedCount: number;
+  /** Package-root-relative location of the draft privilege log, or `null`
+   * when every source was produced normally. NOT ready to serve. */
+  privilegeLogLocation: string | null;
 }
 
 /** UI-facing mirror of `@raiopdf/production-set`'s `ProductionContinuationSummary`. */
@@ -244,6 +282,7 @@ export function ProductionSetWorkspace({
   const [includeFilenameInIndex, setIncludeFilenameInIndex] = useState(true);
   const [combinedPdf, setCombinedPdf] = useState(false);
   const [includeLoadFiles, setIncludeLoadFiles] = useState(false);
+  const [includeFilenameInPrivilegeLog, setIncludeFilenameInPrivilegeLog] = useState(true);
   const [useVolumeCap, setUseVolumeCap] = useState(false);
   const [volumeSizeMb, setVolumeSizeMb] = useState(25);
   const [addingFile, setAddingFile] = useState(false);
@@ -259,7 +298,12 @@ export function ProductionSetWorkspace({
   const [stampFontSizePt, setStampFontSizePt] = useState(DEFAULT_STAMP_FONT_SIZE_PT);
   const [duplicateHandling, setDuplicateHandling] = useState<ProductionDuplicateHandling>("produce-all");
   const hint = useMemo(() => productionHintMessage(effectivePrefix), [effectivePrefix]);
-  const totalPages = files.reduce((sum, file) => sum + (file.pages ?? 0), 0);
+  // Withheld documents consume no Bates numbers, so they must not count
+  // toward the digit-width overflow gate.
+  const totalPages = files.reduce(
+    (sum, file) => sum + (file.status === "withhold" ? 0 : file.pages ?? 0),
+    0,
+  );
   const lastNumber = start + Math.max(0, totalPages - 1);
   const overflows = Number.isFinite(lastNumber) && lastNumber >= 10 ** digits;
   const addFileBusy = addingFile || pendingPageCountReads > 0;
@@ -296,6 +340,25 @@ export function ProductionSetWorkspace({
     }
     return errors;
   }, [files]);
+  // Same recompute-on-every-render discipline as pageRangeErrors above: a
+  // withheld row with no privilege basis is a build-time error
+  // (`buildProductionSet` requires `privilegeAsserted`), caught here so the
+  // Build button disables before the round trip.
+  const privilegeAssertedErrors = useMemo(() => {
+    const errors = new Map<string, string>();
+    for (const file of files) {
+      if (file.status === "withhold" && file.privilegeAsserted.trim() === "") {
+        errors.set(file.id, 'Withholding a document requires a "Privilege asserted" basis.');
+      }
+    }
+    return errors;
+  }, [files]);
+  // Governs the warning line and whether a draft privilege log will be
+  // written at all -- recomputed the same way, never stored.
+  const anyNonProduceStatus = useMemo(
+    () => files.some((file) => file.status !== "produce"),
+    [files],
+  );
   // Advisory grouping by add-time hash -- purely for the UI badge/status
   // line. Files whose hash hasn't resolved yet (or failed) simply never
   // join a group; the build re-groups authoritatively from its own hashes.
@@ -331,6 +394,7 @@ export function ProductionSetWorkspace({
     !placementsCollide &&
     !stampFontSizeOutOfRange &&
     pageRangeErrors.size === 0 &&
+    privilegeAssertedErrors.size === 0 &&
     !progress.running;
 
   useEffect(() => {
@@ -400,6 +464,9 @@ export function ProductionSetWorkspace({
             designation: "",
             designationPages: "",
             sourceSha256: null,
+            status: "produce",
+            privilegeAsserted: "",
+            basis: "",
           });
           if (descriptor.pageCount === null) {
             deferredCount += 1;
@@ -565,7 +632,9 @@ export function ProductionSetWorkspace({
               ? "Stamp font size must be between 6 and 24 points."
               : pageRangeErrors.size > 0
                 ? "Fix the page range shown under each file before building."
-                : "Add files and choose an empty package root folder.");
+                : privilegeAssertedErrors.size > 0
+                  ? 'Add a "Privilege asserted" basis for each withheld file before building.'
+                  : "Add files and choose an empty package root folder.");
       return;
     }
 
@@ -588,6 +657,7 @@ export function ProductionSetWorkspace({
         : undefined,
       duplicateHandling,
       includeLoadFiles,
+      includeFilenameInPrivilegeLog,
     });
   }
 
@@ -641,113 +711,191 @@ export function ProductionSetWorkspace({
             <p className="production-workspace__empty">Add PDFs to build the production order.</p>
           ) : null}
           {files.map((file, index) => (
-            <div className="production-workspace__file-row" role="listitem" key={file.id}>
-              <div className="production-workspace__file-body">
-                <span className="production-workspace__file-index" aria-hidden="true">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <div className="production-workspace__file-name-row">
-                    <p className="production-workspace__file-name">{file.name}</p>
-                    {duplicateFileIds.ids.has(file.id) ? (
-                      <span
-                        className="production-workspace__file-badge"
-                        title="Another file in this production has the same content -- see the duplicate options below."
-                      >
-                        duplicate
-                      </span>
-                    ) : null}
+            <div className="production-workspace__file-entry" role="listitem" key={file.id}>
+              <div className="production-workspace__file-row">
+                <div className="production-workspace__file-body">
+                  <span className="production-workspace__file-index" aria-hidden="true">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <div>
+                    <div className="production-workspace__file-name-row">
+                      <p className="production-workspace__file-name">{file.name}</p>
+                      {duplicateFileIds.ids.has(file.id) ? (
+                        <span
+                          className="production-workspace__file-badge"
+                          title="Another file in this production has the same content -- see the duplicate options below."
+                        >
+                          duplicate
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
+                      {file.pages === null
+                        ? "page count pending"
+                        : `${file.pages} page${file.pages === 1 ? "" : "s"}`}
+                    </p>
                   </div>
-                  <p className="production-workspace__file-meta" title="Pages counted from the opened PDF.">
-                    {file.pages === null
-                      ? "page count pending"
-                      : `${file.pages} page${file.pages === 1 ? "" : "s"}`}
-                  </p>
+                </div>
+                <label
+                  className="production-workspace__status-select"
+                  title="Produce normally, produce with redactions applied upstream (this tool applies none), or withhold entirely."
+                >
+                  <span>Status</span>
+                  <select
+                    value={file.status}
+                    onChange={(event) => {
+                      const next = event.target.value as ProductionSourceStatus;
+                      setFiles((current) => current.map((item) => (
+                        item.id === file.id
+                          ? {
+                              ...item,
+                              status: next,
+                              // Reverting to Produce discards privilege text:
+                              // it is sensitive and meaningless for a produced
+                              // document, and must not linger unseen.
+                              privilegeAsserted: next === "produce" ? "" : item.privilegeAsserted,
+                              basis: next === "produce" ? "" : item.basis,
+                            }
+                          : item
+                      )));
+                    }}
+                  >
+                    {STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label
+                  className="production-workspace__designation"
+                  title="Optional confidentiality text to include for this source in the production package."
+                >
+                  <span>Designation</span>
+                  <select
+                    value={designationSelectValue(file.designation)}
+                    onChange={(event) => {
+                      const next = event.target.value === "Custom" ? file.designation : event.target.value;
+                      setFiles((current) => current.map((item) => (
+                        item.id === file.id
+                          ? {
+                              ...item,
+                              designation: next,
+                              // No designation means no range: keep the disabled
+                              // Pages input from holding a stale value the user
+                              // can't reach but the build would still validate.
+                              designationPages: next === "" ? "" : item.designationPages,
+                            }
+                          : item
+                      )));
+                    }}
+                  >
+                    {DESIGNATION_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option || "None"}</option>
+                    ))}
+                  </select>
+                </label>
+                <label
+                  className="production-workspace__pages"
+                  title={
+                    file.designation === ""
+                      ? "Set a designation before restricting it to specific pages."
+                      : 'Which pages get the designation, e.g. "1-3,7". Leave blank for every page.'
+                  }
+                >
+                  <span>Pages</span>
+                  <input
+                    type="text"
+                    placeholder="all"
+                    value={file.designationPages}
+                    disabled={file.designation === ""}
+                    aria-invalid={pageRangeErrors.has(file.id)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setFiles((current) => current.map((item) => (
+                        item.id === file.id ? { ...item, designationPages: next } : item
+                      )));
+                    }}
+                  />
+                  {pageRangeErrors.has(file.id) ? (
+                    <span className="production-workspace__pages-note production-workspace__pages-note--error" role="alert">
+                      {pageRangeErrors.get(file.id)}
+                    </span>
+                  ) : file.designation !== "" && file.designationPages.trim() !== "" && file.pages === null ? (
+                    <span className="production-workspace__pages-note">
+                      Page count isn't known yet -- checked when you build.
+                    </span>
+                  ) : null}
+                </label>
+                <div className="production-workspace__file-actions">
+                  <button
+                    type="button"
+                    className="production-workspace__icon-button"
+                    aria-label={`Move ${file.name} up`}
+                    disabled={index === 0}
+                    onClick={() => moveFile(index, -1)}
+                  >
+                    <ArrowUpIcon size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="production-workspace__icon-button"
+                    aria-label={`Move ${file.name} down`}
+                    disabled={index === files.length - 1}
+                    onClick={() => moveFile(index, 1)}
+                  >
+                    <ArrowDownIcon size={15} />
+                  </button>
                 </div>
               </div>
-              <label
-                className="production-workspace__designation"
-                title="Optional confidentiality text to include for this source in the production package."
-              >
-                <span>Designation</span>
-                <select
-                  value={designationSelectValue(file.designation)}
-                  onChange={(event) => {
-                    const next = event.target.value === "Custom" ? file.designation : event.target.value;
-                    setFiles((current) => current.map((item) => (
-                      item.id === file.id
-                        ? {
-                            ...item,
-                            designation: next,
-                            // No designation means no range: keep the disabled
-                            // Pages input from holding a stale value the user
-                            // can't reach but the build would still validate.
-                            designationPages: next === "" ? "" : item.designationPages,
-                          }
-                        : item
-                    )));
-                  }}
-                >
-                  {DESIGNATION_OPTIONS.map((option) => (
-                    <option key={option} value={option}>{option || "None"}</option>
-                  ))}
-                </select>
-              </label>
-              <label
-                className="production-workspace__pages"
-                title={
-                  file.designation === ""
-                    ? "Set a designation before restricting it to specific pages."
-                    : 'Which pages get the designation, e.g. "1-3,7". Leave blank for every page.'
-                }
-              >
-                <span>Pages</span>
-                <input
-                  type="text"
-                  placeholder="all"
-                  value={file.designationPages}
-                  disabled={file.designation === ""}
-                  aria-invalid={pageRangeErrors.has(file.id)}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setFiles((current) => current.map((item) => (
-                      item.id === file.id ? { ...item, designationPages: next } : item
-                    )));
-                  }}
-                />
-                {pageRangeErrors.has(file.id) ? (
-                  <span className="production-workspace__pages-note production-workspace__pages-note--error" role="alert">
-                    {pageRangeErrors.get(file.id)}
-                  </span>
-                ) : file.designation !== "" && file.designationPages.trim() !== "" && file.pages === null ? (
-                  <span className="production-workspace__pages-note">
-                    Page count isn't known yet -- checked when you build.
-                  </span>
-                ) : null}
-              </label>
-              <div className="production-workspace__file-actions">
-                <button
-                  type="button"
-                  className="production-workspace__icon-button"
-                  aria-label={`Move ${file.name} up`}
-                  disabled={index === 0}
-                  onClick={() => moveFile(index, -1)}
-                >
-                  <ArrowUpIcon size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="production-workspace__icon-button"
-                  aria-label={`Move ${file.name} down`}
-                  disabled={index === files.length - 1}
-                  onClick={() => moveFile(index, 1)}
-                >
-                  <ArrowDownIcon size={15} />
-                </button>
-              </div>
+              {file.status !== "produce" ? (
+                <div className="production-workspace__privilege-fields">
+                  <label
+                    className="production-workspace__privilege-asserted"
+                    title="Required to withhold a document; optional (but encouraged) for produce with redactions."
+                  >
+                    <span>Privilege asserted</span>
+                    <input
+                      type="text"
+                      placeholder='e.g. "Attorney-client privilege"'
+                      value={file.privilegeAsserted}
+                      aria-invalid={privilegeAssertedErrors.has(file.id)}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setFiles((current) => current.map((item) => (
+                          item.id === file.id ? { ...item, privilegeAsserted: next } : item
+                        )));
+                      }}
+                    />
+                    {privilegeAssertedErrors.has(file.id) ? (
+                      <span className="production-workspace__pages-note production-workspace__pages-note--error" role="alert">
+                        {privilegeAssertedErrors.get(file.id)}
+                      </span>
+                    ) : null}
+                  </label>
+                  <label className="production-workspace__privilege-description" title="Optional free-text description.">
+                    <span>Description</span>
+                    <input
+                      type="text"
+                      placeholder="Optional"
+                      value={file.basis}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setFiles((current) => current.map((item) => (
+                          item.id === file.id ? { ...item, basis: next } : item
+                        )));
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
+        {anyNonProduceStatus ? (
+          <p className="production-workspace__privilege-warning" role="status">
+            A draft privilege log will be written -- it is NOT ready to serve; review and complete it before
+            any use.
+          </p>
+        ) : null}
         {duplicateFileIds.ids.size > 0 ? (
           <div className="production-workspace__duplicates" role="group" aria-label="Duplicate documents">
             <p className="production-workspace__status" role="status">
@@ -1010,6 +1158,17 @@ export function ProductionSetWorkspace({
             />
             <span>Litigation load file (DAT)</span>
           </label>
+          <label
+            className="production-workspace__checkbox-row"
+            title="Include each row's filename in the draft privilege log, when one is written. Independent of the filename column in the production index."
+          >
+            <input
+              type="checkbox"
+              checked={includeFilenameInPrivilegeLog}
+              onChange={(event) => setIncludeFilenameInPrivilegeLog(event.target.checked)}
+            />
+            <span>Filename column in privilege log</span>
+          </label>
         </div>
         {useVolumeCap ? (
           <label className="production-workspace__number" title="Maximum size for each volume folder before starting the next volume.">
@@ -1068,6 +1227,12 @@ export function ProductionSetWorkspace({
                   -- see the manifest for the cross-reference.
                 </p>
               ) : null}
+              {progress.result.privilegeLogLocation ? (
+                <p className="production-workspace__result-subtitle">
+                  {progress.result.withheldCount} withheld, {progress.result.redactedCount} with redactions --
+                  draft privilege log written (not ready to serve).
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="production-workspace__result-parts">
@@ -1089,6 +1254,14 @@ export function ProductionSetWorkspace({
               <div className="production-workspace__result-part">
                 <span className="production-workspace__result-part-label">Load file</span>
                 <span className="production-workspace__result-part-value">{progress.result.loadFileDat}</span>
+              </div>
+            ) : null}
+            {progress.result.privilegeLogLocation ? (
+              <div className="production-workspace__result-part">
+                <span className="production-workspace__result-part-label">Privilege log</span>
+                <span className="production-workspace__result-part-value">
+                  {progress.result.privilegeLogLocation}
+                </span>
               </div>
             ) : null}
           </div>
@@ -1135,6 +1308,9 @@ function fromSourceFile(file: ProductionSetSourceFile, pages: number): Productio
     // a later add. Cosmetic only: the build's own authoritative grouping
     // still covers it like any other source.
     sourceSha256: null,
+    status: "produce",
+    privilegeAsserted: "",
+    basis: "",
   };
 }
 

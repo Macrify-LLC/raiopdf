@@ -139,6 +139,9 @@ describe("ProductionSetWorkspace load file (DAT)", () => {
           fileCount: 1,
           duplicateCount: 0,
           loadFileDat: "production.dat",
+          withheldCount: 0,
+          redactedCount: 0,
+          privilegeLogLocation: null,
         },
       },
     });
@@ -159,6 +162,9 @@ describe("ProductionSetWorkspace load file (DAT)", () => {
           fileCount: 1,
           duplicateCount: 0,
           loadFileDat: null,
+          withheldCount: 0,
+          redactedCount: 0,
+          privilegeLogLocation: null,
         },
       },
     });

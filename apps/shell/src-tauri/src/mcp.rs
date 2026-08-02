@@ -40,6 +40,19 @@ pub struct ProductionSetSource {
     /// desktop UI input in v1: UI-originated builds never set this.
     #[serde(skip_serializing_if = "Option::is_none")]
     custodian: Option<String>,
+    /// `"produce"` (default), `"produce-redacted"`, or `"withhold"` --
+    /// mirrors `packages/production-set`'s `ProductionSourceStatus`;
+    /// validated there, not here. `None` means the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    /// The privilege basis asserted -- REQUIRED (package-side, pre-output
+    /// error) when `status` is `"withhold"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    privilege_asserted: Option<String>,
+    /// Free-text description recorded as the draft privilege log's
+    /// Description column. Always optional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    basis: Option<String>,
 }
 
 /// What the renderer actually sends: an opaque grant, never a real path. The
@@ -59,6 +72,18 @@ pub struct ProductionSetSourceGrant {
     /// input needs no further plumbing change.
     #[serde(default)]
     custodian: Option<String>,
+    /// See `ProductionSetSource::status`. The desktop UI DOES set this --
+    /// the per-file status select in `ProductionSetWorkspace`.
+    #[serde(default)]
+    status: Option<String>,
+    /// See `ProductionSetSource::privilege_asserted`. The desktop UI sets
+    /// this alongside `status`.
+    #[serde(default)]
+    privilege_asserted: Option<String>,
+    /// See `ProductionSetSource::basis`. The desktop UI sets this alongside
+    /// `status`.
+    #[serde(default)]
+    basis: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -120,6 +145,11 @@ struct ProductionSetOneShotInput {
     /// too, but always sent explicitly here like `include_index` and
     /// `combined_pdf` above.
     include_load_files: bool,
+    /// Mirrors `packages/production-set`'s
+    /// `BuildProductionSetInput.includeFilenameInPrivilegeLog`; defaults
+    /// `true` there too, but always sent explicitly here for the same
+    /// reason as `include_load_files` above.
+    include_filename_in_privilege_log: bool,
 }
 
 /// Mirrors `packages/production-set`'s `ProductionSetResult.continuation`
@@ -147,6 +177,12 @@ struct ProductionSetOneShotOutput {
     duplicate_count: Option<u32>,
     #[serde(default)]
     load_file_dat: Option<String>,
+    #[serde(default)]
+    withheld_count: Option<u32>,
+    #[serde(default)]
+    redacted_count: Option<u32>,
+    #[serde(default)]
+    privilege_log_location: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -165,6 +201,9 @@ pub struct ProductionSetShellOutput {
     continuation: Option<ProductionSetContinuationResult>,
     duplicate_count: u32,
     load_file_dat: Option<String>,
+    withheld_count: u32,
+    redacted_count: u32,
+    privilege_log_location: Option<String>,
 }
 
 /// UI-prefill summary from `read_production_continuation` -- see its doc
@@ -731,6 +770,9 @@ pub async fn build_production_set(
     // `include_index`/`combined_pdf` above -- never a raw path, never
     // optional at this boundary.
     include_load_files: bool,
+    // Always sent explicitly by the renderer (default true), same reasoning
+    // as `include_load_files` above.
+    include_filename_in_privilege_log: bool,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
@@ -743,6 +785,9 @@ pub async fn build_production_set(
                 designation: source.designation,
                 designation_pages: source.designation_pages,
                 custodian: source.custodian,
+                status: source.status,
+                privilege_asserted: source.privilege_asserted,
+                basis: source.basis,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -777,6 +822,7 @@ pub async fn build_production_set(
             .map(|reason| ProductionSetContinuationOverride { reason }),
         duplicate_handling,
         include_load_files,
+        include_filename_in_privilege_log,
     };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
@@ -804,6 +850,9 @@ pub async fn build_production_set(
         continuation: output.continuation,
         duplicate_count: output.duplicate_count.unwrap_or(0),
         load_file_dat: output.load_file_dat,
+        withheld_count: output.withheld_count.unwrap_or(0),
+        redacted_count: output.redacted_count.unwrap_or(0),
+        privilege_log_location: output.privilege_log_location,
     })
 }
 
@@ -1558,6 +1607,9 @@ mod tests {
             designation: Some("Confidential".to_string()),
             designation_pages: Some("1-3,7".to_string()),
             custodian: None,
+            status: None,
+            privilege_asserted: None,
+            basis: None,
         };
         let json = serde_json::to_string(&with_range).expect("serialize");
         assert!(json.contains(r#""designationPages":"1-3,7""#), "{json}");
@@ -1567,6 +1619,9 @@ mod tests {
             designation: None,
             designation_pages: None,
             custodian: None,
+            status: None,
+            privilege_asserted: None,
+            basis: None,
         };
         let json = serde_json::to_string(&without_range).expect("serialize");
         assert!(!json.contains("designationPages"), "{json}");
@@ -1580,6 +1635,9 @@ mod tests {
             designation: None,
             designation_pages: None,
             custodian: Some("J. Smith".to_string()),
+            status: None,
+            privilege_asserted: None,
+            basis: None,
         };
         let json = serde_json::to_string(&with_custodian).expect("serialize");
         assert!(json.contains(r#""custodian":"J. Smith""#), "{json}");
@@ -1589,9 +1647,69 @@ mod tests {
             designation: None,
             designation_pages: None,
             custodian: None,
+            status: None,
+            privilege_asserted: None,
+            basis: None,
         };
         let json = serde_json::to_string(&without_custodian).expect("serialize");
         assert!(!json.contains("custodian"), "{json}");
+    }
+
+    #[test]
+    fn production_set_source_grant_deserializes_status_privilege_asserted_and_basis() {
+        let json = r#"{"grant":"g1","status":"withhold","privilegeAsserted":"Attorney-client privilege","basis":"Internal legal memo"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.status.as_deref(), Some("withhold"));
+        assert_eq!(
+            source.privilege_asserted.as_deref(),
+            Some("Attorney-client privilege")
+        );
+        assert_eq!(source.basis.as_deref(), Some("Internal legal memo"));
+    }
+
+    #[test]
+    fn production_set_source_grant_defaults_status_privilege_asserted_and_basis_to_none_when_absent(
+    ) {
+        let json = r#"{"grant":"g1"}"#;
+        let source: ProductionSetSourceGrant = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(source.status, None);
+        assert_eq!(source.privilege_asserted, None);
+        assert_eq!(source.basis, None);
+    }
+
+    #[test]
+    fn production_set_source_serializes_status_privilege_asserted_basis_camel_case_and_omits_when_none(
+    ) {
+        let withheld = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: None,
+            designation_pages: None,
+            custodian: None,
+            status: Some("withhold".to_string()),
+            privilege_asserted: Some("Attorney-client privilege".to_string()),
+            basis: Some("Internal legal memo".to_string()),
+        };
+        let json = serde_json::to_string(&withheld).expect("serialize");
+        assert!(json.contains(r#""status":"withhold""#), "{json}");
+        assert!(
+            json.contains(r#""privilegeAsserted":"Attorney-client privilege""#),
+            "{json}"
+        );
+        assert!(json.contains(r#""basis":"Internal legal memo""#), "{json}");
+
+        let plain = ProductionSetSource {
+            path: "/abs/a.pdf".to_string(),
+            designation: None,
+            designation_pages: None,
+            custodian: None,
+            status: None,
+            privilege_asserted: None,
+            basis: None,
+        };
+        let json = serde_json::to_string(&plain).expect("serialize");
+        assert!(!json.contains("status"), "{json}");
+        assert!(!json.contains("privilegeAsserted"), "{json}");
+        assert!(!json.contains("basis"), "{json}");
     }
 
     #[test]

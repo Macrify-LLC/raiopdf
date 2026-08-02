@@ -54,8 +54,8 @@ load file) can read to import the whole production in one step, with the
 Bates range, confidentiality designation, page count, and file location for
 every document already filled in.
 
-- It only lists documents that were actually produced — a combined PDF or a
-  duplicate you chose to skip never appears in it.
+- It only lists documents that were actually produced — a combined PDF, a
+  duplicate you chose to skip, or a document you withheld never appears in it.
 - If **Filename column in index** is off, the load file's filename field
   stays blank too, matching the index.
 - This version doesn't include a separate image-level cross-reference file
@@ -121,6 +121,59 @@ The badge you see while adding files is a quick heads-up, not the final word: th
 build itself re-checks every file's content right before it writes anything, so
 what actually gets produced is always correct even if a file changed after you
 added it.
+
+## Withholding documents and the draft privilege log
+
+Every document in your production order has a **Status**, next to its
+Designation:
+
+- **Produce** — the default. Nothing changes.
+- **Produce with redactions** — the document is still produced normally, in the
+  same place as any other document. RaioPDF does **not** apply or verify any
+  redaction as part of building a production — if the document needs content
+  removed, do that first with the [Redact](tool:redact) tool, then add the
+  already-redacted file here. This status only tells RaioPDF to log the document
+  as redacted.
+- **Withhold** — the document is left out of the production entirely. It's never
+  Bates-stamped, never copied into the upload folder, never listed in the
+  production index or the load file, and it uses none of the Bates numbers, so
+  the numbering stays unbroken for the documents around it.
+
+Choosing **Withhold** or **Produce with redactions** reveals two more fields:
+
+- **Privilege asserted** — the basis you're claiming, e.g. "Attorney-client
+  privilege" or "Work product." **Required to withhold a document** — RaioPDF
+  won't build the production until every withheld file has one. Optional (but
+  worth filling in) for a redacted document.
+- **Description** — a short free-text note about why. Always optional.
+
+As soon as any file in the order has a non-Produce status, RaioPDF writes
+`draft-privilege-log.csv` at the package root, alongside the production index,
+and shows a warning that a draft privilege log will be written.
+
+**This is a draft, not something you can file or serve as-is.** The log has a
+row for every withheld document and every document produced with redactions,
+with these columns: Row ID, Status, Privilege Asserted, Description, Filename,
+Pages, Date, Doc Type, Author, and Recipients. **The last four columns —
+Date, Doc Type, Author, Recipients — are always left blank.** RaioPDF doesn't
+guess at them: a privilege log entry with a wrong autopopulated date or author
+is worse than one with a blank you know to fill in yourself. Treat the whole
+log the way you'd treat a Rule 26(b)(5)-style privilege log draft — review and
+complete every row before it's ever used or shared. The **Filename column in
+privilege log** option controls whether the Filename column is filled in or
+left blank (the column itself always exists either way) — it's independent of
+the production index's own filename option.
+
+If two or more files in your order have identical content (see "Duplicate
+documents" above), they all need the **same** Status — RaioPDF stops and names
+the files if you give identical documents conflicting statuses, since a
+document can't be simultaneously handed over and withheld. If you withhold the
+same document more than once, the log gets exactly one row for it, not one per
+copy.
+
+**Not yet included:** withheld documents don't get a placeholder page ("slip
+sheet") in the produced set showing where they were removed from — that's
+planned for a future release.
 
 ## Continuing from a prior production
 

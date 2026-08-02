@@ -22,7 +22,7 @@
     "@raiopdf/engine-sidecar": "workspace:*",
     "@raiopdf/production-set": "workspace:*",
     "@raiopdf/rules": "workspace:*",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -150,6 +150,12 @@ struct ProductionSetOneShotInput {
     /// `true` there too, but always sent explicitly here for the same
     /// reason as `include_load_files` above.
     include_filename_in_privilege_log: bool,
+    /// How a withheld source's canonical occurrence appears in the produced
+    /// set -- `"slip-sheet"` (default) or `"omit"`. Mirrors
+    /// `packages/production-set`'s `BuildProductionSetInput.withheldHandling`;
+    /// validated there, not here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withheld_handling: Option<String>,
 }
 
 /// Mirrors `packages/production-set`'s `ProductionSetResult.continuation`
@@ -183,6 +189,8 @@ struct ProductionSetOneShotOutput {
     redacted_count: Option<u32>,
     #[serde(default)]
     privilege_log_location: Option<String>,
+    #[serde(default)]
+    slip_sheet_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +212,7 @@ pub struct ProductionSetShellOutput {
     withheld_count: u32,
     redacted_count: u32,
     privilege_log_location: Option<String>,
+    slip_sheet_count: u32,
 }
 
 /// UI-prefill summary from `read_production_continuation` -- see its doc
@@ -773,6 +782,7 @@ pub async fn build_production_set(
     // Always sent explicitly by the renderer (default true), same reasoning
     // as `include_load_files` above.
     include_filename_in_privilege_log: bool,
+    withheld_handling: Option<String>,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
@@ -823,6 +833,7 @@ pub async fn build_production_set(
         duplicate_handling,
         include_load_files,
         include_filename_in_privilege_log,
+        withheld_handling,
     };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
@@ -853,6 +864,7 @@ pub async fn build_production_set(
         withheld_count: output.withheld_count.unwrap_or(0),
         redacted_count: output.redacted_count.unwrap_or(0),
         privilege_log_location: output.privilege_log_location,
+        slip_sheet_count: output.slip_sheet_count.unwrap_or(0),
     })
 }
 

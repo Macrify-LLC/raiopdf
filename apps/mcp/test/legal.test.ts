@@ -786,7 +786,7 @@ describe("legal tools (local pdf-lib engine)", () => {
     await expect(fs.access(path.join(outputDir, "production.dat"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("build_production_set withholds a source, excludes it from the Bates series, and writes a draft privilege log", async () => {
+  it('build_production_set withholds a source, excludes it from the Bates series, and writes a draft privilege log (withheldHandling: "omit")', async () => {
     const first = await makePdf("keep.pdf", 1);
     const withheld = await makePdf("secret.pdf", 2);
     const outputDir = path.join(dir, "production-package");
@@ -799,6 +799,7 @@ describe("legal tools (local pdf-lib engine)", () => {
         ],
         outputDir,
         prefix: "MCPWH",
+        withheldHandling: "omit",
       },
       engine,
     );
@@ -807,11 +808,43 @@ describe("legal tools (local pdf-lib engine)", () => {
     expect(content.outputs).toHaveLength(1);
     expect(content.withheldCount).toBe(1);
     expect(content.redactedCount).toBe(0);
+    expect(content.slipSheetCount).toBe(0);
     expect(content.privilegeLogLocation).toBe("draft-privilege-log.csv");
     const logCsv = await fs.readFile(path.join(outputDir, "draft-privilege-log.csv"), "utf8");
     expect(logCsv).toContain("secret.pdf");
     expect(logCsv).toContain("Attorney-client privilege");
     expect(logCsv).not.toContain(dir);
+  });
+
+  it('build_production_set defaults to withheldHandling: "slip-sheet" -- a withheld source becomes a Bates-numbered placeholder', async () => {
+    const first = await makePdf("keep.pdf", 1);
+    const withheld = await makePdf("secret.pdf", 2);
+    const outputDir = path.join(dir, "production-package");
+
+    const result = await handleProductionSet(
+      {
+        sources: [
+          { path: first },
+          { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        ],
+        outputDir,
+        prefix: "MCPSLIP",
+      },
+      engine,
+    );
+
+    const content = structured(result);
+    // Both keep.pdf and the generated slip sheet are produced -- the slip
+    // sheet consumes exactly one Bates number in its original position.
+    expect(content.outputs).toHaveLength(2);
+    expect(content.withheldCount).toBe(1);
+    expect(content.slipSheetCount).toBe(1);
+    expect(content.privilegeLogLocation).toBe("draft-privilege-log.csv");
+    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect((result.content[0] as { text: string }).text).toContain("slip sheet");
+
+    const logCsv = await fs.readFile(path.join(outputDir, "draft-privilege-log.csv"), "utf8");
+    expect(logCsv.split("\n")[0]).toContain("Bates");
   });
 
   it("returns privilegeLogLocation: null and withheldCount/redactedCount: 0 when every source is produced normally", async () => {
@@ -955,6 +988,18 @@ describe("legal tools (local pdf-lib engine)", () => {
       expect(parsed.sources[0]!.privilegeAsserted).toBeUndefined();
       expect(parsed.sources[0]!.basis).toBeUndefined();
       expect(parsed.includeFilenameInPrivilegeLog).toBeUndefined();
+    });
+
+    it('accepts withheldHandling "slip-sheet" and "omit", and rejects an out-of-enum value', () => {
+      const base = { sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" };
+      expect(schema.parse({ ...base, withheldHandling: "slip-sheet" }).withheldHandling).toBe("slip-sheet");
+      expect(schema.parse({ ...base, withheldHandling: "omit" }).withheldHandling).toBe("omit");
+      expect(() => schema.parse({ ...base, withheldHandling: "delete" })).toThrow();
+    });
+
+    it("omits withheldHandling entirely without error (backward compatible -- package default applies)", () => {
+      const parsed = schema.parse({ sources: [{ path: "/abs/a.pdf" }], outputDir: "/abs/out", prefix: "SMITH" });
+      expect(parsed.withheldHandling).toBeUndefined();
     });
   });
 });

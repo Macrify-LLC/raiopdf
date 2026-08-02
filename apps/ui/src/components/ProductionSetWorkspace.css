@@ -164,7 +164,8 @@
   white-space: nowrap;
 }
 
-.production-workspace__duplicates {
+.production-workspace__duplicates,
+.production-workspace__withheld-handling {
   display: grid;
   gap: var(--space-1);
   margin-top: var(--space-2);

@@ -174,6 +174,7 @@ describe("ProductionSetWorkspace trust behaviors", () => {
           withheldCount: 0,
           redactedCount: 0,
           privilegeLogLocation: null,
+          slipSheetCount: 0,
         },
       },
       onOpenPackageRoot,

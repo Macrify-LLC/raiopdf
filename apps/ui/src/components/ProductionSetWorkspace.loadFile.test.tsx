@@ -142,6 +142,7 @@ describe("ProductionSetWorkspace load file (DAT)", () => {
           withheldCount: 0,
           redactedCount: 0,
           privilegeLogLocation: null,
+          slipSheetCount: 0,
         },
       },
     });
@@ -165,6 +166,7 @@ describe("ProductionSetWorkspace load file (DAT)", () => {
           withheldCount: 0,
           redactedCount: 0,
           privilegeLogLocation: null,
+          slipSheetCount: 0,
         },
       },
     });

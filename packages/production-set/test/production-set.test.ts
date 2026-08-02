@@ -1348,6 +1348,9 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       outputDir,
       prefix: "WH",
       includeLoadFiles: true,
+      // This test asserts the pure-omission invariant by name -- pin it
+      // explicitly now that "slip-sheet" is the default.
+      withheldHandling: "omit",
     });
 
     // Numbering stays contiguous across the withheld gap -- exactly the same
@@ -1433,17 +1436,26 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
     ];
 
     const firstOutputDir = path.join(dir, "package-1");
-    const firstResult = await buildProductionSet({ sources, outputDir: firstOutputDir, prefix: "GOLD" });
+    const firstResult = await buildProductionSet({
+      sources,
+      outputDir: firstOutputDir,
+      prefix: "GOLD",
+      // Pinned to "omit" so the withheld row's Bates column stays blank and
+      // `files` indexing below stays a simple 2-entry [control, redacted]
+      // array -- unaffected by the slip-sheet default.
+      withheldHandling: "omit",
+    });
     const firstCsv = await fs.readFile(path.join(firstOutputDir, firstResult.privilegeLogLocation!), "utf8");
 
     expect(firstCsv.split("\n")[0]).toBe(
-      "RowId,Status,PrivilegeAsserted,Description,Filename,Pages,Date,DocType,Author,Recipients",
+      "RowId,Status,Bates,PrivilegeAsserted,Description,Filename,Pages,Date,DocType,Author,Recipients",
     );
     const firstRows = parsePrivilegeLogCsv(firstCsv);
     expect(firstRows).toEqual([
       expect.objectContaining({
         RowId: "P-001",
         Status: "Withheld",
+        Bates: "",
         PrivilegeAsserted: "Attorney-client privilege",
         Description: "Internal legal memo",
         Filename: "secret.pdf",
@@ -1468,9 +1480,17 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
     // The redacted row's Filename is the Bates-stamped OUTPUT name, not the
     // source name -- unlike the withheld row above, which never has one.
     expect(firstRows[1]!.Filename).toBe(firstResult.files[1]!.outputName);
+    // A produce-redacted source always consumes a real Bates range,
+    // independent of withheldHandling.
+    expect(firstRows[1]!.Bates).toBe(`${firstResult.files[1]!.batesStart}-${firstResult.files[1]!.batesEnd}`);
 
     const secondOutputDir = path.join(dir, "package-2");
-    const secondResult = await buildProductionSet({ sources, outputDir: secondOutputDir, prefix: "GOLD" });
+    const secondResult = await buildProductionSet({
+      sources,
+      outputDir: secondOutputDir,
+      prefix: "GOLD",
+      withheldHandling: "omit",
+    });
     const secondCsv = await fs.readFile(path.join(secondOutputDir, secondResult.privilegeLogLocation!), "utf8");
     const secondRows = parsePrivilegeLogCsv(secondCsv);
 
@@ -1546,8 +1566,11 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       outputDir,
       prefix: "WDUP",
       // Default duplicateHandling ("produce-all") -- the withheld collapse
-      // to one row happens regardless of this setting, since neither
-      // occurrence is ever produced either way.
+      // to one row happens regardless of this setting. Pinned to "omit" so
+      // NEITHER occurrence is produced (a slip-sheet-mode equivalent, where
+      // the canonical occurrence produces exactly one slip sheet, is
+      // covered separately below).
+      withheldHandling: "omit",
     });
 
     expect(result.files.map((file) => file.sourceFilename)).toEqual(["other.pdf"]);
@@ -1601,6 +1624,7 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       outputDir,
       prefix: "COMBWH",
       combinedPdf: true,
+      withheldHandling: "omit",
     });
 
     expect(result.files).toHaveLength(2);
@@ -1623,6 +1647,7 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       outputDir,
       prefix: "VOLWH",
       volumeSizeMb: 0.0001,
+      withheldHandling: "omit",
     });
 
     expect(result.files.map((file) => file.sourceFilename)).toEqual(["vol-a.pdf", "vol-c.pdf"]);
@@ -1651,6 +1676,7 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       prefix: "CONT",
       start: prior.nextNumber,
       continueFrom: priorOutputDir,
+      withheldHandling: "omit",
     });
 
     // The withheld source never touches the Bates series -- the produced
@@ -1663,6 +1689,312 @@ describe("buildProductionSet withhold and produce-redacted (draft privilege log)
       }),
     ]);
     expect(result.withheldCount).toBe(1);
+  });
+});
+
+describe("buildProductionSet withheld handling: slip sheets", () => {
+  it("is the default -- a withheld source becomes a slip sheet without withheldHandling set", async () => {
+    const first = await makePdf("keep-a.pdf", 2);
+    const withheld = await makePdf("secret.pdf", 3);
+    const second = await makePdf("keep-b.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "SLIP",
+    });
+
+    // The slip sheet consumes EXACTLY one Bates number, in position -- the
+    // neighbors' ranges are exactly what they'd be if the slip sheet were
+    // any other one-page document.
+    expect(result.files.map((file) => [file.sourceFilename, file.batesStart, file.batesEnd])).toEqual([
+      ["keep-a.pdf", "SLIP000001", "SLIP000002"],
+      ["secret.pdf", "SLIP000003", "SLIP000003"],
+      ["keep-b.pdf", "SLIP000004", "SLIP000004"],
+    ]);
+    expect(result.nextNumber).toBe(5);
+    expect(result.slipSheetCount).toBe(1);
+    expect(result.withheldCount).toBe(1);
+  });
+
+  it("writes a Bates-stamped one-page placeholder naming the withheld status, privilege, and Bates number", async () => {
+    const withheld = await makePdf("secret.pdf", 4);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{
+        path: withheld,
+        status: "withhold",
+        privilegeAsserted: "Attorney-client privilege",
+        basis: "Internal legal memo",
+      }],
+      outputDir,
+      prefix: "CONTENT",
+    });
+
+    expect(result.files).toHaveLength(1);
+    const slipSheetFile = result.files[0]!;
+    expect(slipSheetFile.status).toBe("withhold");
+    expect(slipSheetFile.pages).toBe(1);
+    expect(slipSheetFile.designation).toBe("");
+
+    const bytes = await fs.readFile(path.join(outputDir, slipSheetFile.packageRelativePath));
+    const pdf = await PDFDocument.load(bytes);
+    expect(pdf.getPageCount()).toBe(1);
+
+    await expectPageContentToContainLabel(bytes, 0, "DOCUMENT WITHHELD");
+    await expectPageContentToContainLabel(bytes, 0, "Privilege asserted: Attorney-client privilege");
+    await expectPageContentToContainLabel(bytes, 0, "Description: Internal legal memo");
+    // The Bates number is applied by the same batesStamp pass as any other
+    // produced page -- not drawn by the slip-sheet content generator itself.
+    await expectPageContentToContainLabel(bytes, 0, "CONTENT000001");
+  });
+
+  it("appears in upload/, the index, and the DAT with a blank CONFIDENTIALITY value", async () => {
+    const withheld = await makePdf("secret.pdf", 2);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir,
+      prefix: "IDX",
+      includeLoadFiles: true,
+    });
+
+    const uploaded = await fs.readdir(path.join(outputDir, "upload"));
+    expect(uploaded).toEqual(expect.arrayContaining([expect.stringContaining("secret.pdf")]));
+
+    const csv = await fs.readFile(path.join(outputDir, result.indexCsv!), "utf8");
+    expect(csv).toContain("secret.pdf");
+    expect(csv).toContain("IDX000001");
+    // No designation column value for the slip sheet -- it's never
+    // confidentiality-designated.
+    const csvLines = csv.trim().split("\n");
+    expect(csvLines[1]).toContain(",,"); // Designation and Designation Pages columns, both empty.
+
+    const datBytes = await fs.readFile(path.join(outputDir, "production.dat"));
+    const datRows = parseDatRows(datBytes);
+    expect(datRows).toHaveLength(1);
+    expect(datRows[0]!.FILENAME).toContain("secret.pdf");
+    expect(datRows[0]!.PAGECOUNT).toBe("1");
+    expect(datRows[0]!.CONFIDENTIALITY).toBe("");
+  });
+
+  it("adds a Bates column to the privilege log, populated for a slip-sheet row, blank under omit", async () => {
+    const withheldSlip = await makePdf("slip.pdf", 1);
+    const withheldOmit = await makePdf("omitted.pdf", 1);
+    const slipOutputDir = path.join(dir, "package-slip");
+    const omitOutputDir = path.join(dir, "package-omit");
+
+    const slipResult = await buildProductionSet({
+      sources: [{ path: withheldSlip, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir: slipOutputDir,
+      prefix: "PLOGSLIP",
+    });
+    const omitResult = await buildProductionSet({
+      sources: [{ path: withheldOmit, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir: omitOutputDir,
+      prefix: "PLOGOMIT",
+      withheldHandling: "omit",
+    });
+
+    const slipCsv = await fs.readFile(path.join(slipOutputDir, slipResult.privilegeLogLocation!), "utf8");
+    const slipRows = parsePrivilegeLogCsv(slipCsv);
+    expect(slipRows[0]!.Bates).toBe(`${slipResult.files[0]!.batesStart}-${slipResult.files[0]!.batesEnd}`);
+
+    const omitCsv = await fs.readFile(path.join(omitOutputDir, omitResult.privilegeLogLocation!), "utf8");
+    const omitRows = parsePrivilegeLogCsv(omitCsv);
+    expect(omitRows[0]!.Bates).toBe("");
+  });
+
+  it("collapses a withheld duplicate group to exactly one slip sheet, regardless of duplicateHandling", async () => {
+    const first = await makePdf("dup-with.pdf", 1);
+    const second = await copyAs(first, "dup-with-b.pdf");
+    const other = await makePdf("other.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first, status: "withhold", privilegeAsserted: "Attorney-client privilege", basis: "copy A" },
+        { path: second, status: "withhold", privilegeAsserted: "Attorney-client privilege", basis: "copy B" },
+        { path: other },
+      ],
+      outputDir,
+      prefix: "WDUPSLIP",
+      duplicateHandling: "produce-all",
+    });
+
+    // Exactly one slip sheet (the canonical, first-by-order occurrence) plus
+    // the unrelated produced source.
+    expect(result.files.map((file) => file.sourceFilename)).toEqual(["dup-with.pdf", "other.pdf"]);
+    expect(result.slipSheetCount).toBe(1);
+    expect(result.withheldCount).toBe(1);
+
+    expect(result.duplicateGroups).toHaveLength(1);
+    expect(result.duplicateGroups[0]!.occurrences).toEqual([
+      {
+        sourceFilename: "dup-with.pdf",
+        sourceOrdinal: 1,
+        action: "produced",
+        batesRange: `${result.files[0]!.batesStart}-${result.files[0]!.batesEnd}`,
+      },
+      { sourceFilename: "dup-with-b.pdf", sourceOrdinal: 2, action: "omitted", batesRange: null },
+    ]);
+  });
+
+  it("includes slip sheets in the combined production PDF", async () => {
+    const first = await makePdf("combined-a.pdf", 2);
+    const withheld = await makePdf("combined-secret.pdf", 5);
+    const second = await makePdf("combined-c.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "COMBSLIP",
+      combinedPdf: true,
+    });
+
+    // 2 (first) + 1 (slip sheet) + 1 (second) = 4 -- the withheld document's
+    // real 5 pages never appear; only its one-page placeholder does.
+    expect(result.files).toHaveLength(3);
+    const combined = await PDFDocument.load(await fs.readFile(path.join(outputDir, result.combinedPdf!)));
+    expect(combined.getPageCount()).toBe(4);
+  });
+
+  it("assigns slip sheets to volumes like any other produced file", async () => {
+    const first = await makePdf("vol-a.pdf", 1);
+    const withheld = await makePdf("vol-secret.pdf", 1);
+    const second = await makePdf("vol-c.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: first },
+        { path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: second },
+      ],
+      outputDir,
+      prefix: "VOLSLIP",
+      volumeSizeMb: 0.0001,
+    });
+
+    expect(result.files.map((file) => file.sourceFilename)).toEqual([
+      "vol-a.pdf",
+      "vol-secret.pdf",
+      "vol-c.pdf",
+    ]);
+    expect(result.files.map((file) => file.volume)).toEqual(["VOL001", "VOL002", "VOL003"]);
+  });
+
+  it("re-verifies the withheld source's hash before finalizing, without ever using its bytes as content", async () => {
+    const withheld = await makePdf("drifting-secret.pdf", 3);
+    const replacement = await makePdf("replacement-secret.pdf", 1);
+    const outputDir = path.join(dir, "package");
+    const base = createLocalPdfEngine();
+    let swapped = false;
+    // Same deterministic stand-in as the non-withheld drift test above --
+    // mutate the file between the planning read and the output pass.
+    const engine: PdfEngine = Object.assign(Object.create(base) as PdfEngine, {
+      pageCount: async (document: PdfDocumentHandle) => {
+        const pages = await base.pageCount(document);
+        if (!swapped) {
+          swapped = true;
+          await fs.copyFile(replacement, withheld);
+        }
+        return pages;
+      },
+    });
+
+    await expect(buildProductionSet({
+      sources: [{ path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir,
+      prefix: "DRIFTSLIP",
+    }, engine)).rejects.toThrow(/changed on disk during the production build/);
+
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an invalid withheldHandling value, before any output exists", async () => {
+    const source = await makePdf("a.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    await expect(buildProductionSet({
+      sources: [{ path: source }],
+      outputDir,
+      prefix: "BADWH",
+      // @ts-expect-error -- intentionally invalid at the JSON boundary.
+      withheldHandling: "delete",
+    })).rejects.toThrow(/Withheld handling must be "slip-sheet" or "omit"/);
+
+    await expect(fs.readdir(outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("buildProductionSet withheld handling: zero-produced-output (all sources withheld, omit)", () => {
+  it("succeeds as an audit-only package: empty upload/, unchanged nextNumber, no combined PDF, a recorded check", async () => {
+    const withheldA = await makePdf("secret-a.pdf", 2);
+    const withheldB = await makePdf("secret-b.pdf", 3);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [
+        { path: withheldA, status: "withhold", privilegeAsserted: "Attorney-client privilege" },
+        { path: withheldB, status: "withhold", privilegeAsserted: "Work product" },
+      ],
+      outputDir,
+      prefix: "ZERO",
+      start: 5,
+      withheldHandling: "omit",
+      combinedPdf: true,
+      includeLoadFiles: true,
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.nextNumber).toBe(5); // Unchanged -- nothing was ever stamped.
+    expect(result.combinedPdf).toBeNull();
+    expect(result.withheldCount).toBe(2);
+    expect(result.slipSheetCount).toBe(0);
+    expect(result.privilegeLogLocation).toBe("draft-privilege-log.csv");
+
+    const uploaded = await fs.readdir(path.join(outputDir, "upload"));
+    expect(uploaded).toEqual([]);
+
+    const logCsv = await fs.readFile(path.join(outputDir, result.privilegeLogLocation!), "utf8");
+    const logRows = parsePrivilegeLogCsv(logCsv);
+    expect(logRows).toHaveLength(2);
+    expect(logRows.every((row) => row.Bates === "")).toBe(true);
+
+    const manifest = await readPackageManifest(outputDir);
+    expect(manifest.checks).toContainEqual(
+      expect.objectContaining({ checkId: "production-zero-output", status: "pass" }),
+    );
+    expect(manifest.checks.map((check) => check.checkId)).not.toContain("production-combined-memory-bound");
+  });
+
+  it("still writes an (empty-rows) production index when every source is withheld", async () => {
+    const withheld = await makePdf("secret.pdf", 1);
+    const outputDir = path.join(dir, "package");
+
+    const result = await buildProductionSet({
+      sources: [{ path: withheld, status: "withhold", privilegeAsserted: "Attorney-client privilege" }],
+      outputDir,
+      prefix: "ZEROIDX",
+      withheldHandling: "omit",
+    });
+
+    expect(result.indexCsv).toBe("production-index.csv");
+    const csv = await fs.readFile(path.join(outputDir, result.indexCsv!), "utf8");
+    expect(csv.trim().split("\n")).toHaveLength(1); // Header row only.
   });
 });
 
@@ -1773,6 +2105,7 @@ function parseDatRows(bytes: Uint8Array): Record<(typeof DAT_ROW_FIELD_NAMES)[nu
 const PRIVILEGE_LOG_HEADERS = [
   "RowId",
   "Status",
+  "Bates",
   "PrivilegeAsserted",
   "Description",
   "Filename",

@@ -220,6 +220,7 @@ describe("ProductionSetWorkspace withhold / produce-redacted (draft privilege lo
           withheldCount: 1,
           redactedCount: 2,
           privilegeLogLocation: "draft-privilege-log.csv",
+          slipSheetCount: 0,
         },
       },
     });
@@ -246,6 +247,7 @@ describe("ProductionSetWorkspace withhold / produce-redacted (draft privilege lo
           withheldCount: 0,
           redactedCount: 0,
           privilegeLogLocation: null,
+          slipSheetCount: 0,
         },
       },
     });

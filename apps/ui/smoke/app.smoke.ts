@@ -839,11 +839,24 @@ test("switching from Select to a markup tool converts the selection; other tools
     }).toPass({ timeout: 15_000 });
   };
 
+  // Selecting and converting have to retry TOGETHER. `selectBodyText` only
+  // guarantees a selection existed when it returned; the selection can still be
+  // lost before the tool click lands (a re-render, or the click itself), and
+  // then the switch has nothing to convert. Asserting the markup separately
+  // turns that timing accident into a failure that looks like a real
+  // regression. Retrying the pair is safe: an attempt that DID convert passes
+  // its own assertion, so no attempt can leave extra markup behind.
+  const convertSelection = async (tool: string, markupSelector: string) => {
+    await expect(async () => {
+      await selectBodyText();
+      await selectMarkupTool(page, tool);
+      await expect(page.locator(markupSelector).first()).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
+  };
+
   // Select text, switch to Highlight: the selection becomes highlight
   // markup and the browser selection clears.
-  await selectBodyText();
-  await selectMarkupTool(page, "Highlight");
-  await expect(page.locator(".edit-layer__highlight").first()).toBeVisible();
+  await convertSelection("Highlight", ".edit-layer__highlight");
   const highlightCount = await page.locator(".edit-layer__highlight").count();
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 
@@ -857,10 +870,14 @@ test("switching from Select to a markup tool converts the selection; other tools
 
   // The side panel's Edit rows are a second tool-switch entry point and must
   // preserve the selection the same way the floating toolbar does.
-  await selectMarkupTool(page, "Select");
-  await selectBodyText();
-  await toolPanel.getByRole("button", { name: "Underline", exact: true }).click();
-  await expect(page.locator(".edit-layer__text-markup-lines").first()).toBeVisible();
+  await expect(async () => {
+    await selectMarkupTool(page, "Select");
+    await selectBodyText();
+    await toolPanel.getByRole("button", { name: "Underline", exact: true }).click();
+    await expect(page.locator(".edit-layer__text-markup-lines").first()).toBeVisible({
+      timeout: 3_000,
+    });
+  }).toPass({ timeout: 30_000 });
   expect(await page.evaluate(() => window.getSelection()?.isCollapsed ?? true)).toBe(true);
 });
 

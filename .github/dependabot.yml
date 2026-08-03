@@ -4,6 +4,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # react-dom pins an exact peer range on react (`react: ^19.2.8`), so a PR
+      # that bumps only one half leaves the pair mismatched and CI red. Keep
+      # them — and their types — in a single PR.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
 
   - package-ecosystem: cargo
     directory: /apps/shell/src-tauri

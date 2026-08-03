@@ -13,6 +13,8 @@ import type { PdfBinderOptions } from "@raiopdf/engine-api";
 import {
   listExhibitStampTemplates,
   resetExhibitStampCacheForTests,
+  saveExhibitStampTemplate,
+  type ExhibitStampTemplateV1,
 } from "../lib/exhibitStamps";
 import { BinderWorkspace } from "./BinderWorkspace";
 
@@ -45,6 +47,37 @@ const documentState = {
   tempBackingGrant: null,
   error: null,
 } satisfies DocumentState;
+
+/**
+ * A design the user is already six stickers into, styled unlike every starter
+ * template. Both halves matter: the advanced counter is what separates "the
+ * identifier came from the binder's order" from "the identifier came from the
+ * design", and the distinctive styling is what separates "the selected design
+ * was forwarded" from "some design was forwarded".
+ */
+const MID_MATTER_DESIGN: ExhibitStampTemplateV1 = {
+  version: 1,
+  id: "trial-exhibit",
+  name: "Trial Exhibit",
+  prefix: "Trial Exhibit",
+  identifierStyle: "numbers",
+  // The gallery's next sticker off this design would read "Trial Exhibit 7".
+  nextIndex: 6,
+  layout: "inline",
+  widthPt: 180,
+  heightPt: 54,
+  fontFamily: "times",
+  bold: false,
+  italic: true,
+  fontSizePt: 9,
+  textColor: { r: 0.4, g: 0, b: 0.1 },
+  fillColor: { r: 0.98, g: 0.94, b: 0.8 },
+  borderColor: { r: 0.4, g: 0, b: 0.1 },
+  borderWidthPt: 2.5,
+  cornerRadiusPt: 9,
+  createdAt: 1,
+  updatedAt: 1,
+};
 
 describe("BinderWorkspace", () => {
   let root: Root | null = null;
@@ -138,6 +171,88 @@ describe("BinderWorkspace", () => {
       0,
       0,
       0,
+    ]);
+  });
+
+  it("draws binder labels in a mid-matter design's look without spending its numbers", async () => {
+    window.localStorage.clear();
+    resetExhibitStampCacheForTests();
+    const seeded = await saveExhibitStampTemplate(MID_MATTER_DESIGN);
+    expect(seeded.ok).toBe(true);
+
+    const builds: Array<{
+      exhibits: readonly BinderExhibitInput[];
+      options: PdfBinderOptions;
+    }> = [];
+    container = window.document.createElement("div");
+    window.document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <BinderWorkspace
+          document={documentState}
+          onBuildBinder={async (exhibits, options) => {
+            builds.push({ exhibits, options });
+            return true;
+          }}
+          onOpenRequested={() => undefined}
+          onCancel={() => undefined}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await addExhibit("exhibit-a.pdf");
+    await addExhibit("exhibit-b.pdf");
+    await click(designChoice("Trial Exhibit"));
+    await click(buttonWithText("Build Binder"));
+
+    const build = builds[0];
+    expect(build).toBeDefined();
+
+    // (1) The whole visual treatment of THIS design goes to the engine — box,
+    // font face and weight, text/fill/border colors, stroke, corner. An exact
+    // match also pins the other half of the rule: no prefix, identifier style,
+    // or counter rides along with the appearance.
+    expect(build?.options.stampDesign).toEqual({
+      widthPt: 180,
+      heightPt: 54,
+      fontSizePt: 9,
+      fontFamily: "times",
+      bold: false,
+      italic: true,
+      color: { r: 0.4, g: 0, b: 0.1 },
+      fillColor: { r: 0.98, g: 0.94, b: 0.8 },
+      borderColor: { r: 0.4, g: 0, b: 0.1 },
+      borderWidthPt: 2.5,
+      cornerRadiusPt: 9,
+    });
+
+    // (2) The wording is the binder's own running order. Had the design's
+    // identity leaked, these would read "Trial Exhibit 7" and "Trial Exhibit 8"
+    // — different prefix, different style, and crucially a different index.
+    expect(build?.exhibits.map((exhibit) => exhibit.label)).toEqual([
+      "Exhibit A",
+      "Exhibit B",
+    ]);
+    // The design still lends its one-line layout to those binder-owned words.
+    expect(build?.exhibits.map((exhibit) => exhibit.labelLines)).toEqual([
+      ["Exhibit A"],
+      ["Exhibit B"],
+    ]);
+
+    // (3) The load-bearing one: two exhibits drawn in this design, and the
+    // gallery's counter has not moved off 6. Re-read from storage rather than
+    // the module cache, so an advance that was actually persisted is caught.
+    resetExhibitStampCacheForTests();
+    expect(
+      listExhibitStampTemplates().map((template) => [template.id, template.nextIndex]),
+    ).toEqual([
+      ["plaintiffs-exhibit", 0],
+      ["defendants-exhibit", 0],
+      ["exhibit", 0],
+      ["trial-exhibit", 6],
     ]);
   });
 

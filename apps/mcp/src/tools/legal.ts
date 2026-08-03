@@ -755,9 +755,12 @@ export const productionSetInputSchema = {
         .describe(
           'Default "produce". "produce-redacted" is still produced NORMALLY -- this tool performs and ' +
             "verifies NO redaction as part of a production build; redact upstream with redact_terms first -- " +
-            'but gets a draft privilege log row. "withhold" excludes the source entirely: filtered out before ' +
-            "Bates numbers are assigned (like a produce-once-omitted duplicate), never stamped, never in " +
-            "upload/, the index, or the DAT, and consumes no Bates number. Requires privilegeAsserted.",
+            'but gets a draft privilege log row. "withhold" keeps the source\'s own bytes out of the ' +
+            "production and requires privilegeAsserted; how its place is represented depends on " +
+            'withheldHandling (default "slip-sheet"): a Bates-stamped "DOCUMENT WITHHELD" placeholder takes ' +
+            "its position and DOES appear in upload/, the index, and the DAT, consuming exactly one Bates " +
+            'number. Set withheldHandling: "omit" for a pure omission that consumes no Bates number and ' +
+            "never appears anywhere in the produced set.",
         ),
       privilegeAsserted: z
         .string()

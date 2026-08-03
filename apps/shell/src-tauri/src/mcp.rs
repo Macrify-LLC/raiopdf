@@ -92,6 +92,254 @@ struct ProductionSetContinuationOverride {
     reason: String,
 }
 
+/// Everything the renderer sends for a production build, as ONE argument.
+///
+/// Why a struct rather than 20 positional command parameters: with separate
+/// parameters there is no single type to deserialize the renderer's payload
+/// into, so nothing can assert that the two sides still agree. Worse, a
+/// parameter renamed on this side simply stops matching its key -- Tauri hands
+/// the command `None` and the option is dropped **silently**, producing a
+/// wrong production with no error anywhere.
+///
+/// `deny_unknown_fields` is the point of this type, not a nicety: it turns that
+/// silent drop into a loud failure. `rename_all = "camelCase"` is mandatory --
+/// without it every field fails to bind, which is the same failure this exists
+/// to prevent. Same shape as `diagnostics::DiagnosticEvent`, which the renderer
+/// likewise sends nested under its parameter name.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductionSetShellArgs {
+    sources: Vec<ProductionSetSourceGrant>,
+    output_dir: String,
+    prefix: String,
+    #[serde(default)]
+    start: Option<u32>,
+    #[serde(default)]
+    digits: Option<u32>,
+    include_filename_in_index: bool,
+    include_index: bool,
+    combined_pdf: bool,
+    #[serde(default)]
+    volume_size_mb: Option<f64>,
+    #[serde(default)]
+    bates_placement: Option<ProductionSetStampPlacement>,
+    #[serde(default)]
+    designation_placement: Option<ProductionSetStampPlacement>,
+    #[serde(default)]
+    stamp_font_size_pt: Option<f64>,
+    /// Directory grant for a prior production package to continue the same
+    /// Bates series from -- never a raw path from the renderer, same
+    /// discipline as every source grant here.
+    #[serde(default)]
+    continue_from: Option<String>,
+    /// Flat on the wire, nested into `continuationOverride { reason }` for the
+    /// one-shot payload. This rename is exactly the kind of drift
+    /// `to_one_shot_input` exists to pin.
+    #[serde(default)]
+    continuation_override_reason: Option<String>,
+    #[serde(default)]
+    duplicate_handling: Option<String>,
+    include_load_files: bool,
+    include_filename_in_privilege_log: bool,
+    #[serde(default)]
+    withheld_handling: Option<String>,
+}
+
+#[cfg(test)]
+mod production_set_args_fixture {
+    //! The shell half of the `build_production_set` IPC seam.
+    //!
+    //! The fixture read here is generated and asserted by the renderer in
+    //! `apps/ui/src/lib/productionSetArgs.test.ts`. Neither side owns the
+    //! contract alone: the renderer proves it still emits this shape, and these
+    //! tests prove the shell still accepts it and translates it correctly.
+    //!
+    //! What this catches that nothing else did: a field renamed on either side.
+    //! Tauri binds command arguments by name, so a rename used to mean the shell
+    //! received `None` and quietly dropped the option — a wrong production with
+    //! no error. `deny_unknown_fields` plus this fixture turn that into a
+    //! failing test.
+
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../fixtures/production-set-shell-args.json");
+
+    fn parse() -> ProductionSetShellArgs {
+        serde_json::from_str(FIXTURE).expect("renderer fixture must deserialize")
+    }
+
+    #[test]
+    fn accepts_the_renderer_payload() {
+        let args = parse();
+        assert_eq!(args.sources.len(), 3);
+        assert_eq!(args.prefix, "SMITH");
+        assert_eq!(args.start, Some(100));
+        assert_eq!(args.digits, Some(6));
+        assert_eq!(args.duplicate_handling.as_deref(), Some("produce-once"));
+        assert_eq!(args.withheld_handling.as_deref(), Some("slip-sheet"));
+        assert!(args.include_load_files);
+        assert!(args.include_filename_in_privilege_log);
+    }
+
+    #[test]
+    fn rejects_a_field_the_shell_does_not_know() {
+        // `deny_unknown_fields` is the whole point of the struct: a renderer
+        // that starts sending an option this build cannot honour must fail
+        // loudly rather than have it silently ignored.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        value["someFutureOption"] = serde_json::json!(true);
+
+        let parsed = serde_json::from_value::<ProductionSetShellArgs>(value);
+        assert!(
+            parsed.is_err(),
+            "unknown fields must be rejected, not ignored"
+        );
+    }
+
+    #[test]
+    fn a_renamed_field_does_not_silently_become_none() {
+        // The exact historical failure mode: `continuationOverrideReason`
+        // arriving under any other spelling must fail, not quietly disable the
+        // override and renumber a production.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        let object = value.as_object_mut().unwrap();
+        let reason = object.remove("continuationOverrideReason").unwrap();
+        object.insert("continuationOverrideReasonV2".to_string(), reason);
+
+        assert!(serde_json::from_value::<ProductionSetShellArgs>(value).is_err());
+    }
+
+    #[test]
+    fn translates_grants_to_paths_and_nests_the_continuation_override() {
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+
+        // Re-mint the fixture's grants against real grant tables.
+        let mut args = parse();
+        let paths = ["produced.pdf", "redacted.pdf", "withheld.pdf"];
+        for (source, name) in args.sources.iter_mut().zip(paths) {
+            source.grant = file_grants
+                .grant(std::env::temp_dir().join(name))
+                .expect("grant");
+        }
+        args.continue_from = Some(
+            directory_grants
+                .grant(std::env::temp_dir().join("prior-production"))
+                .expect("directory grant"),
+        );
+
+        let input = to_one_shot_input(args, &file_grants, &directory_grants).expect("translation");
+
+        // Grants became real paths, and no grant string survived into the payload.
+        assert!(input.sources[0].path.ends_with("produced.pdf"));
+        assert!(input
+            .continue_from
+            .as_deref()
+            .unwrap()
+            .ends_with("prior-production"));
+
+        // The flat renderer field became the nested one-shot shape.
+        let override_reason = input.continuation_override.as_ref().expect("override kept");
+        assert_eq!(
+            override_reason.reason,
+            "Reserved 100 numbers for a rolling production"
+        );
+
+        // Per-source choices survive the hop unchanged.
+        assert_eq!(input.sources[2].status.as_deref(), Some("withhold"));
+        assert_eq!(
+            input.sources[2].privilege_asserted.as_deref(),
+            Some("Attorney-client privilege")
+        );
+        // A produced document carries no privilege text.
+        assert_eq!(input.sources[0].status, None);
+        assert_eq!(input.sources[0].privilege_asserted, None);
+    }
+
+    #[test]
+    fn serializes_to_the_shape_the_one_shot_connector_expects() {
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+        let mut args = parse();
+        for source in args.sources.iter_mut() {
+            source.grant = file_grants
+                .grant(std::env::temp_dir().join("s.pdf"))
+                .unwrap();
+        }
+        args.continue_from = None;
+
+        let input = to_one_shot_input(args, &file_grants, &directory_grants).unwrap();
+        let json = serde_json::to_value(&input).unwrap();
+
+        // camelCase on the wire, nested override, and no renderer-only keys.
+        assert!(json.get("includeLoadFiles").is_some());
+        assert!(json.get("continuationOverride").is_some());
+        assert!(json.get("continuationOverrideReason").is_none());
+        assert!(json.get("sources").unwrap()[0].get("path").is_some());
+        assert!(json.get("sources").unwrap()[0].get("grant").is_none());
+    }
+}
+
+/// Translate the renderer's grant-shaped arguments into the path-shaped payload
+/// the one-shot connector expects.
+///
+/// Split out of the command so it can be tested without a Tauri runtime: this
+/// is where grants become filesystem paths and where the flat
+/// `continuationOverrideReason` becomes nested `continuationOverride`. A
+/// resolved path never crosses back over IPC to the renderer.
+fn to_one_shot_input(
+    args: ProductionSetShellArgs,
+    file_grants: &FileGrants,
+    directory_grants: &DirectoryGrants,
+) -> Result<ProductionSetOneShotInput, String> {
+    let sources = args
+        .sources
+        .into_iter()
+        .map(|source| {
+            Ok(ProductionSetSource {
+                path: resolve_source_path(file_grants, &source.grant)?,
+                designation: source.designation,
+                designation_pages: source.designation_pages,
+                custodian: source.custodian,
+                status: source.status,
+                privilege_asserted: source.privilege_asserted,
+                basis: source.basis,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let continue_from = match args.continue_from {
+        Some(grant) => Some(path_to_utf8_string(
+            directory_grants.resolve(&grant)?,
+            "Prior production folder",
+        )?),
+        None => None,
+    };
+
+    Ok(ProductionSetOneShotInput {
+        sources,
+        output_dir: resolve_output_dir(&args.output_dir)?,
+        prefix: args.prefix,
+        start: args.start,
+        digits: args.digits,
+        include_filename_in_index: args.include_filename_in_index,
+        include_index: args.include_index,
+        combined_pdf: args.combined_pdf,
+        volume_size_mb: args.volume_size_mb,
+        bates_placement: args.bates_placement,
+        designation_placement: args.designation_placement,
+        stamp_font_size_pt: args.stamp_font_size_pt,
+        continue_from,
+        continuation_override: args
+            .continuation_override_reason
+            .map(|reason| ProductionSetContinuationOverride { reason }),
+        duplicate_handling: args.duplicate_handling,
+        include_load_files: args.include_load_files,
+        include_filename_in_privilege_log: args.include_filename_in_privilege_log,
+        withheld_handling: args.withheld_handling,
+    })
+}
+
 /// Mirrors `packages/production-set`'s `PdfStampPlacement` (via
 /// `@raiopdf/engine-api`) over the Node one-shot JSON boundary. Same shape as
 /// `path_ops::BinderStampPlacement` -- kept as its own type rather than
@@ -754,87 +1002,18 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn build_production_set(
-    sources: Vec<ProductionSetSourceGrant>,
-    output_dir: String,
-    prefix: String,
-    start: Option<u32>,
-    digits: Option<u32>,
-    include_filename_in_index: bool,
-    include_index: bool,
-    combined_pdf: bool,
-    volume_size_mb: Option<f64>,
-    bates_placement: Option<ProductionSetStampPlacement>,
-    designation_placement: Option<ProductionSetStampPlacement>,
-    stamp_font_size_pt: Option<f64>,
-    // Directory grant for a prior production package to continue the same
-    // Bates series from -- never a raw path from the renderer, same
-    // discipline as every source grant here. Resolved to a path below,
-    // immediately before it's handed to the one-shot subprocess.
-    continue_from: Option<String>,
-    continuation_override_reason: Option<String>,
-    duplicate_handling: Option<String>,
-    // Always sent explicitly by the renderer (default false), same as
-    // `include_index`/`combined_pdf` above -- never a raw path, never
-    // optional at this boundary.
-    include_load_files: bool,
-    // Always sent explicitly by the renderer (default true), same reasoning
-    // as `include_load_files` above.
-    include_filename_in_privilege_log: bool,
-    withheld_handling: Option<String>,
+    args: ProductionSetShellArgs,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
-    let output_dir = resolve_output_dir(&output_dir)?;
-    let sources = sources
-        .into_iter()
-        .map(|source| {
-            Ok(ProductionSetSource {
-                path: resolve_source_path(&file_grants, &source.grant)?,
-                designation: source.designation,
-                designation_pages: source.designation_pages,
-                custodian: source.custodian,
-                status: source.status,
-                privilege_asserted: source.privilege_asserted,
-                basis: source.basis,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let file_count = sources.len();
-    let total_bytes = sources
+    let input = to_one_shot_input(args, &file_grants, &directory_grants)?;
+    let file_count = input.sources.len();
+    let total_bytes = input
+        .sources
         .iter()
         .map(|source| file_size_or_zero(&source.path))
         .sum();
-    let continue_from = match continue_from {
-        Some(grant) => Some(path_to_utf8_string(
-            directory_grants.resolve(&grant)?,
-            "Prior production folder",
-        )?),
-        None => None,
-    };
-
-    let input = ProductionSetOneShotInput {
-        sources,
-        output_dir,
-        prefix,
-        start,
-        digits,
-        include_filename_in_index,
-        include_index,
-        combined_pdf,
-        volume_size_mb,
-        bates_placement,
-        designation_placement,
-        stamp_font_size_pt,
-        continue_from,
-        continuation_override: continuation_override_reason
-            .map(|reason| ProductionSetContinuationOverride { reason }),
-        duplicate_handling,
-        include_load_files,
-        include_filename_in_privilege_log,
-        withheld_handling,
-    };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
     let output: ProductionSetOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {

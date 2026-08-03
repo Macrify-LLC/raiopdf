@@ -138,8 +138,36 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   draft privilege log, index, and manifest are all written normally; only the upload
   folder is empty.
 
+- **When something goes wrong, you can hand it to your own AI assistant.**
+  Alongside **Email a report**, an error now offers **Help diagnose this** — one click
+  copies a description of the failure, and you paste it into whatever assistant you
+  already use to have it explain the problem and draft either an email or a public bug
+  report for you to send. If you don't have a GitHub account it offers to walk you
+  through it. A render crash no longer leaves a blank window either: RaioPDF catches it,
+  tells you the files on your disk are untouched, and offers both actions.
+- **Your AI assistant can read RaioPDF's recent diagnostics — scrubbed, never the raw
+  logs.** A new `raiopdf_diagnostics` tool over the MCP connector returns a capped,
+  provenance-stamped summary of what recently went wrong. RaioPDF's logs are written raw,
+  and on a lawyer's machine a folder name is often a client name and a file name a matter
+  name — so this never reads those files directly. It goes through the same redaction the
+  app's own export path uses, enforced in code on the way out rather than by asking an
+  assistant to be careful. Still no AI in RaioPDF itself.
+
 ### Changed
 
+- **An error report now describes the failure you're actually looking at.** Previously
+  **Email a report** attached whichever error was recorded most recently, and on most
+  failures it never appeared at all. Each failure now carries a short reference id that
+  also lands in the log, so the report matches what is on screen — and the button appears
+  on the failures that matter. A capability gap, like no desktop engine or a missing OCR
+  toolchain, correctly offers no report, because there is nothing to investigate.
+- **Document warnings are accurate, and you can close them.** The large-document notice
+  had drifted as file-to-file processing grew, and now lists what genuinely does and does
+  not work at that size. Streamed flatten attempts get their own warning instead of an
+  unrelated one about form filling. Persistent messages — the large-document notice, the
+  signature-invalidation banner, the bookmark-removal warning, and the jurisdiction-pack
+  integrity banner — each gained an independent close button. Messages where hiding the
+  text would leave the screen misleading stay put.
 - **Production sets no longer load every document into memory before they start.**
   Each PDF is now opened, stamped, written, and closed one at a time, so a production of
   hundreds of documents uses about as much memory as a production of five. The optional

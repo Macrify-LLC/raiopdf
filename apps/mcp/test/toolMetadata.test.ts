@@ -1,65 +1,106 @@
-// Pins the public, AI-client-facing descriptions of `build_production_set`'s
-// withhold surface.
+// Pins the public, AI-client-facing description of `build_production_set`'s
+// withhold surface — on BOTH surfaces that drifted.
 //
-// Why this file exists: these descriptions are the only thing an AI client reads
-// to decide how to call the tool, and two of them drifted out of sync with the
-// implementation when slip sheets landed. Both said a withheld document "never
-// appears in upload/, the index, or the DAT and consumes no Bates number" -- which
-// is the `withheldHandling: "omit"` behaviour, not the default. The default is
-// "slip-sheet": a Bates-stamped placeholder that DOES appear in all three and
-// consumes exactly one number (packages/production-set/src/index.ts:97-113,
-// docs/PRODUCTION-SETS.md "Slip sheets").
+// Why this file exists: these descriptions are the only thing an AI client
+// reads to decide how to call the tool, and two of them fell out of sync with
+// the implementation when slip sheets landed. Both said a withheld document
+// "never appears in upload/, the index, or the DAT and consumes no Bates
+// number" — which is the `withheldHandling: "omit"` behaviour, not the default.
+// The default is "slip-sheet": a Bates-stamped placeholder that DOES appear in
+// all three and consumes exactly one number
+// (packages/production-set/src/index.ts:97-113, docs/PRODUCTION-SETS.md).
 //
-// A description that confidently states the wrong contract is worse than a vague
-// one, because a client acts on it. These assertions are semantic rather than
-// exact-string so that rewording stays free while re-introducing the specific
-// contradiction does not.
+// A description that confidently states the wrong contract is worse than a
+// vague one, because a client acts on it.
+//
+// The two surfaces need different reach:
+//   - the per-field `status` / `withheldHandling` text lives on the zod schema
+//     and is read directly;
+//   - the tool's own top-level description is an inline literal inside
+//     `registerTools`, so it is read back the way a client sees it — over a real
+//     tools/list on an in-memory transport. Reading it any other way would let
+//     the exact text that regressed drift again unnoticed.
+//
+// Assertions are semantic rather than exact-string, so rewording stays free
+// while re-introducing the specific contradiction does not.
 
-import { describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import type { EngineHandle } from "../src/engine.js";
+import { registerTools } from "../src/index.js";
 import { productionSetInputSchema } from "../src/tools/legal.js";
 
+const schema = z.object(productionSetInputSchema);
+
 /** Description text for a field on the `sources[]` element. */
-function sourceFieldDescription(field: string): string {
-  const sources = productionSetInputSchema.sources as unknown as {
-    element?: { shape?: Record<string, { description?: string }> };
-  };
-  const description = sources.element?.shape?.[field]?.description;
-  if (typeof description !== "string" || description.length === 0) {
-    throw new Error(`sources[].${field} has no description to pin`);
-  }
-  return description;
+function sourceFieldDescription(field: "status" | "privilegeAsserted" | "basis"): string {
+  return described(schema.shape.sources.element.shape[field]?.description, `sources[].${field}`);
 }
 
 /** Description text for a top-level field on the tool's input schema. */
-function topLevelDescription(field: keyof typeof productionSetInputSchema): string {
-  const description = (productionSetInputSchema[field] as { description?: string }).description;
-  if (typeof description !== "string" || description.length === 0) {
-    throw new Error(`${String(field)} has no description to pin`);
+function topLevelDescription(field: "withheldHandling" | "duplicateHandling"): string {
+  return described(schema.shape[field]?.description, field);
+}
+
+function described(text: string | undefined, label: string): string {
+  if (typeof text !== "string" || text.length === 0) {
+    throw new Error(`${label} has no description to pin`);
   }
-  return description;
+  return text;
+}
+
+/** The engine must never be started just to list tool metadata. */
+function inertEngineHandle(): EngineHandle {
+  return {
+    async getEngine() {
+      throw new Error("listing tools must not start the sidecar");
+    },
+  } as unknown as EngineHandle;
 }
 
 describe("build_production_set withhold metadata", () => {
-  it("does not present the omit-only behaviour as unconditional", () => {
-    const status = sourceFieldDescription("status");
+  let advertisedDescription: string;
 
-    // The failure this guards: a blanket "never in the DAT / consumes no Bates
-    // number" claim with no mention that it depends on withheldHandling.
-    const claimsNothingConsumed = /consum\w*\s+no\s+bates/i.test(status);
-    const claimsNeverAppears = /never\s+(?:in|appears)/i.test(status);
+  beforeAll(async () => {
+    const server = new McpServer({ name: "raiopdf-test", version: "0.0.0" });
+    registerTools(server, {
+      engineHandle: inertEngineHandle(),
+      isEnabled: async () => true,
+    });
 
-    if (claimsNothingConsumed || claimsNeverAppears) {
-      expect(
-        status,
-        "status must tie any never-appears / consumes-no-Bates claim to withheldHandling, " +
-          'because that is only true under "omit" -- the default is "slip-sheet"',
-      ).toMatch(/withheldHandling/);
-      expect(status).toMatch(/omit/);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "metadata-test", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const { tools } = await client.listTools();
+    const tool = tools.find((candidate) => candidate.name === "build_production_set");
+    if (!tool?.description) {
+      throw new Error("build_production_set must advertise a description");
     }
+    advertisedDescription = tool.description;
+    await client.close();
   });
 
-  it("points callers at withheldHandling for what a withheld document leaves behind", () => {
-    expect(sourceFieldDescription("status")).toMatch(/withheldHandling/);
+  it("advertises withhold as depending on withheldHandling, not as an unconditional omission", () => {
+    // This is the exact text that regressed. It is read back over tools/list
+    // because that is the only form an AI client ever sees.
+    expect(advertisedDescription).toMatch(/withheldHandling/);
+    expect(advertisedDescription).toMatch(/slip-sheet/i);
+    expect(advertisedDescription).toMatch(/\bomit\b/);
+  });
+
+  it("does not tell clients a withheld document is excluded entirely", () => {
+    // The specific pre-fix phrasing, and its close relatives.
+    expect(advertisedDescription).not.toMatch(/excluded entirely/i);
+  });
+
+  it("ties the per-source status field to withheldHandling", () => {
+    const status = sourceFieldDescription("status");
+    expect(status).toMatch(/withheldHandling/);
+    expect(status).toMatch(/\bomit\b/);
   });
 
   it("documents the slip-sheet default and what it consumes", () => {
@@ -73,7 +114,7 @@ describe("build_production_set withhold metadata", () => {
 
   it("still documents omit as the pure-omission escape hatch", () => {
     const handling = topLevelDescription("withheldHandling");
-    expect(handling).toMatch(/"omit"|\bomit\b/);
+    expect(handling).toMatch(/\bomit\b/);
     expect(handling).toMatch(/no\s+bates\s+number|consuming\s+no/i);
   });
 

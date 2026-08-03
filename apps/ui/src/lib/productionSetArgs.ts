@@ -13,39 +13,35 @@
 //   - `continuationOverrideReason` is FLAT here and becomes nested
 //     `continuationOverride { reason }` on the far side of the shell.
 
-import type { ProductionSetRunInput } from "../components/ProductionSetWorkspace";
+import type {
+  ProductionSetRunInput,
+  ProductionSourceStatus,
+} from "../components/ProductionSetWorkspace";
 
 /** One source as the shell receives it: a grant plus its per-file choices. */
 export interface ProductionSetSourceArgs {
   grant: string;
   designation?: string | undefined;
   designationPages?: string | undefined;
-  status?: string | undefined;
+  status?: ProductionSourceStatus | undefined;
   privilegeAsserted?: string | undefined;
   basis?: string | undefined;
 }
 
-/** Mirrors `ProductionSetShellArgs` in the shell crate, field for field. */
-export interface ProductionSetArgs {
+/**
+ * Mirrors `ProductionSetShellArgs` in the shell crate.
+ *
+ * Derived from `ProductionSetRunInput` rather than retyped so the workspace's
+ * unions (`ProductionDuplicateHandling`, `WithheldHandling`) keep their narrow
+ * types all the way to the IPC boundary, and so a new production option is a
+ * one-place change here instead of four. Only two fields genuinely differ:
+ * `files` becomes grant-bearing `sources`, and `volumeSizeMb` loses its `null`
+ * (the key is omitted instead).
+ */
+export type ProductionSetArgs = Omit<ProductionSetRunInput, "files" | "volumeSizeMb"> & {
   sources: ProductionSetSourceArgs[];
-  outputDir: string;
-  prefix: string;
-  start?: number | undefined;
-  digits?: number | undefined;
-  includeIndex: boolean;
-  includeFilenameInIndex: boolean;
-  combinedPdf: boolean;
   volumeSizeMb?: number | undefined;
-  batesPlacement?: ProductionSetRunInput["batesPlacement"];
-  designationPlacement?: ProductionSetRunInput["designationPlacement"];
-  stampFontSizePt?: number | undefined;
-  continueFrom?: string | undefined;
-  continuationOverrideReason?: string | undefined;
-  duplicateHandling?: string | undefined;
-  includeLoadFiles: boolean;
-  includeFilenameInPrivilegeLog: boolean;
-  withheldHandling?: string | undefined;
-}
+};
 
 /** Message shown when a file in the run has no desktop grant behind it. */
 export const MISSING_GRANT_MESSAGE =

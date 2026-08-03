@@ -59,8 +59,13 @@ pub struct ProductionSetSource {
 /// grant is resolved to a filesystem path only here in Rust, immediately
 /// before it's handed to the one-shot subprocess -- the resolved path never
 /// crosses back over IPC to the renderer.
+/// `deny_unknown_fields` matters MORE here than on the outer args struct: the
+/// fields whose silent loss is worst — `status`, `privilegeAsserted`, `basis` —
+/// live on this nested type, not the outer one. Without it, renaming
+/// `privilegeAsserted` on the renderer leaves `privilege_asserted` as `None`
+/// and a withheld document ships with a blank privilege-log row.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductionSetSourceGrant {
     grant: String,
     designation: Option<String>,
@@ -106,6 +111,28 @@ struct ProductionSetContinuationOverride {
 /// without it every field fails to bind, which is the same failure this exists
 /// to prevent. Same shape as `diagnostics::DiagnosticEvent`, which the renderer
 /// likewise sends nested under its parameter name.
+///
+/// SCOPE -- this is deliberate, not an unfinished migration. `build_filing_packet`,
+/// `path_ops::protect_to_target`, and `print::print_pdf` still take positional
+/// parameters. The failure this guards needs an `Option<T>` parameter: a renamed
+/// REQUIRED param already fails Tauri's deserialize loudly, so only optionals
+/// degrade silently. By that measure `build_production_set` (8 optionals, each
+/// changing a served legal artifact) was far the worst; `print_pdf` and
+/// `build_filing_packet` (3 each -- a dropped `page_indexes` prints the whole
+/// document, a dropped `split_size_mb` sends an unsplit filing to the portal)
+/// are the next candidates; `protect_to_target` is the weakest despite its
+/// subject matter, because its one optional is inconsequential.
+///
+/// Port one only together with its own fixture test. A `deny_unknown_fields`
+/// struct with no fixture behind it is worse than the positional list it
+/// replaced: it looks pinned and is not.
+///
+/// Cost accepted: the field list is now restated in several places (this struct,
+/// `to_one_shot_input`, `ProductionSetOneShotInput`, the fixture, and the
+/// renderer's `ProductionSetArgs`). That restatement is what makes drift loud,
+/// and `#[serde(flatten)]` over a shared struct is not an option -- serde does
+/// not support it together with `deny_unknown_fields`. Adding a 19th option is
+/// a coordinated multi-file edit by design.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductionSetShellArgs {
@@ -197,6 +224,36 @@ mod production_set_args_fixture {
     }
 
     #[test]
+    fn rejects_an_unknown_field_on_a_source_too() {
+        // The outer struct guarding itself is not enough: the fields whose
+        // silent loss actually costs something -- status, privilegeAsserted,
+        // basis -- are on the nested source. A top-level-only guard would let
+        // a renamed `privilegeAsserted` become None and put a withheld
+        // document out with an empty privilege-log row.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        value["sources"][2]["privilegeAssertedV2"] = serde_json::json!("Attorney-client privilege");
+
+        assert!(
+            serde_json::from_value::<ProductionSetShellArgs>(value).is_err(),
+            "unknown fields on a source must be rejected, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn a_renamed_privilege_field_does_not_silently_blank_the_log() {
+        // Same failure, stated as the outcome that matters.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        let withheld = value["sources"][2].as_object_mut().unwrap();
+        let asserted = withheld.remove("privilegeAsserted").unwrap();
+        withheld.insert("privilege_asserted".to_string(), asserted);
+
+        assert!(
+            serde_json::from_value::<ProductionSetShellArgs>(value).is_err(),
+            "a snake_case slip on the renderer must fail, not withhold without a basis"
+        );
+    }
+
+    #[test]
     fn a_renamed_field_does_not_silently_become_none() {
         // The exact historical failure mode: `continuationOverrideReason`
         // arriving under any other spelling must fail, not quietly disable the
@@ -209,24 +266,32 @@ mod production_set_args_fixture {
         assert!(serde_json::from_value::<ProductionSetShellArgs>(value).is_err());
     }
 
-    #[test]
-    fn translates_grants_to_paths_and_nests_the_continuation_override() {
-        let file_grants = FileGrants::default();
-        let directory_grants = DirectoryGrants::default();
-
-        // Re-mint the fixture's grants against real grant tables.
+    /// The fixture carries placeholder grant strings; re-mint them against real
+    /// grant tables so the translation under test resolves something.
+    fn parse_with_real_grants(
+        temp: &std::path::Path,
+        file_grants: &FileGrants,
+        directory_grants: &DirectoryGrants,
+    ) -> ProductionSetShellArgs {
         let mut args = parse();
-        let paths = ["produced.pdf", "redacted.pdf", "withheld.pdf"];
-        for (source, name) in args.sources.iter_mut().zip(paths) {
-            source.grant = file_grants
-                .grant(std::env::temp_dir().join(name))
-                .expect("grant");
+        let names = ["produced.pdf", "redacted.pdf", "withheld.pdf"];
+        for (source, name) in args.sources.iter_mut().zip(names) {
+            source.grant = file_grants.grant(temp.join(name)).expect("file grant");
         }
         args.continue_from = Some(
             directory_grants
-                .grant(std::env::temp_dir().join("prior-production"))
+                .grant(temp.join("prior-production"))
                 .expect("directory grant"),
         );
+        args
+    }
+
+    #[test]
+    fn translates_grants_to_paths_and_nests_the_continuation_override() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+        let args = parse_with_real_grants(temp.path(), &file_grants, &directory_grants);
 
         let input = to_one_shot_input(args, &file_grants, &directory_grants).expect("translation");
 
@@ -258,14 +323,11 @@ mod production_set_args_fixture {
 
     #[test]
     fn serializes_to_the_shape_the_one_shot_connector_expects() {
+        let temp = tempfile::tempdir().expect("tempdir");
         let file_grants = FileGrants::default();
         let directory_grants = DirectoryGrants::default();
-        let mut args = parse();
-        for source in args.sources.iter_mut() {
-            source.grant = file_grants
-                .grant(std::env::temp_dir().join("s.pdf"))
-                .unwrap();
-        }
+        let mut args = parse_with_real_grants(temp.path(), &file_grants, &directory_grants);
+        // No continuation on this path: the point here is the wire shape.
         args.continue_from = None;
 
         let input = to_one_shot_input(args, &file_grants, &directory_grants).unwrap();
@@ -292,6 +354,10 @@ fn to_one_shot_input(
     file_grants: &FileGrants,
     directory_grants: &DirectoryGrants,
 ) -> Result<ProductionSetOneShotInput, String> {
+    // Cheapest check first: a bad output folder should fail before N grant
+    // lookups, each of which takes the grant-table lock and clones an entry.
+    let output_dir = resolve_output_dir(&args.output_dir)?;
+
     let sources = args
         .sources
         .into_iter()
@@ -318,7 +384,7 @@ fn to_one_shot_input(
 
     Ok(ProductionSetOneShotInput {
         sources,
-        output_dir: resolve_output_dir(&args.output_dir)?,
+        output_dir,
         prefix: args.prefix,
         start: args.start,
         digits: args.digits,
@@ -1309,6 +1375,31 @@ fn one_shot_node_options(explicit: Option<String>) -> String {
     }
 }
 
+/// Build the one-shot child command.
+///
+/// Extracted from the spawn path purely so the argument ORDER is asserted by a
+/// test rather than only described in a comment. `--one-shot <tool>` must be
+/// the only arguments and the marker must come first: the launcher execs
+/// `node <entrypoint> <args...>`, so anything preceding the marker shifts the
+/// token the runtime dispatches on. Passing the hardening flag positionally
+/// did exactly that and shipped broken in v0.1.0–v0.1.2, disabling every
+/// one-shot tool. A comment did not stop it happening three times; a test can.
+fn build_one_shot_command(
+    binary: &std::path::Path,
+    tool_name: &str,
+    node_options: Option<String>,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .args(["--one-shot", tool_name])
+        .env("NODE_OPTIONS", one_shot_node_options(node_options))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    engine_sidecar_core::configure_child_process(&mut command);
+    command
+}
+
 pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     tool_name: &str,
     input: &T,
@@ -1321,16 +1412,7 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     let payload = serde_json::to_vec(input)
         .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
 
-    let mut command = Command::new(&binary);
-    command
-        // `--one-shot <tool>` must be the ONLY arguments, with the marker
-        // first — see `NODE_SECURITY_FLAG` for why nothing may precede it.
-        .args(["--one-shot", tool_name])
-        .env("NODE_OPTIONS", one_shot_node_options(options.node_options))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    engine_sidecar_core::configure_child_process(&mut command);
+    let mut command = build_one_shot_command(&binary, tool_name, options.node_options);
 
     let child = command.spawn().map_err(|_| {
         "RaioPDF couldn't start its built-in tools. Reinstall RaioPDF and try again.".to_string()
@@ -1496,7 +1578,7 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        hash_path_sha256, one_shot_node_options, package_one_shot_timeout,
+        build_one_shot_command, hash_path_sha256, one_shot_node_options, package_one_shot_timeout,
         read_production_continuation_sync, resolve_output_dir, sanitize_one_shot_failure,
         sha256_hex, ProductionSetSource, ProductionSetSourceGrant, ProductionSetStampPlacement,
         NODE_SECURITY_FLAG,
@@ -1643,6 +1725,55 @@ mod tests {
         let error =
             read_production_continuation_sync(dir.path()).expect_err("prefix drift in a row");
         assert!(error.contains("doesn't match its prefix"), "{error}");
+    }
+
+    #[test]
+    fn one_shot_marker_is_first_and_alone_on_the_command_line() {
+        // Guards the defect that shipped in v0.1.0-v0.1.2: a flag placed before
+        // `--one-shot` shifts the token the runtime dispatches on, silently
+        // disabling every one-shot tool. Until now the rule lived only in a
+        // comment, and it was broken three releases running.
+        let command = build_one_shot_command(
+            std::path::Path::new("raiopdf-mcp"),
+            "build_production_set",
+            None,
+        );
+
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
+        assert_eq!(
+            args,
+            vec!["--one-shot", "build_production_set"],
+            "the marker must come first and be the ONLY arguments"
+        );
+    }
+
+    #[test]
+    fn one_shot_hardening_never_rides_on_the_command_line() {
+        // The corollary: the security flag must travel via NODE_OPTIONS, never
+        // as an argument. This asserts the negative directly.
+        let command = build_one_shot_command(
+            std::path::Path::new("raiopdf-mcp"),
+            "batch_cleanup",
+            Some("--max-old-space-size=8192".to_string()),
+        );
+
+        assert!(
+            !command
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains(NODE_SECURITY_FLAG)),
+            "hardening flag must not appear as an argument"
+        );
+
+        let node_options = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("NODE_OPTIONS"))
+            .and_then(|(_, value)| value)
+            .expect("NODE_OPTIONS must be set on every one-shot child")
+            .to_string_lossy()
+            .into_owned();
+
+        assert!(node_options.contains(NODE_SECURITY_FLAG));
+        assert!(node_options.contains("--max-old-space-size=8192"));
     }
 
     #[test]

@@ -15,31 +15,31 @@
 // dropped from a real production.
 
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ProductionSetFile, ProductionSetRunInput } from "../components/ProductionSetWorkspace";
 import { MISSING_GRANT_MESSAGE, buildProductionSetArgs } from "./productionSetArgs";
 
-// apps/ui/src/lib -> repo root
-const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-const FIXTURE_PATH = path.join(
-  repoRoot,
-  "apps/shell/src-tauri/fixtures/production-set-shell-args.json",
+// apps/ui/src/lib -> apps/shell/src-tauri/fixtures
+const FIXTURE_PATH = fileURLToPath(
+  new URL("../../../shell/src-tauri/fixtures/production-set-shell-args.json", import.meta.url),
 );
 
+// No `as` cast on purpose: this file exists to fail when either side of the IPC
+// contract gains a field, and a cast would swallow exactly that.
 function file(overrides: Partial<ProductionSetFile> & { id: string }): ProductionSetFile {
   return {
     name: `${overrides.id}.pdf`,
     path: `C:/matters/${overrides.id}.pdf`,
     pages: 3,
+    sourceSha256: null,
     designation: "",
     designationPages: "",
     status: "produce",
     privilegeAsserted: "",
     basis: "",
     ...overrides,
-  } as ProductionSetFile;
+  };
 }
 
 /**

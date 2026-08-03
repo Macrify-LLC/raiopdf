@@ -257,7 +257,7 @@ import {
   type PathOpsRedactionVerification,
   type PathOpsStatus,
 } from "./lib/pathOps";
-import { buildProductionSetArgs } from "./lib/productionSetArgs";
+import { MISSING_GRANT_MESSAGE, buildProductionSetArgs } from "./lib/productionSetArgs";
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
 import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
@@ -1696,7 +1696,7 @@ export function App() {
     try {
       const sourceGrants = requireFileGrants(
         input.files.map((file) => file.path),
-        "Production package output needs PDFs opened from local desktop paths.",
+        MISSING_GRANT_MESSAGE,
       );
 
       const { invoke } = await import("@tauri-apps/api/core");

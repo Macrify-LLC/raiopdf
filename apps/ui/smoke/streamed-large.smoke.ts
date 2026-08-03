@@ -69,15 +69,31 @@ test.describe("streamed large-PDF handling", () => {
     await expect(page.getByText(/^1 of \d+$/)).toBeVisible({ timeout: 120_000 });
 
     // Byte-based mutations stay gated with the message naming what works.
+    //
+    // Anchored on the two claims rather than the whole paragraph: that the
+    // notice tells the user what is still unavailable, and that rotate is on
+    // that list. The prose itself was rewritten in #324 ("Make RaioPDF warnings
+    // accurate and dismissible") to enumerate the tools that DO work, and this
+    // assertion still named the pre-#324 wording — which went unnoticed because
+    // the whole scenario skips unless the large fixture has been generated.
     await page.getByRole("button", { name: "Rotate selected pages" }).click();
-    await expect(
-      page.getByText("This document is too large for in-app editing", { exact: false }),
-    ).toBeVisible();
+    const largeDocNotice = page.getByText("Still unavailable for files this size", {
+      exact: false,
+    });
+    await expect(largeDocNotice).toBeVisible();
+    await expect(largeDocNotice).toContainText("crop/rotate");
 
+    // Edit Text stays gated too. In the browser the assertion can only be that
+    // it IS gated, not which gate fired: Edit Text needs the installed app, and
+    // that check legitimately preempts the size check when there is no Tauri
+    // runtime. The size-specific message ("...too large for in-app text
+    // editing") lives in lib/textEdit.ts and is reachable only from the desktop
+    // shell, so asserting it here — as this test used to — was asserting
+    // something this environment can never produce.
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByRole("button", { name: "Edit Text Experimental", exact: true }).click();
     await expect(
-      page.getByText("This document is too large for in-app text editing.", { exact: false }),
+      page.getByText("This tool only works in the installed RaioPDF app", { exact: false }),
     ).toBeVisible();
 
     // Whole-document print is gated in the browser runtime (no shell grant

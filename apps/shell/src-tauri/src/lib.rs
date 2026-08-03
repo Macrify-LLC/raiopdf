@@ -604,6 +604,17 @@ impl FileGrants {
             .ok_or_else(|| "File grant not found".to_string())
     }
 
+    /// Every path the table currently grants, sorted. For tests that assert on
+    /// the grant table as a whole rather than on one grant — a folder scan must
+    /// not add to it at all, and a claim must add exactly the confirmed scope.
+    #[cfg(test)]
+    fn granted_paths(&self) -> Vec<PathBuf> {
+        let paths = self.paths.lock().expect("file grant lock");
+        let mut granted: Vec<PathBuf> = paths.values().map(|entry| entry.path.clone()).collect();
+        granted.sort();
+        granted
+    }
+
     /// Drop a grant (used when a path-op temp output is released). Best-effort:
     /// a poisoned lock just leaves the entry behind for the startup sweep.
     fn remove(&self, grant: &str) {
@@ -633,6 +644,14 @@ impl DirectoryGrants {
             .get(grant)
             .cloned()
             .ok_or_else(|| "Directory grant not found".to_string())
+    }
+
+    /// How many folder-wide grants are outstanding. Used by the folder-add
+    /// tests to assert that picking a folder never hands the renderer authority
+    /// over the folder itself — only over the files it confirmed.
+    #[cfg(test)]
+    fn outstanding(&self) -> usize {
+        self.paths.lock().expect("directory grant lock").len()
     }
 }
 
@@ -999,22 +1018,30 @@ async fn scan_folder_for_add(
     };
 
     let root = path.into_path().map_err(|error| error.to_string())?;
-    let (folder_name, canonical_root, outcome) = on_command_blocking_pool(move || {
-        // Canonicalize once, at scan time, while the folder is presumably
-        // still what the user picked. This is the containment root every
-        // claimed file gets checked against later -- see `claim_folder_scan`.
-        let canonical_root = fs::canonicalize(&root)
-            .map_err(|_| "That folder could not be read. Choose it again.".to_string())?;
-        let (folder_name, outcome) = walk_folder_for_pdfs(&root);
-        Ok((folder_name, canonical_root, outcome))
-    })
-    .await?;
+    let (folder_name, canonical_root, outcome) =
+        on_command_blocking_pool(move || scan_folder_tree(&root)).await?;
 
     Ok(Some(folder_scans.insert(
         folder_name,
         canonical_root,
         outcome,
     )?))
+}
+
+/// Everything the scan stage does once a folder is picked, split out of the
+/// command so tests can drive the whole stage without a dialog.
+///
+/// Note the signature: it has no access to `FileGrants` at all, which is how
+/// the "a scan issues no grants" promise is kept structurally rather than by
+/// discipline.
+fn scan_folder_tree(root: &Path) -> Result<(String, PathBuf, FolderWalkOutcome), String> {
+    // Canonicalize once, at scan time, while the folder is presumably
+    // still what the user picked. This is the containment root every
+    // claimed file gets checked against later -- see `claim_folder_scan`.
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|_| "That folder could not be read. Choose it again.".to_string())?;
+    let (folder_name, outcome) = walk_folder_for_pdfs(root);
+    Ok((folder_name, canonical_root, outcome))
 }
 
 /// Stage 2 of folder add: mint grants for the confirmed scope of a scan.
@@ -1030,6 +1057,22 @@ async fn claim_folder_scan(
     file_grants: tauri::State<'_, FileGrants>,
 ) -> Result<PickedPdfs, String> {
     let scan = folder_scans.take(&token)?;
+    Ok(claim_scanned_pdfs(
+        scan,
+        include_subfolders,
+        file_grants.inner(),
+    ))
+}
+
+/// The grant-minting half of the folder add, split out of the command so tests
+/// can drive it directly. This is the only place a folder add turns scanned
+/// paths into file grants, and it mints one only for a file that is both in
+/// the scope the user confirmed and still contained by the scanned root.
+fn claim_scanned_pdfs(
+    scan: FolderScan,
+    include_subfolders: bool,
+    file_grants: &FileGrants,
+) -> PickedPdfs {
     let threshold_bytes = large_doc_threshold_bytes();
     let mut files = Vec::new();
     let mut skipped = Vec::new();
@@ -1072,11 +1115,11 @@ async fn claim_folder_scan(
         });
     }
 
-    Ok(PickedPdfs {
+    PickedPdfs {
         files,
         threshold_bytes,
         skipped,
-    })
+    }
 }
 
 /// Re-checks one scanned file immediately before it's granted, against the
@@ -3791,6 +3834,242 @@ mod tests {
         assert_eq!(summary.top_level_pdfs, 2);
         assert_eq!(summary.subfolder_pdfs, 2);
         assert!(!summary.truncated);
+    }
+
+    /// Runs the scan stage over a fixture tree and parks the result, returning
+    /// the scan store, its token, and the summary the UI would have shown.
+    fn scanned_fixture(root: &Path) -> (FolderScans, String, FolderScanSummary) {
+        let scans = FolderScans::default();
+        let (folder_name, canonical_root, outcome) = scan_folder_tree(root).expect("scan folder");
+        let summary = scans
+            .insert(folder_name, canonical_root, outcome)
+            .expect("insert scan");
+        (scans, summary.token.clone(), summary)
+    }
+
+    fn claimed_names(claimed: &PickedPdfs) -> Vec<&str> {
+        claimed
+            .files
+            .iter()
+            .map(|file| file.name.as_str())
+            .collect()
+    }
+
+    fn skipped_names(claimed: &PickedPdfs) -> Vec<&str> {
+        claimed
+            .skipped
+            .iter()
+            .map(|skipped| skipped.name.as_str())
+            .collect()
+    }
+
+    /// The security split at the heart of the folder add: stage 1 scans and
+    /// hands the UI counts, stage 2 mints grants. A grant is what lets the
+    /// renderer touch a file, so scanning a folder the user has not confirmed
+    /// must leave the grant table exactly as it found it.
+    #[test]
+    fn scanning_a_folder_issues_no_file_grants() {
+        let dir = scan_fixture_tree();
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+
+        let (_scans, _token, summary) = scanned_fixture(dir.path());
+
+        // The scan really did find files, so the empty grant table below is the
+        // split working -- not the walk quietly finding nothing to grant.
+        assert_eq!(summary.total_pdfs, 4);
+        assert!(file_grants.granted_paths().is_empty());
+        // Nor does picking a folder hand out authority over the folder itself.
+        assert_eq!(directory_grants.outstanding(), 0);
+    }
+
+    /// The declined case: the user opens the confirm dialog and backs out. The
+    /// token is never claimed, ages out of the bounded outstanding set, and
+    /// leaves nothing readable behind.
+    #[test]
+    fn a_folder_scan_the_user_never_confirms_leaves_no_grants_behind() {
+        let dir = scan_fixture_tree();
+        let file_grants = FileGrants::default();
+        let (scans, token, _summary) = scanned_fixture(dir.path());
+
+        // Later scans push the declined one out of the outstanding set.
+        for _ in 0..MAX_OUTSTANDING_FOLDER_SCANS {
+            let (folder_name, canonical_root, outcome) =
+                scan_folder_tree(dir.path()).expect("scan folder");
+            scans
+                .insert(folder_name, canonical_root, outcome)
+                .expect("insert scan");
+        }
+
+        assert!(scans.take(&token).is_err());
+        assert!(file_grants.granted_paths().is_empty());
+    }
+
+    /// The other half of the promise: grants do appear, but only once a claim
+    /// succeeds, and each one resolves to the file it was minted for.
+    #[test]
+    fn claiming_a_folder_scan_is_what_mints_the_grants() {
+        let dir = scan_fixture_tree();
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+        let (scans, token, _summary) = scanned_fixture(dir.path());
+        assert!(file_grants.granted_paths().is_empty());
+
+        let scan = scans.take(&token).expect("claim scan");
+        let claimed = claim_scanned_pdfs(scan, true, &file_grants);
+
+        assert_eq!(
+            claimed_names(&claimed),
+            vec!["A.pdf", "b.pdf", "deep.pdf", "inner.pdf"],
+        );
+        assert!(claimed.skipped.is_empty());
+        assert_eq!(file_grants.granted_paths().len(), 4);
+        for file in &claimed.files {
+            let resolved = file_grants
+                .resolve(&file.grant)
+                .expect("claimed grant resolves");
+            assert_eq!(file_name(&resolved), file.name);
+            // Grants stay opaque handles, exactly as `pick_pdfs_for_add`'s do.
+            assert!(!file.grant.contains(&file.name));
+        }
+        // A confirmed claim still grants files one by one, never the folder.
+        assert_eq!(directory_grants.outstanding(), 0);
+    }
+
+    /// A claim carries the scope the user confirmed. Confirming "this folder
+    /// only" must not quietly grant the subfolder PDFs the summary counted.
+    #[test]
+    fn claiming_only_the_top_level_grants_nothing_in_the_subfolders() {
+        let dir = scan_fixture_tree();
+        let file_grants = FileGrants::default();
+        let (scans, token, summary) = scanned_fixture(dir.path());
+        assert_eq!(summary.subfolder_pdfs, 2);
+
+        let scan = scans.take(&token).expect("claim scan");
+        let claimed = claim_scanned_pdfs(scan, false, &file_grants);
+
+        assert_eq!(claimed_names(&claimed), vec!["A.pdf", "b.pdf"]);
+        let mut expected = vec![dir.path().join("A.pdf"), dir.path().join("b.pdf")];
+        expected.sort();
+        assert_eq!(file_grants.granted_paths(), expected);
+    }
+
+    /// A claim grants by scope, not on the scan's word: a recorded path that
+    /// resolves outside the folder the user approved is skipped and never
+    /// granted. Portable stand-in for the symlink-escape races the unix tests
+    /// above drive through `revalidate_scanned_pdf_for_claim`.
+    #[test]
+    fn claiming_never_grants_a_path_outside_the_scanned_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let inside = dir.path().join("inside.pdf");
+        fs::write(&inside, b"%PDF-1.7 inside").expect("inside.pdf");
+        let outside_dir = tempfile::tempdir().expect("outside dir");
+        let outside = outside_dir.path().join("outside.pdf");
+        fs::write(&outside, b"%PDF-1.7 outside").expect("outside.pdf");
+        let file_grants = FileGrants::default();
+
+        let scan = FolderScan {
+            files: vec![
+                ScannedPdf {
+                    path: inside.clone(),
+                    relative: "inside.pdf".to_string(),
+                    in_subfolder: false,
+                },
+                ScannedPdf {
+                    path: outside.clone(),
+                    relative: "outside.pdf".to_string(),
+                    in_subfolder: false,
+                },
+            ],
+            canonical_root: fs::canonicalize(dir.path()).expect("canonicalize root"),
+        };
+
+        let claimed = claim_scanned_pdfs(scan, true, &file_grants);
+
+        assert_eq!(claimed_names(&claimed), vec!["inside.pdf"]);
+        assert_eq!(skipped_names(&claimed), vec!["outside.pdf"]);
+        assert_eq!(claimed.skipped[0].message, FOLDER_SCAN_CLAIM_UNSAFE_ERROR);
+        assert_eq!(file_grants.granted_paths(), vec![inside]);
+    }
+
+    /// The scan-time ceiling is a grant ceiling too. A folder holding more PDFs
+    /// than the cap can never mint more than the cap's worth of grants, however
+    /// the user confirms it -- which is the point of stopping the walk rather
+    /// than walking a whole drive.
+    #[test]
+    fn a_truncated_scan_can_never_grant_more_than_the_ceiling() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for index in 0..(MAX_FOLDER_SCAN_PDFS + 5) {
+            fs::write(
+                dir.path().join(format!("doc-{index:05}.pdf")),
+                b"%PDF-1.7 tiny",
+            )
+            .expect("write pdf");
+        }
+        let file_grants = FileGrants::default();
+        let (scans, token, summary) = scanned_fixture(dir.path());
+
+        assert!(summary.truncated);
+        assert!(file_grants.granted_paths().is_empty());
+
+        let scan = scans.take(&token).expect("claim scan");
+        let claimed = claim_scanned_pdfs(scan, true, &file_grants);
+
+        assert_eq!(claimed.files.len(), MAX_FOLDER_SCAN_PDFS);
+        assert_eq!(file_grants.granted_paths().len(), MAX_FOLDER_SCAN_PDFS);
+    }
+
+    /// The scan refuses to follow links out of the chosen folder, so the link
+    /// target is never even a candidate for a grant. Asserted end to end here:
+    /// scan the folder, claim everything, and the escaped file is absent from
+    /// the grant table.
+    #[cfg(unix)]
+    #[test]
+    fn claiming_everything_grants_nothing_a_link_pointed_outside_the_folder() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::write(root.join("kept.pdf"), b"%PDF-1.7 kept").expect("kept.pdf");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let escaped = outside.path().join("escaped.pdf");
+        fs::write(&escaped, b"%PDF-1.7 escaped").expect("escaped.pdf");
+        std::os::unix::fs::symlink(outside.path(), root.join("linked")).expect("dir symlink");
+        let file_grants = FileGrants::default();
+
+        let (scans, token, summary) = scanned_fixture(root);
+        assert_eq!(summary.skipped_links, 1);
+
+        let scan = scans.take(&token).expect("claim scan");
+        let claimed = claim_scanned_pdfs(scan, true, &file_grants);
+
+        assert_eq!(claimed_names(&claimed), vec!["kept.pdf"]);
+        assert_eq!(file_grants.granted_paths(), vec![root.join("kept.pdf")]);
+    }
+
+    /// The TOCTOU case at the grant layer: a file swapped for an escaping
+    /// symlink between the scan and the confirm is skipped, its siblings are
+    /// still granted, and nothing in the grant table points outside the folder.
+    #[cfg(unix)]
+    #[test]
+    fn claiming_issues_no_grant_for_a_file_swapped_for_an_escaping_symlink() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        fs::write(root.join("kept.pdf"), b"%PDF-1.7 kept").expect("kept.pdf");
+        fs::write(root.join("swapped.pdf"), b"%PDF-1.7 original").expect("swapped.pdf");
+        let file_grants = FileGrants::default();
+        let (scans, token, _summary) = scanned_fixture(root);
+
+        let outside = tempfile::tempdir().expect("outside dir");
+        let secret = outside.path().join("secret.pdf");
+        fs::write(&secret, b"%PDF-1.7 secret").expect("secret.pdf");
+        fs::remove_file(root.join("swapped.pdf")).expect("remove original");
+        std::os::unix::fs::symlink(&secret, root.join("swapped.pdf")).expect("swap for symlink");
+
+        let scan = scans.take(&token).expect("claim scan");
+        let claimed = claim_scanned_pdfs(scan, true, &file_grants);
+
+        assert_eq!(claimed_names(&claimed), vec!["kept.pdf"]);
+        assert_eq!(skipped_names(&claimed), vec!["swapped.pdf"]);
+        assert_eq!(file_grants.granted_paths(), vec![root.join("kept.pdf")]);
     }
 
     /// Covers the scan->claim TOCTOU window directly: `claim_folder_scan`

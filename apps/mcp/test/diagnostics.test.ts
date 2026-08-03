@@ -9,6 +9,22 @@ let tempDir: string;
 const originalBin = process.env[ENGINE_HOST_BIN_ENV];
 
 /**
+ * The fake host below is a `#!/bin/sh` shim, which Windows cannot execute, so
+ * `execFile` fails with ENOENT before the mock is ever reached. There is no
+ * clean fix: `runEngineHost` calls `execFile` without a shell (correctly — the
+ * host is a real binary in production), and Node refuses to spawn a `.cmd`
+ * that way at all since the 18.20 security fix.
+ *
+ * These cases are therefore skipped on Windows rather than left failing. That
+ * costs nothing in coverage — they have never actually run here — and buys
+ * something real: this suite went red on every Windows run, which trains
+ * everyone to ignore it, and a genuine diagnostics regression would have hidden
+ * in that noise. They still run on the Linux and macOS CI legs, which is where
+ * `pnpm -r test` gates the Web job.
+ */
+const describeSpawningHost = describe.skipIf(process.platform === "win32");
+
+/**
  * Stand in for `raiopdf-engine-host --diagnostics`.
  *
  * The point here is the connector's own contract — argument passing, parsing, and
@@ -68,6 +84,39 @@ describe("raiopdf_diagnostics", () => {
     expect(reference.safeParse("d-1\nid=forged").success).toBe(false);
   });
 
+  // These two point the env var at a path that does not exist, so they need no
+  // stand-in host and run everywhere. The path-leak one especially must keep
+  // running on Windows — that is the platform where the leaked install path
+  // contains the user's own name.
+  it("reports a readable error when the host cannot run", async () => {
+    process.env[ENGINE_HOST_BIN_ENV] = path.join(tempDir, "does-not-exist");
+
+    const result = await handleDiagnostics();
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ ok: false });
+  });
+
+  it("never puts a filesystem path in the error surface", async () => {
+    // Node builds execFile's error message as
+    // "Command failed: <resolved path> <args>\n<stderr>". Returning that leaked the
+    // install path — which on Windows sits under the user's own name — plus raw
+    // stderr, the one channel the scrubber never sees.
+    const hostPath = path.join(tempDir, "Jane Doe", "raiopdf-engine-host");
+    process.env[ENGINE_HOST_BIN_ENV] = hostPath;
+
+    const result = await handleDiagnostics();
+    const surfaced = JSON.stringify(result);
+
+    expect(result.isError).toBe(true);
+    expect(surfaced).not.toContain("Jane Doe");
+    expect(surfaced).not.toContain(tempDir);
+  });
+});
+
+// Everything below spawns the fake host — see `describeSpawningHost` above for
+// why these do not run on Windows.
+describeSpawningHost("raiopdf_diagnostics (against a stand-in host)", () => {
   it("returns the scrubbed payload and summarizes which logs were present", async () => {
     process.env[ENGINE_HOST_BIN_ENV] = await writeFakeHost(
       `process.stdout.write(JSON.stringify(${JSON.stringify(VALID_PAYLOAD)}));`,
@@ -102,15 +151,6 @@ describe("raiopdf_diagnostics", () => {
     expect(result.structuredContent).toMatchObject({ telemetryNote: "--diagnostics" });
   });
 
-  it("reports a readable error when the host cannot run", async () => {
-    process.env[ENGINE_HOST_BIN_ENV] = path.join(tempDir, "does-not-exist");
-
-    const result = await handleDiagnostics();
-
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ ok: false });
-  });
-
   it("reports a readable error when the host emits unparseable output", async () => {
     process.env[ENGINE_HOST_BIN_ENV] = await writeFakeHost(`process.stdout.write("not json");`);
 
@@ -118,22 +158,6 @@ describe("raiopdf_diagnostics", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining("unreadable") });
-  });
-
-  it("never puts a filesystem path in the error surface", async () => {
-    // Node builds execFile's error message as
-    // "Command failed: <resolved path> <args>\n<stderr>". Returning that leaked the
-    // install path — which on Windows sits under the user's own name — plus raw
-    // stderr, the one channel the scrubber never sees.
-    const hostPath = path.join(tempDir, "Jane Doe", "raiopdf-engine-host");
-    process.env[ENGINE_HOST_BIN_ENV] = hostPath;
-
-    const result = await handleDiagnostics();
-    const surfaced = JSON.stringify(result);
-
-    expect(result.isError).toBe(true);
-    expect(surfaced).not.toContain("Jane Doe");
-    expect(surfaced).not.toContain(tempDir);
   });
 
   it("does not leak stderr from a host that failed", async () => {

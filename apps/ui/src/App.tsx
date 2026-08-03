@@ -257,6 +257,7 @@ import {
   type PathOpsRedactionVerification,
   type PathOpsStatus,
 } from "./lib/pathOps";
+import { MISSING_GRANT_MESSAGE, buildProductionSetArgs } from "./lib/productionSetArgs";
 import { getWordCapability, isWordPresent } from "./lib/wordCapability";
 import { runWordDocumentImport } from "./lib/wordImport";
 import { planPathOpReopen } from "./lib/pathOpReopen";
@@ -1695,7 +1696,7 @@ export function App() {
     try {
       const sourceGrants = requireFileGrants(
         input.files.map((file) => file.path),
-        "Production package output needs PDFs opened from local desktop paths.",
+        MISSING_GRANT_MESSAGE,
       );
 
       const { invoke } = await import("@tauri-apps/api/core");
@@ -1712,45 +1713,10 @@ export function App() {
         privilegeLogLocation: string | null;
         slipSheetCount: number;
       }>("build_production_set", {
-        sources: input.files.map((file, index) => {
-          const grant = sourceGrants[index];
-          if (!grant) {
-            throw new Error("Production package output needs PDFs opened from local desktop paths.");
-          }
-
-          return {
-            grant,
-            designation: file.designation || undefined,
-            // A range without a designation is meaningless — never forward one.
-            designationPages: file.designation ? file.designationPages || undefined : undefined,
-            // "produce" is the backend default too -- omit it so the common
-            // case sends the same shape it always has.
-            status: file.status === "produce" ? undefined : file.status,
-            // Privilege text is sensitive work product — a value left over
-            // from a reverted Withhold choice is never forwarded for a
-            // produced document.
-            privilegeAsserted:
-              file.status === "produce" ? undefined : file.privilegeAsserted || undefined,
-            basis: file.status === "produce" ? undefined : file.basis || undefined,
-          };
-        }),
-        outputDir: input.outputDir,
-        prefix: input.prefix,
-        start: input.start,
-        digits: input.digits,
-        includeIndex: input.includeIndex,
-        includeFilenameInIndex: input.includeFilenameInIndex,
-        combinedPdf: input.combinedPdf,
-        volumeSizeMb: input.volumeSizeMb ?? undefined,
-        batesPlacement: input.batesPlacement,
-        designationPlacement: input.designationPlacement,
-        stampFontSizePt: input.stampFontSizePt,
-        continueFrom: input.continueFrom,
-        continuationOverrideReason: input.continuationOverrideReason,
-        duplicateHandling: input.duplicateHandling,
-        includeLoadFiles: input.includeLoadFiles,
-        includeFilenameInPrivilegeLog: input.includeFilenameInPrivilegeLog,
-        withheldHandling: input.withheldHandling,
+        // One `args` object, not 20 top-level keys: the shell deserializes it
+        // into `ProductionSetShellArgs` with `deny_unknown_fields`, so drift on
+        // either side fails loudly instead of silently dropping an option.
+        args: buildProductionSetArgs(input, sourceGrants),
       });
 
       writeProductionLastUsed(input.prefix, result.nextNumber - 1);

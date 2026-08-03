@@ -59,8 +59,13 @@ pub struct ProductionSetSource {
 /// grant is resolved to a filesystem path only here in Rust, immediately
 /// before it's handed to the one-shot subprocess -- the resolved path never
 /// crosses back over IPC to the renderer.
+/// `deny_unknown_fields` matters MORE here than on the outer args struct: the
+/// fields whose silent loss is worst — `status`, `privilegeAsserted`, `basis` —
+/// live on this nested type, not the outer one. Without it, renaming
+/// `privilegeAsserted` on the renderer leaves `privilege_asserted` as `None`
+/// and a withheld document ships with a blank privilege-log row.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductionSetSourceGrant {
     grant: String,
     designation: Option<String>,
@@ -90,6 +95,324 @@ pub struct ProductionSetSourceGrant {
 #[serde(rename_all = "camelCase")]
 struct ProductionSetContinuationOverride {
     reason: String,
+}
+
+/// Everything the renderer sends for a production build, as ONE argument.
+///
+/// Why a struct rather than 20 positional command parameters: with separate
+/// parameters there is no single type to deserialize the renderer's payload
+/// into, so nothing can assert that the two sides still agree. Worse, a
+/// parameter renamed on this side simply stops matching its key -- Tauri hands
+/// the command `None` and the option is dropped **silently**, producing a
+/// wrong production with no error anywhere.
+///
+/// `deny_unknown_fields` is the point of this type, not a nicety: it turns that
+/// silent drop into a loud failure. `rename_all = "camelCase"` is mandatory --
+/// without it every field fails to bind, which is the same failure this exists
+/// to prevent. Same shape as `diagnostics::DiagnosticEvent`, which the renderer
+/// likewise sends nested under its parameter name.
+///
+/// SCOPE -- this is deliberate, not an unfinished migration. `build_filing_packet`,
+/// `path_ops::protect_to_target`, and `print::print_pdf` still take positional
+/// parameters. The failure this guards needs an `Option<T>` parameter: a renamed
+/// REQUIRED param already fails Tauri's deserialize loudly, so only optionals
+/// degrade silently. By that measure `build_production_set` (8 optionals, each
+/// changing a served legal artifact) was far the worst; `print_pdf` and
+/// `build_filing_packet` (3 each -- a dropped `page_indexes` prints the whole
+/// document, a dropped `split_size_mb` sends an unsplit filing to the portal)
+/// are the next candidates; `protect_to_target` is the weakest despite its
+/// subject matter, because its one optional is inconsequential.
+///
+/// Port one only together with its own fixture test. A `deny_unknown_fields`
+/// struct with no fixture behind it is worse than the positional list it
+/// replaced: it looks pinned and is not.
+///
+/// Cost accepted: the field list is now restated in several places (this struct,
+/// `to_one_shot_input`, `ProductionSetOneShotInput`, the fixture, and the
+/// renderer's `ProductionSetArgs`). That restatement is what makes drift loud,
+/// and `#[serde(flatten)]` over a shared struct is not an option -- serde does
+/// not support it together with `deny_unknown_fields`. Adding a 19th option is
+/// a coordinated multi-file edit by design.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductionSetShellArgs {
+    sources: Vec<ProductionSetSourceGrant>,
+    output_dir: String,
+    prefix: String,
+    #[serde(default)]
+    start: Option<u32>,
+    #[serde(default)]
+    digits: Option<u32>,
+    include_filename_in_index: bool,
+    include_index: bool,
+    combined_pdf: bool,
+    #[serde(default)]
+    volume_size_mb: Option<f64>,
+    #[serde(default)]
+    bates_placement: Option<ProductionSetStampPlacement>,
+    #[serde(default)]
+    designation_placement: Option<ProductionSetStampPlacement>,
+    #[serde(default)]
+    stamp_font_size_pt: Option<f64>,
+    /// Directory grant for a prior production package to continue the same
+    /// Bates series from -- never a raw path from the renderer, same
+    /// discipline as every source grant here.
+    #[serde(default)]
+    continue_from: Option<String>,
+    /// Flat on the wire, nested into `continuationOverride { reason }` for the
+    /// one-shot payload. This rename is exactly the kind of drift
+    /// `to_one_shot_input` exists to pin.
+    #[serde(default)]
+    continuation_override_reason: Option<String>,
+    #[serde(default)]
+    duplicate_handling: Option<String>,
+    include_load_files: bool,
+    include_filename_in_privilege_log: bool,
+    #[serde(default)]
+    withheld_handling: Option<String>,
+}
+
+#[cfg(test)]
+mod production_set_args_fixture {
+    //! The shell half of the `build_production_set` IPC seam.
+    //!
+    //! The fixture read here is generated and asserted by the renderer in
+    //! `apps/ui/src/lib/productionSetArgs.test.ts`. Neither side owns the
+    //! contract alone: the renderer proves it still emits this shape, and these
+    //! tests prove the shell still accepts it and translates it correctly.
+    //!
+    //! What this catches that nothing else did: a field renamed on either side.
+    //! Tauri binds command arguments by name, so a rename used to mean the shell
+    //! received `None` and quietly dropped the option — a wrong production with
+    //! no error. `deny_unknown_fields` plus this fixture turn that into a
+    //! failing test.
+
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../fixtures/production-set-shell-args.json");
+
+    fn parse() -> ProductionSetShellArgs {
+        serde_json::from_str(FIXTURE).expect("renderer fixture must deserialize")
+    }
+
+    #[test]
+    fn accepts_the_renderer_payload() {
+        let args = parse();
+        assert_eq!(args.sources.len(), 3);
+        assert_eq!(args.prefix, "SMITH");
+        assert_eq!(args.start, Some(100));
+        assert_eq!(args.digits, Some(6));
+        assert_eq!(args.duplicate_handling.as_deref(), Some("produce-once"));
+        assert_eq!(args.withheld_handling.as_deref(), Some("slip-sheet"));
+        assert!(args.include_load_files);
+        assert!(args.include_filename_in_privilege_log);
+    }
+
+    #[test]
+    fn rejects_a_field_the_shell_does_not_know() {
+        // `deny_unknown_fields` is the whole point of the struct: a renderer
+        // that starts sending an option this build cannot honour must fail
+        // loudly rather than have it silently ignored.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        value["someFutureOption"] = serde_json::json!(true);
+
+        let parsed = serde_json::from_value::<ProductionSetShellArgs>(value);
+        assert!(
+            parsed.is_err(),
+            "unknown fields must be rejected, not ignored"
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_field_on_a_source_too() {
+        // The outer struct guarding itself is not enough: the fields whose
+        // silent loss actually costs something -- status, privilegeAsserted,
+        // basis -- are on the nested source. A top-level-only guard would let
+        // a renamed `privilegeAsserted` become None and put a withheld
+        // document out with an empty privilege-log row.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        value["sources"][2]["privilegeAssertedV2"] = serde_json::json!("Attorney-client privilege");
+
+        assert!(
+            serde_json::from_value::<ProductionSetShellArgs>(value).is_err(),
+            "unknown fields on a source must be rejected, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn a_renamed_privilege_field_does_not_silently_blank_the_log() {
+        // Same failure, stated as the outcome that matters.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        let withheld = value["sources"][2].as_object_mut().unwrap();
+        let asserted = withheld.remove("privilegeAsserted").unwrap();
+        withheld.insert("privilege_asserted".to_string(), asserted);
+
+        assert!(
+            serde_json::from_value::<ProductionSetShellArgs>(value).is_err(),
+            "a snake_case slip on the renderer must fail, not withhold without a basis"
+        );
+    }
+
+    #[test]
+    fn a_renamed_field_does_not_silently_become_none() {
+        // The exact historical failure mode: `continuationOverrideReason`
+        // arriving under any other spelling must fail, not quietly disable the
+        // override and renumber a production.
+        let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        let object = value.as_object_mut().unwrap();
+        let reason = object.remove("continuationOverrideReason").unwrap();
+        object.insert("continuationOverrideReasonV2".to_string(), reason);
+
+        assert!(serde_json::from_value::<ProductionSetShellArgs>(value).is_err());
+    }
+
+    /// The fixture carries placeholder grants and a Windows-shaped `outputDir`,
+    /// because it is a record of the RENDERER's payload shape, not of any real
+    /// filesystem. Re-point all three at this run's temp dir so the translation
+    /// under test resolves something on every platform — `resolve_output_dir`
+    /// walks ancestors until one exists, so a literal `C:/matters/out` is an
+    /// error anywhere but Windows.
+    fn parse_with_real_grants(
+        temp: &std::path::Path,
+        file_grants: &FileGrants,
+        directory_grants: &DirectoryGrants,
+    ) -> ProductionSetShellArgs {
+        let mut args = parse();
+        let names = ["produced.pdf", "redacted.pdf", "withheld.pdf"];
+        for (source, name) in args.sources.iter_mut().zip(names) {
+            source.grant = file_grants.grant(temp.join(name)).expect("file grant");
+        }
+        args.continue_from = Some(
+            directory_grants
+                .grant(temp.join("prior-production"))
+                .expect("directory grant"),
+        );
+        args.output_dir = temp
+            .join("out")
+            .to_str()
+            .expect("temp dir is utf-8")
+            .to_string();
+        args
+    }
+
+    #[test]
+    fn translates_grants_to_paths_and_nests_the_continuation_override() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+        let args = parse_with_real_grants(temp.path(), &file_grants, &directory_grants);
+
+        let input = to_one_shot_input(args, &file_grants, &directory_grants).expect("translation");
+
+        // Grants became real paths, and no grant string survived into the payload.
+        assert!(input.sources[0].path.ends_with("produced.pdf"));
+        assert!(input
+            .continue_from
+            .as_deref()
+            .unwrap()
+            .ends_with("prior-production"));
+
+        // The flat renderer field became the nested one-shot shape.
+        let override_reason = input.continuation_override.as_ref().expect("override kept");
+        assert_eq!(
+            override_reason.reason,
+            "Reserved 100 numbers for a rolling production"
+        );
+
+        // Per-source choices survive the hop unchanged.
+        assert_eq!(input.sources[2].status.as_deref(), Some("withhold"));
+        assert_eq!(
+            input.sources[2].privilege_asserted.as_deref(),
+            Some("Attorney-client privilege")
+        );
+        // A produced document carries no privilege text.
+        assert_eq!(input.sources[0].status, None);
+        assert_eq!(input.sources[0].privilege_asserted, None);
+    }
+
+    #[test]
+    fn serializes_to_the_shape_the_one_shot_connector_expects() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file_grants = FileGrants::default();
+        let directory_grants = DirectoryGrants::default();
+        let mut args = parse_with_real_grants(temp.path(), &file_grants, &directory_grants);
+        // No continuation on this path: the point here is the wire shape.
+        args.continue_from = None;
+
+        let input = to_one_shot_input(args, &file_grants, &directory_grants).unwrap();
+        let json = serde_json::to_value(&input).unwrap();
+
+        // camelCase on the wire, nested override, and no renderer-only keys.
+        assert!(json.get("includeLoadFiles").is_some());
+        assert!(json.get("continuationOverride").is_some());
+        assert!(json.get("continuationOverrideReason").is_none());
+        assert!(json.get("sources").unwrap()[0].get("path").is_some());
+        assert!(json.get("sources").unwrap()[0].get("grant").is_none());
+    }
+}
+
+/// Translate the renderer's grant-shaped arguments into the path-shaped payload
+/// the one-shot connector expects.
+///
+/// Split out of the command so it can be tested without a Tauri runtime: this
+/// is where grants become filesystem paths and where the flat
+/// `continuationOverrideReason` becomes nested `continuationOverride`. A
+/// resolved path never crosses back over IPC to the renderer.
+fn to_one_shot_input(
+    args: ProductionSetShellArgs,
+    file_grants: &FileGrants,
+    directory_grants: &DirectoryGrants,
+) -> Result<ProductionSetOneShotInput, String> {
+    // Cheapest check first: a bad output folder should fail before N grant
+    // lookups, each of which takes the grant-table lock and clones an entry.
+    let output_dir = resolve_output_dir(&args.output_dir)?;
+
+    let sources = args
+        .sources
+        .into_iter()
+        .map(|source| {
+            Ok(ProductionSetSource {
+                path: resolve_source_path(file_grants, &source.grant)?,
+                designation: source.designation,
+                designation_pages: source.designation_pages,
+                custodian: source.custodian,
+                status: source.status,
+                privilege_asserted: source.privilege_asserted,
+                basis: source.basis,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let continue_from = match args.continue_from {
+        Some(grant) => Some(path_to_utf8_string(
+            directory_grants.resolve(&grant)?,
+            "Prior production folder",
+        )?),
+        None => None,
+    };
+
+    Ok(ProductionSetOneShotInput {
+        sources,
+        output_dir,
+        prefix: args.prefix,
+        start: args.start,
+        digits: args.digits,
+        include_filename_in_index: args.include_filename_in_index,
+        include_index: args.include_index,
+        combined_pdf: args.combined_pdf,
+        volume_size_mb: args.volume_size_mb,
+        bates_placement: args.bates_placement,
+        designation_placement: args.designation_placement,
+        stamp_font_size_pt: args.stamp_font_size_pt,
+        continue_from,
+        continuation_override: args
+            .continuation_override_reason
+            .map(|reason| ProductionSetContinuationOverride { reason }),
+        duplicate_handling: args.duplicate_handling,
+        include_load_files: args.include_load_files,
+        include_filename_in_privilege_log: args.include_filename_in_privilege_log,
+        withheld_handling: args.withheld_handling,
+    })
 }
 
 /// Mirrors `packages/production-set`'s `PdfStampPlacement` (via
@@ -754,87 +1077,18 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn build_production_set(
-    sources: Vec<ProductionSetSourceGrant>,
-    output_dir: String,
-    prefix: String,
-    start: Option<u32>,
-    digits: Option<u32>,
-    include_filename_in_index: bool,
-    include_index: bool,
-    combined_pdf: bool,
-    volume_size_mb: Option<f64>,
-    bates_placement: Option<ProductionSetStampPlacement>,
-    designation_placement: Option<ProductionSetStampPlacement>,
-    stamp_font_size_pt: Option<f64>,
-    // Directory grant for a prior production package to continue the same
-    // Bates series from -- never a raw path from the renderer, same
-    // discipline as every source grant here. Resolved to a path below,
-    // immediately before it's handed to the one-shot subprocess.
-    continue_from: Option<String>,
-    continuation_override_reason: Option<String>,
-    duplicate_handling: Option<String>,
-    // Always sent explicitly by the renderer (default false), same as
-    // `include_index`/`combined_pdf` above -- never a raw path, never
-    // optional at this boundary.
-    include_load_files: bool,
-    // Always sent explicitly by the renderer (default true), same reasoning
-    // as `include_load_files` above.
-    include_filename_in_privilege_log: bool,
-    withheld_handling: Option<String>,
+    args: ProductionSetShellArgs,
     file_grants: tauri::State<'_, FileGrants>,
     directory_grants: tauri::State<'_, DirectoryGrants>,
 ) -> Result<ProductionSetShellOutput, String> {
-    let output_dir = resolve_output_dir(&output_dir)?;
-    let sources = sources
-        .into_iter()
-        .map(|source| {
-            Ok(ProductionSetSource {
-                path: resolve_source_path(&file_grants, &source.grant)?,
-                designation: source.designation,
-                designation_pages: source.designation_pages,
-                custodian: source.custodian,
-                status: source.status,
-                privilege_asserted: source.privilege_asserted,
-                basis: source.basis,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let file_count = sources.len();
-    let total_bytes = sources
+    let input = to_one_shot_input(args, &file_grants, &directory_grants)?;
+    let file_count = input.sources.len();
+    let total_bytes = input
+        .sources
         .iter()
         .map(|source| file_size_or_zero(&source.path))
         .sum();
-    let continue_from = match continue_from {
-        Some(grant) => Some(path_to_utf8_string(
-            directory_grants.resolve(&grant)?,
-            "Prior production folder",
-        )?),
-        None => None,
-    };
-
-    let input = ProductionSetOneShotInput {
-        sources,
-        output_dir,
-        prefix,
-        start,
-        digits,
-        include_filename_in_index,
-        include_index,
-        combined_pdf,
-        volume_size_mb,
-        bates_placement,
-        designation_placement,
-        stamp_font_size_pt,
-        continue_from,
-        continuation_override: continuation_override_reason
-            .map(|reason| ProductionSetContinuationOverride { reason }),
-        duplicate_handling,
-        include_load_files,
-        include_filename_in_privilege_log,
-        withheld_handling,
-    };
     let timeout = package_one_shot_timeout(file_count, total_bytes, Duration::from_secs(30));
     let stdout = run_one_shot_on_blocking_pool("build_production_set", input, timeout).await?;
     let output: ProductionSetOneShotOutput = serde_json::from_slice(&stdout).map_err(|_| {
@@ -1130,6 +1384,31 @@ fn one_shot_node_options(explicit: Option<String>) -> String {
     }
 }
 
+/// Build the one-shot child command.
+///
+/// Extracted from the spawn path purely so the argument ORDER is asserted by a
+/// test rather than only described in a comment. `--one-shot <tool>` must be
+/// the only arguments and the marker must come first: the launcher execs
+/// `node <entrypoint> <args...>`, so anything preceding the marker shifts the
+/// token the runtime dispatches on. Passing the hardening flag positionally
+/// did exactly that and shipped broken in v0.1.0–v0.1.2, disabling every
+/// one-shot tool. A comment did not stop it happening three times; a test can.
+fn build_one_shot_command(
+    binary: &std::path::Path,
+    tool_name: &str,
+    node_options: Option<String>,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .args(["--one-shot", tool_name])
+        .env("NODE_OPTIONS", one_shot_node_options(node_options))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    engine_sidecar_core::configure_child_process(&mut command);
+    command
+}
+
 pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     tool_name: &str,
     input: &T,
@@ -1142,16 +1421,7 @@ pub(crate) fn run_mcp_one_shot_with_options<T: Serialize>(
     let payload = serde_json::to_vec(input)
         .map_err(|error| format!("failed to encode {tool_name} request: {error}"))?;
 
-    let mut command = Command::new(&binary);
-    command
-        // `--one-shot <tool>` must be the ONLY arguments, with the marker
-        // first — see `NODE_SECURITY_FLAG` for why nothing may precede it.
-        .args(["--one-shot", tool_name])
-        .env("NODE_OPTIONS", one_shot_node_options(options.node_options))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    engine_sidecar_core::configure_child_process(&mut command);
+    let mut command = build_one_shot_command(&binary, tool_name, options.node_options);
 
     let child = command.spawn().map_err(|_| {
         "RaioPDF couldn't start its built-in tools. Reinstall RaioPDF and try again.".to_string()
@@ -1317,7 +1587,7 @@ fn format_tool_error(tool_name: &str, error: Option<ToolError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        hash_path_sha256, one_shot_node_options, package_one_shot_timeout,
+        build_one_shot_command, hash_path_sha256, one_shot_node_options, package_one_shot_timeout,
         read_production_continuation_sync, resolve_output_dir, sanitize_one_shot_failure,
         sha256_hex, ProductionSetSource, ProductionSetSourceGrant, ProductionSetStampPlacement,
         NODE_SECURITY_FLAG,
@@ -1464,6 +1734,55 @@ mod tests {
         let error =
             read_production_continuation_sync(dir.path()).expect_err("prefix drift in a row");
         assert!(error.contains("doesn't match its prefix"), "{error}");
+    }
+
+    #[test]
+    fn one_shot_marker_is_first_and_alone_on_the_command_line() {
+        // Guards the defect that shipped in v0.1.0-v0.1.2: a flag placed before
+        // `--one-shot` shifts the token the runtime dispatches on, silently
+        // disabling every one-shot tool. Until now the rule lived only in a
+        // comment, and it was broken three releases running.
+        let command = build_one_shot_command(
+            std::path::Path::new("raiopdf-mcp"),
+            "build_production_set",
+            None,
+        );
+
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
+        assert_eq!(
+            args,
+            vec!["--one-shot", "build_production_set"],
+            "the marker must come first and be the ONLY arguments"
+        );
+    }
+
+    #[test]
+    fn one_shot_hardening_never_rides_on_the_command_line() {
+        // The corollary: the security flag must travel via NODE_OPTIONS, never
+        // as an argument. This asserts the negative directly.
+        let command = build_one_shot_command(
+            std::path::Path::new("raiopdf-mcp"),
+            "batch_cleanup",
+            Some("--max-old-space-size=8192".to_string()),
+        );
+
+        assert!(
+            !command
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains(NODE_SECURITY_FLAG)),
+            "hardening flag must not appear as an argument"
+        );
+
+        let node_options = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("NODE_OPTIONS"))
+            .and_then(|(_, value)| value)
+            .expect("NODE_OPTIONS must be set on every one-shot child")
+            .to_string_lossy()
+            .into_owned();
+
+        assert!(node_options.contains(NODE_SECURITY_FLAG));
+        assert!(node_options.contains("--max-old-space-size=8192"));
     }
 
     #[test]

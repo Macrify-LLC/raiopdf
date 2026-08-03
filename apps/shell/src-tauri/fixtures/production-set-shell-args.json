@@ -1,0 +1,44 @@
+{
+  "sources": [
+    {
+      "grant": "grant-produced",
+      "designation": "CONFIDENTIAL",
+      "designationPages": "1-2,5"
+    },
+    {
+      "grant": "grant-redacted",
+      "status": "produce-redacted",
+      "privilegeAsserted": "Work product",
+      "basis": "Redacted per protective order"
+    },
+    {
+      "grant": "grant-withheld",
+      "status": "withhold",
+      "privilegeAsserted": "Attorney-client privilege",
+      "basis": "Counsel advice re settlement"
+    }
+  ],
+  "outputDir": "C:/matters/out",
+  "prefix": "SMITH",
+  "start": 100,
+  "digits": 6,
+  "includeIndex": true,
+  "includeFilenameInIndex": true,
+  "combinedPdf": false,
+  "volumeSizeMb": 250,
+  "batesPlacement": {
+    "edge": "footer",
+    "align": "right"
+  },
+  "designationPlacement": {
+    "edge": "header",
+    "align": "center"
+  },
+  "stampFontSizePt": 10,
+  "continueFrom": "dir-grant-prior",
+  "continuationOverrideReason": "Reserved 100 numbers for a rolling production",
+  "duplicateHandling": "produce-once",
+  "includeLoadFiles": true,
+  "includeFilenameInPrivilegeLog": true,
+  "withheldHandling": "slip-sheet"
+}

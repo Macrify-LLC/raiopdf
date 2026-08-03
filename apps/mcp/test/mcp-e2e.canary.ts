@@ -21,7 +21,16 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -473,6 +482,97 @@ function readFileSyncBytes(file: string): Uint8Array {
   return new Uint8Array(readFileSync(file));
 }
 
+/** A parsed header row plus data rows, for the package's tabular artifacts
+ *  (`production.dat`, `production-index.csv`, `draft-privilege-log.csv`). */
+interface CanaryDelimitedFile {
+  header: string[];
+  rows: string[][];
+}
+
+/** Reads one column of a parsed row by header name, so an assertion names the
+ *  column it means instead of a positional index that silently shifts when a
+ *  field is added. */
+function column(file: CanaryDelimitedFile, row: readonly string[], name: string): string {
+  const index = file.header.indexOf(name);
+  expect(index, `column "${name}" should exist; header is ${file.header.join(", ")}`).toBeGreaterThanOrEqual(0);
+  return row[index] ?? "";
+}
+
+/** Byte `0x14` (ASCII DC4) — the DAT field delimiter (docs/PRODUCTION-SETS.md). */
+const DAT_FIELD_DELIMITER = String.fromCharCode(0x14);
+
+/**
+ * Parses `production.dat` and asserts its envelope on the way through: UTF-8
+ * with a BOM, `0x14`-delimited, `þ`-qualified on every field including the
+ * header, CRLF-terminated on every line including the last. A load file that
+ * a review platform silently mis-imports is exactly the failure a mocked unit
+ * test can't see — the bytes have to come off disk.
+ */
+function readProductionDat(root: string): CanaryDelimitedFile {
+  const bytes = readFileSyncBytes(path.join(root, "production.dat"));
+  expect([...bytes.subarray(0, 3)], "production.dat should start with a UTF-8 BOM").toEqual([0xef, 0xbb, 0xbf]);
+  const text = new TextDecoder().decode(bytes.subarray(3));
+  expect(text.endsWith("\r\n"), "every production.dat line ends CRLF, including the last").toBe(true);
+  const parsed = text
+    .slice(0, -2)
+    .split("\r\n")
+    .map((line) =>
+      line.split(DAT_FIELD_DELIMITER).map((field) => {
+        expect(/^þ[\s\S]*þ$/.test(field), `every DAT field should be þ-qualified: ${field}`).toBe(true);
+        return field.slice(1, -1);
+      })
+    );
+  return { header: parsed[0] ?? [], rows: parsed.slice(1) };
+}
+
+/** Minimal RFC 4180 reader for the package's own CSV artifacts (production
+ *  index, draft privilege log) — quoted cells and doubled quotes included, so
+ *  a blank column is distinguishable from a missing one. */
+function readPackageCsv(root: string, name: string): CanaryDelimitedFile {
+  const text = readFileSyncUtf8(path.join(root, name));
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cellText = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (quoted) {
+      if (char !== '"') {
+        cellText += char;
+      } else if (text[index + 1] === '"') {
+        cellText += '"';
+        index += 1;
+      } else {
+        quoted = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cellText);
+      cellText = "";
+    } else if (char === "\n") {
+      row.push(cellText);
+      rows.push(row);
+      row = [];
+      cellText = "";
+    } else if (char !== "\r") {
+      cellText += char;
+    }
+  }
+  if (cellText !== "" || row.length > 0) {
+    row.push(cellText);
+    rows.push(row);
+  }
+  return { header: rows[0] ?? [], rows: rows.slice(1) };
+}
+
+/** The numeric part of a formatted Bates number ("SLIP000003" -> 3). */
+function batesNumber(bates: string): number {
+  return Number(bates.replace(/^\D+/, ""));
+}
+
 // One writable directory for tool outputs. Every test uses a distinct base name and
 // the connector never overwrites, so the fresh mkdtemp dir keeps outputs collision-free.
 let workDir: string;
@@ -904,6 +1004,342 @@ describe("MCP end-to-end canary (real connector + real engine)", () => {
       ]),
     );
     assertManifestChecksums(outputDir);
+  });
+
+  // Discovery-production coverage (0.1.6). The RULES here — who consumes a
+  // Bates number, which rows a privilege log gets, what a slip sheet says —
+  // are already proven by the unit suite in `packages/production-set/test`.
+  // What only this layer can prove is ARTIFACT FIDELITY: that driving the real
+  // connector over stdio actually lands these files on disk, with this
+  // content, in this package shape. So it's two consolidated runs carrying
+  // many fields each, not one run per rule — the canary suite is serial and
+  // every extra production run costs real engine time.
+  describe("build_production_set: withheld documents, load files, and continuation", () => {
+    const PRIVILEGE = "Attorney-client privilege";
+    // Distinctive filename tokens: the "absent everywhere" assertions below are
+    // substring searches, so no source name may be a substring of another.
+    let produceSource: string;
+    let redactedSource: string;
+    let omittedWithheldSource: string;
+    let duplicateFirst: string;
+    let duplicateSecond: string;
+    let slipProduceFirst: string;
+    let slipWithheldSource: string;
+    let slipProduceLast: string;
+    let continuationSource: string;
+
+    beforeAll(async () => {
+      produceSource = out("produced-agreement.pdf");
+      redactedSource = out("redacted-memo.pdf");
+      omittedWithheldSource = out("withheld-privileged-memo.pdf");
+      duplicateFirst = out("duplicate-exhibit.pdf");
+      duplicateSecond = out("duplicate-exhibit-copy.pdf");
+      slipProduceFirst = out("first-production-doc.pdf");
+      slipWithheldSource = out("withheld-strategy-memo.pdf");
+      slipProduceLast = out("last-production-doc.pdf");
+      continuationSource = out("continuation-doc.pdf");
+
+      await writeTextPdf(produceSource, ["Produced agreement page one", "Produced agreement page two"]);
+      await writeTextPdf(redactedSource, ["Redacted memo page one"]);
+      await writeTextPdf(omittedWithheldSource, ["Privileged memo page one"]);
+      await writeTextPdf(duplicateFirst, ["Duplicate exhibit page one"]);
+      // Copied, not regenerated: pdf-lib stamps creation/modification dates, so
+      // only a byte copy reliably hashes identical — which is what duplicate
+      // detection keys on.
+      copyFileSync(duplicateFirst, duplicateSecond);
+      await writeTextPdf(slipProduceFirst, ["First production doc page one", "First production doc page two"]);
+      await writeTextPdf(slipWithheldSource, ["Strategy memo page one"]);
+      await writeTextPdf(slipProduceLast, ["Last production doc page one"]);
+      await writeTextPdf(continuationSource, ["Continuation doc page one", "Continuation doc page two"]);
+    }, 60_000);
+
+    it('withheldHandling "omit": the withheld document is absent from upload/, the index, and production.dat', async () => {
+      const outputDir = out("production-omit-package");
+      const structured = await call(enabled, "build_production_set", {
+        sources: [
+          { path: produceSource, designation: "CONFIDENTIAL", custodian: "R. Nguyen" },
+          {
+            path: redactedSource,
+            status: "produce-redacted",
+            privilegeAsserted: "Attorney work product",
+            basis: "Mental impressions of counsel redacted from the produced copy",
+          },
+          {
+            path: omittedWithheldSource,
+            // Carried deliberately: a withheld source's own designation must
+            // never leak into a package it doesn't appear in.
+            designation: "CONFIDENTIAL",
+            status: "withhold",
+            privilegeAsserted: PRIVILEGE,
+            basis: "Legal advice regarding the draft agreement",
+          },
+          { path: duplicateFirst },
+          { path: duplicateSecond },
+        ],
+        outputDir,
+        prefix: "MIXED",
+        start: 1,
+        digits: 6,
+        includeIndex: true,
+        combinedPdf: true,
+        includeLoadFiles: true,
+        duplicateHandling: "produce-once",
+        withheldHandling: "omit",
+      }, 240_000);
+      expectStructuredOk(structured, "build_production_set (omit)");
+
+      // Three documents are produced: the agreement (2pp), the redacted memo
+      // (1p), and the FIRST duplicate only. The withheld source and the second
+      // duplicate occurrence each consume NO Bates number, so numbering stays
+      // contiguous and the run ends at 5 — not the 7 a produce-all run that
+      // also produced the withheld document would reach.
+      expect(structured).toMatchObject({
+        packageRoot: outputDir,
+        nextNumber: 5,
+        withheldCount: 1,
+        redactedCount: 1,
+        slipSheetCount: 0,
+        duplicateCount: 1,
+        loadFileDat: "production.dat",
+        privilegeLogLocation: "draft-privilege-log.csv",
+        indexCsv: "production-index.csv",
+      });
+      expect(structured.outputs as string[]).toHaveLength(3);
+
+      // upload/ on disk: 3 produced documents + the combined PDF, and no trace
+      // of the withheld document or the omitted duplicate occurrence.
+      const uploadNames = readdirSync(path.join(outputDir, "upload"));
+      expect(uploadNames).toHaveLength(4);
+      expect(uploadNames.some((name) => name.includes("withheld-privileged-memo"))).toBe(false);
+      expect(uploadNames.some((name) => name.includes("duplicate-exhibit-copy"))).toBe(false);
+      expect(uploadNames.some((name) => name.includes("duplicate-exhibit.pdf"))).toBe(true);
+
+      // The production index never names it either.
+      const index = readPackageCsv(outputDir, "production-index.csv");
+      expect(index.rows).toHaveLength(3);
+      expect(readFileSyncUtf8(path.join(outputDir, "production-index.csv"))).not.toContain(
+        "withheld-privileged-memo",
+      );
+
+      // production.dat: one row per PRODUCED document — no row for the combined
+      // PDF, the withheld document, or the produce-once-skipped duplicate.
+      const dat = readProductionDat(outputDir);
+      expect(dat.header).toEqual([
+        "BEGBATES",
+        "ENDBATES",
+        "BEGATTACH",
+        "ENDATTACH",
+        "PAGECOUNT",
+        "CONFIDENTIALITY",
+        "CUSTODIAN",
+        "FILENAME",
+        "LINK",
+        "SHA256",
+      ]);
+      expect(dat.rows, "one DAT row per produced document, and nothing else").toHaveLength(3);
+      expect(dat.rows.map((row) => [column(dat, row, "BEGBATES"), column(dat, row, "ENDBATES")])).toEqual([
+        ["MIXED000001", "MIXED000002"],
+        ["MIXED000003", "MIXED000003"],
+        ["MIXED000004", "MIXED000004"],
+      ]);
+      expect(dat.rows.some((row) => column(dat, row, "LINK").includes("withheld-privileged-memo"))).toBe(false);
+      expect(dat.rows.some((row) => column(dat, row, "LINK").includes("combined-production"))).toBe(false);
+      // Fields that ride the transport for real: designation, custodian, and
+      // the backslash-separated LINK every review platform expects.
+      expect(column(dat, dat.rows[0]!, "CONFIDENTIALITY")).toBe("CONFIDENTIAL");
+      expect(column(dat, dat.rows[0]!, "CUSTODIAN")).toBe("R. Nguyen");
+      expect(column(dat, dat.rows[0]!, "LINK")).toBe(
+        "upload\\MIXED000001 - MIXED000002 - produced-agreement.pdf",
+      );
+
+      // The draft privilege log: one row per non-"produce" source, ordered by
+      // source position. Blankness of the four manual columns IS the feature —
+      // a wrong autopopulated privilege log is worse than a sparse one
+      // (docs/PRODUCTION-SETS.md).
+      const log = readPackageCsv(outputDir, "draft-privilege-log.csv");
+      expect(log.header).toEqual([
+        "RowId",
+        "Status",
+        "Bates",
+        "PrivilegeAsserted",
+        "Description",
+        "Filename",
+        "Pages",
+        "Date",
+        "DocType",
+        "Author",
+        "Recipients",
+      ]);
+      expect(log.rows).toHaveLength(2);
+      for (const row of log.rows) {
+        for (const manualColumn of ["Date", "DocType", "Author", "Recipients"]) {
+          expect(column(log, row, manualColumn), `${manualColumn} is a manual column and must stay blank`).toBe("");
+        }
+      }
+      const redactedRow = log.rows.find((row) => column(log, row, "Status") === "Produced with redactions");
+      expect(redactedRow, "the produce-redacted source should have a privilege log row").toBeDefined();
+      expect(column(log, redactedRow!, "Bates")).toBe("MIXED000003-MIXED000003");
+      const withheldRow = log.rows.find((row) => column(log, row, "Status") === "Withheld");
+      expect(withheldRow, "the withheld source should have a privilege log row").toBeDefined();
+      expect(column(log, withheldRow!, "PrivilegeAsserted")).toBe(PRIVILEGE);
+      // Blank under "omit": this document never consumed a Bates number.
+      expect(column(log, withheldRow!, "Bates")).toBe("");
+      expect(column(log, withheldRow!, "Filename")).toBe("withheld-privileged-memo.pdf");
+
+      assertManifestChecksums(outputDir);
+    });
+
+    it("default slip sheets take the withheld document's place, and a continuation run picks up where it left off", async () => {
+      const slipRoot = out("production-slip-package");
+      const slip = await call(enabled, "build_production_set", {
+        sources: [
+          { path: slipProduceFirst, designation: "CONFIDENTIAL" },
+          {
+            path: slipWithheldSource,
+            // Never stamped onto the slip sheet — see the blank CONFIDENTIALITY
+            // assertions below.
+            designation: "CONFIDENTIAL",
+            status: "withhold",
+            privilegeAsserted: PRIVILEGE,
+            basis: "Litigation strategy prepared in anticipation of trial",
+          },
+          { path: slipProduceLast },
+        ],
+        outputDir: slipRoot,
+        prefix: "SLIP",
+        start: 1,
+        digits: 6,
+        includeIndex: true,
+        includeLoadFiles: true,
+        // withheldHandling deliberately omitted: this run proves the DEFAULT.
+      }, 240_000);
+      expectStructuredOk(slip, "build_production_set (slip-sheet)");
+      expect(slip).toMatchObject({
+        packageRoot: slipRoot,
+        nextNumber: 5,
+        slipSheetCount: 1,
+        withheldCount: 1,
+        redactedCount: 0,
+        loadFileDat: "production.dat",
+        privilegeLogLocation: "draft-privilege-log.csv",
+      });
+      expect(slip.outputs as string[]).toHaveLength(3);
+
+      // The placeholder is a real produced document: three files in upload/,
+      // and the manifest's production-ordered ranges show it consuming exactly
+      // ONE Bates number in the withheld document's own second position, with
+      // no gap on either side.
+      expect(readdirSync(path.join(slipRoot, "upload"))).toHaveLength(3);
+      const slipManifest = packageManifest(slipRoot);
+      expect(slipManifest.uploadFiles.map((file) => [file.batesStart, file.batesEnd])).toEqual([
+        ["SLIP000001", "SLIP000002"],
+        ["SLIP000003", "SLIP000003"],
+        ["SLIP000004", "SLIP000004"],
+      ]);
+      const slipEntry = slipManifest.uploadFiles[1]!;
+      expect(slipEntry.pages).toBe(1);
+      const slipFile = path.join(slipRoot, slipEntry.relativePath);
+      expect(existsSync(slipFile), "the slip sheet should be a real file in upload/").toBe(true);
+      expect(await pageCountOf(slipFile)).toBe(1);
+
+      // What the placeholder actually says, read back out of the generated page
+      // through the connector's own text extraction.
+      const withheldText = await call(enabled, "locate_text", { input: slipFile, query: "DOCUMENT WITHHELD" });
+      expect(withheldText.matchCount as number, "the slip sheet should say DOCUMENT WITHHELD").toBeGreaterThan(0);
+      const privilegeText = await call(enabled, "locate_text", { input: slipFile, query: PRIVILEGE });
+      expect(privilegeText.matchCount as number, "the slip sheet should name the asserted privilege").toBeGreaterThan(0);
+      // And it is Bates-stamped like any other produced page.
+      await expectPageContentContains(slipFile, 0, "SLIP000003");
+
+      // It appears in the index and the DAT, with a blank designation in both —
+      // regardless of the designation its withheld source carried.
+      const slipIndex = readPackageCsv(slipRoot, "production-index.csv");
+      expect(slipIndex.rows).toHaveLength(3);
+      const slipIndexRow = slipIndex.rows.find((row) => column(slipIndex, row, "Bates Start") === "SLIP000003");
+      expect(slipIndexRow, "the slip sheet should have a production index row").toBeDefined();
+      expect(column(slipIndex, slipIndexRow!, "Designation")).toBe("");
+      expect(column(slipIndex, slipIndexRow!, "Pages")).toBe("1");
+      expect(column(slipIndex, slipIndexRow!, "Filename")).toBe(
+        "SLIP000003 - SLIP000003 - withheld-strategy-memo.pdf",
+      );
+
+      const slipDat = readProductionDat(slipRoot);
+      expect(slipDat.rows).toHaveLength(3);
+      const slipDatRow = slipDat.rows.find((row) => column(slipDat, row, "BEGBATES") === "SLIP000003");
+      expect(slipDatRow, "the slip sheet should have a DAT row").toBeDefined();
+      expect(column(slipDat, slipDatRow!, "CONFIDENTIALITY")).toBe("");
+      expect(column(slipDat, slipDatRow!, "PAGECOUNT")).toBe("1");
+      // The blank above is specific to the slip sheet, not a broken designation
+      // path — the produced document ahead of it still carries its designation.
+      expect(column(slipDat, slipDat.rows[0]!, "CONFIDENTIALITY")).toBe("CONFIDENTIAL");
+
+      // The privilege log's Bates column names the slip sheet's stamped range,
+      // while Filename still names the withheld document itself.
+      const slipLog = readPackageCsv(slipRoot, "draft-privilege-log.csv");
+      expect(slipLog.rows).toHaveLength(1);
+      const slipLogRow = slipLog.rows[0]!;
+      expect(column(slipLog, slipLogRow, "Status")).toBe("Withheld");
+      expect(column(slipLog, slipLogRow, "Bates")).toBe(`${slipEntry.batesStart}-${slipEntry.batesEnd}`);
+      expect(column(slipLog, slipLogRow, "Filename")).toBe("withheld-strategy-memo.pdf");
+      for (const manualColumn of ["Date", "DocType", "Author", "Recipients"]) {
+        expect(column(slipLog, slipLogRow, manualColumn), `${manualColumn} must stay blank`).toBe("");
+      }
+      assertManifestChecksums(slipRoot);
+
+      // A second production continuing the same series off the first package.
+      const continuationRoot = out("production-continuation-package");
+      const continued = await call(enabled, "build_production_set", {
+        sources: [{ path: continuationSource }],
+        outputDir: continuationRoot,
+        prefix: "SLIP",
+        start: 5,
+        digits: 6,
+        includeIndex: true,
+        continueFrom: slipRoot,
+      }, 240_000);
+      expectStructuredOk(continued, "build_production_set (continuation)");
+      expect(continued).toMatchObject({
+        packageRoot: continuationRoot,
+        nextNumber: 7,
+        continuation: { mode: "strict", priorLastBates: "SLIP000004" },
+      });
+      assertManifestChecksums(continuationRoot);
+
+      // Across both packages the Bates ranges tile 1..6 exactly: sorted, each
+      // range starts one past the previous one's end — no overlap, no gap.
+      const ranges = [...slipManifest.uploadFiles, ...packageManifest(continuationRoot).uploadFiles]
+        .map((file) => [batesNumber(file.batesStart!), batesNumber(file.batesEnd!)] as const)
+        .sort((left, right) => left[0] - right[0]);
+      expect(ranges).toHaveLength(4);
+      expect(ranges[0]![0], "the combined series still starts at the first production's start").toBe(1);
+      ranges.forEach(([start, end], index) => {
+        expect(end, "every Bates range runs forward").toBeGreaterThanOrEqual(start);
+        if (index > 0) {
+          expect(start, "ranges are disjoint and contiguous — no overlap, no gap").toBe(ranges[index - 1]![1] + 1);
+        }
+      });
+      expect(ranges.at(-1)![1]).toBe(6);
+
+      // Negative: continuing from a folder that isn't a production package is a
+      // structured refusal, and nothing is written.
+      const notAPackage = out("not-a-production-package");
+      mkdirSync(notAPackage, { recursive: true });
+      writeFileSync(path.join(notAPackage, "notes.txt"), "not a production package\n");
+      const rejectedOutputDir = out("production-continuation-rejected");
+      const rejected = await call(enabled, "build_production_set", {
+        sources: [{ path: continuationSource }],
+        outputDir: rejectedOutputDir,
+        prefix: "SLIP",
+        start: 7,
+        digits: 6,
+        continueFrom: notAPackage,
+      }, 120_000);
+      expect(rejected.ok).toBe(false);
+      const error = rejected.error as { code?: string; message?: string };
+      expect(error.code).toBe("ENGINE_ERROR");
+      expect(error.message).toContain("production package");
+      expect(existsSync(rejectedOutputDir), "a refused continuation leaves no half-built package").toBe(false);
+    });
   });
 
   it("batch_cleanup: writes report artifacts, per-file status, and matching checksums", async () => {

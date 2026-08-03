@@ -266,8 +266,12 @@ mod production_set_args_fixture {
         assert!(serde_json::from_value::<ProductionSetShellArgs>(value).is_err());
     }
 
-    /// The fixture carries placeholder grant strings; re-mint them against real
-    /// grant tables so the translation under test resolves something.
+    /// The fixture carries placeholder grants and a Windows-shaped `outputDir`,
+    /// because it is a record of the RENDERER's payload shape, not of any real
+    /// filesystem. Re-point all three at this run's temp dir so the translation
+    /// under test resolves something on every platform — `resolve_output_dir`
+    /// walks ancestors until one exists, so a literal `C:/matters/out` is an
+    /// error anywhere but Windows.
     fn parse_with_real_grants(
         temp: &std::path::Path,
         file_grants: &FileGrants,
@@ -283,6 +287,11 @@ mod production_set_args_fixture {
                 .grant(temp.join("prior-production"))
                 .expect("directory grant"),
         );
+        args.output_dir = temp
+            .join("out")
+            .to_str()
+            .expect("temp dir is utf-8")
+            .to_string();
         args
     }
 

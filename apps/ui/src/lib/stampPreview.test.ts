@@ -203,7 +203,10 @@ describe("computeStampPreviewLayout", () => {
     expect(layout.fontSizePt).toBe(MIN_STAMP_FONT_SIZE_PT);
   });
 
-  it("shrinks by half-point steps until the widest line fits the content box", async () => {
+  // Named for what it asserts: the largest size that fits, not the step size.
+  // This string's fit boundary lands on an integer, so it survives a change to
+  // STAMP_FONT_SIZE_STEP_PT — the height-driven test below is what pins the step.
+  it("shrinks the label to the largest size whose widest line fits the content box", async () => {
     const font = await embeddedHelvetica();
     const line = "Defendant's Exhibit 12";
     const widthPt = 100;

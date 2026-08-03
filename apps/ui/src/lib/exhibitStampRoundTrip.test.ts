@@ -106,50 +106,38 @@ describe("reopened exhibit stamps", () => {
     // the reopened sticker would be movable but no longer part of the set.
     expect(renumberableStamps(stamps, TEMPLATE_ID)).toHaveLength(PLACEMENT_ORDER.length);
 
+    // Provenance field-by-field (templateId, templateRevision, the sequence
+    // envelope) is already pinned on both the pre-save and post-reopen paths by
+    // engine-local's exhibit-stamp round-trip block. What matters at THIS seam
+    // is that the number a sticker was placed with is the number that reopened —
+    // an off-by-one here renumbers a whole exhibit set wrongly.
     for (const stamp of stamps) {
-      expect(stamp).toMatchObject({
-        kind: "stamp",
-        annotSource: "raio",
-        status: "applied",
-        templateId: TEMPLATE_ID,
-        templateRevision: TEMPLATE_REVISION,
-        sequence: { schemaVersion: 1, identifierStyle: "numbers", prefix: PREFIX },
-      });
-      expect(stamp.annotId).toBeTruthy();
-      // The number it was placed with is exactly the number that reopened.
-      expect(stamp.sequence?.index).toBe(PLACEMENT_ORDER.indexOf(nameOf(stamp)));
-      expect(stamp.lines).toEqual(labelFor(PLACEMENT_ORDER.indexOf(nameOf(stamp))));
+      const placedAt = PLACEMENT_ORDER.indexOf(nameOf(stamp));
+      expect(stamp.sequence?.index).toBe(placedAt);
+      expect(stamp.lines).toEqual(labelFor(placedAt));
     }
   });
 
-  it("renumbers reopened stamps in reading order, upside-down page included", async () => {
-    const { stamps, savedBytes, nameOf } = await placeSaveAndReopen();
-
-    await withPdfJsDocument(savedBytes, async (pdfDocument) => {
-      const renumberable = renumberableStamps(stamps, TEMPLATE_ID);
-      const visualRects = await readStampVisualRects(pdfDocument, renumberable);
-
-      // Every page measured, so the plan below is the real viewport sort and
-      // not the user-space fallback (which would get page 1 backwards).
-      expect(visualRects.size).toBe(PLACEMENT_ORDER.length);
-
-      const steps = planExhibitStampRenumber(renumberable, visualRects, 0);
-
-      expect(steps.map((step) => nameOf(byId(stamps, step.id)))).toEqual([...READING_ORDER]);
-      expect(steps.map((step) => step.index)).toEqual([0, 1, 2, 3, 4, 5]);
-    });
-  });
-
+  // The reading-order sort itself — including all four page rotations — is
+  // already pinned by exhibitStampRenumber.test.ts against hand-built rects.
+  // What is NOT covered there is the same sort driven by rects measured from a
+  // real saved file, then written back; that is the test below, so a separate
+  // ordering test here would only re-prove the sibling.
   it("writes the renumber back into the file without duplicating a sticker", async () => {
     const { engine, reopened, stamps, imports, savedBytes, nameOf } = await placeSaveAndReopen();
 
     const renumbered = await withPdfJsDocument(savedBytes, async (pdfDocument) => {
       const renumberable = renumberableStamps(stamps, TEMPLATE_ID);
-      const steps = planExhibitStampRenumber(
-        renumberable,
-        await readStampVisualRects(pdfDocument, renumberable),
-        0,
-      );
+      const visualRects = await readStampVisualRects(pdfDocument, renumberable);
+
+      // Every page measured, so the plan is the real viewport sort and not the
+      // user-space fallback — which would read the upside-down page backwards.
+      expect(visualRects.size).toBe(PLACEMENT_ORDER.length);
+
+      const steps = planExhibitStampRenumber(renumberable, visualRects, 0);
+
+      // Reading order off the real file: page by page, top down, left to right.
+      expect(steps.map((step) => nameOf(byId(stamps, step.id)))).toEqual([...READING_ORDER]);
 
       return stamps.map((stamp) => {
         const step = steps.find((candidate) => candidate.id === stamp.id);

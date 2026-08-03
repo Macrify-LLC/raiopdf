@@ -242,9 +242,12 @@ describe("BinderWorkspace", () => {
       ["Exhibit B"],
     ]);
 
-    // (3) The load-bearing one: two exhibits drawn in this design, and the
-    // gallery's counter has not moved off 6. Re-read from storage rather than
-    // the module cache, so an advance that was actually persisted is caught.
+    // (3) A forward-looking guard, not the load-bearing assertion — (1) and (2)
+    // are. BinderWorkspace imports only `listExhibitStampTemplates`, so today
+    // there is no write path that could advance a counter and no mutation of
+    // this file can make this fail. It is here so that if binder building ever
+    // gains one, spending the design's numbers is caught immediately. Re-read
+    // from storage rather than the module cache so a persisted advance shows up.
     resetExhibitStampCacheForTests();
     expect(
       listExhibitStampTemplates().map((template) => [template.id, template.nextIndex]),

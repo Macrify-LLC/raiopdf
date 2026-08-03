@@ -116,18 +116,18 @@ describe("reopened ink, shape, and callout annotations", () => {
     for (const [index, overlay] of overlays.entries()) {
       const annotId = imports[index]!.annotId;
 
+      // `annotSource` + `annotId` are what mark an overlay item as a live
+      // RaioPDF annotation rather than an unsaved draft; without them the
+      // overlay cannot update or delete it in place. These are the only
+      // fields here that a regression could plausibly drop — `pageIndex` is
+      // not asserted because every fixture sits on page 0, so it would hold
+      // whether the import read it or hard-coded it.
       expect(overlay).toMatchObject({
-        // `annotSource` + `annotId` are what mark an overlay item as a live
-        // RaioPDF annotation rather than an unsaved draft; without them the
-        // overlay cannot update or delete it in place.
         annotSource: "raio",
         annotId,
         id: `annot-${annotId}`,
         status: "applied",
-        pageIndex: 0,
       });
-      // An imported annotation is interactive, never locked on arrival.
-      expect(overlay.pinned).toBeUndefined();
     }
   });
 

@@ -809,33 +809,41 @@ test("switching from Select to a markup tool converts the selection; other tools
   // Deterministic single-line target, anchored by content: position-based
   // finders can grab the multi-line caption block depending on scroll state,
   // which turns the converted markup into a different rect count per run.
+  // Selects via a DOM Range rather than a mouse drag — the same idiom the
+  // right-click replacement test below uses.
+  //
+  // The drag version was the source of a long-standing flake on the required
+  // Web gate (~1 in 5 locally, and it reds a job with no retries). It aimed the
+  // pointer at a rect captured a moment earlier, so any re-layout, scroll, or
+  // slow paint between measuring and dragging left the pointer over the wrong
+  // place and selected nothing — surfacing as `text.length > 5` failing over
+  // and over until the retry budget ran out. A Range needs no coordinates and
+  // cannot miss. It still drives the app through the real selection API, which
+  // is what the tool switch reads.
   const selectBodyText = async () => {
-    let attempt = 0;
-
     await expect(async () => {
-      attempt += 1;
-      const line = await textLayer.evaluate((layer, jitter) => {
+      const selected = await textLayer.evaluate((layer) => {
         const span = [...layer.querySelectorAll("span")].find((s) =>
           s.textContent?.includes("comes before the Court"),
         );
-        if (!span) {
-          return null;
+        const node = span?.firstChild;
+        if (!span || !node || node.nodeType !== Node.TEXT_NODE) {
+          return "";
         }
-        const r = span.getBoundingClientRect();
-        return { left: r.left + 6 + jitter, right: r.right, y: r.top + r.height / 2 };
-      }, (attempt % 5) * 9);
 
-      if (!line) {
-        throw new Error("body line not found");
-      }
-      await page.evaluate(() => window.getSelection()?.removeAllRanges());
-      await page.mouse.move(line.left, line.y);
-      await page.mouse.down();
-      await page.mouse.move(line.left + (line.right - line.left) * 0.6, line.y, { steps: 6 });
-      await page.mouse.up();
-      const text = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+        const length = node.textContent?.length ?? 0;
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.setEnd(node, Math.max(6, Math.floor(length * 0.6)));
 
-      expect(text.length).toBeGreaterThan(5);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        return selection?.toString() ?? "";
+      });
+
+      // Retries only for the text layer not having rendered the line yet.
+      expect(selected.length).toBeGreaterThan(5);
     }).toPass({ timeout: 15_000 });
   };
 

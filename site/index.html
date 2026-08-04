@@ -43,12 +43,11 @@
     --muted-blend:#5A6F8A;
     /* Replaces --muted-blend wherever text sits directly on the hero/divider
        surface — #5A6F8A measured 2.8:1 (light-blue) / 2.9:1 (gold) against the
-       accent text colors that live there. Warm-neutral rather than navy-blue
-       on purpose: the hero's base wash reads as "night," full stop, rather
-       than the stock dark-navy-to-cyan gradient — the storm read comes from
-       the cloud layers and the sunbreak beam sitting on top of it, not from
-       this base tone being blue. */
-    --storm-dusk:#302A24;
+       accent text colors that live there. Kept in the navy family but much
+       darker: a desaturated tone here reads as flat grey on most screens,
+       while dark navy keeps the night-sky read AND passes AA for the gold and
+       light-blue accents (~6.5-7:1). */
+    --storm-dusk:#22334E;
     --surface:#F7FAFE;
     --bg-alt:#EDF4FB;
     --border:#D4DFEE;
@@ -195,7 +194,7 @@
   /* ---------- hero / storm ---------- */
   .hero{
     position:relative; overflow:hidden; isolation:isolate;
-    background:linear-gradient(165deg, var(--navy-deep) 0%, var(--navy) 38%, #4a4540 72%, var(--storm-dusk) 100%);
+    background:linear-gradient(165deg, var(--navy-deep) 0%, var(--navy) 38%, #2B3D5C 72%, var(--storm-dusk) 100%);
     color:#fff;
     padding:clamp(72px, 12vw, 128px) 24px clamp(64px, 9vw, 104px);
   }
@@ -652,7 +651,7 @@
        The blend is routed through warm dawn stops — a straight dark-brown to
        pale-blue mix passes through muddy grey, which read as a flat grey band
        between the hero and the page. */
-    background:linear-gradient(180deg, var(--storm-dusk) 0%, #5a4630 20%, #b08a52 36%, #ecdcba 48%, var(--bg-alt) 64%);
+    background:linear-gradient(180deg, var(--storm-dusk) 0%, #474058 18%, #7d5b45 32%, #d9a95c 42%, #f2e3c2 52%, var(--bg-alt) 66%);
   }
   .motion-band--marquee{ height:128px; background:var(--surface); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 

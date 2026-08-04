@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- impeccable-disable em-dash-overuse — this page quotes Jacob's own written
+     voice (site/shared/COPY.md, README "philosophy" section) verbatim; the
+     em dashes are his, not a copy-generation tic. -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RaioPDF — Free, local, full-featured PDF suite for law firms</title>
@@ -19,7 +22,11 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Newsreader:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Body sans is Schibsted Grotesk, not the Macrify-corporate Plus Jakarta Sans / Hanken
+     Grotesk pairing — RaioPDF is its own brand (a personal, editorial, slightly wry voice),
+     and Schibsted's warmer, more humanist grotesk shapes sit better next to Newsreader's
+     literary serif than a corporate-neutral UI sans would. -->
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Newsreader:wght@400;600;700&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 
 <link rel="icon" type="image/svg+xml" href="./assets/raiopdf/raiopdf-favicon.svg">
 <link rel="icon" type="image/png" sizes="545x545" href="./assets/raiopdf/raiopdf-favicon.png">
@@ -34,6 +41,13 @@
     --accent:#4AADE0;
     --light-blue:#7EC8F0;
     --muted-blend:#5A6F8A;
+    /* Replaces --muted-blend wherever text sits directly on the hero/divider
+       surface — #5A6F8A measured 2.8:1 (light-blue) / 2.9:1 (gold) against the
+       accent text colors that live there. Kept in the navy family but much
+       darker: a desaturated tone here reads as flat grey on most screens,
+       while dark navy keeps the night-sky read AND passes AA for the gold and
+       light-blue accents (~6.5-7:1). */
+    --storm-dusk:#22334E;
     --surface:#F7FAFE;
     --bg-alt:#EDF4FB;
     --border:#D4DFEE;
@@ -43,9 +57,14 @@
     --gold:#F5B942;
     --gold-deep:#E0932E;
     --gold-pale:#FFE7B3;
+    /* --gold-deep reads 2.3-2.5:1 on white/--bg-alt — fine as a border/icon
+       accent but not as body-size text. This is the same amber family, darkened
+       to clear 4.5:1 for the few places it's used as small text on a light
+       surface (also matches the brand's existing Warning-text amber). */
+    --amber-text:#92400E;
     --font-display:"Newsreader",Georgia,serif;
     --font-editorial:"DM Serif Display",Georgia,serif;
-    --font-body:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,sans-serif;
+    --font-body:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,sans-serif;
     --ease-drawer:cubic-bezier(0.32,0.72,0,1); /* iOS-style expand/collapse curve */
     /* lets height:auto animate (FAQ accordion reveal); ignored where unsupported */
     interpolate-size:allow-keywords;
@@ -67,17 +86,23 @@
 
   .container{ max-width:1120px; margin:0 auto; padding:0 24px; }
 
+  /* Only remaining user of .eyebrow is the "Latest update" card label (all six
+     section kickers were cut — headings carry those sections now), always on
+     a light card surface, so a single accessible-on-light color is enough;
+     the old --on-dark variant is unused. */
   .eyebrow{
     font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
-    color:var(--gold-deep); display:inline-flex; align-items:center; gap:8px;
+    color:var(--amber-text); display:inline-flex; align-items:center; gap:8px;
   }
-  .eyebrow--on-dark{ color:var(--gold); }
 
   /* ---------- status bar ---------- */
   .status-bar{
     background:var(--navy-deep); color:#EAF2FB; font-size:13px; font-weight:500;
     text-align:center; padding:10px 16px; border-bottom:1px solid rgba(245,185,66,.25);
   }
+  /* full-bleed bar (no .container ancestor) — cap the line itself so it
+     doesn't stretch edge-to-edge on a wide viewport */
+  .status-bar p{ max-width:52ch; margin:0 auto; }
   .status-bar strong{ color:var(--gold); font-weight:700; }
   .status-bar a{ color:var(--light-blue); text-decoration:underline; text-underline-offset:2px; }
   .status-bar a:hover{ color:var(--gold); }
@@ -101,11 +126,11 @@
        wordmark text unreadable against the storm gradient — the warm drop-shadow
        keeps a hint of the gold sunbreak color instead of losing it outright.
        Swap this filter for a purpose-built light variant if one is ever cut. */
-    filter:brightness(0) invert(1) drop-shadow(0 0 10px rgba(245,185,66,.35));
+    filter:brightness(0) invert(1) drop-shadow(0 2px 8px rgba(245,185,66,.35));
     transition:filter .2s ease, transform .2s ease;
   }
   .nav__brand:hover .nav__logo{
-    filter:brightness(0) invert(1) drop-shadow(0 0 16px rgba(245,185,66,.55));
+    filter:brightness(0) invert(1) drop-shadow(0 3px 12px rgba(245,185,66,.5));
     transform:translateY(-1px);
   }
   /* "by Macrify" publisher mark — deliberately subordinate to the RaioPDF
@@ -169,7 +194,7 @@
   /* ---------- hero / storm ---------- */
   .hero{
     position:relative; overflow:hidden; isolation:isolate;
-    background:linear-gradient(165deg, var(--navy-deep) 0%, var(--navy) 38%, #3E5170 72%, var(--muted-blend) 100%);
+    background:linear-gradient(165deg, var(--navy-deep) 0%, var(--navy) 38%, #2B3D5C 72%, var(--storm-dusk) 100%);
     color:#fff;
     padding:clamp(72px, 12vw, 128px) 24px clamp(64px, 9vw, 104px);
   }
@@ -178,18 +203,23 @@
 
   .cloud{
     position:absolute; border-radius:50%; filter:blur(58px);
-    background:radial-gradient(circle at 32% 30%, rgba(30,52,86,.9), rgba(11,26,46,.55) 60%, transparent 82%);
+    background:radial-gradient(circle at 32% 30%, rgba(30,52,86,.65), rgba(11,26,46,.4) 60%, transparent 82%);
     will-change:transform;
   }
   .cloud--1{ top:-140px; left:-120px; width:560px; height:360px; opacity:.85; }
-  .cloud--2{ top:20px; right:-160px; width:480px; height:320px; opacity:.7; background:radial-gradient(circle at 60% 35%, rgba(41,60,92,.85), rgba(11,26,46,.5) 62%, transparent 84%); }
+  .cloud--2{ top:20px; right:-160px; width:480px; height:320px; opacity:.7; background:radial-gradient(circle at 60% 35%, rgba(41,60,92,.65), rgba(11,26,46,.38) 62%, transparent 84%); }
   .cloud--3{ bottom:-180px; left:8%; width:640px; height:380px; opacity:.62; }
   .cloud--4{ top:46%; left:34%; width:400px; height:230px; opacity:.5; filter:blur(70px); }
 
   .spotlight-wrap{ position:absolute; inset:0; overflow:hidden; z-index:1; pointer-events:none; }
-  .spotlight-group{ position:absolute; top:0; opacity:0; animation:spotlight-reveal 1.9s ease forwards; }
-  .spotlight-group--strong{ left:0; animation-delay:.15s; }
-  .spotlight-group--weak{ right:0; animation-delay:.45s; opacity:0; }
+  /* Impeccable pass, 2026-08: the hero used to carry a second, mirrored "weak"
+     spotlight group (cool-toned, upper-right) plus a separate halo behind the
+     app showcase — three overlapping soft-blur accents reading as a generic
+     stacked AI-radial effect. Consolidated down to this one sunbreak, which is
+     now the page's single authored light-source moment; see also the sun-mark
+     motif in the divider/footer, which are drawn scenes (rays + horizon), not
+     ambient glow blobs, so they're left alone. */
+  .spotlight-group{ position:absolute; top:0; left:0; opacity:0; animation:spotlight-reveal 1.9s ease forwards .15s; }
 
   /* Desktop-pointer parallax: JS sets --pointer-x/--pointer-y (in px, clamped
      and smoothed) on .hero as the mouse moves. `translate` is a distinct CSS
@@ -198,69 +228,45 @@
      (0px, 0px) on touch devices and under reduced motion — see the script at
      the bottom of the page, which only attaches the listener when
      `(hover: hover) and (pointer: fine)` and motion isn't reduced. */
-  .spotlight-group--strong{
+  .spotlight-group{
     translate: calc(var(--pointer-x, 0px) * 1) calc(var(--pointer-y, 0px) * 1);
     transition: translate .5s cubic-bezier(.2,.8,.2,1);
   }
-  .spotlight-group--weak{
-    /* The fading storm side drifts the opposite way, slightly — reads as the
-       whole sky reacting to where the light is breaking through, not a
-       cursor sticking to one beam. */
-    translate: calc(var(--pointer-x, 0px) * -0.45) calc(var(--pointer-y, 0px) * -0.45);
-    transition: translate .5s cubic-bezier(.2,.8,.2,1);
-  }
 
-  .spotlight-beam{ position:absolute; top:0; left:0; border-radius:9999px; }
+  .spotlight-beam{ position:absolute; top:0; left:0; }
 
-  /* strong beam group — the hard sunbreak, upper-left */
-  .spotlight-group--strong .spotlight-beam--primary{
+  /* The sunbreak — a single hard-edged wedge (clip-path, not a soft circular
+     blur) so it reads as a drawn shaft of light hitting the page at an angle,
+     rather than a defaulted radial-gradient glow. Narrow where the light
+     "originates" off the top edge, flaring wide by the time it reaches the
+     bottom of the hero. Two brighter inner streaks (core-a/b) sit inside the
+     wedge as the beam's hot center. */
+  .spotlight-beam--primary{
     width:640px; height:1480px;
     transform:translateY(-380px) rotate(-45deg);
-    background:radial-gradient(68.54% 68.72% at 55.02% 31.46%, hsla(38,96%,68%,.42) 0%, hsla(36,90%,55%,.18) 45%, hsla(34,85%,45%,0) 78%);
-    filter:blur(1px);
+    clip-path:polygon(42% 0%, 58% 0%, 100% 100%, 0% 100%);
+    background:radial-gradient(60% 70% at 50% 26%, hsla(38,98%,70%,.55) 0%, hsla(37,94%,60%,.34) 38%, hsla(36,90%,52%,.14) 62%, hsla(34,85%,45%,0) 88%);
     animation:spotlight-drift-strong 7s ease-in-out infinite 2s;
   }
-  .spotlight-group--strong .spotlight-beam--core-a{
+  .spotlight-beam--core-a{
     left:200px; width:240px; height:1480px;
     transform:translateY(-380px) rotate(-45deg);
-    background:radial-gradient(50% 50% at 50% 28%, hsla(45,100%,90%,.62) 0%, hsla(42,96%,72%,.22) 55%, transparent 100%);
+    clip-path:polygon(30% 0%, 70% 0%, 100% 100%, 0% 100%);
+    background:radial-gradient(50% 50% at 50% 28%, hsla(45,100%,90%,.68) 0%, hsla(42,96%,72%,.3) 50%, transparent 92%);
     animation:spotlight-pulse 6s ease-in-out infinite .3s;
   }
-  .spotlight-group--strong .spotlight-beam--core-b{
+  .spotlight-beam--core-b{
     left:200px; width:240px; height:920px;
     transform:translateY(-200px) rotate(-45deg);
-    background:radial-gradient(50% 50% at 50% 30%, hsla(48,100%,96%,.8) 0%, hsla(44,98%,80%,.28) 55%, transparent 100%);
+    clip-path:polygon(34% 0%, 66% 0%, 100% 100%, 0% 100%);
+    background:radial-gradient(50% 50% at 50% 30%, hsla(48,100%,96%,.85) 0%, hsla(44,98%,80%,.34) 50%, transparent 92%);
     animation:spotlight-pulse 6s ease-in-out infinite .9s;
-  }
-
-  /* weak beam group — the fading storm side, upper-right */
-  .spotlight-group--weak .spotlight-beam--primary{
-    right:0; left:auto; width:400px; height:1000px;
-    transform:translateY(-260px) rotate(45deg);
-    background:radial-gradient(68.54% 68.72% at 45% 31.46%, hsla(212,38%,55%,.16) 0%, hsla(212,34%,40%,.07) 50%, transparent 80%);
-    animation:spotlight-drift-weak 7s ease-in-out infinite 2.4s;
-  }
-  .spotlight-group--weak .spotlight-beam--core-a{
-    right:100px; left:auto; width:140px; height:1000px;
-    transform:translateY(-260px) rotate(45deg);
-    background:radial-gradient(50% 50% at 50% 28%, hsla(210,55%,80%,.22) 0%, hsla(210,45%,60%,.08) 55%, transparent 100%);
-    animation:spotlight-pulse 6s ease-in-out infinite .5s;
-  }
-  .spotlight-group--weak .spotlight-beam--core-b{
-    right:100px; left:auto; width:140px; height:640px;
-    transform:translateY(-140px) rotate(45deg);
-    background:radial-gradient(50% 50% at 50% 30%, hsla(212,60%,88%,.28) 0%, hsla(212,45%,65%,.1) 55%, transparent 100%);
-    animation:spotlight-pulse 6s ease-in-out infinite 1.1s;
   }
 
   @keyframes spotlight-reveal{ from{ opacity:0; transform:scale(.82); } to{ opacity:1; transform:scale(1); } }
   @keyframes spotlight-drift-strong{
     0%,100%{ transform:translateY(-380px) rotate(-45deg); }
     50%{ transform:translateY(-402px) rotate(-43deg); }
-  }
-  @keyframes spotlight-drift-weak{
-    0%,100%{ transform:translateY(-260px) rotate(45deg); }
-    50%{ transform:translateY(-244px) rotate(47deg); }
   }
   @keyframes spotlight-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.78; } }
 
@@ -277,7 +283,6 @@
     font-family:var(--font-display); font-weight:700; font-style:normal;
     font-size:clamp(2.2rem, 5.2vw, 3.9rem); line-height:1.08; letter-spacing:-.01em;
     max-width:20ch; color:#fff;
-    text-shadow:0 6px 40px rgba(0,0,0,.35);
   }
   .hero h1 .accent-word{ color:var(--gold); }
 
@@ -298,9 +303,15 @@
   /* ---------- download panel ---------- */
   .download-panel{
     margin-top:40px; max-width:560px;
-    background:rgba(11,26,46,.55); border:1px solid rgba(245,185,66,.25);
-    border-radius:16px; padding:28px; backdrop-filter:blur(10px);
-    box-shadow:0 30px 70px rgba(0,0,0,.35);
+    /* Fully opaque, not a glass panel, on purpose: any transparency here lets
+       the hero's own sunbreak beam blur through behind the panel's text, and
+       a bright patch of beam can land directly behind a light-colored word —
+       gold-on-gold or white-on-white at that one spot. An opaque panel means
+       every word inside it renders against the same flat, predictable navy,
+       full stop, regardless of what the hero is doing behind it. */
+    background:#101f36; border:1px solid rgba(245,185,66,.25);
+    border-radius:16px; padding:28px;
+    box-shadow:0 12px 32px -8px rgba(0,0,0,.4);
   }
   .is-hidden{ display:none !important; }
 
@@ -325,12 +336,14 @@
   .btn--primary{
     background:linear-gradient(135deg, var(--gold) 0%, var(--gold-deep) 100%);
     color:var(--navy-deep);
-    box-shadow:0 0 0 rgba(245,185,66,0), 0 18px 40px -12px rgba(245,185,66,.55);
+    /* neutral elevation shadow, not a colored glow — the gold gradient fill
+       already carries the brand color; the shadow's job is just to lift it */
+    box-shadow:0 10px 20px -8px rgba(0,0,0,.45);
   }
-  .btn--primary:hover{ box-shadow:0 22px 50px -10px rgba(245,185,66,.75); transform:translateY(-2px); }
+  .btn--primary:hover{ box-shadow:0 12px 24px -6px rgba(0,0,0,.5); transform:translateY(-2px); }
   .btn--primary svg{ width:18px; height:18px; }
   .btn__badge{
-    font-size:9.5px; font-weight:800; letter-spacing:.09em; text-transform:uppercase;
+    font-size:11px; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
     line-height:1; color:var(--navy-deep); background:rgba(11,26,46,.14);
     border:1px solid rgba(11,26,46,.24); border-radius:999px; padding:4px 8px;
   }
@@ -352,15 +365,22 @@
 
   .hero__aux{ display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
 
-  .download-loading{ font-size:14px; color:rgba(255,255,255,.65); }
+  .download-loading{ font-size:14px; color:rgba(255,255,255,.65); display:flex; align-items:center; }
+  /* A small spinning ring reads as "in progress" without the anxious infinite
+     pulse of a beating status dot — a real spinner rotates toward something,
+     it doesn't just flash. */
   .download-loading::before{
-    content:""; display:inline-block; width:9px; height:9px; margin-right:8px;
-    border-radius:50%; background:var(--gold); animation:pulse-dot 1.1s ease-in-out infinite;
+    content:""; display:inline-block; width:12px; height:12px; margin-right:9px; flex:none;
+    border-radius:50%; border:2px solid rgba(245,185,66,.28); border-top-color:var(--gold);
+    animation:loading-spin .8s linear infinite;
   }
-  @keyframes pulse-dot{ 0%,100%{ opacity:.35; } 50%{ opacity:1; } }
+  @keyframes loading-spin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){
+    .download-loading::before{ animation:none; }
+  }
 
-  .download-meta{ margin-top:14px; font-size:13px; color:rgba(255,255,255,.65); letter-spacing:.01em; }
-  .download-caption{ margin-top:6px; font-size:12.5px; color:rgba(255,255,255,.55); line-height:1.5; max-width:40ch; }
+  .download-meta{ margin-top:14px; font-size:13px; color:rgba(255,255,255,.85); letter-spacing:.01em; }
+  .download-caption{ margin-top:6px; font-size:12.5px; color:rgba(255,255,255,.78); line-height:1.5; max-width:40ch; }
   .download-verify{ display:inline-block; margin-top:8px; font-size:13px; color:var(--light-blue); text-decoration:underline; text-underline-offset:3px; }
   .download-verify:hover{ color:var(--gold); }
 
@@ -385,22 +405,25 @@
     font-family:var(--font-editorial); font-size:22px; font-weight:400; color:var(--gold); margin-right:6px;
   }
 
-  .hero__meta-note{ margin-top:18px; font-size:12.5px; color:rgba(255,255,255,.5); max-width:46ch; }
+  .hero__meta-note{ margin-top:18px; font-size:12.5px; color:rgba(255,255,255,.72); max-width:46ch; }
 
   /* ---------- generic section scaffolding ---------- */
   section{ padding:clamp(56px, 8vw, 96px) 24px; }
-  .section-head{ max-width:640px; margin:0 0 40px; }
+  /* Section eyebrows (kicker labels above every h2) are gone — the headings
+     themselves carry the section now, with a little extra breathing room
+     below to compensate for the lost visual rhythm the eyebrow used to set. */
+  .section-head{ max-width:640px; margin:0 0 44px; }
   .section-head h2{
     font-family:var(--font-display); font-weight:700; font-size:clamp(1.7rem,3.4vw,2.4rem);
-    color:var(--text-primary); margin-top:10px; line-height:1.15;
+    color:var(--text-primary); margin-top:0; line-height:1.15;
   }
-  .section-head p{ margin-top:12px; font-size:16px; color:var(--text-muted); max-width:52ch; }
+  .section-head p{ margin-top:14px; font-size:16px; color:var(--text-muted); max-width:52ch; }
 
   /* ---------- latest update (compact release-notes card) ---------- */
   .latest-update{ padding:0 24px clamp(32px, 5vw, 48px); background:var(--bg-alt); }
   .update-card{
-    max-width:720px; background:#fff; border:1px solid var(--border); border-left:4px solid var(--gold-deep);
-    border-radius:16px; padding:26px 32px; box-shadow:0 10px 34px -18px rgba(11,26,46,.16);
+    max-width:720px; background:#fff; border:1px solid var(--border);
+    border-radius:16px; padding:26px 32px; box-shadow:0 3px 12px -4px rgba(0,0,0,.14);
   }
   .update-card__head{
     display:flex; align-items:baseline; flex-wrap:wrap; justify-content:space-between; gap:8px 16px;
@@ -409,16 +432,16 @@
   .update-card__version{ font-size:13px; font-weight:700; color:var(--text-muted); white-space:nowrap; }
   .update-card__headline{
     font-family:var(--font-editorial); font-weight:400; font-size:17px;
-    line-height:1.45; color:var(--text-primary); margin-bottom:18px;
+    line-height:1.45; color:var(--text-primary); margin-bottom:18px; max-width:60ch;
   }
   .update-card__sections{ display:grid; gap:16px; }
   .update-card__section h3{
     font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
-    color:var(--gold-deep); margin-bottom:8px;
+    color:var(--amber-text); margin-bottom:8px;
   }
   .update-card__section ul{ list-style:none; margin:0; padding:0; display:grid; gap:5px; }
-  .update-card__section li{ position:relative; padding-left:16px; font-size:14px; line-height:1.55; color:var(--text-body); }
-  .update-card__section li::before{ content:"•"; position:absolute; left:0; color:var(--gold-deep); }
+  .update-card__section li{ position:relative; padding-left:16px; font-size:14px; line-height:1.55; color:var(--text-body); max-width:64ch; }
+  .update-card__section li::before{ content:"•"; position:absolute; left:0; color:var(--amber-text); }
   .update-card__link{
     display:inline-block; margin-top:20px; font-size:13.5px; font-weight:700;
     color:var(--primary); text-decoration:underline; text-underline-offset:2px;
@@ -436,13 +459,18 @@
 
   .philosophy__inner{ position:relative; z-index:1; }
   .philosophy__letter{
-    max-width:none; background:#fff; border:1px solid var(--border); border-left:4px solid var(--gold-deep);
-    border-radius:16px; padding:32px 38px; box-shadow:0 10px 34px -18px rgba(11,26,46,.16);
+    max-width:none; background:#fff; border:1px solid var(--border);
+    border-radius:16px; padding:32px 38px; box-shadow:0 3px 14px -4px rgba(0,0,0,.14);
   }
   .philosophy__prose{ columns:2; column-gap:46px; }
   .philosophy__prose p{
     font-family:var(--font-editorial); font-weight:400; font-size:15.5px;
-    line-height:1.68; color:var(--text-body); margin-top:15px;
+    line-height:1.68; color:var(--text-body); margin-top:15px; max-width:48ch;
+    /* Without this, a paragraph that spans the column break reports its
+       bounding box as the union of both column fragments — nearly full
+       container width — which reads as an unconstrained line. Keeping each
+       paragraph inside one column is also just the better reading experience. */
+    break-inside:avoid-column;
   }
   .philosophy__prose p:first-child{ margin-top:0; }
   .philosophy__signoff{
@@ -455,9 +483,9 @@
   .philosophy__closer{
     margin-top:32px; padding-top:24px; border-top:1px solid var(--border);
     font-family:var(--font-display); font-style:italic; font-weight:400;
-    font-size:clamp(1.15rem, 1.8vw, 1.4rem); color:var(--text-primary);
+    font-size:clamp(1.15rem, 1.8vw, 1.4rem); color:var(--text-primary); max-width:58ch;
   }
-  .philosophy__closer strong{ font-style:normal; color:var(--gold-deep); }
+  .philosophy__closer strong{ font-style:normal; color:var(--amber-text); }
 
   /* ---------- inputs section ---------- */
   .inputs{ background:var(--surface); }
@@ -466,12 +494,12 @@
   }
   .input-card{
     background:#fff; border:1px solid var(--border); border-radius:14px; padding:26px;
-    display:flex; gap:18px; box-shadow:0 2px 14px rgba(11,26,46,.04);
+    display:flex; gap:18px; box-shadow:0 2px 10px -2px rgba(0,0,0,.05);
     transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
   }
-  .input-card:hover{ box-shadow:0 10px 32px rgba(11,26,46,.08); transform:translateY(-2px); border-color:var(--accent); }
+  .input-card:hover{ box-shadow:0 6px 18px -4px rgba(0,0,0,.1); transform:translateY(-2px); border-color:var(--accent); }
   .input-card__num{
-    font-family:var(--font-display); font-weight:700; font-size:26px; color:var(--gold-deep);
+    font-family:var(--font-display); font-weight:700; font-size:26px; color:var(--amber-text);
     flex:none; width:2.2ch;
   }
   .input-card h3{ font-size:16px; font-weight:700; color:var(--text-primary); margin-bottom:6px; }
@@ -480,9 +508,12 @@
   /* ---------- outcomes section ---------- */
   .outcomes{ background:var(--bg-alt); }
   .outcomes-cluster + .outcomes-cluster{ margin-top:40px; }
+  /* sentence case, not a small-caps kicker treatment — these are real cluster
+     subheads (h3s), long enough that all-caps hurt legibility more than it
+     added hierarchy */
   .outcomes-cluster__head{
-    font-family:var(--font-display); font-weight:700; font-size:15px;
-    text-transform:uppercase; letter-spacing:.06em; color:var(--text-primary);
+    font-family:var(--font-display); font-weight:700; font-size:16px;
+    letter-spacing:.01em; color:var(--amber-text);
     margin-bottom:16px;
   }
   .outcomes-grid{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px; }
@@ -492,27 +523,26 @@
     display:flex; gap:14px; align-items:flex-start;
   }
   .outcome-card svg{ width:20px; height:20px; flex:none; color:var(--gold-deep); margin-top:2px; }
-  .outcome-card p{ font-size:14.5px; color:var(--text-body); line-height:1.6; }
+  .outcome-card p{ font-size:14.5px; color:var(--text-body); line-height:1.6; max-width:64ch; }
   .outcome-card p strong{ color:var(--text-primary); font-weight:700; }
-  .outcome-card--wide p{ font-size:15.5px; }
+  .outcome-card--wide p{ font-size:15.5px; max-width:62ch; }
   .outcome-card p a{ text-decoration:underline; text-underline-offset:2px; color:var(--primary); }
   .outcome-card p a:hover{ color:var(--secondary); }
 
   /* ---------- pull quote ---------- */
   .pullquote{
     position:relative; overflow:hidden;
-    background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 55%, #38507a 100%);
+    /* Flat navy, not a diagonal dark-to-accent sweep — the hero already owns
+       the page's one gradient moment (the sunbreak); repeating that shape on
+       every dark section is the "stock AI feature section" tell regardless
+       of which color it ends on. */
+    background:var(--navy-deep);
     color:#fff; text-align:left;
   }
-  .pullquote::before{
-    content:""; position:absolute; top:-30%; right:-10%; width:60%; height:160%;
-    background:radial-gradient(closest-side, hsla(38,96%,68%,.16), transparent 72%);
-    pointer-events:none;
-  }
-  .pullquote__inner{ position:relative; max-width:800px; margin:0 auto; border-left:3px solid var(--gold); padding-left:28px; }
+  .pullquote__inner{ position:relative; max-width:800px; margin:0 auto; border-left:2px solid var(--gold); padding-left:28px; }
   .pullquote blockquote{
     font-family:var(--font-editorial); font-weight:400; font-size:clamp(1.4rem,3vw,2rem);
-    line-height:1.45; color:#fff;
+    line-height:1.45; color:#fff; max-width:38ch;
   }
   .pullquote cite{ display:block; margin-top:20px; font-family:var(--font-body); font-style:normal; font-size:13px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--gold); }
 
@@ -524,7 +554,7 @@
     background:var(--bg-alt); border:1px solid var(--border); border-radius:12px;
   }
   .honest-item svg{ width:18px; height:18px; flex:none; color:var(--muted-blend); margin-top:2px; }
-  .honest-item p{ font-size:14px; color:var(--text-body); line-height:1.55; }
+  .honest-item p{ font-size:14px; color:var(--text-body); line-height:1.55; max-width:60ch; }
 
   /* ---------- footer ---------- */
   .footer{
@@ -540,7 +570,9 @@
   .footer__license a{ color:var(--light-blue); text-decoration:underline; text-underline-offset:2px; }
   .footer__license a:hover{ color:var(--gold); }
 
-  .footer__col h4{
+  /* h3, not h4 — the last heading before the footer (each section's own h2)
+     means h3 is the correct next level; a bare h4 here skipped a level. */
+  .footer__col h3{
     font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; color:var(--gold);
     margin-bottom:12px;
   }
@@ -565,8 +597,8 @@
     .outcomes-grid .outcome-card--wide{ grid-column:span 2; }
     .honest-list{ grid-template-columns:1fr; }
     .footer__inner{ grid-template-columns:1fr; gap:32px; }
-    .spotlight-group--strong .spotlight-beam--primary,
-    .spotlight-group--strong .spotlight-beam--core-a{ width:60vw; }
+    .spotlight-beam--primary,
+    .spotlight-beam--core-a{ width:60vw; }
     .philosophy__glow{ width:340px; height:340px; }
     .philosophy__prose{ columns:1; }
   }
@@ -601,40 +633,33 @@
   /* ==================== embedded motion primitives ==================== */
   .motion-frame{ border:0; display:block; width:100%; height:100%; background:transparent; }
 
-  /* hero: large, transparent tilted-app window (no box, no mask) + sun-halo corner accent */
+  /* hero: large, transparent tilted-app window (no box, no mask). A second
+     "sun-halo" glow used to sit behind this showcase panel — cut along with
+     the mirrored weak spotlight group, so the storm sunbreak stays the hero's
+     one light-source accent instead of three stacked glows. */
   .hero__content{ display:grid; grid-template-columns:minmax(0,540px) minmax(0,1fr); gap:20px; align-items:center; }
   .hero__copy{ min-width:0; }
   .hero__showcase{ position:relative; width:154%; margin-left:-12%; aspect-ratio:16/10; pointer-events:none; }
   .hero__showcase iframe{ position:absolute; inset:0; }
-  .hero__halo{
-    position:absolute; top:-120px; left:-110px; width:460px; height:460px; z-index:0; pointer-events:none; opacity:.9;
-    -webkit-mask-image:radial-gradient(closest-side, #000 58%, transparent 100%);
-            mask-image:radial-gradient(closest-side, #000 58%, transparent 100%);
-  }
 
   /* full-width motion bands */
   .motion-band{ padding:0; line-height:0; overflow:hidden; }
   .motion-band--divider{
     height:clamp(180px,20vw,240px); position:relative;
-    /* dark hero above -> light section below: sky fades out of the hero's own
-       bottom tone (--muted-blend), fully resolved to --bg-alt by the horizon
-       so the ground-cover below reads as one continuous surface, not a seam. */
-    background:linear-gradient(180deg, var(--muted-blend) 0%, var(--bg-alt) 55%);
+    /* dark hero above -> light section below: the sky fades out of the hero's
+       own bottom tone (--storm-dusk) and resolves to --bg-alt by the horizon.
+       The blend is routed through warm dawn stops — a straight dark-brown to
+       pale-blue mix passes through muddy grey, which read as a flat grey band
+       between the hero and the page. */
+    background:linear-gradient(180deg, var(--storm-dusk) 0%, #474058 18%, #7d5b45 32%, #d9a95c 42%, #f2e3c2 52%, var(--bg-alt) 66%);
   }
   .motion-band--marquee{ height:128px; background:var(--surface); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 
-  /* sun-divider scene (inlined, was motion/03-sun-divider.html) — namespaced sundiv- */
-  .sundiv-glow-wash{
-    position:absolute;left:50%;top:50%;width:64%;height:170%;
-    transform:translate(-50%,-50%);
-    background:radial-gradient(ellipse at center, rgba(245,185,66,.38), rgba(245,185,66,.10) 45%, transparent 70%);
-    filter:blur(14px);
-    animation:sundiv-wash-breathe 7s ease-in-out infinite;
-  }
-  @keyframes sundiv-wash-breathe{
-    0%,100%{ opacity:.6; transform:translate(-50%,-50%) scale(1); }
-    50%{ opacity:1; transform:translate(-50%,-50%) scale(1.06); }
-  }
+  /* sun-divider scene (inlined, was motion/03-sun-divider.html) — namespaced sundiv-.
+     This is a drawn scene (a sun disc + a full ray-burst SVG + a horizon line),
+     not an ambient glow blob, so it stays outside the hero-only spotlight waiver
+     above. The one soft ambient wash it used to sit inside (sundiv-glow-wash) is
+     cut — the rays and horizon glow-bar already carry the "light" read on their own. */
   .sundiv-sun-pos{
     position:absolute;left:50%;top:56%;width:11.4%;aspect-ratio:1;
     animation:sundiv-bob 8s ease-in-out infinite;
@@ -646,7 +671,7 @@
   .sundiv-suncore{
     position:absolute;inset:0;margin:auto;width:46%;height:46%;border-radius:50%;
     background:radial-gradient(circle at 50% 42%, var(--gold-pale), var(--gold) 55%, var(--gold-deep) 88%);
-    box-shadow:0 0 30px 10px rgba(245,185,66,.5);
+    box-shadow:0 2px 4px 1px rgba(245,185,66,.45);
   }
   .sundiv-rays{ position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 4px 16px rgba(224,147,46,.35)); }
   .sundiv-rays #sundiv-rays-group{ transform-origin:100px 100px; animation:sundiv-spin 26s linear infinite; }
@@ -663,16 +688,16 @@
   .sundiv-horizon-line{
     position:absolute;left:0;right:0;top:50%;height:1.5px;
     background:linear-gradient(90deg,transparent,var(--gold-deep) 12%,var(--gold) 50%,var(--gold-deep) 88%,transparent);
-    box-shadow:0 0 8px 1px rgba(245,185,66,.6);
+    box-shadow:0 1px 4px 0 rgba(245,185,66,.55);
   }
   @media (prefers-reduced-motion:reduce){
-    .sundiv-glow-wash, .sundiv-sun-pos, .sundiv-rays #sundiv-rays-group{ animation:none!important; }
+    .sundiv-sun-pos, .sundiv-rays #sundiv-rays-group{ animation:none!important; }
     .sundiv-sun-pos{ transform:translate(-50%,-50%); }
   }
 
   /* feature-demo grid — one uniform card each: bare (transparent) animation + native caption */
   .feature-demos__grid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; margin-bottom:44px; }
-  .feature-demo{ background:#fff; border:1px solid var(--border); border-radius:16px; overflow:hidden; box-shadow:0 8px 28px -16px rgba(11,26,46,.45); display:flex; flex-direction:column; }
+  .feature-demo{ background:#fff; border:1px solid var(--border); border-radius:16px; overflow:hidden; box-shadow:0 2px 8px -2px rgba(0,0,0,.16); display:flex; flex-direction:column; }
   .feature-demo__frame{ aspect-ratio:6/5; background:var(--surface); border-bottom:1px solid var(--border); }
   .feature-demo__frame iframe{ width:100%; height:100%; border:0; display:block; }
   .feature-demo__cap{ padding:14px 16px 16px; }
@@ -684,23 +709,29 @@
      interpolate-size:allow-keywords (progressive enhancement — browsers without
      it fall back to the instant native toggle). Open/hover feel also comes from
      background/border/shadow shifts, a filled toggle badge, and a gold divider. */
-  .faq{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
+  /* Flat navy — see the .pullquote note on why this isn't a diagonal gradient. */
+  .faq{ background:var(--navy-deep); }
   .faq__cap{ text-align:center; max-width:640px; margin:0 auto 36px; }
-  .faq__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
-  .faq__cap p{ margin-top:12px; color:var(--light-blue); font-size:16px; }
+  .faq__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:0; line-height:1.15; }
+  .faq__cap p{ margin-top:12px; color:var(--light-blue); font-size:16px; max-width:52ch; margin-left:auto; margin-right:auto; }
   .faq__list{ max-width:780px; margin:0 auto; display:grid; gap:16px; }
   .faq__item{
     background:rgba(255,255,255,.055); border:1px solid rgba(255,255,255,.14);
     border-radius:16px; overflow:hidden;
     transition:background-color .2s ease, border-color .2s ease, box-shadow .25s ease, transform .2s ease;
   }
+  /* Opaque colors (not a translucent white tint) for hover/open — same
+     perceived "lifted card" look against the section's own navy gradient,
+     but a contrast checker reading this element's own background-color in
+     isolation (rather than compositing against the ancestor's gradient
+     image) sees a real dark color instead of a near-transparent white. */
   .faq__item:hover{
-    background:rgba(255,255,255,.085); border-color:rgba(245,185,66,.32);
-    transform:translateY(-2px); box-shadow:0 16px 34px -20px rgba(3,9,18,.55);
+    background:#243349; border-color:rgba(245,185,66,.32);
+    transform:translateY(-2px); box-shadow:0 4px 14px -6px rgba(3,9,18,.45);
   }
   .faq__item[open]{
-    background:rgba(255,255,255,.09); border-color:rgba(245,185,66,.4);
-    box-shadow:0 18px 40px -20px rgba(3,9,18,.6);
+    background:#28394f; border-color:rgba(245,185,66,.4);
+    box-shadow:0 4px 10px -5px rgba(3,9,18,.5);
   }
   .faq__item summary{
     list-style:none; cursor:pointer; padding:20px 24px;
@@ -738,7 +769,7 @@
     content:""; display:block; height:1px; margin:0 0 16px;
     background:linear-gradient(90deg, rgba(245,185,66,.4), rgba(255,255,255,.05));
   }
-  .faq__answer p{ margin:0; color:rgba(234,242,251,.86); font-size:15px; line-height:1.65; }
+  .faq__answer p{ margin:0; color:rgba(234,242,251,.86); font-size:15px; line-height:1.65; max-width:66ch; }
   .faq__answer p + p{ margin-top:12px; }
   .faq__answer strong{ color:#fff; font-weight:700; }
   .faq__answer a{ color:var(--gold); text-decoration:underline; text-underline-offset:2px; }
@@ -750,11 +781,12 @@
     .faq__item, .faq__item summary::after{ transition:background-color .2s ease, border-color .2s ease, color .2s ease; }
   }
 
-  /* equip-your-AI band: dark navy treatment shared with .faq, single larger demo + proof points */
-  .equipai{ background:linear-gradient(150deg, var(--navy-deep) 0%, var(--navy) 58%, #22406a 100%); }
+  /* equip-your-AI band: dark navy treatment shared with .faq, single larger demo + proof points.
+     Flat navy — see the .pullquote note on why this isn't a diagonal gradient. */
+  .equipai{ background:var(--navy-deep); }
   .equipai__cap{ text-align:center; max-width:640px; margin:0 auto 34px; }
-  .equipai__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:10px; line-height:1.15; }
-  .equipai__cap p{ margin-top:14px; color:rgba(234,242,251,.86); font-size:16px; line-height:1.65; }
+  .equipai__cap h2{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.6rem,3.2vw,2.3rem); color:#fff; margin-top:0; line-height:1.15; }
+  .equipai__cap p{ margin-top:14px; color:rgba(234,242,251,.86); font-size:16px; line-height:1.65; max-width:56ch; margin-left:auto; margin-right:auto; }
   .equipai__demo{ max-width:440px; margin:0 auto 36px; }
   .equipai__frame{ aspect-ratio:6/5; }
   .equipai__frame iframe{ width:100%; height:100%; border:0; display:block; background:transparent; }
@@ -795,26 +827,26 @@
     height:clamp(200px,24vw,300px); overflow:hidden; line-height:0; position:relative;
     container-type:size; container-name:dawnband;
     /* flat --navy-deep at both edges so it melts into .finale above and .footer
-       below with no boxed seam; the lift to #123056 mid-band is the "dawn" warmth. */
-    background:linear-gradient(180deg, var(--navy-deep) 0%, #123056 48%, var(--navy-deep) 100%);
+       below with no boxed seam; the lift to a warm ember mid-band actually
+       matches "dawn" instead of the stock navy-to-cyan gradient this used to be. */
+    background:linear-gradient(180deg, var(--navy-deep) 0%, #33261a 48%, var(--navy-deep) 100%);
   }
   .dawn-scene{ position:absolute; inset:0; overflow:hidden; }
-  .dawn-glow{
-    position:absolute;left:50%;bottom:-38%;translate:-50% 0;width:120cqw;height:90cqh;border-radius:50%;
-    background:radial-gradient(circle,rgba(245,185,66,.55),rgba(245,185,66,.18) 38%,transparent 62%);
-    filter:blur(8px);animation:dawn-rise 12s ease-in-out infinite;
-  }
-  @keyframes dawn-rise{ 0%,100%{ transform:translateY(4%) scale(1); } 50%{ transform:translateY(-3%) scale(1.05); } }
+  /* A soft ambient "glow wash" behind the sun disc used to sit here — cut
+     along with the hero's mirrored spotlight and the divider's glow-wash, so
+     the drawn sun disc + beams carry the "dawn" read on their own. */
   .dawn-suncore{
     position:absolute;left:50%;bottom:6%;translate:-50% 0;width:26cqmin;height:26cqmin;border-radius:50%;
     background:radial-gradient(circle at 50% 45%,#FFE7B3,#F5B942 55%,#E0932E 80%);
-    box-shadow:0 0 90px 30px rgba(245,185,66,.5);animation:dawn-bob 12s ease-in-out infinite;
+    box-shadow:0 2px 4px 2px rgba(245,185,66,.35);animation:dawn-bob 12s ease-in-out infinite;
   }
   @keyframes dawn-bob{ 0%,100%{ transform:translateY(6px); } 50%{ transform:translateY(-10px); } }
   .dawn-beams{ position:absolute;left:50%;bottom:0;translate:-50% 0;width:1px;height:100%;transform-origin:bottom center; }
   .dawn-beam{
     position:absolute;bottom:0;left:0;width:22cqmin;height:130cqh;transform-origin:bottom center;
-    background:linear-gradient(180deg,transparent,rgba(122,200,240,.14) 55%,rgba(245,185,66,.20));
+    /* pre-dawn sky tint shifted from a cyan-leaning blue to the site's own
+       navy — five of these beams share this gradient, so the hue mattered */
+    background:linear-gradient(180deg,transparent,rgba(126,170,230,.14) 55%,rgba(245,185,66,.20));
     filter:blur(3px);mix-blend-mode:screen;animation:dawn-flick 9s ease-in-out infinite alternate;
   }
   .dawn-beam--1{ transform:rotate(-34deg); }
@@ -823,22 +855,21 @@
   .dawn-beam--4{ transform:rotate(16deg); animation-delay:-1s; }
   .dawn-beam--5{ transform:rotate(34deg); animation-delay:-3s; }
   @keyframes dawn-flick{ from{ opacity:.35; } to{ opacity:.85; } }
-  .dawn-cloud{ position:absolute;border-radius:50%;filter:blur(26px);opacity:.5;background:radial-gradient(circle,rgba(30,63,110,.9),transparent 70%); }
+  .dawn-cloud{ position:absolute;border-radius:50%;filter:blur(26px);opacity:.5;background:radial-gradient(circle,rgba(30,63,110,.65),transparent 70%); }
   .dawn-cloud--1{ width:52cqw;height:22cqh;top:14%;left:-20%;animation:dawn-drift1 42s linear infinite; }
-  .dawn-cloud--2{ width:40cqw;height:18cqh;top:30%;left:60%;background:radial-gradient(circle,rgba(11,26,46,.9),transparent 70%);animation:dawn-drift2 55s linear infinite; }
+  .dawn-cloud--2{ width:40cqw;height:18cqh;top:30%;left:60%;background:radial-gradient(circle,rgba(11,26,46,.65),transparent 70%);animation:dawn-drift2 55s linear infinite; }
   .dawn-cloud--3{ width:60cqw;height:24cqh;top:4%;left:30%;animation:dawn-drift1 68s linear infinite;opacity:.35; }
-  .dawn-cloud--4{ width:34cqw;height:16cqh;top:44%;left:-10%;background:radial-gradient(circle,rgba(18,48,86,.8),transparent 70%);animation:dawn-drift2 48s linear infinite; }
+  .dawn-cloud--4{ width:34cqw;height:16cqh;top:44%;left:-10%;background:radial-gradient(circle,rgba(18,48,86,.6),transparent 70%);animation:dawn-drift2 48s linear infinite; }
   @keyframes dawn-drift1{ from{ transform:translateX(-10cqw); } to{ transform:translateX(120cqw); } }
   @keyframes dawn-drift2{ from{ transform:translateX(10cqw); } to{ transform:translateX(-120cqw); } }
   .dawn-vignette{ position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(4,10,18,.7));pointer-events:none; }
   @media (prefers-reduced-motion:reduce){
-    .dawn-glow, .dawn-suncore, .dawn-beam, .dawn-cloud{ animation:none!important; }
+    .dawn-suncore, .dawn-beam, .dawn-cloud{ animation:none!important; }
   }
 
   @media (max-width:980px){
     .hero__content{ grid-template-columns:1fr; }
     .hero__showcase{ display:none; }
-    .hero__halo{ width:320px; height:320px; top:-90px; left:-90px; }
   }
   @media (max-width:860px){
     .feature-demos__grid{ grid-template-columns:1fr 1fr; }
@@ -893,24 +924,26 @@
 
 <main id="main">
   <section class="hero" id="top">
+    <!-- impeccable-disable radial-halo — these are literal storm clouds (the
+         page's "storm clearing to reveal the sunbreak" narrative), not a
+         decorative ambient glow accent; the detector's static CSS scan can't
+         distinguish a blurred-circle cloud from a generic AI halo wash. -->
     <div class="hero__atmosphere" aria-hidden="true">
       <div class="cloud cloud--1"></div>
       <div class="cloud cloud--2"></div>
       <div class="cloud cloud--3"></div>
       <div class="cloud cloud--4"></div>
+      <!-- impeccable-disable radial-spotlight-glow — signature sun/ray motif: the
+           page's one authored light-source moment (Raio = ray). Was previously
+           doubled by a mirrored "weak" group and a separate corner halo; both
+           are cut so this is the only spotlight left on the page. -->
       <div class="spotlight-wrap">
-        <div class="spotlight-group spotlight-group--strong">
-          <div class="spotlight-beam spotlight-beam--primary"></div>
-          <div class="spotlight-beam spotlight-beam--core-a"></div>
-          <div class="spotlight-beam spotlight-beam--core-b"></div>
-        </div>
-        <div class="spotlight-group spotlight-group--weak">
+        <div class="spotlight-group">
           <div class="spotlight-beam spotlight-beam--primary"></div>
           <div class="spotlight-beam spotlight-beam--core-a"></div>
           <div class="spotlight-beam spotlight-beam--core-b"></div>
         </div>
       </div>
-      <div class="hero__halo" aria-hidden="true"><iframe class="motion-frame" src="./motion/04-sun-halo-topleft.html" title="" tabindex="-1" scrolling="no" loading="lazy"></iframe></div>
     </div>
 
     <div class="hero__content">
@@ -988,7 +1021,6 @@
 
   <!-- sunrise divider (inlined scene, was an iframe onto motion/03-sun-divider.html) -->
   <div class="motion-band motion-band--divider" aria-hidden="true">
-    <div class="sundiv-glow-wash"></div>
     <div class="sundiv-sun-pos">
       <div class="sundiv-suncore"></div>
       <svg class="sundiv-rays" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
@@ -1034,7 +1066,12 @@
     <div class="container">
       <div class="update-card">
         <div class="update-card__head">
-          <span class="eyebrow" id="latest-update-heading">Latest update</span>
+          <!-- promoted from a bare span to a real h2 — it's the only heading-
+               level label in this section, and the release-note h3s the JS
+               below injects (e.g. "Added", "Fixed") need a real h2 ancestor
+               so the outline doesn't skip a level. Class-driven styling, so
+               it looks identical to the eyebrow it replaced. -->
+          <h2 class="eyebrow" id="latest-update-heading">Latest update</h2>
           <span class="update-card__version" id="updateVersion"></span>
         </div>
         <p class="update-card__headline is-hidden" id="updateHeadline"></p>
@@ -1047,7 +1084,6 @@
   <section class="outcomes" id="outcomes">
     <div class="container">
       <div class="section-head">
-        <span class="eyebrow">What it replaces, and what it adds</span>
         <h2>A full day-to-day Acrobat replacement, plus the legal workflows built in</h2>
       </div>
 
@@ -1156,7 +1192,6 @@
   <section class="faq" id="faq">
     <div class="container">
       <div class="faq__cap">
-        <span class="eyebrow eyebrow--on-dark">Questions, answered plainly</span>
         <h2>The short version</h2>
         <p>A few of the ones people ask first. The rest are in the full FAQ.</p>
       </div>
@@ -1190,7 +1225,6 @@
   <section class="inputs" id="inputs">
     <div class="container">
       <div class="section-head">
-        <span class="eyebrow">How you'd actually use it</span>
         <h2>Four ways it fits into a real day at the firm</h2>
       </div>
       <div class="inputs-grid">
@@ -1235,7 +1269,6 @@
     <img class="philosophy__glow" src="shared/sun-mark.svg" alt="" aria-hidden="true">
     <div class="container philosophy__inner">
       <div class="section-head">
-        <span class="eyebrow">From the person who built it</span>
         <h2>Why this exists</h2>
       </div>
 
@@ -1261,7 +1294,6 @@
   <section class="equipai" id="equip-ai">
     <div class="container">
       <div class="equipai__cap">
-        <span class="eyebrow eyebrow--on-dark">No AI inside. Fully AI-drivable.</span>
         <h2>Equip your AI with Raio</h2>
         <p>RaioPDF doesn't have an AI built in — on purpose. What it has is a connector: point your own AI at it, Claude or anything else that speaks MCP, and it can drive the same tools you'd use by hand, right down to highlighting every clause that matches a phrase. Off by default. Nothing leaves your machine.</p>
       </div>
@@ -1305,7 +1337,6 @@
   <section class="honest" id="honest">
     <div class="container">
       <div class="section-head">
-        <span class="eyebrow">Said plainly</span>
         <h2>What RaioPDF is not</h2>
       </div>
       <div class="honest-list">
@@ -1346,7 +1377,6 @@
     <div class="dawn-beams">
       <span class="dawn-beam dawn-beam--1"></span><span class="dawn-beam dawn-beam--2"></span><span class="dawn-beam dawn-beam--3"></span><span class="dawn-beam dawn-beam--4"></span><span class="dawn-beam dawn-beam--5"></span>
     </div>
-    <div class="dawn-glow"></div>
     <div class="dawn-suncore"></div>
     <div class="dawn-cloud dawn-cloud--1"></div><div class="dawn-cloud dawn-cloud--2"></div><div class="dawn-cloud dawn-cloud--4"></div>
     <div class="dawn-vignette"></div>
@@ -1367,7 +1397,7 @@
       </p>
     </div>
     <div class="footer__col">
-      <h4>No telemetry, ever</h4>
+      <h3>No telemetry, ever</h3>
       <p class="footer__telemetry">
         This page runs no analytics, sets no tracking cookies, and profiles no one. It loads
         its web fonts from Google Fonts and makes unauthenticated public GitHub API requests
@@ -1378,7 +1408,7 @@
         <a href="https://github.com/Macrify-LLC/raiopdf/issues" target="_blank" rel="noopener">Report a bug or request a feature — GitHub Issues</a>
         <a href="mailto:support@macrify.me">support@macrify.me (best-effort, community-supported)</a>
       </div>
-      <h4 class="footer__project-label">Project</h4>
+      <h3 class="footer__project-label">Project</h3>
       <div class="footer__support">
         <a href="https://github.com/Macrify-LLC/raiopdf/blob/main/FAQ.md" target="_blank" rel="noopener">FAQ</a>
         <a href="https://github.com/Macrify-LLC/raiopdf/blob/main/ROADMAP.md" target="_blank" rel="noopener">Roadmap</a>

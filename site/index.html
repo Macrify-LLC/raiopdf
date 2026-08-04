@@ -647,10 +647,12 @@
   .motion-band{ padding:0; line-height:0; overflow:hidden; }
   .motion-band--divider{
     height:clamp(180px,20vw,240px); position:relative;
-    /* dark hero above -> light section below: sky fades out of the hero's own
-       bottom tone (--storm-dusk), fully resolved to --bg-alt by the horizon
-       so the ground-cover below reads as one continuous surface, not a seam. */
-    background:linear-gradient(180deg, var(--storm-dusk) 0%, var(--bg-alt) 55%);
+    /* dark hero above -> light section below: the sky fades out of the hero's
+       own bottom tone (--storm-dusk) and resolves to --bg-alt by the horizon.
+       The blend is routed through warm dawn stops — a straight dark-brown to
+       pale-blue mix passes through muddy grey, which read as a flat grey band
+       between the hero and the page. */
+    background:linear-gradient(180deg, var(--storm-dusk) 0%, #5a4630 20%, #b08a52 36%, #ecdcba 48%, var(--bg-alt) 64%);
   }
   .motion-band--marquee{ height:128px; background:var(--surface); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 

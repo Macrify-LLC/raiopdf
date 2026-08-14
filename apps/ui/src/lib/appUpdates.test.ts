@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { downloadSignedUpdate, installDownloadedUpdate } from "./appUpdates";
+import {
+  downloadSignedUpdate,
+  formatUpdateDownloadError,
+  installDownloadedUpdate,
+  UPDATE_DOWNLOAD_TIMEOUT_MS,
+} from "./appUpdates";
 
 /**
  * A stand-in for the plugin's Update handle. `download` emits the same event
@@ -55,6 +60,20 @@ describe("appUpdates — download and install are decoupled", () => {
     expect(progress[0]).toBeNull();
   });
 
+  it("downloads with the 60-minute total-request deadline", async () => {
+    const update = fakeUpdate();
+
+    await downloadSignedUpdate(update, () => undefined);
+
+    // The plugin timeout is a TOTAL request deadline, so it doubles as a
+    // minimum sustained speed for the ~400 MB artifact. 60 minutes keeps that
+    // floor under 1 Mbps while still guaranteeing a terminal state.
+    expect(UPDATE_DOWNLOAD_TIMEOUT_MS).toBe(60 * 60_000);
+    expect(update.download).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: UPDATE_DOWNLOAD_TIMEOUT_MS,
+    });
+  });
+
   it("installDownloadedUpdate installs the staged handle and downloads nothing", async () => {
     const update = fakeUpdate();
 
@@ -62,5 +81,66 @@ describe("appUpdates — download and install are decoupled", () => {
 
     expect(update.install).toHaveBeenCalledOnce();
     expect(update.download).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatUpdateDownloadError", () => {
+  const headline =
+    "Update download could not be completed. Try again, or download the latest installer "
+    + "directly from the RaioPDF GitHub releases page.";
+
+  it("keeps the headline and points at the manual download when nothing else is known", () => {
+    expect(formatUpdateDownloadError(undefined, null)).toBe(headline);
+  });
+
+  it("appends the progress reached and the underlying Error message", () => {
+    const message = formatUpdateDownloadError(new Error("operation timed out"), 0.42);
+
+    expect(message.startsWith(headline)).toBe(true);
+    expect(message).toContain("stopped at 42%");
+    expect(message).toContain("operation timed out");
+  });
+
+  it("handles plain-string errors from the plugin", () => {
+    expect(formatUpdateDownloadError("network error: connection reset", 0)).toBe(
+      `${headline} Details: stopped at 0% - network error: connection reset`,
+    );
+  });
+
+  it("handles object errors with a message field, and never says [object Object]", () => {
+    const message = formatUpdateDownloadError({ message: "Io error: timed out" }, null);
+
+    expect(message).toBe(`${headline} Details: Io error: timed out`);
+    expect(message).not.toContain("[object Object]");
+  });
+
+  it("serializes an unrecognized object shape instead of dropping it", () => {
+    const message = formatUpdateDownloadError({ kind: "timeout", elapsedMs: 600000 }, null);
+
+    expect(message).toContain("timeout");
+    expect(message).not.toContain("[object Object]");
+  });
+
+  it("omits detail for an object that carries nothing useful", () => {
+    expect(formatUpdateDownloadError({}, null)).toBe(headline);
+  });
+
+  it("truncates a very long underlying error", () => {
+    const message = formatUpdateDownloadError("x".repeat(1000), null);
+
+    expect(message.length).toBeLessThan(headline.length + 250);
+    expect(message.endsWith("...")).toBe(true);
+  });
+
+  it("collapses newlines so the pill stays one readable line", () => {
+    expect(formatUpdateDownloadError("first line\n  second line", null)).toBe(
+      `${headline} Details: first line second line`,
+    );
+  });
+
+  it("clamps out-of-range progress values", () => {
+    expect(formatUpdateDownloadError(null, 1.4)).toContain("stopped at 100%");
+    expect(formatUpdateDownloadError(null, -0.2)).toContain("stopped at 0%");
+    expect(formatUpdateDownloadError(null, Number.NaN)).toBe(headline);
   });
 });

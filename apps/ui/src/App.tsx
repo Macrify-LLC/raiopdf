@@ -162,6 +162,7 @@ import {
 import {
   checkForSignedUpdate,
   downloadSignedUpdate,
+  formatUpdateDownloadError,
   installDownloadedUpdate,
   isUpdaterRuntime,
   relaunchForInstalledUpdate,
@@ -1509,8 +1510,14 @@ export function App() {
       progress: null,
     });
 
+    // Latest determinate fraction seen, so a failure can say how far it got.
+    let lastProgress: number | null = null;
+
     try {
       await downloadSignedUpdate(update, (progress) => {
+        if (progress !== null) {
+          lastProgress = progress;
+        }
         if (updateDownloadRequestRef.current === requestId) {
           setUpdateStatus((current) => ({
             ...current,
@@ -1531,11 +1538,11 @@ export function App() {
           progress: 1,
         });
       }
-    } catch {
+    } catch (error) {
       if (updateDownloadRequestRef.current === requestId) {
         setUpdateStatus({
           phase: "error",
-          message: "Update download could not be completed. Try again.",
+          message: formatUpdateDownloadError(error, lastProgress),
           currentVersion: update.currentVersion,
           availableVersion: update.version,
         });

@@ -179,6 +179,13 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
   clear error instead of being produced under a Bates range and hash that describe
   the older version of the file.
 
+### Fixed
+
+- **In-place saves on Windows now wait through brief file locks** from antivirus,
+  indexing, and similar background tools instead of failing immediately. If a save
+  still fails, the scrubbed diagnostic records which save step failed and the broad
+  operating-system error category without including file or folder names.
+
 ## [0.1.5] - 2026-07-22
 
 Sixth public alpha. Highlights: **Word import/export on the Mac**, **printing on the

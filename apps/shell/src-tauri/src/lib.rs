@@ -2269,22 +2269,30 @@ fn atomic_copy_file(source: &Path, destination: &Path) -> Result<(), std::io::Er
 }
 
 fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Result<(), String> {
-    let path = fs::canonicalize(&entry.path).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let path = fs::canonicalize(&entry.path)
+        .map_err(|error| save_pdf_io_error("resolve-source", &error))?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let permissions =
-        replacement_permissions(&path, None).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    let permissions = replacement_permissions(&path, None)
+        .map_err(|error| save_pdf_io_error("read-permissions", &error))?;
     let mut temp = replacement_temp_file(parent, permissions.as_ref())
-        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+        .map_err(|error| save_pdf_io_error("create-temp", &error))?;
     temp.write_all(bytes)
-        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
-    apply_replacement_permissions(&temp, permissions).map_err(|_| SAVE_PDF_ERROR.to_string())?;
-    temp.flush().map_err(|_| SAVE_PDF_ERROR.to_string())?;
+        .map_err(|error| save_pdf_io_error("write-temp", &error))?;
+    apply_replacement_permissions(&temp, permissions)
+        .map_err(|error| save_pdf_io_error("apply-permissions", &error))?;
+    temp.flush()
+        .map_err(|error| save_pdf_io_error("flush-temp", &error))?;
     temp.as_file()
         .sync_all()
-        .map_err(|_| SAVE_PDF_ERROR.to_string())?;
+        .map_err(|error| save_pdf_io_error("sync-temp", &error))?;
 
     let backup = backup_path_for(&path);
-    fs::rename(&path, &backup).map_err(|_| SAVE_PDF_ERROR.to_string())?;
+    retry_transient_save_io(
+        SAVE_STAGE_ORIGINAL_ATTEMPTS,
+        SAVE_STAGE_ORIGINAL_RETRY_DELAY,
+        || fs::rename(&path, &backup),
+    )
+    .map_err(|error| save_pdf_io_error("stage-original", &error))?;
 
     let result = (|| {
         let backup_entry = FileGrantEntry {
@@ -2293,8 +2301,8 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
         };
         ensure_grant_file_unchanged(&backup_entry)?;
         persist_atomic_file_noclobber(temp, &path)
-            .and_then(|_| sync_parent_dir(parent))
-            .map_err(|_| SAVE_PDF_ERROR.to_string())
+            .map_err(|error| save_pdf_io_error("install-replacement", &error))?;
+        sync_parent_dir(parent).map_err(|error| save_pdf_io_error("sync-folder", &error))
     })();
 
     match result {
@@ -2308,17 +2316,57 @@ fn atomic_write_grant_if_unchanged(entry: &FileGrantEntry, bytes: &[u8]) -> Resu
             Ok(())
         }
         Err(error) => {
-            restore_staged_original(&backup, &path).map_err(|_| {
-                "RaioPDF couldn't save this PDF, and the original file couldn't be restored. Check the folder and try again."
-                    .to_string()
+            restore_staged_original(&backup, &path).map_err(|restore_error| {
+                format!(
+                    "RaioPDF couldn't save this PDF, and the original file couldn't be restored. Check the folder and try again. [diagnostic: stage=restore-original; kind={:?}]",
+                    restore_error.kind()
+                )
             })?;
             Err(error)
         }
     }
 }
 
+const SAVE_STAGE_ORIGINAL_ATTEMPTS: usize = 5;
+const SAVE_STAGE_ORIGINAL_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SAVE_BACKUP_CLEANUP_RETRIES: usize = 5;
 const SAVE_BACKUP_CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(400);
+
+fn save_pdf_io_error(stage: &str, error: &io::Error) -> String {
+    format!(
+        "{SAVE_PDF_ERROR} [diagnostic: stage={stage}; kind={:?}]",
+        error.kind()
+    )
+}
+
+fn retry_transient_save_io<T, F>(
+    max_attempts: usize,
+    retry_delay: Duration,
+    mut operation: F,
+) -> Result<T, io::Error>
+where
+    F: FnMut() -> Result<T, io::Error>,
+{
+    debug_assert!(max_attempts > 0);
+
+    for attempt in 1..=max_attempts {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if attempt < max_attempts
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::WouldBlock
+                    ) =>
+            {
+                std::thread::sleep(retry_delay);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("a positive attempt count always returns inside the loop")
+}
 
 /// Delete the `.…raio-save-backup` staged next to the user's file after a
 /// save has already succeeded. A transient lock (AV, indexer) gets a few
@@ -4747,6 +4795,59 @@ mod tests {
         atomic_write_grant_if_unchanged(&entry, b"saved bytes").expect("save unchanged grant");
 
         assert_eq!(fs::read(&path).expect("read saved"), b"saved bytes");
+    }
+
+    #[test]
+    fn transient_save_io_retries_permission_locks_then_succeeds() {
+        let mut attempts = 0;
+
+        retry_transient_save_io(5, Duration::ZERO, || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "simulated sharing lock",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("transient lock should be retried");
+
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn transient_save_io_does_not_retry_non_transient_failures() {
+        let mut attempts = 0;
+
+        let error = retry_transient_save_io(5, Duration::ZERO, || {
+            attempts += 1;
+            Err::<(), _>(io::Error::new(
+                io::ErrorKind::NotFound,
+                "source disappeared",
+            ))
+        })
+        .expect_err("a missing source is not transient");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn save_io_diagnostics_name_stage_and_kind_without_raw_details() {
+        let error = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            r"C:\Users\Example\Client Matter\sealed.pdf",
+        );
+
+        let message = save_pdf_io_error("stage-original", &error);
+
+        assert!(message.starts_with(SAVE_PDF_ERROR));
+        assert!(message.contains("stage=stage-original"));
+        assert!(message.contains("kind=PermissionDenied"));
+        assert!(!message.contains("Client Matter"));
+        assert!(!message.contains("sealed.pdf"));
     }
 
     #[test]

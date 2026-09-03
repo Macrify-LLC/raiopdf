@@ -17,7 +17,7 @@
     "@wdio/mocha-framework": "^9.30.0",
     "@wdio/spec-reporter": "^9.20.0",
     "@wdio/tauri-service": "^1.2.0",
-    "@wdio/types": "^9.20.0",
+    "@wdio/types": "^9.31.2",
     "expect-webdriverio": "^5.5.0",
     "pdf-lib": "^1.17.1",
     "tsx": "^4.20.0",

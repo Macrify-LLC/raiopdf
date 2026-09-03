@@ -55,7 +55,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.4",
     "esbuild": "^0.28.1",
-    "eslint": "^10.8.0",
+    "eslint": "^10.9.1",
     "globals": "^17.11.0",
     "husky": "^9.1.7",
     "typescript": "~6.0.3",

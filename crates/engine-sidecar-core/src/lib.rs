@@ -680,8 +680,16 @@ impl SidecarManager {
             ));
         }
 
+        // One budget for the whole call, not one per attempt: the retry below must
+        // not double the bound the user is actually waiting through. A first attempt
+        // that burns the entire window leaves the second none, which is the right
+        // outcome — a cold start that needed the full window would need it again,
+        // and the retry exists for an attempt that fails early (a lost port race),
+        // not for one that ran out of time.
+        let deadline = Instant::now() + self.config.startup_timeout;
+
         for attempt_index in 0..2 {
-            match self.start_once() {
+            match self.start_once_by(deadline) {
                 Ok(port) => {
                     return Ok(EngineStartResponse::ready(
                         port,
@@ -744,7 +752,14 @@ impl SidecarManager {
         self.stop_child();
     }
 
+    /// One start attempt with a fresh full startup window. Prefer
+    /// [`Self::start_once_by`] when retrying, so attempts share one budget.
     pub fn start_once(&self) -> Result<u16, StartAttemptError> {
+        self.start_once_by(Instant::now() + self.config.startup_timeout)
+    }
+
+    /// One start attempt that gives up at `deadline`.
+    pub fn start_once_by(&self, deadline: Instant) -> Result<u16, StartAttemptError> {
         let engine_reservation =
             pick_free_port().map_err(|error| StartAttemptError::Stopped(error.to_string()))?;
         let engine_port = engine_reservation
@@ -783,6 +798,7 @@ impl SidecarManager {
             proxy_port,
             &self.state,
             &self.child,
+            deadline,
         ) {
             StartupOutcome::Ready => {
                 let proxy = start_auth_proxy_with_idle(
@@ -1166,14 +1182,20 @@ pub fn configure_child_process(command: &mut Command) {
     apply_platform_spawn_flags(command);
 }
 
+/// Wait for the engine to answer its health endpoint, giving up at `deadline`.
+///
+/// The deadline is passed in rather than derived from `config.startup_timeout` so
+/// that a caller retrying a failed attempt can share one overall budget across
+/// attempts instead of granting each attempt a fresh full window — see
+/// [`SidecarManager::engine_start`].
 pub fn wait_until_ready(
     config: &SidecarConfig,
     engine_port: u16,
     proxy_port: u16,
     state: &Arc<Mutex<EngineState>>,
     child: &Arc<Mutex<Option<Child>>>,
+    deadline: Instant,
 ) -> StartupOutcome {
-    let deadline = Instant::now() + config.startup_timeout;
     let mut backoff = config.initial_backoff;
 
     loop {
@@ -3936,6 +3958,49 @@ mod tests {
         assert_eq!(state.port, None);
 
         manager.shutdown();
+    }
+
+    #[test]
+    fn wait_until_ready_gives_up_at_the_supplied_deadline_not_the_config_timeout() {
+        // Guards the seam that lets `engine_start` share one budget across its two
+        // attempts: if `wait_until_ready` ever went back to deriving its own deadline
+        // from `config.startup_timeout`, a retry would silently double the bound the
+        // user waits through. The config timeout here is the 90s default, so a run
+        // that honors the passed deadline finishes in well under a second.
+        let config = enabled_test_config("startup-deadline");
+        assert_eq!(config.startup_timeout, DEFAULT_STARTUP_TIMEOUT);
+
+        let state = Arc::new(Mutex::new(EngineState::stopped()));
+        let child = Arc::new(Mutex::new(Some(spawn_sleep_child())));
+        // Nothing is listening here, so every health check fails and the loop runs
+        // to the deadline rather than exiting early on a successful probe.
+        let dead_port = pick_free_port()
+            .expect("port reservation")
+            .port()
+            .expect("port");
+
+        let started = Instant::now();
+        let outcome = wait_until_ready(
+            &config,
+            dead_port,
+            1,
+            &state,
+            &child,
+            started + Duration::from_millis(200),
+        );
+        let elapsed = started.elapsed();
+
+        kill_child(&child);
+
+        assert!(
+            matches!(outcome, StartupOutcome::TimedOut),
+            "an engine that never answers should time out"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "wait_until_ready must honor the passed deadline, not config.startup_timeout; \
+             took {elapsed:?}"
+        );
     }
 
     #[test]

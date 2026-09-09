@@ -47,6 +47,9 @@ pub const ENGINE_MAX_HEAP_MB: u32 = 2048;
 /// request before the engine is reported ready. Reached only if the proxy never
 /// answers; the probe normally succeeds within a poll interval or two.
 pub const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Smallest window the proxy probe is ever given, even when the startup budget is
+/// already spent. Bounds how far past the startup deadline a start can run.
+pub const PROXY_READY_FLOOR: Duration = Duration::from_secs(2);
 pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 pub const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(1);
 pub const DEFAULT_IDLE_SHUTDOWN_MINUTES: u64 = 15;
@@ -524,7 +527,15 @@ pub struct PortReservation {
 pub enum StartupOutcome {
     Ready,
     TimedOut,
+    /// The engine died on its own before serving — a failed spawn, a lost port
+    /// race, a JVM that exited. Retryable: the cause is usually transient and the
+    /// failure arrives in milliseconds.
     Stopped,
+    /// Someone else cleared the child while this start was in flight — an explicit
+    /// stop, a shutdown, or the idle supervisor. `stop_child` does not take the
+    /// lifecycle lock, so this races legitimately. Never retryable: restarting here
+    /// would resurrect an engine that was deliberately stopped.
+    Cancelled,
 }
 
 #[derive(Clone, Debug)]
@@ -680,41 +691,60 @@ impl SidecarManager {
             ));
         }
 
-        // One attempt, one budget. The old shape was two attempts of a full window
-        // each, which is why the "20 second" bound was really 40 and a 90 second one
-        // would have been 180.
+        // One budget for the whole call, and it is spent on the failure worth
+        // retrying rather than the one that isn't.
         //
-        // The retry is gone rather than rationed, because `TimedOut` is only ever
-        // produced by `wait_until_ready` observing that the deadline elapsed — so a
-        // retry could not fire until the entire budget was already spent, and what it
-        // bought was a second cold start on a machine that had just proven it needs
-        // longer than the budget to do a first one. Rationing the window instead
-        // (say 45s + 45s) would defeat the change outright: a genuine slow start needs
-        // one long uninterrupted window, not two short ones, since the second attempt
-        // restarts the JVM from scratch.
+        // `TimedOut` is not retried. It can only be produced by `wait_until_ready`
+        // observing that the deadline elapsed, so a retry could not fire until the
+        // entire budget was already gone, and what it would buy is a second cold
+        // start on a machine that just proved it needs longer than the budget to
+        // finish a first one. (Rationing the window — 45s + 45s — is worse still: a
+        // slow start needs one long uninterrupted window, since attempt two restarts
+        // the JVM from scratch.) The old code retried exactly this case, which is how
+        // a "20 second" bound was really 40.
         //
-        // Note this does NOT cover a transient early failure — a lost port race, a
-        // wedged spawn — which surfaces as `Stopped`, and which the old loop never
-        // retried either. Retrying `Stopped` would be the cheap, useful recovery (a
-        // bind failure returns in milliseconds), but it is a genuinely new behavior
-        // and does not belong in a release-prep change.
+        // `Stopped` is retried once, while budget remains. That is the transient,
+        // recoverable failure — a lost port race, a spawn that died — and it arrives
+        // in milliseconds, so the retry costs a spawn rather than a window. The old
+        // code never retried it.
+        //
+        // `Cancelled` is never retried: an explicit stop, a shutdown, or the idle
+        // supervisor cleared the child mid-start, and restarting would resurrect an
+        // engine somebody deliberately stopped.
         let deadline = Instant::now() + self.config.startup_timeout;
 
-        match self.start_once_by(deadline) {
-            Ok(port) => Ok(EngineStartResponse::ready(
-                port,
-                &self.auth_token,
-                self.config.ocr_toolchain(),
-            )),
-            Err(StartAttemptError::TimedOut(port)) => {
-                kill_child(&self.child);
-                stop_proxy(&self.proxy);
-                let message = "engine health check timed out".to_string();
-                set_state(&self.state, EngineState::error(Some(port), &message));
-                Err(message)
+        for attempt_index in 0..2 {
+            match self.start_once_by(deadline) {
+                Ok(port) => {
+                    return Ok(EngineStartResponse::ready(
+                        port,
+                        &self.auth_token,
+                        self.config.ocr_toolchain(),
+                    ))
+                }
+                Err(StartAttemptError::TimedOut(port)) => {
+                    kill_child(&self.child);
+                    stop_proxy(&self.proxy);
+                    let message = "engine health check timed out".to_string();
+                    set_state(&self.state, EngineState::error(Some(port), &message));
+                    return Err(message);
+                }
+                Err(StartAttemptError::Stopped(message)) => {
+                    if attempt_index == 0 && Instant::now() < deadline {
+                        kill_child(&self.child);
+                        stop_proxy(&self.proxy);
+                        set_state(&self.state, EngineState::stopped());
+                        continue;
+                    }
+                    return Err(message);
+                }
+                Err(StartAttemptError::Cancelled(message)) => return Err(message),
             }
-            Err(StartAttemptError::Stopped(message)) => Err(message),
         }
+
+        let message = "engine failed to start".to_string();
+        set_state(&self.state, EngineState::error(None, &message));
+        Err(message)
     }
 
     pub fn engine_status(&self) -> Result<EngineStatusResponse, String> {
@@ -822,11 +852,17 @@ impl SidecarManager {
                 // before signaling ready, so the first real request (e.g. the OCR that
                 // lazily triggered this start) can't race a cold accept loop and fail with
                 // an intermittent `Local engine request failed`.
+                // Draw this stage from the same budget, so the advertised bound covers
+                // the whole start rather than the engine half of it. The floor keeps a
+                // near-deadline engine from being failed for want of a moment: without
+                // it, an engine that answers at 89.9s would get 0.1s to prove its proxy
+                // and lose a start that was about to succeed. Worst case is therefore
+                // the budget plus the floor, not the budget plus a fresh 10s.
                 if !wait_until_proxy_ready(
                     proxy_port,
                     &self.auth_token,
                     &self.config.health_path,
-                    PROXY_READY_TIMEOUT,
+                    remaining_until(deadline).clamp(PROXY_READY_FLOOR, PROXY_READY_TIMEOUT),
                 ) {
                     stop_proxy(&self.proxy);
                     self.stop_child();
@@ -849,6 +885,10 @@ impl SidecarManager {
                     .unwrap_or_else(|| "engine stopped before becoming ready".to_string());
                 Err(StartAttemptError::Stopped(message))
             }
+            StartupOutcome::Cancelled => Err(StartAttemptError::Cancelled(
+                current_error(&self.state)
+                    .unwrap_or_else(|| "engine start was cancelled".to_string()),
+            )),
         }
     }
 
@@ -936,7 +976,12 @@ impl Drop for SidecarManager {
 
 pub enum StartAttemptError {
     TimedOut(u16),
+    /// The engine failed on its own. Cheap to reach and usually transient, so
+    /// [`SidecarManager::engine_start`] retries it once while budget remains.
     Stopped(String),
+    /// The start was cancelled out from under us by an explicit stop, a shutdown,
+    /// or the idle supervisor. Must never be retried.
+    Cancelled(String),
 }
 
 pub fn pick_free_port() -> std::io::Result<PortReservation> {
@@ -1185,6 +1230,11 @@ pub fn configure_child_process(command: &mut Command) {
     apply_platform_spawn_flags(command);
 }
 
+/// Time left until `deadline`, saturating at zero rather than panicking once passed.
+fn remaining_until(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
+}
+
 /// Wait for the engine to answer its health endpoint, giving up at `deadline`.
 ///
 /// The deadline is passed in rather than derived from `config.startup_timeout` so
@@ -1226,7 +1276,7 @@ pub fn wait_until_ready(
             }
         }
         if child.lock().expect("sidecar child lock poisoned").is_none() {
-            return StartupOutcome::Stopped;
+            return StartupOutcome::Cancelled;
         }
 
         if health_check(engine_port, &config.health_path).unwrap_or(false) {
@@ -4003,6 +4053,36 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "wait_until_ready must honor the passed deadline, not config.startup_timeout; \
              took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn wait_until_ready_reports_cancelled_when_the_child_is_cleared() {
+        // `engine_start` retries `Stopped` but must never retry `Cancelled`, so the
+        // distinction has to hold at its source. `stop_child` clears the child handle
+        // without taking the lifecycle lock, so an explicit stop, a shutdown, or the
+        // idle supervisor can land here mid-start; reporting that as `Stopped` would
+        // have the retry resurrect an engine somebody deliberately stopped.
+        let config = enabled_test_config("startup-cancelled");
+        let state = Arc::new(Mutex::new(EngineState::stopped()));
+        let child = Arc::new(Mutex::new(None));
+        let dead_port = pick_free_port()
+            .expect("port reservation")
+            .port()
+            .expect("port");
+
+        let outcome = wait_until_ready(
+            &config,
+            dead_port,
+            1,
+            &state,
+            &child,
+            Instant::now() + Duration::from_secs(30),
+        );
+
+        assert!(
+            matches!(outcome, StartupOutcome::Cancelled),
+            "a cleared child is a cancellation, not a retryable engine failure"
         );
     }
 

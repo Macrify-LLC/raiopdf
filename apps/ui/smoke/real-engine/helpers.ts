@@ -103,6 +103,19 @@ export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): 
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
   await expect(mainCanvas(page)).toBeVisible();
+  // Both waits above are satisfied by a document that is ALREADY open, so on a
+  // second open they can pass while the previous document is still on screen.
+  // The new document's arrival then bumps `document.generation`, and
+  // useDocumentSearch clears its query on that bump -- silently wiping whatever
+  // the test typed in between. Gate on this file's own name: `fileName` is set
+  // in the same DocumentState object as the generation bump, so a tab carrying
+  // it proves the swap has landed.
+  await expect(
+    page
+      .locator('.title-bar__tab[data-active="true"]')
+      .locator(".title-bar__tab-name", { hasText: fileName })
+      .first(),
+  ).toBeVisible();
 }
 
 export function mainCanvas(page: Page): ReturnType<Page["locator"]> {
@@ -380,7 +393,7 @@ export function localFixtureSetUnder(
  * via the app's own search. A readable legal doc has many "the"s; a
  * font-mismatch-garbled text layer has ~none. Returns 0 when nothing matches.
  */
-export async function searchHitCount(page: Page, term: string): Promise<number> {
+async function readSearchCount(page: Page, term: string): Promise<number> {
   const box = page.getByLabel("Search document");
   // fill() replaces the current value. Do not clear first: that emits a real
   // empty-query render ("0 of 0") which can satisfy the final-count wait before
@@ -394,11 +407,33 @@ export async function searchHitCount(page: Page, term: string): Promise<number> 
     // happens for slower-to-index documents) yields a spurious 0.
     await expect(count).toHaveText(/\bof\s+\d+/, { timeout: 20_000 });
   } catch {
-    return 0; // no matches / search never resolved — no final "N of M" label
+    // A genuine no-match resolves to "0 of 0", which matches the pattern above.
+    // Reaching here means the search never resolved at all, so returning 0
+    // would report "no matches" for a search that never ran -- and would make
+    // every paired `toBe(0)` assertion pass vacuously.
+    const label = (await count.textContent().catch(() => null)) ?? "(no count element)";
+    throw new Error(
+      `searchHitCount("${term}"): search never resolved to a final count; last label was ${JSON.stringify(label)}.`,
+    );
   }
   const text = (await count.textContent()) ?? "";
   const match = text.match(/of\s+(\d+)/);
   return match ? Number(match[1]) : 0;
+}
+
+export async function searchHitCount(page: Page, term: string): Promise<number> {
+  // Opening a document swaps the search source a beat AFTER the new tab goes
+  // active, so a query issued inside that window searches the PREVIOUS document
+  // and resolves to a confident "0 of 0" rather than to "Searching". No DOM
+  // signal marks the swap, so re-issue once whenever the first answer is zero:
+  // a genuine no-match answers zero again, while a raced query corrects itself.
+  const first = await readSearchCount(page, term);
+  if (first !== 0) {
+    return first;
+  }
+  await page.getByLabel("Search document").fill("");
+  await page.waitForTimeout(300);
+  return readSearchCount(page, term);
 }
 
 /**

@@ -11,9 +11,17 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
-## [Unreleased]
+## [0.1.6] - 2026-09-08
 
-Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release.
+Seventh public alpha. Headline: **exhibit stamps** — click-to-place "Plaintiff's
+Exhibit 12" stickers whose numbers advance on their own, with a designer for building
+your own and one-pass renumbering in reading order. Alongside them, **production sets
+grow up**: Bates continuation checked against your last production, duplicate detection,
+a DAT load file for review platforms, withheld/produced-with-redactions status with a
+draft privilege log and Bates-numbered slip sheets, and builds that no longer load every
+document into memory at once. Also **drawings, shapes, and callouts stay editable after
+you reopen a file**, you can add **several PDFs or a whole folder at once**, and your
+own AI assistant can read scrubbed diagnostics when something goes wrong.
 
 ### Added
 
@@ -181,6 +189,18 @@ Changes merged to `main` since 0.1.5 shipped; they'll arrive in the next release
 
 ### Fixed
 
+- **RaioPDF now waits longer for its engine to start on slower machines.** The app gave
+  the bundled engine 20 seconds to come up before reporting a failure, which a cold start
+  behind on-access antivirus scanning could miss on slower hardware — leaving the app
+  stuck on "Getting things ready…" and then failing, every launch. The limit is now 90
+  seconds. Nothing is slower when the engine starts normally: RaioPDF proceeds the moment
+  the engine answers, which is usually a second or two.
+- **In-app updates no longer fail partway down on slower connections.** The download had
+  a ten-minute ceiling on the whole transfer, which effectively demanded about 5 Mbps for
+  the roughly 400 MB update — anyone below that hit the same wall on every retry and could
+  not update in place. The ceiling is now 60 minutes. If a download does fail, the message
+  now tells you what went wrong and how far it got, and points you at the GitHub releases
+  page so you can install the update by hand.
 - **In-place saves on Windows now wait through brief file locks** from antivirus,
   indexing, and similar background tools instead of failing immediately. If a save
   still fails, the scrubbed diagnostic records which save step failed and the broad

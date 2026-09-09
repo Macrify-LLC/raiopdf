@@ -31,7 +31,14 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 
 pub const DEFAULT_HEALTH_PATH: &str = "/api/v1/info/status";
-pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+/// Ceiling on a cold engine start, not a performance budget: `wait_until_ready`
+/// returns the moment the health check passes, which on a warm machine is a poll
+/// interval or two. The bound exists only so a genuinely dead engine fails visibly
+/// instead of parking the UI at "Getting things ready…" forever. The old 20s was
+/// tight enough that a cold JVM start behind on-access antivirus scanning could
+/// miss it on slower hardware, which cost real users a working app; 90s clears
+/// that with room to spare and costs nothing when the engine starts normally.
+pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 /// The bundled engine is a helper, not the whole desktop application. Keep a
 /// malformed or image-heavy PDF from expanding until Windows starts paging or
 /// kills the WebView that owns the request.

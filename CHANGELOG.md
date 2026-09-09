@@ -11,7 +11,7 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
-## [0.1.6] - 2026-09-08
+## [0.1.6] - 2026-09-09
 
 Seventh public alpha. Headline: **exhibit stamps** — click-to-place "Plaintiff's
 Exhibit 12" stickers whose numbers advance on their own, with a designer for building

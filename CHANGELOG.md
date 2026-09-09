@@ -454,7 +454,8 @@ own machine. Windows only for now (macOS later).
 - An off-by-default MCP connector so RaioPDF can talk to your own AI agents; no AI runs
   inside the app itself.
 
-[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Macrify-LLC/raiopdf/compare/v0.1.2...v0.1.3

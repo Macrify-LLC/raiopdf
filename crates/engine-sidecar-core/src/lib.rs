@@ -681,11 +681,9 @@ impl SidecarManager {
         }
 
         // One budget for the whole call, not one per attempt: the retry below must
-        // not double the bound the user is actually waiting through. A first attempt
-        // that burns the entire window leaves the second none, which is the right
-        // outcome — a cold start that needed the full window would need it again,
-        // and the retry exists for an attempt that fails early (a lost port race),
-        // not for one that ran out of time.
+        // not double the bound the user is actually waiting through. The retry exists
+        // for an attempt that fails early (a lost port race), not for one that ran out
+        // of time — so it is skipped outright once the budget is gone.
         let deadline = Instant::now() + self.config.startup_timeout;
 
         for attempt_index in 0..2 {
@@ -697,15 +695,18 @@ impl SidecarManager {
                         self.config.ocr_toolchain(),
                     ))
                 }
-                Err(StartAttemptError::TimedOut(_port)) if attempt_index == 0 => {
-                    kill_child(&self.child);
-                    stop_proxy(&self.proxy);
-                    set_state(&self.state, EngineState::stopped());
-                    continue;
-                }
                 Err(StartAttemptError::TimedOut(port)) => {
                     kill_child(&self.child);
                     stop_proxy(&self.proxy);
+                    // Only spend a retry while budget remains. `start_once_by` reserves
+                    // ports, rotates logs, and spawns a JVM before its first deadline
+                    // check, so retrying past the deadline would push the real wait past
+                    // the advertised bound by a whole spawn — which on the slow-antivirus
+                    // machines this bound exists for is the expensive part.
+                    if attempt_index == 0 && Instant::now() < deadline {
+                        set_state(&self.state, EngineState::stopped());
+                        continue;
+                    }
                     let message = "engine health check timed out".to_string();
                     set_state(&self.state, EngineState::error(Some(port), &message));
                     return Err(message);
@@ -759,6 +760,11 @@ impl SidecarManager {
     }
 
     /// One start attempt that gives up at `deadline`.
+    ///
+    /// Setup — port reservation, log rotation, spawning the JVM — runs before the
+    /// deadline is consulted, so a caller retrying against a shared budget must check
+    /// the deadline itself rather than relying on an expired one to return cheaply.
+    /// [`Self::engine_start`] does exactly that.
     pub fn start_once_by(&self, deadline: Instant) -> Result<u16, StartAttemptError> {
         let engine_reservation =
             pick_free_port().map_err(|error| StartAttemptError::Stopped(error.to_string()))?;

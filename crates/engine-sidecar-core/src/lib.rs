@@ -680,44 +680,41 @@ impl SidecarManager {
             ));
         }
 
-        // One budget for the whole call, not one per attempt: the retry below must
-        // not double the bound the user is actually waiting through. The retry exists
-        // for an attempt that fails early (a lost port race), not for one that ran out
-        // of time — so it is skipped outright once the budget is gone.
+        // One attempt, one budget. The old shape was two attempts of a full window
+        // each, which is why the "20 second" bound was really 40 and a 90 second one
+        // would have been 180.
+        //
+        // The retry is gone rather than rationed, because `TimedOut` is only ever
+        // produced by `wait_until_ready` observing that the deadline elapsed — so a
+        // retry could not fire until the entire budget was already spent, and what it
+        // bought was a second cold start on a machine that had just proven it needs
+        // longer than the budget to do a first one. Rationing the window instead
+        // (say 45s + 45s) would defeat the change outright: a genuine slow start needs
+        // one long uninterrupted window, not two short ones, since the second attempt
+        // restarts the JVM from scratch.
+        //
+        // Note this does NOT cover a transient early failure — a lost port race, a
+        // wedged spawn — which surfaces as `Stopped`, and which the old loop never
+        // retried either. Retrying `Stopped` would be the cheap, useful recovery (a
+        // bind failure returns in milliseconds), but it is a genuinely new behavior
+        // and does not belong in a release-prep change.
         let deadline = Instant::now() + self.config.startup_timeout;
 
-        for attempt_index in 0..2 {
-            match self.start_once_by(deadline) {
-                Ok(port) => {
-                    return Ok(EngineStartResponse::ready(
-                        port,
-                        &self.auth_token,
-                        self.config.ocr_toolchain(),
-                    ))
-                }
-                Err(StartAttemptError::TimedOut(port)) => {
-                    kill_child(&self.child);
-                    stop_proxy(&self.proxy);
-                    // Only spend a retry while budget remains. `start_once_by` reserves
-                    // ports, rotates logs, and spawns a JVM before its first deadline
-                    // check, so retrying past the deadline would push the real wait past
-                    // the advertised bound by a whole spawn — which on the slow-antivirus
-                    // machines this bound exists for is the expensive part.
-                    if attempt_index == 0 && Instant::now() < deadline {
-                        set_state(&self.state, EngineState::stopped());
-                        continue;
-                    }
-                    let message = "engine health check timed out".to_string();
-                    set_state(&self.state, EngineState::error(Some(port), &message));
-                    return Err(message);
-                }
-                Err(StartAttemptError::Stopped(message)) => return Err(message),
+        match self.start_once_by(deadline) {
+            Ok(port) => Ok(EngineStartResponse::ready(
+                port,
+                &self.auth_token,
+                self.config.ocr_toolchain(),
+            )),
+            Err(StartAttemptError::TimedOut(port)) => {
+                kill_child(&self.child);
+                stop_proxy(&self.proxy);
+                let message = "engine health check timed out".to_string();
+                set_state(&self.state, EngineState::error(Some(port), &message));
+                Err(message)
             }
+            Err(StartAttemptError::Stopped(message)) => Err(message),
         }
-
-        let message = "engine failed to start".to_string();
-        set_state(&self.state, EngineState::error(None, &message));
-        Err(message)
     }
 
     pub fn engine_status(&self) -> Result<EngineStatusResponse, String> {

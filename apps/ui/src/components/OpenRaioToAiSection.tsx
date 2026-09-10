@@ -116,6 +116,7 @@ export function OpenRaioToAiSection({
   const resolvedOrPlaceholder = mcpPath ?? PLACEHOLDER_PATH;
   const desktopSnippet = buildClaudeDesktopSnippet(resolvedOrPlaceholder);
   const codeCommand = buildClaudeCodeCommand(resolvedOrPlaceholder);
+  const codexSnippet = buildCodexTomlSnippet(resolvedOrPlaceholder);
   const setupPrompt = buildSetupPrompt(resolvedOrPlaceholder);
 
   return (
@@ -144,7 +145,8 @@ export function OpenRaioToAiSection({
 
       <p className="settings-section__lede">
         Raio still has no AI of its own. Turn this on and whatever assistant you already use
-        — Claude Desktop, Claude Code, anything that speaks MCP — can drive Raio&rsquo;s tools
+        — Claude Desktop, Claude Code, the ChatGPT desktop app, anything that speaks MCP — can
+        drive Raio&rsquo;s tools
         directly: split a file, run OCR, redact a term, stamp Bates numbers. Every operation
         still happens right here; nothing about your files or your prompts goes anywhere else.
       </p>
@@ -187,8 +189,8 @@ export function OpenRaioToAiSection({
             <div className="open-raio-to-ai__guided-text">
               <p className="open-raio-to-ai__guided-title">Let your AI set it up</p>
               <p className="open-raio-to-ai__guided-body">
-                Copy this and paste it into Claude Code, Claude Desktop, or any assistant that
-                can run commands. It reads the instructions, finds the right config file for
+                Copy this and paste it into Claude Code, Claude Desktop, the ChatGPT desktop
+                app, or any assistant that can run commands. It reads the instructions, finds the right config file for
                 your computer, and gets Raio&rsquo;s connector registered.
               </p>
             </div>
@@ -242,6 +244,25 @@ export function OpenRaioToAiSection({
                 caption="Run once in a terminal. Claude Code remembers it from then on."
                 code={codeCommand}
                 copyKey="code"
+                copiedKey={copiedKey}
+                copyFailedKey={copyFailedKey}
+                onCopy={copy}
+                pathResolved={pathResolved}
+              />
+
+              <CopyBlock
+                label="ChatGPT desktop app / Codex"
+                caption={
+                  <>
+                    Add to <code>~/.codex/config.toml</code> (Windows:{" "}
+                    <code>%USERPROFILE%\.codex\config.toml</code>) &mdash; the ChatGPT desktop
+                    app, Codex CLI, and the Codex IDE extension all read it &mdash; then restart
+                    the app. ChatGPT in a browser can&rsquo;t run local programs, so it
+                    can&rsquo;t reach Raio.
+                  </>
+                }
+                code={codexSnippet}
+                copyKey="codex"
                 copiedKey={copiedKey}
                 copyFailedKey={copyFailedKey}
                 onCopy={copy}
@@ -404,6 +425,28 @@ function buildClaudeCodeCommand(command: string): string {
 }
 
 /**
+ * A TOML string for a filesystem path. TOML literal strings (single quotes)
+ * take backslashes verbatim, which is exactly what a Windows path needs — a
+ * basic (double-quoted) string would read `\U` in `C:\Users` as a bad escape
+ * and the Codex/ChatGPT desktop app refuses the whole file. Fall back to a
+ * basic string, JSON-escaped, only when the path itself contains a quote.
+ */
+export function tomlString(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.includes("'") || /[\u0000-\u001f\u007f]/.test(value)
+    ? JSON.stringify(value)
+    : `'${value}'`;
+}
+
+export function buildCodexTomlSnippet(command: string): string {
+  return ["[mcp_servers.raiopdf]", `command = ${tomlString(command)}`].join("\n");
+}
+
+function buildCodexCommand(command: string): string {
+  return `codex mcp add raiopdf -- "${command}"`;
+}
+
+/**
  * The plain-language prompt behind the "Copy setup prompt" button. Composes
  * the two manual snippets above so path-escaping stays correct on Windows,
  * and hands the whole job to whatever AI assistant the user pastes it into
@@ -414,6 +457,8 @@ function buildClaudeCodeCommand(command: string): string {
 export function buildSetupPrompt(command: string): string {
   const desktopSnippet = buildClaudeDesktopSnippet(command);
   const codeCommand = buildClaudeCodeCommand(command);
+  const codexSnippet = buildCodexTomlSnippet(command);
+  const codexCommand = buildCodexCommand(command);
 
   return [
     "I want to connect RaioPDF's local connector to my AI assistant so it can operate RaioPDF for me — things like splitting PDFs, running OCR, redacting text, and stamping Bates numbers. RaioPDF runs entirely on my own computer and this connector makes no network calls; every operation stays on my machine.",
@@ -423,7 +468,7 @@ export function buildSetupPrompt(command: string): string {
     "RaioPDF's connector is a local program at this path:",
     command,
     "",
-    "There are two ways to register it, depending on which assistant I'm using:",
+    "There are three ways to register it, depending on which assistant I'm using:",
     "",
     "1. Claude Desktop (this also covers Cowork sessions started from Claude Desktop): in Claude Desktop, open Settings → Developer → Edit Config. That opens the config file this install actually reads — don't guess the path, because some Windows installs keep it somewhere other than %APPDATA%\\Claude. Make a backup copy, then add this \"raiopdf\" entry under \"mcpServers\", merging it into whatever the file already contains. Never replace the file or delete other keys — it may also hold the app's own settings. Then fully quit Claude Desktop (including the system-tray icon on Windows) and reopen it:",
     desktopSnippet,
@@ -431,7 +476,14 @@ export function buildSetupPrompt(command: string): string {
     "2. Claude Code, only if I run it in a terminal on this same computer — run this once, then restart Claude Code:",
     codeCommand,
     "",
-    "If this conversation is running somewhere that can't launch programs on my computer (a cloud sandbox, a Cowork container, the web app), option 2 will look like it worked and do nothing — use option 1 or walk me through it.",
+    "3. ChatGPT desktop app or Codex (they share one MCP configuration): either run this once in a terminal on this computer,",
+    codexCommand,
+    "or add this table to ~/.codex/config.toml (on Windows: %USERPROFILE%\\.codex\\config.toml), keeping the single quotes around the path exactly as written — a double-quoted Windows path is invalid TOML and stops the app from loading. Then fully quit and reopen the ChatGPT desktop app:",
+    codexSnippet,
+    "",
+    "ChatGPT in a web browser only connects to remote HTTPS servers and can't launch programs on my computer, so it can't use this connector — and please don't try to expose the connector to the internet to work around that.",
+    "",
+    "If this conversation is running somewhere that can't launch programs on my computer (a cloud sandbox, a Cowork container, a web app), options 2 and 3 will look like they worked and do nothing — use option 1 or walk me through it.",
     "",
     "If you're able to run commands or edit files yourself, please just do it for me: work out which assistant this is, find the right config file, make the change, and restart it if you can. If you can't, walk me through the exact steps one at a time.",
     "",

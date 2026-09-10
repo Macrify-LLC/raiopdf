@@ -13,6 +13,14 @@ fades as download volume accrues.
 
 ## [Unreleased]
 
+### Added
+
+- **"Open Raio to AI" now covers the ChatGPT desktop app and Codex.** The panel
+  shows a ready-to-paste `config.toml` entry (the file the ChatGPT desktop app,
+  Codex CLI, and the Codex IDE extension all read), the setup prompt walks an
+  assistant through it, and `docs/MCP.md` explains why ChatGPT in a browser — which
+  only talks to remote servers — can't use a local, loopback-only connector.
+
 ### Fixed
 
 - **"Open Raio to AI": the connector's tools can be called again from clients that

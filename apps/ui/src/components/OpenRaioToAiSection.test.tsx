@@ -16,6 +16,20 @@ describe("buildSetupPrompt", () => {
     expect(prompt).toContain("docs/MCP.md");
   });
 
+  it("steers the assistant to Claude Desktop's own Edit Config and to merge, not replace", () => {
+    // A pasted prompt once led an assistant to guess %APPDATA%\Claude (wrong for a
+    // Microsoft Store install) and then to select-all-and-replace the file it found,
+    // which held the app's own settings. The prompt has to head both off.
+    const prompt = buildSetupPrompt("C:\\Users\\me\\AppData\\Local\\RaioPDF\\raiopdf-mcp.exe");
+
+    expect(prompt).toContain("Settings → Developer → Edit Config");
+    expect(prompt).toMatch(/merging it into whatever the file already contains/i);
+    expect(prompt).toMatch(/never replace the file/i);
+    expect(prompt).toContain("backup");
+    expect(prompt).toContain("Cowork");
+    expect(prompt).toMatch(/fully quit/i);
+  });
+
   it("falls back to the placeholder path when Raio hasn't resolved its install path yet", () => {
     const prompt = buildSetupPrompt("<RAIOPDF_MCP_PATH>");
 

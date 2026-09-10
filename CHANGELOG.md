@@ -11,6 +11,28 @@ Every Windows installer is signed (Certum). Because the certificate is still bui
 reputation, Windows SmartScreen may show a "Run anyway" prompt on first launch — that
 fades as download volume accrues.
 
+## [Unreleased]
+
+### Fixed
+
+- **"Open Raio to AI": the connector's tools can be called again from clients that
+  validate against JSON Schema 2020-12.** The tools listed fine, then every call
+  failed before reaching RaioPDF with an "unsupported dialect" error naming
+  draft-07 in the tool's output schema — the claude.ai cloud client and Cowork
+  sessions were affected; Claude Desktop and Claude Code were not. The connector
+  now advertises its tool schemas in JSON Schema 2020-12 (the schemas themselves
+  are unchanged). Fully quit and reopen your AI client after updating so it
+  re-reads the tool list.
+
+### Changed
+
+- **The "Copy setup prompt" text and `docs/MCP.md` now steer an assistant to Claude
+  Desktop's own Settings → Developer → Edit Config** instead of guessing a config
+  path, and to merge the `raiopdf` entry into the file it opens rather than
+  replacing it — that file can hold the app's own settings on some Windows
+  installs. The prompt also says plainly that the Claude Code line only works in
+  a terminal on the machine RaioPDF is installed on.
+
 ## [0.1.6] - 2026-09-09
 
 Seventh public alpha. Headline: **exhibit stamps** — click-to-place "Plaintiff's

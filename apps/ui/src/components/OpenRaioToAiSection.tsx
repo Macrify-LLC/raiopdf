@@ -224,8 +224,9 @@ export function OpenRaioToAiSection({
                 label="Claude Desktop"
                 caption={
                   <>
-                    Add to <code>claude_desktop_config.json</code>, then restart Claude
-                    Desktop.
+                    In Claude Desktop, open Settings → Developer → Edit Config and merge this
+                    into the file it opens (usually <code>claude_desktop_config.json</code>),
+                    then fully quit and reopen Claude Desktop.
                   </>
                 }
                 code={desktopSnippet}
@@ -424,15 +425,17 @@ export function buildSetupPrompt(command: string): string {
     "",
     "There are two ways to register it, depending on which assistant I'm using:",
     "",
-    "1. Claude Code (command line): run this once, then restart Claude Code:",
-    codeCommand,
-    "",
-    "2. Claude Desktop: add this to the claude_desktop_config.json file, then fully quit and reopen Claude Desktop:",
+    "1. Claude Desktop (this also covers Cowork sessions started from Claude Desktop): in Claude Desktop, open Settings → Developer → Edit Config. That opens the config file this install actually reads — don't guess the path, because some Windows installs keep it somewhere other than %APPDATA%\\Claude. Make a backup copy, then add this \"raiopdf\" entry under \"mcpServers\", merging it into whatever the file already contains. Never replace the file or delete other keys — it may also hold the app's own settings. Then fully quit Claude Desktop (including the system-tray icon on Windows) and reopen it:",
     desktopSnippet,
     "",
-    "If you're able to run commands or edit files yourself, please just do it for me: work out which assistant this is, find the right config file for my operating system, make the change, and restart it if you can. If you can't, walk me through the exact steps one at a time.",
+    "2. Claude Code, only if I run it in a terminal on this same computer — run this once, then restart Claude Code:",
+    codeCommand,
     "",
-    "When you're finished, check the connection by listing RaioPDF's tools. If a tool comes back refused, the safety switch is still off — tell me to open RaioPDF, go to Settings → \"Open Raio to AI\", and turn on \"Let your AI operate Raio\".",
+    "If this conversation is running somewhere that can't launch programs on my computer (a cloud sandbox, a Cowork container, the web app), option 2 will look like it worked and do nothing — use option 1 or walk me through it.",
+    "",
+    "If you're able to run commands or edit files yourself, please just do it for me: work out which assistant this is, find the right config file, make the change, and restart it if you can. If you can't, walk me through the exact steps one at a time.",
+    "",
+    "When you're finished, check the connection by listing RaioPDF's tools, then call one — for example pdf_page_count on a PDF I name. If a tool comes back refused, the safety switch is still off — tell me to open RaioPDF, go to Settings → \"Open Raio to AI\", and turn on \"Let your AI operate Raio\".",
     "",
     `More detail and troubleshooting: ${MCP_DOCS_URL}`,
   ].join("\n");

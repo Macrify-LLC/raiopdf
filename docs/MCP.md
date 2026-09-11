@@ -4,7 +4,8 @@
 
 RaioPDF has **no AI inside** — and this connector doesn't change that. It is an
 optional, off-by-default bridge that lets *your own* AI assistant (Claude
-Desktop, Claude Code) operate *your own* local RaioPDF tools. Everything runs on
+Desktop, Claude Code, the ChatGPT desktop app / Codex) operate *your own* local
+RaioPDF tools. Everything runs on
 your machine: the connector speaks [MCP](https://modelcontextprotocol.io) over
 stdio (your AI client launches it as a subprocess — nothing listens on any
 network), and every PDF operation runs locally through RaioPDF's bundled engine.
@@ -37,11 +38,14 @@ RaioPDF shows the exact snippet with the real binary path once the toggle is on.
 
 **Not sure what to do with these?** In the "Open Raio to AI" panel, **Copy setup
 prompt** copies a plain-language prompt you can paste into Claude Code, Claude
-Desktop, or any assistant that can follow steps — it finds the right config file
-for your OS, registers RaioPDF, and verifies the connection. The raw snippets
-below are the manual alternative.
+Desktop, the ChatGPT desktop app, or any assistant that can follow steps — it
+opens the right config file, merges RaioPDF in without disturbing what's already
+there, and verifies the connection. The raw snippets below are the manual
+alternative.
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+**Claude Desktop** — in Claude Desktop, open **Settings → Developer → Edit
+Config** and merge this into the file it opens (usually
+`claude_desktop_config.json`):
 
 ```json
 {
@@ -53,14 +57,52 @@ below are the manual alternative.
 }
 ```
 
-**Claude Code**:
+Use the Edit Config button rather than guessing the path: some Windows installs
+keep the file somewhere other than `%APPDATA%\Claude`, and the file it opens may
+also hold the app's own settings. Add the `mcpServers` key alongside what is
+already there — never replace the file — and back it up first. Then fully quit
+Claude Desktop (on Windows, the system-tray icon too) and reopen it. Cowork
+sessions started from Claude Desktop pick up the same registration.
+
+**Claude Code**, in a terminal on the same computer:
 
 ```
 claude mcp add raiopdf -- "<path-to>/raiopdf-mcp"
 ```
 
-(A web browser client can't launch a local process — this is for the desktop
-Claude app and Claude Code.)
+**ChatGPT desktop app / Codex** — the ChatGPT desktop app, Codex CLI, and the
+Codex IDE extension share one MCP configuration, `~/.codex/config.toml`
+(Windows: `%USERPROFILE%\.codex\config.toml`). Either run, in a terminal on the
+same computer:
+
+```
+codex mcp add raiopdf -- "<path-to>/raiopdf-mcp"
+```
+
+or add this table to the file yourself, then fully quit and reopen the ChatGPT
+desktop app:
+
+```toml
+[mcp_servers.raiopdf]
+command = '<path-to>/raiopdf-mcp'
+```
+
+Keep the **single quotes**: a TOML literal string takes a Windows path's
+backslashes verbatim, whereas a double-quoted `"C:\Users\..."` is an invalid
+escape and the app then refuses to load the whole file. (The snippet RaioPDF
+shows you is already quoted this way.) The table key is `mcp_servers`, with an
+underscore.
+
+**ChatGPT in a web browser** only connects to *remote* HTTPS MCP servers, and it
+can't launch a program on your computer — so it can't use this connector. Don't
+try to get around that by exposing the connector to the internet: it is a local
+stdio program by design and has no authentication of its own (see the threat
+model below). Use the ChatGPT desktop app instead.
+
+More generally, a client that can't launch a program on your computer — a web
+browser, a cloud sandbox, a Cowork container — can't run the connector, and
+registering it from there does nothing. Register in Claude Desktop, Claude Code,
+or the ChatGPT desktop app / Codex on the machine RaioPDF is installed on.
 
 ## How it works
 
@@ -198,6 +240,25 @@ using explicit `matches` in a write tool.
 is placed at the first match. With `page`, use one-based `page` and optional
 `at: { x, y }` in PDF user-space points; without `at`, the note is placed near
 the top-right corner.
+
+## Troubleshooting
+
+- **Every tool is refused with `MCP_DISABLED`.** The gate is off. Turn on
+  Settings → "Open Raio to AI" → "Let your AI operate Raio" in RaioPDF; no client
+  restart is needed — the connector checks the flag on every call.
+- **The tools are listed but the client won't call any of them, citing an
+  "unsupported dialect" or `draft-07` in the tool's `outputSchema`.** Versions up
+  to 0.1.6 advertised tool schemas in JSON Schema draft-07, which some clients
+  (the claude.ai cloud client among them) refuse to validate against. The
+  connector now advertises JSON Schema 2020-12; update RaioPDF, then fully quit
+  and reopen the client so it re-reads the tool list.
+- **Claude Desktop shows the server as failed.** Check the `command` path first:
+  the "Open Raio to AI" panel shows the resolved path for this install, and it
+  must point at an existing `raiopdf-mcp` binary.
+- **The ChatGPT desktop app or Codex hangs on its loading screen, or ignores the
+  server.** A double-quoted Windows path in `config.toml` is invalid TOML — use
+  the single-quoted form above. A server under any table other than
+  `mcp_servers` (note the underscore) is silently ignored.
 
 ## Notes
 

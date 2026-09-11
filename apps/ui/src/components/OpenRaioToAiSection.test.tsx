@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenRaioToAiSection, buildSetupPrompt } from "./OpenRaioToAiSection";
+import {
+  OpenRaioToAiSection,
+  buildCodexTomlSnippet,
+  buildSetupPrompt,
+  tomlString,
+} from "./OpenRaioToAiSection";
 
 describe("buildSetupPrompt", () => {
   it("includes the resolved path, both registration snippets, and the docs link", () => {
@@ -14,6 +19,53 @@ describe("buildSetupPrompt", () => {
     expect(prompt).toContain('"mcpServers"');
     expect(prompt).toContain('"raiopdf"');
     expect(prompt).toContain("docs/MCP.md");
+  });
+
+  it("steers the assistant to Claude Desktop's own Edit Config and to merge, not replace", () => {
+    // A pasted prompt once led an assistant to guess %APPDATA%\Claude (wrong for a
+    // Microsoft Store install) and then to select-all-and-replace the file it found,
+    // which held the app's own settings. The prompt has to head both off.
+    const prompt = buildSetupPrompt("C:\\Users\\me\\AppData\\Local\\RaioPDF\\raiopdf-mcp.exe");
+
+    expect(prompt).toContain("Settings → Developer → Edit Config");
+    expect(prompt).toMatch(/merging it into whatever the file already contains/i);
+    expect(prompt).toMatch(/never replace the file/i);
+    expect(prompt).toContain("backup");
+    expect(prompt).toContain("Cowork");
+    expect(prompt).toMatch(/fully quit/i);
+  });
+
+  it("covers the ChatGPT desktop app / Codex and rules out browser ChatGPT", () => {
+    const prompt = buildSetupPrompt("C:\\Users\\me\\AppData\\Local\\RaioPDF\\raiopdf-mcp.exe");
+
+    expect(prompt).toContain('codex mcp add raiopdf -- "C:\\Users\\me\\AppData\\Local\\RaioPDF\\raiopdf-mcp.exe"');
+    expect(prompt).toContain("[mcp_servers.raiopdf]");
+    expect(prompt).toContain("command = 'C:\\Users\\me\\AppData\\Local\\RaioPDF\\raiopdf-mcp.exe'");
+    expect(prompt).toContain("~/.codex/config.toml");
+    expect(prompt).toMatch(/web browser only connects to remote HTTPS servers/);
+    expect(prompt).toMatch(/don't try to expose the connector to the internet/);
+  });
+});
+
+describe("Codex config.toml snippet", () => {
+  it("keeps Windows backslashes verbatim in a TOML literal string", () => {
+    // A basic (double-quoted) TOML string treats \U in C:\Users as an escape and the
+    // Codex / ChatGPT desktop app then refuses the whole config file on startup.
+    expect(buildCodexTomlSnippet("C:\\Users\\me\\RaioPDF\\raiopdf-mcp.exe")).toBe(
+      "[mcp_servers.raiopdf]\ncommand = 'C:\\Users\\me\\RaioPDF\\raiopdf-mcp.exe'",
+    );
+  });
+
+  it("uses a POSIX path as-is", () => {
+    expect(buildCodexTomlSnippet("/Applications/RaioPDF.app/Contents/MacOS/raiopdf-mcp")).toBe(
+      "[mcp_servers.raiopdf]\ncommand = '/Applications/RaioPDF.app/Contents/MacOS/raiopdf-mcp'",
+    );
+  });
+
+  it("falls back to an escaped basic string when the path contains a single quote", () => {
+    expect(tomlString("C:\\Users\\O'Brien\\raiopdf-mcp.exe")).toBe(
+      '"C:\\\\Users\\\\O\'Brien\\\\raiopdf-mcp.exe"',
+    );
   });
 
   it("falls back to the placeholder path when Raio hasn't resolved its install path yet", () => {

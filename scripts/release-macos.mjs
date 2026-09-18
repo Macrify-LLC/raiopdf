@@ -91,6 +91,17 @@ export function parseArgs(argv) {
   return { args };
 }
 
+// `ditto` copies the app bundle's permissions verbatim, and the bundled Python OCR
+// payload ships directories without the owner-write bit. An entry inside a
+// dr-xr-xr-x directory cannot be unlinked, so a plain recursive delete of the DMG
+// staging tree fails with EACCES (surfaced as ENOTEMPTY) — `force` suppresses
+// missing-path errors, not permission ones. Restore write access first.
+function removeStagingTree(target) {
+  if (!existsSync(target)) return;
+  spawnSync("chmod", ["-R", "u+w", target], { stdio: "ignore" });
+  rmSync(target, { recursive: true, force: true });
+}
+
 function run(command, commandArgs, { env = {}, cwd = REPO_ROOT, capture = false } = {}) {
   const display = [command, ...commandArgs].join(" ");
   console.log(`\n$ ${display}`);
@@ -279,7 +290,7 @@ const stepImplementations = {
     const app = requireApp();
     const staging = path.join(BUILD_OUT_DIR, "dmg-staging");
     const dmg = path.join(BUILD_OUT_DIR, context.names.installer);
-    rmSync(staging, { recursive: true, force: true });
+    removeStagingTree(staging);
     rmSync(dmg, { force: true });
     mkdirSync(staging, { recursive: true });
     // ditto preserves signatures, extended attributes, and symlinks exactly —
@@ -297,7 +308,7 @@ const stepImplementations = {
       "UDZO",
       dmg,
     ]);
-    rmSync(staging, { recursive: true, force: true });
+    removeStagingTree(staging);
     run("codesign", ["--sign", context.identity, "--timestamp", dmg]);
   },
 

@@ -10,7 +10,13 @@ import { z } from "zod";
 
 export const ENGINE_HOST_BIN_ENV = "RAIOPDF_ENGINE_HOST_BIN";
 
-const ENGINE_HOST_READY_TIMEOUT_MS = 30_000;
+// Must stay above the engine-host's own startup bound, or this outer deadline
+// preempts a cold start the host would have completed. The host allows
+// DEFAULT_STARTUP_TIMEOUT (90s) for the engine plus PROXY_READY_TIMEOUT (10s)
+// for the auth proxy before it prints the ready line; 120s leaves margin for
+// process spawn without waiting appreciably longer on a host that is truly stuck
+// (it exits on its own failure, which rejects here immediately).
+const ENGINE_HOST_READY_TIMEOUT_MS = 120_000;
 const ENGINE_HOST_SHUTDOWN_TIMEOUT_MS = 2_000;
 
 const readyLineSchema = z.object({

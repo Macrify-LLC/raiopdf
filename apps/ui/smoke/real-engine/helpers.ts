@@ -94,7 +94,12 @@ export function captureLogs(page: Page): CapturedLogs {
 
 // --- UI drivers (mirrors app.smoke.ts so the canary drives the app the same) --
 
-export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
+export async function openPdf(
+  page: Page,
+  fileName: string,
+  bytes: Uint8Array,
+  options: { readyText?: string } = {},
+): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
     mimeType: "application/pdf",
@@ -116,6 +121,20 @@ export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): 
       .locator(".title-bar__tab-name", { hasText: fileName })
       .first(),
   ).toBeVisible();
+
+  if (options.readyText) {
+    // The active tab is committed before the generation-matched pdf.js proxy
+    // replaces the old one. The text layer is mounted from that proxy, so a
+    // marker known to be present in this output is an independent semantic
+    // readiness signal for the document/search source. In particular, this
+    // does not infer readiness from the search count, where a stale source can
+    // honestly answer "0 of 0". The marker wait is bounded by Playwright's
+    // assertion timeout and also works for the later genuine no-match query.
+    await expect(
+      page.locator(".page-view__text-layer").first(),
+      `document text layer should contain ${JSON.stringify(options.readyText)}`,
+    ).toContainText(options.readyText, { timeout: 20_000 });
+  }
 }
 
 export function mainCanvas(page: Page): ReturnType<Page["locator"]> {
@@ -422,17 +441,9 @@ async function readSearchCount(page: Page, term: string): Promise<number> {
 }
 
 export async function searchHitCount(page: Page, term: string): Promise<number> {
-  // Opening a document swaps the search source a beat AFTER the new tab goes
-  // active, so a query issued inside that window searches the PREVIOUS document
-  // and resolves to a confident "0 of 0" rather than to "Searching". No DOM
-  // signal marks the swap, so re-issue once whenever the first answer is zero:
-  // a genuine no-match answers zero again, while a raced query corrects itself.
-  const first = await readSearchCount(page, term);
-  if (first !== 0) {
-    return first;
-  }
-  await page.getByLabel("Search document").fill("");
-  await page.waitForTimeout(300);
+  // Callers that open a fresh output use openPdf's readyText gate above before
+  // reaching this helper. A final "0 of 0" here is therefore a genuine
+  // no-match, not a timing guess that needs a fixed-delay retry.
   return readSearchCount(page, term);
 }
 

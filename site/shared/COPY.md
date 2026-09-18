@@ -292,12 +292,6 @@ don't merge the two.)
 - The macOS download appears only once a signed DMG is attached to the latest
   release; until then the page shows Windows alone.
 
-## Download counter
-
-Total downloads across every published release, summed client-side from the
-GitHub Releases API. Hidden when the API does not return a release or the
-count is zero.
-
 ## No-telemetry line (footer or near the download panel)
 
 This page runs no analytics, sets no tracking cookies, and profiles no one.

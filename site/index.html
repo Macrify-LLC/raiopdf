@@ -397,14 +397,6 @@
 
   .download-pending p{ font-size:15px; color:rgba(234,242,251,.9); margin-bottom:18px; max-width:44ch; }
 
-  .download-counter{
-    margin-top:20px; padding-top:18px; border-top:1px solid rgba(255,255,255,.14);
-    font-size:13px; color:rgba(255,255,255,.7);
-  }
-  .download-counter strong{
-    font-family:var(--font-editorial); font-size:22px; font-weight:400; color:var(--gold); margin-right:6px;
-  }
-
   .hero__meta-note{ margin-top:18px; font-size:12.5px; color:rgba(255,255,255,.72); max-width:46ch; }
 
   /* ---------- generic section scaffolding ---------- */
@@ -999,10 +991,6 @@
           <p>RaioPDF is in public alpha. Download the current build from GitHub Releases.</p>
           <a class="btn btn--outline" href="https://github.com/Macrify-LLC/raiopdf/releases" target="_blank" rel="noopener">Open GitHub Releases →</a>
         </div>
-
-        <div class="download-counter is-hidden" id="downloadCounter">
-          <strong id="downloadCounterValue">0</strong><span>downloads across all published releases</span>
-        </div>
       </div>
 
       <p class="hero__meta-note" id="heroMetaNote">Windows today. An Apple Silicon macOS build is on the way.</p>
@@ -1429,8 +1417,6 @@
     var loadingEl = document.getElementById("downloadLoading");
     var availableEl = document.getElementById("downloadAvailable");
     var pendingEl = document.getElementById("downloadPending");
-    var counterEl = document.getElementById("downloadCounter");
-    var counterValueEl = document.getElementById("downloadCounterValue");
     var btn = document.getElementById("downloadBtn");
     var meta = document.getElementById("downloadMeta");
     var verify = document.getElementById("downloadVerify");
@@ -1448,7 +1434,6 @@
       loadingEl.classList.add("is-hidden");
       availableEl.classList.add("is-hidden");
       pendingEl.classList.remove("is-hidden");
-      counterEl.classList.add("is-hidden");
     }
 
     // OS sniffing here is a HINT ONLY — it never decides whether a button
@@ -1612,13 +1597,6 @@
 
             availableEl.classList.remove("is-hidden");
             pendingEl.classList.add("is-hidden");
-
-            if (info.totalDownloads > 0) {
-              counterEl.classList.remove("is-hidden");
-              window.RaioRelease.animateCount(counterValueEl, info.totalDownloads);
-            } else {
-              counterEl.classList.add("is-hidden");
-            }
           } else {
             showPending();
           }

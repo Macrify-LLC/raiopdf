@@ -69,6 +69,32 @@ describe("ToolPanel", () => {
     expect(document.body.textContent).not.toContain("will be permanently removed");
   });
 
+  it("collapses to a narrow strip and restores the tools it hid", () => {
+    render(<Harness />);
+    const panel = document.querySelector(".tool-panel");
+
+    click(document.querySelector("[aria-label='Hide tools']")!);
+
+    expect(panel?.classList.contains("tool-panel--collapsed")).toBe(true);
+    expect(document.querySelector("[aria-label='Show tools']")).not.toBeNull();
+
+    click(document.querySelector("[aria-label='Show tools']")!);
+
+    expect(panel?.classList.contains("tool-panel--collapsed")).toBe(false);
+    expect(document.querySelector("[aria-label='Show tools']")).toBeNull();
+  });
+
+  it("reopens the collapsed panel when a tool is started from elsewhere", () => {
+    render(<Harness />);
+    click(document.querySelector("[aria-label='Hide tools']")!);
+
+    act(() => {
+      root?.render(<Harness activeLegalTool="bates" />);
+    });
+
+    expect(document.querySelector(".tool-panel")?.classList.contains("tool-panel--collapsed")).toBe(false);
+  });
+
   it("keeps substantive edits and annotation tools in separate groups", () => {
     render(<Harness />);
 

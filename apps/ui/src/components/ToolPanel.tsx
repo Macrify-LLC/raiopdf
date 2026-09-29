@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import type {
   PdfBatesStampOptions,
   PdfCompressOptions,
@@ -26,6 +26,8 @@ import {
   BatchCleanupIcon,
   BatesIcon,
   BoltIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CombineExhibitsIcon,
   CommentIcon,
   CompressIcon,
@@ -279,6 +281,14 @@ export function ToolPanel({
   onExperimentalFeatureRequested,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
+  const [collapsed, setCollapsed] = useState(false);
+  // A tool started from the menu bar or command bar while the panel is
+  // hidden still needs its controls, so any newly active tool reopens it.
+  useEffect(() => {
+    if (activeTextEdit || activeEditDialogTool || activeLegalTool || activeOrganizeTool) {
+      setCollapsed(false);
+    }
+  }, [activeTextEdit, activeEditDialogTool, activeLegalTool, activeOrganizeTool]);
   const pendingComments = pendingEdits.filter(
     (edit): edit is Extract<PendingEdit, { kind: "comment" }> => edit.kind === "comment",
   );
@@ -290,235 +300,262 @@ export function ToolPanel({
   }
 
   return (
-    <aside className="tool-panel" aria-label="Tools">
-      <p className="tool-panel__heading">Tools</p>
-      {longProcessLockoutLabel ? (
-        <p className="tool-panel__lockout-note" role="status">{longProcessLockoutLabel}</p>
+    <aside className={`tool-panel${collapsed ? " tool-panel--collapsed" : ""}`} aria-label="Tools">
+      {collapsed ? (
+        <button
+          type="button"
+          className="tool-panel__expand"
+          aria-label="Show tools"
+          title="Show tools"
+          onClick={() => setCollapsed(false)}
+        >
+          <ChevronLeftIcon size={14} />
+          <span>Tools</span>
+        </button>
       ) : null}
+      {/* Collapsing hides the tools rather than unmounting them, so a
+          half-filled form (Bates prefix, page range) survives the round trip. */}
+      <div className="tool-panel__content">
+        <div className="tool-panel__header">
+          <p className="tool-panel__heading">Tools</p>
+          <button
+            type="button"
+            className="tool-panel__collapse"
+            aria-label="Hide tools"
+            title="Hide tools"
+            onClick={() => setCollapsed(true)}
+          >
+            <ChevronRightIcon size={13} />
+          </button>
+        </div>
+        {longProcessLockoutLabel ? (
+          <p className="tool-panel__lockout-note" role="status">{longProcessLockoutLabel}</p>
+        ) : null}
 
-      <AccordionGroup
-        id="edit"
-        icon={<EditIcon size={16} />}
-        label="Edit"
-        isOpen={openGroup === "edit"}
-        onToggle={() => toggleGroup("edit")}
-      >
-        <ToolRow
-          icon={TOOL_PANEL_ICONS[EDIT_TEXT_TOOL.id]}
-          label={EDIT_TEXT_TOOL.label}
-          description={EDIT_TEXT_TOOL.description}
-          selected={activeTextEdit}
-          disabled={longProcessLocked}
-          experimental
-          locked={!experimentalFeaturesEnabled}
-          onSelect={() => experimentalFeaturesEnabled ? onTextEditSelected?.() : onExperimentalFeatureRequested?.()}
-        />
-        {activeTextEdit && textEdit ? (
-          <EditTextStatusPanel
-            textEdit={textEdit}
-            onHelp={() => onHelpRequested(EDIT_TEXT_TOOL.helpArticleId)}
+        <AccordionGroup
+          id="edit"
+          icon={<EditIcon size={16} />}
+          label="Edit"
+          isOpen={openGroup === "edit"}
+          onToggle={() => toggleGroup("edit")}
+        >
+          <ToolRow
+            icon={TOOL_PANEL_ICONS[EDIT_TEXT_TOOL.id]}
+            label={EDIT_TEXT_TOOL.label}
+            description={EDIT_TEXT_TOOL.description}
+            selected={activeTextEdit}
+            disabled={longProcessLocked}
+            experimental
+            locked={!experimentalFeaturesEnabled}
+            onSelect={() => experimentalFeaturesEnabled ? onTextEditSelected?.() : onExperimentalFeatureRequested?.()}
           />
-        ) : null}
-        {EDIT_DIALOG_TOOLS.map((tool) => {
-          const selected = activeEditDialogTool === tool.id;
-
-          return (
-            <div key={tool.id}>
-              <ToolRow
-                icon={TOOL_PANEL_ICONS[tool.id]}
-                label={tool.label}
-                description={tool.description}
-                selected={selected}
-                onSelect={() => onEditDialogToolSelected(tool.id)}
-              />
-              {tool.id === "page-numbers" && selected ? (
-                <ToolExpansion onEscape={() => onEditDialogToolSelected("page-numbers")}>
-                  <PageNumbersPanel
-                    hasDocument={hasDocument}
-                    pageCount={pageCount}
-                    status={sidecarStatus}
-                    onApply={onApplyPageNumbers}
-                    onHelp={() => onHelpRequested(tool.helpArticleId)}
-                  />
-                </ToolExpansion>
-              ) : null}
-              {tool.id === "watermark" && selected ? (
-                <ToolExpansion onEscape={() => onEditDialogToolSelected("watermark")}>
-                  <WatermarkPanel
-                    hasDocument={hasDocument}
-                    pageCount={pageCount}
-                    status={sidecarStatus}
-                    onApply={onApplyWatermark}
-                    onHelp={() => onHelpRequested(tool.helpArticleId)}
-                  />
-                </ToolExpansion>
-              ) : null}
-            </div>
-          );
-        })}
-      </AccordionGroup>
-
-      <AccordionGroup
-        id="annotate"
-        icon={<HighlightIcon size={16} />}
-        label="Annotate"
-        isOpen={openGroup === "annotate"}
-        onToggle={() => toggleGroup("annotate")}
-      >
-        {TOOL_PANEL_ANNOTATE_TOOLS.map((tool) => {
-          const selected = activeEditTool === tool.id;
-
-          return (
-            <ToolRow
-              key={tool.id}
-              icon={TOOL_PANEL_ICONS[tool.id]}
-              label={tool.label}
-              description={tool.description}
-              selected={selected}
-              preserveTextSelection={isTextMarkupTool(tool.id)}
-              onSelect={() => onEditToolSelected(tool.id)}
+          {activeTextEdit && textEdit ? (
+            <EditTextStatusPanel
+              textEdit={textEdit}
+              onHelp={() => onHelpRequested(EDIT_TEXT_TOOL.helpArticleId)}
             />
-          );
-        })}
-        <MarkupAnnotationControls
-          hasDocument={hasDocument}
-          printMarkupAnnotations={printMarkupAnnotations}
-          onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
-          onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
-          message={markupAnnotationMessage}
-        />
-        {pendingContentEdits.length > 0 ? (
-          <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
-        ) : null}
-        {pendingComments.length > 0 ? (
-          <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
-        ) : null}
-      </AccordionGroup>
+          ) : null}
+          {EDIT_DIALOG_TOOLS.map((tool) => {
+            const selected = activeEditDialogTool === tool.id;
 
-      <AccordionGroup
-        id="organize"
-        icon={<OrganizeIcon size={16} />}
-        label="Organize"
-        isOpen={openGroup === "organize"}
-        onToggle={() => toggleGroup("organize")}
-      >
-        {ORGANIZE_TOOLS.map((tool) => {
-          const selected = activeOrganizeTool === tool.id;
+            return (
+              <div key={tool.id}>
+                <ToolRow
+                  icon={TOOL_PANEL_ICONS[tool.id]}
+                  label={tool.label}
+                  description={tool.description}
+                  selected={selected}
+                  onSelect={() => onEditDialogToolSelected(tool.id)}
+                />
+                {tool.id === "page-numbers" && selected ? (
+                  <ToolExpansion onEscape={() => onEditDialogToolSelected("page-numbers")}>
+                    <PageNumbersPanel
+                      hasDocument={hasDocument}
+                      pageCount={pageCount}
+                      status={sidecarStatus}
+                      onApply={onApplyPageNumbers}
+                      onHelp={() => onHelpRequested(tool.helpArticleId)}
+                    />
+                  </ToolExpansion>
+                ) : null}
+                {tool.id === "watermark" && selected ? (
+                  <ToolExpansion onEscape={() => onEditDialogToolSelected("watermark")}>
+                    <WatermarkPanel
+                      hasDocument={hasDocument}
+                      pageCount={pageCount}
+                      status={sidecarStatus}
+                      onApply={onApplyWatermark}
+                      onHelp={() => onHelpRequested(tool.helpArticleId)}
+                    />
+                  </ToolExpansion>
+                ) : null}
+              </div>
+            );
+          })}
+        </AccordionGroup>
 
-          return (
-            <div key={tool.id}>
+        <AccordionGroup
+          id="annotate"
+          icon={<HighlightIcon size={16} />}
+          label="Annotate"
+          isOpen={openGroup === "annotate"}
+          onToggle={() => toggleGroup("annotate")}
+        >
+          {TOOL_PANEL_ANNOTATE_TOOLS.map((tool) => {
+            const selected = activeEditTool === tool.id;
+
+            return (
               <ToolRow
+                key={tool.id}
                 icon={TOOL_PANEL_ICONS[tool.id]}
                 label={tool.label}
                 description={tool.description}
                 selected={selected}
-                onSelect={() => onOrganizeToolSelected(tool.id)}
+                preserveTextSelection={isTextMarkupTool(tool.id)}
+                onSelect={() => onEditToolSelected(tool.id)}
               />
-              {tool.id === "rotate" && selected ? (
-                <ToolExpansion onEscape={() => onOrganizeToolSelected("rotate")}>
-                  <RotatePanel
-                    hasDocument={hasDocument}
-                    onRotateLeft={onRotateLeft}
-                    onRotateRight={onRotateRight}
-                    onHelp={() => onHelpRequested(tool.helpArticleId)}
-                  />
-                </ToolExpansion>
-              ) : null}
-              {tool.id === "compress" && selected ? (
-                <ToolExpansion onEscape={() => onOrganizeToolSelected("compress")}>
-                  <CompressPanel
-                    hasDocument={hasDocument}
-                    available={compressAvailable}
-                    status={sidecarStatus}
-                    onCompress={onCompress}
-                    onHelp={() => onHelpRequested(tool.helpArticleId)}
-                  />
-                </ToolExpansion>
-              ) : null}
-            </div>
-          );
-        })}
-      </AccordionGroup>
+            );
+          })}
+          <MarkupAnnotationControls
+            hasDocument={hasDocument}
+            printMarkupAnnotations={printMarkupAnnotations}
+            onPrintMarkupAnnotationsChange={onPrintMarkupAnnotationsChange}
+            onFlattenMarkupAnnotations={onFlattenMarkupAnnotations}
+            message={markupAnnotationMessage}
+          />
+          {pendingContentEdits.length > 0 ? (
+            <PendingEditsCard edits={pendingContentEdits} onRemove={onRemovePendingEdit} />
+          ) : null}
+          {pendingComments.length > 0 ? (
+            <CommentsCard comments={pendingComments} onRemove={onRemovePendingEdit} />
+          ) : null}
+        </AccordionGroup>
 
-      <div className="tool-panel__top-row">
-        <ToolRow
-          icon={<OcrSearchIcon size={16} />}
-          label={MAKE_SEARCHABLE_TOOL.label}
-          description={MAKE_SEARCHABLE_TOOL.description}
-          disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
-          onSelect={onMakeSearchable}
-        />
-        <ToolRow
-          icon={<OcrSearchIcon size={16} />}
-          label="Redo searchable text"
-          description="Rebuild the invisible searchable text by re-rendering the whole file."
-          disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
-          onSelect={onForceOcr}
-        />
-        {ocrState.phase === "done" ? (
-          <OcrResultNotice ocrState={ocrState} />
-        ) : null}
+        <AccordionGroup
+          id="organize"
+          icon={<OrganizeIcon size={16} />}
+          label="Organize"
+          isOpen={openGroup === "organize"}
+          onToggle={() => toggleGroup("organize")}
+        >
+          {ORGANIZE_TOOLS.map((tool) => {
+            const selected = activeOrganizeTool === tool.id;
+
+            return (
+              <div key={tool.id}>
+                <ToolRow
+                  icon={TOOL_PANEL_ICONS[tool.id]}
+                  label={tool.label}
+                  description={tool.description}
+                  selected={selected}
+                  onSelect={() => onOrganizeToolSelected(tool.id)}
+                />
+                {tool.id === "rotate" && selected ? (
+                  <ToolExpansion onEscape={() => onOrganizeToolSelected("rotate")}>
+                    <RotatePanel
+                      hasDocument={hasDocument}
+                      onRotateLeft={onRotateLeft}
+                      onRotateRight={onRotateRight}
+                      onHelp={() => onHelpRequested(tool.helpArticleId)}
+                    />
+                  </ToolExpansion>
+                ) : null}
+                {tool.id === "compress" && selected ? (
+                  <ToolExpansion onEscape={() => onOrganizeToolSelected("compress")}>
+                    <CompressPanel
+                      hasDocument={hasDocument}
+                      available={compressAvailable}
+                      status={sidecarStatus}
+                      onCompress={onCompress}
+                      onHelp={() => onHelpRequested(tool.helpArticleId)}
+                    />
+                  </ToolExpansion>
+                ) : null}
+              </div>
+            );
+          })}
+        </AccordionGroup>
+
+        <div className="tool-panel__top-row">
+          <ToolRow
+            icon={<OcrSearchIcon size={16} />}
+            label={MAKE_SEARCHABLE_TOOL.label}
+            description={MAKE_SEARCHABLE_TOOL.description}
+            disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
+            onSelect={onMakeSearchable}
+          />
+          <ToolRow
+            icon={<OcrSearchIcon size={16} />}
+            label="Redo searchable text"
+            description="Rebuild the invisible searchable text by re-rendering the whole file."
+            disabled={!hasDocument || longProcessLocked || isOcrActive(ocrState.phase, ocrStarting)}
+            onSelect={onForceOcr}
+          />
+          {ocrState.phase === "done" ? (
+            <OcrResultNotice ocrState={ocrState} />
+          ) : null}
+        </div>
+
+        <ConnectToAiRow onSelect={onConnectToAi} />
+
+        <AccordionGroup
+          id="legal"
+          icon={<ScaleIcon size={16} />}
+          label="Legal"
+          variant="legal"
+          isOpen={openGroup === "legal"}
+          onToggle={() => toggleGroup("legal")}
+        >
+          {LEGAL_TOOLS.map((tool) => {
+            const selected = activeLegalTool === tool.id;
+
+            return (
+              <div key={tool.id}>
+                <ToolRow
+                  icon={TOOL_PANEL_ICONS[tool.id]}
+                  label={tool.label}
+                  description={tool.description}
+                  selected={selected}
+                  disabled={
+                    longProcessLocked &&
+                    (tool.id === "prepare-for-filing" || tool.id === "combine-exhibits")
+                  }
+                  experimental={"maturity" in tool && tool.maturity === "experimental"}
+                  locked={"maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled}
+                  onSelect={() => "maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled ? onExperimentalFeatureRequested?.() : onLegalToolSelected(tool.id)}
+                />
+                {tool.id === "redact" && selected ? (
+                  <RedactionStatusPanel
+                    state={redaction}
+                    hasDocument={hasDocument}
+                  />
+                ) : null}
+                {tool.id === "bates-numbering" && selected ? (
+                  <InlineMessage tone="neutral" message="Configure Bates numbering in the document dialog." />
+                ) : null}
+                {tool.id === "scanner-2425" && selected ? (
+                  <ScannerPanel
+                    state={scanner}
+                    hasDocument={hasDocument}
+                    ocrBusy={isOcrActive(ocrState.phase, ocrStarting)}
+                    onRunScanner={onRunScanner}
+                    onMarkHit={onMarkScannerHit}
+                    onMarkAllHits={onMarkAllScannerHits}
+                    onMakeSearchable={onMakeSearchable}
+                    onHelp={() => onHelpRequested(tool.helpArticleId)}
+                  />
+                ) : null}
+                {tool.id === "scrub-metadata" && selected ? (
+                  <InlineMessage tone="neutral" message="Inspect and scrub metadata in the document dialog." />
+                ) : null}
+                {tool.id === "passwords" && selected ? (
+                  <InlineMessage tone="neutral" message="PDF Security opens over the document." />
+                ) : null}
+              </div>
+            );
+          })}
+        </AccordionGroup>
       </div>
-
-      <ConnectToAiRow onSelect={onConnectToAi} />
-
-      <AccordionGroup
-        id="legal"
-        icon={<ScaleIcon size={16} />}
-        label="Legal"
-        variant="legal"
-        isOpen={openGroup === "legal"}
-        onToggle={() => toggleGroup("legal")}
-      >
-        {LEGAL_TOOLS.map((tool) => {
-          const selected = activeLegalTool === tool.id;
-
-          return (
-            <div key={tool.id}>
-              <ToolRow
-                icon={TOOL_PANEL_ICONS[tool.id]}
-                label={tool.label}
-                description={tool.description}
-                selected={selected}
-                disabled={
-                  longProcessLocked &&
-                  (tool.id === "prepare-for-filing" || tool.id === "combine-exhibits")
-                }
-                experimental={"maturity" in tool && tool.maturity === "experimental"}
-                locked={"maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled}
-                onSelect={() => "maturity" in tool && tool.maturity === "experimental" && !experimentalFeaturesEnabled ? onExperimentalFeatureRequested?.() : onLegalToolSelected(tool.id)}
-              />
-              {tool.id === "redact" && selected ? (
-                <RedactionStatusPanel
-                  state={redaction}
-                  hasDocument={hasDocument}
-                />
-              ) : null}
-              {tool.id === "bates-numbering" && selected ? (
-                <InlineMessage tone="neutral" message="Configure Bates numbering in the document dialog." />
-              ) : null}
-              {tool.id === "scanner-2425" && selected ? (
-                <ScannerPanel
-                  state={scanner}
-                  hasDocument={hasDocument}
-                  ocrBusy={isOcrActive(ocrState.phase, ocrStarting)}
-                  onRunScanner={onRunScanner}
-                  onMarkHit={onMarkScannerHit}
-                  onMarkAllHits={onMarkAllScannerHits}
-                  onMakeSearchable={onMakeSearchable}
-                  onHelp={() => onHelpRequested(tool.helpArticleId)}
-                />
-              ) : null}
-              {tool.id === "scrub-metadata" && selected ? (
-                <InlineMessage tone="neutral" message="Inspect and scrub metadata in the document dialog." />
-              ) : null}
-              {tool.id === "passwords" && selected ? (
-                <InlineMessage tone="neutral" message="PDF Security opens over the document." />
-              ) : null}
-            </div>
-          );
-        })}
-      </AccordionGroup>
     </aside>
   );
 }

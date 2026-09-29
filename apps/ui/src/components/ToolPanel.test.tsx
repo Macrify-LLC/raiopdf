@@ -86,6 +86,8 @@ describe("ToolPanel", () => {
 
   it("reopens the collapsed panel when a tool is started from elsewhere", () => {
     render(<Harness />);
+    click(getButtonByText("Edit"));
+    expect(document.getElementById("accordion-panel-legal")?.hidden).toBe(true);
     click(document.querySelector("[aria-label='Hide tools']")!);
 
     act(() => {
@@ -93,6 +95,7 @@ describe("ToolPanel", () => {
     });
 
     expect(document.querySelector(".tool-panel")?.classList.contains("tool-panel--collapsed")).toBe(false);
+    expect(document.getElementById("accordion-panel-legal")?.hidden).toBe(false);
   });
 
   it("keeps substantive edits and annotation tools in separate groups", () => {

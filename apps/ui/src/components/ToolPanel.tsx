@@ -282,13 +282,21 @@ export function ToolPanel({
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
   const [collapsed, setCollapsed] = useState(false);
-  // A tool started from the menu bar or command bar while the panel is
-  // hidden still needs its controls, so any newly active tool reopens it.
+  // A tool started from the menu bar or command bar still needs its
+  // controls, so a newly active tool reopens the panel and its own group.
+  function revealGroup(group: GroupId) {
+    setCollapsed(false);
+    setOpenGroup(group);
+  }
   useEffect(() => {
-    if (activeTextEdit || activeEditDialogTool || activeLegalTool || activeOrganizeTool) {
-      setCollapsed(false);
-    }
-  }, [activeTextEdit, activeEditDialogTool, activeLegalTool, activeOrganizeTool]);
+    if (activeTextEdit || activeEditDialogTool) revealGroup("edit");
+  }, [activeTextEdit, activeEditDialogTool]);
+  useEffect(() => {
+    if (activeOrganizeTool) revealGroup("organize");
+  }, [activeOrganizeTool]);
+  useEffect(() => {
+    if (activeLegalTool) revealGroup("legal");
+  }, [activeLegalTool]);
   const pendingComments = pendingEdits.filter(
     (edit): edit is Extract<PendingEdit, { kind: "comment" }> => edit.kind === "comment",
   );

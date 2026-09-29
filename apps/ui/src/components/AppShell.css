@@ -56,7 +56,7 @@
 
 .app-shell__body {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 288px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 0;
 }
 

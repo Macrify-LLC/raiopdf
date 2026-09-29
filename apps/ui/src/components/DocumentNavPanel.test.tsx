@@ -10,6 +10,7 @@ describe("DocumentNavPanel", () => {
   let host: HTMLDivElement | null = null;
 
   afterEach(() => {
+    window.localStorage.clear();
     if (root) {
       act(() => root?.unmount());
     }
@@ -44,6 +45,17 @@ describe("DocumentNavPanel", () => {
     expect(container.querySelector(".document-nav-panel--collapsed")).toBeNull();
     expect(getButton(container, "Bookmarks").getAttribute("aria-selected")).toBe("true");
     expect(container.textContent).toContain("Existing bookmark");
+  });
+
+  it("remembers a hidden navigation panel the next time the app opens", async () => {
+    await click(getButton(renderPanel(), "Hide navigation"));
+    act(() => root?.unmount());
+    host?.remove();
+    root = null;
+
+    const container = renderPanel();
+
+    expect(container.querySelector(".document-nav-panel--collapsed")).not.toBeNull();
   });
 
   it("offers an accessible close action for bookmark warnings", async () => {

@@ -11,6 +11,7 @@ import type { OcrUiState } from "../App";
 import { describePendingEdit, excerpt, isTextMarkupTool, type PendingEdit } from "../lib/edits";
 import type { PdfMetadataSummary, SensitiveHit } from "../lib/legalTools";
 import { formatDefaultRange, parsePageRanges } from "../lib/pageRanges";
+import { readUiPreferences, writeUiPreferences } from "../lib/uiPreferences";
 import {
   EDIT_DIALOG_TOOLS,
   HELP_ONLY_TOOL_ENTRIES,
@@ -281,7 +282,11 @@ export function ToolPanel({
   onExperimentalFeatureRequested,
 }: ToolPanelProps) {
   const [openGroup, setOpenGroup] = useState<GroupId | null>("legal");
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsedState] = useState(() => readUiPreferences().toolPanelCollapsed);
+  function setCollapsed(next: boolean) {
+    setCollapsedState(next);
+    writeUiPreferences({ toolPanelCollapsed: next });
+  }
   // A tool started from the menu bar or command bar still needs its
   // controls, so a newly active tool reopens the panel and its own group.
   function revealGroup(group: GroupId) {

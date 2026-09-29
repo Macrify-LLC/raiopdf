@@ -24,6 +24,18 @@ describe("UI preferences", () => {
     expect(writeUiPreferences({ experimentalFeaturesEnabled: true })).toBe(false);
   });
 
+  it("remembers each panel's hidden state without clobbering other preferences", () => {
+    expect(readUiPreferences()).toMatchObject({ toolPanelCollapsed: false, navPanelCollapsed: false });
+    writeUiPreferences({ experimentalFeaturesEnabled: true });
+    writeUiPreferences({ toolPanelCollapsed: true });
+    writeUiPreferences({ navPanelCollapsed: true });
+    expect(readUiPreferences()).toEqual({
+      experimentalFeaturesEnabled: true,
+      toolPanelCollapsed: true,
+      navPanelCollapsed: true,
+    });
+  });
+
   it("reports a successful persisted write", () => {
     expect(writeUiPreferences({ experimentalFeaturesEnabled: true })).toBe(true);
   });

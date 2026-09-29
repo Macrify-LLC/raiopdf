@@ -1,6 +1,7 @@
 import { useState, type MouseEvent } from "react";
 import type { PdfOutlineState } from "@raiopdf/engine-api";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
+import { readUiPreferences, writeUiPreferences } from "../lib/uiPreferences";
 import { ChevronRightIcon } from "../icons";
 import { BookmarksRail } from "./BookmarksRail";
 import { ThumbnailRail } from "./ThumbnailRail";
@@ -46,7 +47,11 @@ export function DocumentNavPanel({
   onOutlineStatusDismiss,
 }: DocumentNavPanelProps) {
   const [activeTab, setActiveTab] = useState<DocumentNavTab>("pages");
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsedState] = useState(() => readUiPreferences().navPanelCollapsed);
+  function setCollapsed(next: boolean) {
+    setCollapsedState(next);
+    writeUiPreferences({ navPanelCollapsed: next });
+  }
 
   if (collapsed) {
     return (

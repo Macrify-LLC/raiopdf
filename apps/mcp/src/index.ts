@@ -9,6 +9,7 @@ import { ENABLE_ACTION, enableFlagPath, isEnabled } from "./gate.js";
 import { errorResult, type StructuredToolResult } from "./format.js";
 import { parseOneShotInvocation } from "./oneShotInvocation.js";
 import { PathPolicyError } from "./paths.js";
+import { installToolListing, type ToolListingEntry, type ToolShape } from "./toolListing.js";
 import {
   batchCleanupInputSchema,
   batchCleanupOutputSchema,
@@ -167,7 +168,24 @@ export function createDefaultDependencies(): ToolDependencies {
 }
 
 export function registerTools(server: McpServer, dependencies: ToolDependencies): void {
-  server.registerTool(
+  // Every tool goes through `register` so the listing below can advertise the
+  // same zod shapes in the JSON Schema dialect clients actually accept — see
+  // `installToolListing`.
+  const listing: ToolListingEntry[] = [];
+  const register: McpServer["registerTool"] = (name, config, cb) => {
+    listing.push({
+      name,
+      title: config.title,
+      description: config.description,
+      // The SDK types these for zod v3 or v4; this package registers zod v4 shapes only.
+      inputSchema: config.inputSchema as ToolShape | undefined,
+      outputSchema: config.outputSchema as ToolShape | undefined,
+      annotations: config.annotations,
+    });
+    return server.registerTool(name, config, cb);
+  };
+
+  register(
     "raiopdf_health",
     {
       title: "RaioPDF health",
@@ -184,7 +202,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(dependencies, async () => await handleHealth(dependencies.engineHandle)),
   );
 
-  server.registerTool(
+  register(
     "raiopdf_diagnostics",
     {
       title: "RaioPDF diagnostics",
@@ -202,7 +220,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     withGate(dependencies, async ({ reference }) => await handleDiagnostics(reference)),
   );
 
-  server.registerTool(
+  register(
     "pdf_page_count",
     {
       title: "PDF page count",
@@ -222,7 +240,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "ocr_pdf",
     {
       title: "OCR PDF",
@@ -237,7 +255,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "merge_pdfs",
     {
       title: "Merge PDFs",
@@ -252,7 +270,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "rotate_pages",
     {
       title: "Rotate pages",
@@ -267,7 +285,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "compress_pdf",
     {
       title: "Compress PDF",
@@ -282,7 +300,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "remove_encryption",
     {
       title: "Remove PDF encryption",
@@ -299,7 +317,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "sanitize_pdf",
     {
       title: "Sanitize PDF",
@@ -315,7 +333,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "scrub_metadata",
     {
       title: "Scrub metadata",
@@ -331,7 +349,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "build_exhibit_binder",
     {
       title: "Build exhibit binder",
@@ -347,7 +365,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "build_cover_page",
     {
       title: "Build court caption cover page",
@@ -364,7 +382,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "detect_authorities",
     {
       title: "Detect legal authorities",
@@ -386,7 +404,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "bates_stamp",
     {
       title: "Bates stamp",
@@ -401,7 +419,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "bates_stamp_folder",
     {
       title: "Bates stamp a document set",
@@ -418,7 +436,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "build_production_set",
     {
       title: "Build production set",
@@ -435,7 +453,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "batch_cleanup",
     {
       title: "Batch cleanup PDFs",
@@ -452,7 +470,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "page_numbers",
     {
       title: "Add page numbers",
@@ -468,7 +486,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "split_pdf",
     {
       title: "Split PDF by size",
@@ -484,7 +502,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "extract_pages",
     {
       title: "Extract pages",
@@ -499,7 +517,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "redact_terms",
     {
       title: "Redact terms",
@@ -515,7 +533,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "locate_text",
     {
       title: "Locate PDF text",
@@ -537,7 +555,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "highlight_text",
     {
       title: "Highlight PDF text",
@@ -554,7 +572,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "underline_text",
     {
       title: "Underline PDF text",
@@ -571,7 +589,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "strikethrough_text",
     {
       title: "Strikethrough PDF text",
@@ -588,7 +606,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "add_comment",
     {
       title: "Add PDF comment",
@@ -605,7 +623,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "prepare_for_filing",
     {
       title: "E-filing preflight",
@@ -627,7 +645,7 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
     ),
   );
 
-  server.registerTool(
+  register(
     "build_filing_packet",
     {
       title: "Build filing packet",
@@ -643,6 +661,8 @@ export function registerTools(server: McpServer, dependencies: ToolDependencies)
         await handleBuildFilingPacket(input, dependencies.engineHandle),
     ),
   );
+
+  installToolListing(server, listing);
 }
 
 export function withGate<Args>(

@@ -5,7 +5,9 @@ import { describe, it } from "node:test";
 import vm from "node:vm";
 
 const SCRIPT = readFileSync(new URL("../site/shared/release-data.js", import.meta.url), "utf8");
+const LANDING_PAGE = readFileSync(new URL("../site/index.html", import.meta.url), "utf8");
 const API_BASE = "https://api.github.com/repos/Macrify-LLC/raiopdf";
+const LANDING_PAGE_SCRIPT = extractLandingPageScript(LANDING_PAGE);
 
 describe("site release data", () => {
   it("enables download for a complete signed latest normal release asset set", async () => {
@@ -194,7 +196,149 @@ describe("site release data", () => {
     assert.equal(info.downloadUrl, undefined);
     assert.equal(info.version, "0.1.2");
   });
+
+  it("keeps the fallback panel and release notes visible when the latest release is unavailable", () => {
+    const dom = createLandingPageDom();
+    const context = {
+      document: dom.document,
+      window: {},
+    };
+    vm.createContext(context);
+    vm.runInContext(SCRIPT, context);
+    context.window.RaioRelease.loadReleaseInfo = () => unavailableReleaseThenable();
+
+    assert.doesNotThrow(() => vm.runInContext(LANDING_PAGE_SCRIPT, context));
+
+    assert.equal(dom.elements.downloadLoading.classList.contains("is-hidden"), true);
+    assert.equal(dom.elements.downloadAvailable.classList.contains("is-hidden"), true);
+    assert.equal(dom.elements.downloadPending.classList.contains("is-hidden"), false);
+    assert.equal(dom.elements["latest-update"].classList.contains("is-hidden"), false);
+    assert.equal(dom.elements.navWhatsNew.classList.contains("is-hidden"), false);
+    assert.equal(dom.elements.updateVersion.textContent, "v0.1.2 · July 5, 2026");
+    assert.equal(dom.elements.updateHeadline.textContent, "A safer release");
+    assert.equal(dom.elements.updateSections.children.length, 1);
+    assert.equal(dom.elements.updateSections.children[0].children[0].textContent, "Fixed");
+    assert.equal(dom.elements.updateSections.children[0].children[1].children[0].textContent, "Fallback copy remains available");
+    assert.equal(dom.elements.updateNotesLink.classList.contains("is-hidden"), false);
+    assert.equal(dom.elements.updateNotesLink.href, "https://github.com/Macrify-LLC/raiopdf/releases/tag/v0.1.2");
+  });
 });
+
+function extractLandingPageScript(html) {
+  const loadingMarker = 'var loadingEl = document.getElementById("downloadLoading");';
+  const markerIndex = html.indexOf(loadingMarker);
+  assert.notEqual(markerIndex, -1, "landing page download script marker should exist");
+  const scriptStart = html.lastIndexOf("<script>", markerIndex);
+  const scriptEnd = html.indexOf("\n\n  // Scroll-linked parallax", markerIndex);
+  assert.notEqual(scriptStart, -1, "landing page download script should have an opening tag");
+  assert.notEqual(scriptEnd, -1, "landing page download script should have a stable boundary");
+  return html.slice(scriptStart + "<script>".length, scriptEnd);
+}
+
+function createLandingPageDom() {
+  const elements = {};
+  const ids = [
+    ["downloadLoading", ""],
+    ["downloadAvailable", "is-hidden"],
+    ["downloadPending", "is-hidden"],
+    ["downloadBtn", ""],
+    ["downloadMeta", ""],
+    ["downloadVerify", "is-hidden"],
+    ["downloadButtons", ""],
+    ["downloadOptionWin", ""],
+    ["downloadOptionMac", "is-hidden"],
+    ["downloadBtnMac", ""],
+    ["downloadMetaMac", ""],
+    ["downloadVerifyMac", "is-hidden"],
+    ["statusBarPlatforms", ""],
+    ["heroChipPlatform", ""],
+    ["heroMetaNote", ""],
+    ["latest-update", "is-hidden"],
+    ["navWhatsNew", "is-hidden"],
+    ["updateVersion", ""],
+    ["updateHeadline", "is-hidden"],
+    ["updateSections", ""],
+    ["updateNotesLink", ""],
+  ];
+
+  for (const [id, className] of ids) {
+    elements[id] = fakeElement(id, className);
+  }
+  elements.downloadOptionMac.parentNode = elements.downloadButtons;
+  elements.downloadOptionWin.parentNode = elements.downloadButtons;
+
+  return {
+    elements,
+    document: {
+      getElementById(id) {
+        return elements[id] || null;
+      },
+      createElement(tagName) {
+        return fakeElement(tagName, "");
+      },
+    },
+  };
+}
+
+function fakeElement(id, className) {
+  const element = {
+    id,
+    className: "",
+    href: "",
+    textContent: "",
+    children: [],
+    parentNode: null,
+    classList: fakeClassList(className),
+    appendChild(child) {
+      this.children.push(child);
+      child.parentNode = this;
+      return child;
+    },
+  };
+  return element;
+}
+
+function fakeClassList(className) {
+  const names = new Set(className ? className.split(/\s+/) : []);
+  return {
+    add(...values) {
+      values.forEach((value) => names.add(value));
+    },
+    remove(...values) {
+      values.forEach((value) => names.delete(value));
+    },
+    contains(value) {
+      return names.has(value);
+    },
+  };
+}
+
+function unavailableReleaseThenable() {
+  const info = {
+    available: false,
+    version: "0.1.2",
+    publishedAt: "2026-07-05T12:00:00.000Z",
+    releaseUrl: "https://github.com/Macrify-LLC/raiopdf/releases/tag/v0.1.2",
+    notesMarkdown: "**A safer release**\n\n## Fixed\n- **Fallback copy remains available.**",
+    mac: null,
+  };
+
+  return {
+    then(onFulfilled) {
+      let error = null;
+      try {
+        onFulfilled(info);
+      } catch (caught) {
+        error = caught;
+      }
+      return {
+        catch(onRejected) {
+          if (error) onRejected(error);
+        },
+      };
+    },
+  };
+}
 
 function loadApi({ latest, releases, textAssets }) {
   const context = {

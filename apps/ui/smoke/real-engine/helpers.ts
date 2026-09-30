@@ -94,7 +94,12 @@ export function captureLogs(page: Page): CapturedLogs {
 
 // --- UI drivers (mirrors app.smoke.ts so the canary drives the app the same) --
 
-export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): Promise<void> {
+export async function openPdf(
+  page: Page,
+  fileName: string,
+  bytes: Uint8Array,
+  options: { readyText?: string } = {},
+): Promise<void> {
   await page.getByLabel("Open PDF file").setInputFiles({
     name: fileName,
     mimeType: "application/pdf",
@@ -103,6 +108,33 @@ export async function openPdf(page: Page, fileName: string, bytes: Uint8Array): 
 
   await expect(page.getByRole("button", { name: "Page 1" })).toBeVisible();
   await expect(mainCanvas(page)).toBeVisible();
+  // Both waits above are satisfied by a document that is ALREADY open, so on a
+  // second open they can pass while the previous document is still on screen.
+  // The new document's arrival then bumps `document.generation`, and
+  // useDocumentSearch clears its query on that bump -- silently wiping whatever
+  // the test typed in between. Gate on this file's own name: `fileName` is set
+  // in the same DocumentState object as the generation bump, so a tab carrying
+  // it proves the swap has landed.
+  await expect(
+    page
+      .locator('.title-bar__tab[data-active="true"]')
+      .locator(".title-bar__tab-name", { hasText: fileName })
+      .first(),
+  ).toBeVisible();
+
+  if (options.readyText) {
+    // The active tab is committed before the generation-matched pdf.js proxy
+    // replaces the old one. The text layer is mounted from that proxy, so a
+    // marker known to be present in this output is an independent semantic
+    // readiness signal for the document/search source. In particular, this
+    // does not infer readiness from the search count, where a stale source can
+    // honestly answer "0 of 0". The marker wait is bounded by Playwright's
+    // assertion timeout and also works for the later genuine no-match query.
+    await expect(
+      page.locator(".page-view__text-layer").first(),
+      `document text layer should contain ${JSON.stringify(options.readyText)}`,
+    ).toContainText(options.readyText, { timeout: 20_000 });
+  }
 }
 
 export function mainCanvas(page: Page): ReturnType<Page["locator"]> {
@@ -380,7 +412,7 @@ export function localFixtureSetUnder(
  * via the app's own search. A readable legal doc has many "the"s; a
  * font-mismatch-garbled text layer has ~none. Returns 0 when nothing matches.
  */
-export async function searchHitCount(page: Page, term: string): Promise<number> {
+async function readSearchCount(page: Page, term: string): Promise<number> {
   const box = page.getByLabel("Search document");
   // fill() replaces the current value. Do not clear first: that emits a real
   // empty-query render ("0 of 0") which can satisfy the final-count wait before
@@ -394,11 +426,25 @@ export async function searchHitCount(page: Page, term: string): Promise<number> 
     // happens for slower-to-index documents) yields a spurious 0.
     await expect(count).toHaveText(/\bof\s+\d+/, { timeout: 20_000 });
   } catch {
-    return 0; // no matches / search never resolved — no final "N of M" label
+    // A genuine no-match resolves to "0 of 0", which matches the pattern above.
+    // Reaching here means the search never resolved at all, so returning 0
+    // would report "no matches" for a search that never ran -- and would make
+    // every paired `toBe(0)` assertion pass vacuously.
+    const label = (await count.textContent().catch(() => null)) ?? "(no count element)";
+    throw new Error(
+      `searchHitCount("${term}"): search never resolved to a final count; last label was ${JSON.stringify(label)}.`,
+    );
   }
   const text = (await count.textContent()) ?? "";
   const match = text.match(/of\s+(\d+)/);
   return match ? Number(match[1]) : 0;
+}
+
+export async function searchHitCount(page: Page, term: string): Promise<number> {
+  // Callers that open a fresh output use openPdf's readyText gate above before
+  // reaching this helper. A final "0 of 0" here is therefore a genuine
+  // no-match, not a timing guess that needs a fixed-delay retry.
+  return readSearchCount(page, term);
 }
 
 /**

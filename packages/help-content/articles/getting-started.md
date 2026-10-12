@@ -38,6 +38,29 @@ unusual ways, and a repair pass usually fixes them.
 - **Select** is your normal reading mode — the plain pointer. When you're done
   with any tool, click it again or press **Esc** to return to Select.
 
+Scroll inside the bookmark list to browse a long outline. The document stays
+on its current page while the list moves, including at the list's ends.
+
+## Printing
+
+Click **Print** in the toolbar, choose a printer, then choose pages and copies.
+**Paper size** and **Paper source** list the choices reported by that printer.
+Paper source may be called a tray or drawer in the printer's own software.
+Leave either field at **Printer default** to use its normal setting. A printer
+with no advertised sources has only the default source choice.
+
+Changing printers clears paper choices. If RaioPDF cannot read a printer's
+choices, you can still print with its defaults. macOS also offers sides and
+orientation; Windows uses the printer's existing defaults for those settings.
+On Windows, choosing a paper size or source fits each page proportionally
+inside that paper's printable area. Large custom forms may exceed the supported
+rendering limit. Printer settings apply to this job and do not change saved
+printer preferences.
+
+If an explicit choice cannot be applied, RaioPDF reports the problem. After a
+job has started, some pages may already have printed; check the output before
+retrying.
+
 ## Saving your work
 
 Tools change the document you have open; nothing is written to your disk until

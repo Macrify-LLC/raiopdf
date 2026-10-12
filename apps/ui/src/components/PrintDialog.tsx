@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { pathOpErrorMessage } from "../lib/pathOps";
 import type { PDFDocumentProxy } from "../lib/pdfjs";
 import {
@@ -6,8 +6,11 @@ import {
   parseCopies,
   parsePrintSelection,
   printStatus,
+  printerCapabilities,
   sortPrintersForPicker,
+  type PrinterCapabilities,
   type PrinterInfo,
+  type PrintOptionChoice,
   type PrintOptions,
 } from "../lib/printPipeline";
 import { runtimePlatform } from "../lib/runtimePlatform";
@@ -27,34 +30,29 @@ export interface StartPrintParams {
   options: PrintOptions;
 }
 
-interface OptionChoice {
-  value: string;
-  label: string;
-}
+type CapabilityRequest = {
+  printer: string;
+  generation: number;
+  state: "loading" | "ready" | "error";
+  capabilities: PrinterCapabilities | null;
+  error: string | null;
+};
 
-const PAPER_SIZES: readonly OptionChoice[] = [
-  { value: "", label: "Printer default" },
-  { value: "Letter", label: "Letter (8.5 × 11 in)" },
-  { value: "Legal", label: "Legal (8.5 × 14 in)" },
-  { value: "A4", label: "A4" },
-];
-
-const DUPLEX: readonly OptionChoice[] = [
+const PRINTER_DEFAULT: PrintOptionChoice = { value: "", label: "Printer default" };
+const DUPLEX: readonly PrintOptionChoice[] = [
   { value: "", label: "Printer default" },
   { value: "one-sided", label: "Single-sided" },
   { value: "two-sided-long-edge", label: "Double-sided (flip on long edge)" },
   { value: "two-sided-short-edge", label: "Double-sided (flip on short edge)" },
 ];
 
-const ORIENTATIONS: readonly OptionChoice[] = [
+const ORIENTATIONS: readonly PrintOptionChoice[] = [
   { value: "", label: "Printer default" },
   { value: "portrait", label: "Portrait" },
   { value: "landscape", label: "Landscape" },
 ];
 
-/** A labeled dropdown for one print option (paper size / sides / orientation).
- * The three CUPS-only option fields are the same field markup over different
- * choice lists, so they share this. */
+/** A labeled dropdown for one printer-advertised paper or semantic option. */
 function OptionSelect({
   id,
   label,
@@ -65,7 +63,7 @@ function OptionSelect({
   id: string;
   label: string;
   value: string;
-  choices: readonly OptionChoice[];
+  choices: readonly PrintOptionChoice[];
   onChange: (value: string) => void;
 }) {
   return (
@@ -116,14 +114,91 @@ export function PrintDialog({
   const [pagesInput, setPagesInput] = useState("");
   const [copiesInput, setCopiesInput] = useState("1");
   const [paperSize, setPaperSize] = useState("");
+  const [paperSource, setPaperSource] = useState("");
   const [duplex, setDuplex] = useState("");
   const [orientation, setOrientation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [capabilityRequest, setCapabilityRequest] = useState<CapabilityRequest>({
+    printer: "",
+    generation: 0,
+    state: "loading",
+    capabilities: null,
+    error: null,
+  });
+  const capabilityGeneration = useRef(0);
+  const selectedPrinter = useRef("");
+  const activeCapabilityRequest = useRef(capabilityRequest);
 
-  // Paper size / duplex / orientation reach the printer through CUPS `lp` on
-  // macOS; the Windows Ghostscript path doesn't consume them yet, so the
-  // controls only appear where they actually take effect.
-  const supportsOptions = runtimePlatform() === "macos";
+  const platform = runtimePlatform();
+  const supportsPaperOptions = platform === "macos" || platform === "windows";
+  const supportsSemanticOptions = platform === "macos";
+
+  const selectPrinter = useCallback((printer: string) => {
+    selectedPrinter.current = printer;
+    const generation = ++capabilityGeneration.current;
+    const pending: CapabilityRequest = {
+      printer,
+      generation,
+      state: "loading",
+      capabilities: null,
+      error: null,
+    };
+    // Update the authoritative request synchronously with the selection. A
+    // submit event in this turn cannot observe a stale ready response.
+    activeCapabilityRequest.current = pending;
+    setCapabilityRequest(pending);
+    setPaperSize("");
+    setPaperSource("");
+    setMessage(null);
+
+    if (!printer) {
+      return;
+    }
+
+    void printerCapabilities(printer).then((capabilities) => {
+      if (
+        capabilityGeneration.current !== generation
+        || selectedPrinter.current !== printer
+        || activeCapabilityRequest.current !== pending
+      ) {
+        return;
+      }
+      const ready: CapabilityRequest = {
+        printer,
+        generation,
+        state: "ready",
+        capabilities,
+        error: null,
+      };
+      activeCapabilityRequest.current = ready;
+      setCapabilityRequest(ready);
+    }).catch((error: unknown) => {
+      if (
+        capabilityGeneration.current !== generation
+        || selectedPrinter.current !== printer
+        || activeCapabilityRequest.current !== pending
+      ) {
+        return;
+      }
+      const failed: CapabilityRequest = {
+        printer,
+        generation,
+        state: "error",
+        capabilities: null,
+        error: pathOpErrorMessage(
+          error,
+          "Printer options could not be loaded. Printer defaults can still be used for paper size and source.",
+        ),
+      };
+      activeCapabilityRequest.current = failed;
+      setCapabilityRequest(failed);
+    });
+  }, []);
+
+  const close = useCallback(() => {
+    capabilityGeneration.current += 1;
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     let disposed = false;
@@ -149,7 +224,9 @@ export function PrintDialog({
         }
         const sorted = sortPrintersForPicker(printerList);
         setPrinters(sorted);
-        setPrinterName(sorted[0]?.name ?? "");
+        const initialPrinter = sorted[0]?.name ?? "";
+        setPrinterName(initialPrinter);
+        selectPrinter(initialPrinter);
         setPhase("ready");
       })
       .catch((error: unknown) => {
@@ -167,7 +244,7 @@ export function PrintDialog({
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [selectPrinter]);
 
   const submit = useCallback(() => {
     const selection = parsePrintSelection(pagesInput, pageCount);
@@ -185,11 +262,23 @@ export function PrintDialog({
       return;
     }
 
-    const options: PrintOptions = supportsOptions
+    const request = activeCapabilityRequest.current;
+    if (
+      selectedPrinter.current !== printerName
+      || request.printer !== printerName
+      || request.generation !== capabilityGeneration.current
+      || request.state === "loading"
+    ) {
+      setMessage("Wait for this printer's options to finish loading.");
+      return;
+    }
+
+    const options: PrintOptions = supportsPaperOptions
       ? {
           ...(paperSize ? { media: paperSize } : {}),
-          ...(duplex ? { sides: duplex } : {}),
-          ...(orientation ? { orientation } : {}),
+          ...(paperSource ? { paperSource } : {}),
+          ...(supportsSemanticOptions && duplex ? { sides: duplex } : {}),
+          ...(supportsSemanticOptions && orientation ? { orientation } : {}),
         }
       : {};
 
@@ -199,22 +288,36 @@ export function PrintDialog({
       copies,
       options,
     });
-    onClose();
+    close();
   }, [
     copiesInput,
+    close,
     duplex,
-    onClose,
     onStartPrint,
     orientation,
     pageCount,
     pagesInput,
     paperSize,
+    paperSource,
     printerName,
-    supportsOptions,
+    supportsPaperOptions,
+    supportsSemanticOptions,
   ]);
 
+  useEffect(() => () => {
+    capabilityGeneration.current += 1;
+  }, []);
+
+  const capabilityRequestIsCurrent = capabilityRequest.printer === printerName
+    && capabilityRequest.generation === capabilityGeneration.current;
+  const paperCapabilities = capabilityRequestIsCurrent
+    ? capabilityRequest.capabilities
+    : null;
+  const paperChoices = [PRINTER_DEFAULT, ...(paperCapabilities?.media ?? [])];
+  const sourceChoices = [PRINTER_DEFAULT, ...(paperCapabilities?.paperSources ?? [])];
+
   return (
-    <FloatingDialog title="Print" eyebrow={fileName ?? undefined} onClose={onClose}>
+    <FloatingDialog title="Print" eyebrow={fileName ?? undefined} onClose={close}>
       <div className="tool-panel__inline-card">
         {phase === "probing" ? (
           <p className="tool-panel__note" role="status">
@@ -244,7 +347,7 @@ export function PrintDialog({
             <button
               type="button"
               className="tool-panel__secondary-button"
-              onClick={onClose}
+              onClick={close}
             >
               Cancel
             </button>
@@ -276,7 +379,11 @@ export function PrintDialog({
               <select
                 id="print-dialog-printer"
                 value={printerName}
-                onChange={(event) => setPrinterName(event.target.value)}
+                onChange={(event) => {
+                  const printer = event.target.value;
+                  setPrinterName(printer);
+                  selectPrinter(printer);
+                }}
               >
                 {printers.map((printer) => (
                   <option key={printer.name} value={printer.name}>
@@ -306,15 +413,26 @@ export function PrintDialog({
                 onChange={(event) => setCopiesInput(event.target.value)}
               />
             </div>
-            {supportsOptions ? (
+            {supportsPaperOptions ? (
               <>
                 <OptionSelect
                   id="print-dialog-paper"
                   label="Paper size"
                   value={paperSize}
-                  choices={PAPER_SIZES}
+                  choices={paperChoices}
                   onChange={setPaperSize}
                 />
+                <OptionSelect
+                  id="print-dialog-paper-source"
+                  label="Paper source"
+                  value={paperSource}
+                  choices={sourceChoices}
+                  onChange={setPaperSource}
+                />
+              </>
+            ) : null}
+            {supportsSemanticOptions ? (
+              <>
                 <OptionSelect
                   id="print-dialog-duplex"
                   label="Sides"
@@ -331,6 +449,14 @@ export function PrintDialog({
                 />
               </>
             ) : null}
+            {supportsPaperOptions && capabilityRequestIsCurrent && capabilityRequest.state === "loading" ? (
+              <p className="tool-panel__note" role="status">Checking paper options...</p>
+            ) : null}
+            {supportsPaperOptions && capabilityRequestIsCurrent && capabilityRequest.state === "error" ? (
+              <p className="tool-panel__note" role="status">
+                {capabilityRequest.error ?? "Printer options could not be loaded. Printer defaults can still be used for paper size and source."}
+              </p>
+            ) : null}
             {message ? (
               <p className="tool-panel__status-line" role="status">
                 {message}
@@ -342,7 +468,7 @@ export function PrintDialog({
             <button
               type="button"
               className="tool-panel__secondary-button"
-              onClick={onClose}
+              onClick={close}
             >
               Cancel
             </button>

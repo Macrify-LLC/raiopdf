@@ -127,6 +127,7 @@ import {
   listenPrintProgress,
   newPrintJobToken,
   printPdf,
+  printErrorPresentation,
 } from "./lib/printPipeline";
 import { SignatureUnlockModal } from "./components/SignatureUnlockModal";
 import { DockedProcessLoader } from "./components/DockedProcessLoader";
@@ -1130,13 +1131,16 @@ export function App() {
           }
         })
         .catch((error: unknown) => {
-          // Cancellation is a user action, not an error to surface.
-          if (error instanceof PathOpsError && error.code === "PRINT_CANCELLED") {
+          const presentation = printErrorPresentation(
+            error,
+            "The document could not be printed.",
+          );
+          if (presentation.kind === "cancelled") {
             return;
           }
           // Only surface against the document that started the print.
           if (documentGenerationRef.current === sourceGeneration) {
-            setPathOpError("print.failed", error, "The document could not be printed.");
+            setErrorWithDiagnostic("print.failed", error, presentation.message);
           }
         })
         .finally(() => {
@@ -1148,7 +1152,7 @@ export function App() {
           }
         });
     },
-    [engineDelegatedGrant, setError, updatePrintJob],
+    [engineDelegatedGrant, setError, setErrorWithDiagnostic, updatePrintJob],
   );
   const [filingReportLoading, setFilingReportLoading] = useState(false);
   const [filingReportError, setFilingReportError] = useState<string | null>(null);

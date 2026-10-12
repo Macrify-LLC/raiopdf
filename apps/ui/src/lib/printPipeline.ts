@@ -2,10 +2,10 @@
  * Native streaming print pipeline client (large-pdf v1.1, Lane F).
  *
  * Typed wrapper around the shell's print commands: any-size PDFs print
- * without the WebView ever holding the document. The shell drives
- * Ghostscript file→printer (`mswinpr2`), segment by segment, and falls back
- * automatically to a qpdf-split part queue handed to the OS print pipeline
- * when a Ghostscript invocation fails. Progress arrives as
+ * without the WebView ever holding the document. The shell uses Ghostscript
+ * for default Windows jobs, a conditional GDI path for explicit Windows paper
+ * settings, and CUPS on macOS. Default Windows jobs can fall back to a qpdf-
+ * split part queue when a Ghostscript invocation fails. Progress arrives as
  * `raiopdf-print-progress` events keyed by a client-minted job token;
  * cancellation is cooperative between segments/parts.
  *
@@ -14,7 +14,7 @@
  */
 
 import { parsePageRanges } from "./pageRanges";
-import { invokePathOp } from "./pathOps";
+import { invokePathOp, PathOpsError, pathOpErrorMessage } from "./pathOps";
 
 // ---------------------------------------------------------------------------
 // Response / event types (mirror apps/shell/src-tauri/src/print.rs)
@@ -32,6 +32,18 @@ export interface PrintStatus {
   available: boolean;
 }
 
+/** One driver-advertised print option token and its display label. */
+export interface PrintOptionChoice {
+  value: string;
+  label: string;
+}
+
+/** Paper options advertised by one installed printer. */
+export interface PrinterCapabilities {
+  media: PrintOptionChoice[];
+  paperSources: PrintOptionChoice[];
+}
+
 export type PrintProgressPhase =
   | "gs-segment"
   | "fallback-split"
@@ -42,13 +54,16 @@ export type PrintProgressPhase =
   | "cups-printing";
 
 /**
- * Paper size / duplex / orientation for the CUPS (`lp`) print path. Each field
- * is optional — omit to keep the printer default. Values come from fixed
- * dropdowns and are re-validated in the shell against an allowlist.
+ * Paper size/source choices come from the selected printer's advertised
+ * capabilities; omit them to keep its defaults. Sides/orientation retain the
+ * existing macOS semantic controls. The shell re-reads capabilities and
+ * validates explicit paper tokens at the native submission boundary.
  */
 export interface PrintOptions {
-  /** CUPS `media` name: "Letter" | "Legal" | "A4". */
+  /** Advertised printer media token. Omit to use the printer default. */
   media?: string;
+  /** Advertised printer paper-source token. Omit to use the printer default. */
+  paperSource?: string;
   /** CUPS `sides`: "one-sided" | "two-sided-long-edge" | "two-sided-short-edge". */
   sides?: string;
   /** Semantic orientation: "portrait" | "landscape". */
@@ -67,8 +82,8 @@ export interface PrintProgressEvent {
 }
 
 export interface PrintResult {
-  /** `ghostscript`/`printto` on Windows; `cups` on macOS (CUPS `lp`). */
-  method: "ghostscript" | "printto" | "cups";
+  /** Windows `windows-gdi`/`ghostscript`/`printto`; macOS CUPS `lp`. */
+  method: "ghostscript" | "printto" | "windows-gdi" | "cups";
   gsInvocations: number;
   fallbackParts: number;
   fallbackReason: string | null;
@@ -91,6 +106,11 @@ export function listPrinters(): Promise<PrinterInfo[]> {
   return invokePathOp("print_list_printers", {});
 }
 
+/** Query only the selected printer's advertised paper-size/source choices. */
+export function printerCapabilities(printer: string): Promise<PrinterCapabilities> {
+  return invokePathOp("print_printer_capabilities", { printer });
+}
+
 export function printPdf(
   grant: string,
   jobToken: string,
@@ -111,6 +131,38 @@ export function printPdf(
 
 export function cancelPrint(jobToken: string): Promise<boolean> {
   return invokePathOp("print_cancel", { jobToken });
+}
+
+export type PrintErrorPresentation =
+  | { kind: "cancelled" }
+  | { kind: "failed"; message: string }
+  | { kind: "partial-cancelled"; message: string };
+
+/**
+ * Keep actionable print-backend errors visible without changing the shared
+ * path-op presentation policy used by other workflows. Cancellation before a
+ * job starts is quiet; cancellation after it starts needs a warning.
+ */
+export function printErrorPresentation(
+  error: unknown,
+  fallback: string,
+): PrintErrorPresentation {
+  if (error instanceof PathOpsError) {
+    if (error.code === "PRINT_CANCELLED") {
+      return { kind: "cancelled" };
+    }
+    if (error.code === "PRINT_PARTIAL_CANCELLED") {
+      return {
+        kind: "partial-cancelled",
+        message: `Printing was cancelled after it started. ${error.message}`,
+      };
+    }
+    if (error.code === "INVALID_INPUT" || error.code === "PRINT_FAILED") {
+      return { kind: "failed", message: error.message };
+    }
+  }
+
+  return { kind: "failed", message: pathOpErrorMessage(error, fallback) };
 }
 
 /** Client-minted job token: the UI must know it before `print_pdf` resolves

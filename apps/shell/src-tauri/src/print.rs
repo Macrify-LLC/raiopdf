@@ -20,7 +20,9 @@ use engine_sidecar_core::path_ops::{OpResult, PathOpError};
 use engine_sidecar_core::print_ops as core_print;
 #[cfg(windows)]
 use engine_sidecar_core::print_ops::PageSegmentRange;
-use engine_sidecar_core::print_ops::{PrintOptions, PrintSelection, PrinterInfo};
+use engine_sidecar_core::print_ops::{
+    PrintOptions, PrintSelection, PrinterCapabilities, PrinterInfo,
+};
 use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -158,7 +160,7 @@ pub struct PrintStatusResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintResultResponse {
-    /// "ghostscript" | "printto" (Windows) | "cups" (macOS/Linux)
+    /// "ghostscript" | "printto" | "windows-gdi" (Windows) | "cups" (macOS/Linux)
     pub method: &'static str,
     pub gs_invocations: u32,
     pub fallback_parts: u32,
@@ -184,6 +186,15 @@ pub fn print_status(app: tauri::AppHandle) -> PrintStatusResponse {
 #[tauri::command]
 pub async fn print_list_printers() -> Result<Vec<PrinterInfo>, PathOpError> {
     on_blocking_pool(core_print::list_printers).await
+}
+
+/// Query job-local paper choices for exactly the selected printer.
+#[tauri::command]
+pub async fn print_printer_capabilities(
+    printer: String,
+) -> Result<PrinterCapabilities, PathOpError> {
+    core_print::validate_printer_name(&printer)?;
+    on_blocking_pool(move || core_print::printer_capabilities(&printer)).await
 }
 
 /// Flip the cooperative cancel flag for a running job. Returns whether a
@@ -267,9 +278,7 @@ async fn execute_native_print(
     printer: String,
     selection: PrintSelection,
     copies: u32,
-    // Paper size / duplex / orientation are a CUPS-path feature; the Windows
-    // Ghostscript path doesn't consume them yet.
-    _options: PrintOptions,
+    options: PrintOptions,
     job_token: String,
     cancel_flag: Arc<AtomicBool>,
 ) -> OpResult<JobOutcome> {
@@ -281,6 +290,26 @@ async fn execute_native_print(
         let work_path = work_dir.path().to_path_buf();
         let fallback_part_queued = fallback_part_queued.clone();
         on_blocking_pool(move || {
+            if requests_windows_options(&options) {
+                let before = snapshot(&input)?;
+                let outcome = engine_sidecar_core::print_windows::print_with_options(
+                    &toolchain,
+                    &input,
+                    &printer,
+                    &selection,
+                    copies,
+                    &options,
+                    &work_path,
+                    &cancel_flag,
+                )?;
+                return Ok(JobOutcome {
+                    method: "windows-gdi",
+                    gs_invocations: outcome.pages_rendered,
+                    fallback_parts: 0,
+                    fallback_reason: None,
+                    input_changed: ensure_unchanged(&input, before).is_err(),
+                });
+            }
             run_print_job(
                 &app,
                 &toolchain,
@@ -300,6 +329,14 @@ async fn execute_native_print(
         work_dir.keep();
     }
     result
+}
+
+#[cfg(windows)]
+fn requests_windows_options(options: &PrintOptions) -> bool {
+    options.media.is_some()
+        || options.paper_source.is_some()
+        || options.sides.is_some()
+        || options.orientation.is_some()
 }
 
 /// macOS / Linux: spool the file straight to CUPS via `lp` — any size, page
@@ -554,6 +591,32 @@ fn run_print_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_windows_options_never_enter_the_default_fallback_path() {
+        assert!(!requests_windows_options(&PrintOptions::default()));
+        for options in [
+            PrintOptions {
+                media: Some("DMPAPER:1".into()),
+                ..Default::default()
+            },
+            PrintOptions {
+                paper_source: Some("DMBIN:1".into()),
+                ..Default::default()
+            },
+            PrintOptions {
+                sides: Some("one-sided".into()),
+                ..Default::default()
+            },
+            PrintOptions {
+                orientation: Some("portrait".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(requests_windows_options(&options));
+        }
+    }
 
     #[test]
     fn print_jobs_register_cancel_and_remove() {

@@ -1,12 +1,145 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invokePathOp, PathOpsError } from "./pathOps";
 import {
   describePrintProgress,
   newPrintJobToken,
   parseCopies,
   parsePrintSelection,
+  printPdf,
+  printErrorPresentation,
+  printerCapabilities,
   sortPrintersForPicker,
   type PrintProgressEvent,
 } from "./printPipeline";
+
+vi.mock("./pathOps", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./pathOps")>(),
+  invokePathOp: vi.fn(),
+}));
+
+const invokePathOpMock = vi.mocked(invokePathOp);
+
+beforeEach(() => {
+  invokePathOpMock.mockReset();
+});
+
+describe("printerCapabilities", () => {
+  it("returns the selected printer's advertised choices through the typed path op", async () => {
+    const capabilities = {
+      media: [{ value: "DMPAPER:1", label: "Letter" }],
+      paperSources: [{ value: "DMBIN:4", label: "Lower tray" }],
+    };
+    invokePathOpMock.mockResolvedValue(capabilities);
+
+    await expect(printerCapabilities("Office Printer")).resolves.toEqual(capabilities);
+    expect(invokePathOpMock).toHaveBeenCalledWith("print_printer_capabilities", {
+      printer: "Office Printer",
+    });
+  });
+});
+
+describe("printPdf option payload", () => {
+  it("keeps advertised media and paper source in the submission payload", async () => {
+    invokePathOpMock.mockResolvedValue({});
+
+    await printPdf("grant", "job", "Office Printer", [0, 2], 2, {
+      media: "DMPAPER:1",
+      paperSource: "DMBIN:4",
+    });
+
+    expect(invokePathOpMock).toHaveBeenCalledWith("print_pdf", {
+      grant: "grant",
+      jobToken: "job",
+      printer: "Office Printer",
+      pageIndexes: [0, 2],
+      copies: 2,
+      options: { media: "DMPAPER:1", paperSource: "DMBIN:4" },
+    });
+  });
+
+  it("preserves default paper and source by omitting both fields", async () => {
+    invokePathOpMock.mockResolvedValue({});
+
+    await printPdf("grant", "job", "Office Printer", null, 1);
+
+    expect(invokePathOpMock).toHaveBeenCalledWith("print_pdf", expect.objectContaining({
+      options: {},
+    }));
+  });
+});
+
+describe("printErrorPresentation", () => {
+  it("preserves actionable print validation and backend failure messages", () => {
+    const invalidPaper = new PathOpsError({
+      code: "INVALID_INPUT",
+      message: "The selected paper size is no longer available. Choose a paper size again.",
+    });
+    const failedJob = new PathOpsError({
+      code: "PRINT_FAILED",
+      message: "The printer stopped after page 4. Check the printer and retry.",
+    });
+
+    expect(printErrorPresentation(invalidPaper, "generic fallback")).toEqual({
+      kind: "failed",
+      message: invalidPaper.message,
+    });
+    expect(printErrorPresentation(failedJob, "generic fallback")).toEqual({
+      kind: "failed",
+      message: failedJob.message,
+    });
+  });
+
+  it("shows the driver's controlled paper settings rejection", () => {
+    const rejectedSettings = new PathOpsError({
+      code: "PRINT_FAILED",
+      message: "printer did not preserve the requested paper source. Choose different printer settings and try again.",
+    });
+
+    expect(printErrorPresentation(rejectedSettings, "generic fallback")).toEqual({
+      kind: "failed",
+      message: rejectedSettings.message,
+    });
+  });
+
+  it("surfaces post-start cancellation as a warning with the native details", () => {
+    const partialCancel = new PathOpsError({
+      code: "PRINT_PARTIAL_CANCELLED",
+      message: "Some selected pages or copies may already have printed. Check the output before retrying.",
+    });
+
+    expect(printErrorPresentation(partialCancel, "generic fallback")).toEqual({
+      kind: "partial-cancelled",
+      message: `Printing was cancelled after it started. ${partialCancel.message}`,
+    });
+  });
+
+  it("suppresses only pre-start cancellation and otherwise uses shared fallback policy", () => {
+    const cancelledBeforeStart = new PathOpsError({
+      code: "PRINT_CANCELLED",
+      message: "Printing was cancelled.",
+    });
+    const unrelatedPrintFailure = new PathOpsError({
+      code: "PRINT_NOT_SUPPORTED",
+      message: "Native printing is unavailable.",
+    });
+    const missingTool = new PathOpsError({
+      code: "TOOLCHAIN_MISSING",
+      message: "The native print helper is missing.",
+    });
+
+    expect(printErrorPresentation(cancelledBeforeStart, "generic fallback")).toEqual({
+      kind: "cancelled",
+    });
+    expect(printErrorPresentation(unrelatedPrintFailure, "generic fallback")).toEqual({
+      kind: "failed",
+      message: "generic fallback",
+    });
+    expect(printErrorPresentation(missingTool, "generic fallback")).toEqual({
+      kind: "failed",
+      message: "The native print helper is missing.",
+    });
+  });
+});
 
 describe("parsePrintSelection", () => {
   it("treats empty input as the whole document", () => {

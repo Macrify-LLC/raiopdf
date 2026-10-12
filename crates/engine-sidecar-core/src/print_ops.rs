@@ -173,9 +173,21 @@ pub fn parse_lpstat_default(output: &str) -> Option<String> {
 }
 
 /// Render a `Segments` selection into a CUPS `page-ranges` value ("1-3,5").
-/// CUPS emits pages in ascending document order regardless of listed order.
+/// CUPS requires ascending, non-overlapping ranges and emits document order.
 pub fn cups_page_ranges(segments: &[PageSegmentRange]) -> String {
-    segments
+    let mut sorted = segments.to_vec();
+    sorted.sort_unstable_by_key(|segment| (segment.first, segment.last));
+    let mut merged: Vec<PageSegmentRange> = Vec::with_capacity(sorted.len());
+    for segment in sorted {
+        if let Some(previous) = merged.last_mut() {
+            if segment.first <= previous.last.saturating_add(1) {
+                previous.last = previous.last.max(segment.last);
+                continue;
+            }
+        }
+        merged.push(segment);
+    }
+    merged
         .iter()
         .map(|segment| {
             if segment.first == segment.last {
@@ -1641,6 +1653,30 @@ mod tests {
     }
 
     #[test]
+    fn cups_page_ranges_sort_and_merge_overlaps_without_changing_windows_selection() {
+        let segments = [
+            PageSegmentRange { first: 9, last: 9 },
+            PageSegmentRange { first: 3, last: 5 },
+            PageSegmentRange { first: 1, last: 3 },
+            PageSegmentRange { first: 5, last: 6 },
+            PageSegmentRange { first: 9, last: 9 },
+        ];
+        assert_eq!(cups_page_ranges(&segments), "1-6,9");
+        assert_eq!(segments[0], PageSegmentRange { first: 9, last: 9 });
+        assert_eq!(
+            cups_page_ranges(&contiguous_segments(&[2, 0]).unwrap()),
+            "1,3"
+        );
+        assert_eq!(
+            cups_page_ranges(&[PageSegmentRange {
+                first: u32::MAX,
+                last: u32::MAX
+            }]),
+            u32::MAX.to_string()
+        );
+    }
+
+    #[test]
     fn lp_args_whole_document_omit_pages_and_single_copy() {
         assert_eq!(
             lp_print_args(
@@ -1997,9 +2033,7 @@ mod tests {
                 "-o",
                 "InputSlot=Tray-1",
                 "-o",
-                // CUPS accepts the caller's range listing; its documented
-                // output order remains ascending by document page.
-                "page-ranges=9,2-4",
+                "page-ranges=2-4,9",
                 "/tmp/a.pdf"
             ])
         );

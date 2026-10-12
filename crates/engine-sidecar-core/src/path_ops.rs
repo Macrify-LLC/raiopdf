@@ -874,7 +874,7 @@ fn run_command_supervised(
         if let Err(error) = result {
             kill_child_tree(&mut child);
             let _ = child.wait();
-            drop(child_job.take());
+            let _ = child_job.take();
             return Err(error);
         }
     }
@@ -899,7 +899,7 @@ fn run_command_supervised(
     let mut abort = |child: &mut Child,
                      stdout_thread: &mut Option<thread::JoinHandle<Vec<u8>>>,
                      stderr_thread: &mut Option<thread::JoinHandle<Vec<u8>>>| {
-        drop(child_job.take());
+        let _ = child_job.take();
         kill_child_tree(child);
         let _ = child.wait();
         if let Some(handle) = stdout_thread.take() {
@@ -984,7 +984,7 @@ fn run_command_supervised(
         }
         thread::sleep(Duration::from_millis(10));
     }
-    drop(child_job.take());
+    let _ = child_job.take();
 
     let stdout = stdout_thread
         .take()

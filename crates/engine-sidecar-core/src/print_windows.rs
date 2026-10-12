@@ -1176,7 +1176,7 @@ fn validate_device_paper_size(dc: HDC, paper: &PaperCapability) -> OpResult<()> 
 #[derive(Clone, Debug, PartialEq)]
 struct SelectedPage {
     index: u32,
-    media_box: [f64; 4],
+    visible_box: [f64; 4],
     rotate: i64,
 }
 
@@ -1227,6 +1227,23 @@ fn selected_pages(
                     "PDF page has invalid MediaBox geometry",
                 ));
             }
+            let visible_box = page.print_box.ok_or_else(|| {
+                PathOpError::invalid("PDF page has no validated effective print box")
+            })?;
+            if visible_box
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() >= 1.0e9)
+                || visible_box[2] <= visible_box[0]
+                || visible_box[3] <= visible_box[1]
+                || visible_box[0] < page.media_box[0]
+                || visible_box[1] < page.media_box[1]
+                || visible_box[2] > page.media_box[2]
+                || visible_box[3] > page.media_box[3]
+            {
+                return Err(PathOpError::invalid(
+                    "PDF page has invalid effective print box geometry",
+                ));
+            }
             if !page.user_unit.is_finite() || (page.user_unit - 1.0).abs() > f64::EPSILON {
                 return Err(PathOpError::invalid(
                     "Windows custom printing does not support PDF /UserUnit values other than 1",
@@ -1234,7 +1251,7 @@ fn selected_pages(
             }
             let selected = SelectedPage {
                 index,
-                media_box: page.media_box,
+                visible_box,
                 rotate: page.rotate,
             };
             Ok(selected)
@@ -1321,8 +1338,8 @@ fn raster_plan(
     let image_bytes = row_bytes
         .checked_mul(budget_height)
         .ok_or_else(|| PathOpError::invalid("PDF page raster size overflow"))?;
-    if width > 100_000.0
-        || height > 100_000.0
+    if width > path_ops::MAX_PRINT_RASTER_AXIS_PIXELS as f64
+        || height > path_ops::MAX_PRINT_RASTER_AXIS_PIXELS as f64
         || width > i32::MAX as f64
         || height > i32::MAX as f64
     {
@@ -1340,8 +1357,8 @@ fn raster_plan(
 }
 
 fn page_dimensions_points(page: &SelectedPage) -> (f64, f64) {
-    let width = page.media_box[2] - page.media_box[0];
-    let height = page.media_box[3] - page.media_box[1];
+    let width = page.visible_box[2] - page.visible_box[0];
+    let height = page.visible_box[3] - page.visible_box[1];
     if matches!(page.rotate, 90 | 270) {
         (height, width)
     } else {
@@ -1405,6 +1422,7 @@ fn render_page_args(input: &Path, page_number: u32, dpi: f64, output: &Path) -> 
         OsString::from("-dTextAlphaBits=4"),
         OsString::from("-dGraphicsAlphaBits=4"),
         OsString::from("-sDEVICE=bmp16m"),
+        OsString::from("-dUseCropBox"),
         OsString::from(format!("-r{dpi}")),
         OsString::from(format!("-dFirstPage={page_number}")),
         OsString::from(format!("-dLastPage={page_number}")),
@@ -1502,7 +1520,11 @@ fn inspect_bitmap(bytes: &[u8], dpi: f64, page: &SelectedPage) -> OpResult<Bitma
     }
     let width = width_signed as u32;
     let height = height_signed.unsigned_abs();
-    if width == 0 || height == 0 || width > 100_000 || height > 100_000 {
+    if width == 0
+        || height == 0
+        || width > path_ops::MAX_PRINT_RASTER_AXIS_PIXELS
+        || height > path_ops::MAX_PRINT_RASTER_AXIS_PIXELS
+    {
         return Err(PathOpError::invalid(
             "Ghostscript returned invalid BMP dimensions",
         ));
@@ -1533,7 +1555,7 @@ fn inspect_bitmap(bytes: &[u8], dpi: f64, page: &SelectedPage) -> OpResult<Bitma
     let expected_height = (media_height * dpi / 72.0).round() as i64;
     if (width as i64 - expected_width).abs() > 2 || (height as i64 - expected_height).abs() > 2 {
         return Err(PathOpError::failed(
-            "Ghostscript bitmap dimensions do not match the PDF MediaBox probe",
+            "Ghostscript bitmap dimensions do not match the PDF effective print box",
         ));
     }
     Ok(BitmapLayout {
@@ -1815,7 +1837,7 @@ mod tests {
     fn selected_page(width: f64, height: f64) -> SelectedPage {
         SelectedPage {
             index: 0,
-            media_box: [0.0, 0.0, width, height],
+            visible_box: [0.0, 0.0, width, height],
             rotate: 0,
         }
     }
@@ -2074,6 +2096,7 @@ mod tests {
             path_ops::PageFacts {
                 index: 0,
                 media_box: [0.0, 0.0, 72.0, 72.0],
+                print_box: Some([0.0, 0.0, 72.0, 72.0]),
                 rotate: 0,
                 user_unit: 1.0,
                 orientation: "portrait",
@@ -2082,6 +2105,7 @@ mod tests {
             path_ops::PageFacts {
                 index: 1,
                 media_box: [0.0, 0.0, 72.0, 72.0],
+                print_box: Some([0.0, 0.0, 72.0, 72.0]),
                 rotate: 0,
                 user_unit: 1.0,
                 orientation: "portrait",
@@ -2111,9 +2135,10 @@ mod tests {
 
     #[test]
     fn selection_rejects_nondefault_user_unit_and_invalid_geometry() {
-        let fact = |user_unit, media_box| path_ops::PageFacts {
+        let fact = |user_unit, media_box, print_box| path_ops::PageFacts {
             index: 0,
             media_box,
+            print_box,
             rotate: 0,
             user_unit,
             orientation: "portrait",
@@ -2121,22 +2146,117 @@ mod tests {
         };
         assert!(selected_pages(
             &PrintSelection::WholeDocument,
-            &[fact(2.0, [0.0, 0.0, 72.0, 72.0])],
+            &[fact(
+                2.0,
+                [0.0, 0.0, 72.0, 72.0],
+                Some([0.0, 0.0, 72.0, 72.0])
+            )],
             1,
         )
         .is_err());
         assert!(selected_pages(
             &PrintSelection::WholeDocument,
-            &[fact(1.0, [0.0, 0.0, f64::INFINITY, 72.0])],
+            &[fact(
+                1.0,
+                [0.0, 0.0, f64::INFINITY, 72.0],
+                Some([0.0, 0.0, 72.0, 72.0])
+            )],
             1,
         )
         .is_err());
         assert!(selected_pages(
             &PrintSelection::WholeDocument,
-            &[fact(1.0, [10.0, 0.0, 9.0, 72.0])],
+            &[fact(
+                1.0,
+                [10.0, 0.0, 9.0, 72.0],
+                Some([10.0, 0.0, 9.0, 72.0])
+            )],
             1,
         )
         .is_err());
+    }
+
+    #[test]
+    fn selection_requires_a_valid_effective_print_box_inside_media_box() {
+        let fact = |print_box| path_ops::PageFacts {
+            index: 0,
+            media_box: [37.0, 53.0, 649.0, 845.0],
+            print_box,
+            rotate: 0,
+            user_unit: 1.0,
+            orientation: "portrait",
+            letter_portrait: false,
+        };
+        let select =
+            |page: path_ops::PageFacts| selected_pages(&PrintSelection::WholeDocument, &[page], 1);
+        assert!(select(fact(None)).is_err());
+        assert!(select(fact(Some([37.0, 53.0, 36.0, 845.0]))).is_err());
+        assert!(select(fact(Some([36.0, 53.0, 649.0, 845.0]))).is_err());
+        assert!(select(fact(Some([37.0, 53.0, 650.0, 845.0]))).is_err());
+        assert!(select(fact(Some([37.0, 53.0, f64::NAN, 845.0]))).is_err());
+        assert!(select(fact(Some([137.0, 153.0, 549.0, 745.0]))).is_ok());
+
+        let first = fact(Some([137.0, 153.0, 549.0, 745.0]));
+        let mut invalid_later = fact(None);
+        invalid_later.index = 1;
+        assert!(
+            selected_pages(&PrintSelection::WholeDocument, &[first, invalid_later], 2).is_err()
+        );
+    }
+
+    #[test]
+    fn cropped_visible_box_drives_raster_geometry_and_rotation() {
+        let media_box = [37.0, 53.0, 649.0, 845.0];
+        let crop_box = [137.0, 153.0, 549.0, 745.0];
+        let fact = |rotate| path_ops::PageFacts {
+            index: 0,
+            media_box,
+            print_box: Some(crop_box),
+            rotate,
+            user_unit: 1.0,
+            orientation: "portrait",
+            letter_portrait: false,
+        };
+        let select = |rotate| {
+            selected_pages(&PrintSelection::WholeDocument, &[fact(rotate)], 1).unwrap()[0].clone()
+        };
+        let portrait = select(0);
+        assert_eq!(page_dimensions_points(&portrait), (412.0, 592.0));
+        let bmp_portrait = inspect_bitmap(&bmp(412, 592, 54, 0), 72.0, &portrait).unwrap();
+        assert_eq!((bmp_portrait.width, bmp_portrait.height), (412, 592));
+        let portrait_plan = raster_plan(&portrait, (4800, 3150, 600, 300), 300.0).unwrap();
+        assert!(
+            (portrait_plan.dpi
+                - 300.0 * (8.0_f64 / (412.0_f64 / 72.0)).min(10.5_f64 / (592.0_f64 / 72.0)))
+            .abs()
+                < 1e-9
+        );
+
+        let rotated = select(90);
+        assert_eq!(page_dimensions_points(&rotated), (592.0, 412.0));
+        let bmp_rotated = inspect_bitmap(&bmp(592, 412, 54, 0), 72.0, &rotated).unwrap();
+        assert_eq!((bmp_rotated.width, bmp_rotated.height), (592, 412));
+        let rotated_plan = raster_plan(&rotated, (4800, 3150, 600, 300), 300.0).unwrap();
+        assert!(
+            (rotated_plan.dpi
+                - 300.0 * (8.0_f64 / (592.0_f64 / 72.0)).min(10.5_f64 / (412.0_f64 / 72.0)))
+            .abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn ghostscript_raster_arguments_use_crop_box_without_global_fit_or_rotation() {
+        let args = render_page_args(Path::new("input.pdf"), 1, 300.0, Path::new("page.bmp"));
+        assert!(args.iter().any(|arg| arg == "-dUseCropBox"));
+        assert!(!args.iter().any(|arg| arg == "-dPDFFitPage"));
+        assert!(!args.iter().any(|arg| arg == "-dFIXEDMEDIA"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.to_string_lossy().starts_with("-g")));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.to_string_lossy().contains("AutoRotate")));
     }
 
     #[test]
@@ -2560,6 +2680,19 @@ mod tests {
         let dpi_y = unsafe { GetDeviceCaps(dc.0, LOGPIXELSY as i32) };
         let expected_width = physical_width as f64 * 72.0 / dpi_x as f64;
         let expected_height = physical_height as f64 * 72.0 / dpi_y as f64;
+        let (print_width, print_height, _, _) = printable_area(dc.0).unwrap();
+        let offset_x = unsafe { GetDeviceCaps(dc.0, PHYSICALOFFSETX as i32) };
+        let offset_y = unsafe { GetDeviceCaps(dc.0, PHYSICALOFFSETY as i32) };
+        // File inspectors use a bottom-left PDF origin; GDI reports the
+        // imageable rectangle's top-left offset on the physical sheet.
+        let print_x = offset_x as f64 * 72.0 / dpi_x as f64;
+        let print_y =
+            (physical_height as f64 - offset_y as f64 - print_height as f64) * 72.0 / dpi_y as f64;
+        println!(
+            "virtual PDF geometry: sheet={expected_width},{expected_height}; printable={print_x},{print_y},{},{}",
+            print_width as f64 * 72.0 / dpi_x as f64,
+            print_height as f64 * 72.0 / dpi_y as f64
+        );
 
         let root = std::env::temp_dir().join(format!(
             "raiopdf-print-canary-{}-{}",

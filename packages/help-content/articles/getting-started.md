@@ -52,10 +52,14 @@ with no advertised sources has only the default source choice.
 Changing printers clears paper choices. If RaioPDF cannot read a printer's
 choices, you can still print with its defaults. macOS also offers sides and
 orientation; Windows uses the printer's existing defaults for those settings.
-On Windows, choosing a paper size or source fits each page proportionally
+On Windows, choosing a paper size or source fits each visible page proportionally
 inside that paper's printable area. Large custom forms may exceed the supported
 rendering limit. Printer settings apply to this job and do not change saved
 printer preferences.
+
+Windows custom printing reports an error before rendering pages with malformed
+or unsupported page geometry. A file that opens in the viewer may still need
+its page boxes repaired before custom printing.
 
 If an explicit choice cannot be applied, RaioPDF reports the problem. After a
 job has started, some pages may already have printed; check the output before

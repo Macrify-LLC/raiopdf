@@ -1573,6 +1573,10 @@ pub struct PageFacts {
     pub index: u32,
     /// Raw MediaBox `[llx, lly, urx, ury]` in PDF points (pre-rotation).
     pub media_box: [f64; 4],
+    /// Strict CropBox/MediaBox intersection, populated only by the Windows
+    /// print probe. Other document operations keep their MediaBox semantics.
+    #[serde(skip)]
+    pub print_box: Option<[f64; 4]>,
     /// Effective /Rotate, normalized to 0/90/180/270.
     pub rotate: i64,
     /// Page-local /UserUnit multiplier (defaults to 1). Windows raster
@@ -1654,7 +1658,7 @@ pub(crate) fn document_facts_print_bounded(
     ]);
     arguments.push(path_arg(input));
     let output = run_qpdf_print_bounded(toolchain, &arguments, cancel_flag)?;
-    parse_document_facts(&output.stdout, size_bytes)
+    parse_document_facts_for_print(&output.stdout, size_bytes)
 }
 
 /// Probe whether a standalone PDF path has an extractable text layer.
@@ -1709,8 +1713,29 @@ const LETTER_WIDTH_PT: f64 = 612.0;
 const LETTER_HEIGHT_PT: f64 = 792.0;
 const LETTER_TOLERANCE_PT: f64 = 1.0;
 const MAX_INHERITANCE_DEPTH: usize = 64;
+// Shared with Windows raster planning so its axis limit and the precision
+// projection below cannot drift independently.
+pub(crate) const MAX_PRINT_RASTER_AXIS_PIXELS: u32 = 100_000;
+const PRINT_BOX_PRECISION_HEADROOM: f64 = 8.0;
+const PRINT_BOX_MAX_PRECISION_ERROR_PIXELS: f64 = 0.5;
 
 pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<DocumentFacts> {
+    parse_document_facts_impl(json, size_bytes, false)
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn parse_document_facts_for_print(
+    json: &[u8],
+    size_bytes: u64,
+) -> OpResult<DocumentFacts> {
+    parse_document_facts_impl(json, size_bytes, true)
+}
+
+fn parse_document_facts_impl(
+    json: &[u8],
+    size_bytes: u64,
+    resolve_print_boxes: bool,
+) -> OpResult<DocumentFacts> {
     let root: serde_json::Value = serde_json::from_slice(json)
         .map_err(|error| PathOpError::failed(format!("qpdf --json parse error: {error}")))?;
 
@@ -1791,6 +1816,11 @@ pub(crate) fn parse_document_facts(json: &[u8], size_bytes: u64) -> OpResult<Doc
         page_facts.push(PageFacts {
             index: index as u32,
             media_box,
+            print_box: if resolve_print_boxes {
+                Some(print_visible_box(objects, page_ref, media_box, index)?)
+            } else {
+                None
+            },
             rotate,
             user_unit,
             orientation,
@@ -1970,6 +2000,139 @@ fn deref<'a>(objects: &'a JsonObjectMap, value: &'a serde_json::Value) -> &'a se
     value
 }
 
+fn print_visible_box(
+    objects: &JsonObjectMap,
+    page_ref: &str,
+    media_box: [f64; 4],
+    index: usize,
+) -> OpResult<[f64; 4]> {
+    let valid_rectangle = |rectangle: &[f64; 4]| {
+        rectangle
+            .iter()
+            .all(|value| value.is_finite() && value.abs() < 1.0e9)
+            && rectangle[2] > rectangle[0]
+            && rectangle[3] > rectangle[1]
+    };
+    if !valid_rectangle(&media_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has invalid MediaBox geometry",
+            index + 1
+        )));
+    }
+    let crop_box = match inherited_attribute(objects, page_ref, "/CropBox")? {
+        Some(value) => parse_rectangle(objects, &value).ok_or_else(|| {
+            PathOpError::invalid(format!(
+                "PDF page {} has malformed CropBox geometry",
+                index + 1
+            ))
+        })?,
+        None => media_box,
+    };
+    if !valid_rectangle(&crop_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has invalid CropBox geometry",
+            index + 1
+        )));
+    }
+    // The bundled PDF interpreter and PDF.js both use the intersection for
+    // valid boxes. Strict printing rejects disjoint/empty boxes rather than
+    // silently choosing a different page view for malformed documents.
+    let visible_box = [
+        crop_box[0].max(media_box[0]),
+        crop_box[1].max(media_box[1]),
+        crop_box[2].min(media_box[2]),
+        crop_box[3].min(media_box[3]),
+    ];
+    if !valid_rectangle(&visible_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has no visible CropBox/MediaBox intersection",
+            index + 1
+        )));
+    }
+    if !print_boxes_have_safe_precision(&media_box, &crop_box, &visible_box) {
+        return Err(PathOpError::invalid(format!(
+            "PDF page {} has unsupported print geometry precision; repair its page boxes before retrying",
+            index + 1
+        )));
+    }
+    Ok(visible_box)
+}
+
+fn print_boxes_have_safe_precision(
+    media_box: &[f64; 4],
+    crop_box: &[f64; 4],
+    visible_box: &[f64; 4],
+) -> bool {
+    [media_box, crop_box, visible_box]
+        .into_iter()
+        .all(print_rectangle_has_safe_precision)
+        && rounded_print_intersection_is_positive(media_box, crop_box)
+}
+
+fn print_rectangle_has_safe_precision(rectangle: &[f64; 4]) -> bool {
+    // Ghostscript's page-box wrapper uses single-real arithmetic. Project a
+    // conservative eight-ULP margin at the largest supported raster axis,
+    // reserving the existing two-pixel budget headroom for raster rounding.
+    (0..2).all(|axis| {
+        let lo = rectangle[axis];
+        let hi = rectangle[axis + 2];
+        let dimension = hi - lo;
+        if !dimension.is_finite() || dimension <= 0.0 {
+            return false;
+        }
+        let lo32 = lo as f32;
+        let hi32 = hi as f32;
+        if !lo32.is_finite() || !hi32.is_finite() || lo32 >= hi32 {
+            return false;
+        }
+        let Some(ulp) = [lo, hi, dimension]
+            .into_iter()
+            .map(binary32_ulp)
+            .try_fold(0.0f64, |largest, spacing| {
+                spacing.map(|spacing| largest.max(spacing))
+            })
+        else {
+            return false;
+        };
+        let error_pixels =
+            PRINT_BOX_PRECISION_HEADROOM * ulp * MAX_PRINT_RASTER_AXIS_PIXELS as f64 / dimension;
+        error_pixels.is_finite() && error_pixels <= PRINT_BOX_MAX_PRECISION_ERROR_PIXELS
+    })
+}
+
+fn rounded_print_intersection_is_positive(media_box: &[f64; 4], crop_box: &[f64; 4]) -> bool {
+    let media = media_box.map(|coordinate| coordinate as f32);
+    let crop = crop_box.map(|coordinate| coordinate as f32);
+    if media
+        .iter()
+        .chain(crop.iter())
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return false;
+    }
+    let left = media[0].max(crop[0]);
+    let bottom = media[1].max(crop[1]);
+    let right = media[2].min(crop[2]);
+    let top = media[3].min(crop[3]);
+    right > left && top > bottom
+}
+
+fn binary32_ulp(value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let rounded = value as f32;
+    if !rounded.is_finite() {
+        return None;
+    }
+    let below = rounded.next_down();
+    let above = rounded.next_up();
+    let below_spacing = (rounded as f64 - below as f64).abs();
+    let above_spacing = (above as f64 - rounded as f64).abs();
+    let ulp = below_spacing.max(above_spacing);
+    ulp.is_finite().then_some(ulp)
+}
+
 fn is_object_ref(text: &str) -> bool {
     let mut parts = text.split(' ');
     matches!(
@@ -1980,7 +2143,7 @@ fn is_object_ref(text: &str) -> bool {
     )
 }
 
-/// Resolve an inheritable page attribute (`/MediaBox`, `/Rotate`) by walking
+/// Resolve an inheritable page attribute (`/MediaBox`, `/CropBox`, `/Rotate`) by walking
 /// `/Parent` links, with a depth cap to survive malformed cyclic trees.
 fn inherited_attribute(
     objects: &JsonObjectMap,
@@ -4921,6 +5084,295 @@ mod tests {
     }
 
     #[test]
+    fn print_probe_resolves_crop_inheritance_and_indirection_without_changing_general_facts() {
+        for rotate in [0, 90, 180, 270] {
+            for mode in [
+                "direct",
+                "inherited",
+                "indirect",
+                "indirect-inherited",
+                "indirect-members",
+            ] {
+                let mut page = serde_json::json!({"/Parent":"1 0 R"});
+                let mut parent = serde_json::json!({
+                    "/MediaBox":[37,53,649,845], "/Rotate":rotate
+                });
+                let rectangle = serde_json::json!([137, 153, 549, 745]);
+                match mode {
+                    "direct" => page["/CropBox"] = rectangle.clone(),
+                    "inherited" => parent["/CropBox"] = rectangle.clone(),
+                    "indirect" | "indirect-members" => {
+                        page["/CropBox"] = serde_json::json!("9 0 R")
+                    }
+                    "indirect-inherited" => parent["/CropBox"] = serde_json::json!("9 0 R"),
+                    _ => unreachable!(),
+                }
+                let mut root: serde_json::Value =
+                    serde_json::from_slice(&geometry_probe_fixture(page, parent, rectangle))
+                        .unwrap();
+                if mode == "indirect-members" {
+                    root["qpdf"][1]["obj:9 0 R"]["value"] =
+                        serde_json::json!(["10 0 R", "11 0 R", "12 0 R", "13 0 R"]);
+                    for (object, value) in [(10, 137), (11, 153), (12, 549), (13, 745)] {
+                        root["qpdf"][1][format!("obj:{object} 0 R")] =
+                            serde_json::json!({"value":value});
+                    }
+                }
+                let bytes = serde_json::to_vec(&root).unwrap();
+                let print = parse_document_facts_for_print(&bytes, 1).unwrap();
+                let general = parse_document_facts(&bytes, 1).unwrap();
+                assert_eq!(
+                    print.pages[0].print_box,
+                    Some([137., 153., 549., 745.]),
+                    "{mode}/{rotate}"
+                );
+                assert_eq!(print.pages[0].media_box, [37., 53., 649., 845.]);
+                assert_eq!(print.pages[0].rotate, rotate);
+                assert_eq!(general.pages[0].print_box, None);
+                // Print-only projection cannot alter the public facts wire
+                // shape or MediaBox-based orientation/letter classification.
+                assert_eq!(
+                    serde_json::to_value(&print).unwrap(),
+                    serde_json::to_value(&general).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn print_probe_defaults_cropbox_and_intersects_partial_or_oversized_boxes() {
+        let media = [37., 53., 649., 845.];
+        for (crop, expected) in [
+            (None, media),
+            (Some(serde_json::json!([37, 53, 649, 845])), media),
+            (
+                Some(serde_json::json!([-63, -47, 237, 253])),
+                [37., 53., 237., 253.],
+            ),
+            (Some(serde_json::json!([-63, -47, 700, 900])), media),
+        ] {
+            let mut page = serde_json::json!({"/Parent":"1 0 R"});
+            if let Some(crop) = crop {
+                page["/CropBox"] = crop;
+            }
+            let bytes = geometry_probe_fixture(
+                page,
+                serde_json::json!({"/MediaBox":[37,53,649,845]}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn print_probe_uses_nearest_cropbox_and_rejects_a_later_invalid_page() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[137,153,549,745]}),
+            serde_json::json!({"/MediaBox":[37,53,649,845], "/CropBox":[37,53,237,253]}),
+            serde_json::json!(null),
+        );
+        assert_eq!(
+            parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+            Some([137., 153., 549., 745.])
+        );
+
+        let mut root: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        root["pages"] = serde_json::json!([{"object":"5 0 R"}, {"object":"6 0 R"}]);
+        root["qpdf"][1]["obj:6 0 R"] = serde_json::json!({
+            "value":{"/Parent":"1 0 R", "/CropBox":[700,900,800,1000]}
+        });
+        let bytes = serde_json::to_vec(&root).unwrap();
+        let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains("page 2"));
+        assert_eq!(parse_document_facts(&bytes, 1).unwrap().pages.len(), 2);
+    }
+
+    #[test]
+    fn print_probe_rejects_invalid_cropboxes_without_rejecting_general_document_facts() {
+        for crop in [
+            serde_json::json!(null),
+            serde_json::json!("invalid"),
+            serde_json::json!([0, 0, 100]),
+            serde_json::json!([0, 0, "Infinity", 100]),
+            serde_json::json!([200, 100, 100, 200]),
+            serde_json::json!([100, 100, 100, 200]),
+            serde_json::json!([700, 900, 800, 1000]),
+            serde_json::json!([649, 53, 700, 845]),
+            serde_json::json!([0, 0, 1.0e9, 100]),
+            serde_json::json!("9 0 R"),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop}),
+                serde_json::json!({"/MediaBox":[37,53,649,845]}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap_err().code,
+                ERR_INVALID_INPUT
+            );
+            assert!(parse_document_facts(&bytes, 1).is_ok());
+        }
+        for media in [
+            serde_json::json!([100, 0, 0, 100]),
+            serde_json::json!([0, 0, 0, 100]),
+            serde_json::json!([0, 0, 1.0e9, 100]),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R"}),
+                serde_json::json!({"/MediaBox":media}),
+                serde_json::json!(null),
+            );
+            assert_eq!(
+                parse_document_facts_for_print(&bytes, 1).unwrap_err().code,
+                ERR_INVALID_INPUT
+            );
+        }
+    }
+
+    #[test]
+    fn print_probe_rejects_high_origin_float32_unstable_geometry_before_render() {
+        for (origin, decimal_literals) in [
+            (100_000_000_i64, false),
+            (100_000_000_i64, true),
+            (999_999_000_i64, false),
+            (999_999_000_i64, true),
+        ] {
+            for rotate in [0, 90, 180, 270] {
+                let make_box = |coords: [i64; 4]| {
+                    serde_json::Value::Array(
+                        coords
+                            .into_iter()
+                            .map(|value| {
+                                if decimal_literals {
+                                    serde_json::json!(value as f64)
+                                } else {
+                                    serde_json::json!(value)
+                                }
+                            })
+                            .collect(),
+                    )
+                };
+                let media = make_box([origin, origin, origin + 200, origin + 200]);
+                let crop = make_box([origin + 100, origin + 120, origin + 108, origin + 128]);
+                let bytes = geometry_probe_fixture(
+                    serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop, "/Rotate":rotate}),
+                    serde_json::json!({"/MediaBox":media}),
+                    serde_json::json!(null),
+                );
+                let round_trip: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    round_trip["qpdf"][1]["obj:1 0 R"]["value"]["/MediaBox"][0]
+                        .as_number()
+                        .unwrap()
+                        .is_f64(),
+                    decimal_literals
+                );
+                let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+                assert_eq!(
+                    error.code, ERR_INVALID_INPUT,
+                    "{origin}/{decimal_literals}/Rotate={rotate}"
+                );
+                assert!(error
+                    .message
+                    .contains("unsupported print geometry precision"));
+                assert!(error
+                    .message
+                    .contains("repair its page boxes before retrying"));
+                // This guard is deliberately print-only; generic document facts
+                // retain their historical MediaBox behavior.
+                assert!(parse_document_facts(&bytes, 1).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn print_probe_rejects_unstable_raw_boxes_even_when_the_intersection_is_stable() {
+        for (media, crop) in [
+            ([900, 0, 1023, 792], [900, 0, 1050, 792]),
+            ([900, 0, 1050, 792], [900, 0, 1023, 792]),
+        ] {
+            let bytes = geometry_probe_fixture(
+                serde_json::json!({"/Parent":"1 0 R", "/CropBox":crop}),
+                serde_json::json!({"/MediaBox":media}),
+                serde_json::json!(null),
+            );
+            let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+            assert_eq!(error.code, ERR_INVALID_INPUT);
+            assert!(error
+                .message
+                .contains("unsupported print geometry precision"));
+            // The generic facts parser intentionally remains independent of this print-only guard.
+            assert!(parse_document_facts(&bytes, 1).is_ok());
+        }
+    }
+
+    #[test]
+    fn print_probe_accepts_ordinary_decimal_a4_and_crop_boxes() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[0.2, 0.3, 594.9, 842.0]}),
+            serde_json::json!({"/MediaBox":[0.1, 0.2, 595.1, 842.2]}),
+            serde_json::json!(null),
+        );
+        assert_eq!(
+            parse_document_facts_for_print(&bytes, 1).unwrap().pages[0].print_box,
+            Some([0.2, 0.3, 594.9, 842.0])
+        );
+    }
+
+    #[test]
+    fn binary32_ulp_handles_powers_of_two_negative_zero_and_subnormals() {
+        assert_eq!(binary32_ulp(1.0), Some(2.0f64.powi(-23)));
+        assert_eq!(binary32_ulp(-1.0), Some(2.0f64.powi(-23)));
+        assert_eq!(binary32_ulp(2.0), Some(2.0f64.powi(-22)));
+        assert_eq!(binary32_ulp(-2.0), Some(2.0f64.powi(-22)));
+        assert_eq!(binary32_ulp(0.0), Some(2.0f64.powi(-149)));
+        assert_eq!(binary32_ulp(-0.0), Some(2.0f64.powi(-149)));
+        let smallest_subnormal = f32::from_bits(1) as f64;
+        assert_eq!(binary32_ulp(smallest_subnormal), Some(smallest_subnormal));
+        assert_eq!(binary32_ulp(-smallest_subnormal), Some(smallest_subnormal));
+        assert_eq!(binary32_ulp(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn print_precision_gate_obeys_its_half_pixel_boundary_and_negative_ranges() {
+        let at_boundary = [1024.0, -1219.3125, 1219.3125, -1024.0];
+        assert!(print_rectangle_has_safe_precision(&at_boundary));
+        let just_over = [1024.0, -1219.25, 1219.25, -1024.0];
+        assert!(!print_rectangle_has_safe_precision(&just_over));
+        let collapsed = [100_000_000.0, 0.0, 100_000_001.0, 100.0];
+        assert!(!print_rectangle_has_safe_precision(&collapsed));
+        let underflowed = [0.0, 0.0, f64::from_bits(1), 1.0];
+        assert!(!print_rectangle_has_safe_precision(&underflowed));
+    }
+
+    #[test]
+    fn print_probe_rejects_precision_unsafe_later_page() {
+        let bytes = geometry_probe_fixture(
+            serde_json::json!({"/Parent":"1 0 R", "/CropBox":[0.2,0.3,594.9,842.0]}),
+            serde_json::json!({"/MediaBox":[0.1,0.2,595.1,842.2]}),
+            serde_json::json!(null),
+        );
+        let mut root: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        root["pages"] = serde_json::json!([{"object":"5 0 R"}, {"object":"6 0 R"}]);
+        root["qpdf"][1]["obj:6 0 R"] = serde_json::json!({
+            "value":{
+                "/Parent":"1 0 R",
+                "/MediaBox":[100000000.0,100000000.0,100000200.0,100000200.0],
+                "/CropBox":[100000100.0,100000120.0,100000108.0,100000128.0]
+            }
+        });
+        let bytes = serde_json::to_vec(&root).unwrap();
+        let error = parse_document_facts_for_print(&bytes, 1).unwrap_err();
+        assert_eq!(error.code, ERR_INVALID_INPUT);
+        assert!(error.message.contains("page 2"));
+        assert!(parse_document_facts(&bytes, 1).is_ok());
+    }
+
+    #[test]
     fn geometry_probe_resolves_inherited_rotation_but_page_local_units() {
         let parent =
             serde_json::json!({"/MediaBox":[37,53,649,845],"/Rotate":"9 0 R","/UserUnit":4});
@@ -6026,6 +6478,7 @@ mod tests {
             .map(|index| PageFacts {
                 index,
                 media_box: [0.0, 0.0, 612.0, 792.0],
+                print_box: None,
                 rotate: 0,
                 user_unit: 1.0,
                 orientation: "portrait",
@@ -6225,6 +6678,7 @@ mod tests {
         let page = PageFacts {
             index: 0,
             media_box: [0.0, 0.0, 612.0, 792.0],
+            print_box: None,
             rotate: 90,
             user_unit: 1.0,
             orientation: "portrait",
